@@ -1,663 +1,1591 @@
-# north
-### Personal Life Operating System - Architecture & Design Document
-> Version 0.3 · May 2026
+# north: System Specification
+### Personal Life Operating System
+> Version 1.2 · May 2026
 
 ---
 
 ## Table of Contents
 
-1. [The Vision](#1-the-vision)
-2. [How It's Different](#2-how-its-different)
-3. [The Moat](#3-the-moat)
-4. [Architecture Overview](#4-architecture-overview)
-5. [Perception Layer](#5-perception-layer)
-6. [The Ledger](#6-the-ledger)
-7. [Context Layer](#7-context-layer)
-8. [Onboarding - Solving the Cold Start](#8-onboarding--solving-the-cold-start)
-9. [The Orchestrator](#9-the-orchestrator)
-10. [Agent Layer](#10-agent-layer)
-11. [Approval Layer](#11-approval-layer)
-12. [Interface Model](#12-interface-model)
-13. [Inference Router](#13-inference-router)
-14. [Storage Model](#14-storage-model)
-15. [End-to-End Data Flow](#15-end-to-end-data-flow)
-16. [Open Questions & TODOs](#16-open-questions--todos)
+1. [Vision](#1-vision)
+2. [System Overview](#2-system-overview)
+3. [Perception Layer](#3-perception-layer)
+4. [The Ledger](#4-the-ledger)
+5. [Context Layer](#5-context-layer)
+6. [The Orchestrator](#6-the-orchestrator)
+7. [Agent Layer](#7-agent-layer)
+8. [Inference Router](#8-inference-router)
+9. [Approval Layer](#9-approval-layer)
+10. [Interface Model](#10-interface-model)
+11. [Cron and Async Jobs](#11-cron-and-async-jobs)
+12. [Storage Model](#12-storage-model)
+13. [End-to-End Data Flow](#13-end-to-end-data-flow)
+14. [Repository Structure](#14-repository-structure)
+15. [Open Questions](#15-open-questions)
+16. [Tech Stack](#16-tech-stack)
 
 ---
 
-## 1. The Vision
+## 1. Vision
 
-Most of what we call work in daily life is not real thinking. It is coordination overhead. Researching where to invest, writing a grocery list, planning a trip, drafting a task plan for the week - none of this requires you specifically. It just requires context about you.
+Most of what we call work in daily life is not real thinking. It is coordination overhead. Planning a week, tracking finances, managing academic deadlines, preparing for an internship: none of this requires you specifically. It just requires context about you.
 
-north is a personal AI operating system that runs continuously in the background. You give it a north star - what you want to achieve, who you want to become - and it handles the operational work across every domain of your life: finance, health, career, travel, logistics. You review, approve, and enjoy the output. The cognitive load of coordination disappears.
+north is a personal AI operating system that runs continuously in the background. You give it a north star (what you want to achieve, who you want to become) and it handles the operational work across every domain of your life. You review, approve, and enjoy the output. The cognitive load of coordination disappears.
 
-> **Core principle:** You should spend your time thinking, deciding, and experiencing - not managing. north manages so you do not have to.
-
-This is different from existing AI tools like ChatGPT or Perplexity, which are reactive - you ask, they answer. north is proactive. It knows your goals, watches your life passively, and surfaces work to you already done or ready to approve. The interaction model is closer to a chief of staff than a search engine.
+**Core principle:** You should spend your time thinking, deciding, and experiencing, not managing. north manages so you do not have to.
 
 ---
 
-## 2. How It's Different
+## 2. System Overview
 
-Several tools today explore parts of the north vision, but none combine all of its components into a single coherent system.
-
-| Tool | What it does | What it lacks |
-|------|-------------|---------------|
-| ChatGPT / Claude | Reactive conversation, some memory | No persistent context, no background activity, no action |
-| Claude Code / Cursor | Excellent coding agent | Single domain, no life context |
-| Rewind / Limitless | Passive mic + screen capture, searchable memory | Stops at recall - never acts on what it captures |
-| Siri / Alexa | Voice commands, shallow integrations | No deep personal model, no multi-step coordination |
-| LangChain / CrewAI | Agent orchestration frameworks | Blank slates - no memory, no perception, no approval layer |
-| Notion / Obsidian | Knowledge organization | Does not act or make decisions |
-
-north sits at the intersection of all these by combining continuous perception, structured personal memory, decision modeling, multi-LLM agent execution, and an approval loop into a single unified pipeline. The gap between knowing information and acting intelligently on it - that is where north lives.
-
----
-
-## 3. The Moat
-
-The technology itself is not the moat. Any engineer can replicate the architecture. The real moats are:
-
-**The context layer compounds daily.** After six months, it contains something no competitor can replicate - a deep, accurate, continuously updated model of you. The switching cost grows every day you use it.
-
-**The judgement rules are irreplaceable.** Your decision patterns, confidence-scored over hundreds of real decisions, cannot be transferred. A competitor would have to watch you make hundreds of decisions again from scratch to rebuild what north accumulated.
-
-**Trust is a moat.** north sits in an extraordinarily sensitive position - it hears your conversations, sees your screen, knows your goals, plans your life. Once someone trusts a system with this level of access, they are extremely unlikely to give the same access to a competitor.
-
-**The biggest threat** is not a startup - it is Apple or Google building this into the OS natively. They already have the mic, screen, calendar, and contacts. The only answer to that threat is going deeper on personalization faster than they can. A platform player building for billions will always build something more generic than a system built for one person.
-
----
-
-## 4. Architecture Overview
-
-north is built from seven distinct layers. Each has one clear job. Together they form a pipeline from raw perception of your world to real-world execution on your behalf.
+north is built from eight distinct layers. Each has one clear job. Together they form a pipeline from raw input to real-world execution on your behalf.
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                     YOU                              │
-│         North stars · Goals · Voice commands         │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────┐
-│                PERCEPTION LAYER                      │
-│         Mic · Screen · Native integrations           │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────┐
-│                   THE LEDGER                         │
-│     Append-only · Timestamped · Configurable         │
-└──────────────────────┬──────────────────────────────┘
-                       │ extraction pipeline
-┌──────────────────────▼──────────────────────────────┐
-│                 CONTEXT LAYER                        │
-│   public · private · privacy rules ·                 │
-│   judgement rules · north stars                      │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────┐
-│                 ORCHESTRATOR                         │
-│    North star check · Decompose · Route              │
-└──────┬───────────┬───────────┬───────────┬──────────┘
-       │           │           │           │
-┌──────▼─┐  ┌─────▼──┐ ┌──────▼─┐  ┌─────▼──┐
-│Finance │  │ Health │ │  Work  │  │ Travel │  · · · (plug-and-play)
-└──────┬─┘  └─────┬──┘ └──────┬─┘  └─────┬──┘
-       └──────────┴─────┬─────┴──────────┘
-                        │ Task Context Object
-┌───────────────────────▼─────────────────────────────┐
-│                 APPROVAL LAYER                       │
-│    Information · Approval · Question cards           │
-└───────────────────────┬─────────────────────────────┘
-                        │
-┌───────────────────────▼─────────────────────────────┐
-│             REAL-WORLD EXECUTION                     │
-└─────────────────────────────────────────────────────┘
-         ▲ feedback loop back into context layer
++-----------------------------------------------------+
+|                        YOU                          |
+|          Voice (dictation key) · Text prompt        |
++------------------------+----------------------------+
+                         |
++------------------------v----------------------------+
+|                 PERCEPTION LAYER                    |
+|          Dictation key (Whisper) · Keyboard input   |
++------------------------+----------------------------+
+                         |
+                         | direct routing (not through Ledger)
+                         |
++------------------------v----------------------------+
+|                   ORCHESTRATOR                      |
+|       Classifier -> North star check -> Route       |
++-------+------------------+------------------+-------+
+        |                  |                  |
++-------v------+  +--------v-----+  +---------v----+  +---------+
+|    Health    |  | University   |  |     Job      |  | Finance |
++--------------+  +--------------+  +--------------+  +---------+
+        |                  |                  |              |
+        +------------------+------------------+--------------+
+                           |
+                  Task Context Object (SQLite)
+                           |
++------------------------v----------------------------+
+|                  APPROVAL LAYER                     |
+|      macOS notifications · Three card types         |
++------------------------+----------------------------+
+                         |
++------------------------v----------------------------+
+|               REAL-WORLD EXECUTION                  |
++-----------------------------------------------------+
+         ^ feedback loop back into context layer
+
++-----------------------------------------------------+
+|                    THE LEDGER                       |
+|   Every layer writes events here asynchronously     |
+|   Append-only · SQLite · Never blocks the main path |
++-----------------------------------------------------+
+
++-----------------------------------------------------+
+|                  CONTEXT LAYER                      |
+|   Built by extraction pipeline reading the Ledger   |
+|   public · private · privacy rules ·                |
+|   judgement rules · north stars                     |
++-----------------------------------------------------+
 ```
 
-Data flows in one direction. Perception feeds the Ledger. The Ledger feeds the Context Layer via the extraction pipeline. Context informs the Orchestrator. The Orchestrator directs Agents via the Task Context Object. Agents surface output through the Approval Layer. Your approvals and overrides flow back into the Context Layer. The loop is complete and self-improving.
+**Critical data flow note:** Input goes directly from the Perception Layer to the Orchestrator. The Ledger is not in the request path. Every layer writes to the Ledger asynchronously as a side effect. The Ledger feeds the Context Layer via the extraction pipeline, which runs as a background job. The Orchestrator reads from the Context Layer at the start of each task, not from the Ledger directly.
 
 ---
 
-## 5. Perception Layer
+## 3. Perception Layer
 
-The Perception Layer is how north understands your world without you manually updating it. It runs continuously and passively.
+The Perception Layer is how north receives input. In v1, all input is explicit and user-initiated. Nothing is captured passively or ambiently.
 
-### 5.1 Microphone Input
+### 3.1 Voice Input: Dictation Key
 
-A microphone runs continuously and captures all audio - conversations, calls, podcasts, videos, meetings. Transcribed locally using Whisper and written immediately to the Ledger.
+The system dictation shortcut (double-tap `Fn` on macOS) triggers Whisper transcription. The user speaks, releases the key, and the transcribed text is routed directly to the Orchestrator via `POST /orchestrator/task`.
 
-The microphone is the primary passive input channel. Most of what matters about your life passes through audio - decisions made in conversations, preferences expressed, commitments given, things learned while listening. Capturing this means the system learns about you without any deliberate effort on your part.
+- Whisper runs locally, no cloud transcription
+- No wake word, no ambient capture, no continuous mic
+- Every transcription is intentional and user-initiated
+- Transcribed text is treated identically to keyboard input downstream
 
-> **Why continuous?** Manually logging your life is friction. The moment you have to remember to update a system, it becomes a task in itself. Running continuously removes this friction entirely.
+### 3.2 Text Input: Keyboard Prompt
 
-### 5.2 Screen Input
+The user types a prompt directly into the Web UI or CLI and submits it. Routes directly to the Orchestrator via the same endpoint.
 
-Screen capture is the universal integration fallback. Many applications do not expose APIs, or their APIs are paywalled or change frequently. Rather than building and maintaining dozens of integrations, the screen reader sees what you see and extracts relevant context from it.
+- Available via Web UI input field
+- Available via CLI: `north task "your prompt here"`
+- Both paths hit `POST /orchestrator/task`
 
-Screen capture operates in three modes:
+### 3.3 What Is Out of Scope for v1
 
-- **On-demand** - you explicitly ask the system to look at your screen
-- **Triggered** - activates when you open an app that has no native integration
-- **Periodic** - lightweight screenshot every few minutes when the system is active
+- Screen capture
+- Ambient microphone recording
+- Browser extension and DOM parsing
+- Mobile microphone input
+- Wake word detection
+- Native app integrations (Gmail, Canvas, etc.)
 
-> **Why screen over integrations?** Native integrations break when apps update APIs, move features behind paywalls, or deprecate endpoints. The screen is a stable universal interface - it works with any app, forever, because it sees exactly what you see.
-
-### 5.3 Native Integrations
-
-Where apps provide good APIs, native integrations are preferred - they give structured, reliable, low-cost data. Examples: Gmail, Google Calendar, GitHub, Notion, Spotify.
-
-Priority rule: **prefer native integration → fall back to screen → fill gaps with mic.**
-
-### 5.4 Wake Word and Intent Detection
-
-Not everything the microphone hears is a command to north. A lightweight always-on wake word detector listens for a specific trigger phrase. When detected, the system shifts from passive capture to active command mode and routes the intent to the Orchestrator. Everything else stays passive and flows only to the Ledger.
-
-### 5.5 Mobile as Perception Extension
-
-The mobile app extends the perception layer beyond the desktop. When you leave your machine, your phone's microphone continues capturing. The system does not go blind when you are away from your desk. Audio captured on mobile feeds into the same Ledger as desktop capture.
+These are deliberately deferred. v1 perception is intentional input only.
 
 ---
 
-## 6. The Ledger
+## 4. The Ledger
 
-The Ledger is a permanent, append-only record of everything the Perception Layer captures. It is never modified - only written to. Think of it as a personal life log.
+The Ledger is the system's complete, permanent audit trail. Every event that happens in north (whether triggered by the user, a cron job, an async job, or an agent) writes an entry to the Ledger asynchronously. The Ledger write never blocks the main request path. Nothing is deleted by default.
 
-Every entry is timestamped and tagged with its source:
+### 4.1 Purpose
+
+The Ledger serves three jobs simultaneously:
+
+1. **Audit trail:** complete history of everything north did and why
+2. **Failure recovery:** granular per-agent entries with full structured output allow partial task reconstruction without wasting tokens
+3. **Context source:** the extraction pipeline reads the Ledger to build and update the Context Layer
+
+### 4.2 Schema
+
+```sql
+CREATE TABLE ledger (
+  id              TEXT PRIMARY KEY,
+  timestamp       DATETIME NOT NULL,
+  source          TEXT NOT NULL,
+    -- full enum defined in Section 4.3
+  task_id         TEXT,              -- links to a task if part of one
+  agent           TEXT,              -- which agent wrote this entry (if applicable)
+  input           TEXT,              -- what triggered this event
+  action          TEXT,              -- what the system did
+  output          TEXT,              -- human-readable summarized result for UI display
+  agent_output    JSON,              -- full structured agent output for Task Context reconstruction on failure
+  tools_used      JSON,              -- list of tools called during this event
+  model_used      TEXT,              -- which LLM was used
+  tokens_in       INTEGER,
+  tokens_out      INTEGER,
+  cost_usd        REAL,
+  status          TEXT,              -- completed | pending | failed | approved | rejected | cancelled
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+```
+
+**Two output fields are intentional.** `output` is a human-readable summary shown in the Ledger viewer in the Web UI. `agent_output` is the full structured JSON the agent produced, used exclusively for reconstructing the Task Context Object during failure recovery. Both are written together when an agent completes its subtask.
+
+### 4.3 Source Field: Complete Enum
+
+The `source` field must be exactly one of the following values. All writers across the entire codebase must use these exact strings. No other values are valid.
 
 ```
-[2026-03-31 09:14:22] [mic] [source: call]
-  I think I want to lean more toward ML infrastructure, pure backend is getting repetitive
-
-[2026-03-31 10:45:01] [screen] [source: browser - moneycontrol.com]
-  User viewing HDFC Bank, price 1642, checking 52-week high
-
-[2026-03-31 11:20:44] [mic] [source: ambient]
-  remind me to look into Anyscale pricing before the LinkedIn internship starts
+prompt              user typed a prompt via CLI or Web UI
+mic                 user spoke via dictation key, Whisper transcribed
+cron                job triggered by the cron scheduler
+agent               an agent writing its own completion entry
+async               an async or retry job triggered by the job processor
+system              internal system events (startup, shutdown, config change,
+                    classifier decisions, routing decisions, north star checks,
+                    extraction pipeline writes, tool confidence updates)
+manual_injection    user fed context via file, text, or URL
+inference_router    inference cost and model usage logging per API call
+approval            user approved, rejected, or answered a question card
 ```
 
-### 6.1 Three Purposes
+### 4.4 Write Rules
 
-1. **Raw material** for the extraction pipeline - the Context Layer is derived from it
-2. **Searchable personal memory** - query it directly to recall decisions from weeks ago
-3. **Safety net** - if the extraction layer misses something, the Ledger preserves it for reprocessing
+- Every agent writes its own entry immediately upon completing its subtask, not when the whole task completes
+- The Orchestrator writes entries (source: system) for routing decisions, north star checks, and classifier decisions
+- The Orchestrator writes entries (source: system) for every inter-agent data request it mediates
+- The job processor writes entries for every cron and async job execution
+- The Approval Layer writes entries (source: approval) for every approval, rejection, and question answered
+- The Inference Router writes entries (source: inference_router) for every inference call
+- Entries are never modified after writing, only new entries are added
+- All Ledger writes are asynchronous and non-blocking
 
-### 6.2 Configurable Retention Windows
+### 4.5 Granularity
 
-The Ledger uses a rolling archive model with fully configurable window sizes. Nothing is deleted by default.
-
-```yaml
-ledger_config:
-  hot_window_days: 30        # actively queried, full fidelity, fast access
-  archive_after_days: 30     # compress and move to cold storage after this
-  delete_after_days: null    # null = never delete. set a number to auto-purge.
-  compression: true          # compress archived entries to save space
-```
-
-- **Hot window** - recent entries in active SQLite, fully queryable, fast
-- **Cold archive** - older entries compressed and stored, retrievable when needed but not actively queried
-- **Delete** - disabled by default. Storage cost for compressed text is negligible even at years of scale.
-
-Changing window sizes does not require touching any other part of the system. Tune them as you learn how you actually use the Ledger.
-
-### 6.3 Privacy Routing in the Ledger
-
-Not all Ledger entries are equal. Before writing an entry, the Perception Layer checks the privacy rules. Entries containing sensitive content - specific financial figures, health details, relationship dynamics - are flagged as private and written to the local Ledger only. Everything else goes to the cloud Ledger.
+One entry per agent per task, not one entry per task. This is critical for failure recovery. If three agents are running and one fails, the two completed agents' full outputs are preserved in `agent_output` in the Ledger and can be reconstructed into a partial Task Context Object without re-running them.
 
 ---
 
-## 7. Context Layer
+## 5. Context Layer
 
-The Context Layer is the most important component of north. It is a structured, persistent model of you - your goals, constraints, preferences, decision patterns, and north stars. Every agent reads from it. Without it, agents are generic tools. With it, they are your personal specialists.
+The Context Layer is a structured, persistent model of the user: goals, preferences, constraints, decision patterns, and north stars. Every agent reads from it. It starts empty and grows naturally from usage. No onboarding, no structured intake.
 
-> The context layer is the primary moat. Every day it runs, it knows you better. After six months, it contains something no competitor can replicate. The switching cost grows every day.
+### 5.1 Storage
 
-### 7.1 Extraction Pipeline
-
-A background job runs periodically - every few minutes - reading new Ledger entries, passing them through a fast cheap LLM, and writing only meaningful context deltas to the Context Layer.
-
-The extraction layer asks one question about every Ledger entry: *does this tell me something new, meaningful, and durable about this person?* A preference expressed, a decision made, a goal updated, a commitment given - these are context-worthy. Background noise and filler conversation are discarded.
-
-The Ledger stores everything. The Context Layer stores only meaning. Agents read from Context, not the Ledger, which keeps their inputs clean and compact.
-
-### 7.2 The Five Documents
+Five markdown files. Human-readable, directly editable, git-versioned.
 
 ```
 context/
-  public.json            ← who you are. freely read by all agents.
-  private.md             ← sensitive details. local only. gated, permission-required.
-  privacy_rules.md       ← who can access what, and under what conditions.
-  judgement_rules.md     ← how you decide. confidence-scored, self-updating.
-  north_stars.md         ← what you are working toward, across all time horizons.
+  public.md            <- who you are. read by all agents.
+  private.md           <- sensitive details. local only. never leaves machine.
+  privacy_rules.md     <- who can access what, and under what conditions.
+  judgement_rules.md   <- how you decide. confidence-scored. self-updating.
+  north_stars.md       <- what you are working toward, across all time horizons.
 ```
 
-#### public.json
-Freely available to all agents in every interaction. Contains your general goals, skill set, schedule preferences, dietary habits, interests, and risk appetite. Populated initially through onboarding, then updated continuously by the extraction pipeline. Stored in cloud.
+### 5.2 The ContextStore Interface
+
+Nothing in the system reads or writes context files directly. Everything goes through the `ContextStore` interface. This makes the storage backend swappable: files today, database tomorrow, without changing any other layer.
+
+```python
+from abc import ABC, abstractmethod
+
+class ContextStore(ABC):
+    @abstractmethod
+    def read(self, document: str) -> str:
+        """Read a full context document by name."""
+        ...
+
+    @abstractmethod
+    def write(self, document: str, content: str) -> None:
+        """Overwrite a context document entirely."""
+        ...
+
+    @abstractmethod
+    def append(self, document: str, delta: str) -> None:
+        """Append a delta to a context document."""
+        ...
+
+    def search(self, query: str) -> str:
+        """Semantic search over context. Not implemented in v1.
+        Do not call this method in v1 code. It will raise NotImplementedError.
+        Upgrade to DBContextStore when semantic search is needed.
+        """
+        raise NotImplementedError(
+            "search() is not available in v1. "
+            "Upgrade to DBContextStore when context files exceed context window limits."
+        )
+
+
+class FileContextStore(ContextStore):
+    def __init__(self, base_path: str = "~/.north/context"):
+        self.base_path = base_path
+
+    def read(self, document: str) -> str:
+        with open(f"{self.base_path}/{document}") as f:
+            return f.read()
+
+    def write(self, document: str, content: str) -> None:
+        with open(f"{self.base_path}/{document}", "w") as f:
+            f.write(content)
+
+    def append(self, document: str, delta: str) -> None:
+        with open(f"{self.base_path}/{document}", "a") as f:
+            f.write(f"\n{delta}")
+```
+
+To swap the backend in the future:
+
+```python
+# One line change in config. Nothing else in the system changes.
+context_store = DBContextStore()  # was FileContextStore()
+```
+
+### 5.3 The Five Documents
+
+#### public.md
+General facts about the user freely available to all agents. Goals, preferences, schedule patterns, dietary habits, risk appetite, professional background. Updated continuously by the extraction pipeline.
 
 #### private.md
-Sensitive information that agents cannot read automatically. Includes specific account numbers and balances, medical details, relationship dynamics, and anything flagged as private. When an agent needs it, it raises a request. You approve. That session uses it and closes cleanly.
-
-**Stored locally only. Never leaves your machine.**
-
-> **The incognito model:** Think of private context access as an incognito session. The data is present in the system but compartmentalized - gated, session-scoped, and not mixed into regular context.
+Sensitive information agents cannot read automatically. Specific account numbers, medical details, relationship dynamics. When an agent needs it, it raises a request through the Orchestrator. The user approves via an Approval card. That session uses the data and closes cleanly. **Stored locally only. Never leaves the machine.**
 
 #### privacy_rules.md
-A document you edit directly. Defines which agents can request private context, which have automatic access, and which topics always route to private context regardless of source. Stored in cloud.
+Edited directly by the user. Defines which agents can request private context, which have automatic access, and which topics always route to private context. Also defines trust thresholds per action category used by the Approval Layer.
 
 #### judgement_rules.md
-A living document that writes itself entirely from watching you make decisions. You never touch it directly. Every approval, override, and answered question writes a delta to it. Over time it becomes a distilled model of how you think - not just what you prefer, but your reasoning patterns.
+A living document that writes itself entirely from watching the user make decisions. Never edited directly by the user or agents. Every approval, rejection, and answered question writes a delta to it. Confidence-scored.
 
 ```
 Finance:
   - Willing to take higher risk on small cap tech          [confidence: 8/10]
-  - Never approves anything over ₹50,000 without breakdown [confidence: 10/10]
-  - Rejected HDFC Bank three times - skip without catalyst [confidence: 7/10]
+  - Never approves anything over 50,000 without breakdown  [confidence: 10/10]
 
-Travel:
-  - Layover acceptable if savings exceed ₹10,000           [confidence: 9/10]
-  - Always prefers window seat                             [confidence: 10/10]
-  - Never books non-refundable hotels > 2 months out       [confidence: 6/10]
+Health:
+  - Prefers morning workouts before 9am                    [confidence: 6/10]
+  - Approves high-protein meal plans automatically         [confidence: 7/10]
 ```
 
-Each rule carries a confidence score. A rule seen once is a hypothesis. A rule seen twenty times is a reliable preference. The Orchestrator weights rules by confidence when deciding whether to auto-approve or surface a question. This prevents one unusual decision from permanently changing behavior. Stored in cloud.
+Each rule starts at confidence 1/10 (one observation = hypothesis). Confidence rises with each confirmation and decays slightly with each contradiction. The Orchestrator treats rules at 8/10 or above as reliable preferences eligible for auto-approval.
 
 #### north_stars.md
-Your goals across every time horizon simultaneously. Every action the Orchestrator takes first checks this document. If a suggestion conflicts with a north star at any horizon, the system surfaces the tension rather than resolving it silently.
+Goals across every time horizon simultaneously. Every consequential action checks this document before proceeding.
 
 ```
 Lifetime:   Financial independence, meaningful technical work at scale
-5-year:     Principal / Staff engineer at a top infrastructure company
+5-year:     Principal or Staff engineer at a top infrastructure company
 1-year:     Crush LinkedIn internship, publish ML research paper
 3-month:    Ship north v1, complete CS271 with strong grade
-This week:  Finish architecture doc, start Phase 2 of hallucination project
+This week:  Finish architecture spec, start Phase 2 of hallucination project
 ```
 
-North stars are not limited to one window. Multiple simultaneous horizons. The system evaluates actions bottom-up - weekly first, then upward. When two north stars conflict, it surfaces that tension to you rather than picking a side. Stored in cloud.
+When two north stars conflict, the Orchestrator surfaces the tension to the user rather than resolving it silently.
 
-> **Why multiple horizons?** A single fixed-window goal is too rigid for real life. Goals exist at every scale simultaneously. The north stars model lets the system serve your weekly focus without losing sight of your lifetime direction.
+### 5.4 Extraction Pipeline
 
-### 7.3 Feedback Loop
+A background job runs periodically (every few minutes) reading new Ledger entries and asking one question about each: does this tell me something new, meaningful, and durable about this person?
 
-The Context Layer is not static. Every approval, override, and answered question flows back as a delta into public context and judgement rules. The longer it runs, the less it needs to ask, and the better its defaults become.
+Since all Ledger entries in v1 come from intentional user input (not ambient capture), the signal-to-noise ratio is already high. The extraction pipeline uses a cheap fast model (high_volume pool) and writes deltas to the appropriate context documents via `ContextStore.append()`. Every write is logged to the Ledger with `source: system`.
+
+```
+New Ledger entry (source: mic):
+  "I always prefer window seats, book one for my next trip"
+
+Extraction pipeline:
+  -> meaningful preference detected
+  -> appends to judgement_rules.md:
+       "Always prefers window seat on flights [confidence: 1/10]"
+  -> Ledger write: source=system, action="extraction: judgement_rules.md updated"
+```
+
+### 5.5 Manual Context Injection
+
+Users can feed north information directly without waiting for the extraction pipeline to learn it naturally. All three paths are logged to the Ledger with `source: manual_injection` and then processed by the same extraction pipeline.
+
+**Via CLI:**
+```bash
+north context add --file resume.pdf
+north context add --file sjsu_transcript.pdf
+north context add --text "My LinkedIn internship starts June 2nd, team is distributed systems"
+north context add --url "https://linkedin.com/jobs/view/123456"
+```
+
+**Via Web UI:**
+- Drag and drop file upload
+- Text input field for direct facts
+- URL field for web content ingestion
+
+The extraction pipeline decides which context document each piece of information belongs to.
+
+### 5.6 Context Viewer
+
+The Web UI exposes a context viewer where the user can:
+- Read all five context documents
+- Edit them directly (writes via `ContextStore.write()`)
+- See what the extraction pipeline added and when (Ledger filtered by `source: system`)
+- Delete or correct wrong extractions
+
+Full visibility and control over what north knows.
 
 ---
 
-## 8. Onboarding - Solving the Cold Start
+## 6. The Orchestrator
 
-On day one, the context layer is empty. The judgement rules are blank. The north stars are undefined. A system that knows nothing about you cannot be useful, and a system that is not immediately useful will not be used long enough to learn. This is the cold start problem.
+The Orchestrator is the brain of north. It sits between the Perception Layer and the Agent Layer. Its job: receive intent, read context, check alignment, decompose into work, coordinate parallel execution, manage shared state, and handle failure.
 
-Onboarding solves it by seeding the context layer before passive perception has had time to build it naturally.
+### 6.1 Request Flow
 
-### 8.1 Structured Questionnaire
-
-When you first set up north, it asks a short set of structured questions across each domain - current goals, financial situation in broad strokes, dietary preferences, work setup, travel patterns. A deliberate 20-minute investment that pays off immediately.
-
-The questionnaire also captures your north stars. You define goals across time horizons - lifetime, five years, one year, this quarter, this week. This becomes the steering document for everything the Orchestrator does from day one.
-
-### 8.2 Document Ingestion
-
-Beyond the questionnaire, you can upload documents that describe your current life state:
-
-- **Resume** - professional background, skills, career trajectory
-- **SOPs and personal notes** - how you like to work
-- **Financial statements** - current position snapshot
-- **Health records** - baseline health context
-- **Any other relevant document**
-
-The extraction pipeline processes uploaded documents exactly like Ledger entries - pulling context deltas and writing them to the appropriate context documents. Someone who uploads ten documents on day one has a context layer that would otherwise take weeks of passive capture to build.
-
-> **Why document ingestion matters:** Passive perception is powerful but slow. It takes weeks of continuous listening to learn things a resume tells you in seconds. Document ingestion gives the system a running start.
-
----
-
-## 9. The Orchestrator
-
-The Orchestrator is the brain of north. It sits between the Context Layer and the Agent Layer. Its job: take your goals and incoming intents, translate them into concrete coordinated work, and route that work to the right agents.
-
-### 9.1 What It Does
-
-When you state an intent, the Orchestrator does four things in order:
-
-1. Reads the relevant slice of the Context Layer - constraints, preferences, prior decisions
-2. Checks your north stars - does this task serve your goals across all time horizons?
-3. Decomposes the intent into sub-tasks and identifies which agents handle each
-4. Creates a Task Context Object and coordinates execution
-
-### 9.2 North Star Check
-
-Before routing any task, the Orchestrator checks it against north_stars.md. If it aligns, it proceeds. If it conflicts with a goal at any horizon, the Orchestrator flags the tension before any work is done. It never silently resolves a north star conflict.
-
-Example: you ask the system to book a weekend trip to Goa. The Orchestrator checks north stars. Your three-month north star is shipping north v1. Your one-year north star includes a savings target. Before routing to the travel agent, it surfaces: *this trip costs ₹18,000 and falls during a week you marked as a deep work block. Do you want to proceed?* You decide.
-
-### 9.3 Trigger Model
-
-**Current version:** manually triggered via voice command with a wake word. You state your intent, it takes over. Intentional - manual triggers keep the system predictable while trust is being established.
-
-**Future version:** proactive - waking itself on a schedule or in response to signals from the Perception Layer. A Monday morning briefing reviewing progress toward your north stars and surfacing the week's agenda is the first natural step.
-
-### 9.4 Task Decomposition
-
-The Orchestrator breaks complex intents into discrete, agent-sized sub-tasks. Identifies dependencies - which must complete before another begins - and which can run in parallel. Routes each sub-task to the appropriate agent with the relevant context slice attached.
-
----
-
-## 10. Agent Layer
-
-Agents are niche specialists. Each knows one domain deeply and operates only within it. They do not talk to each other directly - they communicate through the shared Task Context Object managed by the Orchestrator.
-
-### 10.1 Plug-and-Play Agent Model
-
-The agent layer is a plugin registry. The Orchestrator does not know what agents exist in advance - it reads the registry at runtime and routes tasks to whatever is registered. Adding a new agent means dropping it into the registry with a standard interface. No changes to anything else.
-
-Every agent declares four things when registering:
-
-```yaml
-agent:
-  name: finance_agent
-  domain: finance                          # what category of tasks it handles
-  context_requirements:                    # which context slice it needs
-    - public.json
-    - private.md (requestable)
-  tools:                                   # external tools and APIs it has access to
-    - market_data_api
-    - portfolio_tracker
-  task_interface:                          # what tasks it accepts and what it outputs
-    accepts: [research, analysis, budget, forecast]
-    output_format: structured_json
-```
-
-This means the system is infinitely extensible. Legal agent that reviews contracts? Register it. Learning agent that builds study plans from your north stars? Register it. Relationships agent that surfaces when you should reach out to someone important? Register it. The architecture supports it without modification.
-
-The underlying model powering any agent is also swappable. Better model released tomorrow - point the agent at it. Done. Nothing else changes.
-
-> **Why plug-and-play?** Your life will change. The agents you need in six months are not exactly the agents you need today. A plugin registry treats extensibility as a first-class design property - new capability is additive, never disruptive.
-
-### 10.2 Initial Agent Set
-
-| Agent | Responsibilities |
-|-------|-----------------|
-| Finance | Stock research, portfolio review, budgeting, expense analysis, savings planning, forex |
-| Health | Meal planning, grocery lists, dietary tracking, supplement reminders, workout planning |
-| Work | Task planning, coding assistance, calendar management, meeting prep, project tracking |
-| Travel | Flight and hotel research, itinerary drafting, visa requirements, local recommendations |
-| Research | General research, summarising articles and papers, competitive analysis |
-
-### 10.3 The Task Context Object
-
-The Task Context Object is the shared workspace created by the Orchestrator for every multi-agent task. It replaces direct agent-to-agent communication. Agents read from it, write to it, and raise questions through it. They never need to know which other agents exist or what they are doing.
+Every input goes through four stages in order:
 
 ```
-TaskContext {
-  task_id          → unique identifier for this task
-  intent           → the original user request
-  triggered_by     → source and timestamp
-  status           → in_progress | awaiting_input | awaiting_approval | complete
-  north_star_check → alignment with active north stars, conflicts flagged
+Input arrives directly from Perception Layer (voice or text)
+       |
+       v
+Stage 1: Classifier (high_volume pool: fast, cheap)
+  -> trivial or consequential?
+  -> trivial:       skip to Stage 3
+  -> consequential: proceed to Stage 2
+  -> Ledger write: source=system, action="classified as [trivial|consequential]"
+       |
+       v
+Stage 2: North Star Check (reasoning pool)
+  -> reads north_stars.md via ContextStore
+  -> aligns:    proceed to Stage 3
+  -> conflicts: surface tension card to user, await decision before continuing
+  -> Ledger write: source=system, action="north_star_check: [aligned|conflict]"
+       |
+       v
+Stage 3: Routing Decision (reasoning pool)
+  -> reads public.md and agent registry via ContextStore and filesystem
+  -> decides which agents are needed
+  -> identifies dependencies between agents
+  -> creates parallel execution groups
+  -> creates Task Context Object (new SQLite file for this task_id)
+  -> Ledger write: source=system, action="routed", agents=[...]
+       |
+       v
+Stage 4: Parallel Execution
+  -> spins up agent groups in dependency order
+  -> manages shared state via Task Context Object
+  -> assembles final output when all groups complete
+  -> routes output to Approval Layer
+```
 
-  user_context     → relevant slice from the Context Layer
+### 6.2 Classifier
 
-  agents_involved  → list of agents assigned to this task
+A single LLM call (high_volume pool) categorizing incoming intent as trivial or consequential.
 
-  shared_state     → where agents read and write their outputs
-  {
-    finance   → { estimated_cost: X, budget_ok: true, forex_advice: Y }
-    work      → { conflicts: [], calendar_blocked: true }
-    travel    → { flights: [...], hotels: [...], itinerary: draft }
-    health    → { dietary_notes: Z, vaccines: [] }
-  }
+**Trivial:** informational queries, simple lookups, article summaries, grocery lists, meal plans. No north star check. Routes directly to the appropriate agent and surfaces an Information card when done.
 
-  dependencies     → ordered constraints between agent tasks
-  questions        → raised by agents when genuinely unsure
-  approval_items   → decisions requiring your sign-off
-  final_output     → assembled by Orchestrator from shared_state
+**Consequential:** irreversible actions (booking, buying, deleting), time-consuming actions (blocks calendar), resource-consuming actions (costs money), goal-adjacent actions (directly touches north_stars.md). Goes through north star check. Requires an Approval card.
+
+### 6.3 Trivial Task Output Path
+
+Trivial tasks skip the north star check and the Approval card. After the agent completes:
+- The result is written to the Ledger with `status: completed`
+- An Information card notification is sent to the user
+- The result is displayed in the Web UI activity feed
+- No user action is required to proceed
+
+### 6.4 North Star Check
+
+A single reasoning pool call that reads `north_stars.md` and evaluates whether the requested task aligns with active goals across all time horizons. Checks bottom-up: this week first, then upward through 3-month, 1-year, 5-year, lifetime.
+
+- Aligns: proceed to routing
+- Conflicts: surface the specific tension to the user before any work is done. Never silently resolve a north star conflict.
+
+Example tension surface notification:
+```
+"You asked to book a weekend trip. This falls during your north sprint week
+(3-month goal: Ship north v1). Estimated cost is 18,000 against your savings
+target. Do you want to proceed?"
+  [Proceed anyway]  [Cancel]
+```
+
+### 6.5 Routing Decision
+
+A single reasoning pool call that reads the agent registry (all folders present in `/agents`) and produces a structured execution plan. The registry is read at runtime. Adding a new agent folder makes it automatically available for routing without any Orchestrator code changes.
+
+```json
+{
+  "task_id": "abc123",
+  "intent": "Help me prep for my first week at LinkedIn",
+  "parallel_groups": [
+    ["job", "university"]
+  ],
+  "dependencies": {},
+  "agents_involved": ["job", "university"]
 }
 ```
 
-### 10.4 The If-Unsure-Ask Rule
+Groups run in order. Within each group, agents run simultaneously. Dependencies are resolved between groups.
+
+**Note on agent selection:** The Orchestrator selects agents strictly based on registered agent domains and task content. It does not invent agents or use agents from outside the registry. If a task involves a domain with no registered agent, the Orchestrator routes to the closest available domain and flags the gap in its output.
+
+### 6.6 Task Context Object
+
+The Task Context Object is a SQLite database scoped to a single `task_id`. It is the shared workspace for all agents in a task. Agents never communicate directly. All reads and writes go through the Orchestrator.
+
+```sql
+CREATE TABLE task_state (
+  agent         TEXT NOT NULL,
+  key           TEXT NOT NULL,
+  value         JSON,
+  status        TEXT,           -- pending | completed | failed | awaiting_input
+  written_at    DATETIME,
+  PRIMARY KEY (agent, key)
+)
+```
+
+Each task gets its own SQLite file at `~/.north/tasks/task_{id}.db`.
+
+**Locking model: standard database principles**
+
+- **Shared lock (read):** multiple agents can read simultaneously. Blocks only if an exclusive lock is held.
+- **Exclusive lock (write):** one writer at a time. Blocks all readers and writers until complete. Released immediately after write.
+- SQLite WAL mode handles this natively. No custom locking implementation needed.
+
+**Read request flow:**
+```python
+response = orchestrator.read(
+  task_id="abc123",
+  requesting_agent="job",
+  key="finance.budget",
+  timeout=30,       # seconds to wait if key not yet available
+  required=True     # if False, agent proceeds with a logged assumption on timeout
+)
+```
+
+If the key is not yet available:
+- Orchestrator polls every 2 seconds until timeout
+- On timeout: checks source agent status
+  - still running: extend timeout, notify user
+  - failed: trigger failure handling flow
+  - completed but key missing: log error, notify user
+
+**Write request flow:**
+```python
+orchestrator.write(
+  task_id="abc123",
+  agent="finance",
+  key="budget",
+  value=28000,
+  status="completed"
+)
+```
+
+**Question request flow:**
+```python
+orchestrator.ask(
+  task_id="abc123",
+  agent="job",
+  question="Which role should I prioritize for LinkedIn internship prep?",
+  options=["Distributed Systems", "ML Infrastructure", "Both equally"],
+  blocks_execution=True
+)
+```
+
+Every read, write, and question is logged to the Ledger with `source: system`.
+
+**Task Context Object cleanup policy:**
+
+Task SQLite files are cleaned up by a daily cron job (`task_context_cleanup`, runs at 3:00 AM) to prevent unbounded accumulation:
+- `completed` or `cancelled`: deleted after 7 days
+- `failed`: retained for 30 days (may be needed for debugging or retry)
+- `pending` or `running` with no update in more than 24 hours: treated as stale, marked `failed`, retained for 30 days
+
+Ledger entries for all tasks are retained permanently regardless of Task Context Object cleanup.
+
+### 6.7 Failure Handling
+
+When an agent fails, the Orchestrator classifies the failure before taking any action:
+
+```
+rate_limit    -> auto-queue with cooldown. no notification yet.
+               -> silent retry after cooldown period
+                  (cooldown duration read from Retry-After header in API error response)
+               -> if retry succeeds: continues normally
+               -> if retry fails again: notify user
+
+timeout       -> retry once immediately
+               -> if succeeds: continues normally
+               -> if fails: notify user
+
+api_error     -> retry once
+               -> if succeeds: continues normally
+               -> if fails: notify user
+
+logic_error   -> notify immediately. do not retry.
+context_error -> notify immediately. needs user input to resolve.
+```
+
+**Failure notification card:**
+```
+"Finance agent failed: rate limit resolves in approximately 2 minutes."
+  [Retry Now]  [Queue for Later]  [Cancel Task]
+```
+
+- **Retry Now:** Orchestrator reads `agent_output` from Ledger for all completed agents, reconstructs Task Context Object, retries only the failed agent
+- **Queue for Later:** creates async job in job queue with `retry_after` timestamp. Silent retry after cooldown. Sends notification on completion.
+- **Cancel Task:** writes cancellation to Ledger with `status: cancelled`. Task closed.
+
+**Token preservation:** because the Ledger stores `agent_output` (full structured JSON) per agent per task upon completion, a failure in a later agent never wastes work already done. The Orchestrator reconstructs partial Task Context Object state from the Ledger without re-executing completed agents.
+
+### 6.8 Orchestrator REST API
+
+The Orchestrator exposes a local REST API on `localhost:8000`. Both the CLI and Web UI are clients of this API. The notification callback server also calls this API when the user taps an action button.
+
+All endpoints require the shared secret header `X-North-Secret: {secret}` (see Section 9.1).
+
+```
+POST   /orchestrator/task                -> submit a prompt
+GET    /orchestrator/tasks               -> list all active tasks
+GET    /orchestrator/task/{id}           -> get task status and output
+DELETE /orchestrator/task/{id}           -> cancel a task
+
+GET    /orchestrator/ledger              -> view ledger entries (paginated)
+GET    /orchestrator/ledger?task_id=x    -> filter by task
+GET    /orchestrator/ledger?agent=x      -> filter by agent
+GET    /orchestrator/ledger?source=x     -> filter by source type
+
+GET    /orchestrator/agents              -> list registered agents
+POST   /orchestrator/agent/run           -> manually trigger an agent
+POST   /orchestrator/agent/create        -> scaffold a new agent
+
+GET    /orchestrator/context/{doc}       -> read a context document
+PUT    /orchestrator/context/{doc}       -> overwrite a context document
+POST   /orchestrator/context/add         -> manual context injection
+
+GET    /orchestrator/jobs                -> list job queue (filterable by status)
+POST   /orchestrator/jobs                -> create a job
+DELETE /orchestrator/jobs/{id}           -> cancel a job
+
+GET    /orchestrator/inference/costs     -> inference cost summary
+GET    /orchestrator/inference/models    -> current model pool state
+
+GET    /orchestrator/tools/confidence    -> tool confidence scores per agent
+
+GET    /orchestrator/stream              -> SSE stream for real-time Web UI updates
+
+POST   /orchestrator/approval/respond    -> receive approval decision from callback server
+```
+
+---
+
+## 7. Agent Layer
+
+Agents are domain specialists. Each knows one domain and operates only within it. They do not talk to each other directly. All communication goes through the Task Context Object managed by the Orchestrator.
+
+### 7.1 v1 Agent Set
+
+| Agent | Domain | Responsibilities |
+|-------|--------|-----------------|
+| Health | Health and wellness | Meal planning, grocery lists, dietary tracking, workout planning |
+| University | Academic | Coursework, Canvas deadlines, research papers, professor communications, GPA tracking |
+| Job | Career | LinkedIn internship tasks, professional communications, career goals, interview prep, applications |
+| Finance | Personal finance | Budgeting, expense tracking, savings progress, investment research |
+
+### 7.2 Folder Structure
+
+Each agent is a self-contained folder dropped into `/agents`. The Orchestrator scans this directory on startup and hot-reloads when it detects new or modified folders.
+
+```
+/agents
+  /health
+    agent.py              <- core logic, LLM prompting, tool calls, output formatting
+    config.yaml           <- declaration: domain, model pool, accepted tasks
+    tools.yaml            <- tool edges with initial confidence scores
+    prompts/
+      system.md           <- system prompt defining agent personality and expertise
+      templates/          <- task-specific prompt templates
+    tests/
+      test_agent.py       <- isolated agent tests (no Orchestrator required)
+  /university/
+  /job/
+  /finance/
+```
+
+**config.yaml example:**
+```yaml
+agent: health
+domain: health
+model_pool: fast_cheap
+similar_to: null        # set to another agent name to inherit its tool confidence scores
+accepts:
+  - meal_planning
+  - grocery_list
+  - dietary_tracking
+  - workout_planning
+output_format: structured_json
+version: 1.0.0
+```
+
+**tools.yaml example:**
+```yaml
+tools:
+  - name: web_search
+    initial_confidence: 0.5
+  - name: calendar_api
+    initial_confidence: 0.7
+  - name: nutrition_api
+    initial_confidence: 0.8
+```
+
+### 7.3 Agent Registration
+
+Two paths to register an agent. Both result in the same outcome: a folder in `/agents` that the Orchestrator picks up automatically.
+
+**Path 1: Manual drop**
+```bash
+git clone https://github.com/someone/north-agent-legal ./agents/legal
+# Orchestrator hot-reloads, agent immediately available for routing
+```
+
+**Path 2: Scaffold generator**
+```bash
+north agent create
+```
+
+Interactive prompt:
+```
+Agent name: legal
+Domain: legal
+Model pool (fast_cheap / reasoning): reasoning
+Tools needed: web_search, document_reader
+Tasks it accepts: contract_review, compliance_check
+
+Created /agents/legal/
+   agent.py        <- boilerplate logic ready to customize
+   config.yaml     <- pre-filled from your answers
+   tools.yaml      <- tools with default confidence scores
+   prompts/
+     system.md     <- LLM-generated starter prompt for legal domain
+   tests/
+     test_agent.py <- basic test scaffold
+```
+
+The generator uses a reasoning pool call to produce a reasonable starting `system.md` based on the declared domain and tasks. The agent has a running start, not a blank page.
+
+### 7.4 Tool Graph
+
+Tools are not assigned statically per agent. They exist in a directed graph where edges connect agents to tools. An agent traverses only its own edges, loading only the tools it needs into context. No token waste from irrelevant tool definitions.
+
+**Graph structure:**
+
+```
+Tool Graph (directed):
+
+health ──────────────────> nutrition_api
+health ──────────────────> fitness_tracker
+health ──────────────────> calendar_api <── university, job
+health ──────────────────> web_search   <── job, finance, university
+
+university ──────────────> canvas_api
+university ──────────────> web_search
+university ──────────────> calendar_api
+university ──────────────> gmail_api   <── job, finance
+
+job ─────────────────────> linkedin_api
+job ─────────────────────> gmail_api
+job ─────────────────────> calendar_api
+job ─────────────────────> web_search
+
+finance ─────────────────> market_data_api
+finance ─────────────────> expense_tracker
+finance ─────────────────> web_search
+finance ─────────────────> gmail_api
+```
+
+Cross-domain tools (calendar_api, web_search, gmail_api) are graph nodes with multiple incoming edges. The agent traverses its own edges and picks up shared tools naturally through the graph structure.
+
+**Context loading order:** when an agent spins up, it loads its tool definitions into context sorted by confidence score descending. Low confidence tools are only loaded if the specific task explicitly requires them. This keeps the agent's context window lean.
+
+### 7.5 Confidence Scoring and Persistence
+
+Every tool edge in the graph carries a confidence score from 0.0 to 1.0. Scores update after every tool use.
+
+```python
+if tool_was_helpful:
+    new_confidence = min(1.0, current_confidence + 0.05)
+else:
+    new_confidence = max(0.0, current_confidence - 0.03)
+```
+
+**Persistence:** confidence scores are stored in `~/.north/tools.db`, a dedicated SQLite database. This is separate from the Ledger (event log) and separate from the Task Context Object (per-task scratch space). `tools.db` is the authoritative source for current confidence state.
+
+```sql
+CREATE TABLE tool_confidence (
+  agent           TEXT NOT NULL,
+  tool            TEXT NOT NULL,
+  confidence      REAL NOT NULL DEFAULT 0.5,
+  uses_total      INTEGER DEFAULT 0,
+  uses_helpful    INTEGER DEFAULT 0,
+  last_updated    DATETIME,
+  PRIMARY KEY (agent, tool)
+)
+```
+
+On Orchestrator startup, all confidence scores are loaded from `tools.db` into memory. Every tool use updates the in-memory score and writes the delta to `tools.db`. Every confidence update is also logged to the Ledger with `source: system`.
+
+**New agent inheritance:** when a new agent declares `similar_to: health` in `config.yaml`, the Orchestrator copies confidence rows from the `health` agent in `tools.db` as the new agent's starting prior. Tools not present in the source agent start at `initial_confidence` from `tools.yaml`.
+
+### 7.6 The If-Unsure-Ask Rule
 
 Agents follow a clear decision hierarchy when they encounter ambiguity:
 
-1. **Check Context Layer and Judgement Rules first.** The answer is probably already there.
-2. **Make a reasonable default, proceed, and flag it** transparently in the approval layer so you can override.
-3. **If the decision is consequential and no clear default exists - stop and ask.**
+1. Check Context Layer and `judgement_rules.md` first. The answer is probably already there.
+2. Make a reasonable default, proceed, and flag it clearly in the output for the user to override via the Approval card.
+3. If the decision is consequential and no clear default exists: stop and raise a Question through `orchestrator.ask()`.
 
-When an agent asks, it writes a question into its shared_state slot and sets the task status to `awaiting_input`. The Orchestrator surfaces it through the interface. You answer via voice. The answer is written back to the Task Context Object, the agent resumes, and the answer is added to judgement rules so the agent never asks the same question twice.
-
-> **Why this rule matters:** Agents making assumptions silently is worse than agents asking. A wrong assumption compounds - the travel agent books the wrong hotel class because it assumed your budget was higher. Every answer you give makes the system smarter for next time.
+When an agent raises a question, it sets `status: awaiting_input` in its Task Context Object row. The Orchestrator surfaces a Question card. The user answers via notification buttons or the Web UI. The answer is written back to the Task Context Object, the agent resumes, and the answered question is appended to `judgement_rules.md` so it is never asked again.
 
 ---
 
-## 11. Approval Layer
+## 8. Inference Router
 
-The Approval Layer is your primary interface with north. You do not interact with agents directly. You interact with a clean surface that shows you what the system has done, what it is about to do, and what it needs from you.
+The Inference Router selects the appropriate LLM for every inference call in the system. Fully dynamic: no hardcoded model names in application code, no static config file for model assignments. Model selection is automatic based on task priority.
 
-### 11.1 Three Card Types
+### 8.1 OpenRouter
 
-**Information cards** - things the system has done autonomously and is reporting back.
-- "Your weekly meal plan is ready."
-- "Portfolio summary for the week: up 2.3%."
+All inference goes through OpenRouter (openrouter.ai). Single API endpoint, single API key, access to all major models across all providers. OpenRouter handles availability routing and returns per-call cost data in the response.
 
-**Approval cards** - consequential actions the system wants to take but needs your sign-off.
-- "Book this flight for ₹32,000. Approve?"
-- "Buy 5 shares of this stock. Approve?"
+### 8.2 Dynamic Model Pools
 
-**Question cards** - genuine ambiguities an agent could not resolve from context or judgement rules alone.
-- "Do you prefer to stay in Shinjuku or Shibuya?"
-- "Direct flight for ₹45,000 or layover via Dubai for ₹28,000?"
+The router pulls the live model list from OpenRouter every 6 hours and automatically groups models into three tiers based on current pricing and published capability benchmarks.
 
-### 11.2 How Judgement Rules Filter Cards
+```
+reasoning pool:    top tier by capability-to-cost ratio
+                   typical members: claude-sonnet, gpt-4o, gemini-1.5-pro, deepseek-r1
 
-Before surfacing any card, the Orchestrator checks the judgement rules. If a rule clearly covers the situation it either auto-approves, auto-rejects, or pre-fills a recommendation. You only see a card if the situation is novel or the judgement rules are ambiguous. Over time the approval layer gets quieter - it asks you less as it learns your patterns.
+fast_cheap pool:   mid tier
+                   typical members: claude-haiku, gpt-4o-mini, gemini-flash
 
-### 11.3 Trust Calibration
+high_volume pool:  cheapest available
+                   typical members: gemini-flash, gpt-4o-mini, claude-haiku
+```
 
-Not all actions require the same oversight. You can configure trust thresholds per action category:
+Pools refresh automatically. When a new model releases or pricing changes, it enters the correct pool without any manual action.
 
-- **Low-stakes, repeatable** (grocery list, article summary, meal plan) → can be set to auto-approve
-- **High-stakes, irreversible** (moving money, booking non-refundable travel, calendar commitments) → always pause for explicit approval regardless of judgement rules
+**Pool refresh failure handling:** if the OpenRouter refresh call fails for any reason (network error, API outage), the router continues using the last successfully fetched pool. The last known pool is persisted to `~/.north/inference_cache.json` after every successful refresh. On Orchestrator startup, this cache is loaded before the first live refresh attempt. If no cache exists and the first refresh fails, the router falls back to a hardcoded minimal pool defined in `inference/fallback_pools.py`. In all fallback cases, a warning is logged to the Ledger with `source: system` and the Orchestrator continues accepting tasks normally.
 
-Trust thresholds are adjustable at any time through privacy_rules.md.
+### 8.3 Priority-Driven Model Selection
 
-### 11.4 Interface Design
+The router reads the task priority signal from the Orchestrator classifier and selects accordingly. No fixed model assignments per component.
 
-The interface is intentionally minimal. It is not a chat app. It is a notification surface. Cards appear when the system has something to surface. You review, approve or override, and move on. The system does not demand your attention - it waits for yours.
+```
+high priority    -> reasoning pool (best available model)
+medium priority  -> fast_cheap pool
+low priority     -> high_volume pool (cheapest available)
+```
+
+**Priority signals:**
+- Consequential task (from classifier): high priority
+- Background, async, or non-blocking task: low priority
+- Everything else: medium priority
+
+**Component defaults at v1:**
+```
+orchestrator routing      -> high priority
+north star check          -> high priority
+finance agent             -> high priority (consequential domain)
+job agent                 -> high priority (consequential domain)
+university agent          -> medium priority
+health agent              -> medium priority
+extraction pipeline       -> low priority (background job)
+judgement rules writer    -> low priority (background job)
+classifier                -> low priority (simple binary classification)
+```
+
+### 8.4 Automatic Fallback
+
+On rate limit or API error for any model, the router automatically selects the next available model in the same pool. The calling agent never knows which model it is using and never stops executing.
+
+```
+finance agent -> requests reasoning pool -> claude-sonnet rate limited
+             -> router tries gpt-4o
+             -> if gpt-4o also rate limited -> tries gemini-1.5-pro
+             -> agent continues transparently
+```
+
+### 8.5 Cost Tracking
+
+Every inference call is logged to the Ledger with `source: inference_router`:
+
+```
+source:     inference_router
+component:  finance_agent
+priority:   high
+model_used: anthropic/claude-sonnet
+tokens_in:  1240
+tokens_out: 380
+cost_usd:   0.0024
+task_id:    abc123
+```
+
+Cost summary available via CLI and Web UI:
+```bash
+north inference costs --period week
+north inference costs --period month
+north inference costs --agent finance
+north inference models           # show current pool state
+```
 
 ---
 
-## 12. Interface Model
+## 9. Approval Layer
 
-north has three parallel interfaces serving three distinct purposes. None replaces the others - they are all first-class and used simultaneously.
+The Approval Layer is the primary interface between north and the user for consequential outputs. Users do not interact with agents directly. They interact with macOS notifications and the Web UI.
 
-### 12.1 CLI - Control Plane
+### 9.1 macOS Native Notifications and Security
 
-The CLI is how you operate *on* the system. Configure settings, inspect the context layer, debug an extraction, manually edit a judgement rule, run a specific agent, force a ledger reprocess. Developer mode. Always available regardless of what the voice layer is doing.
+The Approval Layer sends macOS native notifications with action buttons. A local callback server runs on `localhost:8001` and receives button taps from macOS.
 
-Use it when you are building, tuning, or debugging. Think of it the same way as SSH into a server - you use it when you need control, not when you need speed.
+**Security:** the notification callback server is secured with a shared secret generated at first startup and stored at `~/.north/secret.key`. Every notification payload embeds this secret in the callback URL or request body. Every callback request to `localhost:8001` must include the `X-North-Secret` header with the correct value. Requests without a valid secret are rejected with HTTP 403. This prevents any other local process from faking an approval action.
+
+The same shared secret is required on all calls to the Orchestrator REST API (Section 6.8).
+
+```
+Agent completes work
+-> Approval Layer creates card payload
+-> Sends macOS notification with action buttons
+   (callback URL contains the shared secret)
+-> User taps action button
+-> macOS sends POST to localhost:8001/callback with secret
+-> Callback server validates secret
+-> Forwards decision to POST /orchestrator/approval/respond
+-> Orchestrator writes to Ledger: source=approval, status=[approved|rejected]
+-> judgement_rules.md updated via extraction pipeline
+-> System executes approved action or cancels rejected one
+```
+
+### 9.2 Three Card Types
+
+**Information cards:** completed autonomous work requiring no action.
+```
+"Your weekly meal plan is ready."
+"Portfolio summary: up 2.3% this week."
+  [View Detail]
+```
+
+**Approval cards:** consequential actions requiring explicit sign-off before execution.
+```
+"Book flight SFO to NRT for 32,000. June 12 to 19."
+  [Approve]  [Reject]  [View Detail]
+```
+
+**Question cards:** genuine ambiguities the agent could not resolve from context.
+```
+"Do you prefer to stay in Shinjuku or Shibuya for the Japan trip?"
+  [Shinjuku]  [Shibuya]  [View Detail]
+```
+
+### 9.3 View Detail
+
+For complex outputs that do not fit in a notification (full itineraries, research summaries, meal plans), the [View Detail] button opens the full card in the Web UI on the second monitor. The user can approve, reject, or answer questions directly from the Web UI without interacting with the notification.
+
+### 9.4 Judgement Rules Filtering
+
+Before surfacing any card, the Orchestrator checks `judgement_rules.md`. If a rule clearly covers the situation at confidence 8/10 or above, it auto-approves, auto-rejects, or pre-fills a recommendation. Cards only surface when the situation is novel or when no high-confidence rule covers it. Over time the approval layer gets quieter.
+
+### 9.5 Trust Thresholds
+
+Configurable per action category in `privacy_rules.md`:
+
+```
+low_stakes_repeatable:    auto-approve  # grocery list, meal plan, article summary
+medium_stakes:            notify        # calendar changes, research outputs
+high_stakes_irreversible: always ask    # money movement, bookings, commitments
+```
+
+High-stakes-irreversible actions always surface an Approval card regardless of judgement rule confidence. This is a hard override that cannot be bypassed by learned rules.
+
+### 9.6 Feedback Loop
+
+Every approval, rejection, and answered question is processed by the extraction pipeline and appended to `judgement_rules.md`. The system learns from every interaction and asks less over time.
+
+---
+
+## 10. Interface Model
+
+north has two primary interfaces. Both talk to the same Orchestrator REST API. The CLI is direct access. The Web UI makes HTTP calls to the same endpoints.
+
+### 10.1 Web UI: Second Monitor Dashboard
+
+A local React app served at `localhost:3000`. Intended to run permanently on a second monitor, giving continuous visibility into everything north is doing.
+
+**Three panels:**
+
+**Live Activity Feed**
+Real-time stream of Orchestrator activity via SSE (`GET /orchestrator/stream`). Every agent action, tool call, Ledger write, and job execution appears as it happens. Each event shows source, agent, action, and status.
+
+**Approval Surface**
+Full card rendering for complex approvals and questions. Approve, reject, and answer questions directly here without opening a notification. All cards that have been sent as notifications are also mirrored here.
+
+**Control Panel**
+- Submit text prompts to the Orchestrator
+- View and edit all five context documents
+- Browse Ledger history with filters (source, agent, task ID, date range)
+- Manage registered agents (view config, enable, disable)
+- View job queue with filters (status, agent, type) and cancel controls
+- View inference cost breakdown by period and agent
+- Manual context injection (file upload, text input, URL ingestion)
+- Tool confidence scores per agent (read-only view)
+
+### 10.2 CLI: Control Plane
+
+Direct terminal access to the Orchestrator. Every command maps to a REST API call.
 
 ```bash
+# Task management
+north task "Plan my week"
+north task "What assignments are due this week?"
+north tasks                              # list active tasks
+north task cancel {id}
+
+# Context management
 north context view public
-north context edit judgement_rules
-north ledger reprocess --from 2026-03-01
-north agent run finance --task "portfolio review"
-north config set ledger.hot_window_days 14
+north context view north_stars
+north context edit judgement_rules       # opens in $EDITOR
+north context add --file resume.pdf
+north context add --text "I prefer mornings for deep work"
+north context add --url "https://example.com/article"
+
+# Agent management
+north agent list
+north agent create
+north agent run health --task "meal plan for today"
+
+# Ledger
+north ledger                             # recent entries
+north ledger --task {id}
+north ledger --agent finance
+north ledger --source manual_injection
+north ledger reprocess --from 2026-05-01 # rerun extraction pipeline from date
+
+# Job queue
+north jobs                               # list all jobs
+north jobs --status pending
+north job cancel {id}
+
+# Inference
+north inference costs --period week
+north inference costs --agent finance
+north inference models
+
+# Tools
+north tools confidence --agent health
+
+# Config
+north config set ledger.retention_days 90
+north config set jobs.poll_interval_seconds 5
 ```
-
-### 12.2 Voice - Interaction Plane
-
-Voice is how you interact *with* the system naturally. Trigger tasks, answer questions, give approvals, state new goals. Low friction, no context switching, always available. A wake word activates the Orchestrator. Everything else is passive ambient capture.
-
-Use it during your day without breaking flow. You never open an app. You never type. The system comes to you.
-
-### 12.3 Mobile App - Remote Control + Perception Extension
-
-The mobile app does two things:
-
-**As output** - the approval layer in your pocket. Cards surface as push notifications. You tap to review, approve, or override from anywhere. You never need to be at your desk to keep the system moving.
-
-**As input** - an extension of the Perception Layer when you are away from your machine. Your phone's microphone continues capturing when you leave your desk. Conversations, calls, podcasts on the go - all feed into the same Ledger as desktop capture. The system does not go blind when you leave.
 
 ---
 
-## 13. Inference Router
+## 11. Cron and Async Jobs
 
-north does not use one model for everything. Different components have different requirements - some need speed and cheapness, some need deep reasoning, some need accuracy. The right model is used for the right job.
+north executes work autonomously on a schedule and in response to events. All jobs, regardless of how they were created, flow through a single persistent SQLite job queue.
 
-The inference router reads a model config file. Each component declares its preferred model and a fallback. You can tune cost vs quality per component independently.
+### 11.1 Job Queue Schema
 
-```yaml
-inference_config:
-  extraction_layer:
-    model: claude-haiku        # fast, cheap, high volume, simple classification
-    fallback: gpt-4o-mini
-
-  orchestrator:
-    model: claude-sonnet       # needs strong reasoning and planning
-    fallback: gpt-4o
-
-  agents:
-    finance_agent:
-      model: claude-sonnet     # consequential, needs accuracy
-      fallback: gpt-4o
-    health_agent:
-      model: claude-haiku      # straightforward domain, lower stakes
-      fallback: gpt-4o-mini
-    travel_agent:
-      model: claude-haiku      # mostly retrieval and synthesis
-      fallback: gpt-4o-mini
-    work_agent:
-      model: claude-sonnet     # coding and planning need strong reasoning
-      fallback: gpt-4o
-    research_agent:
-      model: claude-sonnet     # deep synthesis, use strongest available
-      fallback: gpt-4o
-
-  judgement_rules_writer:
-    model: claude-haiku        # simple pattern writing, high frequency
-    fallback: gpt-4o-mini
-
-  north_star_check:
-    model: claude-sonnet       # consequential, needs nuance
-    fallback: gpt-4o
+```sql
+CREATE TABLE job_queue (
+  job_id          TEXT PRIMARY KEY,
+  type            TEXT NOT NULL,    -- cron | event | async | retry
+  agent           TEXT NOT NULL,
+  task            TEXT NOT NULL,
+  payload         JSON,
+  status          TEXT NOT NULL,    -- pending | running | completed | failed | cancelled
+  priority        INTEGER,          -- 1 (high) | 2 (medium) | 3 (low)
+  scheduled_at    DATETIME,         -- when to run
+  started_at      DATETIME,
+  completed_at    DATETIME,
+  retry_count     INTEGER DEFAULT 0,
+  max_retries     INTEGER DEFAULT 3,
+  retry_after     DATETIME,         -- for rate limit cooldown periods
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+)
 ```
 
-Swapping a model means changing one line in this config. Nothing else in the system changes. As better models are released, you point components at them and move on.
+The queue persists in SQLite at `~/.north/jobs.db`. If the Orchestrator goes down, it reads pending jobs on restart and resumes exactly where it left off. No jobs are lost.
+
+### 11.2 Job Processor
+
+Runs continuously as part of the Orchestrator. Polls `jobs.db` every 5 seconds (configurable via `north config set jobs.poll_interval_seconds`).
+
+```
+Job processor loop:
+-> SELECT * FROM job_queue
+   WHERE status = 'pending'
+   AND scheduled_at <= now
+   AND (retry_after IS NULL OR retry_after <= now)
+   ORDER BY priority ASC, scheduled_at ASC
+-> for each eligible job:
+     -> UPDATE status = 'running', started_at = now
+     -> spin up declared agent with job payload
+     -> on completion: UPDATE status = 'completed', write to Ledger
+     -> on failure: classify failure, update retry_after or surface failure card
+```
+
+### 11.3 Cron Jobs: v1 Schedule
+
+Fixed schedules defined in `jobs/scheduler.py`. User-configurable via CLI or Web UI.
+
+```
+health_daily_meal_plan         -> daily 7:00 AM
+university_canvas_check        -> daily 8:00 AM
+job_internship_update          -> daily 9:00 AM
+finance_expense_summary        -> daily 10:00 PM
+university_weekly_summary      -> every Monday 8:00 AM
+finance_weekly_budget_check    -> every Sunday 6:00 PM
+task_context_cleanup           -> daily 3:00 AM (Task Context Object file cleanup)
+```
+
+### 11.4 Event-Driven Jobs
+
+Triggered by signals rather than time. Event sources in v1 are limited (no native integrations) but the infrastructure is ready.
+
+```
+assignment deadline in 48 hours  -> trigger university agent warning
+expense logged above threshold   -> trigger finance agent budget check
+task marked complete             -> trigger north star progress check
+```
+
+Event-driven jobs enter the same queue as cron jobs with `type: event`, `scheduled_at: now`, `priority: 1`.
+
+### 11.5 Async Jobs
+
+Created mid-task by the failure handling flow (Queue for Later) or by agents that spawn background work.
+
+```
+Finance agent fails (rate limit)
+-> user selects "Queue for Later"
+-> job created: type=retry, retry_after=now + cooldown from Retry-After header
+-> job processor picks it up after cooldown
+-> Orchestrator reads agent_output from Ledger for completed agents
+-> reconstructs Task Context Object
+-> retries only the failed agent
+-> if succeeds: Information card sent
+-> if fails again: failure card surfaced
+```
 
 ---
 
-## 14. Storage Model
+## 12. Storage Model
 
-Storage in north is split by sensitivity. Private data never leaves your machine. Everything else lives in the cloud where you get better semantic search, faster retrieval, and less infrastructure to maintain.
+All storage is local SQLite and markdown files. Nothing proprietary, battle-tested concurrency via WAL mode.
+
+### 12.1 File Layout
 
 ```
-Storage Router:
-
-  private.md           → local only. never leaves the machine. ever.
-
-  public.json          → cloud
-  judgement_rules.md   → cloud
-  north_stars.md       → cloud
-  privacy_rules.md     → cloud
-
-  Ledger entries       → routed by content sensitivity
-    private-flagged    → local SQLite only
-    everything else    → cloud
+~/.north/
+  ledger.db              <- all ledger entries (append-only)
+  jobs.db                <- persistent job queue
+  tools.db               <- tool confidence scores per agent
+  inference_cache.json   <- last known OpenRouter model pool (fallback if refresh fails)
+  secret.key             <- shared secret for notification callbacks and REST API auth
+  tasks/
+    task_{id}.db         <- one SQLite file per active task (Task Context Object)
+                            cleaned up per Section 6.6 cleanup policy
+  context/
+    public.md
+    private.md           <- local only, never synced, never leaves machine
+    privacy_rules.md
+    judgement_rules.md
+    north_stars.md
 ```
 
-The **privacy routing layer** is the gatekeeper. Before any piece of data is written anywhere, it checks privacy_rules.md to determine the destination. Private-flagged content routes local. Everything else routes cloud. This happens automatically - you never have to think about it.
+### 12.2 Privacy Routing
 
-**Starting stack:**
-- Local: SQLite for the private ledger and private context
-- Cloud: Supermemory (or equivalent) for semantic retrieval over public context, judgement rules, and north stars
+Before any data is written anywhere, the privacy routing layer checks `privacy_rules.md` to determine where it goes. This is automatic and transparent.
 
-> **Why cloud for non-private data?** Better semantic search, vector retrieval over your judgement rules and north stars, and less infrastructure to maintain yourself. Start with what makes the system fast and useful. Optimize later.
+```
+content flagged as sensitive -> local files only (private.md, flagged ledger entries)
+everything else              -> standard local storage
+```
 
-> **Why local for private data?** Your most sensitive information should never be on someone else's infrastructure regardless of how mature the system gets. This is a permanent design decision, not a temporary one.
+`private.md` never leaves the machine under any circumstances. This is a hard, permanent design constraint.
 
-**Inference** uses cloud APIs - your chosen LLM (Claude, OpenAI, etc.). This is the same tradeoff you already accept when using Claude or ChatGPT today. Prompts include slices of your context layer, so non-private context may appear in inference calls. Private context is only included in inference when you explicitly approve it for that session.
+### 12.3 Future: Cloud and Semantic Search Layer
+
+When context files grow large enough that they no longer fit in a context window and semantic search becomes necessary, the `ContextStore` swaps from `FileContextStore` to a `DBContextStore` backed by a vector database. One line change in the Orchestrator initialization. Nothing else changes.
+
+The `search()` method raising `NotImplementedError` in `FileContextStore` marks exactly where this seam is. Any code that accidentally calls `search()` in v1 will fail loudly and immediately rather than silently returning empty results.
 
 ---
 
-## 15. End-to-End Data Flow
+## 13. End-to-End Data Flow
 
-Tracing a complete example - you say: *"Plan a trip to Japan in June."*
+Tracing a complete example. User says: "Help me prep for my first week at LinkedIn."
 
 ```
-1. Wake word detected. Orchestrator activates.
+1. User double-taps Fn key and speaks the prompt.
+   Whisper transcribes locally.
+   Text sent to POST /orchestrator/task (with X-North-Secret header).
+   Ledger write (async): source=mic, input="Help me prep for my first week at LinkedIn"
 
-2. Orchestrator reads Context Layer:
-   budget, dietary restrictions, leave balance, passport validity.
+2. Classifier (high_volume pool):
+   "internship prep" -> consequential
+   Ledger write (async): source=system, action="classified: consequential"
+   Proceed to north star check.
 
-3. Orchestrator checks North Stars:
-   → 1-year goal includes savings target
-   → 3-month goal: ship north v1
-   → Flags potential tension. Will surface in final approval card.
+3. North Star Check (reasoning pool):
+   Reads north_stars.md via ContextStore.
+   "Crush LinkedIn internship" is a 1-year north star. Full alignment.
+   Ledger write (async): source=system, action="north_star_check: aligned"
+   Proceed to routing.
 
-4. Orchestrator creates Task Context Object for this trip.
+4. Routing Decision (reasoning pool):
+   Reads agent registry and public.md.
+   Decides: job agent + university agent (check for schedule conflicts).
+   parallel_groups: [["job", "university"]], no dependencies.
+   Task Context Object created: ~/.north/tasks/task_abc123.db
+   Ledger write (async): source=system, action="routed", agents=["job","university"]
 
-5. Work agent runs (parallel):
-   Checks calendar, identifies available June dates.
-   Writes → shared_state.work: { conflicts: [], available_dates: [...] }
+5. Job agent spins up (reasoning pool, high priority):
+   Traverses tool graph: calendar_api [0.9], web_search [0.7], gmail_api [0.6]
+   Loads those three tool definitions into context (sorted by confidence).
+   Reads public.md: LinkedIn internship, distributed systems team, June 2nd start.
+   Reads judgement_rules.md: prefers mornings for deep work.
+   Produces first-week prep plan: onboarding checklist, team research, tool setup.
+   Writes to task_abc123: job.prep_plan = { full structured JSON }
+   Ledger write (async): source=agent, agent=job, agent_output={full JSON}, output="prep plan created"
+   Inference Router logs (async): source=inference_router, model=claude-sonnet, cost_usd=0.0031
 
-6. Finance agent runs (parallel):
-   Estimates trip cost, checks savings target alignment.
-   Writes → shared_state.finance: { estimated_cost: ₹28,000, budget_ok: true }
+6. University agent spins up simultaneously (fast_cheap pool, medium priority):
+   Reads public.md: SJSU schedule, current courses.
+   Checks calendar for June conflicts. Finds none.
+   Writes to task_abc123: university.schedule_conflicts = []
+   Ledger write (async): source=agent, agent=university, agent_output={full JSON}, output="no conflicts found"
 
-7. Travel agent runs (after work + finance complete):
-   Searches flights and hotels within confirmed budget and dates.
-   Checks judgement_rules: window seat preferred, layover ok if savings > ₹10,000.
-   Finds qualifying flight. One ambiguity remains - hotel area not in judgement rules.
-   Sets status: awaiting_input
-   Writes → shared_state.travel.questions: ["Shinjuku or Shibuya?"]
+7. Orchestrator reads task_abc123. Both agents completed. No conflicts, no questions raised.
+   Task is consequential -> routes to Approval Layer as Approval card.
 
-8. Approval Layer surfaces Question card:
-   "Do you want to stay in Shinjuku or Shibuya?"
+8. Approval Layer sends macOS notification:
+   "LinkedIn first week prep plan is ready."
+   [Approve]  [View Detail]
 
-9. You respond via voice: "Shinjuku."
-   → Answer written to Task Context Object
-   → Answer written to judgement_rules: "Prefers Shinjuku for Japan trips [confidence: 1/10]"
-   → Travel agent resumes, finalises itinerary.
+9. User taps View Detail.
+   Web UI on second monitor renders the full prep plan.
+   User reads it and taps Approve in the Web UI.
 
-10. Health agent runs:
-    Dietary notes for Japan, restaurant types to seek.
-    No vaccine requirements.
-    Writes → shared_state.health: { dietary_notes: [...], vaccines: [] }
+10. Web UI calls POST /orchestrator/approval/respond (with X-North-Secret header).
+    Orchestrator validates secret.
+    Ledger write (async): source=approval, status=approved
+    Extraction pipeline appends to judgement_rules.md:
+      "Approves detailed onboarding checklists [confidence: 1/10]"
+    task_abc123 status set to completed.
+    Information card sent: "LinkedIn prep plan approved."
 
-11. Orchestrator assembles final output from all shared_state slots.
-    Flags north star tension: trip costs ₹28,000, falls during deep work week.
-
-12. Approval Layer surfaces Approval card:
-    Complete trip plan - flights, hotels, itinerary, dietary notes, budget.
-    North star conflict noted: "This falls during your north sprint week."
-    You review, decide the trip is worth it, approve.
-
-13. Finance agent executes payment.
-    Travel agent confirms booking.
-    Context Layer updated with trip details.
-    Judgement rules updated.
+Total effort from user: one voice sentence, one tap.
 ```
-
-**Total effort from you:** one voice sentence, one question answered, one approval tapped. The north star tension was surfaced and you made an informed decision. Everything else was done by the system.
 
 ---
 
-## 16. Open Questions & TODOs
+## 14. Repository Structure
 
-The following are deliberately deferred to the next phase of design.
+```
+north/
+  orchestrator/
+    main.py                  <- Orchestrator entry point, FastAPI REST API on port 8000
+    classifier.py            <- trivial vs consequential classification
+    north_star_check.py      <- north star alignment check
+    router.py                <- agent routing and parallel execution planning
+    task_context.py          <- Task Context Object management (SQLite per task)
+    failure_handler.py       <- failure classification and retry logic
+    stream.py                <- SSE event stream for Web UI real-time updates
 
-**Unresolved decisions:**
+  agents/
+    health/
+      agent.py
+      config.yaml
+      tools.yaml
+      prompts/
+        system.md
+        templates/
+      tests/
+        test_agent.py
+    university/
+    job/
+    finance/
 
-- **Technical MVP scope** - the smallest version of this that provides daily value and can be built and tested in weeks, not months
-- **Proactive orchestration triggers** - how the system decides on its own to do something without a voice command. The Monday morning briefing is the first candidate.
-- **Multi-device sync** - how the context layer stays consistent across phone, laptop, and future devices. Especially the local private.md.
-- **Cloud storage provider** - Supermemory vs alternatives for the public context layer. Defer until the system is running and scale is clearer.
+  context/
+    store.py                 <- ContextStore ABC + FileContextStore implementation
+    extraction.py            <- extraction pipeline (Ledger -> context docs, background job)
+    injection.py             <- manual context injection handler (file, text, URL)
+    public.md
+    private.md
+    privacy_rules.md
+    judgement_rules.md
+    north_stars.md
 
-**TODOs:**
+  ledger/
+    ledger.py                <- async Ledger write interface
+    schema.py                <- source enum, status enum, schema constants
 
-> **TODO - Error recovery:** What happens when the system gets something wrong - the extraction layer misclassifies something, the judgement rules learn a bad pattern from one unusual decision, or an agent acts on a wrong assumption. Need a mechanism for correcting the system's model without breaking accumulated good patterns. Think through: manual override of specific judgement rules, confidence decay for stale rules, rollback of context deltas, and reprocessing Ledger entries with a corrected extraction prompt.
+  inference/
+    router.py                <- Inference Router (OpenRouter, dynamic pools, auto-fallback)
+    fallback_pools.py        <- hardcoded minimal pools used if OpenRouter is unreachable on startup
 
-> **TODO - Persona / Mental Models layer:** A system where you can load the mental models of historical figures - Machiavelli, Robert Greene, Buffett, Einstein - and the system surfaces suggestions through those lenses. Three modes: advisory (personas comment on suggestions), lens (a persona's principles are baked into a specific agent's reasoning), and debate (two personas surface their disagreement for your consideration). Personas are advisory only - they never override your north stars or judgement rules.
+  approval/
+    notifier.py              <- macOS notification sender
+    callback_server.py       <- local server on port 8001 receiving notification callbacks
+    cards.py                 <- card type definitions (Information, Approval, Question)
+    security.py              <- shared secret generation, validation, storage
 
-> **TODO - Agent handoff for real-time back-and-forth:** The current Task Context Object model handles most coordination well. There may be complex tasks where agents need to iterate in real-time rather than a single shared state pass. Design needed.
+  jobs/
+    processor.py             <- job queue processor (polls jobs.db every N seconds)
+    scheduler.py             <- cron job definitions and scheduling logic
+
+  tools/
+    registry.py              <- tool graph definition and edge traversal
+    confidence.py            <- confidence score read/write against tools.db
+    implementations/
+      web_search.py
+      calendar_api.py
+      gmail_api.py
+      canvas_api.py
+      nutrition_api.py
+      market_data_api.py
+      linkedin_api.py
+      fitness_tracker.py
+      expense_tracker.py
+
+  web/
+    src/                     <- React web UI (activity feed, approval surface, control panel)
+    public/
+
+  cli/
+    main.py                  <- CLI entry point, thin wrapper over Orchestrator REST API
+
+  config/
+    settings.py              <- system settings, defaults, environment config
+
+  tests/
+    integration/             <- end-to-end tests against a running Orchestrator
+    unit/                    <- unit tests per module, agents testable in isolation
+
+  README.md
+  requirements.txt
+  docker-compose.yml
+```
+
+---
+
+## 15. Open Questions
+
+The following are deliberately deferred. No coding agent should make decisions on these without explicit spec updates.
+
+**Context Storage Migration**
+When do context files become too large for LLM context windows and semantic search becomes necessary? No action needed until the system is running. The `ContextStore` interface and the `NotImplementedError` on `search()` mark exactly where the implementation gap is.
+
+**Native Integrations**
+Canvas, Gmail, Google Calendar APIs. Deferred for v1. The job processor and event-driven infrastructure are ready to receive polling jobs or webhook signals when integrations are added.
+
+**Mobile App**
+Approval surface on mobile. Post v1. macOS notifications on the primary machine are sufficient for v1.
+
+**Proactive Orchestration**
+The Monday morning briefing: Orchestrator waking itself on a schedule to summarize the week ahead without any user prompt. The cron job infrastructure is ready. The specific content format is not yet defined.
+
+**Multi-device Context Sync**
+How `judgement_rules.md` and `north_stars.md` stay consistent across multiple machines. Deferred until the system is stable on a single machine.
+
+**Confidence Decay**
+Judgement rules learned a long time ago may become stale as preferences change. A decay model (reducing confidence on rules not confirmed in the last N days) is not yet designed.
+
+**Error Recovery and Context Correction**
+Manual override of specific judgement rules, rollback of bad context deltas, reprocessing Ledger entries with a corrected extraction prompt. Mechanism not yet designed.
+
+**Persona Layer**
+Loading mental models of specific thinkers as advisory lenses on Orchestrator decisions. Deliberately post v1.
+
+---
+
+## 16. Tech Stack
+
+Every technology choice here is a firm decision, not a suggestion. Coding agents must not substitute alternatives without an explicit spec update.
+
+### 16.1 Language and Runtime
+
+**Python 3.12+**
+The entire backend (Orchestrator, agents, job processor, inference router, ledger, approval layer) is written in Python. No other backend language is used.
+
+**Package manager: uv**
+All dependencies are managed with `uv`. Do not use pip, poetry, or conda. `uv` is significantly faster and produces a locked `uv.lock` file for reproducible installs.
+
+```bash
+uv sync          # install all dependencies
+uv add {package} # add a new dependency
+uv run {command} # run a command in the project environment
+```
+
+### 16.2 Server
+
+**FastAPI + Uvicorn**
+The Orchestrator REST API runs on FastAPI served by Uvicorn on `localhost:8000`.
+
+```
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0.0
+sse-starlette>=2.0.0     <- SSE streaming for Web UI activity feed
+```
+
+FastAPI handles:
+- All REST endpoints defined in Section 6.8
+- SSE stream via `sse-starlette` (`GET /orchestrator/stream`)
+- Request and response validation via Pydantic models
+- Automatic OpenAPI docs at `localhost:8000/docs` (available in development)
+
+Uvicorn handles:
+- ASGI server
+- Single process, single worker (localhost only, no load balancing needed)
+- Async event loop for parallel agent coroutines
+
+The notification callback server (Section 9.1) runs as a second FastAPI app on `localhost:8001` within the same Uvicorn process using `Mount`.
+
+### 16.3 Database
+
+**SQLite via the standard library**
+All SQLite access uses Python's built-in `sqlite3` module directly. No ORM. Raw SQL only.
+
+WAL mode is enabled on every database at connection time:
+```python
+conn.execute("PRAGMA journal_mode=WAL")
+conn.execute("PRAGMA synchronous=NORMAL")
+```
+
+Four SQLite databases:
+```
+~/.north/ledger.db       <- ledger entries
+~/.north/jobs.db         <- job queue
+~/.north/tools.db        <- tool confidence scores
+~/.north/tasks/          <- one .db file per task (Task Context Object)
+```
+
+### 16.4 Async
+
+**asyncio (standard library)**
+All concurrency uses Python's built-in `asyncio`. No threading, no multiprocessing, no Celery, no Redis. Parallel agent execution uses `asyncio.gather()`. The job processor runs as an asyncio background task inside the same event loop as the FastAPI server.
+
+```python
+# Parallel agent execution
+results = await asyncio.gather(
+    run_agent("job", task_id),
+    run_agent("university", task_id)
+)
+```
+
+### 16.5 LLM and Inference
+
+**OpenRouter via httpx**
+All LLM API calls go through OpenRouter. HTTP calls use `httpx` with async support.
+
+```
+httpx>=0.27.0
+```
+
+No LLM framework (LangChain, LlamaIndex, etc.). Direct API calls only. The Inference Router in `inference/router.py` manages everything (pool building, model selection, fallback, cost logging).
+
+### 16.6 Voice Transcription
+
+**faster-whisper**
+Local Whisper transcription using `faster-whisper`, which is significantly faster than the original OpenAI Whisper package due to CTranslate2 quantization.
+
+```
+faster-whisper>=1.0.0
+```
+
+Model: `base.en` for v1 (fast, accurate enough for voice prompts, small download). Upgradeable to `small.en` or `medium.en` if accuracy is insufficient.
+
+### 16.7 Context Injection: File Parsing
+
+Document parsing for manual context injection (`north context add --file`):
+
+```
+pypdf>=4.0.0          <- PDF text extraction
+python-docx>=1.0.0    <- Word document extraction
+httpx>=0.27.0         <- URL fetching (already listed above)
+beautifulsoup4>=4.12  <- HTML parsing for URL ingestion
+```
+
+### 16.8 Frontend
+
+**React 18 + Vite + TypeScript**
+The Web UI is a standard React app scaffolded with Vite.
+
+```
+react 18
+typescript
+vite
+tailwindcss      <- styling
+```
+
+The React app is served by the FastAPI server in production (`localhost:3000` via a static file mount). In development, Vite's dev server runs separately on `localhost:5173` with a proxy to `localhost:8000`.
+
+SSE connection in the React app:
+```typescript
+const eventSource = new EventSource(
+  "http://localhost:8000/orchestrator/stream",
+  { headers: { "X-North-Secret": token } }
+)
+```
+
+The shared secret is fetched once on app load from `GET /auth/token` (localhost only endpoint, returns the secret to the browser for the session, stored in React state, never in localStorage).
+
+### 16.9 CLI
+
+**Typer**
+The CLI is built with Typer, which is built on top of Click and integrates naturally with FastAPI's Pydantic models.
+
+```
+typer>=0.12.0
+rich>=13.0.0     <- terminal formatting for ledger output, agent status, cost tables
+```
+
+Every CLI command is a thin wrapper over the Orchestrator REST API via `httpx`. The CLI reads `~/.north/secret.key` directly from the filesystem to populate the `X-North-Secret` header.
+
+### 16.10 macOS Notifications
+
+**terminal-notifier**
+macOS native notifications with action buttons via `terminal-notifier`, called as a subprocess from Python.
+
+```bash
+brew install terminal-notifier  # one-time setup
+```
+
+```python
+import subprocess
+
+subprocess.run([
+    "terminal-notifier",
+    "-title", "north",
+    "-message", "LinkedIn prep plan is ready.",
+    "-actions", "Approve,Reject,View Detail",
+    "-reply", f"http://localhost:8001/callback?secret={secret}&action=ACTIONVALUE"
+])
+```
+
+### 16.11 Environment and Configuration
+
+**Environment variables** for secrets and configuration that cannot be in the repo:
+
+```bash
+OPENROUTER_API_KEY=sk-or-...   # required, set once
+NORTH_HOME=~/.north            # optional, default ~/.north
+NORTH_ENV=development          # development | production
+```
+
+**`~/.north/secret.key`** is generated automatically on first `north start` if it does not exist. It is never committed to the repository.
+
+**`pyproject.toml`** is the single source of truth for dependencies, scripts, and tool configuration:
+
+```toml
+[project]
+name = "north"
+version = "1.0.0"
+requires-python = ">=3.12"
+
+[project.scripts]
+north = "cli.main:app"         # makes `north` available as a CLI command after install
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",           # for TestClient in FastAPI tests
+]
+```
+
+### 16.12 Getting Started (for new developers)
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/your-username/north
+cd north
+
+# 2. Install dependencies
+uv sync
+
+# 3. Set your OpenRouter API key
+export OPENROUTER_API_KEY=sk-or-...
+
+# 4. Start north
+uv run north start
+
+# This will:
+#   - Generate ~/.north/secret.key if it does not exist
+#   - Initialize all SQLite databases
+#   - Start the Orchestrator on localhost:8000
+#   - Start the callback server on localhost:8001
+#   - Serve the Web UI on localhost:3000
+
+# 5. In a separate terminal, verify it is running
+uv run north tasks
+```
+
+### 16.13 Complete Dependency List
+
+```toml
+[project.dependencies]
+# Server
+fastapi = ">=0.111.0"
+uvicorn = {extras = ["standard"], version = ">=0.29.0"}
+pydantic = ">=2.0.0"
+sse-starlette = ">=2.0.0"
+
+# HTTP client
+httpx = ">=0.27.0"
+
+# CLI
+typer = ">=0.12.0"
+rich = ">=13.0.0"
+
+# Voice transcription
+faster-whisper = ">=1.0.0"
+
+# Document parsing
+pypdf = ">=4.0.0"
+python-docx = ">=1.0.0"
+beautifulsoup4 = ">=4.12.0"
+
+# Scheduling
+apscheduler = ">=3.10.0"    # cron job scheduling for the job processor
+```
 
 ---
 
