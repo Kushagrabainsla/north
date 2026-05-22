@@ -99,12 +99,15 @@ The Perception Layer is how north receives input. In v1, all input is explicit a
 
 ### 3.1 Voice Input: Dictation Key
 
-The system dictation shortcut (double-tap `Fn` on macOS) triggers Whisper transcription. The user speaks, releases the key, and the transcribed text is routed directly to the Orchestrator via `POST /orchestrator/task`.
+A configurable push-to-talk hotkey triggers audio capture. The user speaks, releases the key, and the captured audio is sent to OpenRouter's transcription endpoint (`POST /api/v1/audio/transcriptions`) using the same `NORTH_OPENROUTER_API_KEY` north already uses for LLM inference. The transcribed text is then routed to the Orchestrator via `POST /orchestrator/task`.
 
-- Whisper runs locally, no cloud transcription
+- Cloud transcription via OpenRouter (Section 8), one provider and one API key for both LLM and STT
 - No wake word, no ambient capture, no continuous mic
 - Every transcription is intentional and user-initiated
 - Transcribed text is treated identically to keyboard input downstream
+- The capture hotkey is configurable and intentionally **not** `Fn`, which is reserved for macOS's built-in Dictation. Default: `Right Option + Space` (configurable in `~/.north/settings.toml`).
+
+The trade-off is explicit: audio leaves the machine in exchange for sub-second transcription latency and a single-provider operational story. The `Notifier`-style pattern (`docs/CODING_STYLE.md` Section 6.1) keeps a future local fallback (e.g. `mlx-whisper`) cheap to add if local-first ever becomes a requirement again.
 
 ### 3.2 Text Input: Keyboard Prompt
 
@@ -863,6 +866,12 @@ north inference costs --agent finance
 north inference models           # show current pool state
 ```
 
+### 8.6 Audio Transcription
+
+The Inference Router also owns audio transcription via OpenRouter's `POST /api/v1/audio/transcriptions` endpoint (see Section 16.6). The same client, the same `NORTH_OPENROUTER_API_KEY`, the same fallback semantics, and the same Ledger logging (`source: inference_router`) apply. Transcription is a separate code path from chat-completion (different endpoint, different request shape) but shares all infrastructure.
+
+Default transcription model: `groq/whisper-large-v3`. The Inference Router exposes a configurable override the same way it exposes LLM model selection.
+
 ---
 
 ## 9. Approval Layer
@@ -944,7 +953,7 @@ north has two primary interfaces. Both talk to the same Orchestrator REST API. T
 
 ### 10.1 Web UI: Second Monitor Dashboard
 
-A local React app served at `localhost:3000`. Intended to run permanently on a second monitor, giving continuous visibility into everything north is doing.
+A local web UI served by the Orchestrator at `localhost:8000/ui`. Server-rendered Jinja2 templates with HTMX for interactivity. No separate frontend process and no build step. Intended to run permanently on a second monitor, giving continuous visibility into everything north is doing.
 
 **Three panels:**
 
@@ -1062,7 +1071,7 @@ Job processor loop:
 
 ### 11.3 Cron Jobs: v1 Schedule
 
-Fixed schedules defined in `jobs/scheduler.py`. User-configurable via CLI or Web UI.
+Fixed schedules defined in `jobs/scheduler.py` as `(hour, minute, weekday)` tuples. The scheduler is a single asyncio background task that computes the next firing across all entries, sleeps until that moment, enqueues the matching job to `jobs.db`, then recomputes. No external scheduler library, consistent with the "asyncio only" stance in Section 16.4. User-configurable via CLI or Web UI.
 
 ```
 health_daily_meal_plan         -> daily 7:00 AM
@@ -1285,8 +1294,8 @@ north/
       expense_tracker.py
 
   web/
-    src/                     <- React web UI (activity feed, approval surface, control panel)
-    public/
+    templates/               <- Jinja2 templates (activity feed, approval surface, control panel)
+    static/                  <- vendored HTMX, CSS, any small assets
 
   cli/
     main.py                  <- CLI entry point, thin wrapper over Orchestrator REST API
@@ -1316,7 +1325,7 @@ When do context files become too large for LLM context windows and semantic sear
 Canvas, Gmail, Google Calendar APIs. Deferred for v1. The job processor and event-driven infrastructure are ready to receive polling jobs or webhook signals when integrations are added.
 
 **Mobile App**
-Approval surface on mobile. Post v1. macOS notifications on the primary machine are sufficient for v1.
+Approval surface on mobile. Post v1. macOS notifications on the primary machine are sufficient for v1. *Note:* the Section 16.8 switch to HTMX + server-rendered templates means a mobile-friendly approval surface is now reachable with template-level changes rather than a separate codebase. The deferral stands; the cost picture changed.
 
 **Proactive Orchestration**
 The Monday morning briefing: Orchestrator waking itself on a schedule to summarize the week ahead without any user prompt. The cron job infrastructure is ready. The specific content format is not yet defined.
@@ -1332,6 +1341,9 @@ Manual override of specific judgement rules, rollback of bad context deltas, rep
 
 **Persona Layer**
 Loading mental models of specific thinkers as advisory lenses on Orchestrator decisions. Deliberately post v1.
+
+**Offline Transcription Fallback**
+Voice input (Section 3.1) depends on OpenRouter being reachable. north has no fallback when the network is down or OpenRouter is degraded. A local Whisper variant (e.g. `mlx-whisper`) behind the same Inference Router interface would close this gap, but the threshold for when it is worth shipping — and the policy for switching modes — is not defined.
 
 ---
 
@@ -1423,14 +1435,18 @@ No LLM framework (LangChain, LlamaIndex, etc.). Direct API calls only. The Infer
 
 ### 16.6 Voice Transcription
 
-**faster-whisper**
-Local Whisper transcription using `faster-whisper`, which is significantly faster than the original OpenAI Whisper package due to CTranslate2 quantization.
+**OpenRouter Audio API**
+Transcription runs through OpenRouter's `POST /api/v1/audio/transcriptions` endpoint (announced May 2026) using the same `NORTH_OPENROUTER_API_KEY` north already uses for LLM inference. One provider, one key, one billing surface.
 
-```
-faster-whisper>=1.0.0
-```
+The Inference Router (Section 8) owns the transcription call exactly as it owns LLM calls. The same fallback and cost-logging path applies: every transcription writes a Ledger entry with `source: inference_router`.
 
-Model: `base.en` for v1 (fast, accurate enough for voice prompts, small download). Upgradeable to `small.en` or `medium.en` if accuracy is insufficient.
+Default transcription model: `groq/whisper-large-v3` (sub-second latency). Alternatives selectable via the Inference Router without code change:
+
+- `openai/whisper-1` — lowest cost
+- `openai/gpt-4o-transcribe` — highest accuracy on technical speech
+- `google/chirp-3` — strong on accented English
+
+No additional Python dependency. The existing `httpx` client handles the request.
 
 ### 16.7 Context Injection: File Parsing
 
@@ -1445,27 +1461,28 @@ beautifulsoup4>=4.12  <- HTML parsing for URL ingestion
 
 ### 16.8 Frontend
 
-**React 18 + Vite + TypeScript**
-The Web UI is a standard React app scaffolded with Vite.
+**HTMX + Jinja2**
+The Web UI is server-rendered Jinja2 templates with HTMX for interactivity. No npm, no build step, no separate frontend process. The Orchestrator's existing FastAPI app serves templates and static assets directly at `localhost:8000/ui` via `fastapi.templating.Jinja2Templates` and a `StaticFiles` mount.
 
 ```
-react 18
-typescript
-vite
-tailwindcss      <- styling
+jinja2>=3.1.0
+htmx              <- vendored as a single .js file in web/static/
 ```
 
-The React app is served by the FastAPI server in production (`localhost:3000` via a static file mount). In development, Vite's dev server runs separately on `localhost:5173` with a proxy to `localhost:8000`.
+SSE wiring (uses Section 6.8's `GET /orchestrator/stream`) is HTMX's built-in SSE extension:
 
-SSE connection in the React app:
-```typescript
-const eventSource = new EventSource(
-  "http://localhost:8000/orchestrator/stream",
-  { headers: { "X-North-Secret": token } }
-)
+```html
+<div hx-ext="sse"
+     sse-connect="/orchestrator/stream"
+     sse-swap="activity-event">
+</div>
 ```
 
-The shared secret is fetched once on app load from `GET /auth/token` (localhost only endpoint, returns the secret to the browser for the session, stored in React state, never in localStorage).
+Approval cards are plain `<form>` elements with `hx-post` to `/orchestrator/approval/respond`. No client-side state library, no hydration step.
+
+The shared secret is set as an HttpOnly session cookie on first load via `GET /auth/token` (localhost-only endpoint). It is never embedded in rendered HTML or accessible to JavaScript.
+
+Styling is a single hand-rolled `web/static/style.css` for v1. A classless CSS framework (e.g. Pico.css) can be added later as a separate decision if richer styling is needed.
 
 ### 16.9 CLI
 
@@ -1481,18 +1498,18 @@ Every CLI command is a thin wrapper over the Orchestrator REST API via `httpx`. 
 
 ### 16.10 macOS Notifications
 
-**terminal-notifier**
-macOS native notifications with action buttons via `terminal-notifier`, called as a subprocess from Python.
+**alerter**
+macOS native notifications with action buttons via `alerter`, called as a subprocess from Python. `alerter` is the actively maintained Swift fork of `terminal-notifier` and is the only command-line tool that still supports notification action buttons on current macOS releases (`terminal-notifier` itself dropped action button support).
 
 ```bash
-brew install terminal-notifier  # one-time setup
+brew install vjeantet/tap/alerter  # one-time setup
 ```
 
 ```python
 import subprocess
 
 subprocess.run([
-    "terminal-notifier",
+    "alerter",
     "-title", "north",
     "-message", "LinkedIn prep plan is ready.",
     "-actions", "Approve,Reject,View Detail",
@@ -1500,14 +1517,16 @@ subprocess.run([
 ])
 ```
 
+The `Notifier` ABC (see docs/CODING_STYLE.md Section 6.1) hides this choice from the rest of the system. Swapping `alerter` for a pyobjc-native UserNotifications binding later is a one-line dependency change.
+
 ### 16.11 Environment and Configuration
 
 **Environment variables** for secrets and configuration that cannot be in the repo:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-...   # required, set once
-NORTH_HOME=~/.north            # optional, default ~/.north
-NORTH_ENV=development          # development | production
+NORTH_OPENROUTER_API_KEY=sk-or-...   # required, set once
+NORTH_NORTH_HOME=~/.north            # optional, default ~/.north
+NORTH_NORTH_ENV=development          # development | production | test
 ```
 
 **`~/.north/secret.key`** is generated automatically on first `north start` if it does not exist. It is never committed to the repository.
@@ -1523,15 +1542,51 @@ requires-python = ">=3.12"
 [project.scripts]
 north = "cli.main:app"         # makes `north` available as a CLI command after install
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "httpx>=0.27.0",           # for TestClient in FastAPI tests
 ]
 ```
 
-### 16.12 Getting Started (for new developers)
+### 16.12 Getting Started
+
+north has two install paths: an end-user flow that bootstraps everything via a single `curl`, and a developer flow that runs from a checkout.
+
+#### For users (intended end-state — installer script not yet implemented)
+
+```bash
+curl -LsSf https://north.dev/install.sh | sh
+north start
+```
+
+The PyPI package name `north` and the installer host `north.dev` are placeholders pending availability checks. The flow below is the spec the installer must fulfill once written.
+
+The installer:
+
+1. Detects macOS arm64 or x86_64. Refuses on other platforms — the Approval Layer (Section 9) is macOS-only by design.
+2. Installs `uv` (via Astral's official one-liner) if not present.
+3. Installs Python 3.12+ via `uv` if not present.
+4. Installs `alerter` via Homebrew (`brew install vjeantet/tap/alerter`) for the notification surface (Section 16.10). Prompts before tapping.
+5. Installs the `north` package itself with `uv tool install north`, placing the `north` binary on the user's `PATH`.
+6. On first run of `north start`: prompts for `NORTH_OPENROUTER_API_KEY`, writes it to `~/.north/.env`, generates `~/.north/secret.key`, initializes all SQLite databases, and opens System Settings to request macOS notification permission.
+
+Optional auto-start at login (opt-in, default off):
+
+```bash
+north install --autostart
+```
+
+Writes `~/Library/LaunchAgents/dev.north.plist`. The Orchestrator becomes a background service that starts at login and survives reboots, consistent with north's "runs continuously" framing in Section 1.
+
+Updates:
+
+```bash
+uv tool upgrade north
+```
+
+#### For developers
 
 ```bash
 # 1. Clone the repo
@@ -1542,7 +1597,7 @@ cd north
 uv sync
 
 # 3. Set your OpenRouter API key
-export OPENROUTER_API_KEY=sk-or-...
+export NORTH_OPENROUTER_API_KEY=sk-or-...
 
 # 4. Start north
 uv run north start
@@ -1550,9 +1605,8 @@ uv run north start
 # This will:
 #   - Generate ~/.north/secret.key if it does not exist
 #   - Initialize all SQLite databases
-#   - Start the Orchestrator on localhost:8000
+#   - Start the Orchestrator on localhost:8000 (REST API at /, Web UI at /ui)
 #   - Start the callback server on localhost:8001
-#   - Serve the Web UI on localhost:3000
 
 # 5. In a separate terminal, verify it is running
 uv run north tasks
@@ -1567,6 +1621,7 @@ fastapi = ">=0.111.0"
 uvicorn = {extras = ["standard"], version = ">=0.29.0"}
 pydantic = ">=2.0.0"
 sse-starlette = ">=2.0.0"
+jinja2 = ">=3.1.0"          # server-rendered templates for the Web UI (Section 16.8)
 
 # HTTP client
 httpx = ">=0.27.0"
@@ -1575,17 +1630,13 @@ httpx = ">=0.27.0"
 typer = ">=0.12.0"
 rich = ">=13.0.0"
 
-# Voice transcription
-faster-whisper = ">=1.0.0"
-
 # Document parsing
 pypdf = ">=4.0.0"
 python-docx = ">=1.0.0"
 beautifulsoup4 = ">=4.12.0"
-
-# Scheduling
-apscheduler = ">=3.10.0"    # cron job scheduling for the job processor
 ```
+
+Scheduling has no external dependency: cron entries are `(hour, minute, weekday)` tuples and `jobs/scheduler.py` is a single asyncio background task (see Section 11.3).
 
 ---
 

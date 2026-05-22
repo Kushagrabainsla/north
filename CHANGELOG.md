@@ -1,0 +1,34 @@
+# Changelog
+
+All notable changes to north are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- `CHANGELOG.md`, following the Keep a Changelog convention. Every change to north now appends an entry here (see `docs/CODING_STYLE.md` Section 23.5).
+- `pyproject.toml` with project metadata and `pytest` + `pytest-asyncio` configuration matching the test conventions in `docs/CODING_STYLE.md` Section 18.
+- `tests/` scaffolding: `tests/conftest.py`, `tests/unit/`, `tests/integration/`, and a smoke test (`tests/unit/test_smoke.py`) that passes from a fresh clone.
+- `docs/CODING_STYLE.md` Section 23 "Working with Claude Code", codifying five collaboration rules: ask when unsure (23.1), confirm before substantive changes with a similar-pattern batching exception (23.2), tech decisions follow research → reason → propose → apply (23.3), tests are co-authored with code (23.4), every change updates this changelog (23.5).
+- `docs/CODING_STYLE.md` Section 18.8, a cross-reference pointing the testing rules forward to Section 23.4.
+- `README.md` Section 15 new entry "Offline Transcription Fallback" — names the reliability gap introduced by Decision 3 (cloud-only STT) without committing to a fix.
+- `CONTRIBUTING.md` at the repo root — covers the three flows required by `docs/CODING_STYLE.md` Section 21.3 (adding agents, adding tools, running tests) and restates the process rules from Section 23.
+- `CODE_OF_CONDUCT.md` at the repo root — Contributor Covenant v2.1 reference with a project-specific enforcement note.
+- `SECURITY.md` at the repo root — vulnerability reporting channel and the in/out-of-scope list (X-North-Secret bypass, callback forgery, prompt-injection exfiltration, ledger tampering).
+- `.env.example` at the repo root — required + optional env vars under the `NORTH_` prefix, documenting the canonical names that `pydantic-settings` will read.
+- `docs/CODING_STYLE.md` Section 23.6 "New Standards Land in This File" — when the user states a rule of practice, capture it tersely in the right section before acting; the file must stay lean.
+- `docs/CODING_STYLE.md` tightened across Sections 2 (SOLID), 3 (Design Patterns — now a table), 4 (Clean Code Rules), 5 (DRY), 6 (Plug and Play), and 23 (Working with Claude Code). File went 2054 → 1562 lines (~24% reduction). Redundant "wrong vs correct" example pairs collapsed to single rules; multi-paragraph prose tightened to single paragraphs. All reference content preserved: interface map (6.1), full Dependencies dataclass + builder pair (6.3), TOOL_GRAPH (6.5), LedgerSource/LedgerStatus enums (5.5), module layout (7.3), Settings class (17.1), .gitignore (20.4), .env.example (21.2).
+
+### Changed
+- `.gitignore` expanded from a single `.envrc` entry to the full layout specified in `docs/CODING_STYLE.md` Section 20.4 (Python, tool caches, env files, OS, editor).
+- `README.md` Section 16.10: macOS notification dependency switched from `terminal-notifier` to `alerter` (Swift fork by vjeantet). `terminal-notifier` removed action button support and its own maintainer points users to `alerter` for that use case; the rest of north's Approval Layer flow (Section 9) is unchanged because the call shape is identical.
+- `README.md` Sections 10.1, 14, 16.8, 16.13: Web UI stack switched from React 18 + Vite + TypeScript + Tailwind to HTMX + Jinja2 (server-rendered, no npm, no build step). UI mounts at `localhost:8000/ui` instead of `localhost:3000`; SSE uses HTMX's SSE extension; approval cards are `<form hx-post>` elements; auth secret moves from in-memory React state to an HttpOnly session cookie. `web/src/` and `web/public/` directories become `web/templates/` and `web/static/`.
+- `README.md` Sections 3.1, 8.6 (new), 16.6, 16.13: voice transcription switched from local `faster-whisper` to OpenRouter's audio transcription endpoint (`POST /api/v1/audio/transcriptions`, announced May 2026). Reuses the existing `OPENROUTER_API_KEY` and the existing `httpx` client — no new dependency. Default transcription model is `groq/whisper-large-v3` (sub-second latency); selectable alternatives include `openai/whisper-1`, `openai/gpt-4o-transcribe`, `google/chirp-3`. Section 3.1's local-only stance is explicitly reversed; the Inference Router (Section 8) now owns transcription on the same fallback and cost-logging path as LLM calls. Capture hotkey changed from `Fn` (collides with macOS system Dictation) to a configurable default of `Right Option + Space`.
+- `README.md` Sections 11.3, 16.13: cron scheduling switched from `apscheduler` to a single in-house asyncio background task. `jobs/scheduler.py` holds `(hour, minute, weekday)` tuples and computes the next firing across all entries. Resolves the prior contradiction between Section 16.4 ("asyncio only, no extra concurrency frameworks") and the apscheduler dependency. `apscheduler` removed from the dependency list; no replacement library added.
+- `pyproject.toml` and `README.md` Section 16.11: migrated dev dependencies from the deprecated `[tool.uv].dev-dependencies` table to the standard `[dependency-groups].dev` table (PEP 735). uv was emitting a deprecation warning on every command with the old form.
+- `README.md` Section 15 "Mobile App" item annotated to note that the HTMX switch in Section 16.8 dropped the implementation cost from "separate codebase" to "template-level changes." Deferral stands.
+- Moved `CODING_STYLE.md` from the repo root to `docs/CODING_STYLE.md`. Keeps GitHub-auto-detected community files at root (README, LICENSE, CHANGELOG, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, .env.example), and gives future architecture/design docs a natural home. All references in README.md and CHANGELOG.md updated; test-file docstring references intentionally left for a later cleanup.
+- `README.md` env var naming brought into line with the `Settings` class declared in `docs/CODING_STYLE.md` Section 17.1 (which uses `env_prefix = "NORTH_"`). Four prose references and the env-block in Section 16.11 updated: `OPENROUTER_API_KEY` → `NORTH_OPENROUTER_API_KEY`, `NORTH_HOME` → `NORTH_NORTH_HOME`, `NORTH_ENV` → `NORTH_NORTH_ENV`. The doubled `NORTH_` prefix is intentional: it is what pydantic-settings actually reads from the environment given the current field names.
+- `README.md` Section 16.12 restructured into two paths: "For users" (the intended `curl -LsSf https://north.dev/install.sh | sh` flow that bootstraps `uv`, Python 3.12+, `alerter`, the `north` package via `uv tool install`, secret generation, API-key prompt, and an opt-in LaunchAgent for auto-start) and "For developers" (the existing `git clone` + `uv sync` flow). Installer script itself is not yet implemented; PyPI package name `north` and install host `north.dev` are placeholders pending availability checks.
