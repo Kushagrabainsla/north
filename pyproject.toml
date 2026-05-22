@@ -5,7 +5,17 @@ description = "Personal AI operating system. Pre-implementation; the spec lives 
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
-dependencies = []
+dependencies = [
+    "pydantic>=2.0.0",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "pydantic-settings>=2.2.0",
+    "jinja2>=3.1.0",
+    "typer>=0.9.0",
+    "cryptography>=42.0.0",
+]
 
 [dependency-groups]
 dev = [
@@ -15,6 +25,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

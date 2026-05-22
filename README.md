@@ -1252,7 +1252,11 @@ north/
     finance/
 
   context/
-    store.py                 <- ContextStore ABC + FileContextStore implementation
+    __init__.py              <- public exports
+    base.py                  <- ContextStore (ABC)
+    models.py                <- ContextDocument (enum of the five valid document names)
+    exceptions.py            <- ContextError, ContextReadError, ContextWriteError
+    file_store.py            <- FileContextStore (v1 concrete)
     extraction.py            <- extraction pipeline (Ledger -> context docs, background job)
     injection.py             <- manual context injection handler (file, text, URL)
     public.md
@@ -1262,8 +1266,11 @@ north/
     north_stars.md
 
   ledger/
-    ledger.py                <- async Ledger write interface
-    schema.py                <- source enum, status enum, schema constants
+    __init__.py              <- public exports
+    base.py                  <- LedgerWriter (ABC), LedgerFilters
+    models.py                <- LedgerEntry, LedgerSource, LedgerStatus
+    exceptions.py            <- LedgerError, LedgerWriteError, LedgerReadError
+    sqlite_writer.py         <- SQLiteLedgerWriter (concrete)
 
   inference/
     router.py                <- Inference Router (OpenRouter, dynamic pools, auto-fallback)

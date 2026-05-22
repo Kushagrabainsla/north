@@ -1,0 +1,9 @@
+tools:
+  - name: web_search
+    purpose: "Search the web for class topics or academic resources."
+  - name: calendar_api
+    purpose: "Schedule class study blocks or set homework reminders."
+  - name: gmail_api
+    purpose: "Fetch class emails or communicate with professors."
+  - name: canvas_api
+    purpose: "Sync courses, coursework, assignments, and academic deadlines."

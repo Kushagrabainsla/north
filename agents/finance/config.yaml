@@ -1,0 +1,15 @@
+agent: finance
+domain: finance
+model_pool: fast_cheap
+accepts:
+  - "budget"
+  - "expense"
+  - "stock"
+  - "market"
+  - "purchase"
+  - "spend"
+  - "price"
+  - "money"
+output_format: structured_json
+version: 1.0.0
+class_name: FinanceAgent

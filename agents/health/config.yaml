@@ -1,0 +1,11 @@
+agent: health
+domain: health
+model_pool: fast_cheap
+accepts:
+  - "workout"
+  - "nutrition"
+  - "fitness"
+  - "diet"
+output_format: structured_json
+version: 1.0.0
+class_name: HealthAgent

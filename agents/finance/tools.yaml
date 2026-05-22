@@ -1,0 +1,9 @@
+tools:
+  - name: web_search
+    purpose: "Search the web for tax info or pricing comparisons."
+  - name: gmail_api
+    purpose: "Fetch invoices or financial receipts."
+  - name: market_data_api
+    purpose: "Access stock/crypto market prices and asset summaries."
+  - name: expense_tracker
+    purpose: "Log and search for logged personal expenditures."

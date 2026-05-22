@@ -1,0 +1,7 @@
+tools:
+  - name: web_search
+    purpose: "Search the web for fitness, health, or workout queries."
+  - name: calendar_api
+    purpose: "Schedule workouts or fitness planning sessions on the calendar."
+  - name: nutrition_api
+    purpose: "Lookup nutritional information or log consumed meals."

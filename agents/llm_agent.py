@@ -1,0 +1,118 @@
+"""Generic LLM-backed agent. The four v1 domain agents are thin subclasses."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from inference.models import (
+    POOL_TO_PRIORITY,
+    CompletionRequest,
+    PoolPriority,
+)
+from tools.base import Tool
+
+from agents.base import Agent
+from agents.exceptions import AgentConfigError, AgentOutputParseError
+from agents.models import AgentPayload
+
+
+class LLMAgent(Agent):
+    """An agent that calls the Inference Router with a markdown system prompt.
+
+    Loads `prompts/system.md` from its own folder and uses it as the system
+    message. The user message is the formatted task: prompt + context summary
+    + tool list. The model is expected to return JSON matching `AgentResult`.
+
+    Override `_build_messages()` or `_parse_response()` for domain-specific
+    serialization. Override `_execute()` directly for radical custom logic.
+    """
+
+    def _prompts_dir(self) -> Path:
+        """Resolve the agent's `prompts/` folder relative to its module file."""
+        import sys
+
+        module = sys.modules[self.__class__.__module__]
+        if module.__file__ is None:
+            raise AgentConfigError(
+                f"Cannot resolve prompts dir for {self.__class__.__name__}: "
+                "module has no __file__"
+            )
+        return Path(module.__file__).parent / "prompts"
+
+    def _load_system_prompt(self) -> str:
+        path = self._prompts_dir() / "system.md"
+        if not path.exists():
+            raise AgentConfigError(
+                f"Missing system prompt at {path}. Every LLMAgent needs one."
+            )
+        return path.read_text(encoding="utf-8")
+
+    def _build_user_message(
+        self,
+        payload: AgentPayload,
+        context: str,
+        tools: list[Tool],
+    ) -> str:
+        tool_lines = "\n".join(f"- {t.name}: {t.description}" for t in tools)
+        return (
+            f"## Task\n{payload.prompt}\n\n"
+            f"## Context\n{context or '(none)'}\n\n"
+            f"## Tools available\n{tool_lines or '(none)'}\n"
+        )
+
+    def _resolve_priority(self) -> PoolPriority:
+        pool_name = self._config.model_pool
+        if pool_name not in POOL_TO_PRIORITY:
+            raise AgentConfigError(
+                f"Unknown model_pool '{pool_name}' in {self.name} config. "
+                f"Expected one of {sorted(POOL_TO_PRIORITY.keys())}."
+            )
+        return POOL_TO_PRIORITY[pool_name]
+
+    async def _execute(
+        self,
+        payload: AgentPayload,
+        context: str,
+        tools: list[Tool],
+    ) -> dict[str, Any]:
+        system_prompt = self._load_system_prompt()
+        user_message = self._build_user_message(payload, context, tools)
+        full_prompt = f"{system_prompt}\n\n---\n\n{user_message}"
+
+        response = await self._deps.inference_router.complete(
+            CompletionRequest(
+                prompt=full_prompt,
+                priority=self._resolve_priority(),
+                component=self.name,
+                task_id=payload.task_id,
+            )
+        )
+        return self._parse_response(response.text)
+
+    def _parse_response(self, text: str) -> dict[str, Any]:
+        """Parse the model's JSON output. The system prompt instructs JSON.
+
+        Strips a fenced code block if the model wraps the JSON in ```json ... ```.
+        """
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            # Drop the opening fence (with optional `json` tag) and the closing fence.
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+            if cleaned.endswith("```"):
+                cleaned = cleaned.rsplit("```", 1)[0]
+            cleaned = cleaned.strip()
+
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise AgentOutputParseError(
+                f"{self.name} returned non-JSON output: {text[:200]}"
+            ) from e
+
+        if not isinstance(parsed, dict):
+            raise AgentOutputParseError(
+                f"{self.name} returned non-object JSON: {type(parsed).__name__}"
+            )
+        return parsed

@@ -1,0 +1,9 @@
+tools:
+  - name: web_search
+    purpose: "Search the web for company research or market roles."
+  - name: calendar_api
+    purpose: "Schedule interviews or prep sessions."
+  - name: gmail_api
+    purpose: "Access recruitment emails or submit applications."
+  - name: linkedin_api
+    purpose: "Outreach message drafts, profile reviews, and connection management."

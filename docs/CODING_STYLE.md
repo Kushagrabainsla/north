@@ -228,7 +228,7 @@ class LedgerStatus(str, Enum):
 These abstract base classes must exist. Every concrete implementation fulfills exactly one of these. No other component depends on a concrete class directly.
 
 ```
-context/store.py       ContextStore      <- FileContextStore (v1), DBContextStore (future)
+context/base.py        ContextStore      <- FileContextStore (v1), DBContextStore (future)
 ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
 inference/base.py      InferenceRouter   <- OpenRouterInferenceRouter
 approval/base.py       Notifier          <- MacOSNotifier, TerminalNotifier (dev/test)
@@ -1538,17 +1538,13 @@ No new library, framework, service, or CLI tool enters north without these four 
 
 One canonical tool per job. Adding `requests` next to `httpx`, or `unittest` next to `pytest`, is a regression even if the new one is good in isolation.
 
-### 23.4 Tests Are Co-Authored, Not Retrofitted
+### 23.4 Tests Are Currently Deferred
 
-Functionality and its tests land in the same change.
+Do not write tests when adding new functionality. The pytest harness and the existing 92 tests stay in place; Section 18 stays in place as the convention for when this policy is lifted.
 
-- **New code:** one test for the happy path, one for a meaningful failure mode.
-- **Modified code:** existing tests updated in the same change. Untested-before is a gap, not a free pass.
-- **Deleted code:** its tests are deleted too.
+**Why:** Build-speed during the pre-MVP phase, while module shape is still moving and the cost of keeping tests synchronized outweighs their value.
 
-If a test genuinely cannot be written (external integration without a viable mock), call it out in the changelog and PR description.
-
-Framework and conventions: Section 18.
+**How to apply:** Skip writing test files for new modules. Skip updating tests during refactors unless an existing test breaks — then fix it. CHANGELOG entries no longer include "Tests under …" paragraphs.
 
 ### 23.5 Every Change Updates CHANGELOG.md
 

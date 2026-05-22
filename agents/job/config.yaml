@@ -1,0 +1,14 @@
+agent: job
+domain: job
+model_pool: fast_cheap
+accepts:
+  - "job"
+  - "resume"
+  - "linkedin"
+  - "interview"
+  - "internship"
+  - "career"
+  - "application"
+output_format: structured_json
+version: 1.0.0
+class_name: JobAgent

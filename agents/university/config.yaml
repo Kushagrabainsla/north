@@ -1,0 +1,14 @@
+agent: university
+domain: university
+model_pool: fast_cheap
+accepts:
+  - "homework"
+  - "class"
+  - "canvas"
+  - "assignment"
+  - "professor"
+  - "study"
+  - "course"
+output_format: structured_json
+version: 1.0.0
+class_name: UniversityAgent

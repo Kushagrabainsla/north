@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — north{% endblock %}
+{% block description %}Real-time task activity feed, active tasks, and pending approvals{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+
+  <!-- ── Left Column: Context & Stats ──────────────────────────────── -->
+  <aside class="panel panel-left">
+    <div class="panel-header">
+      <h2>System Status</h2>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <span class="stat-value">{{ active_tasks | length }}</span>
+        <span class="stat-label">Active Tasks</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value">{{ recent_entries | length }}</span>
+        <span class="stat-label">Recent Events</span>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <h3>Quick Actions</h3>
+      <form
+        id="task-form"
+        hx-post="/orchestrator/task"
+        hx-target="#feed"
+        hx-swap="afterbegin"
+        hx-headers='{"X-North-Secret": ""}'
+      >
+        <div class="input-group">
+          <input
+            id="task-prompt"
+            type="text"
+            name="prompt"
+            placeholder="What would you like north to do?"
+            class="task-input"
+            autocomplete="off"
+          />
+          <button type="submit" class="btn btn-primary">Submit</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="panel-section">
+      <h3>Agents</h3>
+      <div class="agent-list">
+        {% for domain in ["health", "university", "job", "finance"] %}
+        <div class="agent-chip agent-{{ domain }}">
+          <span class="agent-dot"></span>
+          {{ domain }}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Center Column: Live Activity Feed ─────────────────────────── -->
+  <section class="panel panel-center">
+    <div class="panel-header">
+      <h2>Activity Feed</h2>
+      <span class="live-badge">
+        <span class="pulse"></span> Live
+      </span>
+    </div>
+    <div id="feed" class="feed">
+      {% for entry in recent_entries %}
+      <div class="feed-item feed-{{ entry.status.value if entry.status else 'pending' }}">
+        <div class="feed-meta">
+          <span class="feed-source">{{ entry.source.value }}</span>
+          <span class="feed-time">{{ entry.timestamp.strftime("%H:%M:%S") }}</span>
+        </div>
+        <div class="feed-action">{{ entry.action or "event" }}</div>
+        {% if entry.output %}
+        <div class="feed-output">{{ entry.output }}</div>
+        {% endif %}
+        {% if entry.task_id %}
+        <div class="feed-task-id">{{ entry.task_id }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% if not recent_entries %}
+      <div class="feed-empty">
+        <p>No activity yet. Submit a task to get started.</p>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <!-- ── Right Column: Active Tasks & Approvals ────────────────────── -->
+  <aside class="panel panel-right">
+    <div class="panel-header">
+      <h2>Active Tasks</h2>
+    </div>
+    <div class="task-list">
+      {% for task in active_tasks %}
+      <div
+        class="task-card"
+        id="task-{{ task.task_id }}"
+        hx-ext="sse"
+        sse-connect="/orchestrator/stream/{{ task.task_id }}"
+        sse-swap="task_completed,agent_completed,agent_failed,classified"
+        hx-target="this"
+        hx-swap="outerHTML"
+      >
+        <div class="task-header">
+          <span class="task-id">{{ task.task_id }}</span>
+          <span class="task-status status-{{ task.status.value if task.status else 'pending' }}">
+            {{ task.status.value if task.status else "pending" }}
+          </span>
+        </div>
+        {% if task.input %}
+        <div class="task-prompt">{{ task.input[:120] }}{% if task.input | length > 120 %}…{% endif %}</div>
+        {% endif %}
+        <div class="task-time">{{ task.timestamp.strftime("%Y-%m-%d %H:%M") }}</div>
+        <div class="task-progress">
+          <div class="progress-bar"></div>
+        </div>
+      </div>
+      {% endfor %}
+      {% if not active_tasks %}
+      <div class="empty-state">
+        <p>No active tasks.</p>
+      </div>
+      {% endif %}
+    </div>
+  </aside>
+
+</div>
+{% endblock %}
