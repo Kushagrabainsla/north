@@ -71,7 +71,7 @@
       <tbody>
         {% for card in resolved %}
         <tr class="ledger-row">
-          <td class="ledger-time">{{ card.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+          <td class="ledger-time local-time" data-utc="{{ card.created_at.isoformat() }}" data-format="datetime">{{ card.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
           <td><span class="badge badge-source">{{ card.type.value }}</span></td>
           <td>{{ card.agent }}</td>
           <td>{{ card.title }}</td>

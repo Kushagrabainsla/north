@@ -30,7 +30,7 @@
     <tbody>
       {% for entry in entries %}
       <tr class="ledger-row ledger-{{ entry.status.value if entry.status else 'unknown' }}">
-        <td class="ledger-time">{{ entry.timestamp.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        <td class="ledger-time local-time" data-utc="{{ entry.timestamp.isoformat() }}" data-format="datetime">{{ entry.timestamp.strftime("%Y-%m-%d %H:%M:%S") }}</td>
         <td><span class="badge badge-source">{{ entry.source.value }}</span></td>
         <td class="ledger-task-id">{{ entry.task_id or "—" }}</td>
         <td>{{ entry.agent or "—" }}</td>

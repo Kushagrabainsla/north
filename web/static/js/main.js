@@ -26,23 +26,51 @@
   const taskInput = document.getElementById("task-prompt");
 
   if (taskForm && taskInput) {
-    // Clear input and show confirmation after successful submit
-    taskForm.addEventListener("htmx:afterRequest", function (evt) {
-      if (evt.detail.successful) {
-        taskInput.value = "";
+    taskForm.addEventListener("submit", function (evt) {
+      evt.preventDefault();
+
+      const prompt = taskInput.value.trim();
+      if (!prompt) return;
+
+      // Show submitting state
+      taskInput.disabled = true;
+      taskInput.value = "";
+      taskInput.placeholder = "Submitting task...";
+
+      // Send the request via fetch
+      const headers = {
+        "Content-Type": "application/json",
+      };
+      if (NORTH_SECRET) {
+        headers["X-North-Secret"] = NORTH_SECRET;
+      }
+
+      fetch("/orchestrator/task", {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify({ prompt: prompt }),
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error("Failed to submit task");
+        }
+        return response.json();
+      })
+      .then(data => {
         taskInput.placeholder = "Task submitted! ✓";
         setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      })
+      .catch(error => {
+        console.error("Error submitting task:", error);
+        taskInput.disabled = false;
+        taskInput.value = prompt; // Restore original input
+        taskInput.placeholder = "Error submitting task. Try again.";
+        setTimeout(() => {
           taskInput.placeholder = "What would you like north to do?";
-        }, 2000);
-      }
-    });
-
-    // Submit on Enter
-    taskInput.addEventListener("keydown", function (evt) {
-      if (evt.key === "Enter" && !evt.shiftKey) {
-        evt.preventDefault();
-        taskForm.dispatchEvent(new Event("submit", { bubbles: true }));
-      }
+        }, 3000);
+      });
     });
   }
 
@@ -100,4 +128,48 @@
   if (feed) {
     observer.observe(feed, { childList: true });
   }
+
+  // ── Timezone Conversion ──────────────────────────────────────────────────
+  function convertLocalTimes() {
+    document.querySelectorAll(".local-time").forEach((el) => {
+      const utcStr = el.getAttribute("data-utc");
+      const format = el.getAttribute("data-format");
+      if (!utcStr) return;
+
+      const date = new Date(utcStr);
+      if (isNaN(date.getTime())) return;
+
+      if (format === "time") {
+        el.textContent = date.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        });
+      } else {
+        // Format as YYYY-MM-DD HH:MM
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, "0");
+        const dd = String(date.getDate()).padStart(2, "0");
+        const hh = String(date.getHours()).padStart(2, "0");
+        const min = String(date.getMinutes()).padStart(2, "0");
+
+        if (el.classList.contains("ledger-time") && el.textContent.split(":").length === 3) {
+          const ss = String(date.getSeconds()).padStart(2, "0");
+          el.textContent = `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+        } else {
+          el.textContent = `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+        }
+      }
+    });
+  }
+
+  // Run on load
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", convertLocalTimes);
+  } else {
+    convertLocalTimes();
+  }
+  // Also run when HTMX swaps content (so newly loaded elements get converted too!)
+  document.addEventListener("htmx:afterSwap", convertLocalTimes);
 })();

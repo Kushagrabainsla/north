@@ -8,7 +8,7 @@ from __future__ import annotations
 import datetime
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -162,9 +162,16 @@ async def transcribe_audio(request: Request) -> TranscriptionOut:
 # ── Task endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/task", response_model=TaskResponse, status_code=202)
-async def submit_task(request: TaskRequest) -> TaskResponse:
-    """Submit a new task for processing."""
-    return await _orch().submit_task(request)
+async def submit_task(request: Request) -> TaskResponse:
+    """Submit a new task for processing. Accepts JSON or form-encoded bodies."""
+    content_type = request.headers.get("content-type", "")
+    if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form = await request.form()
+        task_req = TaskRequest(prompt=str(form.get("prompt", "")))
+    else:
+        body = await request.json()
+        task_req = TaskRequest(**body)
+    return await _orch().submit_task(task_req)
 
 
 @router.get("/tasks", response_model=list[TaskResponse])
@@ -293,11 +300,6 @@ class ContextWriteRequest(BaseModel):
     content: str
 
 
-class ContextAddRequest(BaseModel):
-    text: str | None = None
-    url: str | None = None
-
-
 @router.get("/context/{doc}", response_model=ContextDocOut)
 async def read_context(doc: str) -> ContextDocOut:
     """Read a context document."""
@@ -315,20 +317,21 @@ async def write_context(doc: str, body: ContextWriteRequest) -> None:
 
 @router.post("/context/add", status_code=202)
 async def add_context(
-    body: ContextAddRequest | None = None,
+    text: Optional[str] = Form(None),
+    url: Optional[str] = Form(None),
     file: UploadFile | None = None,
 ) -> dict[str, str]:
-    """Manual context injection: accepts text, URL, or file upload."""
+    """Manual context injection: accepts text, URL, or file upload (multipart form)."""
     injector = _injector()
     if file is not None:
         content = await file.read()
         doc = await injector.inject_file(file.filename or "upload", content)
         return {"document": doc.value, "source": f"file:{file.filename}"}
-    if body is not None and body.url:
-        doc = await injector.inject_url(body.url)
-        return {"document": doc.value, "source": f"url:{body.url}"}
-    if body is not None and body.text:
-        doc = await injector.inject_text(body.text)
+    if url:
+        doc = await injector.inject_url(url)
+        return {"document": doc.value, "source": f"url:{url}"}
+    if text:
+        doc = await injector.inject_text(text)
         return {"document": doc.value, "source": "text"}
     raise HTTPException(status_code=422, detail="Provide text, url, or a file upload")
 

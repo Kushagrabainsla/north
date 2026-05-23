@@ -8,37 +8,43 @@
   {% endif %}
   <title>{% block title %}north{% endblock %}</title>
   <meta name="description" content="{% block description %}north — Personal Life Operating System{% endblock %}" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/css/main.css" />
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
   <script src="https://unpkg.com/htmx.org/dist/ext/sse.js" defer></script>
 </head>
 <body>
-  <nav class="navbar">
-    <div class="navbar-brand">
-      <span class="brand-star">★</span>
-      <span class="brand-name">north</span>
-    </div>
-    <div class="navbar-links">
-      <a href="/ui/" class="nav-link {% if request.url.path == '/ui/' %}active{% endif %}">Dashboard</a>
-      <a href="/ui/ledger" class="nav-link {% if request.url.path == '/ui/ledger' %}active{% endif %}">Ledger</a>
-      <a href="/ui/approvals" class="nav-link {% if request.url.path == '/ui/approvals' %}active{% endif %}">Approvals</a>
-      <a href="/ui/context" class="nav-link {% if '/ui/context' in request.url.path %}active{% endif %}">Context</a>
-      <a href="/ui/agents" class="nav-link {% if request.url.path == '/ui/agents' %}active{% endif %}">Agents</a>
-      <a href="/ui/jobs" class="nav-link {% if request.url.path == '/ui/jobs' %}active{% endif %}">Jobs</a>
-      <a href="/ui/inference" class="nav-link {% if request.url.path == '/ui/inference' %}active{% endif %}">Inference</a>
-    </div>
-    <div class="navbar-status">
-      <span class="status-dot"></span>
-      <span class="status-text">Live</span>
-    </div>
-  </nav>
+  <div class="app-layout">
 
-  <main class="main-content">
-    {% block content %}{% endblock %}
-  </main>
+    <!-- ── Sidebar ───────────────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="brand-name">north</span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="/ui/" class="sidebar-link {% if request.url.path == '/ui/' %}active{% endif %}">Dashboard</a>
+        <a href="/ui/ledger" class="sidebar-link {% if request.url.path == '/ui/ledger' %}active{% endif %}">Ledger</a>
+        <a href="/ui/approvals" class="sidebar-link {% if request.url.path == '/ui/approvals' %}active{% endif %}">Approvals</a>
+        <a href="/ui/context" class="sidebar-link {% if '/ui/context' in request.url.path %}active{% endif %}">Context</a>
+        <a href="/ui/agents" class="sidebar-link {% if request.url.path == '/ui/agents' %}active{% endif %}">Agents</a>
+        <a href="/ui/jobs" class="sidebar-link {% if request.url.path == '/ui/jobs' %}active{% endif %}">Jobs</a>
+        <a href="/ui/inference" class="sidebar-link {% if request.url.path == '/ui/inference' %}active{% endif %}">Inference</a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span class="status-dot"></span>
+        <span class="status-text">Live</span>
+      </div>
+    </aside>
+
+    <!-- ── Main ──────────────────────────────────────────────────────────── -->
+    <div class="app-main">
+      <main class="main-content">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+
+  </div>
 
   <script src="/static/js/main.js" defer></script>
 </body>

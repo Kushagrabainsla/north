@@ -3,44 +3,49 @@
 {% block description %}Real-time task activity feed, active tasks, and pending approvals{% endblock %}
 
 {% block content %}
+
+<!-- ── Command Bar ─────────────────────────────────────────────────────────── -->
+<div class="command-bar">
+  <form id="task-form">
+      <span class="command-glyph">⌘</span>
+      <input
+        id="task-prompt"
+        type="text"
+        name="prompt"
+        placeholder="What would you like north to do?"
+        class="command-input"
+        autocomplete="off"
+      />
+      <button type="submit" class="btn btn-primary btn-sm">Run</button>
+  </form>
+</div>
+
+<!-- ── Three-Column Dashboard ─────────────────────────────────────────────── -->
 <div class="dashboard">
 
-  <!-- ── Left Column: Context & Stats ──────────────────────────────── -->
+  <!-- ── Left: Status & Agents ──────────────────────────────────────────── -->
   <aside class="panel panel-left">
     <div class="panel-header">
       <h2>System Status</h2>
     </div>
+
     <div class="stat-grid">
       <div class="stat-card">
         <span class="stat-value">{{ active_tasks | length }}</span>
-        <span class="stat-label">Active Tasks</span>
+        <span class="stat-label">Active</span>
       </div>
       <div class="stat-card">
         <span class="stat-value">{{ recent_entries | length }}</span>
-        <span class="stat-label">Recent Events</span>
+        <span class="stat-label">Events</span>
       </div>
-    </div>
-
-    <div class="panel-section">
-      <h3>Quick Actions</h3>
-      <form
-        id="task-form"
-        hx-post="/orchestrator/task"
-        hx-target="#feed"
-        hx-swap="afterbegin"
-      >
-        <div class="input-group">
-          <input
-            id="task-prompt"
-            type="text"
-            name="prompt"
-            placeholder="What would you like north to do?"
-            class="task-input"
-            autocomplete="off"
-          />
-          <button type="submit" class="btn btn-primary">Submit</button>
-        </div>
-      </form>
+      <div class="stat-card">
+        <span class="stat-value">{{ pending_approvals_count }}</span>
+        <span class="stat-label">Approvals</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value">4</span>
+        <span class="stat-label">Agents</span>
+      </div>
     </div>
 
     <div class="panel-section">
@@ -48,28 +53,32 @@
       <div class="agent-list">
         {% for domain in ["health", "university", "job", "finance"] %}
         <div class="agent-chip agent-{{ domain }}">
-          <span class="agent-dot"></span>
-          {{ domain }}
+          <span class="agent-dot"></span>{{ domain }}
         </div>
         {% endfor %}
       </div>
     </div>
+
+    {% if pending_approvals_count > 0 %}
+    <div class="panel-section">
+      <a href="/ui/approvals" class="btn btn-danger btn-sm" style="width:100%;text-align:center;">
+        {{ pending_approvals_count }} Pending Approval{% if pending_approvals_count != 1 %}s{% endif %}
+      </a>
+    </div>
+    {% endif %}
   </aside>
 
-  <!-- ── Center Column: Live Activity Feed ─────────────────────────── -->
+  <!-- ── Center: Live Activity Feed ────────────────────────────────────── -->
   <section class="panel panel-center">
     <div class="panel-header">
       <h2>Activity Feed</h2>
-      <span class="live-badge">
-        <span class="pulse"></span> Live
-      </span>
     </div>
     <div id="feed" class="feed">
       {% for entry in recent_entries %}
       <div class="feed-item feed-{{ entry.status.value if entry.status else 'pending' }}">
         <div class="feed-meta">
           <span class="feed-source">{{ entry.source.value }}</span>
-          <span class="feed-time">{{ entry.timestamp.strftime("%H:%M:%S") }}</span>
+          <span class="feed-time local-time" data-utc="{{ entry.timestamp.isoformat() }}" data-format="time">{{ entry.timestamp.strftime("%H:%M:%S") }}</span>
         </div>
         <div class="feed-action">{{ entry.action or "event" }}</div>
         {% if entry.output %}
@@ -82,13 +91,13 @@
       {% endfor %}
       {% if not recent_entries %}
       <div class="feed-empty">
-        <p>No activity yet. Submit a task to get started.</p>
+        <p>No activity yet — submit a task above to get started.</p>
       </div>
       {% endif %}
     </div>
   </section>
 
-  <!-- ── Right Column: Active Tasks & Approvals ────────────────────── -->
+  <!-- ── Right: Active Tasks ───────────────────────────────────────────── -->
   <aside class="panel panel-right">
     <div class="panel-header">
       <h2>Active Tasks</h2>
@@ -113,7 +122,7 @@
         {% if task.input %}
         <div class="task-prompt">{{ task.input[:120] }}{% if task.input | length > 120 %}…{% endif %}</div>
         {% endif %}
-        <div class="task-time">{{ task.timestamp.strftime("%Y-%m-%d %H:%M") }}</div>
+        <div class="task-time local-time" data-utc="{{ task.timestamp.isoformat() }}" data-format="datetime">{{ task.timestamp.strftime("%Y-%m-%d %H:%M") }}</div>
         <div class="task-progress">
           <div class="progress-bar"></div>
         </div>

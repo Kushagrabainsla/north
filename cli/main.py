@@ -29,8 +29,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -205,9 +207,9 @@ def context_add(
             files = {"file": (file.name, fh, "application/octet-stream")}
             response = _api("POST", "/orchestrator/context/add", files=files)  # type: ignore[arg-type]
     elif url is not None:
-        response = _api("POST", "/orchestrator/context/add", json={"url": url})
+        response = _api("POST", "/orchestrator/context/add", data={"url": url})
     elif text is not None:
-        response = _api("POST", "/orchestrator/context/add", json={"text": text})
+        response = _api("POST", "/orchestrator/context/add", data={"text": text})
     else:
         typer.secho("Provide --text, --url, or --file.", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
@@ -720,6 +722,37 @@ def config_set(
     typer.echo("  Restart north for the change to take effect.")
 
 
+# ── port helpers ──────────────────────────────────────────────────────────────
+
+def _port_in_use(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+
+def _is_north_server(host: str, port: int) -> bool:
+    try:
+        resp = httpx.get(f"http://{host}:{port}/docs", timeout=2.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def _kill_port(host: str, port: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True,
+        )
+        pids = result.stdout.strip().split()
+        if not pids:
+            return False
+        subprocess.run(["kill", "-9"] + pids, capture_output=True)
+        return True
+    except Exception:
+        return False
+
+
 # ── start ─────────────────────────────────────────────────────────────────────
 
 @app.command("start")
@@ -740,6 +773,29 @@ def start(
     (settings.north_home / "tasks").mkdir(parents=True, exist_ok=True)
     (settings.north_home / "context").mkdir(parents=True, exist_ok=True)
     load_secret()
+
+    if _port_in_use(host, port):
+        if _is_north_server(host, port):
+            typer.secho(
+                f"north is already running on port {port}.",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            typer.secho(
+                f"Port {port} is in use by another application.",
+                fg=typer.colors.YELLOW,
+            )
+        kill = typer.confirm("Kill the existing process and restart?", default=False)
+        if not kill:
+            raise typer.Exit(0)
+        typer.echo(f"Stopping process on port {port}…")
+        if not _kill_port(host, port):
+            typer.secho(
+                f"Could not stop the existing process. Try: sudo kill $(lsof -ti :{port})",
+                fg=typer.colors.RED, err=True,
+            )
+            raise typer.Exit(1)
+        time.sleep(1)
 
     typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
     typer.echo(f"  Orchestrator → http://{host}:{port}")

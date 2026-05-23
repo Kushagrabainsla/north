@@ -88,7 +88,18 @@ async def auth(request: Request, next: str = "/ui/") -> Response:
 async def dashboard(request: Request) -> HTMLResponse:
     ledger = _get_ledger()
     entries = await ledger.query(LedgerFilters(limit=50))
-    active_tasks = [e for e in entries if e.status == LedgerStatus.PENDING]
+    # Deduplicate active tasks: since entries are returned in DESC order of timestamp,
+    # the first entry we encounter for a task_id is its latest status.
+    task_latest_entries = {}
+    for e in entries:
+        if e.task_id is not None:
+            if e.task_id not in task_latest_entries:
+                task_latest_entries[e.task_id] = e
+
+    active_tasks = [
+        entry for entry in task_latest_entries.values()
+        if entry.status == LedgerStatus.PENDING
+    ]
     recent_entries = entries[:20]
     pending_approvals = approval_store.pending()
 

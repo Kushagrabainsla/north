@@ -40,7 +40,7 @@
         <td class="ledger-action">{{ job.task[:60] }}{% if job.task | length > 60 %}…{% endif %}</td>
         <td>{{ job.priority.value }}</td>
         <td><span class="badge badge-status badge-{{ job.status.value }}">{{ job.status.value }}</span></td>
-        <td class="ledger-time">{{ job.scheduled_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td class="ledger-time local-time" data-utc="{{ job.scheduled_at.isoformat() }}" data-format="datetime">{{ job.scheduled_at.strftime("%Y-%m-%d %H:%M") }}</td>
         <td>{{ job.retry_count }}/{{ job.max_retries }}</td>
         <td>
           {% if job.status.value in ["pending", "running"] %}
