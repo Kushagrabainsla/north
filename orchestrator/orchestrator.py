@@ -188,7 +188,7 @@ class Orchestrator:
             classification = await self._stage_classify(task_id, request.prompt)
             await self._stage_north_star(task_id, request.prompt, classification)
             plan = await self._stage_route(task_id, request.prompt, classification)
-            await self._stage_execute(task_id, request.prompt, plan)
+            await self._stage_execute(task_id, request.prompt, plan, request.workspace)
         except NorthStarConflictError:
             # Conflict is already surfaced to the user; swallow here.
             pass
@@ -300,14 +300,14 @@ class Orchestrator:
         return plan
 
     async def _stage_execute(
-        self, task_id: str, prompt: str, plan: ExecutionPlan
+        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str = ""
     ) -> None:
         """Stage 4: Execute agents in dependency order, in parallel groups."""
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
 
         for group in plan.parallel_groups:
             agents = [self._agent_registry.get(name) for name in group]
-            await self._execute_agent_group(task_id, prompt, agents)
+            await self._execute_agent_group(task_id, prompt, agents, workspace)
 
         # Mark task completed
         asyncio.create_task(self._ledger.write(LedgerEntry(
@@ -322,10 +322,10 @@ class Orchestrator:
         await self._stream_manager.emit_done(task_id)
 
     async def _execute_agent_group(
-        self, task_id: str, prompt: str, agents: list[Agent]
+        self, task_id: str, prompt: str, agents: list[Agent], workspace: str = ""
     ) -> None:
         """Run a parallel group of agents concurrently; handle per-agent failures."""
-        payload = AgentPayload(task_id=task_id, prompt=prompt)
+        payload = AgentPayload(task_id=task_id, prompt=prompt, workspace=workspace)
         results = await asyncio.gather(
             *[self._run_agent_with_retry(agent, payload) for agent in agents],
             return_exceptions=True,

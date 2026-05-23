@@ -1,0 +1,13 @@
+tools:
+  - name: read_file
+    purpose: "Read file contents before editing or explaining."
+  - name: write_file
+    purpose: "Write or overwrite a file with new content."
+  - name: list_dir
+    purpose: "Explore directory structure to understand the codebase layout."
+  - name: search_files
+    purpose: "Find symbols, patterns, or references across the workspace."
+  - name: bash
+    purpose: "Run commands to build, test, lint, or verify code."
+  - name: web_search
+    purpose: "Look up documentation, APIs, or error messages."

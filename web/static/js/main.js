@@ -42,6 +42,8 @@
     routing:               ["⇢", "Planning which agents to run…"],
     routed:                ["✓", "Execution plan ready"],
     executing:             ["▶", "Running agents…"],
+    tool_called:           ["⚙", null],
+    tool_result:           ["✓", null],
   };
 
   async function loadChatHistory() {
@@ -204,6 +206,7 @@
       "north_star_checking", "north_star_aligned", "north_star_conflict",
       "routing", "routed", "executing",
       "agent_started", "agent_completed",
+      "tool_called", "tool_result",
       "task_completed", "task_failed",
     ];
 
@@ -219,7 +222,12 @@
             ? (data.agent || "agent") + ": " + data.summary
             : (data.agent || "agent") + " agent done";
           _addStep(taskId, "✓", label);
-        } else if (STEP_DEFS[event]) {
+        } else if (event === "tool_called") {
+          _addStep(taskId, "⚙", "  " + (data.tool || "tool") + "…");
+        } else if (event === "tool_result") {
+          const icon = data.success === false ? "✗" : "✓";
+          _addStep(taskId, icon, "  " + (data.tool || "tool") + " done");
+        } else if (STEP_DEFS[event] && STEP_DEFS[event][1]) {
           _addStep(taskId, STEP_DEFS[event][0], STEP_DEFS[event][1]);
         }
 

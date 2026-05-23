@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import yaml
 from pydantic import BaseModel, Field
@@ -15,12 +15,20 @@ from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
 
 
+@runtime_checkable
+class StreamEmitter(Protocol):
+    """Structural protocol satisfied by EventStreamManager — avoids circular imports."""
+
+    async def emit(self, task_id: str, event: str, data: dict[str, Any]) -> None: ...
+
+
 class AgentPayload(BaseModel):
     """Input handed to an agent's `run()`. The Orchestrator constructs this."""
 
     task_id: str
     prompt: str
     context: str = ""  # optional pre-loaded context summary
+    workspace: str = ""  # root directory for filesystem/shell tools
 
 
 class AgentResult(BaseModel):
@@ -76,3 +84,4 @@ class AgentDependencies:
     inference_router: InferenceRouter
     tool_registry: ToolRegistry
     confidence_tracker: ConfidenceTracker
+    stream_manager: StreamEmitter | None = field(default=None)

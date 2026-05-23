@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from approval import MacOSNotifier, Notifier, TerminalNotifier
+from approval import Notifier, TerminalNotifier
 from config.settings import settings
 from context import ContextStore, FileContextStore
 from inference import (

@@ -4,21 +4,30 @@ from __future__ import annotations
 
 from tools.base import Tool
 from tools.exceptions import ToolNotFoundError
+from tools.implementations.bash import BashTool
 from tools.implementations.calendar_api import CalendarApiTool
 from tools.implementations.canvas_api import CanvasApiTool
 from tools.implementations.expense_tracker import ExpenseTrackerTool
 from tools.implementations.fitness_tracker import FitnessTrackerTool
 from tools.implementations.gmail_api import GmailApiTool
 from tools.implementations.linkedin_api import LinkedinApiTool
+from tools.implementations.list_dir import ListDirTool
 from tools.implementations.market_data_api import MarketDataApiTool
 from tools.implementations.nutrition_api import NutritionApiTool
+from tools.implementations.read_file import ReadFileTool
+from tools.implementations.search_files import SearchFilesTool
 from tools.implementations.web_search import WebSearchTool
+from tools.implementations.write_file import WriteFileTool
+
+_CODE_TOOLS = ["read_file", "write_file", "list_dir", "search_files", "bash", "web_search"]
 
 TOOL_GRAPH: dict[str, list[str]] = {
     "health":     ["web_search", "calendar_api", "nutrition_api"],
     "university": ["web_search", "calendar_api", "gmail_api", "canvas_api"],
     "job":        ["web_search", "calendar_api", "gmail_api", "linkedin_api"],
     "finance":    ["web_search", "gmail_api", "market_data_api", "expense_tracker"],
+    "general":    _CODE_TOOLS,
+    "code":       _CODE_TOOLS,
 }
 
 # Mapping of tool names to concrete class instances (docs/CODING_STYLE.md Section 6.5)
@@ -32,6 +41,11 @@ TOOL_IMPLEMENTATIONS: dict[str, Tool] = {
     "linkedin_api": LinkedinApiTool(),
     "fitness_tracker": FitnessTrackerTool(),
     "expense_tracker": ExpenseTrackerTool(),
+    "read_file": ReadFileTool(),
+    "write_file": WriteFileTool(),
+    "list_dir": ListDirTool(),
+    "search_files": SearchFilesTool(),
+    "bash": BashTool(),
 }
 
 

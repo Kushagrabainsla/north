@@ -90,18 +90,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("building confidence tracker")
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
 
+    stream_manager = EventStreamManager()
+
     agent_deps = AgentDependencies(
         context_store=deps.context_store,
         inference_router=deps.inference_router,
         tool_registry=tool_registry,
         confidence_tracker=confidence_tracker,
+        stream_manager=stream_manager,
     )
     _step("scanning agent registry")
     agents_dir = Path(__file__).parent.parent / "agents"
     agent_registry = AgentRegistry(agents_dir=agents_dir, deps=agent_deps)
     _step(f"registered agents: {agent_registry.names()}")
-
-    stream_manager = EventStreamManager()
     task_context_store = TaskContextStore()
     failure_handler = FailureHandler(
         ledger_writer=deps.ledger,

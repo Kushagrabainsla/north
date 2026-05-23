@@ -18,6 +18,7 @@ class TaskRequest(BaseModel):
 
     prompt: str
     source: LedgerSource = LedgerSource.PROMPT
+    workspace: str = ""  # optional root directory for filesystem/shell tools
 
 
 class TaskResponse(BaseModel):

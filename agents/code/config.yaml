@@ -1,0 +1,23 @@
+agent: code
+domain: code
+model_pool: reasoning
+accepts:
+  - "code"
+  - "coding"
+  - "debug"
+  - "refactor"
+  - "explain code"
+  - "write code"
+  - "fix bug"
+  - "implement"
+  - "file"
+  - "directory"
+  - "codebase"
+  - "script"
+  - "function"
+  - "class"
+  - "test"
+  - "run"
+output_format: structured_json
+version: 1.0.0
+class_name: CodeAgent

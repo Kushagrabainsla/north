@@ -1,3 +1,13 @@
 tools:
   - name: web_search
     purpose: "Look up current information, facts, or news when needed."
+  - name: read_file
+    purpose: "Read a file when the user shares a path or wants file contents explained."
+  - name: write_file
+    purpose: "Write notes, drafts, or documents to disk when asked."
+  - name: list_dir
+    purpose: "Explore a directory to understand its contents."
+  - name: search_files
+    purpose: "Find text or patterns across files in a directory."
+  - name: bash
+    purpose: "Run a command when the user needs a quick result or verification."

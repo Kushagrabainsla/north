@@ -158,12 +158,18 @@ def list_tasks() -> None:
 # ── chat ─────────────────────────────────────────────────────────────────────
 
 @app.command("chat")
-def chat() -> None:
+def chat(
+    workspace: Optional[str] = typer.Option(
+        None, "--workspace", "-w",
+        help="Root directory the code agent can read/write (e.g. ./my-project).",
+    ),
+) -> None:
     """Interactive chat with north — live pipeline steps and markdown responses."""
     _setup_readline()
+    subtitle = f"workspace: {workspace}" if workspace else "Type your message and press Enter. Ctrl+C or 'exit' to quit."
     _console.print(
         Panel(
-            Text("Type your message and press Enter. Ctrl+C or 'exit' to quit.", style="dim"),
+            Text(subtitle, style="dim"),
             title="[bold]★ north[/bold]",
             border_style="bright_black",
         )
@@ -177,7 +183,7 @@ def chat() -> None:
         if not prompt or prompt.lower() in ("exit", "quit", "bye"):
             _console.print("[dim]Goodbye.[/dim]")
             break
-        _run_task(prompt)
+        _run_task(prompt, workspace=workspace)
 
 
 # ── shared task runner ────────────────────────────────────────────────────────
@@ -194,6 +200,8 @@ _STEP_ICONS: dict[str, str] = {
     "executing":             "▶",
     "agent_started":         "◎",
     "agent_completed":       "✓",
+    "tool_called":           "⚙",
+    "tool_result":           "✓",
 }
 
 _STEP_LABELS: dict[str, str] = {
@@ -228,10 +236,13 @@ def _build_steps_table(steps: list[tuple[str, str, bool]]) -> Table:
     return t
 
 
-def _run_task(prompt: str) -> None:
+def _run_task(prompt: str, workspace: Optional[str] = None) -> None:
     """Submit prompt, stream SSE pipeline steps live, then render the response."""
+    body: dict = {"prompt": prompt}
+    if workspace:
+        body["workspace"] = workspace
     try:
-        resp = _api("POST", "/orchestrator/task", json={"prompt": prompt})
+        resp = _api("POST", "/orchestrator/task", json=body)
     except SystemExit:
         return
     task_id = resp.json()["task_id"]
@@ -277,6 +288,13 @@ def _run_task(prompt: str) -> None:
                             summary = data.get("summary", "")
                             label = f"{agent}: {summary}" if summary else f"{agent} agent done"
                             steps.append(("✓", label, True))
+                        elif event == "tool_called":
+                            tool = data.get("tool", "tool")
+                            steps.append(("⚙", f"  {tool}…", True))
+                        elif event == "tool_result":
+                            tool = data.get("tool", "tool")
+                            success = data.get("success", True)
+                            steps.append(("✓" if success else "✗", f"  {tool} done", True))
                         elif event in _STEP_LABELS:
                             steps.append((_STEP_ICONS.get(event, "·"), _STEP_LABELS[event], True))
 
@@ -544,6 +562,11 @@ def create_agent(
     if description is None:
         description = typer.prompt("One-line description", default=f"Domain specialist for {domain}.")
 
+    agentic = typer.confirm(
+        "Use agentic loop? (yes = ReAct loop with tool calls; no = single LLM call)",
+        default=True,
+    )
+
     raw_tools = typer.prompt("Tools (comma-separated, or blank)", default="web_search")
     tools = [t.strip() for t in raw_tools.split(",") if t.strip()]
 
@@ -596,11 +619,18 @@ def create_agent(
 
     class_name = "".join(word.title() for word in name.split("_")) + "Agent"
 
+    base_import = (
+        "from agents.agentic_llm_agent import AgenticLLMAgent"
+        if agentic else
+        "from agents.llm_agent import LLMAgent"
+    )
+    base_class = "AgenticLLMAgent" if agentic else "LLMAgent"
+
     (agent_dir / "agent.py").write_text(
         f'"""{class_name} domain specialist.\n\nSee docs/CODING_STYLE.md Section 15.\n"""\n\n'
         f"from __future__ import annotations\n\n"
-        f"from agents.llm_agent import LLMAgent\n\n\n"
-        f"class {class_name}(LLMAgent):\n"
+        f"{base_import}\n\n\n"
+        f"class {class_name}({base_class}):\n"
         f'    """Domain specialist for {domain}."""\n',
         encoding="utf-8",
     )
