@@ -162,7 +162,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
         except httpx.RequestError as e:
             raise InferenceError(f"Request to OpenRouter failed: {e}") from e
 
-        if response.status_code in (429, 402):
+        if response.status_code in (429, 402, 404, 503):
             raise _RateLimited(model)
         if response.status_code >= 400:
             raise InferenceError(

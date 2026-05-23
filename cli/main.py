@@ -47,25 +47,42 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-_console = Console()
+_console = Console(force_terminal=sys.stdout.isatty())
 
 
 def _setup_readline() -> None:
-    """Configure readline key bindings for comfortable terminal editing.
-
-    macOS ships Python with libedit (not GNU readline). libedit doesn't share
-    function names with GNU readline, so we only set emacs mode there — that
-    gives Ctrl+A/E/B/F/W. opt+arrow word-nav only works on GNU readline builds.
-    """
+    """Configure readline key bindings for comfortable terminal editing."""
     try:
         using_libedit = "libedit" in (getattr(readline, "__doc__", "") or "")
         if using_libedit:
-            readline.parse_and_bind("bind -e")  # emacs mode: ctrl+a/e/b/f/w
+            readline.parse_and_bind("bind -e")
+            # libedit uses ^[ for ESC (not \e) and different function names.
+            # Bind every common sequence so it works regardless of terminal app.
+            for seq, fn in [
+                ("^[b",      "ed-prev-word"),   # ESC b  — Terminal.app, VS Code
+                ("^[f",      "em-next-word"),   # ESC f
+                ("^[[1;3D",  "ed-prev-word"),   # opt+left  iTerm2
+                ("^[[1;3C",  "em-next-word"),   # opt+right iTerm2
+                ("^[[3D",    "ed-prev-word"),   # opt+left  some terminals
+                ("^[[3C",    "em-next-word"),   # opt+right some terminals
+                ("^[^[[D",   "ed-prev-word"),   # opt+left  VS Code
+                ("^[^[[C",   "em-next-word"),   # opt+right VS Code
+            ]:
+                try:
+                    readline.parse_and_bind(f'bind "{seq}" {fn}')
+                except Exception:
+                    pass
         else:
-            readline.parse_and_bind(r'"\e[1;3D": backward-word')  # opt+left  iTerm2
-            readline.parse_and_bind(r'"\e[1;3C": forward-word')   # opt+right iTerm2
-            readline.parse_and_bind(r'"\eb": backward-word')      # opt+left  Terminal.app
-            readline.parse_and_bind(r'"\ef": forward-word')       # opt+right Terminal.app
+            for binding in [
+                r'"\e[1;3D": backward-word',   # opt+left  iTerm2
+                r'"\e[1;3C": forward-word',    # opt+right iTerm2
+                r'"\eb": backward-word',       # ESC b
+                r'"\ef": forward-word',        # ESC f
+            ]:
+                try:
+                    readline.parse_and_bind(binding)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -165,6 +182,57 @@ def chat(
     ),
 ) -> None:
     """Interactive chat with north — live pipeline steps and markdown responses."""
+    _chat_loop(workspace=workspace)
+
+
+def _strip_history_prefix(prompt: str) -> str:
+    """Extract the raw user message from a prompt that may contain injected history."""
+    marker = "[Current message]\n"
+    idx = prompt.find(marker)
+    return prompt[idx + len(marker):] if idx != -1 else prompt
+
+
+def _load_history_from_ledger(limit: int = 20) -> list[tuple[str, str]]:
+    """Reconstruct recent conversation turns from the ledger."""
+    try:
+        resp = _api("GET", "/orchestrator/ledger?limit=300")
+        entries = resp.json()
+    except Exception:
+        return []
+
+    tasks: dict[str, dict] = {}
+    for e in entries:
+        tid = e.get("task_id")
+        if not tid:
+            continue
+        if tid not in tasks:
+            tasks[tid] = {"user": None, "assistant": None, "ts": ""}
+        action = e.get("action", "")
+        if action == "task_received" and e.get("input"):
+            tasks[tid]["user"] = _strip_history_prefix(e["input"])
+            tasks[tid]["ts"] = e.get("timestamp", "")
+        elif action == "agent_completed" and e.get("output"):
+            # Last agent's output wins if multiple agents ran
+            tasks[tid]["assistant"] = e["output"]
+
+    pairs = [
+        (t["user"], t["assistant"])
+        for t in sorted(tasks.values(), key=lambda x: x["ts"])
+        if t["user"] and t["assistant"]
+    ]
+    return pairs[-limit:]
+
+
+def _inject_history(prompt: str, history: list[tuple[str, str]]) -> str:
+    """Prepend the last N conversation turns so the agent keeps context."""
+    if not history:
+        return prompt
+    turns = "\n".join(f"User: {u}\nAssistant: {a}" for u, a in history[-5:])
+    return f"[Conversation so far]\n{turns}\n\n[Current message]\n{prompt}"
+
+
+def _chat_loop(workspace: Optional[str] = None) -> None:
+    """Inner chat REPL — called by both `chat` command and `start` command."""
     _setup_readline()
     subtitle = f"workspace: {workspace}" if workspace else "Type your message and press Enter. Ctrl+C or 'exit' to quit."
     _console.print(
@@ -174,16 +242,26 @@ def chat(
             border_style="bright_black",
         )
     )
+    # \001/\002 wrap non-printing ANSI bytes so readline measures prompt width correctly.
+    # Without them Option+Left overshoots and eats the ❯ character.
+    _CHAT_PROMPT = "\n\001\x1b[1;36m\002 ❯ \001\x1b[0m\002"
+
+    history = _load_history_from_ledger(limit=20)
     while True:
         try:
-            prompt = _console.input("\n[bold cyan] ❯ [/bold cyan]").strip()
+            prompt = input(_CHAT_PROMPT).strip()
         except (KeyboardInterrupt, EOFError):
             _console.print("\n[dim]Goodbye.[/dim]")
             break
         if not prompt or prompt.lower() in ("exit", "quit", "bye"):
             _console.print("[dim]Goodbye.[/dim]")
             break
-        _run_task(prompt, workspace=workspace)
+        full_prompt = _inject_history(prompt, history)
+        output = _run_task(full_prompt, workspace=workspace)
+        if output and output != "Task completed.":
+            history.append((prompt, output))
+            if len(history) > 20:
+                history = history[-20:]
 
 
 # ── shared task runner ────────────────────────────────────────────────────────
@@ -236,15 +314,15 @@ def _build_steps_table(steps: list[tuple[str, str, bool]]) -> Table:
     return t
 
 
-def _run_task(prompt: str, workspace: Optional[str] = None) -> None:
-    """Submit prompt, stream SSE pipeline steps live, then render the response."""
+def _run_task(prompt: str, workspace: Optional[str] = None) -> str:
+    """Submit prompt, stream SSE pipeline steps live, then render the response. Returns output text."""
     body: dict = {"prompt": prompt}
     if workspace:
         body["workspace"] = workspace
     try:
         resp = _api("POST", "/orchestrator/task", json=body)
     except SystemExit:
-        return
+        return ""
     task_id = resp.json()["task_id"]
 
     steps: list[tuple[str, str, bool]] = []
@@ -317,7 +395,7 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> None:
 
     except KeyboardInterrupt:
         _console.print("[dim]Interrupted.[/dim]")
-        return
+        return ""
 
     if failed_msg:
         _console.print(Panel(
@@ -325,7 +403,7 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> None:
             title="[red]north — failed[/red]",
             border_style="red",
         ))
-        return
+        return ""
 
     # Fetch the actual output from the ledger
     try:
@@ -345,6 +423,7 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> None:
         border_style="green",
         padding=(1, 2),
     ))
+    return output_text
 
 
 # ── stream (raw) ──────────────────────────────────────────────────────────────
@@ -1076,7 +1155,7 @@ def start(
         _sync_docker_secret(compose_file)
 
         if not no_chat:
-            chat()
+            _chat_loop()
         return
 
     if not local and not _docker_available():
@@ -1105,7 +1184,7 @@ def start(
             typer.secho(f"north is already running on port {port}.", fg=typer.colors.YELLOW)
             if not no_chat:
                 typer.echo("")
-                chat()
+                _chat_loop()
             return
         else:
             typer.secho(f"Port {port} is in use by another application.", fg=typer.colors.YELLOW)
@@ -1156,7 +1235,7 @@ def start(
 
     threading.Thread(target=_run_server, daemon=True).start()
     _wait_for_server(host, port)
-    chat()
+    _chat_loop()
 
 
 @app.command("stop")

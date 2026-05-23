@@ -23,6 +23,7 @@ dependencies = [
     "numpy>=1.26.0; sys_platform == 'darwin'",
     "psutil>=5.9.0",
     "rich>=13.0.0",
+    "ddgs>=1.0.0",
 ]
 
 [project.scripts]
