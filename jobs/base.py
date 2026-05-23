@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from datetime import datetime
+from typing import Any
 
 from jobs.models import Job, JobStatus
 
@@ -58,3 +60,16 @@ class JobProcessor(ABC):
         self, status: JobStatus | None = None, limit: int = 100
     ) -> list[Job]:
         """List jobs, optionally filtered by status, ordered by scheduled_at desc."""
+
+    @abstractmethod
+    async def run(
+        self,
+        on_job: Callable[[Job], Awaitable[Any]] | None = None,
+        poll_interval_seconds: int = 5,
+    ) -> None:
+        """Poll the queue forever, dispatching each claimed job to `on_job`.
+
+        Runs until cancelled. `on_job` is called in a fire-and-forget task so
+        the poll loop never blocks on job execution. If `on_job` is None, claimed
+        jobs are immediately marked completed (no-op drain mode).
+        """

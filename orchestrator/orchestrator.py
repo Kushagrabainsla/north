@@ -11,7 +11,7 @@ from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
-from approval import Card, CardType, Notifier
+from approval import Card, CardType, JudgementFilter, Notifier
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.classifier import IntentClassifier
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, RoutingError
@@ -44,6 +44,7 @@ class Orchestrator:
         failure_handler: FailureHandler,
         notifier: Notifier,
         stream_manager: EventStreamManager,
+        judgement_filter: JudgementFilter | None = None,
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
@@ -54,6 +55,7 @@ class Orchestrator:
         self._failure_handler = failure_handler
         self._notifier = notifier
         self._stream_manager = stream_manager
+        self._judgement_filter = judgement_filter
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -83,6 +85,59 @@ class Orchestrator:
             created_at=format_timestamp(now),
         )
 
+    async def get_task(self, task_id: str) -> TaskResponse | None:
+        """Return the current status of a task by reading its most recent ledger entry."""
+        entries = await self._ledger.query(LedgerFilters(task_id=task_id, limit=1))
+        if not entries:
+            return None
+        entry = entries[0]
+        return TaskResponse(
+            task_id=task_id,
+            status=entry.status.value if entry.status else "unknown",
+            created_at=format_timestamp(entry.timestamp),
+        )
+
+    async def cancel_task(self, task_id: str) -> None:
+        """Write a cancelled entry to the ledger for the given task."""
+        asyncio.create_task(self._ledger.write(LedgerEntry(
+            id=generate_id(),
+            timestamp=utcnow(),
+            source=LedgerSource.SYSTEM,
+            task_id=task_id,
+            action="task_cancelled",
+            status=LedgerStatus.CANCELLED,
+        )))
+        await self._stream_manager.emit(task_id, "task_cancelled", {})
+
+    async def respond_approval(
+        self,
+        card_id: str,
+        task_id: str,
+        agent: str,
+        decision: str,
+        chosen_option: str,
+    ) -> None:
+        """Record a user approval decision from the notification callback or Web UI."""
+        status = (
+            LedgerStatus.APPROVED if decision == "approved" else LedgerStatus.REJECTED
+        )
+        asyncio.create_task(self._ledger.write(LedgerEntry(
+            id=generate_id(),
+            timestamp=utcnow(),
+            source=LedgerSource.APPROVAL,
+            task_id=task_id,
+            agent=agent,
+            action=f"approval_responded: {decision}",
+            input=f"card_id={card_id}",
+            output=f"chosen_option={chosen_option}",
+            status=status,
+        )))
+        await self._stream_manager.emit(task_id, "approval_responded", {
+            "card_id": card_id,
+            "decision": decision,
+            "chosen_option": chosen_option,
+        })
+
     async def list_active_tasks(self) -> list[TaskResponse]:
         """Returns tasks that are still pending in the ledger."""
         entries = await self._ledger.query(
@@ -97,6 +152,31 @@ class Orchestrator:
             for e in entries
             if e.status == LedgerStatus.PENDING
         ]
+
+    # ------------------------------------------------------------------ #
+    #  Notification with judgement filtering                               #
+    # ------------------------------------------------------------------ #
+
+    async def _notify(self, card: Card) -> None:
+        """Run judgement filter; auto-resolve or surface to user."""
+        if self._judgement_filter is not None:
+            decision, chosen_option = await self._judgement_filter.check(card)
+            if decision is not None:
+                asyncio.create_task(self._ledger.write(LedgerEntry(
+                    id=generate_id(),
+                    timestamp=utcnow(),
+                    source=LedgerSource.APPROVAL,
+                    task_id=card.task_id,
+                    agent=card.agent,
+                    action=f"judgement_filter_auto_{decision}",
+                    input=card.title,
+                    output=chosen_option or decision,
+                    status=LedgerStatus.COMPLETED,
+                )))
+                from approval.store import approval_store
+                approval_store.resolve(card.id, decision)
+                return
+        await self._notifier.notify(card)
 
     # ------------------------------------------------------------------ #
     #  Stage pipeline                                                      #
@@ -187,7 +267,7 @@ class Orchestrator:
                 message=tension or "This task conflicts with one of your active goals. Proceed?",
                 options=["Proceed anyway", "Cancel"],
             )
-            await self._notifier.notify(card)
+            await self._notify(card)
             raise NorthStarConflictError(tension or "North Star conflict")
 
         await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": reasoning})
@@ -326,7 +406,7 @@ class Orchestrator:
                 message=result.question or result.output,
                 options=result.question_options if result.has_question else ["Approve", "Reject"],
             )
-            await self._notifier.notify(card)
+            await self._notify(card)
         else:
             card = Card(
                 id=generate_id(),
@@ -336,4 +416,4 @@ class Orchestrator:
                 title=f"{agent.name.capitalize()} — Done",
                 message=result.summary,
             )
-            await self._notifier.notify(card)
+            await self._notify(card)

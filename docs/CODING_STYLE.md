@@ -357,7 +357,7 @@ ledger/
 
 context/
   __init__.py
-  store.py           <- ContextStore (ABC)
+  base.py            <- ContextStore (ABC)
   models.py          <- ContextDocument (enum of valid document names)
   exceptions.py      <- ContextReadError, ContextWriteError
   file_store.py      <- FileContextStore
@@ -371,13 +371,14 @@ inference/
 
 approval/
   __init__.py
-  base.py            <- Notifier (ABC)
-  models.py          <- Card, CardType, ApprovalDecision
-  exceptions.py      <- NotificationError
-  macos.py           <- MacOSNotifier
-  terminal.py        <- TerminalNotifier (dev and test use)
-  callback_server.py <- FastAPI app on port 8001
-  card_factory.py    <- CardFactory
+  base.py             <- Notifier (ABC)
+  models.py           <- Card, CardType, ApprovalDecision
+  exceptions.py       <- NotificationError
+  macos.py            <- MacOSNotifier, AlerterNotifier
+  terminal.py         <- TerminalNotifier (dev and test use)
+  callback_server.py  <- FastAPI app on port 8001
+  store.py            <- module-level approval_store singleton (Web UI visibility)
+  judgement_filter.py <- pre-screens cards against judgement_rules.md
 
 agents/
   __init__.py
@@ -443,17 +444,12 @@ config/
   dependencies.py    <- Dependencies, build_production_dependencies(), build_test_dependencies()
 
 cli/
-  main.py            <- Typer app
-  commands/
-    task.py
-    context.py
-    agent.py
-    ledger.py
-    jobs.py
-    inference.py
+  main.py            <- Typer app, all commands in one file
 
 web/
-  src/
+  routes.py          <- Jinja2 routes for all /ui/* pages (configure() singleton)
+  templates/         <- Jinja2 HTML templates
+  static/            <- vendored JS, CSS
 
 tests/
   unit/

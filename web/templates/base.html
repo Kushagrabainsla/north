@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  {% if not request.cookies.get('north_secret') %}
+  <meta http-equiv="refresh" content="0;url=/ui/auth?next={{ request.url.path }}" />
+  {% endif %}
   <title>{% block title %}north{% endblock %}</title>
   <meta name="description" content="{% block description %}north — Personal Life Operating System{% endblock %}" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -21,6 +24,11 @@
     <div class="navbar-links">
       <a href="/ui/" class="nav-link {% if request.url.path == '/ui/' %}active{% endif %}">Dashboard</a>
       <a href="/ui/ledger" class="nav-link {% if request.url.path == '/ui/ledger' %}active{% endif %}">Ledger</a>
+      <a href="/ui/approvals" class="nav-link {% if request.url.path == '/ui/approvals' %}active{% endif %}">Approvals</a>
+      <a href="/ui/context" class="nav-link {% if '/ui/context' in request.url.path %}active{% endif %}">Context</a>
+      <a href="/ui/agents" class="nav-link {% if request.url.path == '/ui/agents' %}active{% endif %}">Agents</a>
+      <a href="/ui/jobs" class="nav-link {% if request.url.path == '/ui/jobs' %}active{% endif %}">Jobs</a>
+      <a href="/ui/inference" class="nav-link {% if request.url.path == '/ui/inference' %}active{% endif %}">Inference</a>
     </div>
     <div class="navbar-status">
       <span class="status-dot"></span>

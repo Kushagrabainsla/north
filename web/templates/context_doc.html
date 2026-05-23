@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ doc_name }} — Context — north{% endblock %}
+{% block description %}Edit {{ doc_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>{{ doc_name }}</h1>
+  <a href="/ui/context" class="btn btn-ghost">← All documents</a>
+</div>
+
+<form method="post" action="/ui/context/{{ doc_name }}" class="context-editor-form">
+  <textarea
+    name="content"
+    class="context-editor"
+    rows="30"
+    spellcheck="false"
+  >{{ content }}</textarea>
+  <div class="context-editor-actions">
+    <button type="submit" class="btn btn-primary">Save</button>
+    <a href="/ui/context/{{ doc_name }}" class="btn btn-ghost">Discard</a>
+  </div>
+</form>
+{% endblock %}

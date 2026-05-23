@@ -79,7 +79,10 @@ def build_production_dependencies() -> Dependencies:
     return Dependencies(
         context_store=FileContextStore(settings.north_home / "context"),
         ledger=SQLiteLedgerWriter(settings.north_home / "ledger.db"),
-        inference_router=OpenRouterInferenceRouter(settings.openrouter_api_key),
+        inference_router=OpenRouterInferenceRouter(
+            settings.openrouter_api_key,
+            settings.north_home / "inference_cache.json",
+        ),
         notifier=MacOSNotifier(settings.secret),
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
     )

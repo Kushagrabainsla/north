@@ -1229,66 +1229,85 @@ Total effort from user: one voice sentence, one tap.
 ```
 north/
   orchestrator/
-    main.py                  <- Orchestrator entry point, FastAPI REST API on port 8000
-    classifier.py            <- trivial vs consequential classification
-    north_star_check.py      <- north star alignment check
-    router.py                <- agent routing and parallel execution planning
-    task_context.py          <- Task Context Object management (SQLite per task)
-    failure_handler.py       <- failure classification and retry logic
-    stream.py                <- SSE event stream for Web UI real-time updates
+    app.py              <- FastAPI app, lifespan (DB init, background tasks), Uvicorn entry point
+    api_router.py       <- all REST endpoints (tasks, ledger, context, jobs, inference, agents)
+    orchestrator.py     <- core orchestration logic (classify → north star → route → execute)
+    classifier.py       <- trivial vs consequential classification
+    north_star.py       <- north star alignment check
+    router.py           <- agent routing and parallel execution planning
+    task_context.py     <- Task Context Object management (SQLite per task)
+    failure_handler.py  <- failure classification and retry logic
+    stream.py           <- SSE event stream for Web UI real-time updates
+    models.py           <- request/response Pydantic models
+    exceptions.py
 
   agents/
+    base.py             <- Agent (ABC)
+    llm_agent.py        <- LLM-backed agent base class
+    registry.py         <- agent discovery and registration
+    models.py           <- AgentResult, AgentStatus
+    exceptions.py
     health/
       agent.py
       config.yaml
       tools.yaml
       prompts/
         system.md
-        templates/
-      tests/
-        test_agent.py
+      README.md
     university/
     job/
     finance/
 
   context/
-    __init__.py              <- public exports
-    base.py                  <- ContextStore (ABC)
-    models.py                <- ContextDocument (enum of the five valid document names)
-    exceptions.py            <- ContextError, ContextReadError, ContextWriteError
-    file_store.py            <- FileContextStore (v1 concrete)
-    extraction.py            <- extraction pipeline (Ledger -> context docs, background job)
-    injection.py             <- manual context injection handler (file, text, URL)
-    public.md
-    private.md
-    privacy_rules.md
-    judgement_rules.md
-    north_stars.md
+    __init__.py
+    base.py             <- ContextStore (ABC)
+    models.py           <- ContextDocument (enum of the five valid document names)
+    exceptions.py       <- ContextError, ContextReadError, ContextWriteError
+    file_store.py       <- FileContextStore (v1 concrete)
+    extraction.py       <- extraction pipeline (Ledger → context docs, background job)
+    injection.py        <- manual context injection handler (file, text, URL)
 
   ledger/
-    __init__.py              <- public exports
-    base.py                  <- LedgerWriter (ABC), LedgerFilters
-    models.py                <- LedgerEntry, LedgerSource, LedgerStatus
-    exceptions.py            <- LedgerError, LedgerWriteError, LedgerReadError
-    sqlite_writer.py         <- SQLiteLedgerWriter (concrete)
+    __init__.py
+    base.py             <- LedgerWriter (ABC), LedgerFilters
+    models.py           <- LedgerEntry, LedgerSource, LedgerStatus
+    exceptions.py       <- LedgerError, LedgerWriteError, LedgerReadError
+    sqlite_writer.py    <- SQLiteLedgerWriter (concrete)
 
   inference/
-    router.py                <- Inference Router (OpenRouter, dynamic pools, auto-fallback)
-    fallback_pools.py        <- hardcoded minimal pools used if OpenRouter is unreachable on startup
+    __init__.py
+    base.py             <- InferenceRouter (ABC), CompletionRequest/Response
+    openrouter.py       <- OpenRouterInferenceRouter (dynamic pools, auto-fallback)
+    fallback_pools.py   <- hardcoded minimal pools if OpenRouter is unreachable on startup
+    models.py           <- PoolPriority, ModelPool
+    exceptions.py
 
   approval/
-    notifier.py              <- macOS notification sender
-    callback_server.py       <- local server on port 8001 receiving notification callbacks
-    cards.py                 <- card type definitions (Information, Approval, Question)
-    security.py              <- shared secret generation, validation, storage
+    __init__.py
+    base.py             <- Notifier (ABC)
+    macos.py            <- MacOSNotifier / AlerterNotifier (alerter subprocess)
+    terminal.py         <- TerminalNotifier (fallback for dev/test)
+    callback_server.py  <- local server on port 8001 receiving notification callbacks
+    models.py           <- Card, CardType, ApprovalDecision
+    store.py            <- module-level approval_store singleton (Web UI visibility)
+    judgement_filter.py <- pre-screens cards against judgement_rules.md before notifying
+    exceptions.py       <- ApprovalError, NotificationError
 
   jobs/
-    processor.py             <- job queue processor (polls jobs.db every N seconds)
-    scheduler.py             <- cron job definitions and scheduling logic
+    __init__.py
+    base.py             <- JobProcessor (ABC)
+    sqlite_processor.py <- SQLiteJobProcessor (polls jobs.db every N seconds)
+    scheduler.py        <- cron job definitions and scheduling logic
+    models.py           <- Job, JobStatus, JobType
+    exceptions.py
 
   tools/
-    registry.py              <- tool graph definition and edge traversal
-    confidence.py            <- confidence score read/write against tools.db
+    __init__.py
+    base.py             <- Tool (ABC)
+    registry.py         <- tool graph definition and edge traversal
+    confidence.py       <- confidence score read/write against tools.db
+    models.py           <- ToolEdge, ToolResult
+    exceptions.py
     implementations/
       web_search.py
       calendar_api.py
@@ -1301,22 +1320,57 @@ north/
       expense_tracker.py
 
   web/
-    templates/               <- Jinja2 templates (activity feed, approval surface, control panel)
-    static/                  <- vendored HTMX, CSS, any small assets
+    routes.py           <- Jinja2 routes for all /ui/* pages (configure() singleton)
+    templates/
+      base.html         <- layout, nav, auth meta-redirect
+      dashboard.html    <- live activity feed + task input
+      approvals.html    <- approval surface (cards, respond buttons)
+      context_index.html
+      context_doc.html  <- view/edit a context document
+      agents.html
+      jobs.html
+      inference.html
+      ledger.html
+    static/
+      css/main.css
+      js/main.js
 
   cli/
-    main.py                  <- CLI entry point, thin wrapper over Orchestrator REST API
+    main.py             <- CLI entry point (Typer), thin wrapper over Orchestrator REST API
 
   config/
-    settings.py              <- system settings, defaults, environment config
+    settings.py         <- Settings (pydantic-settings), all NORTH_* env vars
+    dependencies.py     <- build_production_dependencies(), shared dependency wiring
+
+  utils/
+    db.py               <- SQLite connection helpers (WAL mode, row_factory)
+    ids.py              <- task/job/card ID generation
+    prompts.py          <- prompt template loading
+    security.py         <- secret key generation, verification, cookie + header auth
+    time.py             <- datetime helpers
+
+  prompts/
+    classifier.md       <- system prompt for the Orchestrator classifier
+    north_star.md       <- system prompt for the north star check
+    router.md           <- system prompt for the routing decision
 
   tests/
-    integration/             <- end-to-end tests against a running Orchestrator
-    unit/                    <- unit tests per module, agents testable in isolation
+    integration/
+    unit/
+      context/
+      jobs/
+      ledger/
+      tools/
+      utils/
 
+  docs/
+    CODING_STYLE.md
+
+  exceptions.py         <- top-level NorthError base exception
+  pyproject.toml
+  uv.lock
+  .env.example
   README.md
-  requirements.txt
-  docker-compose.yml
 ```
 
 ---
@@ -1559,88 +1613,138 @@ dev = [
 
 ### 16.12 Getting Started
 
-north has two install paths: an end-user flow that bootstraps everything via a single `curl`, and a developer flow that runs from a checkout.
+north runs on macOS (arm64 or x86_64). The Approval Layer (Section 9) uses macOS native notifications and is macOS-only by design.
 
-#### For users (intended end-state — installer script not yet implemented)
+#### Prerequisites
+
+Install these once. They do not need to be repeated per project.
+
+**`uv`** — Python package manager. If you do not have it:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**`alerter`** — macOS notifications with action buttons (Section 16.10):
+```bash
+brew install vjeantet/tap/alerter
+```
+
+Grant notification permission when macOS prompts on first run, or open **System Settings → Notifications → alerter** and enable it manually.
+
+**Python 3.12+** — managed automatically by `uv`. No separate install needed.
+
+#### Install from source
+
+```bash
+# 1. Clone
+git clone https://github.com/your-username/north
+cd north
+
+# 2. Install north and all dependencies. Wires the `north` command onto your PATH.
+uv tool install .
+
+# 3. Configure your API key
+cp .env.example .env
+# Open .env and set:
+#   NORTH_OPENROUTER_API_KEY=sk-or-your-key-here
+# Get a key at https://openrouter.ai/keys
+
+# 4. Start
+north start
+```
+
+On first run `north start` creates `~/.north/`, generates `secret.key`, and initialises all SQLite databases. When it is ready you will see:
+
+```
+★ north  Orchestrator → http://127.0.0.1:8000
+         Web UI       → http://127.0.0.1:8000/ui/
+         API docs     → http://127.0.0.1:8000/docs
+         Home         → ~/.north
+```
+
+Open `http://127.0.0.1:8000/ui/` in a browser. The first visit sets the auth cookie and lands you on the dashboard. Submit a task to confirm everything is working.
+
+#### Verify from the CLI
+
+In a second terminal while north is running:
+
+```bash
+north tasks          # list active tasks
+north ledger         # recent ledger entries
+north inference models  # current model pool state
+```
+
+#### Update
+
+```bash
+uv tool upgrade north
+```
+
+#### For developers (editable install with dev tools)
+
+```bash
+git clone https://github.com/your-username/north
+cd north
+
+# Install all dependencies including dev group (pytest, etc.)
+uv sync
+
+# Configure
+cp .env.example .env
+# Edit .env: NORTH_OPENROUTER_API_KEY=sk-or-...
+
+# Run (auto-reload on file changes)
+uv run north start --reload
+
+# Run tests
+uv run pytest tests/unit/
+
+# Lint and format
+uv run ruff check .
+uv run ruff format .
+```
+
+#### Future: one-liner installer (not yet implemented)
+
+The intended end-state for non-developer users is:
 
 ```bash
 curl -LsSf https://north.dev/install.sh | sh
 north start
 ```
 
-The PyPI package name `north` and the installer host `north.dev` are placeholders pending availability checks. The flow below is the spec the installer must fulfill once written.
-
-The installer:
-
-1. Detects macOS arm64 or x86_64. Refuses on other platforms — the Approval Layer (Section 9) is macOS-only by design.
-2. Installs `uv` (via Astral's official one-liner) if not present.
-3. Installs Python 3.12+ via `uv` if not present.
-4. Installs `alerter` via Homebrew (`brew install vjeantet/tap/alerter`) for the notification surface (Section 16.10). Prompts before tapping.
-5. Installs the `north` package itself with `uv tool install north`, placing the `north` binary on the user's `PATH`.
-6. On first run of `north start`: prompts for `NORTH_OPENROUTER_API_KEY`, writes it to `~/.north/.env`, generates `~/.north/secret.key`, initializes all SQLite databases, and opens System Settings to request macOS notification permission.
-
-Optional auto-start at login (opt-in, default off):
-
-```bash
-north install --autostart
-```
-
-Writes `~/Library/LaunchAgents/dev.north.plist`. The Orchestrator becomes a background service that starts at login and survives reboots, consistent with north's "runs continuously" framing in Section 1.
-
-Updates:
-
-```bash
-uv tool upgrade north
-```
-
-#### For developers
-
-```bash
-# 1. Clone the repo
-git clone https://github.com/your-username/north
-cd north
-
-# 2. Install dependencies
-uv sync
-
-# 3. Set your OpenRouter API key
-export NORTH_OPENROUTER_API_KEY=sk-or-...
-
-# 4. Start north
-uv run north start
-
-# This will:
-#   - Generate ~/.north/secret.key if it does not exist
-#   - Initialize all SQLite databases
-#   - Start the Orchestrator on localhost:8000 (REST API at /, Web UI at /ui)
-#   - Start the callback server on localhost:8001
-
-# 5. In a separate terminal, verify it is running
-uv run north tasks
-```
+The installer would handle all prerequisites and the `uv tool install` step automatically. The `north.dev` domain and PyPI package name are placeholders pending availability checks. The manual steps above are the working path in the meantime.
 
 ### 16.13 Complete Dependency List
 
 ```toml
 [project.dependencies]
 # Server
-fastapi = ">=0.111.0"
-uvicorn = {extras = ["standard"], version = ">=0.29.0"}
+fastapi = ">=0.110.0"
+uvicorn = ">=0.28.0"
 pydantic = ">=2.0.0"
-sse-starlette = ">=2.0.0"
-jinja2 = ">=3.1.0"          # server-rendered templates for the Web UI (Section 16.8)
+pydantic-settings = ">=2.2.0"   # Settings class, NORTH_* env var binding
+jinja2 = ">=3.1.0"              # server-rendered templates for the Web UI (Section 16.8)
+python-multipart = ">=0.0.29"   # FastAPI file upload (UploadFile)
 
 # HTTP client
 httpx = ">=0.27.0"
 
 # CLI
-typer = ">=0.12.0"
-rich = ">=13.0.0"
+typer = ">=0.9.0"
+
+# Config
+pyyaml = ">=6.0"                # agent config.yaml / tools.yaml parsing
 
 # Document parsing
 pypdf = ">=4.0.0"
 python-docx = ">=1.0.0"
 beautifulsoup4 = ">=4.12.0"
+
+# Voice input
+sounddevice = ">=0.4.6"         # push-to-talk audio capture
+pynput = ">=1.7.6"              # keyboard listener for push-to-talk hotkey
+numpy = ">=1.26.0"              # sounddevice returns numpy arrays
 ```
 
 Scheduling has no external dependency: cron entries are `(hour, minute, weekday)` tuples and `jobs/scheduler.py` is a single asyncio background task (see Section 11.3).

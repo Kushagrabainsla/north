@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Jobs — north{% endblock %}
+{% block description %}Job queue and cron history{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Jobs</h1>
+  <p class="page-subtitle">{{ jobs | length }} job{% if jobs | length != 1 %}s{% endif %} shown</p>
+</div>
+
+<div class="ledger-controls">
+  <a href="/ui/jobs" class="btn btn-sm {% if not status_filter %}btn-primary{% else %}btn-ghost{% endif %}">All</a>
+  {% for s in all_statuses %}
+  <a href="/ui/jobs?status={{ s }}" class="btn btn-sm {% if status_filter == s %}btn-primary{% else %}btn-ghost{% endif %}">{{ s }}</a>
+  {% endfor %}
+</div>
+
+{% if jobs %}
+<div class="ledger-table-wrap">
+  <table class="ledger-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Type</th>
+        <th>Agent</th>
+        <th>Task</th>
+        <th>Priority</th>
+        <th>Status</th>
+        <th>Scheduled</th>
+        <th>Retries</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr class="ledger-row ledger-{{ job.status.value }}">
+        <td class="ledger-task-id">{{ job.job_id[:12] }}…</td>
+        <td><span class="badge badge-source">{{ job.type.value }}</span></td>
+        <td>{{ job.agent }}</td>
+        <td class="ledger-action">{{ job.task[:60] }}{% if job.task | length > 60 %}…{% endif %}</td>
+        <td>{{ job.priority.value }}</td>
+        <td><span class="badge badge-status badge-{{ job.status.value }}">{{ job.status.value }}</span></td>
+        <td class="ledger-time">{{ job.scheduled_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td>{{ job.retry_count }}/{{ job.max_retries }}</td>
+        <td>
+          {% if job.status.value in ["pending", "running"] %}
+          <form method="post" action="/ui/jobs/{{ job.job_id }}/cancel" style="display:inline">
+            <button type="submit" class="btn btn-sm btn-danger">Cancel</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state">
+  <p>No jobs{% if status_filter %} with status <strong>{{ status_filter }}</strong>{% endif %}.</p>
+</div>
+{% endif %}
+{% endblock %}

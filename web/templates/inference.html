@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Inference — north{% endblock %}
+{% block description %}OpenRouter inference costs and model routing{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Inference</h1>
+  <p class="page-subtitle">Cost tracking and model pool assignments</p>
+</div>
+
+<section class="approvals-section">
+  <h2 class="section-title">Cost Summary</h2>
+  {% if costs %}
+  <div class="stat-grid">
+    {% for key, val in costs.items() %}
+    <div class="stat-card">
+      <span class="stat-value">{{ val }}</span>
+      <span class="stat-label">{{ key }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No cost data available.</p></div>
+  {% endif %}
+</section>
+
+<section class="approvals-section">
+  <h2 class="section-title">Model Pool</h2>
+  {% if models %}
+  <div class="ledger-table-wrap">
+    <table class="ledger-table">
+      <thead>
+        <tr>
+          <th>Model ID</th>
+          <th>Pool</th>
+          <th>Context</th>
+          <th>$/1K prompt</th>
+          <th>$/1K completion</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in models %}
+        <tr class="ledger-row">
+          <td><code>{{ m.get("id", "—") }}</code></td>
+          <td><span class="badge badge-source">{{ m.get("pool", "—") }}</span></td>
+          <td>{{ m.get("context_length", "—") }}</td>
+          <td>{{ m.get("prompt_price", "—") }}</td>
+          <td>{{ m.get("completion_price", "—") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No model data available.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

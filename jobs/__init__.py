@@ -3,7 +3,7 @@
 from jobs.base import JobProcessor
 from jobs.exceptions import JobError, JobNotFoundError, JobProcessingError
 from jobs.models import Job, JobPriority, JobStatus, JobType
-from jobs.scheduler import CronEntry, CronScheduler, next_due_entry, next_firing
+from jobs.scheduler import CronEntry, CronScheduler, V1_CRON_ENTRIES, next_due_entry, next_firing
 from jobs.sqlite_processor import SQLiteJobProcessor
 
 __all__ = [
@@ -20,4 +20,5 @@ __all__ = [
     "SQLiteJobProcessor",
     "next_due_entry",
     "next_firing",
+    "V1_CRON_ENTRIES",
 ]

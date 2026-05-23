@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Context — north{% endblock %}
+{% block description %}The five context documents that govern north's behaviour{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Context Layer</h1>
+  <p class="page-subtitle">Five markdown documents north reads before every decision</p>
+</div>
+
+<div class="card-grid">
+  {% for doc in docs %}
+  <a href="/ui/context/{{ doc }}" class="context-card">
+    <span class="context-card__name">{{ doc }}</span>
+    <span class="context-card__arrow">→</span>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

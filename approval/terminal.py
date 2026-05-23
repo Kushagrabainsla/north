@@ -9,6 +9,7 @@ import sys
 
 from approval.base import Notifier
 from approval.models import Card, CardType
+from approval.store import approval_store
 
 
 class TerminalNotifier(Notifier):
@@ -16,6 +17,7 @@ class TerminalNotifier(Notifier):
 
     async def notify(self, card: Card) -> None:
         """Draw a box around the card details and print it to stdout."""
+        approval_store.add(card)
         header = f"=== NORTH {card.type.value.upper()} CARD ({card.id}) ==="
         border = "=" * len(header)
 

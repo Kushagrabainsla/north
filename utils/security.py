@@ -8,7 +8,7 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-from fastapi import Header, HTTPException
+from fastapi import Cookie, Header, HTTPException
 
 from config.settings import settings
 
@@ -38,11 +38,18 @@ def verify_secret(secret_to_verify: str) -> bool:
     return secrets.compare_digest(secret_to_verify, stored_secret)
 
 
-async def verify_request_secret(x_north_secret: str = Header(...)) -> None:
-    """FastAPI header dependency to verify request auth.
+async def verify_request_secret(
+    x_north_secret: str | None = Header(default=None),
+    north_secret: str | None = Cookie(default=None),
+) -> None:
+    """FastAPI dependency: accept the shared secret via header or HttpOnly cookie.
+
+    The header path is used by the CLI and external clients.
+    The cookie path is used by the Web UI (set by GET /ui/auth).
 
     Raises:
-        HTTPException: 403 if secret verification fails.
+        HTTPException: 403 if neither credential is present or valid.
     """
-    if not verify_secret(x_north_secret):
+    candidate = x_north_secret or north_secret or ""
+    if not verify_secret(candidate):
         raise HTTPException(status_code=403, detail="Invalid secret.")

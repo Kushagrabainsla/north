@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Agents — north{% endblock %}
+{% block description %}Registered agent roster{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Agents</h1>
+  <p class="page-subtitle">{{ agents | length }} registered agent{% if agents | length != 1 %}s{% endif %}</p>
+</div>
+
+{% if agents %}
+<div class="ledger-table-wrap">
+  <table class="ledger-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Domain</th>
+        <th>Description</th>
+        <th>Model Pool</th>
+        <th>Tools</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for agent in agents %}
+      <tr class="ledger-row">
+        <td><strong>{{ agent.name }}</strong></td>
+        <td><span class="badge badge-source">{{ agent.domain }}</span></td>
+        <td>{{ agent.description or "—" }}</td>
+        <td>{{ agent.model_pool if agent.model_pool else "—" }}</td>
+        <td>
+          {% if agent.tools %}
+            {% for t in agent.tools[:4] %}<span class="badge badge-source">{{ t }}</span> {% endfor %}
+            {% if agent.tools | length > 4 %}+{{ agent.tools | length - 4 }}{% endif %}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state">
+  <p>No agents registered. Create one with <code>north agent create</code>.</p>
+</div>
+{% endif %}
+{% endblock %}

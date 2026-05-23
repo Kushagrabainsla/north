@@ -2,14 +2,18 @@
 
 from context.base import ContextStore
 from context.exceptions import ContextError, ContextReadError, ContextWriteError
+from context.extraction import ExtractionPipeline
 from context.file_store import FileContextStore
+from context.injection import ContextInjector
 from context.models import ContextDocument
 
 __all__ = [
     "ContextDocument",
     "ContextError",
+    "ContextInjector",
     "ContextReadError",
     "ContextStore",
     "ContextWriteError",
+    "ExtractionPipeline",
     "FileContextStore",
 ]

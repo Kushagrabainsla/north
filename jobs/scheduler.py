@@ -1,4 +1,4 @@
-"""Asyncio-native cron scheduler. See README Section 11.3.
+"""Asyncio-native cron scheduler and v1 schedule entries. See README Section 11.3.
 
 Implements Decision 4 (CHANGELOG): a single asyncio background task computes
 the next firing across all `CronEntry` tuples, sleeps until that moment,
@@ -110,3 +110,16 @@ class CronScheduler:
             delay = max(0.0, (firing - now).total_seconds())
             await asyncio.sleep(delay)
             await self._processor.enqueue(self.build_job(entry, firing))
+
+
+# V1 schedule — see README Section 11.3.
+# weekday: 0=Mon … 6=Sun, None = daily.
+V1_CRON_ENTRIES: list[CronEntry] = [
+    CronEntry(name="health_daily_meal_plan",    agent="health",     task="Generate today's meal plan",                  hour=7,  minute=0),
+    CronEntry(name="university_canvas_check",   agent="university", task="Check Canvas for new assignments and deadlines", hour=8,  minute=0),
+    CronEntry(name="job_internship_update",     agent="job",        task="Review internship prep progress and next steps", hour=9,  minute=0),
+    CronEntry(name="finance_expense_summary",   agent="finance",    task="Summarise today's expenses",                  hour=22, minute=0),
+    CronEntry(name="university_weekly_summary", agent="university", task="Weekly academic summary and upcoming deadlines", hour=8,  minute=0, weekday=0),
+    CronEntry(name="finance_weekly_budget",     agent="finance",    task="Weekly budget check and savings progress",     hour=18, minute=0, weekday=6),
+    CronEntry(name="task_context_cleanup",      agent="system",     task="task_context_cleanup",                        hour=3,  minute=0),
+]

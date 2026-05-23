@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from jobs.base import JobProcessor
 from jobs.exceptions import JobProcessingError
 from jobs.models import Job, JobPriority, JobStatus, JobType
 from utils.db import open_db_connection
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_queue (
@@ -186,6 +191,42 @@ class SQLiteJobProcessor(JobProcessor):
     ) -> list[Job]:
         rows = await asyncio.to_thread(self._list_sync, status, limit)
         return [self._row_to_job(r) for r in rows]
+
+    async def run(
+        self,
+        on_job: Callable[[Job], Awaitable[Any]] | None = None,
+        poll_interval_seconds: int = 5,
+    ) -> None:
+        """Poll the queue and dispatch claimed jobs via `on_job`."""
+        while True:
+            try:
+                job = await self.claim_next()
+                if job is not None:
+                    if on_job is not None:
+                        asyncio.create_task(
+                            self._run_job(job, on_job),
+                            name=f"job-{job.job_id}",
+                        )
+                    else:
+                        await self.mark_completed(job.job_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("JobProcessor: error in poll loop")
+            await asyncio.sleep(poll_interval_seconds)
+
+    async def _run_job(
+        self, job: Job, on_job: Callable[[Job], Awaitable[Any]]
+    ) -> None:
+        """Execute one job; mark completed or failed based on outcome."""
+        try:
+            await on_job(job)
+            await self.mark_completed(job.job_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("JobProcessor: job %s failed", job.job_id)
+            await self.mark_failed(job.job_id)
 
     def _list_sync(
         self, status: JobStatus | None, limit: int
