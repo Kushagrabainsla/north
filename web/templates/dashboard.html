@@ -4,78 +4,28 @@
 
 {% block content %}
 
-<!-- ── Command Bar ─────────────────────────────────────────────────────────── -->
-<div class="command-bar">
-  <form id="task-form" enctype="multipart/form-data">
-      <span class="command-glyph">⌘</span>
-      <input
-        id="task-prompt"
-        type="text"
-        name="prompt"
-        placeholder="What would you like north to do?"
-        class="command-input"
-        autocomplete="off"
-      />
-      <div id="task-file-chip" style="display:none;" class="file-chip">
-        <span class="file-chip__name" id="task-file-name"></span>
-        <button type="button" class="file-chip__remove" id="task-file-remove" aria-label="Remove file">✕</button>
-      </div>
-      <button type="submit" class="btn btn-primary btn-sm">Run</button>
-  </form>
-</div>
-
-<!-- ── Three-Column Dashboard ─────────────────────────────────────────────── -->
+<!-- ── Two-column layout: chat + activity feed ─────────────────────────────── -->
 <div class="dashboard">
 
-  <!-- ── Left: Status & Agents ──────────────────────────────────────────── -->
-  <aside class="panel panel-left">
+  <!-- ── Chat Thread ────────────────────────────────────────────────────── -->
+  <section class="panel chat-panel">
     <div class="panel-header">
-      <h2>System Status</h2>
-    </div>
-
-    <div class="stat-grid">
-      <div class="stat-card">
-        <span class="stat-value">{{ active_tasks | length }}</span>
-        <span class="stat-label">Active</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-value">{{ recent_entries | length }}</span>
-        <span class="stat-label">Events</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-value">{{ pending_approvals_count }}</span>
-        <span class="stat-label">Approvals</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-value">4</span>
-        <span class="stat-label">Agents</span>
-      </div>
-    </div>
-
-    <div class="panel-section">
-      <h3>Agents</h3>
-      <div class="agent-list">
-        {% for domain in ["health", "university", "job", "finance"] %}
-        <div class="agent-chip agent-{{ domain }}">
-          <span class="agent-dot"></span>{{ domain }}
-        </div>
-        {% endfor %}
-      </div>
-    </div>
-
-    {% if pending_approvals_count > 0 %}
-    <div class="panel-section">
-      <a href="/ui/approvals" class="btn btn-danger btn-sm" style="width:100%;text-align:center;">
-        {{ pending_approvals_count }} Pending Approval{% if pending_approvals_count != 1 %}s{% endif %}
+      <h2>Chat</h2>
+      {% if pending_approvals_count > 0 %}
+      <a href="/ui/approvals" class="btn btn-danger btn-sm">
+        {{ pending_approvals_count }} pending
       </a>
+      {% endif %}
     </div>
-    {% endif %}
-  </aside>
+    <div id="chat-thread" class="chat-thread">
+      <div class="chat-empty">No messages yet — type below to get started.</div>
+    </div>
+  </section>
 
-  <!-- ── Center: Live Activity Feed ────────────────────────────────────── -->
-  <section class="panel panel-center">
+  <!-- ── Activity Feed ─────────────────────────────────────────────────── -->
+  <aside class="panel activity-panel">
     <div class="panel-header">
-      <h2>Activity Feed</h2>
+      <h2>Activity</h2>
     </div>
     <div id="feed" class="feed">
       {% for entry in recent_entries %}
@@ -94,51 +44,31 @@
       </div>
       {% endfor %}
       {% if not recent_entries %}
-      <div class="feed-empty">
-        <p>No activity yet — submit a task above to get started.</p>
-      </div>
-      {% endif %}
-    </div>
-  </section>
-
-  <!-- ── Right: Active Tasks ───────────────────────────────────────────── -->
-  <aside class="panel panel-right">
-    <div class="panel-header">
-      <h2>Active Tasks</h2>
-    </div>
-    <div class="task-list">
-      {% for task in active_tasks %}
-      <div
-        class="task-card"
-        id="task-{{ task.task_id }}"
-        hx-ext="sse"
-        sse-connect="/orchestrator/stream/{{ task.task_id }}"
-        sse-swap="task_completed,agent_completed,agent_failed,classified"
-        hx-target="this"
-        hx-swap="outerHTML"
-      >
-        <div class="task-header">
-          <span class="task-id">{{ task.task_id }}</span>
-          <span class="task-status status-{{ task.status.value if task.status else 'pending' }}">
-            {{ task.status.value if task.status else "pending" }}
-          </span>
-        </div>
-        {% if task.input %}
-        <div class="task-prompt">{{ task.input[:120] }}{% if task.input | length > 120 %}…{% endif %}</div>
-        {% endif %}
-        <div class="task-time local-time" data-utc="{{ task.timestamp.isoformat() }}" data-format="datetime">{{ task.timestamp.strftime("%Y-%m-%d %H:%M") }}</div>
-        <div class="task-progress">
-          <div class="progress-bar"></div>
-        </div>
-      </div>
-      {% endfor %}
-      {% if not active_tasks %}
-      <div class="empty-state">
-        <p>No active tasks.</p>
-      </div>
+      <div class="feed-empty"><p>No activity yet.</p></div>
       {% endif %}
     </div>
   </aside>
 
 </div>
+
+<!-- ── Command Bar — pinned to bottom ────────────────────────────────────── -->
+<div class="command-bar">
+  <form id="task-form" enctype="multipart/form-data">
+    <span class="command-glyph">⌘</span>
+    <input
+      id="task-prompt"
+      type="text"
+      name="prompt"
+      placeholder="Message north…"
+      class="command-input"
+      autocomplete="off"
+    />
+    <div id="task-file-chip" style="display:none;" class="file-chip">
+      <span class="file-chip__name" id="task-file-name"></span>
+      <button type="button" class="file-chip__remove" id="task-file-remove" aria-label="Remove file">✕</button>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Send</button>
+  </form>
+</div>
+
 {% endblock %}

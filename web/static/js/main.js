@@ -5,21 +5,259 @@
 (function () {
   "use strict";
 
-  // ── Secret header injection ─────────────────────────────────────────────
+  // ── Auth ────────────────────────────────────────────────────────────────────
   const secretMeta = document.querySelector('meta[name="north-secret"]');
   const NORTH_SECRET = secretMeta ? secretMeta.getAttribute("content") : "";
 
   document.addEventListener("htmx:configRequest", function (evt) {
-    if (NORTH_SECRET) {
-      evt.detail.headers["X-North-Secret"] = NORTH_SECRET;
-    }
+    if (NORTH_SECRET) evt.detail.headers["X-North-Secret"] = NORTH_SECRET;
   });
 
   function authHeaders() {
     return NORTH_SECRET ? { "X-North-Secret": NORTH_SECRET } : {};
   }
 
-  // ── Task form UX ────────────────────────────────────────────────────────
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function hasFiles(e) {
+    return e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+  }
+
+  // ── Chat thread ──────────────────────────────────────────────────────────────
+  const chatThread = document.getElementById("chat-thread");
+
+  // [icon, label] per SSE event. icon is a text glyph.
+  const STEP_DEFS = {
+    classifying:           ["◎", "Classifying your message…"],
+    classified:            ["✓", "Classified"],
+    classified_as_trivial: ["✓", "Quick task — skipping north star check"],
+    north_star_checking:   ["★", "Checking north stars…"],
+    north_star_aligned:    ["✓", "Aligned with your goals"],
+    north_star_conflict:   ["!", "North star conflict — check approvals"],
+    routing:               ["⇢", "Planning which agents to run…"],
+    routed:                ["✓", "Execution plan ready"],
+    executing:             ["▶", "Running agents…"],
+  };
+
+  async function loadChatHistory() {
+    if (!chatThread) return;
+    try {
+      const resp = await fetch("/orchestrator/ledger?limit=200", { headers: authHeaders() });
+      if (!resp.ok) return;
+      const entries = await resp.json();
+
+      // Oldest first so we can walk forward and build pairs
+      const ordered = [...entries].reverse();
+
+      // Build task map: task_id → { prompt, time, outputs[] }
+      const tasks = {};
+      const taskOrder = [];
+
+      for (const e of ordered) {
+        if (!e.task_id) continue;
+        if (e.source === "prompt" && e.action === "task_received") {
+          tasks[e.task_id] = { prompt: e.input || "", time: e.timestamp, outputs: [] };
+          taskOrder.push(e.task_id);
+        }
+        if (e.source === "agent" && e.action === "agent_completed" && tasks[e.task_id] && e.output) {
+          tasks[e.task_id].outputs.push({ agent: e.agent, text: e.output });
+        }
+      }
+
+      if (taskOrder.length === 0) return;
+
+      const empty = chatThread.querySelector(".chat-empty");
+      if (empty) empty.remove();
+
+      for (const taskId of taskOrder) {
+        const t = tasks[taskId];
+        _appendUserBubble(t.prompt, taskId);
+        if (t.outputs.length > 0) {
+          _appendNorthBubble(t.outputs, taskId);
+        }
+      }
+
+      chatThread.scrollTop = chatThread.scrollHeight;
+    } catch (_) {}
+  }
+
+  function _appendUserBubble(prompt, taskId) {
+    if (!chatThread) return;
+    const div = document.createElement("div");
+    div.className = "chat-bubble user";
+    div.id = "chat-user-" + taskId;
+    div.innerHTML =
+      '<span class="bubble-label">you</span>' +
+      '<div class="bubble-content">' + escapeHtml(prompt) + '</div>';
+    chatThread.appendChild(div);
+  }
+
+  function _appendThinkingBubble(taskId) {
+    if (!chatThread) return;
+    const div = document.createElement("div");
+    div.className = "chat-bubble north";
+    div.id = "chat-thinking-" + taskId;
+    div.innerHTML =
+      '<span class="bubble-label">north</span>' +
+      '<div class="chat-thinking">' +
+        '<span class="think-dot"></span>' +
+        '<span class="think-dot"></span>' +
+        '<span class="think-dot"></span>' +
+      '</div>' +
+      '<div class="bubble-steps" id="steps-' + taskId + '"></div>';
+    chatThread.appendChild(div);
+    chatThread.scrollTop = chatThread.scrollHeight;
+  }
+
+  function _addStep(taskId, icon, label) {
+    const steps = document.getElementById("steps-" + taskId);
+    if (!steps) return;
+    // Mark previous active step as done
+    const prev = steps.querySelector(".step-pill.step-active");
+    if (prev) prev.classList.replace("step-active", "step-done");
+    const pill = document.createElement("div");
+    pill.className = "step-pill step-active";
+    pill.innerHTML =
+      '<span class="step-icon">' + escapeHtml(icon) + '</span>' +
+      '<span>' + escapeHtml(label) + '</span>';
+    steps.appendChild(pill);
+    if (chatThread) chatThread.scrollTop = chatThread.scrollHeight;
+  }
+
+  function _appendNorthBubble(outputs, taskId) {
+    if (!chatThread) return;
+    const thinking = document.getElementById("chat-thinking-" + taskId);
+
+    // Mark last active step as done and remove the thinking dots — keep steps
+    if (thinking) {
+      const lastActive = thinking.querySelector(".step-pill.step-active");
+      if (lastActive) lastActive.classList.replace("step-active", "step-done");
+      const dots = thinking.querySelector(".chat-thinking");
+      if (dots) dots.remove();
+    }
+
+    const text = outputs
+      .map(function (o) { return o.text; })
+      .filter(Boolean)
+      .join("\n\n") || "Task completed.";
+
+    // Append the response content into the existing thinking bubble so steps stay above it
+    const bubble = thinking || document.getElementById("chat-north-" + taskId);
+    if (bubble) {
+      bubble.id = "chat-north-" + taskId;
+      const content = document.createElement("div");
+      content.className = "bubble-content";
+      content.textContent = text;
+      bubble.appendChild(content);
+    } else {
+      const div = document.createElement("div");
+      div.className = "chat-bubble north";
+      div.id = "chat-north-" + taskId;
+      div.innerHTML =
+        '<span class="bubble-label">north</span>' +
+        '<div class="bubble-content">' + escapeHtml(text) + '</div>';
+      chatThread.appendChild(div);
+    }
+    chatThread.scrollTop = chatThread.scrollHeight;
+  }
+
+  function _appendErrorBubble(taskId, msg) {
+    if (!chatThread) return;
+    const thinking = document.getElementById("chat-thinking-" + taskId);
+    if (thinking) {
+      const lastActive = thinking.querySelector(".step-pill.step-active");
+      if (lastActive) lastActive.classList.replace("step-active", "step-done");
+      const dots = thinking.querySelector(".chat-thinking");
+      if (dots) dots.remove();
+      const content = document.createElement("div");
+      content.className = "bubble-content chat-error";
+      content.textContent = msg || "Task failed.";
+      thinking.id = "chat-north-" + taskId;
+      thinking.appendChild(content);
+    } else {
+      const div = document.createElement("div");
+      div.className = "chat-bubble north";
+      div.id = "chat-north-" + taskId;
+      div.innerHTML =
+        '<span class="bubble-label">north</span>' +
+        '<div class="bubble-content chat-error">' + escapeHtml(msg || "Task failed.") + '</div>';
+      chatThread.appendChild(div);
+    }
+    chatThread.scrollTop = chatThread.scrollHeight;
+  }
+
+  function subscribeToTask(taskId) {
+    _appendThinkingBubble(taskId);
+
+    // EventSource sends same-origin cookies automatically — auth handled via cookie.
+    const es = new EventSource("/orchestrator/stream/" + taskId);
+
+    // The server emits named SSE events (event: classified, event: routing, …).
+    // onmessage only fires for unnamed events, so we must listen per event name.
+    const NAMED_EVENTS = [
+      "classifying", "classified", "classified_as_trivial",
+      "north_star_checking", "north_star_aligned", "north_star_conflict",
+      "routing", "routed", "executing",
+      "agent_started", "agent_completed",
+      "task_completed", "task_failed",
+    ];
+
+    function handleSseEvent(evt) {
+      try {
+        const data = JSON.parse(evt.data);
+        const event = evt.type;
+
+        if (event === "agent_started") {
+          _addStep(taskId, "◎", (data.agent || "agent") + " agent running…");
+        } else if (event === "agent_completed") {
+          const label = data.summary
+            ? (data.agent || "agent") + ": " + data.summary
+            : (data.agent || "agent") + " agent done";
+          _addStep(taskId, "✓", label);
+        } else if (STEP_DEFS[event]) {
+          _addStep(taskId, STEP_DEFS[event][0], STEP_DEFS[event][1]);
+        }
+
+        if (event === "task_completed") {
+          es.close();
+          setTimeout(async function () {
+            try {
+              const resp = await fetch(
+                "/orchestrator/ledger?task_id=" + taskId + "&limit=20",
+                { headers: authHeaders() }
+              );
+              if (!resp.ok) { _appendNorthBubble([], taskId); return; }
+              const entries = await resp.json();
+              const outputs = entries
+                .filter(function (e) { return e.action === "agent_completed" && e.output; })
+                .map(function (e) { return { agent: e.agent, text: e.output }; });
+              _appendNorthBubble(outputs.length ? outputs : [], taskId);
+            } catch (_) {
+              _appendNorthBubble([], taskId);
+            }
+          }, 500);
+        }
+
+        if (event === "task_failed") {
+          es.close();
+          _appendErrorBubble(taskId, data.error || "Task failed.");
+        }
+      } catch (_) {}
+    }
+
+    NAMED_EVENTS.forEach(function (name) {
+      es.addEventListener(name, handleSseEvent);
+    });
+
+    es.onerror = function () { es.close(); };
+  }
+
+  // ── File chip ────────────────────────────────────────────────────────────────
   const taskForm   = document.getElementById("task-form");
   const taskInput  = document.getElementById("task-prompt");
   const fileChip   = document.getElementById("task-file-chip");
@@ -32,18 +270,19 @@
     pendingFile = file;
     if (fileNameEl) fileNameEl.textContent = file.name;
     if (fileChip)   fileChip.style.display = "inline-flex";
-    taskInput.placeholder = "Describe what to do with " + file.name + " (optional)";
+    if (taskInput)  taskInput.placeholder = "Describe what to do with " + file.name + " (optional)";
   }
 
   function clearFileChip() {
     pendingFile = null;
     if (fileChip)   fileChip.style.display = "none";
     if (fileNameEl) fileNameEl.textContent = "";
-    taskInput.placeholder = "What would you like north to do?";
+    if (taskInput)  taskInput.placeholder = "What would you like north to do?";
   }
 
   if (fileRemove) fileRemove.addEventListener("click", clearFileChip);
 
+  // ── Task form submit ─────────────────────────────────────────────────────────
   if (taskForm && taskInput) {
     taskForm.addEventListener("submit", async function (evt) {
       evt.preventDefault();
@@ -57,7 +296,6 @@
       try {
         let finalPrompt = prompt;
 
-        // Step 1: upload attached file to context if present
         if (pendingFile) {
           const fd = new FormData();
           fd.append("file", pendingFile, pendingFile.name);
@@ -78,7 +316,6 @@
           clearFileChip();
         }
 
-        // Step 2: submit the task
         const taskResp = await fetch("/orchestrator/task", {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/x-www-form-urlencoded" },
@@ -88,12 +325,14 @@
         if (taskResp.ok) {
           const taskData = await taskResp.json();
           taskInput.value = "";
-          taskInput.placeholder = "Task submitted ✓";
-          setTimeout(() => {
-            taskInput.placeholder = "What would you like north to do?";
-          }, 2000);
 
-          // Inject a live feed item without page reload
+          // Remove empty state and append user bubble
+          const empty = chatThread && chatThread.querySelector(".chat-empty");
+          if (empty) empty.remove();
+          _appendUserBubble(finalPrompt, taskData.task_id);
+          subscribeToTask(taskData.task_id);
+
+          // Also inject into the activity feed
           const feedEl = document.getElementById("feed");
           if (feedEl) {
             const item = document.createElement("div");
@@ -101,21 +340,23 @@
             item.innerHTML =
               '<div class="feed-meta">' +
                 '<span class="feed-source">prompt</span>' +
-                '<span class="feed-time">' + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) + '</span>' +
+                '<span class="feed-time">' +
+                  new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) +
+                '</span>' +
               '</div>' +
               '<div class="feed-action">' + escapeHtml(finalPrompt) + '</div>' +
               '<div class="feed-task-id">' + escapeHtml(taskData.task_id || "") + '</div>';
-            const empty = feedEl.querySelector(".feed-empty");
-            if (empty) empty.remove();
+            const feedEmpty = feedEl.querySelector(".feed-empty");
+            if (feedEmpty) feedEmpty.remove();
             feedEl.prepend(item);
           }
         } else {
           taskInput.placeholder = "Error submitting — try again";
-          setTimeout(() => { taskInput.placeholder = "What would you like north to do?"; }, 3000);
+          setTimeout(function () { taskInput.placeholder = "What would you like north to do?"; }, 3000);
         }
       } catch (_) {
         taskInput.placeholder = "Network error — try again";
-        setTimeout(() => { taskInput.placeholder = "What would you like north to do?"; }, 3000);
+        setTimeout(function () { taskInput.placeholder = "What would you like north to do?"; }, 3000);
       } finally {
         taskInput.disabled = false;
         if (submitBtn) submitBtn.disabled = false;
@@ -131,11 +372,10 @@
     });
   }
 
-  // ── Command bar drag-and-drop ────────────────────────────────────────────
+  // ── Command bar drag-and-drop ────────────────────────────────────────────────
   const commandBar = document.querySelector(".command-bar");
   if (commandBar) {
     let depth = 0;
-
     commandBar.addEventListener("dragenter", function (e) {
       if (!hasFiles(e)) return;
       e.preventDefault();
@@ -144,21 +384,19 @@
     commandBar.addEventListener("dragover",  function (e) { if (hasFiles(e)) e.preventDefault(); });
     commandBar.addEventListener("dragleave", function ()  { if (--depth <= 0) { depth = 0; commandBar.classList.remove("drag-active"); } });
     commandBar.addEventListener("drop", function (e) {
-      e.preventDefault();
-      depth = 0;
+      e.preventDefault(); depth = 0;
       commandBar.classList.remove("drag-active");
       const file = e.dataTransfer.files[0];
       if (file) showFileChip(file);
     });
   }
 
-  // ── Context page drop zone ───────────────────────────────────────────────
+  // ── Context page drop zone ────────────────────────────────────────────────────
   const ctxZone   = document.getElementById("context-drop-zone");
   const ctxStatus = document.getElementById("context-drop-status");
 
   if (ctxZone) {
     let depth = 0;
-
     ctxZone.addEventListener("dragenter", function (e) {
       if (!hasFiles(e)) return;
       e.preventDefault();
@@ -167,14 +405,12 @@
     ctxZone.addEventListener("dragover",  function (e) { if (hasFiles(e)) e.preventDefault(); });
     ctxZone.addEventListener("dragleave", function ()  { if (--depth <= 0) { depth = 0; ctxZone.classList.remove("drag-active"); } });
     ctxZone.addEventListener("drop", async function (e) {
-      e.preventDefault();
-      depth = 0;
+      e.preventDefault(); depth = 0;
       ctxZone.classList.remove("drag-active");
       const file = e.dataTransfer.files[0];
       if (file) await uploadContextFile(file);
     });
 
-    // Click to browse
     ctxZone.addEventListener("click", function () {
       const input = document.createElement("input");
       input.type = "file";
@@ -199,7 +435,7 @@
           const data = await resp.json();
           setCtxStatus("✓ Injected into " + (data.document || "context"), "ok");
         } else {
-          const err = await resp.json().catch(() => ({}));
+          const err = await resp.json().catch(function () { return {}; });
           setCtxStatus("✗ " + (err.detail || "Upload failed"), "err");
         }
       } catch (_) {
@@ -214,7 +450,7 @@
     }
   }
 
-  // ── SSE event highlights ─────────────────────────────────────────────────
+  // ── SSE activity feed highlights ─────────────────────────────────────────────
   document.addEventListener("htmx:sseMessage", function (evt) {
     try {
       const data = JSON.parse(evt.detail.data);
@@ -223,35 +459,27 @@
       const card = document.getElementById("task-" + taskId);
       if (!card) return;
       card.classList.add("sse-flash");
-      setTimeout(() => card.classList.remove("sse-flash"), 600);
-      if (data.event === "task_completed") {
-        const badge = card.querySelector(".task-status");
-        if (badge) { badge.textContent = "completed"; badge.className = "task-status status-completed"; }
-        const bar = card.querySelector(".progress-bar");
-        if (bar) bar.style.width = "100%";
-      }
-      if (data.event === "agent_failed") {
-        const badge = card.querySelector(".task-status");
-        if (badge) { badge.textContent = "failed"; badge.className = "task-status status-failed"; }
-      }
+      setTimeout(function () { card.classList.remove("sse-flash"); }, 600);
     } catch (_) {}
   });
 
-  // ── Animate newly inserted feed items ───────────────────────────────────
-  const observer = new MutationObserver(function (mutations) {
-    mutations.forEach(function (mut) {
-      mut.addedNodes.forEach(function (node) {
-        if (node.classList && node.classList.contains("feed-item")) {
-          node.style.animation = "none";
-          requestAnimationFrame(() => { node.style.animation = ""; });
-        }
+  // ── Animate new feed items ────────────────────────────────────────────────────
+  const feedEl = document.getElementById("feed");
+  if (feedEl) {
+    const obs = new MutationObserver(function (mutations) {
+      mutations.forEach(function (mut) {
+        mut.addedNodes.forEach(function (node) {
+          if (node.classList && node.classList.contains("feed-item")) {
+            node.style.animation = "none";
+            requestAnimationFrame(function () { node.style.animation = ""; });
+          }
+        });
       });
     });
-  });
-  const feed = document.getElementById("feed");
-  if (feed) observer.observe(feed, { childList: true });
+    obs.observe(feedEl, { childList: true });
+  }
 
-  // ── Local time conversion ────────────────────────────────────────────────
+  // ── Local time conversion ──────────────────────────────────────────────────────
   function convertLocalTimes() {
     document.querySelectorAll(".local-time").forEach(function (el) {
       const utcStr = el.getAttribute("data-utc");
@@ -262,8 +490,10 @@
       if (format === "time") {
         el.textContent = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
       } else {
-        const p = (n) => String(n).padStart(2, "0");
-        el.textContent = date.getFullYear() + "-" + p(date.getMonth() + 1) + "-" + p(date.getDate()) + " " + p(date.getHours()) + ":" + p(date.getMinutes());
+        const p = function (n) { return String(n).padStart(2, "0"); };
+        el.textContent =
+          date.getFullYear() + "-" + p(date.getMonth() + 1) + "-" + p(date.getDate()) +
+          " " + p(date.getHours()) + ":" + p(date.getMinutes());
       }
     });
   }
@@ -275,12 +505,7 @@
   }
   document.addEventListener("htmx:afterSwap", convertLocalTimes);
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
-  function hasFiles(e) {
-    return e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
-  }
+  // ── Boot ───────────────────────────────────────────────────────────────────────
+  loadChatHistory();
 
-  function escapeHtml(str) {
-    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
 })();

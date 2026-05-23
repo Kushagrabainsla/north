@@ -214,7 +214,7 @@ async def stream_task_events(task_id: str) -> StreamingResponse:
 
 # ── Ledger endpoints ──────────────────────────────────────────────────────────
 
-_LEDGER_EXCLUDE = {"agent_output", "input", "tools_used"}
+_LEDGER_EXCLUDE = {"agent_output", "tools_used"}
 
 
 @router.get("/ledger", response_model=list[LedgerEntry], response_model_exclude=_LEDGER_EXCLUDE)

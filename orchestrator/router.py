@@ -127,8 +127,11 @@ class ExecutionPlanner:
         """Constructs a simple fallback plan targeting the domain's primary agent."""
         matching_agents = self._agent_registry.for_domain(domain)
         if not matching_agents:
-            # If no agent for that specific domain, pick the first registered agent
-            matching_agents = [self._agent_registry.all()[0]]
+            # Prefer the general agent for unmatched domains; fall back to first registered
+            matching_agents = (
+                self._agent_registry.for_domain("general")
+                or [self._agent_registry.all()[0]]
+            )
 
         agent_name = matching_agents[0].name
         return ExecutionPlan(

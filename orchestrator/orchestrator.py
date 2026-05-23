@@ -361,7 +361,8 @@ class Orchestrator:
                     task_id, agent.name, "completed"
                 )
                 await self._stream_manager.emit(
-                    task_id, "agent_completed", {"agent": agent.name}
+                    task_id, "agent_completed",
+                    {"agent": agent.name, "summary": result.summary},
                 )
                 return result
             except Exception as exc:
@@ -390,7 +391,7 @@ class Orchestrator:
             task_id=task_id,
             agent=agent.name,
             action="agent_completed",
-            output=result.summary,
+            output=result.output,
             agent_output=result.data,
             status=LedgerStatus.COMPLETED,
         )))

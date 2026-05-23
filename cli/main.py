@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import readline  # noqa: F401 — enables arrow-key/history editing in input()
 import shutil
 import socket
 import subprocess
@@ -39,6 +40,35 @@ from typing import Optional
 
 import httpx
 import typer
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+_console = Console()
+
+
+def _setup_readline() -> None:
+    """Configure readline key bindings for comfortable terminal editing.
+
+    macOS ships Python with libedit (not GNU readline). libedit doesn't share
+    function names with GNU readline, so we only set emacs mode there — that
+    gives Ctrl+A/E/B/F/W. opt+arrow word-nav only works on GNU readline builds.
+    """
+    try:
+        using_libedit = "libedit" in (getattr(readline, "__doc__", "") or "")
+        if using_libedit:
+            readline.parse_and_bind("bind -e")  # emacs mode: ctrl+a/e/b/f/w
+        else:
+            readline.parse_and_bind(r'"\e[1;3D": backward-word')  # opt+left  iTerm2
+            readline.parse_and_bind(r'"\e[1;3C": forward-word')   # opt+right iTerm2
+            readline.parse_and_bind(r'"\eb": backward-word')      # opt+left  Terminal.app
+            readline.parse_and_bind(r'"\ef": forward-word')       # opt+right Terminal.app
+    except Exception:
+        pass
+
 
 from utils.security import load_secret
 
@@ -92,19 +122,13 @@ def task_default(
     ctx: typer.Context,
     prompt: Optional[str] = typer.Argument(None, help="Prompt to submit as a new task."),
 ) -> None:
-    """Submit a task, or use a subcommand (cancel)."""
+    """Submit a task and stream results live."""
     if ctx.invoked_subcommand is not None:
         return
     if prompt is None:
         typer.echo(ctx.get_help())
         raise typer.Exit()
-    response = _api("POST", "/orchestrator/task", json={"prompt": prompt})
-    data = response.json()
-    task_id = data["task_id"]
-    typer.secho(f"✓ Task submitted: {task_id}", fg=typer.colors.GREEN)
-    typer.echo(f"  Status : {data['status']}")
-    typer.echo(f"  Created: {data['created_at']}")
-    typer.echo(f"\nStream with:  north stream {task_id}")
+    _run_task(prompt)
 
 
 @task_app.command("cancel")
@@ -131,31 +155,202 @@ def list_tasks() -> None:
         typer.echo(f"  {t['status']}  {t['created_at']}")
 
 
-# ── stream ────────────────────────────────────────────────────────────────────
+# ── chat ─────────────────────────────────────────────────────────────────────
+
+@app.command("chat")
+def chat() -> None:
+    """Interactive chat with north — live pipeline steps and markdown responses."""
+    _setup_readline()
+    _console.print(
+        Panel(
+            Text("Type your message and press Enter. Ctrl+C or 'exit' to quit.", style="dim"),
+            title="[bold]★ north[/bold]",
+            border_style="bright_black",
+        )
+    )
+    while True:
+        try:
+            prompt = _console.input("\n[bold cyan] ❯ [/bold cyan]").strip()
+        except (KeyboardInterrupt, EOFError):
+            _console.print("\n[dim]Goodbye.[/dim]")
+            break
+        if not prompt or prompt.lower() in ("exit", "quit", "bye"):
+            _console.print("[dim]Goodbye.[/dim]")
+            break
+        _run_task(prompt)
+
+
+# ── shared task runner ────────────────────────────────────────────────────────
+
+_STEP_ICONS: dict[str, str] = {
+    "classifying":           "◎",
+    "classified":            "✓",
+    "classified_as_trivial": "✓",
+    "north_star_checking":   "★",
+    "north_star_aligned":    "✓",
+    "north_star_conflict":   "!",
+    "routing":               "⇢",
+    "routed":                "✓",
+    "executing":             "▶",
+    "agent_started":         "◎",
+    "agent_completed":       "✓",
+}
+
+_STEP_LABELS: dict[str, str] = {
+    "classifying":           "Classifying…",
+    "classified":            "Classified",
+    "classified_as_trivial": "Quick task — skipping north star check",
+    "north_star_checking":   "Checking north stars…",
+    "north_star_aligned":    "Aligned with goals",
+    "north_star_conflict":   "North star conflict — check approvals",
+    "routing":               "Planning execution…",
+    "routed":                "Execution plan ready",
+    "executing":             "Running agents…",
+}
+
+
+def _build_steps_table(steps: list[tuple[str, str, bool]]) -> Table:
+    """Render pipeline steps as a borderless table. Each step is (icon, label, active)."""
+    t = Table.grid(padding=(0, 1))
+    t.add_column(width=2)
+    t.add_column()
+    for icon, label, active in steps:
+        if active:
+            t.add_row(
+                Text(icon, style="bold blue"),
+                Text(label, style="bold white"),
+            )
+        else:
+            t.add_row(
+                Text(icon, style="dim green"),
+                Text(label, style="dim"),
+            )
+    return t
+
+
+def _run_task(prompt: str) -> None:
+    """Submit prompt, stream SSE pipeline steps live, then render the response."""
+    try:
+        resp = _api("POST", "/orchestrator/task", json={"prompt": prompt})
+    except SystemExit:
+        return
+    task_id = resp.json()["task_id"]
+
+    steps: list[tuple[str, str, bool]] = []
+
+    def _make_renderable() -> Panel:
+        return Panel(
+            _build_steps_table(steps) if steps else Text("Starting…", style="dim"),
+            title=f"[dim]{task_id}[/dim]",
+            border_style="bright_black",
+        )
+
+    url = f"{_BASE_URL}/orchestrator/stream/{task_id}"
+    output_text: str = ""
+    failed_msg: str = ""
+
+    try:
+        with Live(_make_renderable(), console=_console, refresh_per_second=8) as live:
+            with httpx.stream("GET", url, headers=_headers(), timeout=None) as stream:
+                current_event = ""
+                for line in stream.iter_lines():
+                    if line.startswith("event:"):
+                        current_event = line[6:].strip()
+                    elif line.startswith("data:"):
+                        try:
+                            data = json.loads(line[5:].strip())
+                        except json.JSONDecodeError:
+                            continue
+
+                        event = current_event or data.get("event", "")
+
+                        # Mark previous active step done
+                        if steps:
+                            icon, label, _ = steps[-1]
+                            steps[-1] = (icon, label, False)
+
+                        if event == "agent_started":
+                            agent = data.get("agent", "agent")
+                            steps.append(("◎", f"{agent} agent running…", True))
+                        elif event == "agent_completed":
+                            agent = data.get("agent", "agent")
+                            summary = data.get("summary", "")
+                            label = f"{agent}: {summary}" if summary else f"{agent} agent done"
+                            steps.append(("✓", label, True))
+                        elif event in _STEP_LABELS:
+                            steps.append((_STEP_ICONS.get(event, "·"), _STEP_LABELS[event], True))
+
+                        live.update(_make_renderable())
+
+                        if event == "task_completed":
+                            if steps:
+                                icon, label, _ = steps[-1]
+                                steps[-1] = (icon, label, False)
+                            live.update(_make_renderable())
+                            break
+                        if event == "task_failed":
+                            failed_msg = data.get("error", "Task failed.")
+                            if steps:
+                                icon, label, _ = steps[-1]
+                                steps[-1] = ("✗", label, False)
+                            live.update(_make_renderable())
+                            break
+                        current_event = ""
+
+    except KeyboardInterrupt:
+        _console.print("[dim]Interrupted.[/dim]")
+        return
+
+    if failed_msg:
+        _console.print(Panel(
+            Text(failed_msg, style="red"),
+            title="[red]north — failed[/red]",
+            border_style="red",
+        ))
+        return
+
+    # Fetch the actual output from the ledger
+    try:
+        ledger_resp = _api("GET", f"/orchestrator/ledger?task_id={task_id}&limit=20")
+        entries = ledger_resp.json()
+        outputs = [
+            e["output"] for e in entries
+            if e.get("action") == "agent_completed" and e.get("output")
+        ]
+        output_text = "\n\n".join(outputs) if outputs else "Task completed."
+    except Exception:
+        output_text = "Task completed."
+
+    _console.print(Panel(
+        Markdown(output_text),
+        title="[bold green]north[/bold green]",
+        border_style="green",
+        padding=(1, 2),
+    ))
+
+
+# ── stream (raw) ──────────────────────────────────────────────────────────────
 
 @app.command("stream")
 def stream_task(
-    task_id: str = typer.Argument(..., help="Task ID to stream events for."),
+    task_id: str = typer.Argument(..., help="Task ID to stream raw events for."),
 ) -> None:
-    """Stream real-time events for a task via SSE."""
+    """Stream raw SSE events for a task (debug view)."""
     url = f"{_BASE_URL}/orchestrator/stream/{task_id}"
-    typer.echo(f"Streaming events for {task_id} (Ctrl+C to stop)…\n")
+    _console.print(f"[dim]Streaming {task_id} — Ctrl+C to stop[/dim]\n")
     try:
         with httpx.stream("GET", url, headers=_headers(), timeout=None) as response:
             for line in response.iter_lines():
-                if line.startswith("data:"):
-                    payload = line[5:].strip()
+                if line.startswith("event:"):
+                    _console.print(f"[cyan]{line}[/cyan]")
+                elif line.startswith("data:"):
                     try:
-                        data = json.loads(payload)
-                        event = data.get("event", "event")
-                        typer.secho(f"[{event}] ", fg=typer.colors.CYAN, nl=False)
-                        typer.echo(json.dumps(
-                            {k: v for k, v in data.items() if k != "event"}, indent=2
-                        ))
+                        data = json.loads(line[5:].strip())
+                        _console.print_json(json.dumps(data))
                     except json.JSONDecodeError:
-                        typer.echo(payload)
+                        _console.print(line)
     except KeyboardInterrupt:
-        typer.echo("\nStream closed.")
+        _console.print("\n[dim]Stream closed.[/dim]")
 
 
 # ── context ──────────────────────────────────────────────────────────────────
@@ -739,6 +934,37 @@ def _is_north_server(host: str, port: int) -> bool:
         return False
 
 
+def _wait_for_server(host: str, port: int, timeout: int = 90) -> None:
+    """Poll until the server responds or timeout expires."""
+    typer.echo("Waiting for server ", nl=False)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _is_north_server(host, port):
+            typer.secho(" ready.", fg=typer.colors.GREEN)
+            return
+        typer.echo(".", nl=False)
+        time.sleep(1)
+    typer.echo("")
+    typer.secho("Server did not become ready in time.", fg=typer.colors.RED, err=True)
+    raise typer.Exit(1)
+
+
+def _sync_docker_secret(compose_file: Path) -> None:
+    """Read the north secret from the running Docker container and cache it locally."""
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "exec", "-T", "north",
+             "cat", "/data/secret.key"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            secret_path = Path.home() / ".north" / "secret.key"
+            secret_path.parent.mkdir(parents=True, exist_ok=True)
+            secret_path.write_text(result.stdout.strip(), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _kill_port(host: str, port: int) -> bool:
     try:
         import psutil
@@ -791,11 +1017,13 @@ def start(
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (local mode only)."),
     local: bool = typer.Option(False, "--local", help="Skip Docker; run directly with uvicorn."),
+    no_chat: bool = typer.Option(False, "--no-chat", help="Start server only; skip interactive chat."),
 ) -> None:
-    """Start north.
+    """Start north, then drop into interactive chat.
 
     By default uses Docker Compose when a docker-compose.yml is found and
     Docker is available. Pass --local to force direct uvicorn launch.
+    Pass --no-chat to start the server without entering the chat REPL.
     """
     compose_file = _find_compose_file()
     use_docker = not local and _docker_available() and compose_file is not None
@@ -806,10 +1034,19 @@ def start(
         typer.echo(f"  Compose file → {compose_file}")
         typer.echo(f"  Web UI       → http://127.0.0.1:{port}/ui/")
         typer.echo("")
-        subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "up", "--build"],
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
             check=False,
         )
+        if result.returncode != 0:
+            typer.secho("Docker Compose failed to start.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+        _wait_for_server("127.0.0.1", port)
+        _sync_docker_secret(compose_file)
+
+        if not no_chat:
+            chat()
         return
 
     if not local and not _docker_available():
@@ -836,6 +1073,10 @@ def start(
     if _port_in_use(host, port):
         if _is_north_server(host, port):
             typer.secho(f"north is already running on port {port}.", fg=typer.colors.YELLOW)
+            if not no_chat:
+                typer.echo("")
+                chat()
+            return
         else:
             typer.secho(f"Port {port} is in use by another application.", fg=typer.colors.YELLOW)
         kill = typer.confirm("Kill the existing process and restart?", default=False)
@@ -859,13 +1100,33 @@ def start(
     typer.echo("")
 
     import uvicorn
-    uvicorn.run(
-        "orchestrator.app:app",
-        host=host,
-        port=port,
-        reload=reload,
-        log_level="info",
-    )
+
+    if reload or no_chat:
+        # reload uses multiprocessing and can't share a thread with the chat REPL
+        uvicorn.run(
+            "orchestrator.app:app",
+            host=host,
+            port=port,
+            reload=reload,
+            log_level="info",
+        )
+        return
+
+    # Start server in a background daemon thread, then enter chat
+    import threading
+
+    def _run_server() -> None:
+        uvicorn.run(
+            "orchestrator.app:app",
+            host=host,
+            port=port,
+            log_level="error",
+            access_log=False,
+        )
+
+    threading.Thread(target=_run_server, daemon=True).start()
+    _wait_for_server(host, port)
+    chat()
 
 
 @app.command("stop")

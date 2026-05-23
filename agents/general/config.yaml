@@ -1,0 +1,28 @@
+agent: general
+domain: general
+model_pool: fast_cheap
+accepts:
+  - "general"
+  - "chat"
+  - "help"
+  - "question"
+  - "plan"
+  - "advice"
+  - "explain"
+  - "summarise"
+  - "summarize"
+  - "write"
+  - "draft"
+  - "brainstorm"
+  - "idea"
+  - "reminder"
+  - "note"
+  - "list"
+  - "todo"
+  - "task"
+  - "what"
+  - "how"
+  - "why"
+output_format: structured_json
+version: 1.0.0
+class_name: GeneralAgent

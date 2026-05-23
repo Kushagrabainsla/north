@@ -1,0 +1,3 @@
+tools:
+  - name: web_search
+    purpose: "Look up current information, facts, or news when needed."
