@@ -83,7 +83,7 @@ def build_production_dependencies() -> Dependencies:
             settings.openrouter_api_key,
             settings.north_home / "inference_cache.json",
         ),
-        notifier=MacOSNotifier(settings.secret),
+        notifier=TerminalNotifier(),
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
     )
 

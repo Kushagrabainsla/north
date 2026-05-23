@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -740,32 +741,90 @@ def _is_north_server(host: str, port: int) -> bool:
 
 def _kill_port(host: str, port: int) -> bool:
     try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
-            capture_output=True, text=True,
-        )
-        pids = result.stdout.strip().split()
-        if not pids:
+        import psutil
+        killed = False
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.laddr.port == port and conn.status == "LISTEN":
+                try:
+                    psutil.Process(conn.pid).kill()
+                    killed = True
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        return killed
+    except ImportError:
+        # Fallback: platform-agnostic subprocess approach
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True, text=True,
+            )
+            pids = result.stdout.strip().split()
+            if not pids:
+                return False
+            subprocess.run(["kill", "-9"] + pids, capture_output=True)
+            return True
+        except Exception:
             return False
-        subprocess.run(["kill", "-9"] + pids, capture_output=True)
-        return True
     except Exception:
         return False
 
 
 # ── start ─────────────────────────────────────────────────────────────────────
 
+def _find_compose_file() -> Optional[Path]:
+    """Walk up from CWD looking for docker-compose.yml."""
+    cwd = Path.cwd()
+    for candidate in [cwd, *cwd.parents]:
+        f = candidate / "docker-compose.yml"
+        if f.exists():
+            return f
+    return None
+
+
+def _docker_available() -> bool:
+    return shutil.which("docker") is not None
+
+
 @app.command("start")
 def start(
-    host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host (local mode only)."),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
-    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (dev)."),
+    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (local mode only)."),
+    local: bool = typer.Option(False, "--local", help="Skip Docker; run directly with uvicorn."),
 ) -> None:
-    """Bootstrap north and start the Orchestrator server.
+    """Start north.
 
-    On first run: creates ~/.north/, generates secret.key, initialises all
-    SQLite databases. Subsequent runs just launch the server.
+    By default uses Docker Compose when a docker-compose.yml is found and
+    Docker is available. Pass --local to force direct uvicorn launch.
     """
+    compose_file = _find_compose_file()
+    use_docker = not local and _docker_available() and compose_file is not None
+
+    if use_docker:
+        typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
+        typer.echo(f"  Mode         → Docker Compose")
+        typer.echo(f"  Compose file → {compose_file}")
+        typer.echo(f"  Web UI       → http://127.0.0.1:{port}/ui/")
+        typer.echo("")
+        subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "up", "--build"],
+            check=False,
+        )
+        return
+
+    if not local and not _docker_available():
+        typer.secho(
+            "Docker not found — falling back to local mode. Install Docker for container support.",
+            fg=typer.colors.YELLOW,
+        )
+    elif not local and compose_file is None:
+        typer.secho(
+            "No docker-compose.yml found — falling back to local mode. "
+            "Run from the project root for Docker support.",
+            fg=typer.colors.YELLOW,
+        )
+
+    # ── Local uvicorn launch ──────────────────────────────────────────────
     from config.settings import settings
     from utils.security import load_secret
 
@@ -776,28 +835,23 @@ def start(
 
     if _port_in_use(host, port):
         if _is_north_server(host, port):
-            typer.secho(
-                f"north is already running on port {port}.",
-                fg=typer.colors.YELLOW,
-            )
+            typer.secho(f"north is already running on port {port}.", fg=typer.colors.YELLOW)
         else:
-            typer.secho(
-                f"Port {port} is in use by another application.",
-                fg=typer.colors.YELLOW,
-            )
+            typer.secho(f"Port {port} is in use by another application.", fg=typer.colors.YELLOW)
         kill = typer.confirm("Kill the existing process and restart?", default=False)
         if not kill:
             raise typer.Exit(0)
         typer.echo(f"Stopping process on port {port}…")
         if not _kill_port(host, port):
             typer.secho(
-                f"Could not stop the existing process. Try: sudo kill $(lsof -ti :{port})",
+                f"Could not stop the existing process. Try killing port {port} manually.",
                 fg=typer.colors.RED, err=True,
             )
             raise typer.Exit(1)
         time.sleep(1)
 
     typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
+    typer.echo(f"  Mode         → Local")
     typer.echo(f"  Orchestrator → http://{host}:{port}")
     typer.echo(f"  Web UI       → http://{host}:{port}/ui/")
     typer.echo(f"  API docs     → http://{host}:{port}/docs")
@@ -812,6 +866,32 @@ def start(
         reload=reload,
         log_level="info",
     )
+
+
+@app.command("stop")
+def stop(
+    port: int = typer.Option(8000, "--port", "-p", help="Port to stop."),
+) -> None:
+    """Stop north (Docker Compose or local process)."""
+    compose_file = _find_compose_file()
+
+    if _docker_available() and compose_file is not None:
+        typer.echo("Stopping Docker Compose services…")
+        subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "down"],
+            check=False,
+        )
+        return
+
+    if _port_in_use("127.0.0.1", port):
+        typer.echo(f"Stopping process on port {port}…")
+        if _kill_port("127.0.0.1", port):
+            typer.secho(f"✓ Stopped.", fg=typer.colors.GREEN)
+        else:
+            typer.secho("Could not stop the process. Try killing it manually.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+    else:
+        typer.echo("north is not running.")
 
 
 if __name__ == "__main__":

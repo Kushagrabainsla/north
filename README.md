@@ -878,9 +878,9 @@ Default transcription model: `groq/whisper-large-v3`. The Inference Router expos
 
 The Approval Layer is the primary interface between north and the user for consequential outputs. Users do not interact with agents directly. They interact with macOS notifications and the Web UI.
 
-### 9.1 macOS Native Notifications and Security
+### 9.1 Notifications and Security
 
-The Approval Layer sends macOS native notifications with action buttons. A local callback server runs on `localhost:8001` and receives button taps from macOS.
+The Approval Layer sends notifications with action buttons. On macOS, it uses native macOS notifications via `alerter`. In a container or on non-macOS systems, it falls back to `TerminalNotifier`, which prints approval cards to stdout/logs. A local callback server runs on `localhost:8001` and receives button taps from macOS.
 
 **Security:** the notification callback server is secured with a shared secret generated at first startup and stored at `~/.north/secret.key`. Every notification payload embeds this secret in the callback URL or request body. Every callback request to `localhost:8001` must include the `X-North-Secret` header with the correct value. Requests without a valid secret are rejected with HTTP 403. This prevents any other local process from faking an approval action.
 
@@ -1369,6 +1369,9 @@ north/
   exceptions.py         <- top-level NorthError base exception
   pyproject.toml
   uv.lock
+  Dockerfile
+  docker-compose.yml
+  .dockerignore
   .env.example
   README.md
 ```
@@ -1557,40 +1560,34 @@ rich>=13.0.0     <- terminal formatting for ledger output, agent status, cost ta
 
 Every CLI command is a thin wrapper over the Orchestrator REST API via `httpx`. The CLI reads `~/.north/secret.key` directly from the filesystem to populate the `X-North-Secret` header.
 
-### 16.10 macOS Notifications
+### 16.10 Notifications
 
-**alerter**
-macOS native notifications with action buttons via `alerter`, called as a subprocess from Python. `alerter` is the actively maintained Swift fork of `terminal-notifier` and is the only command-line tool that still supports notification action buttons on current macOS releases (`terminal-notifier` itself dropped action button support).
+**TerminalNotifier (default)**
+The default `Notifier` implementation prints approval cards to stdout/logs. It works anywhere Python runs — including Docker containers and non-macOS hosts.
+
+**alerter (macOS only, optional)**
+For macOS native notification banners with action buttons, `alerter` is called as a subprocess. It is the actively maintained Swift fork of `terminal-notifier` and is the only command-line tool that still supports notification action buttons on current macOS releases.
 
 ```bash
-brew install vjeantet/tap/alerter  # one-time setup
+brew install vjeantet/tap/alerter  # one-time, macOS only
 ```
 
-```python
-import subprocess
-
-subprocess.run([
-    "alerter",
-    "-title", "north",
-    "-message", "LinkedIn prep plan is ready.",
-    "-actions", "Approve,Reject,View Detail",
-    "-reply", f"http://localhost:8001/callback?secret={secret}&action=ACTIONVALUE"
-])
-```
-
-The `Notifier` ABC (see docs/CODING_STYLE.md Section 6.1) hides this choice from the rest of the system. Swapping `alerter` for a pyobjc-native UserNotifications binding later is a one-line dependency change.
+To use `alerter`, swap `TerminalNotifier()` → `MacOSNotifier(settings.secret)` in `config/dependencies.py`. The `Notifier` ABC (see docs/CODING_STYLE.md Section 6.1) hides this choice from the rest of the system.
 
 ### 16.11 Environment and Configuration
 
 **Environment variables** for secrets and configuration that cannot be in the repo:
 
 ```bash
-NORTH_OPENROUTER_API_KEY=sk-or-...   # required, set once
-NORTH_NORTH_HOME=~/.north            # optional, default ~/.north
+NORTH_OPENROUTER_API_KEY=sk-or-...   # required
+NORTH_HOME=~/.north                  # optional, override data directory (e.g. /data in Docker)
+NORTH_SECRET=your-secret             # optional, override secret.key file (preferred in Docker)
 NORTH_NORTH_ENV=development          # development | production | test
 ```
 
-**`~/.north/secret.key`** is generated automatically on first `north start` if it does not exist. It is never committed to the repository.
+`NORTH_HOME` and `NORTH_SECRET` are read directly from the environment (no doubled `NORTH_` prefix). `NORTH_NORTH_ENV` follows pydantic-settings' `NORTH_` prefix convention.
+
+**`~/.north/secret.key`** is generated automatically on first `north start` if it does not exist. It is never committed to the repository. When `NORTH_SECRET` is set, the file is not consulted.
 
 **`pyproject.toml`** is the single source of truth for dependencies, scripts, and tool configuration:
 
@@ -1613,27 +1610,47 @@ dev = [
 
 ### 16.12 Getting Started
 
-north runs on macOS (arm64 or x86_64). The Approval Layer (Section 9) uses macOS native notifications and is macOS-only by design.
+north runs on macOS (arm64 or x86_64) or inside a Docker container on any platform. Container deployments use `TerminalNotifier` (stdout/logs). macOS native notifications require alerter and a local install.
 
-#### Prerequisites
+#### Path A: Docker (recommended for server/headless deployments)
 
-Install these once. They do not need to be repeated per project.
+**Prerequisites:** Docker with the Compose plugin.
 
-**`uv`** — Python package manager. If you do not have it:
+```bash
+# 1. Clone
+git clone https://github.com/your-username/north
+cd north
+
+# 2. Configure
+cp .env.example .env
+# Edit .env:
+#   NORTH_OPENROUTER_API_KEY=sk-or-your-key-here
+#   NORTH_SECRET=some-random-secret-string
+
+# 3. Start (builds the image and runs the container)
+north start
+
+# 4. Stop
+north stop
+```
+
+`north start` detects `docker-compose.yml` in the project directory and calls `docker compose up --build`. Data persists in a named Docker volume (`north_data`) mounted at `/data` inside the container.
+
+#### Path B: Local install (macOS with native notifications)
+
+**Prerequisites:**
+
+**`uv`** — Python package manager:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**`alerter`** — macOS notifications with action buttons (Section 16.10):
+**`alerter`** — macOS notifications with action buttons (Section 16.10), optional:
 ```bash
 brew install vjeantet/tap/alerter
 ```
 
-Grant notification permission when macOS prompts on first run, or open **System Settings → Notifications → alerter** and enable it manually.
-
 **Python 3.12+** — managed automatically by `uv`. No separate install needed.
-
-#### Install from source
 
 ```bash
 # 1. Clone
@@ -1647,10 +1664,9 @@ uv tool install .
 cp .env.example .env
 # Open .env and set:
 #   NORTH_OPENROUTER_API_KEY=sk-or-your-key-here
-# Get a key at https://openrouter.ai/keys
 
-# 4. Start
-north start
+# 4. Start (uses local uvicorn when no docker-compose.yml is detected, or with --local flag)
+north start --local
 ```
 
 On first run `north start` creates `~/.north/`, generates `secret.key`, and initialises all SQLite databases. When it is ready you will see:
@@ -1674,6 +1690,12 @@ north ledger         # recent ledger entries
 north inference models  # current model pool state
 ```
 
+#### Stop
+
+```bash
+north stop           # docker compose down (if Docker) or kills port 8000
+```
+
 #### Update
 
 ```bash
@@ -1694,7 +1716,7 @@ cp .env.example .env
 # Edit .env: NORTH_OPENROUTER_API_KEY=sk-or-...
 
 # Run (auto-reload on file changes)
-uv run north start --reload
+uv run north start --reload --local
 
 # Run tests
 uv run pytest tests/unit/
@@ -1745,6 +1767,9 @@ beautifulsoup4 = ">=4.12.0"
 sounddevice = ">=0.4.6"         # push-to-talk audio capture
 pynput = ">=1.7.6"              # keyboard listener for push-to-talk hotkey
 numpy = ">=1.26.0"              # sounddevice returns numpy arrays
+
+# System
+psutil = ">=5.9.0"              # cross-platform process and port management (north start/stop)
 ```
 
 Scheduling has no external dependency: cron entries are `(hour, minute, weekday)` tuples and `jobs/scheduler.py` is a single asyncio background task (see Section 11.3).

@@ -5,6 +5,7 @@ See docs/CODING_STYLE.md Section 17.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -17,8 +18,11 @@ class Settings(BaseSettings):
     # Required for production; empty default allows import/initialization without crash
     openrouter_api_key: str = ""
 
-    # Paths
-    north_home: Path = Path("~/.north").expanduser()
+    # Paths — NORTH_HOME env var is the canonical override (used in Docker)
+    north_home: Path = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
+
+    # Pre-shared secret override — set NORTH_SECRET in Docker instead of using a key file
+    north_secret: str = os.environ.get("NORTH_SECRET", "")
 
     # Runtime environment
     north_env: Literal["development", "production", "test"] = "development"
@@ -35,7 +39,9 @@ class Settings(BaseSettings):
 
     @property
     def secret(self) -> str:
-        """Read the local shared secret from north_home."""
+        """Return the shared secret: env var takes priority over the key file."""
+        if self.north_secret:
+            return self.north_secret
         secret_file = self.north_home / "secret.key"
         if not secret_file.exists():
             return ""

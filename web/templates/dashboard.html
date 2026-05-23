@@ -6,7 +6,7 @@
 
 <!-- ── Command Bar ─────────────────────────────────────────────────────────── -->
 <div class="command-bar">
-  <form id="task-form">
+  <form id="task-form" enctype="multipart/form-data">
       <span class="command-glyph">⌘</span>
       <input
         id="task-prompt"
@@ -16,6 +16,10 @@
         class="command-input"
         autocomplete="off"
       />
+      <div id="task-file-chip" style="display:none;" class="file-chip">
+        <span class="file-chip__name" id="task-file-name"></span>
+        <button type="button" class="file-chip__remove" id="task-file-remove" aria-label="Remove file">✕</button>
+      </div>
       <button type="submit" class="btn btn-primary btn-sm">Run</button>
   </form>
 </div>

@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **File drag-and-drop** on two surfaces:
+  - *Context page drop zone* (`context_index.html`): drop a PDF, DOCX, TXT, or MD file onto the drop zone to inject it directly into the context store via `POST /orchestrator/context/add`. Visual feedback (border highlight, status message) on drag-over and after upload.
+  - *Command bar* (`dashboard.html`): drop a file onto the command bar while composing a task. The file is uploaded first via `POST /orchestrator/context/add`, then the task is submitted with the file name appended to the prompt. A dismissable file chip shows the attached filename.
+  - Drag-over state tracked with a depth counter (prevents false `dragleave` on child element entry). Click-to-browse also supported on the context drop zone.
+  - CSS additions in `web/static/css/main.css`: `.drop-zone`, `.drop-zone.drag-active`, `.command-bar.drag-active`, `.file-chip`, `.drop-zone__status`.
+
+- **Docker / container support:**
+  - `Dockerfile` — `python:3.12-slim` base; installs `uv`; installs north via `uv pip install --system -e .`; copies source; sets `NORTH_HOME=/data`; exposes 8000.
+  - `docker-compose.yml` — single `north` service; mounts `north_data` volume at `/data`; passes `NORTH_HOME`, `NORTH_SECRET`, `NORTH_OPENROUTER_API_KEY`, `NORTH_ENV` from the host environment; `restart: unless-stopped`; healthcheck polls `/docs`.
+  - `.dockerignore` — excludes `.venv/`, `__pycache__/`, test artifacts, `.env*`, and `.git/`.
+
+- **`north stop` CLI command** — `docker compose down` when Docker is available; otherwise kills the process listening on port 8000 via psutil.
+
+- **`NORTH_HOME` env var** in `config/settings.py` — `north_home` field now reads `os.environ.get("NORTH_HOME", "~/.north")` so the Docker volume mount (`/data`) takes effect without the doubled `NORTH_` pydantic-settings prefix.
+
+- **`NORTH_SECRET` env var** in `config/settings.py` — `north_secret` field reads `os.environ.get("NORTH_SECRET", "")`. The `secret` property prefers the env var over the `secret.key` file, so Docker deployments can pass the secret without a volume-mounted key file.
+
+- **`psutil>=5.9.0`** added to `[project.dependencies]` — cross-platform process/port management for `north start` conflict detection and `north stop`.
+
+### Changed
+- **`north start` uses Docker Compose by default** — if a `docker-compose.yml` is found in the CWD or any parent directory and Docker is available, `north start` calls `docker compose up --build`. The `--local` flag forces the old uvicorn path regardless. Falls back to uvicorn with a warning when Docker is unavailable.
+
+- **Cross-platform port conflict handling in `north start`** — replaced macOS-only `lsof -ti :8000 | xargs kill -9` with psutil: iterates `psutil.net_connections()`, finds the PID listening on the configured port, and kills it. No subprocess or platform-specific command.
+
+- **`TerminalNotifier` replaces `MacOSNotifier` as the default notifier** — `config/dependencies.py` now wires `TerminalNotifier()` in `build_production_dependencies()`. `MacOSNotifier` remains in `approval/macos.py` and can be re-wired manually on macOS. Removes the macOS-only constraint from the production dependency graph.
+
+- **`POST /context/add` accepts `Form` parameters** — removed the Pydantic `ContextAddRequest` body model; `text` and `url` are now `Form(None)` parameters. Fixes a FastAPI constraint where the presence of `UploadFile` forces multipart mode and makes a JSON body unparseable.
+
+- **`POST /task` accepts both form-encoded and JSON bodies** — the endpoint now reads `content-type` and parses `application/x-www-form-urlencoded` or `multipart/form-data` via `request.form()`, falling back to `request.json()`. Fixes HTMX form submissions which send `application/x-www-form-urlencoded` by default.
+
+- **`README.md` Section 9.1** — updated to note that `TerminalNotifier` (stdout/logs) is the default; `alerter` is optional and macOS-only.
+- **`README.md` Section 14** — added `Dockerfile`, `docker-compose.yml`, `.dockerignore` to the repository structure.
+- **`README.md` Section 16.10** — "macOS Notifications" renamed to "Notifications"; documents `TerminalNotifier` as default and `alerter` as optional upgrade on macOS.
+- **`README.md` Section 16.11** — corrected env var names: `NORTH_HOME` and `NORTH_SECRET` (not doubled `NORTH_NORTH_*`); added `NORTH_SECRET` entry.
+- **`README.md` Section 16.12** — restructured Getting Started into Path A (Docker, recommended for server/headless) and Path B (local macOS install); added `north stop` command; `--local` flag documented.
+- **`README.md` Section 16.13** — added `psutil>=5.9.0` to the complete dependency list.
+
+### Added
 - `CHANGELOG.md`, following the Keep a Changelog convention. Every change to north now appends an entry here (see `docs/CODING_STYLE.md` Section 23.5).
 - `pyproject.toml` with project metadata and `pytest` + `pytest-asyncio` configuration matching the test conventions in `docs/CODING_STYLE.md` Section 18.
 - `tests/` scaffolding: `tests/conftest.py`, `tests/unit/`, `tests/integration/`, and a smoke test (`tests/unit/test_smoke.py`) that passes from a fresh clone.
