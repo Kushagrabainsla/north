@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Jobs — north{% endblock %}
-{% block description %}Job queue and cron history{% endblock %}
+{% block description %}Job queue and scheduled tasks{% endblock %}
 
 {% block content %}
 <div class="page-header">
@@ -8,55 +8,162 @@
   <p class="page-subtitle">{{ jobs | length }} job{% if jobs | length != 1 %}s{% endif %} shown</p>
 </div>
 
-<div class="ledger-controls">
-  <a href="/ui/jobs" class="btn btn-sm {% if not status_filter %}btn-primary{% else %}btn-ghost{% endif %}">All</a>
-  {% for s in all_statuses %}
-  <a href="/ui/jobs?status={{ s }}" class="btn btn-sm {% if status_filter == s %}btn-primary{% else %}btn-ghost{% endif %}">{{ s }}</a>
-  {% endfor %}
-</div>
+<!-- ── Recurring schedules ─────────────────────────────────────────────────── -->
+<section class="jobs-section">
+  <div class="jobs-section-header">
+    <h2 class="jobs-section-title">Recurring Schedules</h2>
+    <button class="btn btn-sm btn-ghost" onclick="toggleForm('form-recurring')">+ Add</button>
+  </div>
 
-{% if jobs %}
-<div class="ledger-table-wrap">
-  <table class="ledger-table">
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>Type</th>
-        <th>Agent</th>
-        <th>Task</th>
-        <th>Priority</th>
-        <th>Status</th>
-        <th>Scheduled</th>
-        <th>Retries</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for job in jobs %}
-      <tr class="ledger-row ledger-{{ job.status.value }}">
-        <td class="ledger-task-id">{{ job.job_id[:12] }}…</td>
-        <td><span class="badge badge-source">{{ job.type.value }}</span></td>
-        <td>{{ job.agent }}</td>
-        <td class="ledger-action">{{ job.task[:60] }}{% if job.task | length > 60 %}…{% endif %}</td>
-        <td>{{ job.priority.value }}</td>
-        <td><span class="badge badge-status badge-{{ job.status.value }}">{{ job.status.value }}</span></td>
-        <td class="ledger-time local-time" data-utc="{{ job.scheduled_at.isoformat() }}" data-format="datetime">{{ job.scheduled_at.strftime("%Y-%m-%d %H:%M") }}</td>
-        <td>{{ job.retry_count }}/{{ job.max_retries }}</td>
-        <td>
-          {% if job.status.value in ["pending", "running"] %}
-          <form method="post" action="/ui/jobs/{{ job.job_id }}/cancel" style="display:inline">
-            <button type="submit" class="btn btn-sm btn-danger">Cancel</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<div class="empty-state">
-  <p>No jobs{% if status_filter %} with status <strong>{{ status_filter }}</strong>{% endif %}.</p>
-</div>
-{% endif %}
+  <div id="form-recurring" class="schedule-form" style="display:none">
+    <form method="post" action="/ui/jobs/schedule/recurring" class="schedule-form-inner">
+      <input class="form-input" name="task" placeholder="Task description" required />
+      <select class="form-input" name="agent">
+        {% for a in agent_names %}
+        <option value="{{ a }}">{{ a }}</option>
+        {% endfor %}
+        {% if not agent_names %}
+        <option value="general">general</option>
+        {% endif %}
+      </select>
+      <input class="form-input form-input-sm" name="hour" type="number" min="0" max="23" placeholder="Hour (0-23)" required />
+      <input class="form-input form-input-sm" name="minute" type="number" min="0" max="59" placeholder="Min (0-59)" value="0" />
+      <select class="form-input form-input-sm" name="weekday">
+        <option value="">Daily</option>
+        <option value="0">Monday</option>
+        <option value="1">Tuesday</option>
+        <option value="2">Wednesday</option>
+        <option value="3">Thursday</option>
+        <option value="4">Friday</option>
+        <option value="5">Saturday</option>
+        <option value="6">Sunday</option>
+      </select>
+      <input class="form-input form-input-sm" name="name" placeholder="Name (optional)" />
+      <button type="submit" class="btn btn-sm btn-primary">Schedule</button>
+    </form>
+  </div>
+
+  {% if cron_entries %}
+  <div class="ledger-table-wrap">
+    <table class="ledger-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Agent</th>
+          <th>Task</th>
+          <th>Schedule</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in cron_entries %}
+        <tr class="ledger-row">
+          <td class="ledger-task-id">{{ e.name }}</td>
+          <td>{{ e.agent }}</td>
+          <td class="ledger-action">{{ e.task[:60] }}{% if e.task | length > 60 %}…{% endif %}</td>
+          <td>
+            {% if e.weekday is none %}
+              Daily {{ "%02d"|format(e.hour) }}:{{ "%02d"|format(e.minute) }} UTC
+            {% else %}
+              {% set days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"] %}
+              Every {{ days[e.weekday] }} {{ "%02d"|format(e.hour) }}:{{ "%02d"|format(e.minute) }} UTC
+            {% endif %}
+          </td>
+          <td>
+            <form method="post" action="/ui/jobs/cron/{{ e.name }}/delete" style="display:inline">
+              <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-hint">No recurring schedules. Use the form above or ask north to schedule a task.</p>
+  {% endif %}
+</section>
+
+<!-- ── One-shot jobs ───────────────────────────────────────────────────────── -->
+<section class="jobs-section">
+  <div class="jobs-section-header">
+    <h2 class="jobs-section-title">One-Shot &amp; Queue</h2>
+    <button class="btn btn-sm btn-ghost" onclick="toggleForm('form-oneshot')">+ Schedule</button>
+  </div>
+
+  <div id="form-oneshot" class="schedule-form" style="display:none">
+    <form method="post" action="/ui/jobs/schedule/oneshot" class="schedule-form-inner">
+      <input class="form-input" name="task" placeholder="Task description" required />
+      <select class="form-input" name="agent">
+        {% for a in agent_names %}
+        <option value="{{ a }}">{{ a }}</option>
+        {% endfor %}
+        {% if not agent_names %}
+        <option value="general">general</option>
+        {% endif %}
+      </select>
+      <input class="form-input" name="run_at" type="datetime-local" required />
+      <button type="submit" class="btn btn-sm btn-primary">Schedule</button>
+    </form>
+  </div>
+
+  <div class="ledger-controls">
+    <a href="/ui/jobs" class="btn btn-sm {% if not status_filter %}btn-primary{% else %}btn-ghost{% endif %}">All</a>
+    {% for s in all_statuses %}
+    <a href="/ui/jobs?status={{ s }}" class="btn btn-sm {% if status_filter == s %}btn-primary{% else %}btn-ghost{% endif %}">{{ s }}</a>
+    {% endfor %}
+  </div>
+
+  {% if jobs %}
+  <div class="ledger-table-wrap">
+    <table class="ledger-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Type</th>
+          <th>Agent</th>
+          <th>Task</th>
+          <th>Priority</th>
+          <th>Status</th>
+          <th>Scheduled</th>
+          <th>Retries</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr class="ledger-row ledger-{{ job.status.value }}">
+          <td class="ledger-task-id">{{ job.job_id[:12] }}…</td>
+          <td><span class="badge badge-source">{{ job.type.value }}</span></td>
+          <td>{{ job.agent }}</td>
+          <td class="ledger-action">{{ job.task[:60] }}{% if job.task | length > 60 %}…{% endif %}</td>
+          <td>{{ job.priority.value }}</td>
+          <td><span class="badge badge-status badge-{{ job.status.value }}">{{ job.status.value }}</span></td>
+          <td class="ledger-time local-time" data-utc="{{ job.scheduled_at.isoformat() }}" data-format="datetime">{{ job.scheduled_at.strftime("%Y-%m-%d %H:%M") }}</td>
+          <td>{{ job.retry_count }}/{{ job.max_retries }}</td>
+          <td>
+            {% if job.status.value in ["pending", "running"] %}
+            <form method="post" action="/ui/jobs/{{ job.job_id }}/cancel" style="display:inline">
+              <button type="submit" class="btn btn-sm btn-danger">Cancel</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>No jobs{% if status_filter %} with status <strong>{{ status_filter }}</strong>{% endif %}.</p>
+  </div>
+  {% endif %}
+</section>
+
+<script>
+function toggleForm(id) {
+  var el = document.getElementById(id);
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+</script>
 {% endblock %}

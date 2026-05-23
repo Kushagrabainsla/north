@@ -46,6 +46,20 @@
     tool_result:           ["✓", null],
   };
 
+  // Strip injected conversation history prefix so raw user message shows in bubbles.
+  function stripHistoryPrefix(text) {
+    const marker = "[Current message]\n";
+    const idx = text.indexOf(marker);
+    return idx !== -1 ? text.slice(idx + marker.length) : text;
+  }
+
+  function renderMarkdown(text) {
+    if (typeof marked !== "undefined") {
+      try { return marked.parse(text); } catch (_) {}
+    }
+    return escapeHtml(text).replace(/\n/g, "<br>");
+  }
+
   async function loadChatHistory() {
     if (!chatThread) return;
     try {
@@ -53,17 +67,14 @@
       if (!resp.ok) return;
       const entries = await resp.json();
 
-      // Oldest first so we can walk forward and build pairs
       const ordered = [...entries].reverse();
-
-      // Build task map: task_id → { prompt, time, outputs[] }
       const tasks = {};
       const taskOrder = [];
 
       for (const e of ordered) {
         if (!e.task_id) continue;
         if (e.source === "prompt" && e.action === "task_received") {
-          tasks[e.task_id] = { prompt: e.input || "", time: e.timestamp, outputs: [] };
+          tasks[e.task_id] = { prompt: stripHistoryPrefix(e.input || ""), time: e.timestamp, outputs: [] };
           taskOrder.push(e.task_id);
         }
         if (e.source === "agent" && e.action === "agent_completed" && tasks[e.task_id] && e.output) {
@@ -148,13 +159,15 @@
       .filter(Boolean)
       .join("\n\n") || "Task completed.";
 
-    // Append the response content into the existing thinking bubble so steps stay above it
     const bubble = thinking || document.getElementById("chat-north-" + taskId);
     if (bubble) {
       bubble.id = "chat-north-" + taskId;
+      // Remove any pending approval widget — task is done
+      const approvalWidget = bubble.querySelector(".approval-widget");
+      if (approvalWidget) approvalWidget.remove();
       const content = document.createElement("div");
-      content.className = "bubble-content";
-      content.textContent = text;
+      content.className = "bubble-content markdown";
+      content.innerHTML = renderMarkdown(text);
       bubble.appendChild(content);
     } else {
       const div = document.createElement("div");
@@ -162,7 +175,7 @@
       div.id = "chat-north-" + taskId;
       div.innerHTML =
         '<span class="bubble-label">north</span>' +
-        '<div class="bubble-content">' + escapeHtml(text) + '</div>';
+        '<div class="bubble-content markdown">' + renderMarkdown(text) + '</div>';
       chatThread.appendChild(div);
     }
     chatThread.scrollTop = chatThread.scrollHeight;
@@ -207,6 +220,7 @@
       "routing", "routed", "executing",
       "agent_started", "agent_completed",
       "tool_called", "tool_result",
+      "approval_required",
       "task_completed", "task_failed",
     ];
 
@@ -227,6 +241,43 @@
         } else if (event === "tool_result") {
           const icon = data.success === false ? "✗" : "✓";
           _addStep(taskId, icon, "  " + (data.tool || "tool") + " done");
+        } else if (event === "approval_required") {
+          _addStep(taskId, "?", "Approval required");
+          const bubble = document.getElementById("chat-thinking-" + taskId);
+          if (bubble) {
+            const widget = document.createElement("div");
+            widget.className = "approval-widget";
+            widget.innerHTML =
+              '<div class="approval-message">' + escapeHtml(data.message || "Action requires your approval.") + '</div>' +
+              '<div class="approval-options">' +
+              (data.options || ["Approve", "Reject"]).map(function (opt) {
+                return '<button class="btn btn-ghost approval-btn" data-option="' + escapeHtml(opt) + '">' + escapeHtml(opt) + '</button>';
+              }).join("") +
+              '</div>';
+            widget.querySelectorAll(".approval-btn").forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                const chosen = this.dataset.option;
+                const lower = chosen.toLowerCase();
+                const decision = (lower === "approve" || lower === "approved") ? "approved"
+                  : (lower === "reject" || lower === "rejected") ? "rejected"
+                  : "answered";
+                widget.innerHTML = '<span class="approval-sent">Decision sent: ' + escapeHtml(chosen) + '</span>';
+                await fetch("/orchestrator/approval/respond", {
+                  method: "POST",
+                  headers: Object.assign({}, authHeaders(), { "Content-Type": "application/json" }),
+                  body: JSON.stringify({
+                    card_id: data.card_id,
+                    task_id: taskId,
+                    agent: data.agent || "",
+                    decision: decision,
+                    chosen_option: chosen,
+                  }),
+                });
+              });
+            });
+            bubble.appendChild(widget);
+            chatThread.scrollTop = chatThread.scrollHeight;
+          }
         } else if (STEP_DEFS[event] && STEP_DEFS[event][1]) {
           _addStep(taskId, STEP_DEFS[event][0], STEP_DEFS[event][1]);
         }

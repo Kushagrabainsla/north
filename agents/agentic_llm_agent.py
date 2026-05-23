@@ -29,15 +29,18 @@ Every response must be exactly one raw JSON object — no markdown fences, no te
 To call a tool:
 {"tool": "<tool_name>", "params": {"key": "value"}}
 
+To request user approval before an irreversible action (send email, submit form, delete data, etc.):
+{"tool": "request_approval", "params": {"message": "<describe exactly what you want to do and why>", "options": ["Approve", "Reject"]}}
+The tool returns {"decision": "Approve"|"Reject"|"<chosen option>"}. Only proceed if approved.
+
 To give a final answer:
-{"output": "<markdown response to the user>", "summary": "<one-line summary>", "requires_approval": false, "has_question": false, "question": null, "question_options": [], "data": {}}
+{"output": "<markdown response to the user>", "summary": "<one-line summary>", "has_question": false, "question": null, "question_options": [], "data": {}}
 
 Rules:
-- Use `"tool"` when you need to call a tool. Do not include `"output"` in the same object.
+- Use `"tool"` when you need to call a tool or request approval.
 - Use `"output"` when you have a complete answer. Do not include `"tool"` in the same object.
 - After each tool result, decide whether to call another tool or give the final answer.
-- Set `requires_approval` to true before taking any irreversible action on the user's behalf.
-- Set `has_question` to true if you need clarification before proceeding.
+- Set `has_question` to true and populate `question` if you need clarification before proceeding.
 """
 
 
@@ -79,10 +82,24 @@ class AgenticLLMAgent(LLMAgent):
                 tool_name = parsed["tool"]
                 params: dict[str, Any] = dict(parsed.get("params") or {})
 
+                conversation += f"{raw}\n\n"
+
+                if tool_name == "request_approval":
+                    if self._deps.stream_manager and payload.task_id:
+                        await self._deps.stream_manager.emit(
+                            payload.task_id, "tool_called", {"tool": "request_approval", "params": params}
+                        )
+                    decision = await self._request_approval(payload, params)
+                    tool_result_str = json.dumps({"decision": decision})
+                    if self._deps.stream_manager and payload.task_id:
+                        await self._deps.stream_manager.emit(
+                            payload.task_id, "tool_result", {"tool": "request_approval", "success": True}
+                        )
+                    conversation += f"## Tool Result (request_approval)\n{tool_result_str}\n\n"
+                    continue
+
                 if payload.workspace and "workspace" not in params:
                     params["workspace"] = payload.workspace
-
-                conversation += f"{raw}\n\n"
 
                 if self._deps.stream_manager and payload.task_id:
                     await self._deps.stream_manager.emit(
@@ -118,6 +135,53 @@ class AgenticLLMAgent(LLMAgent):
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
         )
+
+    async def _request_approval(
+        self, payload: AgentPayload, params: dict[str, Any]
+    ) -> str:
+        """Create an approval card, emit SSE, and block until the user decides."""
+        from approval.models import Card, CardType
+        from approval.store import approval_store
+        from utils.ids import generate_id
+
+        message = str(params.get("message", "Action requires your approval."))
+        options = list(params.get("options", ["Approve", "Reject"]))
+        card_id = generate_id()
+
+        card = Card(
+            id=card_id,
+            type=CardType.APPROVAL,
+            task_id=payload.task_id,
+            agent=self.name,
+            title=f"{self.name.title()} — Approval Required",
+            message=message,
+            options=options,
+        )
+        approval_store.add(card)
+
+        if self._deps.stream_manager and payload.task_id:
+            await self._deps.stream_manager.emit(
+                payload.task_id,
+                "approval_required",
+                {
+                    "card_id": card_id,
+                    "task_id": payload.task_id,
+                    "agent": self.name,
+                    "title": card.title,
+                    "message": message,
+                    "options": options,
+                },
+            )
+
+        # Poll up to 5 minutes for the user's decision.
+        for _ in range(300):
+            await asyncio.sleep(1)
+            current = approval_store.get(card_id)
+            if current and current.status != "pending":
+                return current.status
+
+        approval_store.resolve(card_id, "rejected")
+        return "timeout_rejected"
 
     async def _call_tool(
         self,

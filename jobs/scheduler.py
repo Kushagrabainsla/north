@@ -8,13 +8,20 @@ enqueues the matching `Job`, then recomputes. No external scheduling library.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from jobs.base import JobProcessor
 from jobs.models import Job, JobPriority, JobType
 from utils.ids import generate_id
+
+if TYPE_CHECKING:
+    from jobs.cron_store import UserCronStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -70,17 +77,41 @@ class CronScheduler:
     """Sleep until the next scheduled firing, enqueue, repeat.
 
     `clock` is injectable for testing. The default uses UTC.
+    Accepts an optional `cron_store` for user-defined entries that are loaded
+    each iteration so newly added schedules take effect within 60 seconds.
     """
 
     def __init__(
         self,
         processor: JobProcessor,
         entries: list[CronEntry],
+        cron_store: "UserCronStore | None" = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._processor = processor
-        self._entries = list(entries)
+        self._builtin_entries = list(entries)
+        self._cron_store = cron_store
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    async def _all_entries(self) -> list[CronEntry]:
+        entries = list(self._builtin_entries)
+        if self._cron_store is not None:
+            try:
+                user = await self._cron_store.list()
+                for u in user:
+                    entries.append(
+                        CronEntry(
+                            name=u["name"],
+                            agent=u["agent"],
+                            task=u["task"],
+                            hour=u["hour"],
+                            minute=u["minute"],
+                            weekday=u["weekday"],
+                        )
+                    )
+            except Exception:
+                logger.exception("CronScheduler: failed to load user cron entries")
+        return entries
 
     def build_job(self, entry: CronEntry, scheduled_at: datetime) -> Job:
         """Construct the `Job` that will be enqueued for one firing of `entry`."""
@@ -97,19 +128,25 @@ class CronScheduler:
     async def run(self) -> None:
         """Loop forever: pick the next due entry, sleep, enqueue, repeat.
 
-        Returns only on cancellation. Safe to launch as an `asyncio.create_task`
-        in the Orchestrator's lifespan (docs/CODING_STYLE.md Section 10.4).
+        Sleep is capped at 60 s so user-added entries take effect within a minute.
+        Returns only on cancellation.
         """
-        if not self._entries:
-            return
         while True:
+            entries = await self._all_entries()
+            if not entries:
+                await asyncio.sleep(60)
+                continue
             now = self._clock()
-            due = next_due_entry(self._entries, now)
-            assert due is not None  # entries non-empty
+            due = next_due_entry(entries, now)
+            if due is None:
+                await asyncio.sleep(60)
+                continue
             entry, firing = due
             delay = max(0.0, (firing - now).total_seconds())
-            await asyncio.sleep(delay)
-            await self._processor.enqueue(self.build_job(entry, firing))
+            await asyncio.sleep(min(delay, 60.0))
+            now = self._clock()
+            if firing <= now:
+                await self._processor.enqueue(self.build_job(entry, firing))
 
 
 # V1 schedule — see README Section 11.3.

@@ -22,11 +22,11 @@ from tools.implementations.write_file import WriteFileTool
 _CODE_TOOLS = ["read_file", "write_file", "list_dir", "search_files", "bash", "web_search"]
 
 TOOL_GRAPH: dict[str, list[str]] = {
-    "health":     ["web_search", "calendar_api", "nutrition_api"],
-    "university": ["web_search", "calendar_api", "gmail_api", "canvas_api"],
-    "job":        ["web_search", "calendar_api", "gmail_api", "linkedin_api"],
-    "finance":    ["web_search", "gmail_api", "market_data_api", "expense_tracker"],
-    "general":    _CODE_TOOLS,
+    "health":     ["web_search", "calendar_api", "nutrition_api", "schedule_task"],
+    "university": ["web_search", "calendar_api", "gmail_api", "canvas_api", "schedule_task"],
+    "job":        ["web_search", "calendar_api", "gmail_api", "linkedin_api", "schedule_task"],
+    "finance":    ["web_search", "gmail_api", "market_data_api", "expense_tracker", "schedule_task"],
+    "general":    _CODE_TOOLS + ["schedule_task"],
     "code":       _CODE_TOOLS,
 }
 

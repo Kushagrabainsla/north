@@ -22,8 +22,10 @@ from config.dependencies import build_production_dependencies
 from config.settings import settings
 from context.extraction import ExtractionPipeline
 from context.injection import ContextInjector
+from jobs.cron_store import UserCronStore
 from jobs.models import Job
 from jobs.scheduler import CronScheduler, V1_CRON_ENTRIES
+from tools.implementations.schedule_task import ScheduleTaskTool
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.api_router import configure as configure_api
 from orchestrator.api_router import router as orchestrator_router
@@ -85,8 +87,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("building dependencies")
     deps = build_production_dependencies()
 
+    _step("building cron store")
+    cron_store = UserCronStore(settings.north_home / "jobs.db")
+
     _step("building tool registry")
     tool_registry = ToolRegistry(graph=TOOL_GRAPH, auto_register=True)
+    tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=cron_store))
     _step("building confidence tracker")
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
 
@@ -177,6 +183,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         job_processor=deps.job_processor,
         inference_router=deps.inference_router,
         confidence_tracker=confidence_tracker,
+        cron_store=cron_store,
     )
 
     _step("configuring web router")
@@ -188,6 +195,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         job_processor=deps.job_processor,
         inference_router=deps.inference_router,
         confidence_tracker=confidence_tracker,
+        cron_store=cron_store,
     )
 
     # ── Background tasks ─────────────────────────────────────────────────────
@@ -196,6 +204,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cron_scheduler = CronScheduler(
         processor=deps.job_processor,
         entries=V1_CRON_ENTRIES,
+        cron_store=cron_store,
     )
 
     # ── Callback server (port 8001) — receives macOS alerter decisions ──────

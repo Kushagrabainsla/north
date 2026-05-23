@@ -27,6 +27,9 @@ class ApprovalStore:
                 update={"status": status}
             )
 
+    def get(self, card_id: str) -> Card | None:
+        return self._cards.get(card_id)
+
     def pending(self) -> list[Card]:
         return [c for c in self._cards.values() if c.status == "pending"]
 

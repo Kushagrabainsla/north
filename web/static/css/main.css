@@ -549,6 +549,27 @@ textarea:focus {
   border-radius: var(--r-lg);
 }
 
+.jobs-section { margin-bottom: 36px; }
+.jobs-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.jobs-section-title { font-size: 1rem; font-weight: 600; color: var(--label-1); margin: 0; }
+
+.schedule-form { margin-bottom: 16px; padding: 16px; background: var(--bg-secondary); border-radius: var(--r-md); }
+.schedule-form-inner { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.form-input {
+  background: var(--bg-primary);
+  border: 1px solid var(--sep);
+  border-radius: var(--r-sm);
+  color: var(--label-1);
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  min-width: 140px;
+  flex: 1;
+}
+.form-input-sm { min-width: 90px; flex: 0 0 auto; }
+.form-input:focus { outline: none; border-color: var(--blue); }
+
+.empty-hint { color: var(--label-3); font-size: 0.85rem; padding: 12px 0; }
+
 /* ── Task Cards ───────────────────────────────────────────────────────────── */
 .task-list {
   flex: 1;
@@ -1074,3 +1095,37 @@ textarea:focus {
   0%, 60%, 100% { opacity: 0.3; transform: scale(1); }
   30%           { opacity: 1;   transform: scale(1.2); }
 }
+
+.approval-widget {
+  margin: 8px 12px 12px;
+  padding: 12px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--yellow, #f5a623);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.approval-message {
+  font-size: 0.85rem;
+  color: var(--label-1);
+  line-height: 1.5;
+}
+.approval-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.approval-sent {
+  font-size: 0.8rem;
+  color: var(--label-3);
+  font-style: italic;
+}
+
+.bubble-content.markdown { white-space: normal; }
+.bubble-content.markdown p { margin: 0 0 0.6em; }
+.bubble-content.markdown p:last-child { margin-bottom: 0; }
+.bubble-content.markdown pre { background: var(--bg-primary); border-radius: var(--r-sm); padding: 8px 10px; overflow-x: auto; }
+.bubble-content.markdown code { font-family: monospace; font-size: 0.85em; }
+.bubble-content.markdown ul, .bubble-content.markdown ol { padding-left: 1.4em; margin: 0 0 0.6em; }
+.bubble-content.markdown li { margin-bottom: 0.2em; }

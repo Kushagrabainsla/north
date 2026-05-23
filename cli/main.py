@@ -373,6 +373,44 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> str:
                             tool = data.get("tool", "tool")
                             success = data.get("success", True)
                             steps.append(("✓" if success else "✗", f"  {tool} done", True))
+                        elif event == "approval_required":
+                            steps.append(("?", "Approval required", False))
+                            live.update(_make_renderable())
+                            live.stop()
+                            _console.print()
+                            _console.print(Panel(
+                                Text(data.get("message", ""), style="white"),
+                                title=f"[bold yellow]? {data.get('title', 'Approval Required')}[/bold yellow]",
+                                border_style="yellow",
+                                padding=(1, 2),
+                            ))
+                            options = data.get("options", ["Approve", "Reject"])
+                            for i, opt in enumerate(options, 1):
+                                _console.print(f"  [{i}] {opt}")
+                            raw_choice = input("\n ❯ ").strip()
+                            try:
+                                idx = int(raw_choice) - 1
+                                chosen = options[idx] if 0 <= idx < len(options) else raw_choice
+                            except ValueError:
+                                chosen = raw_choice or options[0]
+                            decision = "approved" if chosen.lower() in ("approve", "approved", "yes") else \
+                                       "rejected" if chosen.lower() in ("reject", "rejected", "no") else \
+                                       "answered"
+                            try:
+                                _api("POST", "/orchestrator/approval/respond", json={
+                                    "card_id": data.get("card_id", ""),
+                                    "task_id": task_id,
+                                    "agent": data.get("agent", ""),
+                                    "decision": decision,
+                                    "chosen_option": chosen,
+                                })
+                            except SystemExit:
+                                pass
+                            steps[-1] = ("✓" if decision != "rejected" else "✗", f"Approval: {chosen}", False)
+                            live.start()
+                            live.update(_make_renderable())
+                            current_event = ""
+                            continue
                         elif event in _STEP_LABELS:
                             steps.append((_STEP_ICONS.get(event, "·"), _STEP_LABELS[event], True))
 

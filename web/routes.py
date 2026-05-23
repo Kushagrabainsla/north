@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from approval.store import approval_store
 from utils.security import load_secret
 from context.models import ContextDocument
+from jobs.cron_store import UserCronStore
 from jobs.models import JobStatus
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerStatus
@@ -33,6 +34,7 @@ _context_injector = None
 _job_processor = None
 _inference_router = None
 _confidence_tracker = None
+_cron_store: UserCronStore | None = None
 
 
 def configure(
@@ -43,9 +45,10 @@ def configure(
     job_processor,
     inference_router,
     confidence_tracker,
+    cron_store: UserCronStore | None = None,
 ) -> None:
     global _ledger, _agent_registry, _context_store, _context_injector
-    global _job_processor, _inference_router, _confidence_tracker
+    global _job_processor, _inference_router, _confidence_tracker, _cron_store
     _ledger = ledger
     _agent_registry = agent_registry
     _context_store = context_store
@@ -53,6 +56,7 @@ def configure(
     _job_processor = job_processor
     _inference_router = inference_router
     _confidence_tracker = confidence_tracker
+    _cron_store = cron_store
 
 
 def _get_ledger() -> LedgerWriter:
@@ -223,6 +227,14 @@ async def jobs_view(request: Request, status: str = "") -> HTMLResponse:
         filter_status = JobStatus(status) if status else None
         jobs = await _job_processor.list_jobs(status=filter_status, limit=100)
 
+    cron_entries: list = []
+    if _cron_store is not None:
+        cron_entries = await _cron_store.list()
+
+    agent_names: list = []
+    if _agent_registry is not None:
+        agent_names = _agent_registry.names()
+
     return templates.TemplateResponse(
         request,
         "jobs.html",
@@ -230,6 +242,8 @@ async def jobs_view(request: Request, status: str = "") -> HTMLResponse:
             "jobs": jobs,
             "status_filter": status,
             "all_statuses": [s.value for s in JobStatus],
+            "cron_entries": cron_entries,
+            "agent_names": agent_names,
         },
     )
 
@@ -238,6 +252,80 @@ async def jobs_view(request: Request, status: str = "") -> HTMLResponse:
 async def job_cancel(request: Request, job_id: str) -> RedirectResponse:
     if _job_processor is not None:
         await _job_processor.cancel(job_id)
+    return RedirectResponse(url="/ui/jobs", status_code=303)
+
+
+@router.post("/jobs/schedule/oneshot", include_in_schema=False)
+async def schedule_oneshot(request: Request) -> RedirectResponse:
+    """Create a one-shot job from the web form."""
+    import re
+    from datetime import datetime, timezone
+    from jobs.models import Job, JobPriority, JobType
+    from utils.ids import generate_id
+
+    form = await request.form()
+    task = str(form.get("task", "")).strip()
+    agent = str(form.get("agent", "general")).strip()
+    run_at_str = str(form.get("run_at", "")).strip()
+
+    if task and run_at_str and _job_processor is not None:
+        try:
+            scheduled_at = datetime.fromisoformat(run_at_str)
+            if scheduled_at.tzinfo is None:
+                scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+            job = Job(
+                job_id=generate_id(),
+                type=JobType.ASYNC,
+                agent=agent,
+                task=task,
+                payload={"scheduled_by": "web_ui"},
+                priority=JobPriority.MEDIUM,
+                scheduled_at=scheduled_at,
+            )
+            await _job_processor.enqueue(job)
+        except (ValueError, Exception):
+            pass
+
+    return RedirectResponse(url="/ui/jobs", status_code=303)
+
+
+@router.post("/jobs/schedule/recurring", include_in_schema=False)
+async def schedule_recurring(request: Request) -> RedirectResponse:
+    """Create a recurring cron entry from the web form."""
+    import re
+
+    form = await request.form()
+    task = str(form.get("task", "")).strip()
+    agent = str(form.get("agent", "general")).strip()
+    name = str(form.get("name", "")).strip()
+    hour_str = str(form.get("hour", "")).strip()
+    minute_str = str(form.get("minute", "0")).strip()
+    weekday_str = str(form.get("weekday", "")).strip()
+
+    if task and hour_str and _cron_store is not None:
+        try:
+            hour = int(hour_str)
+            minute = int(minute_str) if minute_str else 0
+            weekday = int(weekday_str) if weekday_str else None
+            entry_name = name or "user_" + re.sub(r"[^a-z0-9]+", "_", task.lower())[:40].strip("_")
+            await _cron_store.add(
+                name=entry_name,
+                agent=agent,
+                task=task,
+                hour=hour,
+                minute=minute,
+                weekday=weekday,
+            )
+        except (ValueError, Exception):
+            pass
+
+    return RedirectResponse(url="/ui/jobs", status_code=303)
+
+
+@router.post("/jobs/cron/{name}/delete", include_in_schema=False)
+async def cron_delete(request: Request, name: str) -> RedirectResponse:
+    if _cron_store is not None:
+        await _cron_store.remove(name)
     return RedirectResponse(url="/ui/jobs", status_code=303)
 
 

@@ -187,5 +187,7 @@ class ExtractionPipeline:
             return None
 
     def _save_watermark(self, ts: datetime.datetime) -> None:
+        # Advance by 1µs so the next batch's `>=` query excludes this entry.
+        advanced = ts + datetime.timedelta(microseconds=1)
         self._watermark_path.parent.mkdir(parents=True, exist_ok=True)
-        self._watermark_path.write_text(ts.isoformat(), encoding="utf-8")
+        self._watermark_path.write_text(advanced.isoformat(), encoding="utf-8")
