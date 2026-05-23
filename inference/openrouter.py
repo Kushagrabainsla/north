@@ -121,8 +121,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         pool = self._pools[PRIORITY_TO_POOL[request.priority]]
-        if not pool.models:
-            raise InferenceError(f"Pool '{pool.name}' is empty")
+        free_pool = self._pools.get("free_fallback")
 
         last_error: Exception | None = None
         for model in pool.models:
@@ -131,8 +130,18 @@ class OpenRouterInferenceRouter(InferenceRouter):
             except _RateLimited as e:
                 last_error = e
                 continue
+
+        # Primary pool exhausted — try free models before giving up.
+        if free_pool:
+            for model in free_pool.models:
+                try:
+                    return await self._call_completion(model, request)
+                except _RateLimited as e:
+                    last_error = e
+                    continue
+
         raise AllModelsRateLimitedError(
-            f"All {len(pool.models)} models in '{pool.name}' rate-limited"
+            f"All models in '{pool.name}' and free_fallback exhausted"
         ) from last_error
 
     async def _call_completion(
@@ -153,7 +162,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
         except httpx.RequestError as e:
             raise InferenceError(f"Request to OpenRouter failed: {e}") from e
 
-        if response.status_code == 429:
+        if response.status_code in (429, 402):
             raise _RateLimited(model)
         if response.status_code >= 400:
             raise InferenceError(
@@ -226,24 +235,29 @@ class _RateLimited(Exception):
 
 
 def _bucket_models(models: list[dict]) -> dict[str, ModelPool]:
-    """Bucket OpenRouter's `/models` response into three pools by output cost.
+    """Bucket OpenRouter's `/models` response into pools by output cost.
 
-    Heuristic: sort by completion price descending; top third → reasoning,
-    middle third → fast_cheap, bottom third → high_volume. Models with zero
-    or missing pricing data are skipped — they're typically free preview
-    endpoints we should not silently route real traffic through.
-
-    Refined manual policy can replace this later (Section 15 open item).
+    Priced models are split into three tiers (top/mid/bottom third by price).
+    Free models (id ends with ':free', price == 0) go into free_fallback —
+    tried automatically after all paid models in a pool are exhausted.
     """
     priced: list[tuple[str, float]] = []
+    free_ids: list[str] = []
+
     for m in models:
         model_id = m.get("id")
         if not isinstance(model_id, str):
             continue
         completion_price = _output_price(m)
         if completion_price <= 0:
-            continue
-        priced.append((model_id, completion_price))
+            if model_id.endswith(":free"):
+                free_ids.append(model_id)
+        else:
+            priced.append((model_id, completion_price))
+
+    # Prefer the static free list as a known-good baseline; extend with live ones.
+    static_free = list(FALLBACK_POOLS["free_fallback"].models)
+    merged_free = static_free + [m for m in free_ids if m not in static_free]
 
     if not priced:
         return dict(FALLBACK_POOLS)
@@ -260,6 +274,7 @@ def _bucket_models(models: list[dict]) -> dict[str, ModelPool]:
         "reasoning": ModelPool(name="reasoning", models=reasoning_ids),
         "fast_cheap": ModelPool(name="fast_cheap", models=fast_cheap_ids),
         "high_volume": ModelPool(name="high_volume", models=high_volume_ids),
+        "free_fallback": ModelPool(name="free_fallback", models=merged_free),
     }
 
 

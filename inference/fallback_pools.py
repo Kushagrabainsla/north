@@ -34,6 +34,15 @@ FALLBACK_POOLS: dict[str, ModelPool] = {
             "anthropic/claude-haiku-4-5",
         ],
     ),
+    "free_fallback": ModelPool(
+        name="free_fallback",
+        models=[
+            "google/gemini-2.0-flash-exp:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "mistralai/mistral-7b-instruct:free",
+            "qwen/qwen3-8b:free",
+        ],
+    ),
 }
 
 DEFAULT_TRANSCRIPTION_MODEL = "groq/whisper-large-v3"
