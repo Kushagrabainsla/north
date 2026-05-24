@@ -59,6 +59,7 @@ class AgenticLLMAgent(LLMAgent):
         tool_map = {t.name: t for t in tools}
 
         conversation = f"## User\n{user_message}\n\n"
+        total_cost_usd: float = 0.0
 
         for _ in range(_MAX_ITERATIONS):
             full_prompt = f"{system_prompt}\n\n---\n\n{conversation}## Assistant\n"
@@ -71,13 +72,14 @@ class AgenticLLMAgent(LLMAgent):
                     task_id=payload.task_id,
                 )
             )
+            total_cost_usd += response.cost_usd
 
             raw = response.text.strip()
             parsed = _parse_json(raw)
 
             if parsed is None:
                 # Model returned plain text instead of JSON — treat as final answer
-                return _final_answer(raw, raw[:120])
+                return _final_answer(raw, raw[:120], total_cost_usd)
 
             if "tool" in parsed:
                 tool_name = parsed["tool"]
@@ -109,10 +111,14 @@ class AgenticLLMAgent(LLMAgent):
 
                 tool_result_str = await self._call_tool(tool_map, tool_name, params)
 
+                was_helpful = _extract_success(tool_result_str)
+                asyncio.create_task(
+                    self._deps.confidence_tracker.record_use(self.name, tool_name, was_helpful)
+                )
+
                 if self._deps.stream_manager and payload.task_id:
-                    success = '"success": true' in tool_result_str
                     await self._deps.stream_manager.emit(
-                        payload.task_id, "tool_result", {"tool": tool_name, "success": success}
+                        payload.task_id, "tool_result", {"tool": tool_name, "success": was_helpful}
                     )
 
                 conversation += f"## Tool Result ({tool_name})\n{tool_result_str}\n\n"
@@ -127,14 +133,16 @@ class AgenticLLMAgent(LLMAgent):
                     "has_question": bool(parsed.get("has_question", False)),
                     "question": parsed.get("question"),
                     "question_options": parsed.get("question_options", []),
+                    "cost_usd": total_cost_usd,
                 }
 
             # Parsed JSON but neither "tool" nor "output" — treat raw as final answer
-            return _final_answer(raw, raw[:120])
+            return _final_answer(raw, raw[:120], total_cost_usd)
 
         return _final_answer(
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
+            total_cost_usd,
         )
 
     async def _request_approval(
@@ -202,6 +210,18 @@ class AgenticLLMAgent(LLMAgent):
             return json.dumps({"success": False, "error": str(exc)})
 
 
+def _extract_success(tool_result_str: str) -> bool:
+    """Return the `success` flag from a tool-result JSON string.
+
+    Falls back to False on any parse failure so a bad result always records
+    as unhelpful rather than inflating confidence scores.
+    """
+    try:
+        return bool(json.loads(tool_result_str).get("success", False))
+    except (json.JSONDecodeError, AttributeError):
+        return False
+
+
 def _parse_json(text: str) -> dict[str, Any] | None:
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -214,7 +234,7 @@ def _parse_json(text: str) -> dict[str, Any] | None:
         return None
 
 
-def _final_answer(output: str, summary: str) -> dict[str, Any]:
+def _final_answer(output: str, summary: str, cost_usd: float = 0.0) -> dict[str, Any]:
     return {
         "output": output,
         "summary": summary,
@@ -223,4 +243,5 @@ def _final_answer(output: str, summary: str) -> dict[str, Any]:
         "has_question": False,
         "question": None,
         "question_options": [],
+        "cost_usd": cost_usd,
     }

@@ -37,9 +37,10 @@ from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.stream import EventStreamManager
+from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from tools.confidence import ConfidenceTracker
-from tools.registry import TOOL_GRAPH, ToolRegistry
+from tools.registry import ToolRegistry
 from utils.ids import generate_id
 from utils.security import load_secret
 from utils.time import utcnow
@@ -95,7 +96,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cron_store = UserCronStore(settings.north_home / "jobs.db")
 
     _step("building tool registry")
-    tool_registry = ToolRegistry(graph=TOOL_GRAPH, auto_register=True)
+    agents_dir = Path(__file__).parent.parent / "agents"
+    dynamic_tool_graph = AgentRegistry.build_tool_graph(agents_dir)
+    tool_registry = ToolRegistry(graph=dynamic_tool_graph, auto_register=True)
     tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=cron_store))
     _step("building confidence tracker")
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
@@ -110,7 +113,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         stream_manager=stream_manager,
     )
     _step("scanning agent registry")
-    agents_dir = Path(__file__).parent.parent / "agents"
     agent_registry = AgentRegistry(agents_dir=agents_dir, deps=agent_deps)
     _step(f"registered agents: {agent_registry.names()}")
     task_context_store = TaskContextStore()
@@ -143,6 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         stream_manager=stream_manager,
         judgement_filter=judgement_filter,
         north_settings=north_settings,
+        synthesizer=ResultSynthesizer(inference_router=deps.inference_router),
     )
 
     context_injector = ContextInjector(

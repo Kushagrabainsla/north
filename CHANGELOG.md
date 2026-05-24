@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`tools.yaml` is now the authoritative tool graph** — `AgentRegistry.build_tool_graph()` scans each agent directory at startup, reads its `tools.yaml`, and constructs the `ToolRegistry` graph dynamically. The hardcoded `TOOL_GRAPH` constant in `tools/registry.py` is no longer used in production; adding or removing a tool from an agent now only requires editing that agent's `tools.yaml` and restarting. All domain agent `tools.yaml` files updated to include `schedule_task` (was missing from finance, health, job, university, general).
+
+- **Confidence feedback loop** — `AgenticLLMAgent` now calls `ConfidenceTracker.record_use(agent, tool, was_helpful)` after every tool call in the ReAct loop. `was_helpful` is derived from the `success` field of the tool's JSON result. This activates the previously dormant confidence-ordering feature: tools that consistently succeed move to the front of the list presented to the LLM on the next run.
+
+- **Multi-agent result synthesis** — `orchestrator/synthesizer.py` introduces `ResultSynthesizer`, which merges outputs from parallel agent runs into a single coherent markdown response using a cheap inference call (`PoolPriority.LOW`). The Orchestrator stores each agent's `result.output` in `TaskContextStore` (key `"output"`) and invokes the synthesizer after all parallel groups complete. A `task_synthesis` SSE event carries the merged output and the list of contributing agents. Synthesis is skipped when only one agent ran or when all agent outputs are empty. System prompt in `prompts/synthesizer.md`.
+
+- **Per-task cost aggregation** — `AgentResult` gains a `cost_usd: float` field. `AgenticLLMAgent` accumulates `CompletionResponse.cost_usd` across every iteration of the ReAct loop and returns the total in the result dict. The Orchestrator sums costs across all agents per task and emits the total as `cost_usd` in the `task_completed` SSE event, making spend visible to the UI and CLI without additional queries.
+
+### Added
 - **Inference strategy (eco / cruise / sport)** — `config/strategy.py` introduces `StrategyMode` and `NorthSettings` (persisted to `~/.north/settings.json`). The `OpenRouterInferenceRouter` builds a model fallback chain at call time based on the active strategy: `eco` tries cheapest first, `sport` tries most capable first, `cruise` (default) maps `PoolPriority` to an appropriate starting tier then falls through adjacent tiers. Free models are always appended as the last resort. Strategy is changed via natural language ("switch to eco mode") or `POST /orchestrator/settings` and takes effect immediately with no restart.
 
 - **Strategy indicator in UI** — terminal prompt shows the active mode in colour (`[eco] ❯` green, `[cruise] ❯` cyan, `[sport] ❯` yellow); Web UI command bar shows a matching badge that refreshes after each task completes.

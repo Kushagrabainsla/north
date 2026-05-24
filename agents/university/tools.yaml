@@ -7,3 +7,5 @@ tools:
     purpose: "Fetch class emails or communicate with professors."
   - name: canvas_api
     purpose: "Sync courses, coursework, assignments, and academic deadlines."
+  - name: schedule_task
+    purpose: "Schedule study blocks, assignment reminders, or weekly academic reviews."

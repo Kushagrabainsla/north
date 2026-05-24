@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import importlib
+import logging
 from pathlib import Path
+
+import yaml
 
 from agents.base import Agent
 from agents.exceptions import AgentConfigError, AgentNotFoundError
 from agents.models import AgentConfig, AgentDependencies
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRegistry:
@@ -24,6 +29,42 @@ class AgentRegistry:
         self._deps = deps
         self._agents: dict[str, Agent] = {}
         self._discover()
+
+    @classmethod
+    def build_tool_graph(cls, agents_dir: Path) -> dict[str, list[str]]:
+        """Return {agent_name: [tool_names]} by reading each agent's tools.yaml.
+
+        Scans the same directories that `_discover` would instantiate. Agents
+        with no tools.yaml contribute an empty list so the agent still appears
+        in the graph (and therefore in `ToolRegistry.agent_names()`).
+        Called before constructing `AgentDependencies` so there is no circular
+        dependency between AgentRegistry and ToolRegistry.
+        """
+        graph: dict[str, list[str]] = {}
+        if not agents_dir.exists():
+            return graph
+        for entry in sorted(agents_dir.iterdir()):
+            if not cls._is_valid_agent_directory(entry):
+                continue
+            try:
+                config = AgentConfig.from_yaml(entry / "config.yaml")
+                graph[config.agent] = cls._load_tool_names(entry)
+            except Exception:
+                logger.warning("build_tool_graph: skipping %s (failed to load config)", entry.name)
+        return graph
+
+    @staticmethod
+    def _load_tool_names(agent_dir: Path) -> list[str]:
+        """Return the tool names declared in tools.yaml, or [] if the file is absent."""
+        tools_yaml = agent_dir / "tools.yaml"
+        if not tools_yaml.exists():
+            return []
+        with tools_yaml.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            return []
+        tools = data.get("tools", [])
+        return [t["name"] for t in tools if isinstance(t, dict) and "name" in t]
 
     def _discover(self) -> None:
         if not self._agents_dir.exists():

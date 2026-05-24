@@ -11,3 +11,5 @@ tools:
     purpose: "Find text or patterns across files in a directory."
   - name: bash
     purpose: "Run a command when the user needs a quick result or verification."
+  - name: schedule_task
+    purpose: "Schedule a one-shot or recurring task for future execution."

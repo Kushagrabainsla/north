@@ -7,3 +7,5 @@ tools:
     purpose: "Access recruitment emails or submit applications."
   - name: linkedin_api
     purpose: "Outreach message drafts, profile reviews, and connection management."
+  - name: schedule_task
+    purpose: "Schedule interview prep sessions, follow-ups, or job search check-ins."

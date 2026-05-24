@@ -5,3 +5,5 @@ tools:
     purpose: "Schedule workouts or fitness planning sessions on the calendar."
   - name: nutrition_api
     purpose: "Lookup nutritional information or log consumed meals."
+  - name: schedule_task
+    purpose: "Schedule a recurring meal plan, workout, or health reminder."

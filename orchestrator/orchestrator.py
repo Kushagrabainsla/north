@@ -21,6 +21,7 @@ from orchestrator.models import ExecutionPlan, IntentClassification, TaskRequest
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.router import ExecutionPlanner
 from orchestrator.stream import EventStreamManager
+from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from utils.ids import generate_id, generate_task_id
@@ -53,6 +54,7 @@ class Orchestrator:
         stream_manager: EventStreamManager,
         judgement_filter: JudgementFilter | None = None,
         north_settings: NorthSettings | None = None,
+        synthesizer: ResultSynthesizer | None = None,
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
@@ -65,6 +67,8 @@ class Orchestrator:
         self._stream_manager = stream_manager
         self._judgement_filter = judgement_filter
         self._north_settings = north_settings
+        self._synthesizer = synthesizer
+        self._task_costs: dict[str, float] = {}
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -373,14 +377,17 @@ class Orchestrator:
     async def _stage_execute(
         self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str = ""
     ) -> None:
-        """Stage 4: Execute agents in dependency order, in parallel groups."""
+        """Stage 4: Execute agents in dependency order, then optionally synthesize."""
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
 
         for group in plan.parallel_groups:
             agents = [self._agent_registry.get(name) for name in group]
             await self._execute_agent_group(task_id, prompt, agents, workspace)
 
-        # Mark task completed
+        await self._maybe_synthesize(task_id, plan.agents)
+
+        task_cost_usd = self._task_costs.pop(task_id, 0.0)
+
         asyncio.create_task(self._ledger.write(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
@@ -389,8 +396,29 @@ class Orchestrator:
             action="task_completed",
             status=LedgerStatus.COMPLETED,
         )))
-        await self._stream_manager.emit(task_id, "task_completed", {})
+        await self._stream_manager.emit(task_id, "task_completed", {"cost_usd": task_cost_usd})
         await self._stream_manager.emit_done(task_id)
+
+    async def _maybe_synthesize(self, task_id: str, agents: list[str]) -> None:
+        """Synthesize outputs from multiple agents into one response, if applicable."""
+        if self._synthesizer is None or len(agents) < 2:
+            return
+
+        all_data = await self._task_context_store.get_all(task_id)
+        agent_outputs = {
+            agent: (all_data.get(agent) or {}).get("output", "")
+            for agent in agents
+        }
+
+        synthesized = await self._synthesizer.synthesize(agent_outputs, task_id)
+        if synthesized is None:
+            return
+
+        await self._stream_manager.emit(
+            task_id,
+            "task_synthesis",
+            {"output": synthesized, "agents": agents},
+        )
 
     async def _execute_agent_group(
         self, task_id: str, prompt: str, agents: list[Agent], workspace: str = ""
@@ -454,6 +482,15 @@ class Orchestrator:
             value=result.data,
             status="completed",
         )
+        await self._task_context_store.write(
+            task_id=task_id,
+            agent=agent.name,
+            key="output",
+            value=result.output,
+            status="completed",
+        )
+
+        self._task_costs[task_id] = self._task_costs.get(task_id, 0.0) + result.cost_usd
 
         asyncio.create_task(self._ledger.write(LedgerEntry(
             id=generate_id(),
