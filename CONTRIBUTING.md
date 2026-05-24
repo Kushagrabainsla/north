@@ -2,7 +2,7 @@
 
 north is a personal AI operating system. Before making changes, read:
 
-- [README.md](README.md) — the full system specification.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the full system specification.
 - [docs/CODING_STYLE.md](docs/CODING_STYLE.md) — coding conventions and the process rules in Section 23.
 
 ## Quick start
@@ -22,11 +22,11 @@ Per `docs/CODING_STYLE.md` Section 21.3:
 
 ### 1. Adding a new agent
 
-Follows `docs/CODING_STYLE.md` Section 15 and README Section 7. Briefly: drop a folder into `/agents/<name>/` with `agent.py`, `config.yaml`, `tools.yaml`, `prompts/`, and `tests/`. The Orchestrator discovers it at startup. See `agents/health/` for a worked example once it lands.
+Follows `docs/CODING_STYLE.md` Section 15 and `docs/ARCHITECTURE.md` Section 7. Briefly: drop a folder into `/agents/<name>/` with `agent.py`, `config.yaml`, `tools.yaml`, `prompts/`, and `tests/`. The Orchestrator discovers it at startup. See `agents/health/` for a worked example once it lands.
 
 ### 2. Adding a new tool
 
-Follows `docs/CODING_STYLE.md` Section 16 and README Section 7.4. Briefly: implement the `Tool` ABC, register the implementation in `TOOL_GRAPH`, and add edges from the agents that should use it.
+Follows `docs/CODING_STYLE.md` Section 16 and `docs/ARCHITECTURE.md` Section 7.4. Briefly: implement the `Tool` ABC, register the implementation in `TOOL_GRAPH`, and add edges from the agents that should use it.
 
 ### 3. Running the test suite
 
