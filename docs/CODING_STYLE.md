@@ -1143,7 +1143,34 @@ class Settings(BaseSettings):
 settings = Settings()
 ```
 
-### 17.2 Never Read os.environ Directly
+### 17.2 User Settings vs. System Settings
+
+Runtime environment config lives in `Settings` (Section 17.1) and is sourced from env vars / `.env`. User preferences that change at runtime (e.g. inference strategy) live in `NorthSettings` (`config/strategy.py`) and are persisted to `~/.north/settings.json`.
+
+```python
+# system config — read-only at runtime, set via env vars
+from config.settings import settings
+path = settings.north_home
+
+# user preferences — mutable at runtime, changed via prompt or API
+from config.strategy import NorthSettings, StrategyMode
+north_settings = NorthSettings(settings.north_home / "settings.json")
+north_settings.set_strategy(StrategyMode.ECO)
+```
+
+`NorthSettings` is created once in the lifespan and injected wherever needed (inference router, orchestrator). Never instantiate it inline inside a request handler.
+
+### 17.3 Inference Strategy
+
+Every `CompletionRequest` carries a `PoolPriority` signal. The `OpenRouterInferenceRouter` reads `NorthSettings.strategy` at call time to determine the model ordering:
+
+- `eco` — cheapest priced model first, free models at tail
+- `cruise` — tier matching `PoolPriority`, cross-tier fallback, free at tail (default)
+- `sport` — most expensive first, free models at tail
+
+Changing strategy takes effect on the next inference call. No restart required.
+
+### 17.5 Never Read os.environ Directly
 
 ```python
 # correct

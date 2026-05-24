@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
@@ -21,8 +22,14 @@ from orchestrator.north_star import NorthStarChecker
 from orchestrator.router import ExecutionPlanner
 from orchestrator.stream import EventStreamManager
 from orchestrator.task_context import TaskContextStore
+from config.strategy import NorthSettings, StrategyMode, describe
 from utils.ids import generate_id, generate_task_id
 from utils.time import format_timestamp, utcnow
+
+_STRATEGY_RE = re.compile(r"\b(eco|cruise|sport)\b", re.IGNORECASE)
+_STRATEGY_INTENT_RE = re.compile(
+    r"\b(set|switch|use|change|enable|activate|mode)\b", re.IGNORECASE
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +52,7 @@ class Orchestrator:
         notifier: Notifier,
         stream_manager: EventStreamManager,
         judgement_filter: JudgementFilter | None = None,
+        north_settings: NorthSettings | None = None,
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
@@ -56,6 +64,7 @@ class Orchestrator:
         self._notifier = notifier
         self._stream_manager = stream_manager
         self._judgement_filter = judgement_filter
+        self._north_settings = north_settings
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -182,9 +191,36 @@ class Orchestrator:
     #  Stage pipeline                                                      #
     # ------------------------------------------------------------------ #
 
+    def _detect_strategy_command(self, prompt: str) -> StrategyMode | None:
+        """Return a StrategyMode if the prompt is a strategy change command."""
+        match = _STRATEGY_RE.search(prompt)
+        if match and _STRATEGY_INTENT_RE.search(prompt):
+            return StrategyMode(match.group(1).lower())
+        return None
+
     async def _process_task(self, task_id: str, request: TaskRequest) -> None:
         """Full pipeline: classify → north-star → route → execute."""
         try:
+            # Strategy command shortcut — handle before full pipeline
+            if self._north_settings is not None:
+                mode = self._detect_strategy_command(request.prompt)
+                if mode is not None:
+                    self._north_settings.set_strategy(mode)
+                    msg = f"Strategy set to **{mode.value}**. {describe(mode)}"
+                    await self._ledger.write(LedgerEntry(
+                        id=generate_id(),
+                        timestamp=utcnow(),
+                        source=LedgerSource.SYSTEM,
+                        task_id=task_id,
+                        action="agent_completed",
+                        agent="orchestrator",
+                        output=msg,
+                        status=LedgerStatus.COMPLETED,
+                    ))
+                    await self._stream_manager.emit(task_id, "task_completed", {})
+                    await self._stream_manager.emit_done(task_id)
+                    return
+
             classification = await self._stage_classify(task_id, request.prompt)
             await self._stage_north_star(task_id, request.prompt, classification)
             plan = await self._stage_route(task_id, request.prompt, classification)
@@ -241,9 +277,14 @@ class Orchestrator:
             return
 
         await self._stream_manager.emit(task_id, "north_star_checking", {})
-        aligned, tension, reasoning = await self._north_star_checker.check_alignment(
-            prompt, task_id=task_id
-        )
+        try:
+            aligned, tension, reasoning = await self._north_star_checker.check_alignment(
+                prompt, task_id=task_id
+            )
+        except OrchestratorError as e:
+            logger.warning("North Star check skipped (inference unavailable): %s", e)
+            await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": "check skipped"})
+            return
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
         asyncio.create_task(self._ledger.write(LedgerEntry(

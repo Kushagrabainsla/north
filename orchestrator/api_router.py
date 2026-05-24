@@ -18,6 +18,7 @@ from context.injection import ContextInjector
 from context.models import ContextDocument
 from inference.base import InferenceRouter
 from inference.models import CostSummary
+from config.strategy import NorthSettings, StrategyMode
 from jobs.base import JobProcessor
 from jobs.cron_store import UserCronStore
 from jobs.models import Job, JobPriority, JobStatus, JobType
@@ -48,6 +49,7 @@ _job_processor: JobProcessor | None = None
 _inference_router: InferenceRouter | None = None
 _confidence_tracker: ConfidenceTracker | None = None
 _cron_store: UserCronStore | None = None
+_north_settings: NorthSettings | None = None
 
 
 def configure(
@@ -61,11 +63,12 @@ def configure(
     inference_router: InferenceRouter,
     confidence_tracker: ConfidenceTracker,
     cron_store: UserCronStore | None = None,
+    north_settings: NorthSettings | None = None,
 ) -> None:
     """Wire the singletons used by every route. Called once in app lifespan."""
     global _orchestrator, _stream_manager, _ledger, _agent_registry
     global _context_store, _context_injector, _job_processor
-    global _inference_router, _confidence_tracker, _cron_store
+    global _inference_router, _confidence_tracker, _cron_store, _north_settings
     _orchestrator = orchestrator
     _stream_manager = stream_manager
     _ledger = ledger
@@ -76,6 +79,7 @@ def configure(
     _inference_router = inference_router
     _confidence_tracker = confidence_tracker
     _cron_store = cron_store
+    _north_settings = north_settings
 
 
 def _orch() -> Orchestrator:
@@ -603,6 +607,38 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
         )
     )
     return AgentCreateResponse(name=body.name, system_prompt=result.text)
+
+
+# ── Settings endpoint ────────────────────────────────────────────────────────
+
+class SettingsOut(BaseModel):
+    strategy: str
+
+
+class SettingsUpdate(BaseModel):
+    strategy: str
+
+
+@router.get("/settings", response_model=SettingsOut)
+async def get_settings() -> SettingsOut:
+    """Return current user settings."""
+    mode = _north_settings.strategy.value if _north_settings else "cruise"
+    return SettingsOut(strategy=mode)
+
+
+@router.post("/settings", response_model=SettingsOut)
+async def update_settings(body: SettingsUpdate) -> SettingsOut:
+    """Update user settings directly (alternative to natural language)."""
+    try:
+        mode = StrategyMode(body.strategy)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown strategy {body.strategy!r}. Valid: eco, cruise, sport",
+        )
+    if _north_settings is not None:
+        _north_settings.set_strategy(mode)
+    return SettingsOut(strategy=mode.value)
 
 
 # ── Approval endpoint ─────────────────────────────────────────────────────────

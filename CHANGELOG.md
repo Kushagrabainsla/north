@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Inference strategy (eco / cruise / sport)** — `config/strategy.py` introduces `StrategyMode` and `NorthSettings` (persisted to `~/.north/settings.json`). The `OpenRouterInferenceRouter` builds a model fallback chain at call time based on the active strategy: `eco` tries cheapest first, `sport` tries most capable first, `cruise` (default) maps `PoolPriority` to an appropriate starting tier then falls through adjacent tiers. Free models are always appended as the last resort. Strategy is changed via natural language ("switch to eco mode") or `POST /orchestrator/settings` and takes effect immediately with no restart.
+
+- **Strategy indicator in UI** — terminal prompt shows the active mode in colour (`[eco] ❯` green, `[cruise] ❯` cyan, `[sport] ❯` yellow); Web UI command bar shows a matching badge that refreshes after each task completes.
+
+- **Inline approval widget in Web UI** — when an agent emits `approval_required` mid-loop, an approval card appears inline inside the thinking bubble with the agent's message and action buttons. Clicking a button POSTs to `/orchestrator/approval/respond` and replaces the widget with a confirmation.
+
+- **Markdown rendering in chat** — north's responses in the Web UI are now rendered as formatted markdown (via `marked.js`) rather than plain text. Code blocks, headers, lists, and inline code all display correctly.
+
+- **Persistent conversation history** — `north chat` loads the last 20 task/response pairs from the ledger at startup and injects them as conversation context so the agent remembers prior sessions.
+
+- **User-defined cron schedules** — `jobs/cron_store.py` adds `UserCronStore`, backed by a `user_cron_entries` table in `~/.north/jobs.db`. The `CronScheduler` now merges built-in and user entries on each iteration (max 60 s delay for new entries to take effect). Managed via `POST/GET/DELETE /orchestrator/cron` or the Web UI Jobs page.
+
+- **One-shot scheduled jobs** — agents can schedule a task for a specific future datetime via the `schedule_task` tool (`run_at` param). Users can also create them from the Jobs page "+ Schedule" form or `POST /orchestrator/jobs`.
+
+- **`schedule_task` tool** — available to all domain agents (health, university, job, finance, general). Accepts `run_at` (one-shot) or `hour`/`minute`/`weekday` (recurring). Recurring entries are persisted via `UserCronStore`; one-shot tasks are enqueued directly into `jobs.db`.
+
+- **Jobs page redesign** — `/ui/jobs` now has two sections: "Recurring Schedules" (user cron entries with delete, "+ Add" form) and "One-Shot & Queue" (job table with "+ Schedule" form and status filters).
+
+### Changed
+- **`NorthStarChecker` uses `PoolPriority.MEDIUM`** (was `HIGH`) — the alignment check is a structured JSON classification task, not deep reasoning; fast/cheap models handle it reliably and the change avoids burning the reasoning pool on every consequential task.
+
+- **North star failure is non-fatal** — if inference is unavailable during the north star check, the orchestrator logs a warning, emits `north_star_aligned` (skip), and the task continues. Only an actual goal conflict stops execution.
+
+- **`CronScheduler.run()` no longer exits on empty entries** — previously returned immediately when `entries` was empty. Now loops with a 60 s sleep so user-added entries are picked up without a restart.
+
 - **File drag-and-drop** on two surfaces:
   - *Context page drop zone* (`context_index.html`): drop a PDF, DOCX, TXT, or MD file onto the drop zone to inject it directly into the context store via `POST /orchestrator/context/add`. Visual feedback (border highlight, status message) on drag-over and after upload.
   - *Command bar* (`dashboard.html`): drop a file onto the command bar while composing a task. The file is uploaded first via `POST /orchestrator/context/add`, then the task is submitted with the file name appended to the prompt. A dismissable file chip shows the attached filename.

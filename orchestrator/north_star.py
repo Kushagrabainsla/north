@@ -58,7 +58,7 @@ class NorthStarChecker:
             response = await self._inference_router.complete(
                 CompletionRequest(
                     prompt=full_prompt,
-                    priority=PoolPriority.HIGH,
+                    priority=PoolPriority.MEDIUM,
                     component="north_star_checker",
                     task_id=task_id,
                 )

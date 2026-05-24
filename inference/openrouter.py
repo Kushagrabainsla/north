@@ -21,6 +21,7 @@ from inference.exceptions import (
     PoolRefreshError,
     TranscriptionError,
 )
+from config.strategy import NorthSettings, StrategyMode
 from inference.fallback_pools import DEFAULT_TRANSCRIPTION_MODEL, FALLBACK_POOLS
 from inference.models import (
     CompletionRequest,
@@ -53,6 +54,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
         *,
         client: httpx.AsyncClient | None = None,
         default_transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL,
+        north_settings: NorthSettings | None = None,
     ) -> None:
         self._api_key = api_key
         self._cache_path = cache_path
@@ -62,20 +64,24 @@ class OpenRouterInferenceRouter(InferenceRouter):
             headers={"Authorization": f"Bearer {api_key}"},
         )
         self._default_transcription_model = default_transcription_model
-        self._pools: dict[str, ModelPool] = self._load_initial_pools()
+        self._north_settings = north_settings
+        self._pools: dict[str, ModelPool] = {}
+        self._all_models_asc: list[str] = []  # all priced models, cheapest first
+        self._load_initial_pools()
 
     # ---- pool state ----
 
-    def _load_initial_pools(self) -> dict[str, ModelPool]:
+    def _load_initial_pools(self) -> None:
         if self._cache_path.exists():
             try:
                 raw = json.loads(self._cache_path.read_text(encoding="utf-8"))
-                return {
-                    name: ModelPool(**pool) for name, pool in raw.items()
-                }
+                self._pools = {name: ModelPool(**pool) for name, pool in raw.items()}
+                self._all_models_asc = _models_asc_from_pools(self._pools)
+                return
             except (OSError, ValueError):
                 pass
-        return dict(FALLBACK_POOLS)
+        self._pools = dict(FALLBACK_POOLS)
+        self._all_models_asc = _models_asc_from_pools(self._pools)
 
     def current_pools(self) -> dict[str, ModelPool]:
         return dict(self._pools)
@@ -106,7 +112,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
         except ValueError as e:
             raise PoolRefreshError("OpenRouter response was not JSON") from e
 
-        self._pools = _bucket_models(models)
+        self._pools, self._all_models_asc = _bucket_models(models)
         try:
             self._cache_path.parent.mkdir(parents=True, exist_ok=True)
             self._cache_path.write_text(
@@ -120,29 +126,55 @@ class OpenRouterInferenceRouter(InferenceRouter):
     # ---- completion ----
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
-        pool = self._pools[PRIORITY_TO_POOL[request.priority]]
-        free_pool = self._pools.get("free_fallback")
+        strategy = (
+            self._north_settings.strategy
+            if self._north_settings is not None
+            else StrategyMode.CRUISE
+        )
+        chain = self._build_chain(request.priority, strategy)
 
         last_error: Exception | None = None
-        for model in pool.models:
+        for model in chain:
             try:
                 return await self._call_completion(model, request)
             except _RateLimited as e:
                 last_error = e
                 continue
 
-        # Primary pool exhausted — try free models before giving up.
-        if free_pool:
-            for model in free_pool.models:
-                try:
-                    return await self._call_completion(model, request)
-                except _RateLimited as e:
-                    last_error = e
-                    continue
-
         raise AllModelsRateLimitedError(
-            f"All models in '{pool.name}' and free_fallback exhausted"
+            f"All models exhausted (strategy={strategy.value}, priority={request.priority.value})"
         ) from last_error
+
+    def _build_chain(self, priority: PoolPriority, strategy: StrategyMode) -> list[str]:
+        """Return an ordered list of models to try for this (priority, strategy) pair."""
+        free = list(self._pools.get("free_fallback", ModelPool(name="f", models=[])).models)
+
+        if strategy == StrategyMode.ECO:
+            # Cheapest first across all priced models, free at tail
+            return _dedup(self._all_models_asc + free)
+
+        if strategy == StrategyMode.SPORT:
+            # Most capable first, free at tail
+            return _dedup(list(reversed(self._all_models_asc)) + free)
+
+        # CRUISE: role-aware starting pool, fall through remaining tiers, free last
+        pool_order: list[str]
+        if priority == PoolPriority.HIGH:
+            # reasoning → fast_cheap → high_volume → free
+            pool_order = ["reasoning", "fast_cheap", "high_volume"]
+        elif priority == PoolPriority.MEDIUM:
+            # fast_cheap → high_volume → reasoning → free
+            pool_order = ["fast_cheap", "high_volume", "reasoning"]
+        else:
+            # high_volume → fast_cheap → free
+            pool_order = ["high_volume", "fast_cheap", "reasoning"]
+
+        chain: list[str] = []
+        for pool_name in pool_order:
+            pool = self._pools.get(pool_name)
+            if pool:
+                chain.extend(pool.models)
+        return _dedup(chain + free)
 
     async def _call_completion(
         self, model: str, request: CompletionRequest
@@ -234,12 +266,32 @@ class _RateLimited(Exception):
         self.model = model
 
 
-def _bucket_models(models: list[dict]) -> dict[str, ModelPool]:
+def _dedup(models: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in models:
+        if m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+
+def _models_asc_from_pools(pools: dict[str, ModelPool]) -> list[str]:
+    """Build cheapest-first ordered list from pool structure (fallback case)."""
+    # high_volume = cheapest tier, fast_cheap = mid, reasoning = most expensive
+    asc: list[str] = []
+    for name in ("high_volume", "fast_cheap", "reasoning"):
+        pool = pools.get(name)
+        if pool:
+            asc.extend(pool.models)
+    return _dedup(asc)
+
+
+def _bucket_models(models: list[dict]) -> tuple[dict[str, ModelPool], list[str]]:
     """Bucket OpenRouter's `/models` response into pools by output cost.
 
-    Priced models are split into three tiers (top/mid/bottom third by price).
-    Free models (id ends with ':free', price == 0) go into free_fallback —
-    tried automatically after all paid models in a pool are exhausted.
+    Returns (pools, all_priced_asc) where all_priced_asc is every priced model
+    sorted cheapest-first — used by eco/sport strategy chains.
     """
     priced: list[tuple[str, float]] = []
     free_ids: list[str] = []
@@ -260,8 +312,10 @@ def _bucket_models(models: list[dict]) -> dict[str, ModelPool]:
     merged_free = static_free + [m for m in free_ids if m not in static_free]
 
     if not priced:
-        return dict(FALLBACK_POOLS)
+        pools = dict(FALLBACK_POOLS)
+        return pools, _models_asc_from_pools(pools)
 
+    # Sort descending for pool bucketing (most expensive = reasoning)
     priced.sort(key=lambda pair: pair[1], reverse=True)
     n = len(priced)
     third = max(1, n // 3)
@@ -270,12 +324,16 @@ def _bucket_models(models: list[dict]) -> dict[str, ModelPool]:
     fast_cheap_ids = [mid for mid, _ in priced[third : 2 * third]] or reasoning_ids
     high_volume_ids = [mid for mid, _ in priced[-third:]]
 
-    return {
+    # Cheapest-first list for eco/sport: reverse of the descending-sorted priced list
+    all_priced_asc = [mid for mid, _ in reversed(priced)]
+
+    pools = {
         "reasoning": ModelPool(name="reasoning", models=reasoning_ids),
         "fast_cheap": ModelPool(name="fast_cheap", models=fast_cheap_ids),
         "high_volume": ModelPool(name="high_volume", models=high_volume_ids),
         "free_fallback": ModelPool(name="free_fallback", models=merged_free),
     }
+    return pools, all_priced_asc
 
 
 def _output_price(model: dict) -> float:

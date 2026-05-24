@@ -244,12 +244,22 @@ def _chat_loop(workspace: Optional[str] = None) -> None:
     )
     # \001/\002 wrap non-printing ANSI bytes so readline measures prompt width correctly.
     # Without them Option+Left overshoots and eats the ❯ character.
-    _CHAT_PROMPT = "\n\001\x1b[1;36m\002 ❯ \001\x1b[0m\002"
+    _STRATEGY_COLORS = {"eco": "\x1b[1;32m", "cruise": "\x1b[1;36m", "sport": "\x1b[1;33m"}
+
+    def _chat_prompt() -> str:
+        from config.settings import settings as _settings
+        from config.strategy import NorthSettings as _NS
+        try:
+            mode = _NS(_settings.north_home / "settings.json").strategy.value
+        except Exception:
+            mode = "cruise"
+        color = _STRATEGY_COLORS.get(mode, "\x1b[1;36m")
+        return f"\n\001{color}\002[{mode}] ❯ \001\x1b[0m\002"
 
     history = _load_history_from_ledger(limit=20)
     while True:
         try:
-            prompt = input(_CHAT_PROMPT).strip()
+            prompt = input(_chat_prompt()).strip()
         except (KeyboardInterrupt, EOFError):
             _console.print("\n[dim]Goodbye.[/dim]")
             break

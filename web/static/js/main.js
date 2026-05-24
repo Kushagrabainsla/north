@@ -284,6 +284,7 @@
 
         if (event === "task_completed") {
           es.close();
+          loadStrategyBadge();
           setTimeout(async function () {
             try {
               const resp = await fetch(
@@ -564,7 +565,27 @@
   }
   document.addEventListener("htmx:afterSwap", convertLocalTimes);
 
+  // ── Strategy badge ────────────────────────────────────────────────────────────
+  async function loadStrategyBadge() {
+    try {
+      const resp = await fetch("/orchestrator/settings", { headers: authHeaders() });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const bar = document.querySelector(".command-bar");
+      if (!bar) return;
+      let badge = document.getElementById("strategy-badge");
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.id = "strategy-badge";
+        bar.insertBefore(badge, bar.firstChild);
+      }
+      badge.textContent = data.strategy;
+      badge.className = "strategy-badge strategy-" + data.strategy;
+    } catch (_) {}
+  }
+
   // ── Boot ───────────────────────────────────────────────────────────────────────
   loadChatHistory();
+  loadStrategyBadge();
 
 })();

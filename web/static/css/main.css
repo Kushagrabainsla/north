@@ -570,6 +570,23 @@ textarea:focus {
 
 .empty-hint { color: var(--label-3); font-size: 0.85rem; padding: 12px 0; }
 
+.strategy-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  border: 1px solid currentColor;
+  margin-right: 8px;
+  flex-shrink: 0;
+  align-self: center;
+  opacity: 0.85;
+}
+.strategy-eco   { color: #34c759; }
+.strategy-cruise { color: #64d2ff; }
+.strategy-sport  { color: #ffd60a; }
+
 /* ── Task Cards ───────────────────────────────────────────────────────────── */
 .task-list {
   flex: 1;

@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from agents.models import AgentDependencies
+from config.strategy import NorthSettings
 from agents.registry import AgentRegistry
 from config.dependencies import build_production_dependencies
 from config.settings import settings
@@ -84,8 +85,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("loading secret")
     load_secret()
 
+    _step("loading north settings")
+    north_settings = NorthSettings(settings.north_home / "settings.json")
+
     _step("building dependencies")
-    deps = build_production_dependencies()
+    deps = build_production_dependencies(north_settings=north_settings)
 
     _step("building cron store")
     cron_store = UserCronStore(settings.north_home / "jobs.db")
@@ -138,6 +142,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         notifier=deps.notifier,
         stream_manager=stream_manager,
         judgement_filter=judgement_filter,
+        north_settings=north_settings,
     )
 
     context_injector = ContextInjector(
@@ -184,6 +189,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         inference_router=deps.inference_router,
         confidence_tracker=confidence_tracker,
         cron_store=cron_store,
+        north_settings=north_settings,
     )
 
     _step("configuring web router")

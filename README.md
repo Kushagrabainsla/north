@@ -779,7 +779,7 @@ When an agent raises a question, it sets `status: awaiting_input` in its Task Co
 
 ## 8. Inference Router
 
-The Inference Router selects the appropriate LLM for every inference call in the system. Fully dynamic: no hardcoded model names in application code, no static config file for model assignments. Model selection is automatic based on task priority.
+The Inference Router selects the appropriate LLM for every inference call in the system. Fully dynamic: no hardcoded model names in application code, no static config file for model assignments. Model selection is driven by task priority and the active inference strategy.
 
 ### 8.1 OpenRouter
 
@@ -787,60 +787,68 @@ All inference goes through OpenRouter (openrouter.ai). Single API endpoint, sing
 
 ### 8.2 Dynamic Model Pools
 
-The router pulls the live model list from OpenRouter every 6 hours and automatically groups models into three tiers based on current pricing and published capability benchmarks.
+The router pulls the live model list from OpenRouter every 6 hours and automatically groups models into three tiers based on current pricing.
 
 ```
-reasoning pool:    top tier by capability-to-cost ratio
-                   typical members: claude-sonnet, gpt-4o, gemini-1.5-pro, deepseek-r1
+reasoning pool:    top third by price (most capable)
+                   typical members: claude-opus, gpt-4o, deepseek-r1
 
-fast_cheap pool:   mid tier
-                   typical members: claude-haiku, gpt-4o-mini, gemini-flash
+fast_cheap pool:   middle third
+                   typical members: claude-sonnet, gpt-4o-mini, gemini-flash
 
-high_volume pool:  cheapest available
-                   typical members: gemini-flash, gpt-4o-mini, claude-haiku
+high_volume pool:  bottom third (cheapest)
+                   typical members: claude-haiku, gemini-flash, mistral-7b
+
+free_fallback:     all :free models — always appended as the last resort
 ```
 
 Pools refresh automatically. When a new model releases or pricing changes, it enters the correct pool without any manual action.
 
-**Pool refresh failure handling:** if the OpenRouter refresh call fails for any reason (network error, API outage), the router continues using the last successfully fetched pool. The last known pool is persisted to `~/.north/inference_cache.json` after every successful refresh. On Orchestrator startup, this cache is loaded before the first live refresh attempt. If no cache exists and the first refresh fails, the router falls back to a hardcoded minimal pool defined in `inference/fallback_pools.py`. In all fallback cases, a warning is logged to the Ledger with `source: system` and the Orchestrator continues accepting tasks normally.
+**Pool refresh failure handling:** if the OpenRouter refresh call fails, the router falls back to `~/.north/inference_cache.json` (last successful snapshot), then to the hardcoded pools in `inference/fallback_pools.py`. The Orchestrator continues accepting tasks in all cases.
 
-### 8.3 Priority-Driven Model Selection
+### 8.3 Inference Strategy
 
-The router reads the task priority signal from the Orchestrator classifier and selects accordingly. No fixed model assignments per component.
-
-```
-high priority    -> reasoning pool (best available model)
-medium priority  -> fast_cheap pool
-low priority     -> high_volume pool (cheapest available)
-```
-
-**Priority signals:**
-- Consequential task (from classifier): high priority
-- Background, async, or non-blocking task: low priority
-- Everything else: medium priority
-
-**Component defaults at v1:**
-```
-orchestrator routing      -> high priority
-north star check          -> high priority
-finance agent             -> high priority (consequential domain)
-job agent                 -> high priority (consequential domain)
-university agent          -> medium priority
-health agent              -> medium priority
-extraction pipeline       -> low priority (background job)
-judgement rules writer    -> low priority (background job)
-classifier                -> low priority (simple binary classification)
-```
-
-### 8.4 Automatic Fallback
-
-On rate limit or API error for any model, the router automatically selects the next available model in the same pool. The calling agent never knows which model it is using and never stops executing.
+The active strategy controls how models are ordered in the fallback chain for every call. Set via natural language ("switch to eco mode") or `POST /orchestrator/settings`. Persisted to `~/.north/settings.json`. Default: **cruise**.
 
 ```
-finance agent -> requests reasoning pool -> claude-sonnet rate limited
-             -> router tries gpt-4o
-             -> if gpt-4o also rate limited -> tries gemini-1.5-pro
-             -> agent continues transparently
+eco     Cheapest model first, climbs up price ladder only on failure.
+        Minimises cost; quality may vary on hard tasks.
+
+cruise  Role-aware ordering (default). Maps task priority to the appropriate
+        tier, then falls through adjacent tiers on failure:
+          HIGH   -> reasoning -> fast_cheap -> high_volume -> free
+          MEDIUM -> fast_cheap -> high_volume -> reasoning -> free
+          LOW    -> high_volume -> fast_cheap -> reasoning -> free
+
+sport   Most capable model first, descends to cheaper only on failure.
+        Maximises quality regardless of cost.
+```
+
+The current strategy is shown in the terminal prompt (`[eco] ❯`, `[cruise] ❯`, `[sport] ❯`) and as a badge in the Web UI command bar.
+
+### 8.4 Priority Signals
+
+Every `CompletionRequest` carries a `PoolPriority` that `cruise` strategy uses to pick a starting tier. Components use priority as a signal of task complexity, not as a hard model assignment.
+
+```
+orchestrator routing      -> MEDIUM
+north star check          -> MEDIUM
+finance agent             -> HIGH (consequential domain)
+job agent                 -> HIGH (consequential domain)
+university agent          -> MEDIUM
+health agent              -> MEDIUM
+extraction pipeline       -> LOW (background job)
+classifier                -> LOW (simple binary classification)
+```
+
+### 8.5 Automatic Fallback Chain
+
+Every `complete()` call walks an ordered model list until one succeeds. HTTP 429 (rate limit), 402 (payment required), 404 (model retired), and 503 (unavailable) all skip to the next model. The chain always ends with free models so there is always a last resort.
+
+```
+sport strategy, any priority:
+  claude-opus -> gpt-4o -> claude-sonnet -> gpt-4o-mini -> claude-haiku
+  -> gemini-flash -> ... -> meta-llama:free -> qwen3-8b:free
 ```
 
 ### 8.5 Cost Tracking
@@ -1069,10 +1077,11 @@ Job processor loop:
      -> on failure: classify failure, update retry_after or surface failure card
 ```
 
-### 11.3 Cron Jobs: v1 Schedule
+### 11.3 Cron Jobs: Built-in + User-Defined
 
-Fixed schedules defined in `jobs/scheduler.py` as `(hour, minute, weekday)` tuples. The scheduler is a single asyncio background task that computes the next firing across all entries, sleeps until that moment, enqueues the matching job to `jobs.db`, then recomputes. No external scheduler library, consistent with the "asyncio only" stance in Section 16.4. User-configurable via CLI or Web UI.
+The `CronScheduler` runs as a single asyncio background task. It combines two sources of entries and re-evaluates them every 60 seconds so newly added schedules take effect within a minute.
 
+**Built-in schedules** (`jobs/scheduler.py` — `V1_CRON_ENTRIES`):
 ```
 health_daily_meal_plan         -> daily 7:00 AM
 university_canvas_check        -> daily 8:00 AM
@@ -1080,10 +1089,26 @@ job_internship_update          -> daily 9:00 AM
 finance_expense_summary        -> daily 10:00 PM
 university_weekly_summary      -> every Monday 8:00 AM
 finance_weekly_budget_check    -> every Sunday 6:00 PM
-task_context_cleanup           -> daily 3:00 AM (Task Context Object file cleanup)
+task_context_cleanup           -> daily 3:00 AM
 ```
 
-### 11.4 Event-Driven Jobs
+**User-defined schedules** — stored in the `user_cron_entries` table in `~/.north/jobs.db`. Created three ways:
+1. Natural language: "remind me every Monday at 9am to review my goals"
+   → agent calls `schedule_task` tool with `hour`, `minute`, `weekday` params
+2. Web UI: `/ui/jobs` → Recurring Schedules → "+ Add" form
+3. API: `POST /orchestrator/cron`
+
+User entries are deleted with `DELETE /orchestrator/cron/{name}` or via the Web UI delete button.
+
+### 11.4 One-Shot Scheduled Jobs
+
+A job enqueued with a future `scheduled_at` will sit as `pending` until the job processor clock catches up. Created three ways:
+1. Natural language: "remind me tomorrow at 5pm to call the doctor"
+   → agent calls `schedule_task` tool with `run_at` param (ISO 8601 UTC)
+2. Web UI: `/ui/jobs` → One-Shot & Queue → "+ Schedule" form
+3. API: `POST /orchestrator/jobs` with `scheduled_at` field
+
+### 11.5 Event-Driven Jobs
 
 Triggered by signals rather than time. Event sources in v1 are limited (no native integrations) but the infrastructure is ready.
 
@@ -1095,7 +1120,7 @@ task marked complete             -> trigger north star progress check
 
 Event-driven jobs enter the same queue as cron jobs with `type: event`, `scheduled_at: now`, `priority: 1`.
 
-### 11.5 Async Jobs
+### 11.6 Async Jobs
 
 Created mid-task by the failure handling flow (Queue for Later) or by agents that spawn background work.
 
