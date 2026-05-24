@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from context.base import ContextStore
 from context.exceptions import ContextReadError, ContextWriteError
 from context.models import ContextDocument
+
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "and", "or", "but", "not", "i",
+    "my", "me", "we", "our", "you", "your", "it", "its",
+})
 
 
 class FileContextStore(ContextStore):
@@ -57,3 +66,50 @@ class FileContextStore(ContextStore):
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         separator = "\n" if existing else ""
         path.write_text(f"{existing}{separator}{delta}", encoding="utf-8")
+
+    async def search(self, query: str, max_results: int = 5) -> str:
+        return await asyncio.to_thread(self._search_sync, query, max_results)
+
+    def _search_sync(self, query: str, max_results: int) -> str:  # noqa: C901
+        query_words = _tokenize(query)
+        if not query_words:
+            return ""
+
+        hits: list[tuple[int, str, str]] = []  # (score, doc_label, paragraph)
+
+        for doc in ContextDocument:
+            path = self._path(doc)
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            label = doc.value.removesuffix(".md").replace("_", " ").title()
+            for para in _split_paragraphs(text):
+                score = _score(para, query_words)
+                if score > 0:
+                    hits.append((score, label, para.strip()))
+
+        hits.sort(key=lambda h: h[0], reverse=True)
+        top = hits[:max_results]
+
+        if not top:
+            return ""
+
+        sections = [f"[{label}]\n{para}" for _, label, para in top]
+        return "\n\n---\n\n".join(sections)
+
+
+def _tokenize(text: str) -> frozenset[str]:
+    """Lowercase words, strip punctuation, drop stopwords."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return frozenset(w for w in words if w not in _STOPWORDS)
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    """Split on one or more blank lines; drop empty results."""
+    return [p for p in re.split(r"\n{2,}", text) if p.strip()]
+
+
+def _score(paragraph: str, query_words: frozenset[str]) -> int:
+    """Count distinct query words that appear in the paragraph."""
+    para_words = _tokenize(paragraph)
+    return len(query_words & para_words)

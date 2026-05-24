@@ -33,6 +33,7 @@ from orchestrator.api_router import router as orchestrator_router
 from orchestrator.classifier import IntentClassifier
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
+from inference.cost_tracker import CostTracker
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
@@ -91,6 +92,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _step("building dependencies")
     deps = build_production_dependencies(north_settings=north_settings)
+    cost_tracker = CostTracker(deps.inference_router)
 
     _step("building cron store")
     cron_store = UserCronStore(settings.north_home / "jobs.db")
@@ -102,12 +104,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=cron_store))
     _step("building confidence tracker")
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
+    _RELIABLE_TOOLS = frozenset({
+        "read_file", "write_file", "list_dir", "search_files", "bash",
+        "web_search", "schedule_task",
+    })
+    await confidence_tracker.seed_defaults(dynamic_tool_graph, _RELIABLE_TOOLS)
 
     stream_manager = EventStreamManager()
 
     agent_deps = AgentDependencies(
         context_store=deps.context_store,
-        inference_router=deps.inference_router,
+        inference_router=cost_tracker,
         tool_registry=tool_registry,
         confidence_tracker=confidence_tracker,
         stream_manager=stream_manager,
@@ -124,20 +131,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     judgement_filter = JudgementFilter(
         context_store=deps.context_store,
-        inference_router=deps.inference_router,
+        inference_router=cost_tracker,
     )
 
     orchestrator = Orchestrator(
         ledger=deps.ledger,
         agent_registry=agent_registry,
-        classifier=IntentClassifier(inference_router=deps.inference_router),
+        classifier=IntentClassifier(inference_router=cost_tracker),
         north_star_checker=NorthStarChecker(
             context_store=deps.context_store,
-            inference_router=deps.inference_router,
+            inference_router=cost_tracker,
         ),
         execution_planner=ExecutionPlanner(
             agent_registry=agent_registry,
-            inference_router=deps.inference_router,
+            inference_router=cost_tracker,
         ),
         task_context_store=task_context_store,
         failure_handler=failure_handler,
@@ -145,19 +152,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         stream_manager=stream_manager,
         judgement_filter=judgement_filter,
         north_settings=north_settings,
-        synthesizer=ResultSynthesizer(inference_router=deps.inference_router),
+        synthesizer=ResultSynthesizer(inference_router=cost_tracker),
+        cost_tracker=cost_tracker,
     )
 
     context_injector = ContextInjector(
         context_store=deps.context_store,
-        inference_router=deps.inference_router,
+        inference_router=cost_tracker,
         ledger=deps.ledger,
     )
 
     extraction_pipeline = ExtractionPipeline(
         ledger=deps.ledger,
         context_store=deps.context_store,
-        inference_router=deps.inference_router,
+        inference_router=cost_tracker,
         north_home=settings.north_home,
     )
 
@@ -271,6 +279,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         for task in background_tasks:
             task.cancel()
         await asyncio.gather(*background_tasks, return_exceptions=True)
+        await cost_tracker.aclose()
 
 
 app = FastAPI(

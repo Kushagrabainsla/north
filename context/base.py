@@ -30,14 +30,13 @@ class ContextStore(ABC):
         """Append `delta` to `document`, separated from existing content by a
         single newline. If the document does not exist, create it."""
 
-    def search(self, query: str) -> str:
-        """Semantic search. Not implemented in v1.
+    async def search(self, query: str, max_results: int = 5) -> str:
+        """Keyword search across all context documents.
 
-        Upgrade to `DBContextStore` when context files outgrow LLM context
-        windows. Until then, this raises loudly — see docs/CODING_STYLE.md
-        Section 6.2.
+        Returns the top `max_results` paragraphs ranked by query-word overlap,
+        each labelled with its source document. Returns an empty string when
+        nothing matches.
         """
         raise NotImplementedError(
-            "search() requires DBContextStore. "
-            "FileContextStore does not support semantic search."
+            "search() must be implemented by a concrete ContextStore subclass."
         )

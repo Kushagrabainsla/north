@@ -114,6 +114,32 @@ class ConfidenceTracker:
                 ).fetchall()
             )
 
+    async def seed_defaults(self, graph: dict[str, list[str]], reliable_tools: frozenset[str]) -> None:
+        """Insert default confidence scores for all (agent, tool) pairs, if not yet recorded.
+
+        Rows already written by real usage are preserved via INSERT OR IGNORE, so seeds
+        never overwrite earned data. Call once at startup before any tasks run.
+
+        Args:
+            graph:          {agent_name: [tool_names]} — the full tool graph.
+            reliable_tools: Tool names that get a high prior (0.80). Everything
+                            else receives the neutral default (0.50).
+        """
+        await asyncio.to_thread(self._seed_defaults_sync, graph, reliable_tools)
+
+    def _seed_defaults_sync(self, graph: dict[str, list[str]], reliable_tools: frozenset[str]) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            for agent, tools in graph.items():
+                for tool in tools:
+                    score = 0.80 if tool in reliable_tools else DEFAULT_CONFIDENCE
+                    conn.execute(
+                        "INSERT OR IGNORE INTO tool_confidence "
+                        "(agent, tool, confidence, uses_total, uses_helpful, last_updated) "
+                        "VALUES (?, ?, ?, 0, 0, ?)",
+                        (agent, tool, score, now),
+                    )
+
     async def inherit_from(self, new_agent: str, source_agent: str) -> None:
         """Copy `source_agent`'s tool rows to `new_agent` as a starting prior.
 

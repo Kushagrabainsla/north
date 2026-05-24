@@ -40,8 +40,8 @@ class Agent(ABC):
     async def run(self, payload: AgentPayload) -> AgentResult:
         """Template method. Do not override. Implement `_execute()` instead."""
         context = await self._load_context(payload)
-        tools = await self._load_tools()
-        raw = await self._execute(payload, context, tools)
+        scored_tools = await self._load_tools()
+        raw = await self._execute(payload, context, scored_tools)
         return self._format_result(raw)
 
     @abstractmethod
@@ -49,16 +49,12 @@ class Agent(ABC):
         self,
         payload: AgentPayload,
         context: str,
-        tools: list[Tool],
+        scored_tools: list[tuple[Tool, float]],
     ) -> dict[str, Any]:
         """Domain-specific logic. Returns a dict that maps onto `AgentResult` fields."""
 
     async def _load_context(self, payload: AgentPayload) -> str:
-        """Default: concatenate `public.md` and `judgement_rules.md`.
-
-        Subclasses can override to read additional documents or to pull
-        from `payload.context` instead of disk.
-        """
+        """Default: concatenate `public.md` and `judgement_rules.md`."""
         if payload.context:
             return payload.context
         store = self._deps.context_store
@@ -68,15 +64,17 @@ class Agent(ABC):
         ]
         return "\n\n".join(p for p in parts if p)
 
-    async def _load_tools(self) -> list[Tool]:
-        """Default: load the agent's tools, sorted by confidence descending."""
+    async def _load_tools(self) -> list[tuple[Tool, float]]:
+        """Return (tool, confidence_score) pairs, sorted by score descending.
+
+        Scores are fetched once here and threaded through to `_execute` so no
+        subclass needs a second async call to look them up.
+        """
         registry_tools = self._deps.tool_registry.tools_for_agent(self.name)
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
-        registry_tools.sort(
-            key=lambda t: scores.get(t.name, 0.5),  # default score for unseen tools
-            reverse=True,
-        )
-        return registry_tools
+        scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        return scored
 
     def _format_result(self, raw: dict[str, Any]) -> AgentResult:
         """Default: wrap the dict in an `AgentResult`. Override for custom shape."""

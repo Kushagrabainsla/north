@@ -52,11 +52,11 @@ class AgenticLLMAgent(LLMAgent):
         self,
         payload: AgentPayload,
         context: str,
-        tools: list[Tool],
+        scored_tools: list[tuple[Tool, float]],
     ) -> dict[str, Any]:
         system_prompt = self._load_system_prompt() + REACT_FORMAT_SUFFIX
-        user_message = self._build_user_message(payload, context, tools)
-        tool_map = {t.name: t for t in tools}
+        user_message = self._build_user_message(payload, context, scored_tools)
+        tool_map = {t.name: t for t, _ in scored_tools}
 
         conversation = f"## User\n{user_message}\n\n"
         total_cost_usd: float = 0.0

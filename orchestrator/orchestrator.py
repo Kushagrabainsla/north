@@ -14,6 +14,7 @@ from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
 from approval import Card, CardType, JudgementFilter, Notifier
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
+from inference.cost_tracker import CostTracker
 from orchestrator.classifier import IntentClassifier
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, RoutingError
 from orchestrator.failure_handler import FailureHandler
@@ -55,6 +56,7 @@ class Orchestrator:
         judgement_filter: JudgementFilter | None = None,
         north_settings: NorthSettings | None = None,
         synthesizer: ResultSynthesizer | None = None,
+        cost_tracker: CostTracker | None = None,
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
@@ -68,7 +70,7 @@ class Orchestrator:
         self._judgement_filter = judgement_filter
         self._north_settings = north_settings
         self._synthesizer = synthesizer
-        self._task_costs: dict[str, float] = {}
+        self._cost_tracker = cost_tracker
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -386,7 +388,7 @@ class Orchestrator:
 
         await self._maybe_synthesize(task_id, plan.agents)
 
-        task_cost_usd = self._task_costs.pop(task_id, 0.0)
+        task_cost_usd = self._cost_tracker.pop_task_cost(task_id) if self._cost_tracker else 0.0
 
         asyncio.create_task(self._ledger.write(LedgerEntry(
             id=generate_id(),
@@ -489,8 +491,6 @@ class Orchestrator:
             value=result.output,
             status="completed",
         )
-
-        self._task_costs[task_id] = self._task_costs.get(task_id, 0.0) + result.cost_usd
 
         asyncio.create_task(self._ledger.write(LedgerEntry(
             id=generate_id(),

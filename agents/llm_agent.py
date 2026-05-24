@@ -53,9 +53,12 @@ class LLMAgent(Agent):
         self,
         payload: AgentPayload,
         context: str,
-        tools: list[Tool],
+        scored_tools: list[tuple[Tool, float]],
     ) -> str:
-        tool_lines = "\n".join(f"- {t.name}: {t.description}" for t in tools)
+        tool_lines = "\n".join(
+            f"- {t.name} (reliability {score:.0%}): {t.description}"
+            for t, score in scored_tools
+        )
         return (
             f"## Task\n{payload.prompt}\n\n"
             f"## Context\n{context or '(none)'}\n\n"
@@ -75,10 +78,10 @@ class LLMAgent(Agent):
         self,
         payload: AgentPayload,
         context: str,
-        tools: list[Tool],
+        scored_tools: list[tuple[Tool, float]],
     ) -> dict[str, Any]:
         system_prompt = self._load_system_prompt()
-        user_message = self._build_user_message(payload, context, tools)
+        user_message = self._build_user_message(payload, context, scored_tools)
         full_prompt = f"{system_prompt}\n\n---\n\n{user_message}"
 
         response = await self._deps.inference_router.complete(
