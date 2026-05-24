@@ -37,4 +37,5 @@ class Card(BaseModel):
     message: str
     options: list[str] = Field(default_factory=list)
     status: str = "pending"  # pending, approved, rejected, answered
+    chosen_option: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

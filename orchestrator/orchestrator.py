@@ -141,6 +141,8 @@ class Orchestrator:
             output=f"chosen_option={chosen_option}",
             status=status,
         )))
+        from approval.store import approval_store
+        approval_store.resolve(card_id, decision, chosen_option=chosen_option)
         await self._stream_manager.emit(task_id, "approval_responded", {
             "card_id": card_id,
             "decision": decision,
@@ -225,9 +227,18 @@ class Orchestrator:
             await self._stage_north_star(task_id, request.prompt, classification)
             plan = await self._stage_route(task_id, request.prompt, classification)
             await self._stage_execute(task_id, request.prompt, plan, request.workspace)
-        except NorthStarConflictError:
-            # Conflict is already surfaced to the user; swallow here.
-            pass
+        except NorthStarConflictError as e:
+            asyncio.create_task(self._ledger.write(LedgerEntry(
+                id=generate_id(),
+                timestamp=utcnow(),
+                source=LedgerSource.SYSTEM,
+                task_id=task_id,
+                action="task_cancelled",
+                output=str(e),
+                status=LedgerStatus.CANCELLED,
+            )))
+            await self._stream_manager.emit(task_id, "task_cancelled", {"reason": str(e)})
+            await self._stream_manager.emit_done(task_id)
         except Exception as e:
             logger.exception("Unhandled error processing task %s: %s", task_id, e)
             asyncio.create_task(self._ledger.write(LedgerEntry(
@@ -298,7 +309,7 @@ class Orchestrator:
         )))
 
         if not aligned:
-            await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
+            from approval.store import approval_store
             card = Card(
                 id=generate_id(),
                 type=CardType.APPROVAL,
@@ -308,8 +319,27 @@ class Orchestrator:
                 message=tension or "This task conflicts with one of your active goals. Proceed?",
                 options=["Proceed anyway", "Cancel"],
             )
-            await self._notify(card)
-            raise NorthStarConflictError(tension or "North Star conflict")
+            approval_store.add(card)
+            await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
+            await self._stream_manager.emit(task_id, "approval_required", {
+                "card_id": card.id,
+                "task_id": task_id,
+                "agent": "orchestrator",
+                "title": card.title,
+                "message": card.message,
+                "options": card.options,
+            })
+            # Poll up to 5 minutes for user decision
+            for _ in range(300):
+                await asyncio.sleep(1)
+                current = approval_store.get(card.id)
+                if current and current.status != "pending":
+                    break
+            current = approval_store.get(card.id)
+            chosen_opt = (current.chosen_option if current else "").lower()
+            if chosen_opt not in ("proceed anyway", "proceed", "approve", "approved", "yes"):
+                raise NorthStarConflictError(tension or "North Star conflict")
+            # User chose "Proceed anyway" — continue
 
         await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": reasoning})
 

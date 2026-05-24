@@ -417,8 +417,9 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> str:
                             except SystemExit:
                                 pass
                             steps[-1] = ("✓" if decision != "rejected" else "✗", f"Approval: {chosen}", False)
-                            live.start()
-                            live.update(_make_renderable())
+                            # Do NOT restart Live — cursor is now past the approval panel.
+                            # Subsequent live.update() calls on a stopped Live are no-ops;
+                            # task_completed / task_cancelled will break the loop.
                             current_event = ""
                             continue
                         elif event in _STEP_LABELS:
@@ -438,6 +439,13 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> str:
                                 icon, label, _ = steps[-1]
                                 steps[-1] = ("✗", label, False)
                             live.update(_make_renderable())
+                            break
+                        if event == "task_cancelled":
+                            if steps:
+                                icon, label, _ = steps[-1]
+                                steps[-1] = (icon, label, False)
+                            live.update(_make_renderable())
+                            _console.print("[dim]Task cancelled.[/dim]")
                             break
                         current_event = ""
 

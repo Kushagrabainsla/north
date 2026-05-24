@@ -5,6 +5,7 @@ See docs/CODING_STYLE.md Section 15.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any

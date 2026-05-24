@@ -20,11 +20,11 @@ class ApprovalStore:
     def add(self, card: Card) -> None:
         self._cards[card.id] = card
 
-    def resolve(self, card_id: str, status: str) -> None:
-        """Update the status of a card (approved / rejected / answered)."""
+    def resolve(self, card_id: str, status: str, chosen_option: str = "") -> None:
+        """Update the status and chosen_option of a card."""
         if card_id in self._cards:
             self._cards[card_id] = self._cards[card_id].model_copy(
-                update={"status": status}
+                update={"status": status, "chosen_option": chosen_option}
             )
 
     def get(self, card_id: str) -> Card | None:
