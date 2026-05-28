@@ -1,6 +1,8 @@
 tools:
   - name: web_search
     purpose: "Look up current information, facts, or news when needed."
+  - name: fetch_url
+    purpose: "Fetch and read the full content of a specific URL — documentation, articles, or any page the user links to."
   - name: read_file
     purpose: "Read a file when the user shares a path or wants file contents explained."
   - name: write_file

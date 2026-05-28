@@ -16,12 +16,19 @@ See docs/CODING_STYLE.md Sections 2.2, 3, 6.4.
 
 from __future__ import annotations
 
+from typing import Callable, Awaitable
+
 from inference.base import InferenceRouter
 from inference.models import (
     CompletionRequest,
     CompletionResponse,
+    EmbedRequest,
+    EmbedResponse,
     ModelPool,
     PoolPriority,
+    ToolCall,
+    ToolCallRequest,
+    ToolCallResponse,
     TranscriptionRequest,
     TranscriptionResponse,
 )
@@ -51,6 +58,21 @@ class CostTracker(InferenceRouter):
                 self._task_costs.get(request.task_id, 0.0) + response.cost_usd
             )
         return response
+
+    async def complete_with_tools(
+        self,
+        request: ToolCallRequest,
+        token_callback: Callable[[str], Awaitable[None]] | None = None,
+    ) -> ToolCallResponse:
+        response = await self._inner.complete_with_tools(request, token_callback)
+        if request.task_id:
+            self._task_costs[request.task_id] = (
+                self._task_costs.get(request.task_id, 0.0) + response.cost_usd
+            )
+        return response
+
+    async def embed(self, request: EmbedRequest) -> EmbedResponse:
+        return await self._inner.embed(request)
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         return await self._inner.transcribe(request)

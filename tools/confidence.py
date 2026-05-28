@@ -10,8 +10,10 @@ from pathlib import Path
 from utils.db import open_db_connection
 
 DEFAULT_CONFIDENCE: float = 0.5
-CONFIDENCE_INCREASE: float = 0.05
-CONFIDENCE_DECREASE: float = 0.03
+# EMA smoothing factor: each new observation shifts the score 10 % toward the
+# outcome (1.0 = helpful, 0.0 = unhelpful).  Recent experience dominates over
+# time without the slow recovery of the old fixed-delta approach.
+EMA_ALPHA: float = 0.10
 MIN_CONFIDENCE: float = 0.0
 MAX_CONFIDENCE: float = 1.0
 
@@ -36,8 +38,8 @@ class ConfidenceTracker:
     """Tracks how reliable each tool has been for each agent.
 
     Confidence starts at `DEFAULT_CONFIDENCE` for any unseen (agent, tool)
-    pair. A helpful use adds `CONFIDENCE_INCREASE`; an unhelpful one
-    subtracts `CONFIDENCE_DECREASE`. Scores are clamped to [0.0, 1.0].
+    pair and is updated via exponential moving average (EMA_ALPHA = 0.10).
+    A helpful use blends the score toward 1.0; unhelpful blends toward 0.0.
     """
 
     def __init__(self, db_path: Path) -> None:
@@ -67,7 +69,7 @@ class ConfidenceTracker:
 
     def _record_use_sync(self, agent: str, tool: str, was_helpful: bool) -> float:
         now = datetime.now(timezone.utc).isoformat()
-        delta = CONFIDENCE_INCREASE if was_helpful else -CONFIDENCE_DECREASE
+        outcome = 1.0 if was_helpful else 0.0
         helpful_inc = 1 if was_helpful else 0
 
         with open_db_connection(self._db_path) as conn:
@@ -78,7 +80,8 @@ class ConfidenceTracker:
             ).fetchone()
 
             if existing is None:
-                new_score = _clamp(DEFAULT_CONFIDENCE + delta)
+                # Blend the default prior with the first observation.
+                new_score = _clamp(EMA_ALPHA * outcome + (1.0 - EMA_ALPHA) * DEFAULT_CONFIDENCE)
                 conn.execute(
                     "INSERT INTO tool_confidence "
                     "(agent, tool, confidence, uses_total, uses_helpful, last_updated) "
@@ -87,7 +90,7 @@ class ConfidenceTracker:
                 )
                 return new_score
 
-            new_score = _clamp(existing["confidence"] + delta)
+            new_score = _clamp(EMA_ALPHA * outcome + (1.0 - EMA_ALPHA) * existing["confidence"])
             conn.execute(
                 "UPDATE tool_confidence "
                 "SET confidence = ?, "

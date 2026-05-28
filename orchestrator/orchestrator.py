@@ -57,6 +57,7 @@ class Orchestrator:
         north_settings: NorthSettings | None = None,
         synthesizer: ResultSynthesizer | None = None,
         cost_tracker: CostTracker | None = None,
+        episodic_store: Any | None = None,
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
@@ -71,6 +72,7 @@ class Orchestrator:
         self._north_settings = north_settings
         self._synthesizer = synthesizer
         self._cost_tracker = cost_tracker
+        self._episodic_store = episodic_store
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -232,7 +234,9 @@ class Orchestrator:
             classification = await self._stage_classify(task_id, request.prompt)
             await self._stage_north_star(task_id, request.prompt, classification)
             plan = await self._stage_route(task_id, request.prompt, classification)
-            await self._stage_execute(task_id, request.prompt, plan, request.workspace)
+            await self._stage_execute(
+                task_id, request.prompt, plan, request.workspace, domain=classification.domain
+            )
         except NorthStarConflictError as e:
             asyncio.create_task(self._ledger.write(LedgerEntry(
                 id=generate_id(),
@@ -335,13 +339,7 @@ class Orchestrator:
                 "message": card.message,
                 "options": card.options,
             })
-            # Poll up to 5 minutes for user decision
-            for _ in range(300):
-                await asyncio.sleep(1)
-                current = approval_store.get(card.id)
-                if current and current.status != "pending":
-                    break
-            current = approval_store.get(card.id)
+            current = await approval_store.wait_for_decision(card.id, timeout=300.0)
             chosen_opt = (current.chosen_option if current else "").lower()
             if chosen_opt not in ("proceed anyway", "proceed", "approve", "approved", "yes"):
                 raise NorthStarConflictError(tension or "North Star conflict")
@@ -377,7 +375,12 @@ class Orchestrator:
         return plan
 
     async def _stage_execute(
-        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str = ""
+        self,
+        task_id: str,
+        prompt: str,
+        plan: ExecutionPlan,
+        workspace: str = "",
+        domain: str = "general",
     ) -> None:
         """Stage 4: Execute agents in dependency order, then optionally synthesize."""
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
@@ -387,7 +390,9 @@ class Orchestrator:
             await self._execute_agent_group(task_id, prompt, agents, workspace)
 
         await self._maybe_synthesize(task_id, plan.agents)
-
+        asyncio.create_task(
+            self._record_episode(task_id, prompt, plan.agents, domain)
+        )
         task_cost_usd = self._cost_tracker.pop_task_cost(task_id) if self._cost_tracker else 0.0
 
         asyncio.create_task(self._ledger.write(LedgerEntry(
@@ -400,6 +405,27 @@ class Orchestrator:
         )))
         await self._stream_manager.emit(task_id, "task_completed", {"cost_usd": task_cost_usd})
         await self._stream_manager.emit_done(task_id)
+
+    async def _record_episode(
+        self, task_id: str, prompt: str, agents: list[str], domain: str
+    ) -> None:
+        """Write a task episode to episodic memory after completion."""
+        if self._episodic_store is None:
+            return
+        all_data = await self._task_context_store.get_all(task_id)
+        outputs = [
+            (all_data.get(agent) or {}).get("output", "") for agent in agents
+        ]
+        combined = "\n".join(o for o in outputs if o).strip()
+        if not combined:
+            return
+        summary = f"Task: {prompt[:120]}\nResult: {combined[:400]}"
+        try:
+            await self._episodic_store.record(
+                task_id=task_id, domain=domain, summary=summary
+            )
+        except Exception:
+            logger.debug("Episodic record failed for task %s", task_id)
 
     async def _maybe_synthesize(self, task_id: str, agents: list[str]) -> None:
         """Synthesize outputs from multiple agents into one response, if applicable."""

@@ -5,47 +5,40 @@ from __future__ import annotations
 from tools.base import Tool
 from tools.exceptions import ToolNotFoundError
 from tools.implementations.bash import BashTool
-from tools.implementations.calendar_api import CalendarApiTool
-from tools.implementations.canvas_api import CanvasApiTool
-from tools.implementations.expense_tracker import ExpenseTrackerTool
-from tools.implementations.fitness_tracker import FitnessTrackerTool
-from tools.implementations.gmail_api import GmailApiTool
-from tools.implementations.linkedin_api import LinkedinApiTool
+from tools.implementations.fetch_url import FetchUrlTool
+from tools.implementations.git_tool import GitTool
 from tools.implementations.list_dir import ListDirTool
-from tools.implementations.market_data_api import MarketDataApiTool
-from tools.implementations.nutrition_api import NutritionApiTool
+from tools.implementations.patch_file import PatchFileTool
 from tools.implementations.read_file import ReadFileTool
 from tools.implementations.search_files import SearchFilesTool
 from tools.implementations.web_search import WebSearchTool
 from tools.implementations.write_file import WriteFileTool
 
-_CODE_TOOLS = ["read_file", "write_file", "list_dir", "search_files", "bash", "web_search"]
+_FILE_TOOLS = ["read_file", "write_file", "list_dir", "search_files"]
+_CODE_TOOLS = _FILE_TOOLS + ["bash", "web_search", "fetch_url"]
 
 TOOL_GRAPH: dict[str, list[str]] = {
-    "health":     ["web_search", "calendar_api", "nutrition_api", "schedule_task"],
-    "university": ["web_search", "calendar_api", "gmail_api", "canvas_api", "schedule_task"],
-    "job":        ["web_search", "calendar_api", "gmail_api", "linkedin_api", "schedule_task"],
-    "finance":    ["web_search", "gmail_api", "market_data_api", "expense_tracker", "schedule_task"],
+    # Domain agents: web search + URL fetch + file I/O + scheduling.
+    "health":     ["web_search", "fetch_url", "schedule_task"] + _FILE_TOOLS,
+    "university": ["web_search", "fetch_url", "schedule_task"] + _FILE_TOOLS,
+    "job":        ["web_search", "fetch_url", "schedule_task"] + _FILE_TOOLS,
+    "finance":    ["web_search", "fetch_url", "schedule_task"] + _FILE_TOOLS,
+    # General: full code tools + scheduling + URL fetch.
     "general":    _CODE_TOOLS + ["schedule_task"],
-    "code":       _CODE_TOOLS,
+    # Code: full code tools + precise patch editing + git.
+    "code":       _CODE_TOOLS + ["patch_file", "git"],
 }
 
-# Mapping of tool names to concrete class instances (docs/CODING_STYLE.md Section 6.5)
 TOOL_IMPLEMENTATIONS: dict[str, Tool] = {
-    "web_search": WebSearchTool(),
-    "calendar_api": CalendarApiTool(),
-    "gmail_api": GmailApiTool(),
-    "canvas_api": CanvasApiTool(),
-    "nutrition_api": NutritionApiTool(),
-    "market_data_api": MarketDataApiTool(),
-    "linkedin_api": LinkedinApiTool(),
-    "fitness_tracker": FitnessTrackerTool(),
-    "expense_tracker": ExpenseTrackerTool(),
-    "read_file": ReadFileTool(),
-    "write_file": WriteFileTool(),
-    "list_dir": ListDirTool(),
+    "web_search":   WebSearchTool(),
+    "fetch_url":    FetchUrlTool(),
+    "read_file":    ReadFileTool(),
+    "write_file":   WriteFileTool(),
+    "list_dir":     ListDirTool(),
     "search_files": SearchFilesTool(),
-    "bash": BashTool(),
+    "bash":         BashTool(),
+    "patch_file":   PatchFileTool(),
+    "git":          GitTool(),
 }
 
 

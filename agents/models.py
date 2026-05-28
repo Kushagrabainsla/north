@@ -86,3 +86,6 @@ class AgentDependencies:
     tool_registry: ToolRegistry
     confidence_tracker: ConfidenceTracker
     stream_manager: StreamEmitter | None = field(default=None)
+    # Optional episodic memory store.  When present, _load_context() injects
+    # semantically relevant past task summaries into every agent prompt.
+    episodic_store: "Any | None" = field(default=None)

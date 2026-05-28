@@ -19,10 +19,18 @@ class ListDirTool(Tool):
     """Lists directory entries sorted dirs-first then files alphabetically."""
 
     name = "list_dir"
-    description = (
-        "List directory contents. "
-        "Params: path (str, default '.'), workspace (str, optional)."
-    )
+    description = "List directory contents, sorted dirs-first then files alphabetically."
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Directory path to list (default '.')",
+                "default": ".",
+            },
+            "workspace": {"type": "string", "description": "Workspace root (optional)"},
+        },
+    }
 
     async def run(self, input: ToolInput) -> ToolOutput:
         resolved = resolve_path(input.params.get("path", "."), input.params.get("workspace"))

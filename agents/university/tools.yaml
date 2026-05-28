@@ -1,11 +1,15 @@
 tools:
   - name: web_search
-    purpose: "Search the web for class topics or academic resources."
-  - name: calendar_api
-    purpose: "Schedule class study blocks or set homework reminders."
-  - name: gmail_api
-    purpose: "Fetch class emails or communicate with professors."
-  - name: canvas_api
-    purpose: "Sync courses, coursework, assignments, and academic deadlines."
+    purpose: "Search for academic resources, course topics, or research papers."
+  - name: read_file
+    purpose: "Read a syllabus, lecture notes, or assignment brief the user has saved locally."
+  - name: write_file
+    purpose: "Write study notes, assignment drafts, or academic summaries to disk."
+  - name: list_dir
+    purpose: "Browse a directory of course materials or notes."
+  - name: search_files
+    purpose: "Search across local academic files for a topic or keyword."
   - name: schedule_task
     purpose: "Schedule study blocks, assignment reminders, or weekly academic reviews."
+  - name: fetch_url
+    purpose: "Fetch and read the full text content of a specific URL — use when web_search results aren't enough and you need the full page."

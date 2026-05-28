@@ -21,6 +21,7 @@ def test_ledger_source_enum_matches_spec() -> None:
         "manual_injection",
         "inference_router",
         "approval",
+        "webhook",
     }
     assert {s.value for s in LedgerSource} == expected
 

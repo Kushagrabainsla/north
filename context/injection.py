@@ -140,6 +140,7 @@ class ContextInjector:
                 prompt=_ROUTING_PROMPT.format(content=text[:_MAX_CONTENT_CHARS]),
                 priority=PoolPriority.LOW,
                 component="context_injector",
+                json_mode=True,
             )
         )
         try:

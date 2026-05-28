@@ -8,24 +8,54 @@ without requiring constructor injection across the whole call chain.
 
 from __future__ import annotations
 
+import asyncio
+
 from approval.models import Card
 
 
 class ApprovalStore:
-    """Thread-safe in-memory registry of Card objects."""
+    """Thread-safe in-memory registry of Card objects.
+
+    Each card gets a paired ``asyncio.Event`` on ``add()``.  Callers waiting
+    for a decision use ``wait_for_decision()`` instead of polling; ``resolve()``
+    sets the event so waiters wake immediately.
+    """
 
     def __init__(self) -> None:
         self._cards: dict[str, Card] = {}
+        self._events: dict[str, asyncio.Event] = {}
 
     def add(self, card: Card) -> None:
         self._cards[card.id] = card
+        self._events[card.id] = asyncio.Event()
 
     def resolve(self, card_id: str, status: str, chosen_option: str = "") -> None:
-        """Update the status and chosen_option of a card."""
+        """Update the status of a card and wake any waiting coroutines."""
         if card_id in self._cards:
             self._cards[card_id] = self._cards[card_id].model_copy(
                 update={"status": status, "chosen_option": chosen_option}
             )
+            event = self._events.get(card_id)
+            if event is not None:
+                event.set()
+
+    async def wait_for_decision(self, card_id: str, timeout: float = 300.0) -> Card | None:
+        """Block until the card is resolved or *timeout* seconds elapse.
+
+        Returns the resolved ``Card`` (status ≠ "pending") or ``None`` on
+        timeout.  Never polls; wakes exactly when ``resolve()`` is called.
+        """
+        event = self._events.get(card_id)
+        if event is None:
+            return self._cards.get(card_id)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        card = self._cards.get(card_id)
+        if card is None or card.status == "pending":
+            return None
+        return card
 
     def get(self, card_id: str) -> Card | None:
         return self._cards.get(card_id)

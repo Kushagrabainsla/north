@@ -2,8 +2,7 @@
 
 from tools.base import AuthenticatedTool, CacheableTool, Tool
 from tools.confidence import (
-    CONFIDENCE_DECREASE,
-    CONFIDENCE_INCREASE,
+    EMA_ALPHA,
     ConfidenceTracker,
     DEFAULT_CONFIDENCE,
     MAX_CONFIDENCE,
@@ -20,8 +19,7 @@ from tools.registry import TOOL_GRAPH, ToolRegistry
 
 __all__ = [
     "AuthenticatedTool",
-    "CONFIDENCE_DECREASE",
-    "CONFIDENCE_INCREASE",
+    "EMA_ALPHA",
     "CacheableTool",
     "ConfidenceScore",
     "ConfidenceTracker",

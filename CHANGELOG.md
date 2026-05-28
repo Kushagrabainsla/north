@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Web UI conversation context** — Fixed missing memory in the Web UI session. The Web UI now tracks `chatHistory` in Javascript and prepends the last 5 conversation turns to the prompt before posting, mirroring the CLI behavior.
+- **HTTP 400 fallback** — Added `400` status code to the `_RateLimited` fallback trigger set in `complete_with_tools()`. This allows gracefully advancing to the next model in the pool on OpenRouter models that do not support tool calling, rather than failing the task.
+- **Path sandboxing** — Strengthened the path resolution sandbox by expanding `~` to the home directory and explicitly blocking well-known credential directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`) from being read or written to by the agent when no workspace is configured.
+- **Confidence seeding** — Updated `_RELIABLE_TOOLS` to include `fetch_url`, `git`, and `patch_file`, ensuring these modern tools are seeded with the correct `0.80` prior reliability score on startup rather than defaulting to `0.50`.
+- **Conversation compaction** — Implemented an automatic history compaction mechanism in the agent's ReAct loop. Large tool outputs from older iterations are now compacted/truncated to save context window space and avoid hitting context limit errors.
+- **Stale build directory code** — Deleted the stale `build/` directory containing outdated versions of `ContextStore` to prevent IDE index pollution and search confusion.
+
 ### Added
 - **`tools.yaml` is now the authoritative tool graph** — `AgentRegistry.build_tool_graph()` scans each agent directory at startup, reads its `tools.yaml`, and constructs the `ToolRegistry` graph dynamically. The hardcoded `TOOL_GRAPH` constant in `tools/registry.py` is no longer used in production; adding or removing a tool from an agent now only requires editing that agent's `tools.yaml` and restarting. All domain agent `tools.yaml` files updated to include `schedule_task` (was missing from finance, health, job, university, general).
 

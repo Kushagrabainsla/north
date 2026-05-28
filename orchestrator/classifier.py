@@ -47,6 +47,7 @@ class IntentClassifier:
                     priority=PoolPriority.MEDIUM,
                     component="classifier",
                     task_id=task_id,
+                    json_mode=True,
                 )
             )
         except Exception as e:

@@ -1146,3 +1146,8 @@ textarea:focus {
 .bubble-content.markdown code { font-family: monospace; font-size: 0.85em; }
 .bubble-content.markdown ul, .bubble-content.markdown ol { padding-left: 1.4em; margin: 0 0 0.6em; }
 .bubble-content.markdown li { margin-bottom: 0.2em; }
+
+/* Live streaming response — appears inside the thinking bubble as tokens arrive */
+.bubble-streaming { white-space: normal; opacity: 0.85; border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; }
+.bubble-streaming::after { content: "▍"; animation: blink 0.7s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }

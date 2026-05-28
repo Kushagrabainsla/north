@@ -14,6 +14,8 @@ from pathlib import Path
 
 import httpx
 
+from typing import AsyncIterator, Callable, Awaitable
+
 from inference.base import InferenceRouter
 from inference.exceptions import (
     AllModelsRateLimitedError,
@@ -26,13 +28,20 @@ from inference.fallback_pools import DEFAULT_TRANSCRIPTION_MODEL, FALLBACK_POOLS
 from inference.models import (
     CompletionRequest,
     CompletionResponse,
+    EmbedRequest,
+    EmbedResponse,
     ModelPool,
     POOL_NAMES,
     PRIORITY_TO_POOL,
     PoolPriority,
+    ToolCall,
+    ToolCallRequest,
+    ToolCallResponse,
     TranscriptionRequest,
     TranscriptionResponse,
 )
+
+_DEFAULT_EMBED_MODEL = "openai/text-embedding-3-small"
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -188,6 +197,8 @@ class OpenRouterInferenceRouter(InferenceRouter):
             body["max_tokens"] = request.max_tokens
         if request.temperature is not None:
             body["temperature"] = request.temperature
+        if request.json_mode:
+            body["response_format"] = {"type": "json_object"}
 
         try:
             response = await self._client.post("/chat/completions", json=body)
@@ -251,6 +262,159 @@ class OpenRouterInferenceRouter(InferenceRouter):
             text=payload.get("text", ""),
             model_used=payload.get("model", model),
             cost_usd=float(usage.get("cost", 0.0)),
+        )
+
+    # ---- function calling ----
+
+    async def complete_with_tools(
+        self,
+        request: ToolCallRequest,
+        token_callback: Callable[[str], Awaitable[None]] | None = None,
+    ) -> ToolCallResponse:
+        strategy = (
+            self._north_settings.strategy
+            if self._north_settings is not None
+            else StrategyMode.CRUISE
+        )
+        chain = self._build_chain(request.priority, strategy)
+        last_error: Exception | None = None
+        for model in chain:
+            try:
+                return await self._call_tools_streaming(model, request, token_callback)
+            except _RateLimited as e:
+                last_error = e
+                continue
+        raise AllModelsRateLimitedError(
+            f"All models exhausted for tool call (strategy={strategy.value})"
+        ) from last_error
+
+    async def _call_tools_streaming(
+        self,
+        model: str,
+        request: ToolCallRequest,
+        token_callback: Callable[[str], Awaitable[None]] | None,
+    ) -> ToolCallResponse:
+        body: dict = {
+            "model": model,
+            "messages": request.messages,
+            "tools": request.tools,
+            "stream": True,
+            "usage": {"include": True},
+        }
+        content_parts: list[str] = []
+        # tool_calls[index] = {id, name, arguments_so_far}
+        tool_calls: dict[int, dict] = {}
+        tokens_in = 0
+        tokens_out = 0
+        cost_usd = 0.0
+
+        try:
+            async with self._client.stream("POST", "/chat/completions", json=body) as resp:
+                if resp.status_code in (400, 429, 402, 404, 503):
+                    await resp.aread()
+                    raise _RateLimited(model)
+                if resp.status_code >= 400:
+                    body_text = (await resp.aread()).decode("utf-8", errors="replace")[:200]
+                    raise InferenceError(
+                        f"OpenRouter returned {resp.status_code} for {model}: {body_text}"
+                    )
+                async for raw_line in resp.aiter_lines():
+                    if not raw_line.startswith("data: "):
+                        continue
+                    data = raw_line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    usage = chunk.get("usage")
+                    if usage:
+                        tokens_in = usage.get("prompt_tokens", tokens_in)
+                        tokens_out = usage.get("completion_tokens", tokens_out)
+                        cost_usd = float(usage.get("cost", cost_usd))
+                    choices = chunk.get("choices")
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    text_token = delta.get("content") or ""
+                    if text_token:
+                        content_parts.append(text_token)
+                        if token_callback is not None:
+                            await token_callback(text_token)
+                    for tc in delta.get("tool_calls", []):
+                        idx = tc.get("index", 0)
+                        if idx not in tool_calls:
+                            tool_calls[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc.get("id"):
+                            tool_calls[idx]["id"] = tc["id"]
+                        fn = tc.get("function", {})
+                        if fn.get("name"):
+                            tool_calls[idx]["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            tool_calls[idx]["arguments"] += fn["arguments"]
+        except httpx.RequestError as e:
+            raise InferenceError(f"Request to OpenRouter failed: {e}") from e
+
+        if tool_calls:
+            calls = []
+            for idx in sorted(tool_calls):
+                tc = tool_calls[idx]
+                try:
+                    params = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                except json.JSONDecodeError:
+                    params = {}
+                calls.append(ToolCall(
+                    name=tc["name"],
+                    call_id=tc["id"] or f"call_{tc['name']}_{idx}",
+                    params=params,
+                ))
+            return ToolCallResponse(
+                type="tool_calls",
+                calls=calls,
+                content=None,
+                model_used=model,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost_usd=cost_usd,
+            )
+
+        return ToolCallResponse(
+            type="message",
+            content="".join(content_parts),
+            calls=[],
+            model_used=model,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost_usd=cost_usd,
+        )
+
+    # ---- embeddings ----
+
+    async def embed(self, request: EmbedRequest) -> EmbedResponse:
+        body = {"model": _DEFAULT_EMBED_MODEL, "input": request.texts}
+        try:
+            resp = await self._client.post("/embeddings", json=body)
+        except httpx.RequestError as e:
+            raise InferenceError(f"Embedding request failed: {e}") from e
+        if resp.status_code >= 400:
+            raise InferenceError(
+                f"OpenRouter /embeddings returned {resp.status_code}: {resp.text[:200]}"
+            )
+        try:
+            payload = resp.json()
+        except ValueError as e:
+            raise InferenceError("Embeddings response was not JSON") from e
+        data = payload.get("data", [])
+        # Sort by index to preserve order regardless of API response ordering.
+        data.sort(key=lambda d: d.get("index", 0))
+        embeddings = [d["embedding"] for d in data]
+        usage = payload.get("usage", {})
+        cost = float(usage.get("cost", 0.0))
+        return EmbedResponse(
+            embeddings=embeddings,
+            model_used=payload.get("model", _DEFAULT_EMBED_MODEL),
+            cost_usd=cost,
         )
 
     async def aclose(self) -> None:

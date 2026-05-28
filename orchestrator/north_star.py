@@ -61,6 +61,7 @@ class NorthStarChecker:
                     priority=PoolPriority.MEDIUM,
                     component="north_star_checker",
                     task_id=task_id,
+                    json_mode=True,
                 )
             )
         except Exception as e:

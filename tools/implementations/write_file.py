@@ -17,10 +17,16 @@ class WriteFileTool(Tool):
     """Writes content to a file, creating parent directories as needed."""
 
     name = "write_file"
-    description = (
-        "Write content to a file (creates or overwrites). "
-        "Params: path (str), content (str), workspace (str, optional)."
-    )
+    description = "Write or overwrite a file with the given content (creates parent dirs as needed)."
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Destination file path"},
+            "content": {"type": "string", "description": "Text content to write"},
+            "workspace": {"type": "string", "description": "Workspace root (optional)"},
+        },
+        "required": ["path", "content"],
+    }
 
     async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")

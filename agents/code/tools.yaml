@@ -11,3 +11,7 @@ tools:
     purpose: "Run commands to build, test, lint, or verify code."
   - name: web_search
     purpose: "Look up documentation, APIs, or error messages."
+  - name: patch_file
+    purpose: "Make a precise targeted edit to a file by replacing an exact string — prefer over write_file for existing code."
+  - name: git
+    purpose: "Run git operations: status/diff/log/branch (safe reads) and add/commit/push (require request_approval first)."

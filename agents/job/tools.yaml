@@ -1,11 +1,15 @@
 tools:
   - name: web_search
-    purpose: "Search the web for company research or market roles."
-  - name: calendar_api
-    purpose: "Schedule interviews or prep sessions."
-  - name: gmail_api
-    purpose: "Access recruitment emails or submit applications."
-  - name: linkedin_api
-    purpose: "Outreach message drafts, profile reviews, and connection management."
+    purpose: "Research companies, job postings, salary data, and industry trends."
+  - name: read_file
+    purpose: "Read a resume, cover letter, or job description the user has saved locally."
+  - name: write_file
+    purpose: "Write or update a resume, cover letter, or application notes."
+  - name: list_dir
+    purpose: "Browse a directory of application materials or notes."
+  - name: search_files
+    purpose: "Search across local career files for a pattern or keyword."
   - name: schedule_task
     purpose: "Schedule interview prep sessions, follow-ups, or job search check-ins."
+  - name: fetch_url
+    purpose: "Fetch and read the full text content of a specific URL — use when web_search results aren't enough and you need the full page."

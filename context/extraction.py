@@ -147,6 +147,7 @@ class ExtractionPipeline:
                 priority=PoolPriority.LOW,
                 component="extraction_pipeline",
                 task_id=entry.task_id,
+                json_mode=True,
             )
         )
 

@@ -29,19 +29,19 @@ def _make_tool(tool_name: str) -> Tool:
 
 
 def test_tool_graph_has_v1_agents() -> None:
-    """The four v1 agents must each appear in the graph (README Section 7.1)."""
-    assert set(TOOL_GRAPH.keys()) == {"health", "university", "job", "finance"}
+    """The four v1 domain agents must each appear in the graph (README Section 7.1)."""
+    assert {"health", "university", "job", "finance"}.issubset(set(TOOL_GRAPH.keys()))
 
 
 def test_tool_graph_has_cross_domain_tools() -> None:
-    """web_search, calendar_api, and gmail_api appear in more than one agent."""
+    """web_search and file tools appear across multiple agents."""
     appearances: dict[str, int] = {}
     for tools in TOOL_GRAPH.values():
         for t in tools:
             appearances[t] = appearances.get(t, 0) + 1
-    assert appearances["web_search"] >= 3
-    assert appearances["calendar_api"] >= 2
-    assert appearances["gmail_api"] >= 2
+    assert appearances["web_search"] >= 4
+    assert appearances["read_file"] >= 4
+    assert appearances["write_file"] >= 4
 
 
 # ToolRegistry — register / get
@@ -67,12 +67,11 @@ def test_get_unknown_tool_raises_tool_not_found() -> None:
 def test_tools_for_agent_returns_only_registered_tools_in_graph() -> None:
     registry = ToolRegistry()
     registry.register(_make_tool("web_search"))
-    registry.register(_make_tool("nutrition_api"))
-    # calendar_api intentionally NOT registered
+    # read_file intentionally NOT registered — should be silently skipped
 
     tools = registry.tools_for_agent("health")
 
-    assert {t.name for t in tools} == {"web_search", "nutrition_api"}
+    assert {t.name for t in tools} == {"web_search"}
 
 
 def test_tools_for_agent_returns_empty_for_unknown_agent() -> None:

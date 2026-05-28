@@ -58,11 +58,11 @@ async def test_documents_are_stored_independently(store: FileContextStore) -> No
     assert await store.read(ContextDocument.PRIVATE) == "private content"
 
 
-def test_search_raises_not_implemented_in_v1(tmp_path: Path) -> None:
-    """The v1 marker — calling search() must fail loudly, not silently return."""
+async def test_search_returns_empty_string_when_no_docs_exist(tmp_path: Path) -> None:
+    """search() on an empty store returns '' rather than raising."""
     store = FileContextStore(tmp_path / "context")
-    with pytest.raises(NotImplementedError):
-        store.search("anything")
+    result = await store.search("anything")
+    assert result == ""
 
 
 def test_constructor_creates_missing_base_directory(tmp_path: Path) -> None:

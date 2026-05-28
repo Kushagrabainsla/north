@@ -21,6 +21,7 @@ class LedgerSource(str, Enum):
     MANUAL_INJECTION = "manual_injection"
     INFERENCE_ROUTER = "inference_router"
     APPROVAL = "approval"
+    WEBHOOK = "webhook"
 
 
 class LedgerStatus(str, Enum):

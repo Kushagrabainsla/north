@@ -10,6 +10,10 @@ from tools.base import Tool
 
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 
+# Per-document cap before truncation.  ~12k chars ≈ 3k tokens — enough for rich
+# personal context without blowing a model's context window on large docs.
+_MAX_CONTEXT_CHARS = 12_000
+
 
 class Agent(ABC):
     """Domain specialist. Subclasses implement `_execute()` only.
@@ -54,14 +58,36 @@ class Agent(ABC):
         """Domain-specific logic. Returns a dict that maps onto `AgentResult` fields."""
 
     async def _load_context(self, payload: AgentPayload) -> str:
-        """Default: concatenate `public.md` and `judgement_rules.md`."""
+        """Concatenate public.md + judgement_rules.md + relevant past episodes.
+
+        Each context document is capped at _MAX_CONTEXT_CHARS to prevent large
+        accumulated documents from overflowing the model's context window.
+        """
         if payload.context:
             return payload.context
         store = self._deps.context_store
-        parts = [
+        raw_parts = [
             await store.read(ContextDocument.PUBLIC),
             await store.read(ContextDocument.JUDGEMENT_RULES),
         ]
+        parts = []
+        for text in raw_parts:
+            if len(text) > _MAX_CONTEXT_CHARS:
+                omitted = len(text) - _MAX_CONTEXT_CHARS
+                text = text[:_MAX_CONTEXT_CHARS] + f"\n\n[…{omitted} chars omitted — document too large]"
+            parts.append(text)
+
+        episodic = self._deps.episodic_store
+        if episodic is not None:
+            try:
+                episodes = await episodic.search(payload.prompt, max_results=3)
+                if episodes:
+                    block = "## Relevant past context\n" + "\n".join(
+                        f"- {e}" for e in episodes
+                    )
+                    parts.append(block)
+            except Exception:
+                pass
         return "\n\n".join(p for p in parts if p)
 
     async def _load_tools(self) -> list[tuple[Tool, float]]:

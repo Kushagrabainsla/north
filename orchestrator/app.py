@@ -21,6 +21,8 @@ from config.strategy import NorthSettings
 from agents.registry import AgentRegistry
 from config.dependencies import build_production_dependencies
 from config.settings import settings
+from context.embedding_index import EmbeddingIndex
+from context.episodic import EpisodicStore
 from context.extraction import ExtractionPipeline
 from context.injection import ContextInjector
 from jobs.cron_store import UserCronStore
@@ -30,6 +32,7 @@ from tools.implementations.schedule_task import ScheduleTaskTool
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.api_router import configure as configure_api
 from orchestrator.api_router import router as orchestrator_router
+from orchestrator.api_router import webhook_router
 from orchestrator.classifier import IntentClassifier
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
@@ -94,6 +97,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     deps = build_production_dependencies(north_settings=north_settings)
     cost_tracker = CostTracker(deps.inference_router)
 
+    async def _embed_fn(texts: list[str]) -> list[list[float]]:
+        from inference.models import EmbedRequest
+        resp = await cost_tracker.embed(EmbedRequest(texts=texts, component="embed"))
+        return resp.embeddings
+
+    _step("building embedding index")
+    embedding_index = EmbeddingIndex(
+        db_path=settings.north_home / "embeddings.db",
+        embed_fn=_embed_fn,
+    )
+
+    _step("building episodic store")
+    episodic_store = EpisodicStore(
+        db_path=settings.north_home / "episodic.db",
+        embed_fn=_embed_fn,
+    )
+
+    # Attach embedding index to the context store so write/append trigger re-indexing.
+    from context.file_store import FileContextStore
+    if isinstance(deps.context_store, FileContextStore):
+        deps.context_store._embedding_index = embedding_index
+
     _step("building cron store")
     cron_store = UserCronStore(settings.north_home / "jobs.db")
 
@@ -106,7 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
     _RELIABLE_TOOLS = frozenset({
         "read_file", "write_file", "list_dir", "search_files", "bash",
-        "web_search", "schedule_task",
+        "web_search", "schedule_task", "fetch_url", "git", "patch_file",
     })
     await confidence_tracker.seed_defaults(dynamic_tool_graph, _RELIABLE_TOOLS)
 
@@ -118,6 +143,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         tool_registry=tool_registry,
         confidence_tracker=confidence_tracker,
         stream_manager=stream_manager,
+        episodic_store=episodic_store,
     )
     _step("scanning agent registry")
     agent_registry = AgentRegistry(agents_dir=agents_dir, deps=agent_deps)
@@ -154,6 +180,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         north_settings=north_settings,
         synthesizer=ResultSynthesizer(inference_router=cost_tracker),
         cost_tracker=cost_tracker,
+        episodic_store=episodic_store,
     )
 
     context_injector = ContextInjector(
@@ -290,6 +317,7 @@ app = FastAPI(
 )
 
 app.include_router(orchestrator_router)
+app.include_router(webhook_router)
 app.include_router(web_router)
 
 _static_dir = Path(__file__).parent.parent / "web" / "static"

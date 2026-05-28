@@ -30,6 +30,7 @@
 
   // ── Chat thread ──────────────────────────────────────────────────────────────
   const chatThread = document.getElementById("chat-thread");
+  let chatHistory = [];
 
   // [icon, label] per SSE event. icon is a text glyph.
   const STEP_DEFS = {
@@ -94,6 +95,19 @@
           _appendNorthBubble(t.outputs, taskId);
         }
       }
+
+      const history = [];
+      for (const taskId of taskOrder) {
+        const t = tasks[taskId];
+        const text = t.outputs
+          .map(function (o) { return o.text; })
+          .filter(Boolean)
+          .join("\n\n");
+        if (t.prompt && text) {
+          history.push([t.prompt, text]);
+        }
+      }
+      chatHistory = history.slice(-20);
 
       chatThread.scrollTop = chatThread.scrollHeight;
     } catch (_) {}
@@ -206,7 +220,7 @@
     chatThread.scrollTop = chatThread.scrollHeight;
   }
 
-  function subscribeToTask(taskId) {
+  function subscribeToTask(taskId, cleanPrompt) {
     _appendThinkingBubble(taskId);
 
     // EventSource sends same-origin cookies automatically — auth handled via cookie.
@@ -220,9 +234,14 @@
       "routing", "routed", "executing",
       "agent_started", "agent_completed",
       "tool_called", "tool_result",
+      "token",
+      "task_synthesis",
       "approval_required",
-      "task_completed", "task_failed",
+      "task_completed", "task_failed", "task_cancelled",
     ];
+
+    // Accumulate streamed tokens so task_completed can use them directly.
+    let tokenBuffer = "";
 
     function handleSseEvent(evt) {
       try {
@@ -241,6 +260,23 @@
         } else if (event === "tool_result") {
           const icon = data.success === false ? "✗" : "✓";
           _addStep(taskId, icon, "  " + (data.tool || "tool") + " done");
+        } else if (event === "token") {
+          // Progressive token rendering — append to a live streaming div inside the
+          // thinking bubble.  The accumulated text becomes the final answer when
+          // task_completed fires, avoiding the extra ledger fetch.
+          const token = data.text || "";
+          tokenBuffer += token;
+          const bubble = document.getElementById("chat-thinking-" + taskId);
+          if (bubble) {
+            let streamDiv = bubble.querySelector(".bubble-streaming");
+            if (!streamDiv) {
+              streamDiv = document.createElement("div");
+              streamDiv.className = "bubble-content bubble-streaming";
+              bubble.appendChild(streamDiv);
+            }
+            streamDiv.innerHTML = renderMarkdown(tokenBuffer);
+            chatThread.scrollTop = chatThread.scrollHeight;
+          }
         } else if (event === "approval_required") {
           _addStep(taskId, "?", "Approval required");
           const bubble = document.getElementById("chat-thinking-" + taskId);
@@ -278,6 +314,12 @@
             bubble.appendChild(widget);
             chatThread.scrollTop = chatThread.scrollHeight;
           }
+        } else if (event === "task_synthesis") {
+          // Multi-agent synthesis arrived — override token buffer with merged output.
+          if (data.output) {
+            tokenBuffer = data.output;
+          }
+          _addStep(taskId, "⟳", "Synthesising agent outputs…");
         } else if (STEP_DEFS[event] && STEP_DEFS[event][1]) {
           _addStep(taskId, STEP_DEFS[event][0], STEP_DEFS[event][1]);
         }
@@ -285,27 +327,56 @@
         if (event === "task_completed") {
           es.close();
           loadStrategyBadge();
-          setTimeout(async function () {
-            try {
-              const resp = await fetch(
-                "/orchestrator/ledger?task_id=" + taskId + "&limit=20",
-                { headers: authHeaders() }
-              );
-              if (!resp.ok) { _appendNorthBubble([], taskId); return; }
-              const entries = await resp.json();
-              const outputs = entries
-                .filter(function (e) { return e.action === "agent_completed" && e.output; })
-                .map(function (e) { return { agent: e.agent, text: e.output }; });
-              _appendNorthBubble(outputs.length ? outputs : [], taskId);
-            } catch (_) {
-              _appendNorthBubble([], taskId);
+          // Remove the live streaming div — the final bubble will replace it.
+          const bubble = document.getElementById("chat-thinking-" + taskId);
+          if (bubble) {
+            const streamDiv = bubble.querySelector(".bubble-streaming");
+            if (streamDiv) streamDiv.remove();
+          }
+          if (tokenBuffer) {
+            // Tokens were streamed — use them directly without a ledger round-trip.
+            _appendNorthBubble([{ agent: "", text: tokenBuffer }], taskId);
+            if (cleanPrompt) {
+              chatHistory.push([cleanPrompt, tokenBuffer]);
+              if (chatHistory.length > 20) chatHistory = chatHistory.slice(-20);
             }
-          }, 500);
+            tokenBuffer = "";
+          } else {
+            // No tokens (e.g. multi-agent synthesis path) — fetch from ledger.
+            setTimeout(async function () {
+              try {
+                const resp = await fetch(
+                  "/orchestrator/ledger?task_id=" + taskId + "&limit=20",
+                  { headers: authHeaders() }
+                );
+                if (!resp.ok) { _appendNorthBubble([], taskId); return; }
+                const entries = await resp.json();
+                const outputs = entries
+                  .filter(function (e) { return e.action === "agent_completed" && e.output; })
+                  .map(function (e) { return { agent: e.agent, text: e.output }; });
+                _appendNorthBubble(outputs.length ? outputs : [], taskId);
+                if (cleanPrompt) {
+                  const text = outputs.map(function (o) { return o.text; }).filter(Boolean).join("\n\n") || "Task completed.";
+                  chatHistory.push([cleanPrompt, text]);
+                  if (chatHistory.length > 20) chatHistory = chatHistory.slice(-20);
+                }
+              } catch (_) {
+                _appendNorthBubble([], taskId);
+              }
+            }, 500);
+          }
         }
 
         if (event === "task_failed") {
           es.close();
           _appendErrorBubble(taskId, data.error || "Task failed.");
+        }
+
+        if (event === "task_cancelled") {
+          es.close();
+          tokenBuffer = "";
+          const reason = data.reason || "Task cancelled.";
+          _appendErrorBubble(taskId, reason);
         }
       } catch (_) {}
     }
@@ -376,10 +447,18 @@
           clearFileChip();
         }
 
+        let promptToPost = finalPrompt;
+        if (chatHistory.length > 0) {
+          const turns = chatHistory.slice(-5).map(function (turn) {
+            return "User: " + turn[0] + "\nAssistant: " + turn[1];
+          }).join("\n");
+          promptToPost = "[Conversation so far]\n" + turns + "\n\n[Current message]\n" + finalPrompt;
+        }
+
         const taskResp = await fetch("/orchestrator/task", {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/x-www-form-urlencoded" },
-          body: "prompt=" + encodeURIComponent(finalPrompt),
+          body: "prompt=" + encodeURIComponent(promptToPost),
         });
 
         if (taskResp.ok) {
@@ -390,7 +469,7 @@
           const empty = chatThread && chatThread.querySelector(".chat-empty");
           if (empty) empty.remove();
           _appendUserBubble(finalPrompt, taskData.task_id);
-          subscribeToTask(taskData.task_id);
+          subscribeToTask(taskData.task_id, finalPrompt);
 
           // Also inject into the activity feed
           const feedEl = document.getElementById("feed");

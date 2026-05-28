@@ -12,6 +12,8 @@ from approval import Notifier, TerminalNotifier
 from config.settings import settings
 from config.strategy import NorthSettings
 from context import ContextStore, FileContextStore
+from typing import Callable, Awaitable
+
 from inference import (
     CompletionRequest,
     CompletionResponse,
@@ -22,6 +24,7 @@ from inference import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from inference.models import EmbedRequest, EmbedResponse, ToolCall, ToolCallRequest, ToolCallResponse
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
 
@@ -62,6 +65,28 @@ class MockInferenceRouter(InferenceRouter):
             "fast_cheap": ModelPool(name="fast_cheap", models=["mock-fast_cheap-model"]),
             "high_volume": ModelPool(name="high_volume", models=["mock-high_volume-model"]),
         }
+
+    async def complete_with_tools(
+        self,
+        request: ToolCallRequest,
+        token_callback: Callable[[str], Awaitable[None]] | None = None,
+    ) -> ToolCallResponse:
+        text = '{"output": "Mocked tool response.", "summary": "Mocked."}'
+        if token_callback is not None:
+            await token_callback(text)
+        return ToolCallResponse(
+            type="message",
+            content=text,
+            calls=[],
+            model_used="mock-model",
+        )
+
+    async def embed(self, request: EmbedRequest) -> EmbedResponse:
+        dim = 8
+        return EmbedResponse(
+            embeddings=[[0.0] * dim for _ in request.texts],
+            model_used="mock-embed-model",
+        )
 
 
 @dataclass

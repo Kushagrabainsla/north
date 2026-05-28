@@ -104,6 +104,7 @@ class JudgementFilter:
                     priority=PoolPriority.MEDIUM,
                     component="judgement_filter",
                     task_id=card.task_id,
+                    json_mode=True,
                 )
             )
             result = json.loads(response.text.strip())

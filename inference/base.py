@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from typing import AsyncIterator, Callable, Awaitable
+
 from inference.models import (
     CompletionRequest,
     CompletionResponse,
+    EmbedRequest,
+    EmbedResponse,
     ModelPool,
     PoolPriority,
+    ToolCallRequest,
+    ToolCallResponse,
     TranscriptionRequest,
     TranscriptionResponse,
 )
@@ -50,3 +56,18 @@ class InferenceRouter(ABC):
     @abstractmethod
     def current_pools(self) -> dict[str, ModelPool]:
         """Snapshot of the current pool state. Powers the `inference models` CLI."""
+
+    @abstractmethod
+    async def complete_with_tools(
+        self,
+        request: ToolCallRequest,
+        token_callback: Callable[[str], Awaitable[None]] | None = None,
+    ) -> ToolCallResponse:
+        """Function-calling completion.  The model either returns a tool call or
+        a final text message.  When *token_callback* is provided, text tokens are
+        forwarded to it as they stream in (task 4 streaming).
+        """
+
+    @abstractmethod
+    async def embed(self, request: EmbedRequest) -> EmbedResponse:
+        """Embed a batch of texts and return one float vector per input."""

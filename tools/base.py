@@ -18,6 +18,23 @@ class Tool(ABC):
 
     name: str
     description: str
+    # Override in subclasses with an OpenAI-compatible JSON Schema for the
+    # function parameters.  The default accepts any key/value object.
+    parameters_schema: dict = {
+        "type": "object",
+        "additionalProperties": True,
+    }
+
+    def schema(self) -> dict:
+        """Return an OpenAI-format function definition for use with tool calling."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters_schema,
+            },
+        }
 
     @abstractmethod
     async def run(self, input: ToolInput) -> ToolOutput:

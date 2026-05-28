@@ -20,11 +20,17 @@ class SearchFilesTool(Tool):
     """Searches files recursively for a regex pattern."""
 
     name = "search_files"
-    description = (
-        "Search files for a regex pattern. "
-        "Params: pattern (str), path (str, default '.'), "
-        "workspace (str, optional), file_glob (str, default '*')."
-    )
+    description = "Search files recursively for a regex pattern and return matching lines."
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "pattern": {"type": "string", "description": "Regex pattern to search for"},
+            "path": {"type": "string", "description": "Root path to search from (default '.')", "default": "."},
+            "file_glob": {"type": "string", "description": "File glob filter (default '*')", "default": "*"},
+            "workspace": {"type": "string", "description": "Workspace root (optional)"},
+        },
+        "required": ["pattern"],
+    }
 
     async def run(self, input: ToolInput) -> ToolOutput:
         pattern = input.params.get("pattern")

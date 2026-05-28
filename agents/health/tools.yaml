@@ -1,9 +1,15 @@
 tools:
   - name: web_search
-    purpose: "Search the web for fitness, health, or workout queries."
-  - name: calendar_api
-    purpose: "Schedule workouts or fitness planning sessions on the calendar."
-  - name: nutrition_api
-    purpose: "Lookup nutritional information or log consumed meals."
+    purpose: "Search for nutrition facts, workout plans, health research, or symptoms."
+  - name: read_file
+    purpose: "Read a meal plan, workout log, or health document the user has saved locally."
+  - name: write_file
+    purpose: "Write a meal plan, grocery list, workout schedule, or health summary to disk."
+  - name: list_dir
+    purpose: "Browse a directory of health documents or logs."
+  - name: search_files
+    purpose: "Search across local health files for a pattern or keyword."
   - name: schedule_task
-    purpose: "Schedule a recurring meal plan, workout, or health reminder."
+    purpose: "Schedule a recurring meal plan, workout reminder, or health check-in."
+  - name: fetch_url
+    purpose: "Fetch and read the full text content of a specific URL — use when web_search results aren't enough and you need the full page."

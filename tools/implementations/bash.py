@@ -11,6 +11,9 @@ from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
 _TIMEOUT = 30
+# Stdout/stderr are capped so a single `cat` of a large file can't overflow the
+# model's context window.  The tail is truncated with a visible marker.
+_MAX_OUTPUT_CHARS = 30_000
 
 _BLOCKED = [
     "rm -rf /",
@@ -20,14 +23,30 @@ _BLOCKED = [
 ]
 
 
+def _cap(text: str) -> str:
+    if len(text) <= _MAX_OUTPUT_CHARS:
+        return text
+    kept = text[:_MAX_OUTPUT_CHARS]
+    omitted = len(text) - _MAX_OUTPUT_CHARS
+    return kept + f"\n[…{omitted} chars truncated]"
+
+
 class BashTool(Tool):
     """Runs a shell command and returns stdout, stderr, and return code."""
 
     name = "bash"
-    description = (
-        "Run a shell command (30s timeout). "
-        "Params: command (str), workspace (str, optional, used as cwd)."
-    )
+    description = "Run a shell command (30 s timeout) and return stdout/stderr/returncode."
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "Shell command to execute"},
+            "workspace": {
+                "type": "string",
+                "description": "Working directory for the command (optional)",
+            },
+        },
+        "required": ["command"],
+    }
 
     async def run(self, input: ToolInput) -> ToolOutput:
         command = input.params.get("command")
@@ -56,11 +75,15 @@ class BashTool(Tool):
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))
 
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        stdout = _cap(stdout)
+        stderr = _cap(stderr)
         return ToolOutput(
             success=proc.returncode == 0,
             data={
-                "stdout": stdout_b.decode("utf-8", errors="replace"),
-                "stderr": stderr_b.decode("utf-8", errors="replace"),
+                "stdout": stdout,
+                "stderr": stderr,
                 "returncode": proc.returncode,
             },
         )

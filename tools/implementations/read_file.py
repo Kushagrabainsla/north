@@ -19,7 +19,15 @@ class ReadFileTool(Tool):
     """Reads a file and returns its text content."""
 
     name = "read_file"
-    description = "Read a file's text contents. Params: path (str), workspace (str, optional)."
+    description = "Read a file's full text contents."
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path to the file"},
+            "workspace": {"type": "string", "description": "Workspace root (optional)"},
+        },
+        "required": ["path"],
+    }
 
     async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")

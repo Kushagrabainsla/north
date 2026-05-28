@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from context.base import ContextStore
 from context.exceptions import ContextReadError, ContextWriteError
 from context.models import ContextDocument
+
+if TYPE_CHECKING:
+    from context.embedding_index import EmbeddingIndex
 
 _STOPWORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
@@ -27,9 +31,10 @@ class FileContextStore(ContextStore):
     on the event loop (docs/CODING_STYLE.md Section 10.3).
     """
 
-    def __init__(self, base_path: Path) -> None:
+    def __init__(self, base_path: Path, embedding_index: "EmbeddingIndex | None" = None) -> None:
         self._base_path = base_path
         self._base_path.mkdir(parents=True, exist_ok=True)
+        self._embedding_index = embedding_index
 
     def _path(self, document: ContextDocument) -> Path:
         return self._base_path / document.value
@@ -51,6 +56,10 @@ class FileContextStore(ContextStore):
             await asyncio.to_thread(self._write_sync, document, content)
         except OSError as e:
             raise ContextWriteError(f"Failed to write {document.value}: {e}") from e
+        if self._embedding_index is not None:
+            asyncio.create_task(
+                self._embedding_index.update_document(document.value, content)
+            )
 
     def _write_sync(self, document: ContextDocument, content: str) -> None:
         self._path(document).write_text(content, encoding="utf-8")
@@ -60,6 +69,11 @@ class FileContextStore(ContextStore):
             await asyncio.to_thread(self._append_sync, document, delta)
         except OSError as e:
             raise ContextWriteError(f"Failed to append to {document.value}: {e}") from e
+        if self._embedding_index is not None:
+            new_content = await self.read(document)
+            asyncio.create_task(
+                self._embedding_index.update_document(document.value, new_content)
+            )
 
     def _append_sync(self, document: ContextDocument, delta: str) -> None:
         path = self._path(document)
@@ -68,6 +82,11 @@ class FileContextStore(ContextStore):
         path.write_text(f"{existing}{separator}{delta}", encoding="utf-8")
 
     async def search(self, query: str, max_results: int = 5) -> str:
+        if self._embedding_index is not None:
+            hits = await self._embedding_index.search(query, max_results=max_results)
+            if hits:
+                sections = [f"[{label}]\n{chunk}" for label, chunk in hits]
+                return "\n\n---\n\n".join(sections)
         return await asyncio.to_thread(self._search_sync, query, max_results)
 
     def _search_sync(self, query: str, max_results: int) -> str:  # noqa: C901

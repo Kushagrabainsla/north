@@ -16,9 +16,20 @@ class WebSearchTool(Tool):
     name = "web_search"
     description = (
         "Searches the web for up-to-date information. "
-        "Use for current events, facts, prices, or anything requiring real-time data. "
-        "Params: query (str, required), max_results (int, optional, default 5)."
+        "Use for current events, facts, prices, or anything requiring real-time data."
     )
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "The search query"},
+            "max_results": {
+                "type": "integer",
+                "description": "Number of results to return (1–10)",
+                "default": 5,
+            },
+        },
+        "required": ["query"],
+    }
 
     async def run(self, input: ToolInput) -> ToolOutput:
         query = input.params.get("query")

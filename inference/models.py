@@ -47,6 +47,9 @@ class CompletionRequest(BaseModel):
     task_id: str | None = None
     max_tokens: int | None = None
     temperature: float | None = None
+    # When True the provider is instructed to return valid JSON (response_format
+    # json_object).  Only set this when the system prompt guarantees JSON output.
+    json_mode: bool = False
 
 
 class CompletionResponse(BaseModel):
@@ -57,6 +60,46 @@ class CompletionResponse(BaseModel):
     tokens_in: int
     tokens_out: int
     cost_usd: float
+
+
+class ToolCallRequest(BaseModel):
+    """Input to a function-calling completion.
+
+    ``messages`` is the full OpenAI-format conversation history.
+    ``tools`` is the list of OpenAI-format function definitions to offer.
+    """
+
+    messages: list[dict]
+    tools: list[dict]
+    priority: PoolPriority = PoolPriority.MEDIUM
+    component: str
+    task_id: str | None = None
+
+
+class ToolCall(BaseModel):
+    """One function invocation from a model response."""
+
+    name: str
+    call_id: str
+    params: dict = {}
+
+
+class ToolCallResponse(BaseModel):
+    """Result of a single function-calling turn.
+
+    ``type`` is ``"tool_calls"`` when the model invoked one or more functions,
+    or ``"message"`` when it produced a final text answer.
+    ``calls`` carries every tool the model dispatched in this turn (often one,
+    but models can and do issue multiple calls in parallel).
+    """
+
+    type: str  # "tool_calls" | "message"
+    content: str | None = None
+    calls: list[ToolCall] = []
+    model_used: str
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
 
 
 class TranscriptionRequest(BaseModel):
@@ -71,6 +114,18 @@ class TranscriptionRequest(BaseModel):
 
 class TranscriptionResponse(BaseModel):
     text: str
+    model_used: str
+    cost_usd: float = 0.0
+
+
+class EmbedRequest(BaseModel):
+    texts: list[str]
+    component: str = "embed"
+    task_id: str | None = None
+
+
+class EmbedResponse(BaseModel):
+    embeddings: list[list[float]]
     model_used: str
     cost_usd: float = 0.0
 

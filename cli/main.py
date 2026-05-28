@@ -347,6 +347,7 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> str:
     url = f"{_BASE_URL}/orchestrator/stream/{task_id}"
     output_text: str = ""
     failed_msg: str = ""
+    token_buffer: str = ""
 
     try:
         with Live(_make_renderable(), console=_console, refresh_per_second=8) as live:
@@ -422,6 +423,11 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> str:
                             # task_completed / task_cancelled will break the loop.
                             current_event = ""
                             continue
+                        elif event == "token":
+                            token_buffer += data.get("text", "")
+                            # Don't add a step pill per token — just accumulate silently.
+                            current_event = ""
+                            continue
                         elif event in _STEP_LABELS:
                             steps.append((_STEP_ICONS.get(event, "·"), _STEP_LABELS[event], True))
 
@@ -461,17 +467,21 @@ def _run_task(prompt: str, workspace: Optional[str] = None) -> str:
         ))
         return ""
 
-    # Fetch the actual output from the ledger
-    try:
-        ledger_resp = _api("GET", f"/orchestrator/ledger?task_id={task_id}&limit=20")
-        entries = ledger_resp.json()
-        outputs = [
-            e["output"] for e in entries
-            if e.get("action") == "agent_completed" and e.get("output")
-        ]
-        output_text = "\n\n".join(outputs) if outputs else "Task completed."
-    except Exception:
-        output_text = "Task completed."
+    if token_buffer:
+        # Tokens were streamed — use them directly, no ledger round-trip needed.
+        output_text = token_buffer
+    else:
+        # No tokens (multi-agent synthesis or older path) — fetch from ledger.
+        try:
+            ledger_resp = _api("GET", f"/orchestrator/ledger?task_id={task_id}&limit=20")
+            entries = ledger_resp.json()
+            outputs = [
+                e["output"] for e in entries
+                if e.get("action") == "agent_completed" and e.get("output")
+            ]
+            output_text = "\n\n".join(outputs) if outputs else "Task completed."
+        except Exception:
+            output_text = "Task completed."
 
     _console.print(Panel(
         Markdown(output_text),

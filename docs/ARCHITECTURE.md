@@ -1,6 +1,6 @@
 # north: System Specification
 ### Personal Life Operating System
-> Version 1.2 · May 2026
+> Version 1.3 · May 2026
 
 ---
 
@@ -22,6 +22,8 @@
 14. [Repository Structure](#14-repository-structure)
 15. [Open Questions](#15-open-questions)
 16. [Tech Stack](#16-tech-stack)
+
+> **What changed in 1.3:** asyncio.Event-based approval waiting (§9), JSON mode for all structured-output callers (§8.2), native function calling + token streaming in the ReAct loop (§7.6, §8.7), EMA confidence scoring (§7.5), semantic context search via OpenRouter embeddings (§5.7), episodic memory layer (§5.8), webhook event ingestion (§4.3, §6.8, §11.5), and two new SQLite stores (`embeddings.db`, `episodic.db`, §12.1).
 
 ---
 
@@ -184,6 +186,7 @@ system              internal system events (startup, shutdown, config change,
 manual_injection    user fed context via file, text, or URL
 inference_router    inference cost and model usage logging per API call
 approval            user approved, rejected, or answered a question card
+webhook             task triggered by an external service via POST /orchestrator/webhooks/{source}
 ```
 
 ### 4.4 Write Rules
@@ -229,54 +232,32 @@ from abc import ABC, abstractmethod
 
 class ContextStore(ABC):
     @abstractmethod
-    def read(self, document: str) -> str:
-        """Read a full context document by name."""
+    async def read(self, document: ContextDocument) -> str:
+        """Read a full context document. Returns '' if not yet written."""
         ...
 
     @abstractmethod
-    def write(self, document: str, content: str) -> None:
+    async def write(self, document: ContextDocument, content: str) -> None:
         """Overwrite a context document entirely."""
         ...
 
     @abstractmethod
-    def append(self, document: str, delta: str) -> None:
-        """Append a delta to a context document."""
+    async def append(self, document: ContextDocument, delta: str) -> None:
+        """Append a delta (one line) to a context document."""
         ...
 
-    def search(self, query: str) -> str:
-        """Semantic search over context. Not implemented in v1.
-        Do not call this method in v1 code. It will raise NotImplementedError.
-        Upgrade to DBContextStore when semantic search is needed.
+    async def search(self, query: str, max_results: int = 5) -> str:
+        """Semantic search across all five context documents.
+
+        Returns the top-k most relevant paragraphs, each labelled with its
+        source document.  Uses cosine similarity when an EmbeddingIndex is
+        attached (v1.3+); falls back to keyword overlap scoring when not.
+        Returns '' when nothing is relevant.
         """
-        raise NotImplementedError(
-            "search() is not available in v1. "
-            "Upgrade to DBContextStore when context files exceed context window limits."
-        )
-
-
-class FileContextStore(ContextStore):
-    def __init__(self, base_path: str = "~/.north/context"):
-        self.base_path = base_path
-
-    def read(self, document: str) -> str:
-        with open(f"{self.base_path}/{document}") as f:
-            return f.read()
-
-    def write(self, document: str, content: str) -> None:
-        with open(f"{self.base_path}/{document}", "w") as f:
-            f.write(content)
-
-    def append(self, document: str, delta: str) -> None:
-        with open(f"{self.base_path}/{document}", "a") as f:
-            f.write(f"\n{delta}")
+        ...
 ```
 
-To swap the backend in the future:
-
-```python
-# One line change in config. Nothing else in the system changes.
-context_store = DBContextStore()  # was FileContextStore()
-```
+`FileContextStore` is the concrete v1 implementation.  It optionally accepts an `EmbeddingIndex` at construction time (see Section 5.7).  When present, `write()` and `append()` schedule a background re-indexing task; `search()` uses cosine similarity.  When absent, `search()` uses paragraph-level keyword scoring.  The rest of the system is unaware of which mode is active.
 
 ### 5.3 The Five Documents
 
@@ -362,6 +343,55 @@ The Web UI exposes a context viewer where the user can:
 - Delete or correct wrong extractions
 
 Full visibility and control over what north knows.
+
+### 5.7 Semantic Search and Embedding Index
+
+`FileContextStore.search()` uses an `EmbeddingIndex` backed by `~/.north/embeddings.db` when one is wired in at startup.
+
+**How it works:**
+
+1. **Indexing** — every `write()` or `append()` call schedules a background `asyncio.create_task` that chunks the updated document into paragraphs, calls `InferenceRouter.embed()` in a batch, and stores `(doc, chunk_idx, chunk_text, embedding_vector)` rows in `embeddings.db`.  Indexing never blocks the write path.
+
+2. **Retrieval** — `search(query)` embeds the query string (one API call), computes cosine similarity against every stored paragraph vector using numpy, and returns the top-k `[Source Document]\n<paragraph>` blocks as a single string.
+
+3. **Fallback** — if the `EmbeddingIndex` is absent or the embed call fails, `search()` falls back to paragraph-level keyword overlap scoring (already implemented in v1.2).  Agents that call `search()` always get a result.
+
+**Embedding model:** `openai/text-embedding-3-small` via OpenRouter's `POST /api/v1/embeddings` endpoint, same API key as inference.  Embedding calls are not tracked by the `CostTracker` — they are small enough that the noise is acceptable.
+
+**Scope:** the embedding index covers the five context documents only.  It does not index the Ledger or the job queue.  Episodic memories (Section 5.8) have their own separate embedding store.
+
+### 5.8 Episodic Memory
+
+The episodic memory layer gives north a growing record of what it has actually done — not just facts about you, but memories of specific past tasks.
+
+**What is stored:** after every completed task, the Orchestrator writes a summary of the form `Task: <prompt truncated to 120 chars>\nResult: <agent output truncated to 400 chars>` to `~/.north/episodic.db` together with an embedding of that summary.
+
+**Retrieval:** before executing each agent run, `Agent._load_context()` queries the episodic store for the top-3 semantically similar past episodes (embedding cosine similarity, keyword fallback).  Any results are injected into the agent's context block as a `## Relevant past context` section containing bulleted summaries.
+
+```
+## Relevant past context
+- Task: Search for internship applications due in June
+  Result: Found 4 open applications: Stripe, Databricks, Cloudflare, Figma...
+- Task: Draft follow-up email to Stripe recruiter
+  Result: Email drafted and queued for approval...
+```
+
+This makes north progressively more context-aware about your patterns without the agent needing to re-search past ledger entries itself.
+
+**Storage:** `~/.north/episodic.db`, schema:
+
+```sql
+CREATE TABLE episodes (
+  id        TEXT PRIMARY KEY,
+  task_id   TEXT,
+  domain    TEXT NOT NULL,
+  summary   TEXT NOT NULL,
+  embedding TEXT,           -- JSON float array, null if embed call failed at write time
+  timestamp TEXT NOT NULL
+)
+```
+
+**Scope:** episodic search is over this table only.  The five context documents and the episodic store are complementary: context documents hold durable facts about you; the episodic store holds memories of specific past interactions.
 
 ---
 
@@ -601,7 +631,8 @@ GET    /orchestrator/inference/models    -> current model pool state
 
 GET    /orchestrator/tools/confidence    -> tool confidence scores per agent
 
-GET    /orchestrator/stream              -> SSE stream for real-time Web UI updates
+GET    /orchestrator/stream/{task_id}    -> SSE stream for real-time task progress (tokens,
+                                            tool calls, approval cards, completion)
 
 POST   /orchestrator/approval/respond    -> receive approval decision from callback server
 
@@ -611,6 +642,13 @@ POST   /orchestrator/transcribe          -> transcribe raw audio bytes via OpenR
 
 GET    /orchestrator/settings            -> read current user settings (strategy mode, etc.)
 POST   /orchestrator/settings            -> update user settings
+
+POST   /orchestrator/webhooks/{source}   -> receive an external event and submit it as a task
+                                            auth: X-Webhook-Secret header (same shared secret)
+                                            body: {prompt, context?}
+                                            source: any string identifying the origin
+                                                    (e.g. gmail, github, calendar, finance)
+                                            returns: {task_id, status, source}
 ```
 
 ---
@@ -749,14 +787,14 @@ Cross-domain tools (calendar_api, web_search, gmail_api) are graph nodes with mu
 
 ### 7.5 Confidence Scoring and Persistence
 
-Every tool edge in the graph carries a confidence score from 0.0 to 1.0. Scores update after every tool use.
+Every tool edge in the graph carries a confidence score from 0.0 to 1.0. Scores are updated after every tool use via an **exponential moving average (EMA)** with smoothing factor α = 0.10:
 
 ```python
-if tool_was_helpful:
-    new_confidence = min(1.0, current_confidence + 0.05)
-else:
-    new_confidence = max(0.0, current_confidence - 0.03)
+outcome = 1.0 if was_helpful else 0.0
+new_confidence = clamp(0.10 * outcome + 0.90 * current_confidence, 0.0, 1.0)
 ```
+
+The EMA means recent behavior dominates: a tool that failed early but now succeeds reliably recovers its score in ~10 successful uses.  The old fixed-delta approach (`+0.05 / -0.03`) took ~27 successful uses to recover from a low score — far too slow for the system to adapt.  Default prior for unseen tool pairs: 0.50.  Reliable filesystem/shell tools are seeded at 0.80 on startup via `seed_defaults()`.
 
 **Persistence:** confidence scores are stored in `~/.north/tools.db`, a dedicated SQLite database. This is separate from the Ledger (event log) and separate from the Task Context Object (per-task scratch space). `tools.db` is the authoritative source for current confidence state.
 
@@ -776,7 +814,42 @@ On Orchestrator startup, all confidence scores are loaded from `tools.db` into m
 
 **New agent inheritance:** when a new agent declares `similar_to: health` in `config.yaml`, the Orchestrator copies confidence rows from the `health` agent in `tools.db` as the new agent's starting prior. Tools not present in the source agent start at `initial_confidence` from `tools.yaml`.
 
-### 7.6 The If-Unsure-Ask Rule
+### 7.6 The AgenticLLMAgent ReAct Loop (Function Calling)
+
+Domain agents that extend `AgenticLLMAgent` run a ReAct loop using the OpenAI-compatible **function calling API** instead of JSON-in-text prompting.  This is the default for all v1 domain agents.
+
+**Why function calling instead of JSON-in-text:**
+
+The previous approach required the model to produce a raw JSON string matching a hand-crafted schema, then parsing it with `json.loads()`.  This failed silently when models wrapped output in markdown fences, produced partial JSON, or hallucinated tool names.  Function calling offloads schema enforcement to the provider: the model receives typed function definitions and returns a structured `tool_calls` object.
+
+**Loop:**
+
+```
+messages = [system_prompt, user_message_with_task_and_context]
+tools    = [typed function defs from tool.schema() for each tool] + [request_approval]
+
+loop (max 12 iterations):
+  compact older tool results in messages to preserve context window
+  response = complete_with_tools(messages, tools, token_callback)
+
+  if response.type == "message":
+    stream tokens to SSE; return final answer      # done
+
+  if response.type == "tool_call":
+    execute tool (or request_approval)
+    record confidence via ConfidenceTracker
+    emit tool_called + tool_result SSE events
+    append assistant tool-call turn + tool result to messages
+    continue
+```
+
+**Token streaming (Section 8.7):** when the model produces a text response (the final answer), individual tokens are forwarded to the caller via an async `token_callback`.  `AgenticLLMAgent` passes a callback that emits `token` SSE events, so the Web UI renders the response progressively as it arrives.
+
+**Tool schemas:** every `Tool` subclass declares a `parameters_schema` class variable (JSON Schema object).  The base class `schema()` method wraps it in the OpenAI function definition format.  Tools without an explicit schema use `{type: object, additionalProperties: true}` as a safe default.
+
+**`request_approval` tool:** a synthetic tool injected into every agent's tool list.  When called, it creates an Approval card, emits `approval_required` via SSE, and blocks (via asyncio.Event — Section 9.7) until the user responds.  The model's decision to call this tool is treated like any other tool call.
+
+### 7.7 The If-Unsure-Ask Rule
 
 Agents follow a clear decision hierarchy when they encounter ambiguity:
 
@@ -854,15 +927,13 @@ classifier                -> LOW (simple binary classification)
 
 ### 8.5 Automatic Fallback Chain
 
-Every `complete()` call walks an ordered model list until one succeeds. HTTP 429 (rate limit), 402 (payment required), 404 (model retired), and 503 (unavailable) all skip to the next model. The chain always ends with free models so there is always a last resort.
+Every `complete()` call walks an ordered model list until one succeeds. HTTP 429 (rate limit), 402 (payment required), 404 (model retired), and 503 (unavailable) all skip to the next model. For `complete_with_tools()`, HTTP 400 is also skipped to handle models that do not support tool calling. The chain always ends with free models so there is always a last resort.
 
 ```
 sport strategy, any priority:
   claude-opus -> gpt-4o -> claude-sonnet -> gpt-4o-mini -> claude-haiku
   -> gemini-flash -> ... -> meta-llama:free -> qwen3-8b:free
 ```
-
-### 8.5 Cost Tracking
 
 Every inference call is logged to the Ledger with `source: inference_router`:
 
@@ -877,6 +948,8 @@ cost_usd:   0.0024
 task_id:    abc123
 ```
 
+`CostTracker` (an `InferenceRouter` decorator) intercepts every `complete()` and `complete_with_tools()` call and accumulates `cost_usd` keyed by `task_id`.  The Orchestrator calls `cost_tracker.pop_task_cost(task_id)` after all agents complete and emits the total in the `task_completed` SSE event.
+
 Cost summary available via CLI and Web UI:
 ```bash
 north inference costs --period week
@@ -885,7 +958,35 @@ north inference costs --agent finance
 north inference models           # show current pool state
 ```
 
-### 8.6 Audio Transcription
+### 8.6 JSON Mode
+
+All callers that expect a structured JSON response (classifier, north star checker, extraction pipeline, context injection router) pass `json_mode=True` in their `CompletionRequest`.  The router forwards this as `response_format: {type: json_object}` in the OpenRouter request body.
+
+This eliminates the entire class of "Failed to parse classifier output as JSON" errors that arose when models wrapped responses in markdown fences or produced partial output.  The model is still instructed to produce JSON via its system prompt; `json_mode` is a belt-and-suspenders guarantee at the provider level.
+
+**Rule:** only set `json_mode=True` when the system prompt explicitly instructs JSON output.
+
+### 8.7 Function Calling and Token Streaming
+
+`InferenceRouter` exposes two additional async methods beyond `complete()`:
+
+```python
+async def complete_with_tools(
+    request: ToolCallRequest,
+    token_callback: Callable[[str], Awaitable[None]] | None = None,
+) -> ToolCallResponse:
+    """Function-calling completion.  Returns either a tool call or a final
+    text message.  Text tokens are streamed to token_callback as they arrive."""
+
+async def embed(request: EmbedRequest) -> EmbedResponse:
+    """Embed a batch of texts and return one float vector per input."""
+```
+
+`complete_with_tools` uses OpenRouter's streaming endpoint (`stream: true`) internally so text tokens from the final answer are forwarded to `token_callback` in real time.  Tool call arguments are accumulated from streaming delta chunks and resolved when `finish_reason: tool_calls` is received.  `CostTracker` wraps this method and accumulates `response.cost_usd` per `task_id` exactly as it does for `complete()`.
+
+`embed` calls `POST /api/v1/embeddings` with `openai/text-embedding-3-small`.  Used by `EmbeddingIndex` (§5.7) and `EpisodicStore` (§5.8).
+
+### 8.8 Audio Transcription
 
 The Inference Router also owns audio transcription via OpenRouter's `POST /api/v1/audio/transcriptions` endpoint (see Section 16.6). The same client, the same `NORTH_OPENROUTER_API_KEY`, the same fallback semantics, and the same Ledger logging (`source: inference_router`) apply. Transcription is a separate code path from chat-completion (different endpoint, different request shape) but shares all infrastructure.
 
@@ -964,6 +1065,24 @@ High-stakes-irreversible actions always surface an Approval card regardless of j
 
 Every approval, rejection, and answered question is processed by the extraction pipeline and appended to `judgement_rules.md`. The system learns from every interaction and asks less over time.
 
+### 9.7 Event-Based Approval Waiting
+
+When a coroutine needs to wait for a user decision (north star conflict approval, mid-task `request_approval` tool call), it calls `approval_store.wait_for_decision(card_id, timeout=300.0)` rather than polling in a loop.
+
+```python
+# Before (polling — held the event loop busy for up to 1 s per tick):
+for _ in range(300):
+    await asyncio.sleep(1)
+    card = approval_store.get(card_id)
+    if card and card.status != "pending":
+        break
+
+# After (event-based — wakes exactly when the user clicks):
+card = await approval_store.wait_for_decision(card_id, timeout=300.0)
+```
+
+`ApprovalStore` allocates an `asyncio.Event` for each card on `add()`.  `resolve()` calls `event.set()`.  `wait_for_decision()` awaits the event with a 300-second `asyncio.wait_for` timeout.  Under load with many concurrent pending approvals, zero CPU is consumed while waiting — each coroutine is simply suspended until its specific event fires.
+
 ---
 
 ## 10. Interface Model
@@ -977,13 +1096,36 @@ A local web UI served by the Orchestrator at `localhost:8000/ui`. Server-rendere
 **Three panels:**
 
 **Live Activity Feed**
-Real-time stream of Orchestrator activity via SSE (`GET /orchestrator/stream`). Every agent action, tool call, Ledger write, and job execution appears as it happens. Each event shows source, agent, action, and status.
+Real-time stream of Orchestrator activity via SSE (`GET /orchestrator/stream/{task_id}`). Every agent action, tool call, Ledger write, and job execution appears as it happens. Includes `token` events — individual text tokens streamed from the model's final answer as they arrive, enabling progressive rendering of the agent's response as it generates.
+
+SSE event types:
+```
+classifying          Stage 1 started
+classified           Trivial/consequential decision + domain
+north_star_checking  Stage 2 started
+north_star_conflict  Conflict detected — approval card incoming
+north_star_aligned   Check passed
+routing              Stage 3 started
+routed               Agents selected + parallel groups
+executing            Stage 4 started
+agent_started        One agent beginning its ReAct loop
+tool_called          Agent called a tool (includes tool name + params)
+tool_result          Tool completed (includes success flag)
+token                One text token from the final answer (streaming)
+approval_required    An approval card needs user action
+approval_responded   User made a decision
+agent_completed      Agent produced its final answer
+task_synthesis       Multi-agent outputs merged into one response
+task_completed       Full task done (includes cost_usd)
+task_cancelled       Task cancelled (includes reason)
+task_failed          Unrecoverable error
+```
 
 **Approval Surface**
 Full card rendering for complex approvals and questions. Approve, reject, and answer questions directly here without opening a notification. All cards that have been sent as notifications are also mirrored here.
 
 **Control Panel**
-- Submit text prompts to the Orchestrator
+- Submit text prompts to the Orchestrator (with session conversation history)
 - View and edit all five context documents
 - Browse Ledger history with filters (source, agent, task ID, date range)
 - Manage registered agents (view config, enable, disable)
@@ -1137,15 +1279,26 @@ A job enqueued with a future `scheduled_at` will sit as `pending` until the job 
 
 ### 11.5 Event-Driven Jobs
 
-Triggered by signals rather than time. Event sources in v1 are limited (no native integrations) but the infrastructure is ready.
+Triggered by signals rather than time.  v1 now supports two event sources:
+
+**Webhook ingestion** — external services send `POST /orchestrator/webhooks/{source}` with an `X-Webhook-Secret` header and a JSON body containing a `prompt` and optional `context` field.  The Orchestrator submits this as a task with `source: webhook` and the prompt prefixed with `[webhook:{source}]` so the classifier can route it correctly.
+
+```bash
+# A Gmail push notification triggers the job agent:
+curl -X POST http://localhost:8000/orchestrator/webhooks/gmail \
+  -H "X-Webhook-Secret: $NORTH_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Recruiter from Stripe replied to your application", "context": "sender: recruiter@stripe.com"}'
+```
+
+**Internal threshold events** — agents can schedule immediate threshold-triggered jobs via the `schedule_task` tool with `run_at: now`.  Infrastructure examples:
 
 ```
-assignment deadline in 48 hours  -> trigger university agent warning
-expense logged above threshold   -> trigger finance agent budget check
-task marked complete             -> trigger north star progress check
+expense logged above monthly threshold -> finance agent budget check
+canvas deadline in 48 hours            -> university agent reminder
 ```
 
-Event-driven jobs enter the same queue as cron jobs with `type: event`, `scheduled_at: now`, `priority: 1`.
+All event-triggered tasks enter the main pipeline (classify → north star → route → execute) identically to user-initiated prompts.  Ledger entries use `source: webhook` (external) or `source: cron` (internal threshold jobs).
 
 ### 11.6 Async Jobs
 
@@ -1174,9 +1327,12 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
 ```
 ~/.north/
   ledger.db              <- all ledger entries (append-only)
-  jobs.db                <- persistent job queue
-  tools.db               <- tool confidence scores per agent
+  jobs.db                <- persistent job queue + user cron entries
+  tools.db               <- tool confidence scores per agent (EMA-updated)
+  embeddings.db          <- paragraph embedding vectors for the five context documents
+  episodic.db            <- per-task summaries with embeddings for episodic retrieval
   inference_cache.json   <- last known OpenRouter model pool (fallback if refresh fails)
+  settings.json          <- user settings (inference strategy, etc.)
   secret.key             <- shared secret for notification callbacks and REST API auth
   tasks/
     task_{id}.db         <- one SQLite file per active task (Task Context Object)
@@ -1200,11 +1356,11 @@ everything else              -> standard local storage
 
 `private.md` never leaves the machine under any circumstances. This is a hard, permanent design constraint.
 
-### 12.3 Future: Cloud and Semantic Search Layer
+### 12.3 Embedding Storage
 
-When context files grow large enough that they no longer fit in a context window and semantic search becomes necessary, the `ContextStore` swaps from `FileContextStore` to a `DBContextStore` backed by a vector database. One line change in the Orchestrator initialization. Nothing else changes.
+`embeddings.db` and `episodic.db` are both append-dominant SQLite databases using WAL mode.  They have no retention policy: embedding rows are replaced wholesale when a context document is overwritten, and episodic rows accumulate indefinitely (bounded by the 500-row `ORDER BY timestamp DESC LIMIT 500` query in `EpisodicStore`).
 
-The `search()` method raising `NotImplementedError` in `FileContextStore` marks exactly where this seam is. Any code that accidentally calls `search()` in v1 will fail loudly and immediately rather than silently returning empty results.
+When context files grow large enough that paragraph-level embedding search degrades (thousands of paragraphs, many documents), the `EmbeddingIndex` can be replaced with a proper vector database (e.g. sqlite-vec, ChromaDB) behind the same interface with no changes to callers.  The `ContextStore.search()` contract is stable; the backing store is an implementation detail.
 
 ---
 
@@ -1315,7 +1471,9 @@ north/
     base.py             <- ContextStore (ABC)
     models.py           <- ContextDocument (enum of the five valid document names)
     exceptions.py       <- ContextError, ContextReadError, ContextWriteError
-    file_store.py       <- FileContextStore (v1 concrete)
+    file_store.py       <- FileContextStore (v1 concrete, optional EmbeddingIndex)
+    embedding_index.py  <- EmbeddingIndex: SQLite paragraph vectors + cosine search
+    episodic.py         <- EpisodicStore: per-task summaries + semantic retrieval
     extraction.py       <- extraction pipeline (Ledger → context docs, background job)
     injection.py        <- manual context injection handler (file, text, URL)
 
@@ -1328,10 +1486,11 @@ north/
 
   inference/
     __init__.py
-    base.py             <- InferenceRouter (ABC), CompletionRequest/Response
-    openrouter.py       <- OpenRouterInferenceRouter (dynamic pools, auto-fallback)
+    base.py             <- InferenceRouter (ABC): complete, complete_with_tools, embed, transcribe
+    openrouter.py       <- OpenRouterInferenceRouter (dynamic pools, streaming, function calling)
+    cost_tracker.py     <- CostTracker: InferenceRouter decorator, accumulates cost per task_id
     fallback_pools.py   <- hardcoded minimal pools if OpenRouter is unreachable on startup
-    models.py           <- PoolPriority, ModelPool
+    models.py           <- PoolPriority, ModelPool, ToolCallRequest/Response, EmbedRequest/Response
     exceptions.py
 
   approval/
@@ -1341,7 +1500,7 @@ north/
     terminal.py         <- TerminalNotifier (fallback for dev/test)
     callback_server.py  <- local server on port 8001 receiving notification callbacks
     models.py           <- Card, CardType, ApprovalDecision
-    store.py            <- module-level approval_store singleton (Web UI visibility)
+    store.py            <- ApprovalStore: asyncio.Event per card, wait_for_decision()
     judgement_filter.py <- pre-screens cards against judgement_rules.md before notifying
     exceptions.py       <- ApprovalError, NotificationError
 
@@ -1434,32 +1593,38 @@ north/
 
 The following are deliberately deferred. No coding agent should make decisions on these without explicit spec updates.
 
-**Context Storage Migration**
-When do context files become too large for LLM context windows and semantic search becomes necessary? No action needed until the system is running. The `ContextStore` interface and the `NotImplementedError` on `search()` mark exactly where the implementation gap is.
-
 **Native Integrations**
-Canvas, Gmail, Google Calendar APIs. Deferred for v1. The job processor and event-driven infrastructure are ready to receive polling jobs or webhook signals when integrations are added.
+Canvas, Gmail, Google Calendar APIs. Deferred for v1. The job processor and webhook infrastructure (`POST /orchestrator/webhooks/{source}`) are ready to receive events when real integrations are added.
 
 **Mobile App**
-Approval surface on mobile. Post v1. macOS notifications on the primary machine are sufficient for v1. *Note:* the Section 16.8 switch to HTMX + server-rendered templates means a mobile-friendly approval surface is now reachable with template-level changes rather than a separate codebase. The deferral stands; the cost picture changed.
+Approval surface on mobile. Post v1. The HTMX + server-rendered template stack means a mobile-friendly surface is reachable with template-level changes rather than a separate codebase. The deferral stands; the cost picture changed.
 
 **Proactive Orchestration**
 The Monday morning briefing: Orchestrator waking itself on a schedule to summarize the week ahead without any user prompt. The cron job infrastructure is ready. The specific content format is not yet defined.
 
 **Multi-device Context Sync**
-How `judgement_rules.md` and `north_stars.md` stay consistent across multiple machines. Deferred until the system is stable on a single machine.
+How `judgement_rules.md`, `north_stars.md`, and `episodic.db` stay consistent across multiple machines. Deferred until the system is stable on a single machine.
 
-**Confidence Decay**
-Judgement rules learned a long time ago may become stale as preferences change. A decay model (reducing confidence on rules not confirmed in the last N days) is not yet designed.
+**Episodic Store Pruning**
+`episodic.db` currently queries `ORDER BY timestamp DESC LIMIT 500` to keep retrieval fast.  A more principled pruning strategy (deduplicate similar summaries, age out low-relevance episodes) is not yet designed.
+
+**Embedding Model Upgrade Path**
+`openai/text-embedding-3-small` is the current embedding model.  If better models appear on OpenRouter or if the 1536-dimension vectors become expensive to store at scale, the `EmbeddingIndex` needs a migration path for existing vectors.  Not designed yet.
 
 **Error Recovery and Context Correction**
-Manual override of specific judgement rules, rollback of bad context deltas, reprocessing Ledger entries with a corrected extraction prompt. Mechanism not yet designed.
+Manual override of specific judgement rules, rollback of bad context deltas, reprocessing Ledger entries with a corrected extraction prompt. Mechanism not yet designed.  (Versioning infrastructure is the recommended first step.)
+
+**Confidence Decay**
+Judgement rules learned a long time ago may become stale as preferences change. The EMA scoring already gives more weight to recent observations, but a time-based decay model for very old rules is not yet designed.
 
 **Persona Layer**
 Loading mental models of specific thinkers as advisory lenses on Orchestrator decisions. Deliberately post v1.
 
 **Offline Transcription Fallback**
-Voice input (Section 3.1) depends on OpenRouter being reachable. north has no fallback when the network is down or OpenRouter is degraded. A local Whisper variant (e.g. `mlx-whisper`) behind the same Inference Router interface would close this gap, but the threshold for when it is worth shipping — and the policy for switching modes — is not defined.
+Voice input depends on OpenRouter being reachable. A local Whisper variant (`mlx-whisper`) behind the same `InferenceRouter` interface would close this gap, but the switching policy is not yet defined.
+
+**Privacy Enforcement Layer**
+The `privacy_rules.md` document defines which agents can access which data, but there is no active enforcement layer that reads these rules before injecting context into agent prompts.  The `_load_context()` override in `AgentBase` is the correct place to add this check.  Deferred.
 
 ---
 
@@ -1516,11 +1681,13 @@ conn.execute("PRAGMA journal_mode=WAL")
 conn.execute("PRAGMA synchronous=NORMAL")
 ```
 
-Four SQLite databases:
+Six SQLite databases:
 ```
-~/.north/ledger.db       <- ledger entries
-~/.north/jobs.db         <- job queue
-~/.north/tools.db        <- tool confidence scores
+~/.north/ledger.db       <- ledger entries (append-only)
+~/.north/jobs.db         <- job queue + user cron entries
+~/.north/tools.db        <- tool confidence scores (EMA-updated)
+~/.north/embeddings.db   <- paragraph embedding vectors for context documents
+~/.north/episodic.db     <- per-task episode summaries with embeddings
 ~/.north/tasks/          <- one .db file per task (Task Context Object)
 ```
 
@@ -1827,7 +1994,8 @@ ddgs = ">=1.0.0"                # DuckDuckGo search (no API key required)
 # Voice input
 sounddevice = ">=0.4.6"         # push-to-talk audio capture
 pynput = ">=1.7.6"              # keyboard listener for push-to-talk hotkey
-numpy = ">=1.26.0"              # sounddevice returns numpy arrays
+numpy = ">=1.26.0"              # sounddevice returns numpy arrays; cosine similarity
+                                #   in EmbeddingIndex and EpisodicStore
 
 # System
 psutil = ">=5.9.0"              # cross-platform process and port management (north start/stop)

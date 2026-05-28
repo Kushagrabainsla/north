@@ -75,6 +75,7 @@ class ExecutionPlanner:
                     priority=PoolPriority.HIGH,
                     component="router",
                     task_id=task_id,
+                    json_mode=True,
                 )
             )
         except Exception as e:

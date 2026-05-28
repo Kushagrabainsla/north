@@ -17,12 +17,25 @@ class ScheduleTaskTool(Tool):
     name = "schedule_task"
     description = (
         "Schedule a task to run in the future. "
-        "One-shot: provide run_at (ISO 8601 UTC, e.g. '2026-05-24T17:00:00Z'). "
-        "Recurring daily/weekly: provide hour (0-23) and minute (0-59, default 0); "
-        "optionally weekday (0=Mon … 6=Sun) for weekly, omit for daily. "
-        "Params: task (str, required), agent (str, optional, default 'general'), "
-        "run_at (str), hour (int), minute (int), weekday (int 0-6)."
+        "One-shot: provide run_at (ISO 8601 UTC). "
+        "Recurring: provide hour (0-23) and optional minute/weekday."
     )
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "task": {"type": "string", "description": "The task prompt to run"},
+            "agent": {
+                "type": "string",
+                "description": "Agent to run it (default 'general')",
+                "default": "general",
+            },
+            "run_at": {"type": "string", "description": "ISO 8601 UTC datetime for one-shot"},
+            "hour": {"type": "integer", "description": "Hour (0-23) for recurring schedule"},
+            "minute": {"type": "integer", "description": "Minute (0-59, default 0)"},
+            "weekday": {"type": "integer", "description": "Weekday 0=Mon…6=Sun (omit for daily)"},
+        },
+        "required": ["task"],
+    }
 
     def __init__(self, job_processor, cron_store) -> None:
         self._job_processor = job_processor
