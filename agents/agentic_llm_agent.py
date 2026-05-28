@@ -20,12 +20,40 @@ from tools.models import ToolInput
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 
-_MAX_ITERATIONS = 12
+_MAX_ITERATIONS = 40  # overridden at runtime by settings.agent_max_iterations
 # Cap the JSON-serialised tool result injected back into the conversation.
 # ~40k chars ≈ 10k tokens — generous but bounded.
 _MAX_TOOL_RESULT_CHARS = 40_000
 
 # Special tool offered to every agent so it can gate irreversible actions.
+_DELEGATE_TASK_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "delegate_task",
+        "description": (
+            "Delegate a sub-task to a specialist agent. "
+            "Use when a sub-problem clearly belongs to a different domain specialist "
+            "(e.g. code, finance, health). The specialist runs its own ReAct loop and "
+            "returns a result. Only use when the sub-task genuinely requires domain expertise "
+            "you don't have — don't delegate work you can do yourself."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string",
+                    "description": "Name of the specialist agent (e.g. 'code', 'finance', 'health', 'general').",
+                },
+                "task": {
+                    "type": "string",
+                    "description": "The full sub-task prompt for the specialist. Be specific.",
+                },
+            },
+            "required": ["agent", "task"],
+        },
+    },
+}
+
 _REQUEST_APPROVAL_SCHEMA: dict = {
     "type": "function",
     "function": {
@@ -75,11 +103,12 @@ class AgenticLLMAgent(LLMAgent):
             {"role": "user", "content": user_text},
         ]
 
-        tools = [t.schema() for t, _ in scored_tools] + [_REQUEST_APPROVAL_SCHEMA]
+        tools = [t.schema() for t, _ in scored_tools] + [_DELEGATE_TASK_SCHEMA, _REQUEST_APPROVAL_SCHEMA]
         tool_map = {t.name: t for t, _ in scored_tools}
         total_cost_usd: float = 0.0
 
-        for _ in range(_MAX_ITERATIONS):
+        from config.settings import settings as _settings
+        for _ in range(_settings.agent_max_iterations):
             _compact_history(messages)
             token_cb = self._make_token_callback(payload.task_id)
 
@@ -126,7 +155,7 @@ class AgenticLLMAgent(LLMAgent):
                     await self._deps.stream_manager.emit(
                         payload.task_id, "tool_result", {"tool": call.name, "success": success}
                     )
-                if call.name not in ("request_approval",):
+                if call.name not in ("request_approval", "delegate_task"):
                     asyncio.create_task(
                         self._deps.confidence_tracker.record_use(self.name, call.name, success)
                     )
@@ -170,6 +199,10 @@ class AgenticLLMAgent(LLMAgent):
     ) -> tuple[ToolCall, str, bool]:
         """Execute one tool call and return (call, result_json, success)."""
         params = dict(call.params)
+        if call.name == "delegate_task":
+            result_str = await self._delegate_task(payload, params)
+            success = json.loads(result_str).get("success", False)
+            return call, result_str, success
         if call.name == "request_approval":
             decision = await self._request_approval(payload, params)
             result_str = json.dumps({"decision": decision})
@@ -209,6 +242,38 @@ class AgenticLLMAgent(LLMAgent):
             await stream_mgr.emit(_task_id, "token", {"text": token})
 
         return _cb
+
+    async def _delegate_task(
+        self, payload: AgentPayload, params: dict[str, Any]
+    ) -> str:
+        """Run a specialist sub-agent and return its output as a tool result."""
+        registry = self._deps.agent_registry
+        if registry is None:
+            return json.dumps({"success": False, "error": "Agent registry not available for delegation."})
+
+        agent_name = str(params.get("agent", "general"))
+        task = str(params.get("task", ""))
+        if not task:
+            return json.dumps({"success": False, "error": "delegate_task requires a non-empty 'task' parameter."})
+
+        try:
+            agent = registry.get(agent_name)
+        except Exception:
+            try:
+                agent = registry.get("general")
+            except Exception:
+                return json.dumps({"success": False, "error": f"Agent '{agent_name}' not found and no 'general' fallback."})
+
+        sub_payload = AgentPayload(
+            task_id=payload.task_id,
+            prompt=task,
+            workspace=payload.workspace,
+        )
+        try:
+            result = await agent.run(sub_payload)
+            return json.dumps({"success": True, "output": result.output, "summary": result.summary})
+        except Exception as exc:
+            return json.dumps({"success": False, "error": str(exc)})
 
     async def _request_approval(
         self, payload: AgentPayload, params: dict[str, Any]

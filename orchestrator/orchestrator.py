@@ -6,6 +6,7 @@ See docs/CODING_STYLE.md Sections 2.5, 4.1, 6, 10.2, 14.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any
@@ -15,20 +16,44 @@ from agents.registry import AgentRegistry
 from approval import Card, CardType, JudgementFilter, Notifier
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from inference.cost_tracker import CostTracker
-from orchestrator.classifier import IntentClassifier
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, RoutingError
-from orchestrator.failure_handler import FailureHandler
-from orchestrator.models import ExecutionPlan, IntentClassification, TaskRequest, TaskResponse
+from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification, TaskRequest, TaskResponse
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.router import ExecutionPlanner
 from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from config.strategy import NorthSettings, StrategyMode, describe
+from tools.registry import ToolRegistry
+from tools.models import ToolInput
 from utils.ids import generate_id, generate_task_id
 from utils.time import format_timestamp, utcnow
 
 _STRATEGY_RE = re.compile(r"\b(eco|cruise|sport)\b", re.IGNORECASE)
+
+
+def _format_tool_result(tool_name: str, data: dict | None) -> str:
+    """Format a tool result dict as a human-readable string."""
+    if not data:
+        return "Done."
+    if tool_name == "write_file":
+        return f"Created `{data.get('path', '?')}` ({data.get('bytes_written', 0)} bytes written)."
+    if tool_name == "patch_file":
+        return f"Patched `{data.get('path', '?')}`."
+    if tool_name == "read_file":
+        return str(data.get("content", "(empty)"))
+    if tool_name == "list_dir":
+        entries = data.get("entries", [])
+        return "\n".join(str(e) for e in entries) if entries else "(empty directory)"
+    if tool_name == "bash":
+        return str(data.get("output", data.get("stdout", ""))).strip()
+    if tool_name == "search_files":
+        results = data.get("results", [])
+        return "\n".join(str(r) for r in results) if results else "No matches found."
+    if tool_name == "web_search":
+        results = data.get("results", [])
+        return "\n".join(str(r) for r in results) if results else "No results."
+    return json.dumps(data, indent=2)
 _STRATEGY_INTENT_RE = re.compile(
     r"\b(set|switch|use|change|enable|activate|mode)\b", re.IGNORECASE
 )
@@ -46,7 +71,6 @@ class Orchestrator:
         self,
         ledger: LedgerWriter,
         agent_registry: AgentRegistry,
-        classifier: IntentClassifier,
         north_star_checker: NorthStarChecker,
         execution_planner: ExecutionPlanner,
         task_context_store: TaskContextStore,
@@ -58,10 +82,10 @@ class Orchestrator:
         synthesizer: ResultSynthesizer | None = None,
         cost_tracker: CostTracker | None = None,
         episodic_store: Any | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
-        self._classifier = classifier
         self._north_star_checker = north_star_checker
         self._execution_planner = execution_planner
         self._task_context_store = task_context_store
@@ -73,6 +97,7 @@ class Orchestrator:
         self._synthesizer = synthesizer
         self._cost_tracker = cost_tracker
         self._episodic_store = episodic_store
+        self._tool_registry = tool_registry
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -231,9 +256,8 @@ class Orchestrator:
                     await self._stream_manager.emit_done(task_id)
                     return
 
-            classification = await self._stage_classify(task_id, request.prompt)
+            classification, plan = await self._stage_plan(task_id, request.prompt)
             await self._stage_north_star(task_id, request.prompt, classification)
-            plan = await self._stage_route(task_id, request.prompt, classification)
             await self._stage_execute(
                 task_id, request.prompt, plan, request.workspace, domain=classification.domain
             )
@@ -263,12 +287,13 @@ class Orchestrator:
             await self._stream_manager.emit(task_id, "task_failed", {"error": str(e)})
             await self._stream_manager.emit_done(task_id)
 
-    async def _stage_classify(
+    async def _stage_plan(
         self, task_id: str, prompt: str
-    ) -> IntentClassification:
-        """Stage 1: Classify the prompt."""
+    ) -> tuple[IntentClassification, ExecutionPlan]:
+        """Stage 1+3: Classify intent and build execution plan in one LLM call."""
         await self._stream_manager.emit(task_id, "classifying", {"prompt": prompt})
-        classification = await self._classifier.classify(prompt, task_id=task_id)
+
+        classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id)
 
         asyncio.create_task(self._ledger.write(LedgerEntry(
             id=generate_id(),
@@ -285,7 +310,13 @@ class Orchestrator:
             "domain": classification.domain,
             "reasoning": classification.reasoning,
         })
-        return classification
+        await self._stream_manager.emit(task_id, "routed", {
+            "agents": plan.agents,
+            "parallel_groups": plan.parallel_groups,
+            "mode": plan.mode.value,
+        })
+        await self._task_context_store.initialize_task(task_id, plan.agents)
+        return classification, plan
 
     async def _stage_north_star(
         self,
@@ -347,33 +378,6 @@ class Orchestrator:
 
         await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": reasoning})
 
-    async def _stage_route(
-        self,
-        task_id: str,
-        prompt: str,
-        classification: IntentClassification,
-    ) -> ExecutionPlan:
-        """Stage 3: Build the execution plan."""
-        await self._stream_manager.emit(task_id, "routing", {"domain": classification.domain})
-        plan = await self._execution_planner.plan(prompt, classification, task_id)
-
-        asyncio.create_task(self._ledger.write(LedgerEntry(
-            id=generate_id(),
-            timestamp=utcnow(),
-            source=LedgerSource.SYSTEM,
-            task_id=task_id,
-            action="routed",
-            output=f"agents={plan.agents}",
-            status=LedgerStatus.COMPLETED,
-        )))
-
-        await self._stream_manager.emit(task_id, "routed", {
-            "agents": plan.agents,
-            "parallel_groups": plan.parallel_groups,
-        })
-        await self._task_context_store.initialize_task(task_id, plan.agents)
-        return plan
-
     async def _stage_execute(
         self,
         task_id: str,
@@ -386,18 +390,102 @@ class Orchestrator:
         if not workspace:
             from config.settings import settings
             workspace = settings.north_workspace
+
+        if plan.mode == ExecutionMode.SINGLE_TOOL and plan.direct_tool:
+            await self._execute_single_tool(task_id, prompt, plan, workspace)
+            return
+
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
 
-        for group in plan.parallel_groups:
-            agents = [self._agent_registry.get(name) for name in group]
-            await self._execute_agent_group(task_id, prompt, agents, workspace)
+        if plan.mode == ExecutionMode.HIERARCHICAL:
+            prior_context = ""
+            for group in plan.parallel_groups:
+                agents = [self._agent_registry.get(name) for name in group]
+                effective_prompt = (
+                    f"{prompt}\n\n## Results from earlier steps\n{prior_context}"
+                    if prior_context else prompt
+                )
+                await self._execute_agent_group(task_id, effective_prompt, agents, workspace)
+                # Collect this group's outputs to feed into the next group
+                all_data = await self._task_context_store.get_all(task_id)
+                snippets = [
+                    f"[{name}]: {(all_data.get(name) or {}).get('output', '')}"
+                    for name in group
+                    if (all_data.get(name) or {}).get("output")
+                ]
+                prior_context = "\n\n".join(snippets)
+        else:
+            for group in plan.parallel_groups:
+                agents = [self._agent_registry.get(name) for name in group]
+                await self._execute_agent_group(task_id, prompt, agents, workspace)
 
-        await self._maybe_synthesize(task_id, plan.agents)
+        await self._maybe_synthesize(task_id, plan.agents, plan.mode)
         asyncio.create_task(
             self._record_episode(task_id, prompt, plan.agents, domain)
         )
-        task_cost_usd = self._cost_tracker.pop_task_cost(task_id) if self._cost_tracker else 0.0
+        await self._finish_task(task_id)
 
+    async def _execute_single_tool(
+        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str
+    ) -> None:
+        """Execute a single tool call directly, bypassing the agent layer."""
+        from tools.exceptions import ToolNotFoundError
+
+        await self._stream_manager.emit(task_id, "executing", {"agents": []})
+        await self._stream_manager.emit(task_id, "tool_called", {
+            "tool": plan.direct_tool, "params": plan.direct_tool_params
+        })
+
+        output = ""
+        success = False
+        try:
+            if self._tool_registry is None:
+                raise ToolNotFoundError("No tool registry available.")
+            tool = self._tool_registry.get(plan.direct_tool)  # type: ignore[arg-type]
+            params = {**plan.direct_tool_params}
+            if workspace and "workspace" not in params:
+                params["workspace"] = workspace
+            result = await tool.run(ToolInput(params=params))
+            success = result.success
+            output = (
+                _format_tool_result(plan.direct_tool, result.data)  # type: ignore[arg-type]
+                if result.success
+                else f"Tool error: {result.error}"
+            )
+        except ToolNotFoundError:
+            logger.warning("single_tool fallback: tool %r not found, re-routing to agent", plan.direct_tool)
+            fallback = self._execution_planner._build_fallback_plan("general", task_id)
+            await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
+            for group in fallback.parallel_groups:
+                agents = [self._agent_registry.get(name) for name in group]
+                await self._execute_agent_group(task_id, prompt, agents, workspace)
+            await self._finish_task(task_id)
+            return
+        except Exception as exc:
+            output = f"Tool execution error: {exc}"
+            success = False
+
+        await self._stream_manager.emit(task_id, "tool_result", {
+            "tool": plan.direct_tool, "success": success
+        })
+
+        asyncio.create_task(self._ledger.write(LedgerEntry(
+            id=generate_id(),
+            timestamp=utcnow(),
+            source=LedgerSource.AGENT,
+            task_id=task_id,
+            agent="tool_executor",
+            action="agent_completed",
+            output=output,
+            status=LedgerStatus.COMPLETED,
+        )))
+
+        await self._stream_manager.emit(task_id, "token", {"text": output})
+        await self._finish_task(task_id)
+
+    async def _finish_task(self, task_id: str) -> None:
+        """Write completion ledger entry and emit done events."""
+        task_cost_usd = self._cost_tracker.pop_task_cost(task_id) if self._cost_tracker else 0.0
         asyncio.create_task(self._ledger.write(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
@@ -430,9 +518,17 @@ class Orchestrator:
         except Exception:
             logger.debug("Episodic record failed for task %s", task_id)
 
-    async def _maybe_synthesize(self, task_id: str, agents: list[str]) -> None:
-        """Synthesize outputs from multiple agents into one response, if applicable."""
+    async def _maybe_synthesize(
+        self, task_id: str, agents: list[str], mode: ExecutionMode = ExecutionMode.PARALLEL
+    ) -> None:
+        """Synthesize outputs from multiple agents into one response, if applicable.
+
+        Only runs for parallel and hierarchical modes — single_agent produces one
+        coherent output that needs no synthesis.
+        """
         if self._synthesizer is None or len(agents) < 2:
+            return
+        if mode not in (ExecutionMode.PARALLEL, ExecutionMode.HIERARCHICAL):
             return
 
         all_data = await self._task_context_store.get_all(task_id)

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     confidence_decrease_per_unhelpful_use: float = 0.03
     confidence_auto_approve_threshold: float = 0.8
     inference_pool_refresh_interval_hours: int = 6
+    agent_max_iterations: int = 40
 
     @property
     def secret(self) -> str:

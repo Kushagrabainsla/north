@@ -33,7 +33,6 @@ from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.api_router import configure as configure_api
 from orchestrator.api_router import router as orchestrator_router
 from orchestrator.api_router import webhook_router
-from orchestrator.classifier import IntentClassifier
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
 from inference.cost_tracker import CostTracker
@@ -147,6 +146,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     _step("scanning agent registry")
     agent_registry = AgentRegistry(agents_dir=agents_dir, deps=agent_deps)
+    # Wire agent_registry back into deps so agents can delegate sub-tasks.
+    agent_deps.agent_registry = agent_registry
     _step(f"registered agents: {agent_registry.names()}")
     task_context_store = TaskContextStore()
     failure_handler = FailureHandler(
@@ -163,7 +164,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     orchestrator = Orchestrator(
         ledger=deps.ledger,
         agent_registry=agent_registry,
-        classifier=IntentClassifier(inference_router=cost_tracker),
         north_star_checker=NorthStarChecker(
             context_store=deps.context_store,
             inference_router=cost_tracker,
@@ -171,6 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         execution_planner=ExecutionPlanner(
             agent_registry=agent_registry,
             inference_router=cost_tracker,
+            tool_registry=tool_registry,
         ),
         task_context_store=task_context_store,
         failure_handler=failure_handler,
@@ -181,6 +182,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         synthesizer=ResultSynthesizer(inference_router=cost_tracker),
         cost_tracker=cost_tracker,
         episodic_store=episodic_store,
+        tool_registry=tool_registry,
     )
 
     context_injector = ContextInjector(

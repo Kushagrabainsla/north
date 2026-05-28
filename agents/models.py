@@ -89,3 +89,6 @@ class AgentDependencies:
     # Optional episodic memory store.  When present, _load_context() injects
     # semantically relevant past task summaries into every agent prompt.
     episodic_store: "Any | None" = field(default=None)
+    # Agent registry — injected after construction to avoid circular dependency.
+    # Used by AgenticLLMAgent's delegate_task tool for hierarchical execution.
+    agent_registry: "Any | None" = field(default=None)
