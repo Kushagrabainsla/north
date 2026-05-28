@@ -108,7 +108,7 @@ class Orchestrator:
         task_id = generate_task_id()
         now = utcnow()
 
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        asyncio.create_task(self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=now,
             source=request.source,
@@ -141,7 +141,7 @@ class Orchestrator:
 
     async def cancel_task(self, task_id: str) -> None:
         """Write a cancelled entry to the ledger for the given task."""
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        asyncio.create_task(self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
@@ -163,7 +163,7 @@ class Orchestrator:
         status = (
             LedgerStatus.APPROVED if decision == "approved" else LedgerStatus.REJECTED
         )
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        asyncio.create_task(self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.APPROVAL,
@@ -198,6 +198,20 @@ class Orchestrator:
         ]
 
     # ------------------------------------------------------------------ #
+    #  Internal helpers                                                    #
+    # ------------------------------------------------------------------ #
+
+    async def _write_ledger(self, entry: LedgerEntry) -> None:
+        """Ledger write with error logging; safe to fire-and-forget."""
+        try:
+            await self._ledger.write(entry)
+        except Exception as exc:
+            logger.error(
+                "Ledger write failed task=%s action=%s: %s",
+                entry.task_id, entry.action, exc,
+            )
+
+    # ------------------------------------------------------------------ #
     #  Notification with judgement filtering                               #
     # ------------------------------------------------------------------ #
 
@@ -206,7 +220,7 @@ class Orchestrator:
         if self._judgement_filter is not None:
             decision, chosen_option = await self._judgement_filter.check(card)
             if decision is not None:
-                asyncio.create_task(self._ledger.write(LedgerEntry(
+                asyncio.create_task(self._write_ledger(LedgerEntry(
                     id=generate_id(),
                     timestamp=utcnow(),
                     source=LedgerSource.APPROVAL,
@@ -262,7 +276,7 @@ class Orchestrator:
                 task_id, request.prompt, plan, request.workspace, domain=classification.domain
             )
         except NorthStarConflictError as e:
-            asyncio.create_task(self._ledger.write(LedgerEntry(
+            asyncio.create_task(self._write_ledger(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
                 source=LedgerSource.SYSTEM,
@@ -275,7 +289,7 @@ class Orchestrator:
             await self._stream_manager.emit_done(task_id)
         except Exception as e:
             logger.exception("Unhandled error processing task %s: %s", task_id, e)
-            asyncio.create_task(self._ledger.write(LedgerEntry(
+            asyncio.create_task(self._write_ledger(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
                 source=LedgerSource.SYSTEM,
@@ -295,7 +309,7 @@ class Orchestrator:
 
         classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id)
 
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        asyncio.create_task(self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
@@ -339,7 +353,7 @@ class Orchestrator:
             return
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        asyncio.create_task(self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
@@ -397,6 +411,7 @@ class Orchestrator:
 
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
 
+        all_failures: list[str] = []
         if plan.mode == ExecutionMode.HIERARCHICAL:
             prior_context = ""
             for group in plan.parallel_groups:
@@ -405,7 +420,8 @@ class Orchestrator:
                     f"{prompt}\n\n## Results from earlier steps\n{prior_context}"
                     if prior_context else prompt
                 )
-                await self._execute_agent_group(task_id, effective_prompt, agents, workspace)
+                failed = await self._execute_agent_group(task_id, effective_prompt, agents, workspace)
+                all_failures.extend(failed)
                 # Collect this group's outputs to feed into the next group
                 all_data = await self._task_context_store.get_all(task_id)
                 snippets = [
@@ -417,9 +433,15 @@ class Orchestrator:
         else:
             for group in plan.parallel_groups:
                 agents = [self._agent_registry.get(name) for name in group]
-                await self._execute_agent_group(task_id, prompt, agents, workspace)
+                failed = await self._execute_agent_group(task_id, prompt, agents, workspace)
+                all_failures.extend(failed)
 
         await self._maybe_synthesize(task_id, plan.agents, plan.mode)
+
+        if all_failures:
+            names = ", ".join(f"`{n}`" for n in all_failures)
+            note = f"\n\n> **Note:** {len(all_failures)} agent(s) did not complete: {names}. Partial results may be missing."
+            await self._stream_manager.emit(task_id, "token", {"text": note})
         asyncio.create_task(
             self._record_episode(task_id, prompt, plan.agents, domain)
         )
@@ -469,7 +491,7 @@ class Orchestrator:
             "tool": plan.direct_tool, "success": success
         })
 
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        asyncio.create_task(self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.AGENT,
@@ -486,7 +508,7 @@ class Orchestrator:
     async def _finish_task(self, task_id: str) -> None:
         """Write completion ledger entry and emit done events."""
         task_cost_usd = self._cost_tracker.pop_task_cost(task_id) if self._cost_tracker else 0.0
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        asyncio.create_task(self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
@@ -549,18 +571,23 @@ class Orchestrator:
 
     async def _execute_agent_group(
         self, task_id: str, prompt: str, agents: list[Agent], workspace: str = ""
-    ) -> None:
-        """Run a parallel group of agents concurrently; handle per-agent failures."""
+    ) -> list[str]:
+        """Run a parallel group of agents concurrently; handle per-agent failures.
+
+        Returns the names of any agents that failed after all retries.
+        """
         payload = AgentPayload(task_id=task_id, prompt=prompt, workspace=workspace)
         results = await asyncio.gather(
             *[self._run_agent_with_retry(agent, payload) for agent in agents],
             return_exceptions=True,
         )
 
+        failed: list[str] = []
         for agent, result in zip(agents, results):
             if isinstance(result, Exception):
                 logger.error("Agent '%s' failed: %s", agent.name, result)
-                asyncio.create_task(self._ledger.write(LedgerEntry(
+                failed.append(agent.name)
+                asyncio.create_task(self._write_ledger(LedgerEntry(
                     id=generate_id(),
                     timestamp=utcnow(),
                     source=LedgerSource.AGENT,
@@ -572,6 +599,7 @@ class Orchestrator:
                 )))
             else:
                 await self._handle_agent_result(task_id, agent, result)
+        return failed
 
     async def _run_agent_with_retry(
         self, agent: Agent, payload: AgentPayload
@@ -617,7 +645,7 @@ class Orchestrator:
             status="completed",
         )
 
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        asyncio.create_task(self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.AGENT,
