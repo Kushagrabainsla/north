@@ -6,8 +6,10 @@ services:
       - "8000:8000"
     volumes:
       - north_data:/data
+      - ${NORTH_WORKSPACE:-/tmp/north_workspace}:${NORTH_WORKSPACE:-/tmp/north_workspace}
     environment:
       - NORTH_HOME=/data
+      - NORTH_WORKSPACE=${NORTH_WORKSPACE:-}
       - NORTH_SECRET=${NORTH_SECRET:-}
       - NORTH_OPENROUTER_API_KEY=${NORTH_OPENROUTER_API_KEY:-}
       - NORTH_ENV=${NORTH_ENV:-production}

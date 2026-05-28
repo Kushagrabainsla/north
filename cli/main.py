@@ -1182,6 +1182,15 @@ def _find_compose_file() -> Optional[Path]:
     return None
 
 
+def _find_git_root(start: Path) -> Path:
+    """Walk up from start to find the git repo root. Falls back to start."""
+    current = start.resolve()
+    for candidate in [current, *current.parents]:
+        if (candidate / ".git").exists():
+            return candidate
+    return current
+
+
 def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
@@ -1193,6 +1202,10 @@ def start(
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (local mode only)."),
     local: bool = typer.Option(False, "--local", help="Skip Docker; run directly with uvicorn."),
     no_chat: bool = typer.Option(False, "--no-chat", help="Start server only; skip interactive chat."),
+    workspace: Optional[str] = typer.Option(
+        None, "--workspace", "-w",
+        help="Root directory agents can read/write. Defaults to current directory.",
+    ),
 ) -> None:
     """Start north, then drop into interactive chat.
 
@@ -1200,6 +1213,9 @@ def start(
     Docker is available. Pass --local to force direct uvicorn launch.
     Pass --no-chat to start the server without entering the chat REPL.
     """
+    base = Path(workspace).resolve() if workspace else Path.cwd()
+    resolved_workspace = str(_find_git_root(base))
+
     compose_file = _find_compose_file()
     use_docker = not local and _docker_available() and compose_file is not None
 
@@ -1207,10 +1223,13 @@ def start(
         typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
         typer.echo(f"  Mode         → Docker Compose")
         typer.echo(f"  Compose file → {compose_file}")
+        typer.echo(f"  Workspace    → {resolved_workspace}")
         typer.echo(f"  Web UI       → http://127.0.0.1:{port}/ui/")
         typer.echo("")
+        docker_env = {**os.environ, "NORTH_WORKSPACE": resolved_workspace}
         result = subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
+            env=docker_env,
             check=False,
         )
         if result.returncode != 0:
@@ -1221,7 +1240,7 @@ def start(
         _sync_docker_secret(compose_file)
 
         if not no_chat:
-            _chat_loop()
+            _chat_loop(workspace=resolved_workspace)
         return
 
     if not local and not _docker_available():
@@ -1250,7 +1269,7 @@ def start(
             typer.secho(f"north is already running on port {port}.", fg=typer.colors.YELLOW)
             if not no_chat:
                 typer.echo("")
-                _chat_loop()
+                _chat_loop(workspace=resolved_workspace)
             return
         else:
             typer.secho(f"Port {port} is in use by another application.", fg=typer.colors.YELLOW)
@@ -1272,6 +1291,7 @@ def start(
     typer.echo(f"  Web UI       → http://{host}:{port}/ui/")
     typer.echo(f"  API docs     → http://{host}:{port}/docs")
     typer.echo(f"  Home         → {settings.north_home}")
+    typer.echo(f"  Workspace    → {resolved_workspace}")
     typer.echo("")
 
     import uvicorn
@@ -1301,7 +1321,7 @@ def start(
 
     threading.Thread(target=_run_server, daemon=True).start()
     _wait_for_server(host, port)
-    _chat_loop()
+    _chat_loop(workspace=resolved_workspace)
 
 
 @app.command("stop")

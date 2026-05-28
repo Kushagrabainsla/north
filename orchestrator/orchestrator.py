@@ -383,6 +383,9 @@ class Orchestrator:
         domain: str = "general",
     ) -> None:
         """Stage 4: Execute agents in dependency order, then optionally synthesize."""
+        if not workspace:
+            from config.settings import settings
+            workspace = settings.north_workspace
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
 
         for group in plan.parallel_groups:

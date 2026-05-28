@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # Paths — NORTH_HOME env var is the canonical override (used in Docker)
     north_home: Path = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
 
+    # Default workspace for filesystem/shell tools when no workspace is provided per-request.
+    # Set via NORTH_WORKSPACE env var. In Docker this is auto-populated by the CLI.
+    north_workspace: str = ""
+
     # Pre-shared secret override — set NORTH_SECRET in Docker instead of using a key file
     north_secret: str = os.environ.get("NORTH_SECRET", "")
 
