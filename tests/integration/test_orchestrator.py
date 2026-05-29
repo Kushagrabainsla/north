@@ -9,33 +9,32 @@ logic that unit tests on storage primitives cannot catch.
 from __future__ import annotations
 
 import asyncio
-import pytest
-
 from pathlib import Path
 
+import pytest
+
+from agents.models import AgentDependencies, AgentPayload
 from approval.store import ApprovalStore
 from approval.terminal import TerminalNotifier
-from agents.models import AgentDependencies, AgentPayload
 from context import FileContextStore
 from context.extraction import ExtractionPipeline
+from jobs import SQLiteJobProcessor
 from ledger import SQLiteLedgerWriter
 from ledger.base import LedgerFilters
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from jobs import SQLiteJobProcessor
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
 from orchestrator.task_context import TaskContextStore
+
+# Import shared test utilities from conftest
+from tests.conftest import MockInferenceRouter
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.time import utcnow
-
-# Import shared test utilities from conftest
-from tests.conftest import MockInferenceRouter
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -151,9 +150,10 @@ async def test_cancel_task_writes_cancelled_entry(tmp_path):
 @pytest.mark.asyncio
 async def test_concurrent_task_cap_raises(tmp_path):
     """submit_task() must raise OrchestratorError when the concurrent cap is hit."""
+    import unittest.mock as mock
+
     from orchestrator.exceptions import OrchestratorError
     from orchestrator.orchestrator import _MAX_CONCURRENT_TASKS
-    import unittest.mock as mock
 
     orch, _, _ = _make_orchestrator(tmp_path)
 
@@ -187,9 +187,10 @@ async def test_strategy_command_completes_without_agent(tmp_path):
 @pytest.mark.asyncio
 async def test_north_star_skipped_on_low_confidence(tmp_path):
     """When the planner returns confidence < 0.7, north star check must be skipped."""
-    from orchestrator.orchestrator import _NORTH_STAR_CONFIDENCE_THRESHOLD
-    from orchestrator.models import IntentClassification, ExecutionPlan, ExecutionMode
     import unittest.mock as mock
+
+    from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
+    from orchestrator.orchestrator import _NORTH_STAR_CONFIDENCE_THRESHOLD
 
     orch, ledger, _ = _make_orchestrator(tmp_path)
 
@@ -210,14 +211,13 @@ async def test_north_star_skipped_on_low_confidence(tmp_path):
     # Patch plan_all to return our low-confidence classification
     with mock.patch.object(
         orch._execution_planner, "plan_all", return_value=(low_conf, dummy_plan)
-    ):
-        with mock.patch.object(orch._north_star_checker, "check_alignment") as mock_check:
-            response = await orch.submit_task(
-                TaskRequest(prompt="send an email", source=LedgerSource.PROMPT)
-            )
-            await asyncio.sleep(0.3)
-            # check_alignment must NOT have been called
-            mock_check.assert_not_called()
+    ), mock.patch.object(orch._north_star_checker, "check_alignment") as mock_check:
+        response = await orch.submit_task(
+            TaskRequest(prompt="send an email", source=LedgerSource.PROMPT)
+        )
+        await asyncio.sleep(0.3)
+        # check_alignment must NOT have been called
+        mock_check.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +409,6 @@ async def test_allowed_documents_respects_rules(tmp_path):
     """When privacy_rules.md has a matching rule, _allowed_documents() returns only those docs."""
     from agents.base import Agent
     from agents.models import AgentConfig
-    from context.base import ContextStore
     from context.models import ContextDocument
 
     context_store = FileContextStore(tmp_path / "context")
@@ -450,7 +449,8 @@ async def test_allowed_documents_respects_rules(tmp_path):
 async def test_delegate_task_blocked_at_depth_limit(tmp_path):
     """_delegate_task() must return a failure JSON when delegation_depth >= limit."""
     import json
-    from agents.agentic_llm_agent import AgenticLLMAgent, _MAX_DELEGATION_DEPTH
+
+    from agents.agentic_llm_agent import _MAX_DELEGATION_DEPTH, AgenticLLMAgent
     from agents.models import AgentConfig
 
     context_store = FileContextStore(tmp_path / "context")
@@ -488,7 +488,8 @@ async def test_delegate_task_blocked_at_depth_limit(tmp_path):
 async def test_episodic_store_prunes_old_entries(tmp_path):
     """record() must remove episodes beyond the retention window."""
     import datetime
-    from context.episodic import EpisodicStore, _RETENTION_DAYS
+
+    from context.episodic import _RETENTION_DAYS, EpisodicStore
     from utils.db import open_db_connection
 
     store = EpisodicStore(db_path=tmp_path / "episodic.db")

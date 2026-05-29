@@ -6,24 +6,25 @@ See README Section 6.8 and docs/CODING_STYLE.md Sections 12.1-12.4.
 from __future__ import annotations
 
 import datetime
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agents.registry import AgentRegistry
+from config.strategy import NorthSettings, StrategyMode
 from context.base import ContextStore
 from context.injection import ContextInjector
 from context.models import ContextDocument
 from inference.base import InferenceRouter
 from inference.models import CostSummary
-from config.strategy import NorthSettings, StrategyMode
 from jobs.base import JobProcessor
 from jobs.cron_store import UserCronStore
 from jobs.models import Job, JobPriority, JobStatus, JobType
 from ledger.base import LedgerFilters, LedgerWriter
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from ledger.models import LedgerEntry, LedgerSource
 from orchestrator.models import TaskRequest, TaskResponse
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
@@ -37,6 +38,19 @@ router = APIRouter(
     tags=["orchestrator"],
     dependencies=[Depends(verify_request_secret)],
 )
+
+# Unauthenticated router — only hosts /health so Docker / load-balancer probes
+# don't need the API secret.
+health_router = APIRouter(tags=["health"])
+
+
+@health_router.get("/health", include_in_schema=True)
+async def health_check() -> dict:
+    """Liveness probe — returns 200 {"status": "ok"} with no authentication.
+
+    Used by Docker HEALTHCHECK and any upstream load-balancer probe.
+    """
+    return {"status": "ok"}
 
 # Module-level singletons injected by app.py at startup
 _orchestrator: Orchestrator | None = None
@@ -227,9 +241,9 @@ _LEDGER_EXCLUDE = {"agent_output", "tools_used"}
 
 @router.get("/ledger", response_model=list[LedgerEntry], response_model_exclude=_LEDGER_EXCLUDE)
 async def query_ledger(
-    task_id: Optional[str] = None,
-    agent: Optional[str] = None,
-    source: Optional[str] = None,
+    task_id: str | None = None,
+    agent: str | None = None,
+    source: str | None = None,
     limit: int = 50,
 ) -> list[LedgerEntry]:
     """Query ledger entries with optional filters."""
@@ -325,8 +339,8 @@ async def write_context(doc: str, body: ContextWriteRequest) -> None:
 
 @router.post("/context/add", status_code=202)
 async def add_context(
-    text: Optional[str] = Form(None),
-    url: Optional[str] = Form(None),
+    text: str | None = Form(None),
+    url: str | None = Form(None),
     file: UploadFile | None = None,
 ) -> dict[str, str]:
     """Manual context injection: accepts text, URL, or file upload (multipart form)."""
@@ -380,7 +394,7 @@ def _job_to_out(j: Job) -> JobOut:
 
 @router.get("/jobs", response_model=list[JobOut])
 async def list_jobs(
-    status: Optional[str] = None,
+    status: str | None = None,
     limit: int = 50,
 ) -> list[JobOut]:
     """List job queue entries, optionally filtered by status."""
@@ -438,7 +452,7 @@ class CronEntryOut(BaseModel):
     task: str
     hour: int
     minute: int
-    weekday: Optional[int]
+    weekday: int | None
 
 
 class CronEntryCreate(BaseModel):
@@ -447,7 +461,7 @@ class CronEntryCreate(BaseModel):
     task: str
     hour: int
     minute: int = 0
-    weekday: Optional[int] = None
+    weekday: int | None = None
 
 
 @router.get("/cron", response_model=list[CronEntryOut])
@@ -488,7 +502,7 @@ async def delete_cron_entry(name: str) -> None:
 @router.get("/inference/costs", response_model=CostSummary)
 async def inference_costs(
     period: str = "week",
-    agent: Optional[str] = None,
+    agent: str | None = None,
 ) -> CostSummary:
     """Aggregated inference costs over a period (day/week/month)."""
     now = utcnow()
@@ -545,7 +559,7 @@ class ToolConfidenceOut(BaseModel):
 
 
 @router.get("/tools/confidence", response_model=list[ToolConfidenceOut])
-async def tool_confidence(agent: Optional[str] = None) -> list[ToolConfidenceOut]:
+async def tool_confidence(agent: str | None = None) -> list[ToolConfidenceOut]:
     """Tool confidence scores, optionally filtered by agent."""
     tracker = _confidence()
     if agent is not None:

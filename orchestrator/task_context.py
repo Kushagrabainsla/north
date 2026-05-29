@@ -164,7 +164,7 @@ class TaskContextStore:
                     await asyncio.wait_for(
                         condition.wait(), timeout=min(remaining, poll_interval)
                     )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     async def write(

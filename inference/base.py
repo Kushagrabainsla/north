@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-
-from typing import AsyncIterator, Callable, Awaitable
+from collections.abc import Awaitable, Callable
 
 from inference.models import (
     CompletionRequest,

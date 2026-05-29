@@ -7,12 +7,13 @@ from pathlib import Path
 import pytest
 
 from tools import (
-    EMA_ALPHA,
-    ConfidenceTracker,
     DEFAULT_CONFIDENCE,
+    EMA_ALPHA,
     MAX_CONFIDENCE,
     MIN_CONFIDENCE,
+    ConfidenceTracker,
 )
+
 
 # Convenience: one EMA step from the default prior toward a given outcome.
 def _ema(prior: float, outcome: float) -> float:

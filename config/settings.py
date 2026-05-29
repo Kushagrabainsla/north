@@ -9,11 +9,15 @@ import os
 from pathlib import Path
 from typing import Literal
 
+from pydantic import PrivateAttr
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     """Configuration loaded from the environment with prefix `NORTH_` or a `.env` file."""
+
+    # In-memory cache for the secret so the key file is only read once.
+    _secret_cache: str = PrivateAttr(default="")
 
     # Required for production; empty default allows import/initialization without crash
     openrouter_api_key: str = ""
@@ -48,13 +52,21 @@ class Settings(BaseSettings):
 
     @property
     def secret(self) -> str:
-        """Return the shared secret: env var takes priority over the key file."""
+        """Return the shared secret: env var takes priority over the key file.
+
+        The key-file path is read once and cached in ``_secret_cache`` so that
+        subsequent calls (one per authenticated request) do not hit the filesystem.
+        """
         if self.north_secret:
             return self.north_secret
+        if self._secret_cache:
+            return self._secret_cache
         secret_file = self.north_home / "secret.key"
         if not secret_file.exists():
             return ""
-        return secret_file.read_text(encoding="utf-8").strip()
+        value = secret_file.read_text(encoding="utf-8").strip()
+        self._secret_cache = value
+        return value
 
     @property
     def is_development(self) -> bool:

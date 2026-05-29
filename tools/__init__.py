@@ -2,11 +2,11 @@
 
 from tools.base import AuthenticatedTool, CacheableTool, Tool
 from tools.confidence import (
-    EMA_ALPHA,
-    ConfidenceTracker,
     DEFAULT_CONFIDENCE,
+    EMA_ALPHA,
     MAX_CONFIDENCE,
     MIN_CONFIDENCE,
+    ConfidenceTracker,
 )
 from tools.exceptions import (
     ToolAuthError,

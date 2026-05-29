@@ -165,6 +165,7 @@ def _strip_html(html: str) -> str:
 
 def _extract_pdf(content: bytes) -> str:
     import io
+
     from pypdf import PdfReader  # type: ignore[import-untyped]
 
     reader = PdfReader(io.BytesIO(content))
@@ -174,6 +175,7 @@ def _extract_pdf(content: bytes) -> str:
 
 def _extract_docx(content: bytes) -> str:
     import io
+
     from docx import Document  # type: ignore[import-untyped]
 
     doc = Document(io.BytesIO(content))

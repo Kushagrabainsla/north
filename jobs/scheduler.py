@@ -11,7 +11,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from jobs.base import JobProcessor
@@ -85,13 +85,13 @@ class CronScheduler:
         self,
         processor: JobProcessor,
         entries: list[CronEntry],
-        cron_store: "UserCronStore | None" = None,
+        cron_store: UserCronStore | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._processor = processor
         self._builtin_entries = list(entries)
         self._cron_store = cron_store
-        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def _all_entries(self) -> list[CronEntry]:
         entries = list(self._builtin_entries)
@@ -138,6 +138,8 @@ class CronScheduler:
         immediately rather than skipped until the next scheduled cycle.
         Returns only on cancellation.
         """
+        if not self._builtin_entries and self._cron_store is None:
+            return
         first_tick = True
         while True:
             entries = await self._all_entries()

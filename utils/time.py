@@ -10,7 +10,7 @@ import datetime
 
 def utcnow() -> datetime.datetime:
     """Return the current timezone-aware UTC datetime."""
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 def format_timestamp(dt: datetime.datetime | None = None) -> str:

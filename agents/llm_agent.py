@@ -6,16 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agents.base import Agent
+from agents.exceptions import AgentConfigError, AgentOutputParseError
+from agents.models import AgentPayload
 from inference.models import (
     POOL_TO_PRIORITY,
     CompletionRequest,
     PoolPriority,
 )
 from tools.base import Tool
-
-from agents.base import Agent
-from agents.exceptions import AgentConfigError, AgentOutputParseError
-from agents.models import AgentPayload
 
 
 class LLMAgent(Agent):

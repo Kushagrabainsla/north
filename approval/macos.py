@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import shutil
 import sys
-from typing import Any
 
 from approval.base import Notifier
 from approval.models import Card, CardType
@@ -88,7 +87,6 @@ class MacOSNotifier(Notifier):
             # If the user clicked a valid action button, we can relay this
             # back to the orchestrator if a callback server is active.
             # Standard callback handling is done in callback_server.py.
-            pass
 
 
 # Provide AlerterNotifier alias as used in dependencies.py

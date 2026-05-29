@@ -71,7 +71,7 @@ class AgentConfig(BaseModel):
         return f"{self.agent.capitalize()}Agent"
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "AgentConfig":
+    def from_yaml(cls, path: Path) -> AgentConfig:
         with path.open(encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return cls(**data)
@@ -90,13 +90,13 @@ class AgentDependencies:
     tool_registry: ToolRegistry
     confidence_tracker: ConfidenceTracker
     stream_manager: StreamEmitter | None = field(default=None)
-    episodic_store: "Any | None" = field(default=None)
+    episodic_store: Any | None = field(default=None)
     # Injected after construction to break the circular dependency:
     # agent_registry → agent_deps → agent_registry.
-    agent_registry: "Any | None" = field(default=None)
+    agent_registry: Any | None = field(default=None)
     # Required for the request_approval tool.  Must be the same ApprovalStore
     # instance used by the Orchestrator so waits and resolutions are consistent.
-    approval_store: "ApprovalStore | None" = field(default=None)
+    approval_store: ApprovalStore | None = field(default=None)
     # Iteration caps injected from Settings so agents never read config globals.
     agent_max_iterations: int = 40
     agent_history_keep_recent: int = 10

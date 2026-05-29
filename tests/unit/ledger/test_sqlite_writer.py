@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ def _entry(
 ) -> LedgerEntry:
     return LedgerEntry(
         id=id_,
-        timestamp=timestamp or datetime.now(timezone.utc),
+        timestamp=timestamp or datetime.now(UTC),
         source=source,
         **kwargs,
     )
@@ -106,7 +106,7 @@ async def test_query_filters_by_source(writer: SQLiteLedgerWriter) -> None:
 
 
 async def test_query_filters_by_since(writer: SQLiteLedgerWriter) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await writer.write(_entry("old", timestamp=now - timedelta(hours=2)))
     await writer.write(_entry("recent", timestamp=now - timedelta(minutes=5)))
     await writer.write(_entry("newest", timestamp=now))
@@ -117,7 +117,7 @@ async def test_query_filters_by_since(writer: SQLiteLedgerWriter) -> None:
 
 
 async def test_query_orders_by_timestamp_descending(writer: SQLiteLedgerWriter) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await writer.write(_entry("old", timestamp=now - timedelta(hours=1)))
     await writer.write(_entry("new", timestamp=now))
 

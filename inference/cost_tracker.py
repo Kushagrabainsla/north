@@ -16,7 +16,7 @@ See docs/CODING_STYLE.md Sections 2.2, 3, 6.4.
 
 from __future__ import annotations
 
-from typing import Callable, Awaitable
+from collections.abc import Awaitable, Callable
 
 from inference.base import InferenceRouter
 from inference.models import (
@@ -26,7 +26,6 @@ from inference.models import (
     EmbedResponse,
     ModelPool,
     PoolPriority,
-    ToolCall,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,

@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
 
-from typing import AsyncIterator, Callable, Awaitable
-
+from config.strategy import NorthSettings, StrategyMode
 from inference.base import InferenceRouter
 from inference.exceptions import (
     AllModelsRateLimitedError,
@@ -23,16 +23,15 @@ from inference.exceptions import (
     PoolRefreshError,
     TranscriptionError,
 )
-from config.strategy import NorthSettings, StrategyMode
 from inference.fallback_pools import DEFAULT_TRANSCRIPTION_MODEL, FALLBACK_POOLS
 from inference.models import (
+    POOL_NAMES,
+    PRIORITY_TO_POOL,
     CompletionRequest,
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
     ModelPool,
-    POOL_NAMES,
-    PRIORITY_TO_POOL,
     PoolPriority,
     ToolCall,
     ToolCallRequest,

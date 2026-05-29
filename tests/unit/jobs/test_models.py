@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from jobs import Job, JobPriority, JobStatus, JobType
 
@@ -33,7 +33,7 @@ def test_job_accepts_minimal_fields_with_sane_defaults() -> None:
         type=JobType.CRON,
         agent="health",
         task="meal_plan",
-        scheduled_at=datetime.now(timezone.utc),
+        scheduled_at=datetime.now(UTC),
     )
     assert job.status is JobStatus.PENDING
     assert job.priority is JobPriority.MEDIUM

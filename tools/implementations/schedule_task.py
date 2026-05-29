@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 
 from jobs.models import Job, JobPriority, JobType
 from tools.base import Tool

@@ -26,7 +26,6 @@ See docs/CODING_STYLE.md Section 8 and README Section 10.2.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import readline  # noqa: F401 — enables arrow-key/history editing in input()
@@ -36,7 +35,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import httpx
 import typer
@@ -137,8 +135,8 @@ app.add_typer(task_app, name="task")
 @task_app.callback(invoke_without_command=True)
 def task_default(
     ctx: typer.Context,
-    prompt: Optional[str] = typer.Argument(None, help="Prompt to submit as a new task."),
-    workspace: Optional[str] = typer.Option(
+    prompt: str | None = typer.Argument(None, help="Prompt to submit as a new task."),
+    workspace: str | None = typer.Option(
         None, "--workspace", "-w",
         help="Root directory agents can read/write. Defaults to git root of current directory.",
     ),
@@ -181,7 +179,7 @@ def list_tasks() -> None:
 
 @app.command("chat")
 def chat(
-    workspace: Optional[str] = typer.Option(
+    workspace: str | None = typer.Option(
         None, "--workspace", "-w",
         help="Root directory agents can read/write. Defaults to git root of current directory.",
     ),
@@ -237,7 +235,7 @@ def _inject_history(prompt: str, history: list[tuple[str, str]]) -> str:
     return f"[Conversation so far]\n{turns}\n\n[Current message]\n{prompt}"
 
 
-def _chat_loop(workspace: Optional[str] = None) -> None:
+def _chat_loop(workspace: str | None = None) -> None:
     """Inner chat REPL — called by both `chat` command and `start` command."""
     _setup_readline()
     subtitle = f"workspace: {workspace}" if workspace else "Type your message and press Enter. Ctrl+C or 'exit' to quit."
@@ -330,7 +328,7 @@ def _build_steps_table(steps: list[tuple[str, str, bool]]) -> Table:
     return t
 
 
-def _run_task(prompt: str, workspace: Optional[str] = None) -> str:
+def _run_task(prompt: str, workspace: str | None = None) -> str:
     """Submit prompt, stream SSE pipeline steps live, then render the response. Returns output text."""
     body: dict = {"prompt": prompt}
     if workspace:
@@ -559,9 +557,9 @@ def context_edit(
 
 @context_app.command("add")
 def context_add(
-    text: Optional[str] = typer.Option(None, "--text", help="Raw text to inject."),
-    url: Optional[str] = typer.Option(None, "--url", help="URL to fetch and inject."),
-    file: Optional[Path] = typer.Option(None, "--file", help="File to inject."),
+    text: str | None = typer.Option(None, "--text", help="Raw text to inject."),
+    url: str | None = typer.Option(None, "--url", help="URL to fetch and inject."),
+    file: Path | None = typer.Option(None, "--file", help="File to inject."),
 ) -> None:
     """Inject context from text, a URL, or a file."""
     if file is not None:
@@ -591,9 +589,9 @@ def context_add(
 @app.command("ledger")
 def show_ledger(
     limit: int = typer.Option(20, "--limit", "-n", help="Number of entries to show."),
-    task_id: Optional[str] = typer.Option(None, "--task", help="Filter by task ID."),
-    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent name."),
-    source: Optional[str] = typer.Option(None, "--source", help="Filter by source type."),
+    task_id: str | None = typer.Option(None, "--task", help="Filter by task ID."),
+    agent: str | None = typer.Option(None, "--agent", help="Filter by agent name."),
+    source: str | None = typer.Option(None, "--source", help="Filter by source type."),
 ) -> None:
     """Show recent ledger entries."""
     params: dict[str, object] = {"limit": limit}
@@ -628,7 +626,7 @@ def show_ledger(
 @app.command("jobs")
 def show_jobs(
     limit: int = typer.Option(20, "--limit", "-n", help="Number of jobs to show."),
-    status: Optional[str] = typer.Option(None, "--status", help="Filter by status."),
+    status: str | None = typer.Option(None, "--status", help="Filter by status."),
 ) -> None:
     """Show scheduled jobs."""
     params: dict[str, object] = {"limit": limit}
@@ -690,11 +688,11 @@ def _list_agents_impl() -> None:
 
 @agent_app.command("create")
 def create_agent(
-    name: Optional[str] = typer.Option(None, "--name", help="Agent name (slug, lowercase)."),
-    domain: Optional[str] = typer.Option(None, "--domain", help="Domain (e.g. health, finance)."),
-    description: Optional[str] = typer.Option(None, "--description", help="One-line description."),
+    name: str | None = typer.Option(None, "--name", help="Agent name (slug, lowercase)."),
+    domain: str | None = typer.Option(None, "--domain", help="Domain (e.g. health, finance)."),
+    description: str | None = typer.Option(None, "--description", help="One-line description."),
     model_pool: str = typer.Option("fast_cheap", "--pool", help="Model pool: reasoning / fast_cheap / high_volume."),
-    output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Where to create the agent folder (default: ./agents/)."),
+    output_dir: Path | None = typer.Option(None, "--output-dir", help="Where to create the agent folder (default: ./agents/)."),
 ) -> None:
     """Interactively scaffold a new domain-specialist agent."""
     import re
@@ -818,7 +816,7 @@ def create_agent(
     typer.echo(f"  {agent_dir}/config.yaml")
     typer.echo(f"  {agent_dir}/tools.yaml")
     typer.echo(f"  {agent_dir}/prompts/system.md")
-    typer.echo(f"\nRestart north to load the new agent.")
+    typer.echo("\nRestart north to load the new agent.")
 
 
 @agent_app.command("run")
@@ -844,7 +842,7 @@ app.add_typer(inference_app, name="inference")
 @inference_app.command("costs")
 def inference_costs(
     period: str = typer.Option("week", "--period", help="day / week / month"),
-    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent/component."),
+    agent: str | None = typer.Option(None, "--agent", help="Filter by agent/component."),
 ) -> None:
     """Show inference cost summary."""
     params: dict[str, object] = {"period": period}
@@ -960,7 +958,8 @@ def dictate(
 
         audio_np = np.concatenate(captured, axis=0)
         # Encode as 16-bit PCM WAV in memory
-        import io, wave  # noqa: E401
+        import io  # noqa: E401
+        import wave
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(1)
@@ -1018,7 +1017,7 @@ app.add_typer(tools_app, name="tools")
 
 @tools_app.command("confidence")
 def tools_confidence(
-    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent name."),
+    agent: str | None = typer.Option(None, "--agent", help="Filter by agent name."),
 ) -> None:
     """Show tool confidence scores per agent."""
     params: dict[str, object] = {}
@@ -1178,7 +1177,7 @@ def _kill_port(host: str, port: int) -> bool:
 
 # ── start ─────────────────────────────────────────────────────────────────────
 
-def _find_compose_file() -> Optional[Path]:
+def _find_compose_file() -> Path | None:
     """Return the compose file to use.
 
     Priority:
@@ -1224,7 +1223,7 @@ def start(
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (local mode only)."),
     local: bool = typer.Option(False, "--local", help="Skip Docker; run directly with uvicorn."),
     no_chat: bool = typer.Option(False, "--no-chat", help="Start server only; skip interactive chat."),
-    workspace: Optional[str] = typer.Option(
+    workspace: str | None = typer.Option(
         None, "--workspace", "-w",
         help="Root directory agents can read/write. Defaults to current directory.",
     ),
@@ -1243,7 +1242,7 @@ def start(
 
     if use_docker:
         typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
-        typer.echo(f"  Mode         → Docker Compose")
+        typer.echo("  Mode         → Docker Compose")
         typer.echo(f"  Compose file → {compose_file}")
         typer.echo(f"  Workspace    → {resolved_workspace}")
         typer.echo(f"  Web UI       → http://127.0.0.1:{port}/ui/")
@@ -1308,7 +1307,7 @@ def start(
         time.sleep(1)
 
     typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
-    typer.echo(f"  Mode         → Local")
+    typer.echo("  Mode         → Local")
     typer.echo(f"  Orchestrator → http://{host}:{port}")
     typer.echo(f"  Web UI       → http://{host}:{port}/ui/")
     typer.echo(f"  API docs     → http://{host}:{port}/docs")
@@ -1317,6 +1316,7 @@ def start(
     typer.echo("")
 
     import uvicorn
+
     from config.settings import settings as _cfg
     _cfg.north_workspace = resolved_workspace
 
@@ -1366,7 +1366,7 @@ def stop(
     if _port_in_use("127.0.0.1", port):
         typer.echo(f"Stopping process on port {port}…")
         if _kill_port("127.0.0.1", port):
-            typer.secho(f"✓ Stopped.", fg=typer.colors.GREEN)
+            typer.secho("✓ Stopped.", fg=typer.colors.GREEN)
         else:
             typer.secho("Could not stop the process. Try killing it manually.", fg=typer.colors.RED, err=True)
             raise typer.Exit(1)

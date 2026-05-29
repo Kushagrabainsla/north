@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from utils.db import open_db_connection
@@ -68,7 +68,7 @@ class ConfidenceTracker:
         )
 
     def _record_use_sync(self, agent: str, tool: str, was_helpful: bool) -> float:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         outcome = 1.0 if was_helpful else 0.0
         helpful_inc = 1 if was_helpful else 0
 
@@ -131,7 +131,7 @@ class ConfidenceTracker:
         await asyncio.to_thread(self._seed_defaults_sync, graph, reliable_tools)
 
     def _seed_defaults_sync(self, graph: dict[str, list[str]], reliable_tools: frozenset[str]) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
             for agent, tools in graph.items():
                 for tool in tools:
@@ -152,7 +152,7 @@ class ConfidenceTracker:
         await asyncio.to_thread(self._inherit_from_sync, new_agent, source_agent)
 
     def _inherit_from_sync(self, new_agent: str, source_agent: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO tool_confidence "

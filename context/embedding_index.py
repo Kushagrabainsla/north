@@ -12,8 +12,8 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Callable, Awaitable
 
 from utils.db import open_db_connection
 

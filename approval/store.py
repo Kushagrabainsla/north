@@ -51,7 +51,7 @@ class ApprovalStore:
             return self._cards.get(card_id)
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         card = self._cards.get(card_id)
         if card is None or card.status == "pending":

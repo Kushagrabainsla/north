@@ -6,7 +6,6 @@ See docs/CODING_STYLE.md Sections 5.2, 12.3.
 from __future__ import annotations
 
 import secrets
-from pathlib import Path
 
 from fastapi import Cookie, Header, HTTPException
 

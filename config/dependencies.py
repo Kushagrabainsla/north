@@ -11,9 +11,9 @@ See docs/CODING_STYLE.md Section 6.3.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from approval import Notifier, TerminalNotifier
 from approval.store import ApprovalStore
@@ -49,13 +49,13 @@ class Dependencies:
     inference_router: InferenceRouter
     notifier: Notifier
     job_processor: JobProcessor
-    cost_tracker: "CostTracker"
-    stream_manager: "EventStreamManager"
+    cost_tracker: CostTracker
+    stream_manager: EventStreamManager
     approval_store: ApprovalStore
-    cron_store: "UserCronStore"
-    confidence_tracker: "ConfidenceTracker"
-    episodic_store: "EpisodicStore"
-    task_context_store: "TaskContextStore"
+    cron_store: UserCronStore
+    confidence_tracker: ConfidenceTracker
+    episodic_store: EpisodicStore
+    task_context_store: TaskContextStore
     north_settings: NorthSettings
     # Shared async callable used by both EpisodicStore and EmbeddingIndex so
     # they are guaranteed to use the same embedding model and billing surface.

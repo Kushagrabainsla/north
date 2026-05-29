@@ -15,9 +15,9 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Awaitable
 
 from utils.db import open_db_connection
 from utils.ids import generate_id
@@ -89,7 +89,7 @@ class EpisodicStore:
                 embedding = vecs[0] if vecs else None
             except Exception:
                 logger.debug("EpisodicStore: embed failed for task %s", task_id)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         emb_json = json.dumps(embedding) if embedding is not None else None
         await asyncio.to_thread(
             self._insert_and_prune_sync,
@@ -159,7 +159,7 @@ class EpisodicStore:
             # Delete episodes older than the retention window.
             from datetime import timedelta
             cutoff = (
-                datetime.now(timezone.utc) - timedelta(days=_RETENTION_DAYS)
+                datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)
             ).isoformat()
             conn.execute("DELETE FROM episodes WHERE timestamp < ?", (cutoff,))
             # If we're still above the hard cap, trim the oldest rows.

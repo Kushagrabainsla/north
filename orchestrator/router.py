@@ -33,7 +33,7 @@ class ExecutionPlanner:
         self,
         agent_registry: AgentRegistry,
         inference_router: InferenceRouter,
-        tool_registry: "ToolRegistry | None" = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self._agent_registry = agent_registry
         self._inference_router = inference_router

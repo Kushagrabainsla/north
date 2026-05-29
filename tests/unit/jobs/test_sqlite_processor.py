@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +39,7 @@ def _job(
         agent=agent,
         task=task,
         priority=priority,
-        scheduled_at=scheduled_at or datetime.now(timezone.utc),
+        scheduled_at=scheduled_at or datetime.now(UTC),
         payload=payload or {},
     )
 
@@ -87,7 +87,7 @@ async def test_claim_next_marks_job_running(processor: SQLiteJobProcessor) -> No
 async def test_claim_next_respects_priority_then_scheduled_at(
     processor: SQLiteJobProcessor,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await processor.enqueue(_job("low", priority=JobPriority.LOW, scheduled_at=now - timedelta(minutes=10)))
     await processor.enqueue(_job("high-later", priority=JobPriority.HIGH, scheduled_at=now))
     await processor.enqueue(_job("medium", priority=JobPriority.MEDIUM, scheduled_at=now - timedelta(minutes=5)))
@@ -102,7 +102,7 @@ async def test_claim_next_respects_priority_then_scheduled_at(
 async def test_claim_next_skips_future_scheduled_jobs(
     processor: SQLiteJobProcessor,
 ) -> None:
-    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    future = datetime.now(UTC) + timedelta(hours=1)
     await processor.enqueue(_job("future", scheduled_at=future))
 
     assert await processor.claim_next() is None
@@ -111,7 +111,7 @@ async def test_claim_next_skips_future_scheduled_jobs(
 async def test_claim_next_respects_retry_after(processor: SQLiteJobProcessor) -> None:
     await processor.enqueue(_job("j1"))
     await processor.mark_failed(
-        "j1", retry_after=datetime.now(timezone.utc) + timedelta(hours=1)
+        "j1", retry_after=datetime.now(UTC) + timedelta(hours=1)
     )
 
     assert await processor.claim_next() is None
@@ -147,7 +147,7 @@ async def test_mark_failed_with_retry_after_keeps_job_pending(
 ) -> None:
     await processor.enqueue(_job("j1"))
     await processor.claim_next()
-    retry_at = datetime.now(timezone.utc) + timedelta(minutes=2)
+    retry_at = datetime.now(UTC) + timedelta(minutes=2)
     await processor.mark_failed("j1", retry_after=retry_at)
 
     fetched = await processor.get("j1")

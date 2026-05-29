@@ -19,5 +19,10 @@ COPY . .
 ENV NORTH_HOME=/data
 EXPOSE 8000
 
+# Liveness probe — /health returns 200 with no authentication.
+# --start-period gives the lifespan startup time before failures count.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
 CMD ["python", "-m", "uvicorn", "orchestrator.app:app", \
      "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]

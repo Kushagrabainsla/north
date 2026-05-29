@@ -9,9 +9,10 @@ See docs/CODING_STYLE.md Section 18.2.
 
 from __future__ import annotations
 
-import pytest
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Callable, Awaitable
+
+import pytest
 
 from approval.terminal import TerminalNotifier
 from context import FileContextStore
@@ -96,6 +97,7 @@ class MockInferenceRouter(InferenceRouter):
 def build_test_dependencies(tmp_path: Path):
     """Return a dependency bundle wired to isolated temp paths with mock inference."""
     from dataclasses import dataclass
+
     from context.base import ContextStore
 
     @dataclass

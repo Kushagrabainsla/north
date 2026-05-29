@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -42,7 +42,7 @@ def test_ledger_status_enum_matches_spec() -> None:
 def test_ledger_entry_accepts_minimal_required_fields() -> None:
     entry = LedgerEntry(
         id="abc123",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         source=LedgerSource.PROMPT,
     )
     assert entry.id == "abc123"
@@ -56,7 +56,7 @@ def test_ledger_entry_rejects_unknown_source() -> None:
     with pytest.raises(ValidationError):
         LedgerEntry(
             id="abc123",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             source="not_a_real_source",  # type: ignore[arg-type]
         )
 
@@ -65,7 +65,7 @@ def test_ledger_entry_rejects_unknown_status() -> None:
     with pytest.raises(ValidationError):
         LedgerEntry(
             id="abc123",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             source=LedgerSource.SYSTEM,
             status="halfway_done",  # type: ignore[arg-type]
         )

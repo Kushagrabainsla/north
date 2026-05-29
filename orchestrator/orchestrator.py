@@ -6,7 +6,6 @@ See docs/CODING_STYLE.md Sections 2.5, 4.1, 6, 10.2, 14.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from typing import Any
@@ -15,21 +14,28 @@ from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
 from approval import Card, CardType, JudgementFilter, Notifier
 from approval.store import ApprovalStore
-from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
+from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
-from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, RoutingError
+from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
+from orchestrator.exceptions import NorthStarConflictError, OrchestratorError
 from orchestrator.failure_handler import FailureHandler
-from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification, TaskRequest, TaskResponse
+from orchestrator.models import (
+    ExecutionMode,
+    ExecutionPlan,
+    IntentClassification,
+    TaskRequest,
+    TaskResponse,
+)
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.router import ExecutionPlanner
 from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
-from config.strategy import NorthSettings, StrategyMode, describe
-from tools.registry import ToolRegistry
 from tools.models import ToolInput
+from tools.registry import ToolRegistry
 from utils.ids import generate_id, generate_task_id
+from utils.logging import bind_task_id
 from utils.time import format_timestamp, utcnow
 
 # Maximum tasks allowed to be in-flight at the same time.  Prevents runaway
@@ -265,6 +271,7 @@ class Orchestrator:
 
     async def _process_task(self, task_id: str, request: TaskRequest) -> None:
         """Full pipeline: classify → north-star → route → execute."""
+        bind_task_id(task_id)  # attach correlation ID to every log line in this context
         try:
             # Strategy command shortcut — handle before full pipeline
             if self._north_settings is not None:

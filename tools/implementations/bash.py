@@ -6,7 +6,6 @@ See docs/CODING_STYLE.md Section 16.1.
 from __future__ import annotations
 
 import asyncio
-
 from typing import Any
 
 from tools.base import Tool
@@ -73,7 +72,7 @@ class BashTool(Tool):
             )
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 await proc.communicate()
                 return ToolOutput(success=False, error=f"Command timed out after {_TIMEOUT}s.")

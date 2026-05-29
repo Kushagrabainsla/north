@@ -11,16 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
+from agents.llm_agent import LLMAgent
+from agents.models import AgentPayload
 from inference.models import ToolCall, ToolCallRequest
 from tools.base import Tool
 from tools.models import ToolInput
 
-from agents.llm_agent import LLMAgent
-from agents.models import AgentPayload
-
-_MAX_ITERATIONS = 40  # overridden at runtime by settings.agent_max_iterations
 _MAX_DELEGATION_DEPTH = 2  # top-level agent may delegate once; that delegate cannot delegate further
 # Cap the JSON-serialised tool result injected back into the conversation.
 # ~40k chars ≈ 10k tokens — generous but bounded.
@@ -108,6 +107,7 @@ class AgenticLLMAgent(LLMAgent):
         tool_map = {t.name: t for t, _ in scored_tools}
         total_cost_usd: float = 0.0
 
+        # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
             _compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
             token_cb = self._make_token_callback(payload.task_id)

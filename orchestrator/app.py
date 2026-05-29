@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 
 import uvicorn
 from fastapi import FastAPI
@@ -17,30 +17,31 @@ from fastapi.staticfiles import StaticFiles
 
 from agents.models import AgentDependencies
 from agents.registry import AgentRegistry
+from approval.callback_server import app as callback_app
+from approval.judgement_filter import JudgementFilter
 from config.dependencies import build_production_dependencies
 from config.settings import settings
 from context.embedding_index import EmbeddingIndex
 from context.extraction import ExtractionPipeline
 from context.injection import ContextInjector
 from jobs.models import Job
-from jobs.scheduler import CronScheduler, V1_CRON_ENTRIES
+from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from tools.implementations.schedule_task import ScheduleTaskTool
 from orchestrator.api_router import configure as configure_api
+from orchestrator.api_router import health_router, webhook_router
 from orchestrator.api_router import router as orchestrator_router
-from orchestrator.api_router import webhook_router
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
+from tools.implementations.schedule_task import ScheduleTaskTool
 from tools.registry import ToolRegistry
 from utils.ids import generate_id
+from utils.logging import configure_structured_logging
 from utils.security import load_secret
 from utils.time import utcnow
-from approval.callback_server import app as callback_app
-from approval.judgement_filter import JudgementFilter
 from web.routes import configure as configure_web
 from web.routes import router as web_router
 
@@ -51,6 +52,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Build production dependencies and launch background tasks."""
     import sys
+
+    configure_structured_logging()  # JSON logs with task_id correlation IDs
 
     def _step(msg: str) -> None:
         print(f"  [startup] {msg}", flush=True, file=sys.stderr)
@@ -153,6 +156,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         inference_router=deps.cost_tracker,
         ledger=deps.ledger,
     )
+
+    # ── Startup reconciliation sweep ─────────────────────────────────────────
+    # Any task that was PENDING in the ledger but has no live asyncio.Task
+    # (i.e. the server was killed mid-flight) is written as FAILED so the
+    # ledger is never left with a dangling PENDING entry.
+
+    _step("running startup reconciliation sweep")
+    try:
+        from ledger.base import LedgerFilters as _LF
+        pending_entries = await deps.ledger.query(
+            _LF(status=LedgerStatus.PENDING, limit=500)
+        )
+        pending_task_ids = {e.task_id for e in pending_entries if e.task_id}
+        orphaned = pending_task_ids - set(orchestrator._active_tasks)
+        for orphaned_id in orphaned:
+            await deps.ledger.write(LedgerEntry(
+                id=generate_id(),
+                timestamp=utcnow(),
+                source=LedgerSource.SYSTEM,
+                task_id=orphaned_id,
+                action="task_failed",
+                output="Server restarted while task was pending — marked as failed.",
+                status=LedgerStatus.FAILED,
+            ))
+        if orphaned:
+            logger.warning(
+                "Reconciliation: marked %d orphaned PENDING task(s) as FAILED: %s",
+                len(orphaned),
+                list(orphaned),
+            )
+        else:
+            logger.info("Reconciliation: no orphaned PENDING tasks found.")
+    except Exception:
+        logger.exception("Startup reconciliation sweep failed")
 
     extraction_pipeline = ExtractionPipeline(
         ledger=deps.ledger,
@@ -283,6 +320,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(health_router)
 app.include_router(orchestrator_router)
 app.include_router(webhook_router)
 app.include_router(web_router)

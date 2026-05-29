@@ -7,6 +7,7 @@ See docs/CODING_STYLE.md Sections 12, 17.
 
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -14,12 +15,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from approval.store import ApprovalStore
-from utils.security import load_secret
 from context.models import ContextDocument
 from jobs.cron_store import UserCronStore
 from jobs.models import JobStatus
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerStatus
+from utils.security import load_secret
 
 router = APIRouter(prefix="/ui", tags=["web"])
 
@@ -263,8 +264,8 @@ async def job_cancel(request: Request, job_id: str) -> RedirectResponse:
 @router.post("/jobs/schedule/oneshot", include_in_schema=False)
 async def schedule_oneshot(request: Request) -> RedirectResponse:
     """Create a one-shot job from the web form."""
-    import re
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from jobs.models import Job, JobPriority, JobType
     from utils.ids import generate_id
 
@@ -277,7 +278,7 @@ async def schedule_oneshot(request: Request) -> RedirectResponse:
         try:
             scheduled_at = datetime.fromisoformat(run_at_str)
             if scheduled_at.tzinfo is None:
-                scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+                scheduled_at = scheduled_at.replace(tzinfo=UTC)
             job = Job(
                 job_id=generate_id(),
                 type=JobType.ASYNC,

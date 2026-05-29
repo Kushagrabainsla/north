@@ -7,7 +7,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -105,7 +105,7 @@ class SQLiteJobProcessor(JobProcessor):
         return self._row_to_job(row) if row is not None else None
 
     def _claim_next_sync(self) -> sqlite3.Row | None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -157,7 +157,7 @@ class SQLiteJobProcessor(JobProcessor):
                     # Max retries exhausted — mark terminal instead of re-queuing.
                     conn.execute(
                         "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
-                        (JobStatus.FAILED.value, datetime.now(timezone.utc).isoformat(), job_id),
+                        (JobStatus.FAILED.value, datetime.now(UTC).isoformat(), job_id),
                     )
                     return
                 conn.execute(
@@ -185,7 +185,7 @@ class SQLiteJobProcessor(JobProcessor):
                 """,
                 (
                     JobStatus.CANCELLED.value,
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(UTC).isoformat(),
                     job_id,
                     JobStatus.COMPLETED.value,
                     JobStatus.FAILED.value,
@@ -198,7 +198,7 @@ class SQLiteJobProcessor(JobProcessor):
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
-                (status.value, datetime.now(timezone.utc).isoformat(), job_id),
+                (status.value, datetime.now(UTC).isoformat(), job_id),
             )
 
     async def list_jobs(

@@ -6,7 +6,6 @@ See docs/CODING_STYLE.md Section 16.1.
 from __future__ import annotations
 
 import asyncio
-
 from typing import Any
 
 from tools import Tool, ToolInput, ToolOutput

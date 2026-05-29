@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from tools import ConfidenceScore, ToolInput, ToolOutput
 
@@ -31,7 +31,7 @@ def test_tool_output_failure_with_error() -> None:
 
 
 def test_confidence_score_carries_all_fields() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     score = ConfidenceScore(
         agent="finance",
         tool="market_data_api",
