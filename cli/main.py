@@ -138,6 +138,10 @@ app.add_typer(task_app, name="task")
 def task_default(
     ctx: typer.Context,
     prompt: Optional[str] = typer.Argument(None, help="Prompt to submit as a new task."),
+    workspace: Optional[str] = typer.Option(
+        None, "--workspace", "-w",
+        help="Root directory agents can read/write. Defaults to git root of current directory.",
+    ),
 ) -> None:
     """Submit a task and stream results live."""
     if ctx.invoked_subcommand is not None:
@@ -145,7 +149,8 @@ def task_default(
     if prompt is None:
         typer.echo(ctx.get_help())
         raise typer.Exit()
-    _run_task(prompt)
+    resolved = workspace or str(_find_git_root(Path.cwd()))
+    _run_task(prompt, workspace=resolved)
 
 
 @task_app.command("cancel")
@@ -178,11 +183,12 @@ def list_tasks() -> None:
 def chat(
     workspace: Optional[str] = typer.Option(
         None, "--workspace", "-w",
-        help="Root directory the code agent can read/write (e.g. ./my-project).",
+        help="Root directory agents can read/write. Defaults to git root of current directory.",
     ),
 ) -> None:
     """Interactive chat with north — live pipeline steps and markdown responses."""
-    _chat_loop(workspace=workspace)
+    resolved = workspace or str(_find_git_root(Path.cwd()))
+    _chat_loop(workspace=resolved)
 
 
 def _strip_history_prefix(prompt: str) -> str:
@@ -1173,13 +1179,29 @@ def _kill_port(host: str, port: int) -> bool:
 # ── start ─────────────────────────────────────────────────────────────────────
 
 def _find_compose_file() -> Optional[Path]:
-    """Walk up from CWD looking for docker-compose.yml."""
+    """Return the compose file to use.
+
+    Priority:
+    1. Walk up from CWD — lets developers use their local repo copy (with build: .).
+    2. ~/.north/docker-compose.yml — written on first run from the bundled copy.
+    3. Bundled copy inside the installed package (cli/docker-compose.yml).
+    """
+    north_home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
+    installed = north_home / "docker-compose.yml"
+
     cwd = Path.cwd()
     for candidate in [cwd, *cwd.parents]:
         f = candidate / "docker-compose.yml"
-        if f.exists():
+        if f.exists() and f != installed:
             return f
-    return None
+
+    if not installed.exists():
+        bundled = Path(__file__).parent / "docker-compose.yml"
+        if bundled.exists():
+            north_home.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bundled, installed)
+
+    return installed if installed.exists() else None
 
 
 def _find_git_root(start: Path) -> Path:
@@ -1213,8 +1235,8 @@ def start(
     Docker is available. Pass --local to force direct uvicorn launch.
     Pass --no-chat to start the server without entering the chat REPL.
     """
-    base = Path(workspace).resolve() if workspace else Path.cwd()
-    resolved_workspace = str(_find_git_root(base))
+    base = Path(workspace).resolve() if workspace else Path.home()
+    resolved_workspace = str(base)
 
     compose_file = _find_compose_file()
     use_docker = not local and _docker_available() and compose_file is not None
@@ -1226,7 +1248,7 @@ def start(
         typer.echo(f"  Workspace    → {resolved_workspace}")
         typer.echo(f"  Web UI       → http://127.0.0.1:{port}/ui/")
         typer.echo("")
-        docker_env = {**os.environ, "NORTH_WORKSPACE": resolved_workspace}
+        docker_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
         result = subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
             env=docker_env,
@@ -1295,6 +1317,8 @@ def start(
     typer.echo("")
 
     import uvicorn
+    from config.settings import settings as _cfg
+    _cfg.north_workspace = resolved_workspace
 
     if reload or no_chat:
         # reload uses multiprocessing and can't share a thread with the chat REPL

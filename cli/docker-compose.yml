@@ -1,16 +1,15 @@
 services:
   north:
-    build: .
-    image: north:local
+    image: ghcr.io/kushagrabainsla/north:latest
     ports:
       - "8000:8000"
     volumes:
-      - north_data:/data  # Persists ledger, context, jobs, and secret across restarts
-      - ${HOME}:${HOME}   # Agents can read/write your home directory
+      - north_data:/data
+      - ${HOME}:${HOME}
     environment:
       - NORTH_HOME=/data
       - NORTH_NORTH_WORKSPACE=${NORTH_NORTH_WORKSPACE:-${HOME}}
-      - NORTH_SECRET=${NORTH_SECRET:-}  # Auto-generated if omitted
+      - NORTH_SECRET=${NORTH_SECRET:-}
       - NORTH_OPENROUTER_API_KEY=${NORTH_OPENROUTER_API_KEY:-}
       - NORTH_ENV=${NORTH_ENV:-production}
     restart: unless-stopped

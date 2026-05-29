@@ -43,7 +43,7 @@ where = ["."]
 exclude = ["tests*", ".venv*", "build*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml", "*.md", "*.html", "*.css", "*.js"]
+"*" = ["*.yaml", "*.yml", "*.md", "*.html", "*.css", "*.js", "*.sh"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

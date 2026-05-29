@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     north_home: Path = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
 
     # Default workspace for filesystem/shell tools when no workspace is provided per-request.
-    # Set via NORTH_WORKSPACE env var. In Docker this is auto-populated by the CLI.
+    # Set via NORTH_NORTH_WORKSPACE env var. In Docker, defaults to $HOME via docker-compose.
     north_workspace: str = ""
 
     # Pre-shared secret override — set NORTH_SECRET in Docker instead of using a key file
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
         return self.north_env == "test"
 
     model_config = {
-        "env_file": ".env",
+        "env_file": [str(Path.home() / ".north" / ".env"), ".env"],
         "env_prefix": "NORTH_",
         "extra": "ignore",
     }

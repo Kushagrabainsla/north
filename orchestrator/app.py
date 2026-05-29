@@ -97,6 +97,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("loading secret")
     load_secret()
 
+    if not settings.openrouter_api_key:
+        raise RuntimeError(
+            "NORTH_OPENROUTER_API_KEY is not set. "
+            "Get a key at https://openrouter.ai/keys and add it to your .env file."
+        )
+
     _step("loading north settings")
     north_settings = NorthSettings(settings.north_home / "settings.json")
 

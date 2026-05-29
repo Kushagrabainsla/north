@@ -18,35 +18,21 @@ You give north your goals — your north stars. It handles the coordination work
 
 ## Quick start
 
-You need an [OpenRouter](https://openrouter.ai) API key (one key for all LLM inference and voice transcription).
-
-### Docker (recommended)
-
 ```bash
-git clone https://github.com/your-username/north
-cd north
-cp .env.example .env
-# Set NORTH_OPENROUTER_API_KEY and NORTH_SECRET in .env
+curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash
 north start
 ```
 
-### Local install
+The install script checks for Docker, installs the `north` CLI via `uv`, and prompts for your [OpenRouter](https://openrouter.ai/keys) API key. That's it.
+
+### Manual install (alternative)
+
+Requires **Python 3.12+** and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Install uv (Python package manager)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone and install
-git clone https://github.com/your-username/north
-cd north
-uv tool install .
-
-# Configure
-cp .env.example .env
-# Set NORTH_OPENROUTER_API_KEY in .env
-
-# Start
-north start --local
+uv tool install git+https://github.com/Kushagrabainsla/north
+echo "NORTH_OPENROUTER_API_KEY=sk-or-your-key" >> ~/.north/.env
+north start
 ```
 
 When ready:
@@ -73,7 +59,7 @@ north tasks           # active tasks
 north ledger          # full event log
 
 # Context
-north context view north_stars
+north context show north_stars
 north context add --text "I prefer mornings for deep work"
 north context add --file resume.pdf
 
@@ -102,7 +88,7 @@ Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before making changes. The short version:
 
 ```bash
-git clone https://github.com/your-username/north
+git clone https://github.com/Kushagrabainsla/north
 cd north
 uv sync
 uv run pytest

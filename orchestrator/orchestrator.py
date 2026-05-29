@@ -192,18 +192,13 @@ class Orchestrator:
         })
 
     async def list_active_tasks(self) -> list[TaskResponse]:
-        """Returns tasks that are still pending in the ledger."""
-        entries = await self._ledger.query(
-            LedgerFilters(status=LedgerStatus.PENDING, limit=50)
-        )
-        return [
-            TaskResponse(
-                task_id=e.task_id or "",
-                status=(e.status.value if e.status else "unknown"),
-                created_at=format_timestamp(e.timestamp),
-            )
-            for e in entries
-        ]
+        """Returns tasks that are currently in-flight (asyncio tasks still running)."""
+        results = []
+        for task_id in list(self._active_tasks):
+            resp = await self.get_task(task_id)
+            if resp is not None:
+                results.append(resp)
+        return results
 
     # ------------------------------------------------------------------ #
     #  Internal helpers                                                    #
