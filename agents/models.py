@@ -81,8 +81,8 @@ class AgentConfig(BaseModel):
 class AgentDependencies:
     """Bundle of shared dependencies injected into every agent at construction.
 
-    Wired once by the Orchestrator (`config/dependencies.py` when that lands).
-    Lets the agent ABC stay parameterless beyond `(config, deps)`.
+    Wired once at startup via ``config/dependencies.py`` and ``app.py``.
+    Lets the agent ABC stay parameterless beyond ``(config, deps)``.
     """
 
     context_store: ContextStore
@@ -90,11 +90,13 @@ class AgentDependencies:
     tool_registry: ToolRegistry
     confidence_tracker: ConfidenceTracker
     stream_manager: StreamEmitter | None = field(default=None)
-    # Optional episodic memory store.  When present, _load_context() injects
-    # semantically relevant past task summaries into every agent prompt.
     episodic_store: "Any | None" = field(default=None)
-    # Agent registry — injected after construction to avoid circular dependency.
-    # Used by AgenticLLMAgent's delegate_task tool for hierarchical execution.
+    # Injected after construction to break the circular dependency:
+    # agent_registry → agent_deps → agent_registry.
     agent_registry: "Any | None" = field(default=None)
-    # Injected approval store so agents don't rely on the module-level singleton.
+    # Required for the request_approval tool.  Must be the same ApprovalStore
+    # instance used by the Orchestrator so waits and resolutions are consistent.
     approval_store: "ApprovalStore | None" = field(default=None)
+    # Iteration caps injected from Settings so agents never read config globals.
+    agent_max_iterations: int = 40
+    agent_history_keep_recent: int = 10

@@ -9,6 +9,8 @@ import asyncio
 import re
 from pathlib import Path
 
+from typing import Any
+
 from tools.base import Tool
 from tools.implementations._path import resolve_path
 from tools.models import ToolInput, ToolOutput
@@ -31,6 +33,14 @@ class SearchFilesTool(Tool):
         },
         "required": ["pattern"],
     }
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        matches = data.get("matches", [])
+        if not matches:
+            return "No matches found."
+        return "\n".join(
+            f"{m['file']}:{m['line']}: {m['text']}" for m in matches
+        )
 
     async def run(self, input: ToolInput) -> ToolOutput:
         pattern = input.params.get("pattern")

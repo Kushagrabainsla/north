@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from typing import Any
+
 from tools.base import Tool
 from tools.implementations._path import resolve_path
 from tools.models import ToolInput, ToolOutput
@@ -27,6 +29,9 @@ class WriteFileTool(Tool):
         },
         "required": ["path", "content"],
     }
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        return f"Created `{data.get('path', '?')}` ({data.get('bytes_written', 0)} bytes written)."
 
     async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")

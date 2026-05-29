@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from typing import Any
+
 from tools.base import Tool
 from tools.implementations._path import resolve_path
 from tools.models import ToolInput, ToolOutput
@@ -31,6 +33,16 @@ class ListDirTool(Tool):
             "workspace": {"type": "string", "description": "Workspace root (optional)"},
         },
     }
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        entries = data.get("entries", [])
+        if not entries:
+            return "(empty directory)"
+        lines = [
+            f"{'[dir] ' if e.get('type') == 'dir' else '      '}{e['name']}"
+            for e in entries
+        ]
+        return "\n".join(lines)
 
     async def run(self, input: ToolInput) -> ToolOutput:
         resolved = resolve_path(input.params.get("path", "."), input.params.get("workspace"))

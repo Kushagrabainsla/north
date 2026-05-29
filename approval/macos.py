@@ -12,7 +12,6 @@ from typing import Any
 
 from approval.base import Notifier
 from approval.models import Card, CardType
-from approval.store import approval_store
 from approval.terminal import TerminalNotifier
 
 
@@ -31,9 +30,9 @@ class MacOSNotifier(Notifier):
         """Post a macOS notification.
 
         If `alerter` is available, spawns it. Otherwise, falls back to printing the card
-        to standard output.
+        to standard output.  The card is already registered in ApprovalStore by the
+        Orchestrator before this method is called.
         """
-        approval_store.add(card)
         alerter_path = shutil.which("alerter")
         if not alerter_path:
             # Fall back gracefully to TerminalNotifier

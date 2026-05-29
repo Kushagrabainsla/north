@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
+from typing import Any
 
 from tools.models import ToolInput, ToolOutput
 
@@ -41,6 +43,16 @@ class Tool(ABC):
         """Execute the tool against `input.params`. Must not raise on
         recoverable errors — return `ToolOutput(success=False, error=...)`
         instead so the `ConfidenceTracker` can record the outcome."""
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        """Render a successful ToolOutput.data as a human-readable string.
+
+        The default falls back to compact JSON. Subclasses override to produce
+        domain-appropriate text (e.g. WriteFileTool returns a one-liner with
+        the path and byte count). The Orchestrator calls this instead of
+        maintaining a central switch-on-tool-name.
+        """
+        return json.dumps(data, indent=2) if data else "Done."
 
 
 class AuthenticatedTool(Tool, ABC):

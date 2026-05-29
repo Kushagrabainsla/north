@@ -17,7 +17,9 @@ from approval import Card, CardType, JudgementFilter, Notifier
 from approval.store import ApprovalStore
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from inference.cost_tracker import CostTracker
+from inference.models import CompletionRequest, PoolPriority
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, RoutingError
+from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification, TaskRequest, TaskResponse
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.router import ExecutionPlanner
@@ -38,33 +40,13 @@ _MAX_CONCURRENT_TASKS = 10
 # avoid interrupting the user on borderline-classified tasks.
 _NORTH_STAR_CONFIDENCE_THRESHOLD = 0.7
 
-_STRATEGY_RE = re.compile(r"\b(eco|cruise|sport)\b", re.IGNORECASE)
-
-
-def _format_tool_result(tool_name: str, data: dict | None) -> str:
-    """Format a tool result dict as a human-readable string."""
-    if not data:
-        return "Done."
-    if tool_name == "write_file":
-        return f"Created `{data.get('path', '?')}` ({data.get('bytes_written', 0)} bytes written)."
-    if tool_name == "patch_file":
-        return f"Patched `{data.get('path', '?')}`."
-    if tool_name == "read_file":
-        return str(data.get("content", "(empty)"))
-    if tool_name == "list_dir":
-        entries = data.get("entries", [])
-        return "\n".join(str(e) for e in entries) if entries else "(empty directory)"
-    if tool_name == "bash":
-        return str(data.get("output", data.get("stdout", ""))).strip()
-    if tool_name == "search_files":
-        results = data.get("results", [])
-        return "\n".join(str(r) for r in results) if results else "No matches found."
-    if tool_name == "web_search":
-        results = data.get("results", [])
-        return "\n".join(str(r) for r in results) if results else "No results."
-    return json.dumps(data, indent=2)
-_STRATEGY_INTENT_RE = re.compile(
-    r"\b(set|switch|use|change|enable|activate|mode)\b", re.IGNORECASE
+# Matches the exact command form "/strategy <mode>" or bare shorthand like
+# "eco mode" / "switch to cruise" so that incidental mentions of these words
+# ("I was in sport mode") never accidentally mutate the strategy.
+_STRATEGY_CMD_RE = re.compile(
+    r"^(?:(?:set|switch|use|change|enable|activate)\s+(?:to\s+)?)?(?:the\s+)?"
+    r"(eco|cruise|sport)\s*(?:mode|strategy)?$",
+    re.IGNORECASE,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,13 +68,14 @@ class Orchestrator:
         failure_handler: FailureHandler,
         notifier: Notifier,
         stream_manager: EventStreamManager,
+        approval_store: ApprovalStore,
         judgement_filter: JudgementFilter | None = None,
         north_settings: NorthSettings | None = None,
         synthesizer: ResultSynthesizer | None = None,
         cost_tracker: CostTracker | None = None,
         episodic_store: Any | None = None,
         tool_registry: ToolRegistry | None = None,
-        approval_store: ApprovalStore | None = None,
+        default_workspace: str = "",
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
@@ -102,19 +85,14 @@ class Orchestrator:
         self._failure_handler = failure_handler
         self._notifier = notifier
         self._stream_manager = stream_manager
+        self._approval_store = approval_store
         self._judgement_filter = judgement_filter
         self._north_settings = north_settings
         self._synthesizer = synthesizer
         self._cost_tracker = cost_tracker
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
-        # Use the injected store; fall back to the module singleton so existing
-        # code that hasn't been updated yet still works.
-        if approval_store is not None:
-            self._approval_store = approval_store
-        else:
-            from approval.store import approval_store as _singleton
-            self._approval_store = _singleton
+        self._default_workspace = default_workspace
         # Maps task_id → running asyncio.Task so cancel_task() can stop it.
         self._active_tasks: dict[str, asyncio.Task] = {}
 
@@ -244,7 +222,13 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
 
     async def _notify(self, card: Card) -> None:
-        """Run judgement filter; auto-resolve or surface to user."""
+        """Register card, run judgement filter, then auto-resolve or surface to user.
+
+        Always registers the card in the ApprovalStore first so it is wait-able
+        regardless of which code path follows.  The Notifier implementations
+        are responsible only for delivering the alert — they never touch the store.
+        """
+        self._approval_store.add(card)
         if self._judgement_filter is not None:
             decision, chosen_option = await self._judgement_filter.check(card)
             if decision is not None:
@@ -268,9 +252,14 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
 
     def _detect_strategy_command(self, prompt: str) -> StrategyMode | None:
-        """Return a StrategyMode if the prompt is a strategy change command."""
-        match = _STRATEGY_RE.search(prompt)
-        if match and _STRATEGY_INTENT_RE.search(prompt):
+        """Return a StrategyMode if the prompt is an unambiguous strategy command.
+
+        Requires the prompt to be *only* a strategy directive — no surrounding
+        prose — so incidental mentions ("I was in sport mode") never mutate
+        the running strategy.
+        """
+        match = _STRATEGY_CMD_RE.match(prompt.strip())
+        if match:
             return StrategyMode(match.group(1).lower())
         return None
 
@@ -334,7 +323,7 @@ class Orchestrator:
     async def _stage_plan(
         self, task_id: str, prompt: str
     ) -> tuple[IntentClassification, ExecutionPlan]:
-        """Stage 1+3: Classify intent and build execution plan in one LLM call."""
+        """Stages 1+3: Classify intent and build execution plan in one LLM call."""
         await self._stream_manager.emit(task_id, "classifying", {"prompt": prompt})
 
         classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id)
@@ -373,7 +362,7 @@ class Orchestrator:
             return
 
         # Skip when the classifier is uncertain to avoid false interruptions on
-        # borderline tasks (e.g. "schedule a reminder" that could be either).
+        # borderline tasks (e.g. "schedule a reminder" — local? external?).
         if classification.confidence < _NORTH_STAR_CONFIDENCE_THRESHOLD:
             logger.info(
                 "Skipping north star check for task %s — classifier confidence "
@@ -436,7 +425,6 @@ class Orchestrator:
             chosen_opt = (current.chosen_option if current else "").lower()
             if chosen_opt not in ("proceed anyway", "proceed", "approve", "approved", "yes"):
                 raise NorthStarConflictError(tension or "North Star conflict")
-            # User chose "Proceed anyway" — continue
 
         await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": reasoning})
 
@@ -450,8 +438,7 @@ class Orchestrator:
     ) -> None:
         """Stage 4: Execute agents in dependency order, then optionally synthesize."""
         if not workspace:
-            from config.settings import settings
-            workspace = settings.north_workspace
+            workspace = self._default_workspace
 
         if plan.mode == ExecutionMode.SINGLE_TOOL and plan.direct_tool:
             await self._execute_single_tool(task_id, prompt, plan, workspace)
@@ -470,7 +457,6 @@ class Orchestrator:
                 )
                 failed = await self._execute_agent_group(task_id, effective_prompt, agents, workspace)
                 all_failures.extend(failed)
-                # Collect this group's outputs to feed into the next group
                 all_data = await self._task_context_store.get_all(task_id)
                 snippets = [
                     f"[{name}]: {(all_data.get(name) or {}).get('output', '')}"
@@ -518,7 +504,7 @@ class Orchestrator:
             result = await tool.run(ToolInput(params=params))
             success = result.success
             output = (
-                _format_tool_result(plan.direct_tool, result.data)  # type: ignore[arg-type]
+                tool.format_output(result.data)
                 if result.success
                 else f"Tool error: {result.error}"
             )
@@ -580,7 +566,7 @@ class Orchestrator:
         combined = "\n".join(o for o in outputs if o).strip()
         if not combined:
             return
-        summary = f"Task: {prompt[:120]}\nResult: {combined[:400]}"
+        summary = await self._summarize_episode(task_id, prompt, combined)
         try:
             await self._episodic_store.record(
                 task_id=task_id, domain=domain, summary=summary
@@ -588,14 +574,39 @@ class Orchestrator:
         except Exception:
             logger.debug("Episodic record failed for task %s", task_id)
 
+    async def _summarize_episode(
+        self, task_id: str, prompt: str, output: str
+    ) -> str:
+        """Generate a retrieval-friendly episode summary via the LLM.
+
+        Falls back to a plain truncated string when the cost tracker is
+        unavailable (tests, offline mode) so episodic memory always gets
+        *something* rather than nothing.
+        """
+        fallback = f"Task: {prompt[:200]}\nResult: {output[:500]}"
+        if self._cost_tracker is None:
+            return fallback
+        try:
+            response = await self._cost_tracker.complete(
+                CompletionRequest(
+                    prompt=(
+                        "Summarize this completed AI task in 2–3 sentences for future retrieval. "
+                        "Include what was requested, what was done, and any key outcomes or decisions.\n\n"
+                        f"Task: {prompt}\n\nResult: {output[:3000]}"
+                    ),
+                    priority=PoolPriority.LOW,
+                    component="episodic_summary",
+                    task_id=task_id,
+                )
+            )
+            return response.text.strip() or fallback
+        except Exception:
+            return fallback
+
     async def _maybe_synthesize(
         self, task_id: str, agents: list[str], mode: ExecutionMode = ExecutionMode.PARALLEL
     ) -> None:
-        """Synthesize outputs from multiple agents into one response, if applicable.
-
-        Only runs for parallel and hierarchical modes — single_agent produces one
-        coherent output that needs no synthesis.
-        """
+        """Synthesize outputs from multiple agents into one response, if applicable."""
         if self._synthesizer is None or len(agents) < 2:
             return
         if mode not in (ExecutionMode.PARALLEL, ExecutionMode.HIERARCHICAL):
@@ -632,6 +643,10 @@ class Orchestrator:
 
         failed: list[str] = []
         for agent, result in zip(agents, results):
+            if isinstance(result, asyncio.CancelledError):
+                # A cancelled task means cancel_task() was called — propagate
+                # so the outer _process_task handler can write the ledger entry.
+                raise result
             if isinstance(result, Exception):
                 logger.error("Agent '%s' failed: %s", agent.name, result)
                 failed.append(agent.name)

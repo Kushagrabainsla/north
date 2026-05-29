@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 
+from typing import Any
+
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
@@ -47,6 +49,9 @@ class BashTool(Tool):
         },
         "required": ["command"],
     }
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        return str(data.get("stdout", data.get("output", ""))).strip()
 
     async def run(self, input: ToolInput) -> ToolOutput:
         command = input.params.get("command")

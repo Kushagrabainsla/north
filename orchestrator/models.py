@@ -5,7 +5,6 @@ See docs/CODING_STYLE.md Section 9.7.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -25,7 +24,7 @@ class ExecutionMode(str, Enum):
 class TaskRequest(BaseModel):
     """Input payload to trigger a new task execution."""
 
-    prompt: str
+    prompt: str = Field(..., min_length=1, max_length=32_768)
     source: LedgerSource = LedgerSource.PROMPT
     workspace: str = ""  # optional root directory for filesystem/shell tools
 
@@ -47,8 +46,7 @@ class IntentClassification(BaseModel):
     confidence: float = 1.0  # 0–1; below 0.7 skips the north star check to avoid false interruptions
 
 
-@dataclass
-class ExecutionPlan:
+class ExecutionPlan(BaseModel):
     """The plan built by the router indicating execution steps."""
 
     task_id: str
@@ -57,4 +55,4 @@ class ExecutionPlan:
     dependencies: dict[str, list[str]]
     mode: ExecutionMode = ExecutionMode.SINGLE_AGENT
     direct_tool: str | None = None
-    direct_tool_params: dict[str, Any] = field(default_factory=dict)
+    direct_tool_params: dict[str, Any] = Field(default_factory=dict)

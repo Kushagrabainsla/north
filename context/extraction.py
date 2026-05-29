@@ -9,6 +9,7 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 
 from pathlib import Path
 
@@ -35,6 +36,9 @@ _DOCUMENT_MAP: dict[str, ContextDocument] = {
 }
 
 _SKIPPED_SOURCES = {LedgerSource.SYSTEM, LedgerSource.INFERENCE_ROUTER}
+# Failed-task entries carry noise (error messages, stack traces) rather than
+# durable facts about the user.  Sending them to the LLM wastes budget.
+_SKIPPED_STATUSES = {LedgerStatus.FAILED}
 
 _EXTRACTION_PROMPT = """\
 You are the extraction pipeline for a personal AI operating system.
@@ -118,10 +122,10 @@ class ExtractionPipeline:
         if not entries:
             return 0
 
-        # Advance watermark past skipped sources immediately, collect the rest.
+        # Advance watermark past entries that should never be extracted, collect the rest.
         to_process: list = []
         for entry in entries:
-            if entry.source in _SKIPPED_SOURCES:
+            if entry.source in _SKIPPED_SOURCES or entry.status in _SKIPPED_STATUSES:
                 self._save_watermark(entry.timestamp)
             else:
                 to_process.append(entry)
@@ -194,7 +198,7 @@ class ExtractionPipeline:
         doc = _DOCUMENT_MAP[doc_key]
         await self._context_store.append(doc, delta)
 
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        await self._ledger.write(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
@@ -202,7 +206,7 @@ class ExtractionPipeline:
             action=f"extraction: {doc.value} updated",
             output=delta,
             status=LedgerStatus.COMPLETED,
-        )))
+        ))
         return True
 
     def _load_watermark(self) -> datetime.datetime | None:
@@ -218,4 +222,8 @@ class ExtractionPipeline:
         # Advance by 1µs so the next batch's `>=` query excludes this entry.
         advanced = ts + datetime.timedelta(microseconds=1)
         self._watermark_path.parent.mkdir(parents=True, exist_ok=True)
-        self._watermark_path.write_text(advanced.isoformat(), encoding="utf-8")
+        # Write to a temp file then atomically rename so a crash mid-write
+        # never leaves the watermark in a partially-written state.
+        tmp = self._watermark_path.with_suffix(".tmp")
+        tmp.write_text(advanced.isoformat(), encoding="utf-8")
+        os.replace(tmp, self._watermark_path)

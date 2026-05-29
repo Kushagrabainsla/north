@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from approval.store import approval_store
+from approval.store import ApprovalStore
 from utils.security import load_secret
 from context.models import ContextDocument
 from jobs.cron_store import UserCronStore
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/ui", tags=["web"])
 _templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
 
-# Module-level singletons populated by configure() at startup
+# Module-level references populated by configure() at startup
 _ledger: LedgerWriter | None = None
 _agent_registry = None
 _context_store = None
@@ -35,6 +35,7 @@ _job_processor = None
 _inference_router = None
 _confidence_tracker = None
 _cron_store: UserCronStore | None = None
+_approval_store: ApprovalStore | None = None
 
 
 def configure(
@@ -46,9 +47,11 @@ def configure(
     inference_router,
     confidence_tracker,
     cron_store: UserCronStore | None = None,
+    approval_store: ApprovalStore | None = None,
 ) -> None:
     global _ledger, _agent_registry, _context_store, _context_injector
     global _job_processor, _inference_router, _confidence_tracker, _cron_store
+    global _approval_store
     _ledger = ledger
     _agent_registry = agent_registry
     _context_store = context_store
@@ -57,6 +60,7 @@ def configure(
     _inference_router = inference_router
     _confidence_tracker = confidence_tracker
     _cron_store = cron_store
+    _approval_store = approval_store
 
 
 def _get_ledger() -> LedgerWriter:
@@ -105,7 +109,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         if entry.status == LedgerStatus.PENDING
     ]
     recent_entries = entries[:20]
-    pending_approvals = approval_store.pending()
+    pending_approvals = _approval_store.pending() if _approval_store else []
 
     return templates.TemplateResponse(
         request,
@@ -137,7 +141,7 @@ async def ledger_view(request: Request, limit: int = 50) -> HTMLResponse:
 
 @router.get("/approvals", response_class=HTMLResponse, include_in_schema=False)
 async def approvals_view(request: Request) -> HTMLResponse:
-    cards = approval_store.all(limit=50)
+    cards = _approval_store.all(limit=50) if _approval_store else []
     pending = [c for c in cards if c.status == "pending"]
     resolved = [c for c in cards if c.status != "pending"]
 
@@ -157,7 +161,8 @@ async def approvals_respond(request: Request) -> RedirectResponse:
     card_id = str(form.get("card_id", ""))
     decision = str(form.get("decision", "approved"))
 
-    approval_store.resolve(card_id, decision)
+    if _approval_store is not None:
+        _approval_store.resolve(card_id, decision)
     return RedirectResponse(url="/ui/approvals", status_code=303)
 
 

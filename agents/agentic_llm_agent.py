@@ -108,9 +108,8 @@ class AgenticLLMAgent(LLMAgent):
         tool_map = {t.name: t for t, _ in scored_tools}
         total_cost_usd: float = 0.0
 
-        from config.settings import settings as _settings
-        for _ in range(_settings.agent_max_iterations):
-            _compact_history(messages)
+        for _ in range(self._deps.agent_max_iterations):
+            _compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
             token_cb = self._make_token_callback(payload.task_id)
 
             response = await self._deps.inference_router.complete_with_tools(
@@ -290,12 +289,14 @@ class AgenticLLMAgent(LLMAgent):
         self, payload: AgentPayload, params: dict[str, Any]
     ) -> str:
         from approval.models import Card, CardType
-        from approval.store import approval_store as _global_store
         from utils.ids import generate_id
 
-        # Prefer the injected store; fall back to the module singleton for
-        # any code path that hasn't wired the dependency yet.
-        store = self._deps.approval_store or _global_store
+        store = self._deps.approval_store
+        if store is None:
+            raise RuntimeError(
+                f"Agent '{self.name}' called request_approval but no ApprovalStore "
+                "was injected into AgentDependencies. Wire it at startup."
+            )
 
         message = str(params.get("message", "Action requires your approval."))
         options = list(params.get("options", ["Approve", "Reject"]))

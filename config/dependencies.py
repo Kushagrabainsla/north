@@ -1,47 +1,109 @@
 """Dependency injection wire-up.
 
+All components that can be constructed synchronously and do not have
+circular dependencies are built here.  The remaining pieces —
+``AgentRegistry``, ``Orchestrator``, and friends — are assembled in
+``orchestrator/app.py`` because they either require async initialisation
+or have circular construction order (agent_registry ↔ agent_deps).
+
 See docs/CODING_STYLE.md Section 6.3.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from approval import Notifier, TerminalNotifier
+from approval.store import ApprovalStore
 from config.settings import settings
 from config.strategy import NorthSettings
 from context import ContextStore, FileContextStore
-
-from inference import (
-    InferenceRouter,
-    OpenRouterInferenceRouter,
-)
+from inference import InferenceRouter, OpenRouterInferenceRouter
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
+
+if TYPE_CHECKING:
+    from context.episodic import EpisodicStore
+    from inference.cost_tracker import CostTracker
+    from jobs.cron_store import UserCronStore
+    from orchestrator.stream import EventStreamManager
+    from orchestrator.task_context import TaskContextStore
+    from tools.confidence import ConfidenceTracker
+
+EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 
 @dataclass
 class Dependencies:
-    """Dependency container for injecting concrete implementations into interfaces."""
+    """Full dependency container built once at startup.
+
+    Covers every component that does not require async initialisation or
+    has a circular construction dependency.  ``app.py`` reads from this
+    object instead of constructing components inline.
+    """
 
     context_store: ContextStore
     ledger: LedgerWriter
     inference_router: InferenceRouter
     notifier: Notifier
     job_processor: JobProcessor
+    cost_tracker: "CostTracker"
+    stream_manager: "EventStreamManager"
+    approval_store: ApprovalStore
+    cron_store: "UserCronStore"
+    confidence_tracker: "ConfidenceTracker"
+    episodic_store: "EpisodicStore"
+    task_context_store: "TaskContextStore"
+    north_settings: NorthSettings
+    # Shared async callable used by both EpisodicStore and EmbeddingIndex so
+    # they are guaranteed to use the same embedding model and billing surface.
+    embed_fn: EmbedFn | None = field(default=None)
 
 
 def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
-    """Build production dependencies wired once at startup."""
+    """Build and wire all synchronously-constructable production dependencies."""
+    from context.episodic import EpisodicStore
+    from inference.cost_tracker import CostTracker
+    from inference.models import EmbedRequest
+    from jobs.cron_store import UserCronStore
+    from orchestrator.stream import EventStreamManager
+    from orchestrator.task_context import TaskContextStore
+    from tools.confidence import ConfidenceTracker
+
+    if north_settings is None:
+        north_settings = NorthSettings(settings.north_home / "settings.json")
+
+    context_store = FileContextStore(settings.north_home / "context")
+    ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
+    base_router = OpenRouterInferenceRouter(
+        settings.openrouter_api_key,
+        settings.north_home / "inference_cache.json",
+        north_settings=north_settings,
+    )
+    cost_tracker = CostTracker(base_router)
+
+    async def _embed_fn(texts: list[str]) -> list[list[float]]:
+        resp = await cost_tracker.embed(EmbedRequest(texts=texts, component="embed"))
+        return resp.embeddings
+
     return Dependencies(
-        context_store=FileContextStore(settings.north_home / "context"),
-        ledger=SQLiteLedgerWriter(settings.north_home / "ledger.db"),
-        inference_router=OpenRouterInferenceRouter(
-            settings.openrouter_api_key,
-            settings.north_home / "inference_cache.json",
-            north_settings=north_settings,
-        ),
+        context_store=context_store,
+        ledger=ledger,
+        inference_router=base_router,
         notifier=TerminalNotifier(),
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
+        cost_tracker=cost_tracker,
+        stream_manager=EventStreamManager(),
+        approval_store=ApprovalStore(),
+        cron_store=UserCronStore(settings.north_home / "jobs.db"),
+        confidence_tracker=ConfidenceTracker(db_path=settings.north_home / "tools.db"),
+        episodic_store=EpisodicStore(
+            db_path=settings.north_home / "episodic.db",
+            embed_fn=_embed_fn,
+        ),
+        task_context_store=TaskContextStore(),
+        north_settings=north_settings,
+        embed_fn=_embed_fn,
     )

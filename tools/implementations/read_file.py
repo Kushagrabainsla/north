@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from typing import Any
+
 from tools.base import Tool
 from tools.implementations._path import resolve_path
 from tools.models import ToolInput, ToolOutput
@@ -28,6 +30,9 @@ class ReadFileTool(Tool):
         },
         "required": ["path"],
     }
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        return str(data.get("content", "(empty)"))
 
     async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")

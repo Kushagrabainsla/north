@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from typing import Any
+
 from tools.base import Tool
 from tools.implementations._path import resolve_path
 from tools.models import ToolInput, ToolOutput
@@ -40,6 +42,9 @@ class PatchFileTool(Tool):
         },
         "required": ["path", "old_string", "new_string"],
     }
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        return f"Patched `{data.get('path', '?')}`."
 
     async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")

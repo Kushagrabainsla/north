@@ -1,9 +1,10 @@
 """In-memory store for pending approval cards shown in the Web UI.
 
 Cards are added when a Notifier fires and resolved when the user responds
-via the approval endpoint or Web UI. The store is a module-level singleton
-so it is accessible from both the Notifier implementations and the web routes
-without requiring constructor injection across the whole call chain.
+via the approval endpoint or Web UI. A single ApprovalStore instance is
+constructed at startup and injected wherever it is needed — Orchestrator,
+AgentDependencies, and the web routes all share the same object so that
+approval waits and resolutions always touch the same in-memory registry.
 """
 
 from __future__ import annotations
@@ -67,7 +68,3 @@ class ApprovalStore:
         cards = list(self._cards.values())
         cards.sort(key=lambda c: c.created_at, reverse=True)
         return cards[:limit]
-
-
-# Module-level singleton — import this directly everywhere.
-approval_store = ApprovalStore()

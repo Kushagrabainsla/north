@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 
+from typing import Any
+
 from tools import Tool, ToolInput, ToolOutput
 
 
@@ -30,6 +32,20 @@ class WebSearchTool(Tool):
         },
         "required": ["query"],
     }
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        results = data.get("results", [])
+        if not results:
+            return "No results."
+        lines = []
+        for r in results:
+            lines.append(f"**{r.get('title', '')}**")
+            if r.get("snippet"):
+                lines.append(r["snippet"])
+            if r.get("url"):
+                lines.append(r["url"])
+            lines.append("")
+        return "\n".join(lines).strip()
 
     async def run(self, input: ToolInput) -> ToolOutput:
         query = input.params.get("query")
