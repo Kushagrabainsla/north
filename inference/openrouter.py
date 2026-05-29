@@ -217,10 +217,15 @@ class OpenRouterInferenceRouter(InferenceRouter):
         except ValueError as e:
             raise InferenceError("OpenRouter response was not JSON") from e
 
-        choice = payload["choices"][0]["message"]["content"]
+        choices = payload.get("choices") or []
+        if not choices:
+            raise InferenceError(
+                f"OpenRouter returned empty choices for {model}: {payload}"
+            )
+        content = choices[0].get("message", {}).get("content") or ""
         usage = payload.get("usage", {})
         return CompletionResponse(
-            text=choice,
+            text=content,
             model_used=payload.get("model", model),
             tokens_in=usage.get("prompt_tokens", 0),
             tokens_out=usage.get("completion_tokens", 0),
@@ -349,8 +354,10 @@ class OpenRouterInferenceRouter(InferenceRouter):
                             tool_calls[idx]["id"] = tc["id"]
                         fn = tc.get("function", {})
                         if fn.get("name"):
-                            tool_calls[idx]["name"] += fn["name"]
+                            # name only appears in the first chunk — assign, don't append
+                            tool_calls[idx]["name"] = fn["name"]
                         if fn.get("arguments"):
+                            # arguments are streamed in pieces — accumulate
                             tool_calls[idx]["arguments"] += fn["arguments"]
         except httpx.RequestError as e:
             raise InferenceError(f"Request to OpenRouter failed: {e}") from e

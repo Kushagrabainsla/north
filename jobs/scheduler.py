@@ -129,6 +129,22 @@ class CronScheduler:
     # after a scheduled time had already passed).
     _STARTUP_CATCHUP_MINUTES: int = 15
 
+    def _cannot_schedule(self) -> bool:
+        return not self._builtin_entries and self._cron_store is None
+
+    def _get_reference_time(self, now: datetime, first_tick: bool) -> datetime:
+        if first_tick:
+            return now - timedelta(minutes=self._STARTUP_CATCHUP_MINUTES)
+        return now
+
+    async def _execute_due_entry(self, due: tuple[CronEntry, datetime], now: datetime) -> None:
+        entry, firing = due
+        delay = max(0.0, (firing - now).total_seconds())
+        await asyncio.sleep(min(delay, 60.0))
+        now_after_sleep = self._clock()
+        if firing <= now_after_sleep:
+            await self._processor.enqueue(self.build_job(entry, firing))
+
     async def run(self) -> None:
         """Loop forever: pick the next due entry, sleep, enqueue, repeat.
 
@@ -138,7 +154,7 @@ class CronScheduler:
         immediately rather than skipped until the next scheduled cycle.
         Returns only on cancellation.
         """
-        if not self._builtin_entries and self._cron_store is None:
+        if self._cannot_schedule():
             return
         first_tick = True
         while True:
@@ -147,25 +163,13 @@ class CronScheduler:
                 await asyncio.sleep(60)
                 continue
             now = self._clock()
-            # On first tick look back up to CATCHUP_WINDOW so a just-missed
-            # firing (e.g. process restarted 5 min after the scheduled time)
-            # is caught rather than waiting a full day/week.
-            reference = (
-                now - timedelta(minutes=self._STARTUP_CATCHUP_MINUTES)
-                if first_tick
-                else now
-            )
+            reference = self._get_reference_time(now, first_tick)
             first_tick = False
             due = next_due_entry(entries, reference)
             if due is None:
                 await asyncio.sleep(60)
                 continue
-            entry, firing = due
-            delay = max(0.0, (firing - now).total_seconds())
-            await asyncio.sleep(min(delay, 60.0))
-            now = self._clock()
-            if firing <= now:
-                await self._processor.enqueue(self.build_job(entry, firing))
+            await self._execute_due_entry(due, now)
 
 
 # V1 schedule — see README Section 11.3.

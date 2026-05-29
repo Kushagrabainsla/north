@@ -53,7 +53,8 @@ Your job: decide if this event reveals something NEW, MEANINGFUL, and DURABLE ab
 the user — a preference, habit, goal, constraint, or decision pattern worth remembering.
 
 If yes, respond with JSON in exactly this format:
-{{"extract": true, "document": "<public|judgement_rules|north_stars>", "delta": "<one concise line>"}}
+{{"extract": true, "document": "<public|judgement_rules|north_stars>", \
+"delta": "<one concise line>"}}
 
 If no, respond with:
 {{"extract": false}}
@@ -109,6 +110,52 @@ class ExtractionPipeline:
 
     # ------------------------------------------------------------------ #
 
+    def _filter_valid_entries(self, entries: list[LedgerEntry]) -> list[LedgerEntry]:
+        """Skip internal/failed entries, saving watermarks for them, return valid ones."""
+        valid: list[LedgerEntry] = []
+        for entry in entries:
+            if entry.source in _SKIPPED_SOURCES or entry.status in _SKIPPED_STATUSES:
+                self._save_watermark(entry.timestamp)
+            else:
+                valid.append(entry)
+        return valid
+
+    async def _run_extractions_concurrently(
+        self, entries: list[LedgerEntry]
+    ) -> list[bool | Exception]:
+        """Perform concurrent extraction checks with a semaphore rate-limit cap."""
+        sem = asyncio.Semaphore(_MAX_CONCURRENT_EXTRACTIONS)
+        results: list[bool | Exception] = [False] * len(entries)
+
+        async def _bounded(idx: int, entry: LedgerEntry) -> None:
+            async with sem:
+                try:
+                    results[idx] = await self._process_entry(entry)
+                except Exception as exc:
+                    results[idx] = exc
+
+        await asyncio.gather(*[_bounded(i, e) for i, e in enumerate(entries)])
+        return results
+
+    def _process_extraction_results(
+        self, entries: list[LedgerEntry], results: list[bool | Exception]
+    ) -> int:
+        """Process extraction output, saving watermarks sequentially until any error."""
+        extractions = 0
+        for entry, result in zip(entries, results, strict=True):
+            if isinstance(result, Exception):
+                logger.exception(
+                    "ExtractionPipeline: failed on entry %s — watermark NOT advanced past this "
+                    "point, will retry",
+                    entry.id,
+                )
+                break
+            if result:
+                extractions += 1
+            self._save_watermark(entry.timestamp)
+
+        return extractions
+
     async def _process_batch(
         self, since_override: datetime.datetime | None = None
     ) -> int:
@@ -121,46 +168,12 @@ class ExtractionPipeline:
         if not entries:
             return 0
 
-        # Advance watermark past entries that should never be extracted, collect the rest.
-        to_process: list = []
-        for entry in entries:
-            if entry.source in _SKIPPED_SOURCES or entry.status in _SKIPPED_STATUSES:
-                self._save_watermark(entry.timestamp)
-            else:
-                to_process.append(entry)
-
+        to_process = self._filter_valid_entries(entries)
         if not to_process:
             return 0
 
-        # Run up to _MAX_CONCURRENT_EXTRACTIONS LLM calls in parallel.
-        # Each call is independent so the semaphore just prevents rate-limit bursts.
-        sem = asyncio.Semaphore(_MAX_CONCURRENT_EXTRACTIONS)
-        results: list[bool | Exception] = [False] * len(to_process)
-
-        async def _bounded(idx: int, entry: LedgerEntry) -> None:
-            async with sem:
-                try:
-                    results[idx] = await self._process_entry(entry)
-                except Exception as exc:
-                    results[idx] = exc
-
-        await asyncio.gather(*[_bounded(i, e) for i, e in enumerate(to_process)])
-
-        # Advance watermark sequentially, stopping at the first failure so the
-        # failed entry is retried on the next poll cycle.
-        extractions = 0
-        for entry, result in zip(to_process, results):
-            if isinstance(result, Exception):
-                logger.exception(
-                    "ExtractionPipeline: failed on entry %s — watermark NOT advanced past this point, will retry",
-                    entry.id,
-                )
-                break
-            if result:
-                extractions += 1
-            self._save_watermark(entry.timestamp)
-
-        return extractions
+        results = await self._run_extractions_concurrently(to_process)
+        return self._process_extraction_results(to_process, results)
 
     async def _process_entry(self, entry: LedgerEntry) -> bool:
         """Ask the LLM whether this entry yields a user fact worth storing."""

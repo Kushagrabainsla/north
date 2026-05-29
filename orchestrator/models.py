@@ -27,6 +27,7 @@ class TaskRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=32_768)
     source: LedgerSource = LedgerSource.PROMPT
     workspace: str = ""  # optional root directory for filesystem/shell tools
+    context: str = ""    # optional pre-loaded context summary to inject into the agent's prompt
 
 
 class TaskResponse(BaseModel):

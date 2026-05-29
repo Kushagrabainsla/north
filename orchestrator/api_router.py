@@ -700,7 +700,7 @@ async def receive_webhook(source: str, request: Request) -> dict:
     task_req = TaskRequest(
         prompt=f"[webhook:{source}] {prompt}",
         source=LedgerSource.WEBHOOK,
-        workspace=context,  # context delivered as workspace field (injected by agent)
+        context=context,
     )
 
     orch = _orch()

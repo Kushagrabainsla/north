@@ -63,8 +63,8 @@ class FailureHandler:
         Returns:
             True if a retry should be attempted, False otherwise.
         """
-        attempts = self.get_retry_count(task_id, agent_name)
-        await self._task_context_store.update_agent_status(task_id, agent_name, "failed")
+        # Increment first so the count reflects attempts already made (1-indexed).
+        attempt = self.increment_retry_count(task_id, agent_name)
 
         # Emit failure event
         if self._stream_manager:
@@ -74,22 +74,27 @@ class FailureHandler:
                 data={
                     "agent": agent_name,
                     "error": str(exception),
-                    "retry_attempt": attempts,
+                    "retry_attempt": attempt,
                     "max_retries": self.max_retries,
-                    "will_retry": attempts < self.max_retries,
+                    "will_retry": attempt < self.max_retries,
                 },
             )
 
-        if attempts >= self.max_retries:
+        if attempt >= self.max_retries:
+            await self._task_context_store.update_agent_status(task_id, agent_name, "failed")
             logger.error(
-                f"Agent '{agent_name}' failed in task '{task_id}' and exceeded max retries ({self.max_retries})."
+                "Agent '%s' failed in task '%s' and exceeded max retries (%d).",
+                agent_name,
+                task_id,
+                self.max_retries,
             )
+            self.clear_retry_count(task_id, agent_name)
             return False
 
         # Calculate exponential back-off cooldown
-        cooldown = self.base_cooldown_seconds * (2**attempts)
+        cooldown = self.base_cooldown_seconds * (2 ** (attempt - 1))
         logger.info(
-            f"Agent '{agent_name}' failed (attempt {attempts + 1}/{self.max_retries}). "
+            f"Agent '{agent_name}' failed (attempt {attempt}/{self.max_retries}). "
             f"Retrying in {cooldown:.2f} seconds..."
         )
 
@@ -104,7 +109,6 @@ class FailureHandler:
             )
 
         await asyncio.sleep(cooldown)
-        self.increment_retry_count(task_id, agent_name)
         return True
 
     async def reconstruct_context(self, task_id: str, agents: list[str]) -> None:
@@ -130,15 +134,20 @@ class FailureHandler:
                 # Mark agent status as completed in context
                 await self._task_context_store.update_agent_status(task_id, entry.agent, "completed")
                 # Write back all output keys the agent completed
-                if entry.agent_output:
-                    for k, v in entry.agent_output.items():
-                        await self._task_context_store.write(
-                            task_id=task_id,
-                            agent=entry.agent,
-                            key=k,
-                            value=v,
-                            status="completed",
-                        )
+                await self._task_context_store.write(
+                    task_id=task_id,
+                    agent=entry.agent,
+                    key="result",
+                    value=entry.agent_output if entry.agent_output is not None else {},
+                    status="completed",
+                )
+                await self._task_context_store.write(
+                    task_id=task_id,
+                    agent=entry.agent,
+                    key="output",
+                    value=entry.output if entry.output is not None else "",
+                    status="completed",
+                )
 
         if self._stream_manager:
             await self._stream_manager.emit(

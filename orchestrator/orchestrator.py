@@ -269,34 +269,48 @@ class Orchestrator:
             return StrategyMode(match.group(1).lower())
         return None
 
+    async def _handle_strategy_command(self, task_id: str, prompt: str) -> bool:
+        """Process strategy commands and return True if handled."""
+        if self._north_settings is None:
+            return False
+
+        mode = self._detect_strategy_command(prompt)
+        if mode is None:
+            return False
+
+        self._north_settings.set_strategy(mode)
+        msg = f"Strategy set to **{mode.value}**. {describe(mode)}"
+        await self._ledger.write(LedgerEntry(
+            id=generate_id(),
+            timestamp=utcnow(),
+            source=LedgerSource.SYSTEM,
+            task_id=task_id,
+            action="agent_completed",
+            agent="orchestrator",
+            output=msg,
+            status=LedgerStatus.COMPLETED,
+        ))
+        await self._stream_manager.emit(task_id, "task_completed", {})
+        await self._stream_manager.emit_done(task_id)
+        return True
+
     async def _process_task(self, task_id: str, request: TaskRequest) -> None:
         """Full pipeline: classify → north-star → route → execute."""
         bind_task_id(task_id)  # attach correlation ID to every log line in this context
         try:
             # Strategy command shortcut — handle before full pipeline
-            if self._north_settings is not None:
-                mode = self._detect_strategy_command(request.prompt)
-                if mode is not None:
-                    self._north_settings.set_strategy(mode)
-                    msg = f"Strategy set to **{mode.value}**. {describe(mode)}"
-                    await self._ledger.write(LedgerEntry(
-                        id=generate_id(),
-                        timestamp=utcnow(),
-                        source=LedgerSource.SYSTEM,
-                        task_id=task_id,
-                        action="agent_completed",
-                        agent="orchestrator",
-                        output=msg,
-                        status=LedgerStatus.COMPLETED,
-                    ))
-                    await self._stream_manager.emit(task_id, "task_completed", {})
-                    await self._stream_manager.emit_done(task_id)
-                    return
+            if await self._handle_strategy_command(task_id, request.prompt):
+                return
 
             classification, plan = await self._stage_plan(task_id, request.prompt)
             await self._stage_north_star(task_id, request.prompt, classification)
             await self._stage_execute(
-                task_id, request.prompt, plan, request.workspace, domain=classification.domain
+                task_id,
+                request.prompt,
+                plan,
+                request.workspace,
+                domain=classification.domain,
+                context=request.context,
             )
         except asyncio.CancelledError:
             # cancel_task() already wrote the ledger entry and emitted events.
@@ -358,6 +372,37 @@ class Orchestrator:
         await self._task_context_store.initialize_task(task_id, plan.agents)
         return classification, plan
 
+    async def _handle_alignment_conflict(self, task_id: str, tension: str) -> None:
+        """Prompt user for approval when a North Star conflict is detected.
+
+        The north_star_conflict SSE event is emitted first for UI awareness,
+        then the card is routed through _notify() so the JudgementFilter and
+        Notifier are applied consistently with every other approval card.
+        """
+        card = Card(
+            id=generate_id(),
+            type=CardType.APPROVAL,
+            task_id=task_id,
+            agent="orchestrator",
+            title="North Star Conflict Detected",
+            message=tension or "This task conflicts with one of your active goals. Proceed?",
+            options=["Proceed anyway", "Cancel"],
+        )
+        # Emit the conflict event before notifying so the UI can show context.
+        await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
+        # _notify() registers the card in the ApprovalStore, applies the
+        # JudgementFilter (auto-resolve if rules match), and fires the Notifier.
+        await self._notify(card)
+        current = await self._approval_store.wait_for_decision(card.id, timeout=300.0)
+        if current is None:
+            logger.warning(
+                "North Star approval timed out for task %s — treating as rejection",
+                task_id,
+            )
+        chosen_opt = (current.chosen_option if current else "").lower()
+        if chosen_opt not in ("proceed anyway", "proceed", "approve", "approved", "yes"):
+            raise NorthStarConflictError(tension or "North Star conflict")
+
     async def _stage_north_star(
         self,
         task_id: str,
@@ -407,33 +452,57 @@ class Orchestrator:
         ))
 
         if not aligned:
-            card = Card(
-                id=generate_id(),
-                type=CardType.APPROVAL,
-                task_id=task_id,
-                agent="orchestrator",
-                title="North Star Conflict Detected",
-                message=tension or "This task conflicts with one of your active goals. Proceed?",
-                options=["Proceed anyway", "Cancel"],
-            )
-            self._approval_store.add(card)
-            await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
-            await self._stream_manager.emit(task_id, "approval_required", {
-                "card_id": card.id,
-                "task_id": task_id,
-                "agent": "orchestrator",
-                "title": card.title,
-                "message": card.message,
-                "options": card.options,
-            })
-            current = await self._approval_store.wait_for_decision(card.id, timeout=300.0)
-            if current is None:
-                logger.warning("North Star approval timed out for task %s — treating as rejection", task_id)
-            chosen_opt = (current.chosen_option if current else "").lower()
-            if chosen_opt not in ("proceed anyway", "proceed", "approve", "approved", "yes"):
-                raise NorthStarConflictError(tension or "North Star conflict")
+            await self._handle_alignment_conflict(task_id, tension)
 
         await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": reasoning})
+
+    async def _execute_hierarchical_groups(
+        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
+    ) -> list[str]:
+        """Execute agents in hierarchical mode, passing results from earlier steps."""
+        all_failures: list[str] = []
+        prior_context = ""
+        for group in plan.parallel_groups:
+            agents = [self._agent_registry.get(name) for name in group]
+            effective_prompt = (
+                f"{prompt}\n\n## Results from earlier steps\n{prior_context}"
+                if prior_context else prompt
+            )
+            failed = await self._execute_agent_group(
+                task_id, effective_prompt, agents, workspace, context=context
+            )
+            all_failures.extend(failed)
+            
+            all_data = await self._task_context_store.get_all(task_id)
+            snippets = [
+                f"[{name}]: {(all_data.get(name) or {}).get('output', '')}"
+                for name in group
+                if (all_data.get(name) or {}).get("output")
+            ]
+            prior_context = "\n\n".join(snippets)
+        return all_failures
+
+    async def _execute_parallel_groups(
+        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
+    ) -> list[str]:
+        """Execute agents in parallel groups."""
+        all_failures: list[str] = []
+        for group in plan.parallel_groups:
+            agents = [self._agent_registry.get(name) for name in group]
+            failed = await self._execute_agent_group(
+                task_id, prompt, agents, workspace, context=context
+            )
+            all_failures.extend(failed)
+        return all_failures
+
+    async def _report_execution_failures(self, task_id: str, failures: list[str]) -> None:
+        """Format and emit a message showing which agents failed to complete."""
+        names = ", ".join(f"`{n}`" for n in failures)
+        note = (
+            f"\n\n> **Note:** {len(failures)} agent(s) did not complete: {names}. "
+            "Partial results may be missing."
+        )
+        await self._stream_manager.emit(task_id, "token", {"text": note})
 
     async def _stage_execute(
         self,
@@ -442,54 +511,39 @@ class Orchestrator:
         plan: ExecutionPlan,
         workspace: str = "",
         domain: str = "general",
+        context: str = "",
     ) -> None:
         """Stage 4: Execute agents in dependency order, then optionally synthesize."""
         if not workspace:
             workspace = self._default_workspace
 
         if plan.mode == ExecutionMode.SINGLE_TOOL and plan.direct_tool:
-            await self._execute_single_tool(task_id, prompt, plan, workspace)
+            await self._execute_single_tool(task_id, prompt, plan, workspace, context=context)
             return
 
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
 
-        all_failures: list[str] = []
         if plan.mode == ExecutionMode.HIERARCHICAL:
-            prior_context = ""
-            for group in plan.parallel_groups:
-                agents = [self._agent_registry.get(name) for name in group]
-                effective_prompt = (
-                    f"{prompt}\n\n## Results from earlier steps\n{prior_context}"
-                    if prior_context else prompt
-                )
-                failed = await self._execute_agent_group(task_id, effective_prompt, agents, workspace)
-                all_failures.extend(failed)
-                all_data = await self._task_context_store.get_all(task_id)
-                snippets = [
-                    f"[{name}]: {(all_data.get(name) or {}).get('output', '')}"
-                    for name in group
-                    if (all_data.get(name) or {}).get("output")
-                ]
-                prior_context = "\n\n".join(snippets)
+            all_failures = await self._execute_hierarchical_groups(
+                task_id, prompt, plan, workspace, context=context
+            )
         else:
-            for group in plan.parallel_groups:
-                agents = [self._agent_registry.get(name) for name in group]
-                failed = await self._execute_agent_group(task_id, prompt, agents, workspace)
-                all_failures.extend(failed)
+            all_failures = await self._execute_parallel_groups(
+                task_id, prompt, plan, workspace, context=context
+            )
 
         await self._maybe_synthesize(task_id, plan.agents, plan.mode)
 
         if all_failures:
-            names = ", ".join(f"`{n}`" for n in all_failures)
-            note = f"\n\n> **Note:** {len(all_failures)} agent(s) did not complete: {names}. Partial results may be missing."
-            await self._stream_manager.emit(task_id, "token", {"text": note})
+            await self._report_execution_failures(task_id, all_failures)
+
         asyncio.create_task(
             self._record_episode(task_id, prompt, plan.agents, domain)
         )
         await self._finish_task(task_id)
 
     async def _execute_single_tool(
-        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str
+        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
     ) -> None:
         """Execute a single tool call directly, bypassing the agent layer."""
         from tools.exceptions import ToolNotFoundError
@@ -519,9 +573,15 @@ class Orchestrator:
             logger.warning("single_tool fallback: tool %r not found, re-routing to agent", plan.direct_tool)
             fallback = self._execution_planner._build_fallback_plan("general", task_id)
             await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
+            fallback_failures: list[str] = []
             for group in fallback.parallel_groups:
                 agents = [self._agent_registry.get(name) for name in group]
-                await self._execute_agent_group(task_id, prompt, agents, workspace)
+                failed = await self._execute_agent_group(
+                    task_id, prompt, agents, workspace, context=context
+                )
+                fallback_failures.extend(failed)
+            if fallback_failures:
+                await self._report_execution_failures(task_id, fallback_failures)
             await self._finish_task(task_id)
             return
         except Exception as exc:
@@ -636,13 +696,13 @@ class Orchestrator:
         )
 
     async def _execute_agent_group(
-        self, task_id: str, prompt: str, agents: list[Agent], workspace: str = ""
+        self, task_id: str, prompt: str, agents: list[Agent], workspace: str = "", context: str = ""
     ) -> list[str]:
         """Run a parallel group of agents concurrently; handle per-agent failures.
 
         Returns the names of any agents that failed after all retries.
         """
-        payload = AgentPayload(task_id=task_id, prompt=prompt, workspace=workspace)
+        payload = AgentPayload(task_id=task_id, prompt=prompt, workspace=workspace, context=context)
         results = await asyncio.gather(
             *[self._run_agent_with_retry(agent, payload) for agent in agents],
             return_exceptions=True,

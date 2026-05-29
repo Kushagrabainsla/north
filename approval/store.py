@@ -45,6 +45,8 @@ class ApprovalStore:
 
         Returns the resolved ``Card`` (status ≠ "pending") or ``None`` on
         timeout.  Never polls; wakes exactly when ``resolve()`` is called.
+        The asyncio.Event is freed after this method returns so it does not
+        accumulate indefinitely in long-running servers.
         """
         event = self._events.get(card_id)
         if event is None:
@@ -53,6 +55,10 @@ class ApprovalStore:
             await asyncio.wait_for(event.wait(), timeout=timeout)
         except TimeoutError:
             pass
+        finally:
+            # Release the Event regardless of outcome — it is no longer needed
+            # once we have woken up (either resolved or timed out).
+            self._events.pop(card_id, None)
         card = self._cards.get(card_id)
         if card is None or card.status == "pending":
             return None

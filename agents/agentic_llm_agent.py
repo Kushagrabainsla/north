@@ -20,7 +20,8 @@ from inference.models import ToolCall, ToolCallRequest
 from tools.base import Tool
 from tools.models import ToolInput
 
-_MAX_DELEGATION_DEPTH = 2  # top-level agent may delegate once; that delegate cannot delegate further
+# top-level agent may delegate once; that delegate cannot delegate further
+_MAX_DELEGATION_DEPTH = 2
 # Cap the JSON-serialised tool result injected back into the conversation.
 # ~40k chars ≈ 10k tokens — generous but bounded.
 _MAX_TOOL_RESULT_CHARS = 40_000
@@ -42,7 +43,10 @@ _DELEGATE_TASK_SCHEMA: dict = {
             "properties": {
                 "agent": {
                     "type": "string",
-                    "description": "Name of the specialist agent (e.g. 'code', 'finance', 'health', 'general').",
+                    "description": (
+                        "Name of the specialist agent "
+                        "(e.g. 'code', 'finance', 'health', 'general')."
+                    ),
                 },
                 "task": {
                     "type": "string",
@@ -89,6 +93,69 @@ class AgenticLLMAgent(LLMAgent):
     as they arrive so the UI can render them progressively.
     """
 
+    async def _record_tool_call_confidence(self, tool_name: str, success: bool) -> None:
+        """Record tool execution confidence if not a special internal tool."""
+        if tool_name not in ("request_approval", "delegate_task"):
+            asyncio.create_task(
+                self._deps.confidence_tracker.record_use(self.name, tool_name, success)
+            )
+
+    async def _emit_tool_call_events(
+        self, task_id: str, tool_name: str, params: dict, success: bool
+    ) -> None:
+        """Emit stream events for a completed tool call."""
+        if self._deps.stream_manager and task_id:
+            await self._deps.stream_manager.emit(
+                task_id, "tool_called", {"tool": tool_name, "params": params}
+            )
+            await self._deps.stream_manager.emit(
+                task_id, "tool_result", {"tool": tool_name, "success": success}
+            )
+
+    def _append_tool_call_exchange(
+        self, messages: list[dict], results: list[tuple[ToolCall, str, bool]]
+    ) -> None:
+        """Format and append assistant tool_calls message and the respective tool outputs."""
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.params),
+                    },
+                }
+                for call, _, _ in results
+            ],
+        })
+        for call, result_str, _ in results:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.call_id,
+                "content": result_str,
+            })
+
+    async def _handle_tool_calls_response(
+        self,
+        calls: list[ToolCall],
+        payload: AgentPayload,
+        tool_map: dict[str, Tool],
+        messages: list[dict],
+    ) -> None:
+        """Execute multiple tool calls in parallel and update logging/history."""
+        results: list[tuple[ToolCall, str, bool]] = await asyncio.gather(
+            *[self._execute_call(call, payload, tool_map) for call in calls]
+        )
+
+        for call, _, success in results:
+            await self._emit_tool_call_events(payload.task_id, call.name, call.params, success)
+            await self._record_tool_call_confidence(call.name, success)
+
+        self._append_tool_call_exchange(messages, results)
+
     async def _execute(
         self,
         payload: AgentPayload,
@@ -103,7 +170,10 @@ class AgenticLLMAgent(LLMAgent):
             {"role": "user", "content": user_text},
         ]
 
-        tools = [t.schema() for t, _ in scored_tools] + [_DELEGATE_TASK_SCHEMA, _REQUEST_APPROVAL_SCHEMA]
+        tools = (
+            [t.schema() for t, _ in scored_tools]
+            + [_DELEGATE_TASK_SCHEMA, _REQUEST_APPROVAL_SCHEMA]
+        )
         tool_map = {t.name: t for t, _ in scored_tools}
         total_cost_usd: float = 0.0
 
@@ -127,61 +197,13 @@ class AgenticLLMAgent(LLMAgent):
             if response.type == "message":
                 # Final answer — tokens were already streamed via token_cb.
                 content = response.content or ""
-                return {
-                    "output": content,
-                    "summary": content[:120],
-                    "data": {},
-                    "requires_approval": False,
-                    "has_question": False,
-                    "question": None,
-                    "question_options": [],
-                    "cost_usd": total_cost_usd,
-                }
+                return _final_answer(content, content[:120], total_cost_usd)
 
             # Tool calls branch — execute all calls in parallel.
             if not response.calls:
                 break
 
-            results: list[tuple[ToolCall, str, bool]] = await asyncio.gather(
-                *[self._execute_call(call, payload, tool_map) for call in response.calls]
-            )
-
-            # Emit events and record confidence for each completed call.
-            for call, result_str, success in results:
-                if self._deps.stream_manager and payload.task_id:
-                    await self._deps.stream_manager.emit(
-                        payload.task_id, "tool_called", {"tool": call.name, "params": call.params}
-                    )
-                    await self._deps.stream_manager.emit(
-                        payload.task_id, "tool_result", {"tool": call.name, "success": success}
-                    )
-                if call.name not in ("request_approval", "delegate_task"):
-                    asyncio.create_task(
-                        self._deps.confidence_tracker.record_use(self.name, call.name, success)
-                    )
-
-            # Append one assistant message with all tool calls, then one result per call.
-            messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": call.call_id,
-                        "type": "function",
-                        "function": {
-                            "name": call.name,
-                            "arguments": json.dumps(call.params),
-                        },
-                    }
-                    for call, _, _ in results
-                ],
-            })
-            for call, result_str, _ in results:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call.call_id,
-                    "content": result_str,
-                })
+            await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
 
         return _final_answer(
             "Reached the maximum number of reasoning steps without a final answer.",
@@ -258,12 +280,16 @@ class AgenticLLMAgent(LLMAgent):
 
         registry = self._deps.agent_registry
         if registry is None:
-            return json.dumps({"success": False, "error": "Agent registry not available for delegation."})
+            return json.dumps(
+                {"success": False, "error": "Agent registry not available for delegation."}
+            )
 
         agent_name = str(params.get("agent", "general"))
         task = str(params.get("task", ""))
         if not task:
-            return json.dumps({"success": False, "error": "delegate_task requires a non-empty 'task' parameter."})
+            return json.dumps(
+                {"success": False, "error": "delegate_task requires a non-empty 'task' parameter."}
+            )
 
         try:
             agent = registry.get(agent_name)
@@ -271,7 +297,12 @@ class AgenticLLMAgent(LLMAgent):
             try:
                 agent = registry.get("general")
             except Exception:
-                return json.dumps({"success": False, "error": f"Agent '{agent_name}' not found and no 'general' fallback."})
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": f"Agent '{agent_name}' not found and no 'general' fallback.",
+                    }
+                )
 
         sub_payload = AgentPayload(
             task_id=payload.task_id,
