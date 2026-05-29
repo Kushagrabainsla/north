@@ -24,6 +24,8 @@
 16. [Tech Stack](#16-tech-stack)
 
 > **What changed in 1.3:** asyncio.Event-based approval waiting (§9), JSON mode for all structured-output callers (§8.2), native function calling + token streaming in the ReAct loop (§7.6, §8.7), EMA confidence scoring (§7.5), semantic context search via OpenRouter embeddings (§5.7), episodic memory layer (§5.8), webhook event ingestion (§4.3, §6.8, §11.5), and two new SQLite stores (`embeddings.db`, `episodic.db`, §12.1).
+>
+> **What changed since 1.3:** curl installer (`scripts/install.sh`), GHCR image publishing via GitHub Actions, bundled `cli/docker-compose.yml` so install works without cloning the repo, `$HOME` workspace mount in Docker, workspace auto-detection from CWD in `north task` / `north chat`, `~/.north/.env` as the canonical config location, and fixed `north tasks` returning stale historical entries (§6).
 
 ---
 
@@ -1836,80 +1838,56 @@ dev = [
 
 north runs on any platform (Linux, macOS, Windows via Docker). All deployments use `TerminalNotifier` by default. Native macOS notification banners require alerter and a local install (see Section 16.10).
 
-#### Path A: Docker (recommended for server/headless deployments)
-
-**Prerequisites:** Docker with the Compose plugin.
+#### Recommended: curl installer
 
 ```bash
-# 1. Clone
-git clone https://github.com/your-username/north
-cd north
-
-# 2. Configure
-cp .env.example .env
-# Edit .env:
-#   NORTH_OPENROUTER_API_KEY=sk-or-your-key-here
-#   NORTH_SECRET=some-random-secret-string
-
-# 3. Start (builds the image and runs the container)
+curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash
 north start
-
-# 4. Stop
-north stop
 ```
 
-`north start` detects `docker-compose.yml` in the project directory and calls `docker compose up --build`. Data persists in a named Docker volume (`north_data`) mounted at `/data` inside the container.
+`scripts/install.sh` checks for Docker, installs `uv` if needed, installs the `north` CLI from GitHub, prompts for your OpenRouter API key, and saves it to `~/.north/.env`. After that `north start` is the only remaining step from any directory.
 
-#### Path B: Local install
-
-**Prerequisites:**
-
-**`uv`** — Python package manager:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-**`alerter`** — macOS native notification banners with action buttons (Section 16.10), optional:
-```bash
-brew install vjeantet/tap/alerter  # macOS only
-```
-
-**Python 3.12+** — managed automatically by `uv`. No separate install needed.
-
-```bash
-# 1. Clone
-git clone https://github.com/your-username/north
-cd north
-
-# 2. Install north and all dependencies. Wires the `north` command onto your PATH.
-uv tool install .
-
-# 3. Configure your API key
-cp .env.example .env
-# Open .env and set:
-#   NORTH_OPENROUTER_API_KEY=sk-or-your-key-here
-
-# 4. Start (uses local uvicorn when no docker-compose.yml is detected, or with --local flag)
-north start --local
-```
-
-On first run `north start` creates `~/.north/`, generates `secret.key`, and initialises all SQLite databases. When it is ready you will see:
+On first `north start`:
+- `~/.north/` is created with all SQLite databases and `secret.key`
+- The bundled `cli/docker-compose.yml` (which pulls `ghcr.io/kushagrabainsla/north:latest`) is copied to `~/.north/docker-compose.yml`
+- Docker pulls the image and starts the container
+- Your home directory is mounted inside the container so agents can access your files
 
 ```
-★ north  Orchestrator → http://127.0.0.1:8000
+★ north  Mode         → Docker Compose
          Web UI       → http://127.0.0.1:8000/ui/
-         API docs     → http://127.0.0.1:8000/docs
-         Home         → ~/.north
+         Workspace    → /Users/you
 ```
 
-Open `http://127.0.0.1:8000/ui/` in a browser. The first visit sets the auth cookie and lands you on the dashboard. Submit a task to confirm everything is working.
+#### Manual install (alternative)
+
+**Prerequisites:** Docker with the Compose plugin, Python 3.12+, `uv`.
+
+```bash
+uv tool install git+https://github.com/Kushagrabainsla/north
+echo "NORTH_OPENROUTER_API_KEY=sk-or-your-key" >> ~/.north/.env
+north start
+```
+
+#### Workspace
+
+Agents can read and write files within a configured workspace. In Docker mode, the workspace defaults to `$HOME` (your entire home directory is mounted inside the container). Per-request workspace is resolved automatically:
+
+```bash
+cd ~/myproject
+north task "review my code"   # workspace auto-detected as git root of ~/myproject
+north chat                    # same — scoped to ~/myproject
+north chat --workspace ~/other-project   # explicit override
+```
+
+`north start --workspace /some/path` overrides the default for the server session.
 
 #### Verify from the CLI
 
 In a second terminal while north is running:
 
 ```bash
-north tasks          # list active tasks
+north tasks          # list active tasks (empty when nothing is running)
 north ledger         # recent ledger entries
 north inference models  # current model pool state
 ```
@@ -1923,13 +1901,15 @@ north stop           # docker compose down (if Docker) or kills port 8000
 #### Update
 
 ```bash
-uv tool upgrade north
+uv tool install git+https://github.com/Kushagrabainsla/north --force-reinstall
 ```
+
+The Docker image is updated automatically on the next `north start` (it always pulls `latest`).
 
 #### For developers (editable install with dev tools)
 
 ```bash
-git clone https://github.com/your-username/north
+git clone https://github.com/Kushagrabainsla/north
 cd north
 
 # Install all dependencies including dev group (pytest, etc.)
@@ -1950,16 +1930,7 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-#### Future: one-liner installer (not yet implemented)
-
-The intended end-state for non-developer users is:
-
-```bash
-curl -LsSf https://north.dev/install.sh | sh
-north start
-```
-
-The installer would handle all prerequisites and the `uv tool install` step automatically. The `north.dev` domain and PyPI package name are placeholders pending availability checks. The manual steps above are the working path in the meantime.
+Developers running from the cloned repo get Docker mode with a local build (`build: .` in the root `docker-compose.yml`) rather than the GHCR image.
 
 ### 16.13 Complete Dependency List
 

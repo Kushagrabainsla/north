@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`north tasks` returning stale entries** — `list_active_tasks` was querying the ledger for all entries with `status=pending`. Because every task starts with a `task_received` ledger entry stamped `pending`, every task ever submitted appeared in the list regardless of its current state. Fixed by reading from the in-memory `_active_tasks` dict instead, which only contains asyncio tasks that are genuinely in-flight. `GET /orchestrator/tasks` and `north tasks` now return an empty list when nothing is running.
+
+- **Workspace env var never propagated to the server** — `docker-compose.yml` was setting `NORTH_WORKSPACE` but pydantic-settings reads `NORTH_NORTH_WORKSPACE` (prefix `NORTH_` + field name `north_workspace`). `settings.north_workspace` was always empty in Docker, silently falling back to CWD-based resolution. Fixed by using the correct env var name throughout.
+
+- **`north context view` documented as a valid subcommand** — README referenced `north context view north_stars` but the actual subcommand is `north context show`. Corrected.
+
+- **Startup silent failure on missing API key** — if `NORTH_OPENROUTER_API_KEY` was not set, the server started cleanly and only failed on the first task with a cryptic inference error. The lifespan startup sequence now raises `RuntimeError` immediately with a clear message pointing to `~/.north/.env` and `https://openrouter.ai/keys`.
+
+### Added
+- **`scripts/install.sh` — curl-based installer** — single-command install that works from a fresh machine:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash
+  ```
+  The script checks for Docker, installs `uv` if missing, installs the `north` CLI from GitHub via `uv tool install git+…`, prompts for the OpenRouter API key, and writes it to `~/.north/.env`. Ends with `north start` as the only remaining step.
+
+- **`cli/docker-compose.yml` — bundled compose file** — a compose file ships inside the `cli/` Python package (included via `pyproject.toml` package-data). It references `ghcr.io/kushagrabainsla/north:latest` rather than a local build context. On first `north start`, this file is copied to `~/.north/docker-compose.yml` so Docker mode works from any directory — no cloned repo required.
+
+- **`.github/workflows/docker-publish.yml` — GHCR publishing** — GitHub Actions workflow that builds and pushes the Docker image to `ghcr.io/kushagrabainsla/north` on every push to `main` and on version tags. Uses `docker/metadata-action` to tag `latest` on default branch and semver tags on releases. No secrets needed beyond the automatic `GITHUB_TOKEN`.
+
+- **`north task` workspace auto-detection** — `north task` now accepts `--workspace / -w` and resolves it from the git root of the current directory when omitted. `cd ~/myproject && north task "review my code"` scopes agents to `~/myproject` without any flags.
+
+- **`north chat` workspace auto-detection** — same as above; `north chat` now defaults to the git root of the calling directory rather than requiring an explicit `--workspace`.
+
+### Changed
+- **`north start` defaults workspace to `$HOME`** — previously resolved the git root of the current working directory as the default workspace. Changed to `Path.home()` so agents have broad access to the user's files regardless of which directory `north start` is run from.
+
+- **Docker volume mounts `$HOME:$HOME`** — the compose files (both root `docker-compose.yml` and the bundled `cli/docker-compose.yml`) now mount the host's home directory at the same path inside the container. `NORTH_NORTH_WORKSPACE` is set to `${HOME}` so `settings.north_workspace` is always populated correctly in Docker with zero configuration.
+
+- **`_find_compose_file()` checks `~/.north/` as fallback** — after the walk-up search from CWD, the function now checks `~/.north/docker-compose.yml`. On first run the bundled `cli/docker-compose.yml` is copied there automatically, so `north start` works from any directory after initial install.
+
+- **`config/settings.py` reads `~/.north/.env` first** — `env_file` is now a list: `[~/.north/.env, .env]`. Installed users set their API key once in `~/.north/.env` via the install script; developers keep using the repo-level `.env` as before.
+
+- **`pyproject.toml` package-data includes `*.yml` and `*.sh`** — required so `cli/docker-compose.yml` is included in the installed package and accessible at `Path(__file__).parent / "docker-compose.yml"` from `cli/main.py`.
+
+### Fixed
 - **Web UI conversation context** — Fixed missing memory in the Web UI session. The Web UI now tracks `chatHistory` in Javascript and prepends the last 5 conversation turns to the prompt before posting, mirroring the CLI behavior.
 - **HTTP 400 fallback** — Added `400` status code to the `_RateLimited` fallback trigger set in `complete_with_tools()`. This allows gracefully advancing to the next model in the pool on OpenRouter models that do not support tool calling, rather than failing the task.
 - **Path sandboxing** — Strengthened the path resolution sandbox by expanding `~` to the home directory and explicitly blocking well-known credential directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`) from being read or written to by the agent when no workspace is configured.
