@@ -126,8 +126,11 @@ class ExtractionPipeline:
                     extractions += 1
             except Exception:
                 logger.exception(
-                    "ExtractionPipeline: failed on entry %s", entry.id
+                    "ExtractionPipeline: failed on entry %s — watermark NOT advanced, will retry",
+                    entry.id,
                 )
+                # Stop the batch here so the failed entry is retried next time.
+                break
             self._save_watermark(entry.timestamp)
 
         return extractions

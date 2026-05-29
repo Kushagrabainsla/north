@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from context.models import ContextDocument
 from tools.base import Tool
@@ -86,8 +89,8 @@ class Agent(ABC):
                         f"- {e}" for e in episodes
                     )
                     parts.append(block)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Episodic context search failed for task %s: %s", payload.task_id, exc)
         return "\n\n".join(p for p in parts if p)
 
     async def _load_tools(self) -> list[tuple[Tool, float]]:

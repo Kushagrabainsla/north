@@ -310,7 +310,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
 
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as resp:
-                if resp.status_code in (400, 429, 402, 404, 503):
+                if resp.status_code in (429, 402, 404, 503):
                     await resp.aread()
                     raise _RateLimited(model)
                 if resp.status_code >= 400:

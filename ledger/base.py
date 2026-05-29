@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
-from ledger.models import LedgerEntry, LedgerSource
+from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 
 
 @dataclass
@@ -16,6 +16,7 @@ class LedgerFilters:
     task_id: str | None = None
     agent: str | None = None
     source: LedgerSource | None = None
+    status: LedgerStatus | None = None
     since: datetime | None = None
     limit: int = 100
 

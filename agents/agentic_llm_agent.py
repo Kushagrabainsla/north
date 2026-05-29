@@ -342,12 +342,28 @@ class AgenticLLMAgent(LLMAgent):
 
 
 def _compact_history(messages: list[dict], keep_recent: int = 4) -> None:
-    """Compacts the history by truncating older tool responses to save context."""
+    """Compacts the history by truncating older tool responses to save context.
+
+    Also truncates the arguments on the paired assistant tool_call so both
+    halves of the exchange shrink together — preventing context bloat from
+    large input payloads that were already executed.
+    """
     tool_indices = [i for i, msg in enumerate(messages) if msg.get("role") == "tool"]
     if len(tool_indices) <= keep_recent:
         return
 
+    # Build a map from tool_call_id -> index of the assistant message that owns it.
+    call_id_to_assistant: dict[str, int] = {}
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                cid = tc.get("id")
+                if cid:
+                    call_id_to_assistant[cid] = i
+
     to_compact = tool_indices[:-keep_recent]
+    compacted_assistant: set[int] = set()
+
     for idx in to_compact:
         msg = messages[idx]
         content = msg.get("content")
@@ -369,6 +385,19 @@ def _compact_history(messages: list[dict], keep_recent: int = 4) -> None:
 
             if truncated:
                 msg["content"] = content[:300] + "... [Large tool output truncated to save context]"
+
+        # Also compact the arguments on the paired assistant tool_call.
+        call_id = msg.get("tool_call_id")
+        if call_id and call_id in call_id_to_assistant:
+            ast_idx = call_id_to_assistant[call_id]
+            if ast_idx not in compacted_assistant:
+                ast_msg = messages[ast_idx]
+                for tc in ast_msg.get("tool_calls") or []:
+                    fn = tc.get("function", {})
+                    args = fn.get("arguments", "")
+                    if isinstance(args, str) and len(args) > 200:
+                        fn["arguments"] = "{}"  # keep structure, drop large args
+                compacted_assistant.add(ast_idx)
 
 
 def _extract_success(tool_result_str: str) -> bool:

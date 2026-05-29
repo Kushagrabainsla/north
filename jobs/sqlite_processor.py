@@ -108,29 +108,33 @@ class SQLiteJobProcessor(JobProcessor):
         now = datetime.now(timezone.utc).isoformat()
         with open_db_connection(self._db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                """
-                SELECT * FROM job_queue
-                WHERE status = ?
-                  AND scheduled_at <= ?
-                  AND (retry_after IS NULL OR retry_after <= ?)
-                ORDER BY priority ASC, scheduled_at ASC
-                LIMIT 1
-                """,
-                (JobStatus.PENDING.value, now, now),
-            ).fetchone()
-            if row is None:
+            try:
+                row = conn.execute(
+                    """
+                    SELECT * FROM job_queue
+                    WHERE status = ?
+                      AND scheduled_at <= ?
+                      AND (retry_after IS NULL OR retry_after <= ?)
+                    ORDER BY priority ASC, scheduled_at ASC
+                    LIMIT 1
+                    """,
+                    (JobStatus.PENDING.value, now, now),
+                ).fetchone()
+                if row is None:
+                    conn.execute("COMMIT")
+                    return None
+                conn.execute(
+                    "UPDATE job_queue SET status = ?, started_at = ? WHERE job_id = ?",
+                    (JobStatus.RUNNING.value, now, row["job_id"]),
+                )
+                updated = conn.execute(
+                    "SELECT * FROM job_queue WHERE job_id = ?", (row["job_id"],)
+                ).fetchone()
                 conn.execute("COMMIT")
-                return None
-            conn.execute(
-                "UPDATE job_queue SET status = ?, started_at = ? WHERE job_id = ?",
-                (JobStatus.RUNNING.value, now, row["job_id"]),
-            )
-            updated = conn.execute(
-                "SELECT * FROM job_queue WHERE job_id = ?", (row["job_id"],)
-            ).fetchone()
-            conn.execute("COMMIT")
-            return updated
+                return updated
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
     async def mark_completed(self, job_id: str) -> None:
         await asyncio.to_thread(self._set_terminal_sync, job_id, JobStatus.COMPLETED)
@@ -145,6 +149,17 @@ class SQLiteJobProcessor(JobProcessor):
     def _mark_failed_sync(self, job_id: str, retry_after: datetime | None) -> None:
         if retry_after is not None:
             with open_db_connection(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT retry_count, max_retries FROM job_queue WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if row and row["retry_count"] >= row["max_retries"]:
+                    # Max retries exhausted — mark terminal instead of re-queuing.
+                    conn.execute(
+                        "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
+                        (JobStatus.FAILED.value, datetime.now(timezone.utc).isoformat(), job_id),
+                    )
+                    return
                 conn.execute(
                     """
                     UPDATE job_queue

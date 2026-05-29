@@ -42,12 +42,16 @@ class LLMAgent(Agent):
         return Path(module.__file__).parent / "prompts"
 
     def _load_system_prompt(self) -> str:
-        path = self._prompts_dir() / "system.md"
-        if not path.exists():
-            raise AgentConfigError(
-                f"Missing system prompt at {path}. Every LLMAgent needs one."
-            )
-        return path.read_text(encoding="utf-8")
+        # Cached on first call — prompts are static at runtime and reading from
+        # disk on every agent invocation would block the event loop.
+        if not hasattr(self, "_system_prompt_cache"):
+            path = self._prompts_dir() / "system.md"
+            if not path.exists():
+                raise AgentConfigError(
+                    f"Missing system prompt at {path}. Every LLMAgent needs one."
+                )
+            self._system_prompt_cache: str = path.read_text(encoding="utf-8")
+        return self._system_prompt_cache
 
     def _build_user_message(
         self,

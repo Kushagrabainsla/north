@@ -27,6 +27,14 @@ class TaskContextStore:
         Otherwise, database paths are derived dynamically under ~/.north/tasks/.
         """
         self._db_path = db_path
+        # Per-task condition variables: write() notifies, read() waits.
+        # This avoids opening a new DB connection every poll interval.
+        self._conditions: dict[str, asyncio.Condition] = {}
+
+    def _get_condition(self, task_id: str) -> asyncio.Condition:
+        if task_id not in self._conditions:
+            self._conditions[task_id] = asyncio.Condition()
+        return self._conditions[task_id]
 
     def _get_db_path(self, task_id: str) -> Path:
         if self._db_path is not None:
@@ -84,8 +92,13 @@ class TaskContextStore:
             actual_key = key
 
         db_path = self._get_db_path(task_id)
-        start_time = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        start_time = loop.time()
+        # Fallback poll interval — condition.wait() wakes immediately on write(),
+        # so this only fires when a write is missed (e.g. race at startup).
         poll_interval = 2.0
+
+        condition = self._get_condition(task_id)
 
         while True:
             def _check() -> sqlite3.Row | None:
@@ -113,7 +126,7 @@ class TaskContextStore:
                     )
 
             # Check timeout
-            elapsed = asyncio.get_event_loop().time() - start_time
+            elapsed = loop.time() - start_time
             if elapsed >= timeout:
                 def _check_agent_status() -> str:
                     if not db_path.exists():
@@ -147,7 +160,16 @@ class TaskContextStore:
                         )
                     return None
 
-            await asyncio.sleep(poll_interval)
+            # Wait for a write notification or fall back to the poll interval,
+            # whichever comes first — avoids opening a new DB connection every poll.
+            remaining = timeout - elapsed
+            try:
+                async with condition:
+                    await asyncio.wait_for(
+                        condition.wait(), timeout=min(remaining, poll_interval)
+                    )
+            except asyncio.TimeoutError:
+                pass
 
     async def write(
         self,
@@ -174,6 +196,10 @@ class TaskContextStore:
                 )
 
         await asyncio.to_thread(_run)
+        # Wake any coroutines waiting in read() for this task.
+        condition = self._get_condition(task_id)
+        async with condition:
+            condition.notify_all()
 
     async def update_agent_status(self, task_id: str, agent: str, status: str) -> None:
         """Convenience method to set an agent's run status in the task DB."""

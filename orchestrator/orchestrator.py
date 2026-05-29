@@ -98,6 +98,8 @@ class Orchestrator:
         self._cost_tracker = cost_tracker
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
+        # Maps task_id → running asyncio.Task so cancel_task() can stop it.
+        self._active_tasks: dict[str, asyncio.Task] = {}
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -108,7 +110,8 @@ class Orchestrator:
         task_id = generate_task_id()
         now = utcnow()
 
-        asyncio.create_task(self._write_ledger(LedgerEntry(
+        # Await the initial write so get_task() never returns None for a live task.
+        await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=now,
             source=request.source,
@@ -116,10 +119,12 @@ class Orchestrator:
             input=request.prompt,
             action="task_received",
             status=LedgerStatus.PENDING,
-        )))
+        ))
 
-        # Kick off async processing; caller gets the task_id immediately.
-        asyncio.create_task(self._process_task(task_id, request))
+        # Kick off async processing; store handle so cancel_task() can stop it.
+        task = asyncio.create_task(self._process_task(task_id, request))
+        self._active_tasks[task_id] = task
+        task.add_done_callback(lambda _: self._active_tasks.pop(task_id, None))
 
         return TaskResponse(
             task_id=task_id,
@@ -140,16 +145,20 @@ class Orchestrator:
         )
 
     async def cancel_task(self, task_id: str) -> None:
-        """Write a cancelled entry to the ledger for the given task."""
-        asyncio.create_task(self._write_ledger(LedgerEntry(
+        """Cancel a running task: stop its pipeline and write a terminal ledger entry."""
+        running = self._active_tasks.pop(task_id, None)
+        if running is not None and not running.done():
+            running.cancel()
+        await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
             task_id=task_id,
             action="task_cancelled",
             status=LedgerStatus.CANCELLED,
-        )))
+        ))
         await self._stream_manager.emit(task_id, "task_cancelled", {})
+        await self._stream_manager.emit_done(task_id)
 
     async def respond_approval(
         self,
@@ -163,7 +172,7 @@ class Orchestrator:
         status = (
             LedgerStatus.APPROVED if decision == "approved" else LedgerStatus.REJECTED
         )
-        asyncio.create_task(self._write_ledger(LedgerEntry(
+        await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.APPROVAL,
@@ -173,7 +182,7 @@ class Orchestrator:
             input=f"card_id={card_id}",
             output=f"chosen_option={chosen_option}",
             status=status,
-        )))
+        ))
         from approval.store import approval_store
         approval_store.resolve(card_id, decision, chosen_option=chosen_option)
         await self._stream_manager.emit(task_id, "approval_responded", {
@@ -185,7 +194,7 @@ class Orchestrator:
     async def list_active_tasks(self) -> list[TaskResponse]:
         """Returns tasks that are still pending in the ledger."""
         entries = await self._ledger.query(
-            LedgerFilters(source=LedgerSource.PROMPT, limit=50)
+            LedgerFilters(status=LedgerStatus.PENDING, limit=50)
         )
         return [
             TaskResponse(
@@ -194,7 +203,6 @@ class Orchestrator:
                 created_at=format_timestamp(e.timestamp),
             )
             for e in entries
-            if e.status == LedgerStatus.PENDING
         ]
 
     # ------------------------------------------------------------------ #
@@ -220,7 +228,7 @@ class Orchestrator:
         if self._judgement_filter is not None:
             decision, chosen_option = await self._judgement_filter.check(card)
             if decision is not None:
-                asyncio.create_task(self._write_ledger(LedgerEntry(
+                await self._write_ledger(LedgerEntry(
                     id=generate_id(),
                     timestamp=utcnow(),
                     source=LedgerSource.APPROVAL,
@@ -230,7 +238,7 @@ class Orchestrator:
                     input=card.title,
                     output=chosen_option or decision,
                     status=LedgerStatus.COMPLETED,
-                )))
+                ))
                 from approval.store import approval_store
                 approval_store.resolve(card.id, decision)
                 return
@@ -275,8 +283,11 @@ class Orchestrator:
             await self._stage_execute(
                 task_id, request.prompt, plan, request.workspace, domain=classification.domain
             )
+        except asyncio.CancelledError:
+            # cancel_task() already wrote the ledger entry and emitted events.
+            raise
         except NorthStarConflictError as e:
-            asyncio.create_task(self._write_ledger(LedgerEntry(
+            await self._write_ledger(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
                 source=LedgerSource.SYSTEM,
@@ -284,12 +295,12 @@ class Orchestrator:
                 action="task_cancelled",
                 output=str(e),
                 status=LedgerStatus.CANCELLED,
-            )))
+            ))
             await self._stream_manager.emit(task_id, "task_cancelled", {"reason": str(e)})
             await self._stream_manager.emit_done(task_id)
         except Exception as e:
             logger.exception("Unhandled error processing task %s: %s", task_id, e)
-            asyncio.create_task(self._write_ledger(LedgerEntry(
+            await self._write_ledger(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
                 source=LedgerSource.SYSTEM,
@@ -297,7 +308,7 @@ class Orchestrator:
                 action="task_failed",
                 output=str(e),
                 status=LedgerStatus.FAILED,
-            )))
+            ))
             await self._stream_manager.emit(task_id, "task_failed", {"error": str(e)})
             await self._stream_manager.emit_done(task_id)
 
@@ -309,7 +320,7 @@ class Orchestrator:
 
         classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id)
 
-        asyncio.create_task(self._write_ledger(LedgerEntry(
+        await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
@@ -317,7 +328,7 @@ class Orchestrator:
             action=f"classified_as_{'consequential' if classification.is_consequential else 'trivial'}",
             output=classification.reasoning,
             status=LedgerStatus.COMPLETED,
-        )))
+        ))
 
         await self._stream_manager.emit(task_id, "classified", {
             "is_consequential": classification.is_consequential,
@@ -353,7 +364,7 @@ class Orchestrator:
             return
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
-        asyncio.create_task(self._write_ledger(LedgerEntry(
+        await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
@@ -361,7 +372,7 @@ class Orchestrator:
             action=check_action,
             output=reasoning,
             status=LedgerStatus.COMPLETED,
-        )))
+        ))
 
         if not aligned:
             from approval.store import approval_store
@@ -385,6 +396,8 @@ class Orchestrator:
                 "options": card.options,
             })
             current = await approval_store.wait_for_decision(card.id, timeout=300.0)
+            if current is None:
+                logger.warning("North Star approval timed out for task %s — treating as rejection", task_id)
             chosen_opt = (current.chosen_option if current else "").lower()
             if chosen_opt not in ("proceed anyway", "proceed", "approve", "approved", "yes"):
                 raise NorthStarConflictError(tension or "North Star conflict")
@@ -491,7 +504,7 @@ class Orchestrator:
             "tool": plan.direct_tool, "success": success
         })
 
-        asyncio.create_task(self._write_ledger(LedgerEntry(
+        await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.AGENT,
@@ -500,7 +513,7 @@ class Orchestrator:
             action="agent_completed",
             output=output,
             status=LedgerStatus.COMPLETED,
-        )))
+        ))
 
         await self._stream_manager.emit(task_id, "token", {"text": output})
         await self._finish_task(task_id)
@@ -508,14 +521,14 @@ class Orchestrator:
     async def _finish_task(self, task_id: str) -> None:
         """Write completion ledger entry and emit done events."""
         task_cost_usd = self._cost_tracker.pop_task_cost(task_id) if self._cost_tracker else 0.0
-        asyncio.create_task(self._write_ledger(LedgerEntry(
+        await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.SYSTEM,
             task_id=task_id,
             action="task_completed",
             status=LedgerStatus.COMPLETED,
-        )))
+        ))
         await self._stream_manager.emit(task_id, "task_completed", {"cost_usd": task_cost_usd})
         await self._stream_manager.emit_done(task_id)
 
@@ -587,7 +600,7 @@ class Orchestrator:
             if isinstance(result, Exception):
                 logger.error("Agent '%s' failed: %s", agent.name, result)
                 failed.append(agent.name)
-                asyncio.create_task(self._write_ledger(LedgerEntry(
+                await self._write_ledger(LedgerEntry(
                     id=generate_id(),
                     timestamp=utcnow(),
                     source=LedgerSource.AGENT,
@@ -596,7 +609,7 @@ class Orchestrator:
                     action="agent_execution_failed",
                     output=str(result),
                     status=LedgerStatus.FAILED,
-                )))
+                ))
             else:
                 await self._handle_agent_result(task_id, agent, result)
         return failed
@@ -611,6 +624,7 @@ class Orchestrator:
         while True:
             try:
                 result = await agent.run(payload)
+                self._failure_handler.clear_retry_count(task_id, agent.name)
                 await self._task_context_store.update_agent_status(
                     task_id, agent.name, "completed"
                 )
@@ -645,7 +659,7 @@ class Orchestrator:
             status="completed",
         )
 
-        asyncio.create_task(self._write_ledger(LedgerEntry(
+        await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.AGENT,
@@ -655,7 +669,7 @@ class Orchestrator:
             output=result.output,
             agent_output=result.data,
             status=LedgerStatus.COMPLETED,
-        )))
+        ))
 
         if result.requires_approval or result.has_question:
             card_type = CardType.QUESTION if result.has_question else CardType.APPROVAL

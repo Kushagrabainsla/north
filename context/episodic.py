@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS episodes (
 )
 """
 
+_SCHEMA_INDEX = "CREATE INDEX IF NOT EXISTS idx_episodes_domain ON episodes (domain)"
+
 _STOPWORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "have",
     "has", "had", "do", "does", "did", "to", "of", "in", "for", "on",
@@ -73,6 +75,7 @@ class EpisodicStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
+            conn.execute(_SCHEMA_INDEX)
 
     async def record(self, task_id: str, domain: str, summary: str) -> None:
         """Store a task episode.  Embedding is generated if an embed_fn is available."""

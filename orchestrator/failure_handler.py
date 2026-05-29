@@ -48,6 +48,10 @@ class FailureHandler:
         self._retry_counts[key] = self._retry_counts.get(key, 0) + 1
         return self._retry_counts[key]
 
+    def clear_retry_count(self, task_id: str, agent_name: str) -> None:
+        """Remove the retry counter for a completed agent to prevent memory leaks."""
+        self._retry_counts.pop((task_id, agent_name), None)
+
     async def handle_failure(
         self, task_id: str, agent_name: str, exception: Exception
     ) -> bool:

@@ -49,7 +49,12 @@ def _split_paragraphs(text: str) -> list[str]:
 
 
 class EmbeddingIndex:
-    """Per-document paragraph embeddings stored in SQLite, searched by cosine similarity."""
+    """Per-document paragraph embeddings stored in SQLite, searched by cosine similarity.
+
+    Embeddings are cached in memory after the first load so that repeated
+    searches don't pay the cost of a full SQLite read every time.  The cache
+    is invalidated per-document whenever ``update_document`` is called.
+    """
 
     def __init__(self, db_path: Path, embed_fn: EmbedFn) -> None:
         self._db_path = db_path
@@ -57,12 +62,15 @@ class EmbeddingIndex:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
+        # (doc, chunk_text, embedding_vector) — rebuilt lazily, invalidated on update.
+        self._cache: list[tuple[str, str, list[float]]] | None = None
 
     async def update_document(self, doc_name: str, content: str) -> None:
         """Re-embed all paragraphs for *doc_name* and store them."""
         chunks = _split_paragraphs(content)
         if not chunks:
             await asyncio.to_thread(self._delete_doc_sync, doc_name)
+            self._cache = None
             return
         try:
             embeddings = await self._embed_fn(chunks)
@@ -70,6 +78,7 @@ class EmbeddingIndex:
             logger.warning("EmbeddingIndex: embed failed for %s — index not updated", doc_name)
             return
         await asyncio.to_thread(self._write_chunks_sync, doc_name, chunks, embeddings)
+        self._cache = None  # invalidate so next search reloads fresh data
 
     async def search(self, query: str, max_results: int = 5) -> list[tuple[str, str]]:
         """Return up to *max_results* ``(doc_label, chunk_text)`` pairs by similarity.
@@ -83,13 +92,20 @@ class EmbeddingIndex:
         if not query_embeddings:
             return []
         qvec = query_embeddings[0]
-        rows = await asyncio.to_thread(self._load_all_sync)
+
+        if self._cache is None:
+            rows = await asyncio.to_thread(self._load_all_sync)
+            parsed: list[tuple[str, str, list[float]]] = []
+            for doc, chunk_text, emb_json in rows:
+                try:
+                    emb = json.loads(emb_json)
+                except json.JSONDecodeError:
+                    continue
+                parsed.append((doc, chunk_text, emb))
+            self._cache = parsed
+
         scored: list[tuple[float, str, str]] = []
-        for doc, chunk_text, emb_json in rows:
-            try:
-                emb = json.loads(emb_json)
-            except json.JSONDecodeError:
-                continue
+        for doc, chunk_text, emb in self._cache:
             sim = _cosine(qvec, emb)
             label = doc.removesuffix(".md").replace("_", " ").title()
             scored.append((sim, label, chunk_text))
@@ -97,6 +113,10 @@ class EmbeddingIndex:
         return [(label, chunk) for _, label, chunk in scored[:max_results]]
 
     # ------------------------------------------------------------------ #
+
+    def invalidate_cache(self) -> None:
+        """Drop the in-memory embedding cache so the next search reloads from DB."""
+        self._cache = None
 
     def _delete_doc_sync(self, doc_name: str) -> None:
         with open_db_connection(self._db_path) as conn:

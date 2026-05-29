@@ -35,6 +35,10 @@ class FileContextStore(ContextStore):
         self._base_path = base_path
         self._base_path.mkdir(parents=True, exist_ok=True)
         self._embedding_index = embedding_index
+        # Per-document locks serialise concurrent append() calls so the
+        # read-modify-write inside _append_sync is always atomic from the
+        # perspective of async callers.
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def _path(self, document: ContextDocument) -> Path:
         return self._base_path / document.value
@@ -57,6 +61,10 @@ class FileContextStore(ContextStore):
         except OSError as e:
             raise ContextWriteError(f"Failed to write {document.value}: {e}") from e
         if self._embedding_index is not None:
+            # Invalidate synchronously so any search that runs before the
+            # background update completes will reload from DB rather than
+            # serving the pre-write cache.
+            self._embedding_index.invalidate_cache()
             asyncio.create_task(
                 self._embedding_index.update_document(document.value, content)
             )
@@ -65,15 +73,17 @@ class FileContextStore(ContextStore):
         self._path(document).write_text(content, encoding="utf-8")
 
     async def append(self, document: ContextDocument, delta: str) -> None:
-        try:
-            await asyncio.to_thread(self._append_sync, document, delta)
-        except OSError as e:
-            raise ContextWriteError(f"Failed to append to {document.value}: {e}") from e
-        if self._embedding_index is not None:
-            new_content = await self.read(document)
-            asyncio.create_task(
-                self._embedding_index.update_document(document.value, new_content)
-            )
+        lock = self._locks.setdefault(document.value, asyncio.Lock())
+        async with lock:
+            try:
+                await asyncio.to_thread(self._append_sync, document, delta)
+            except OSError as e:
+                raise ContextWriteError(f"Failed to append to {document.value}: {e}") from e
+            if self._embedding_index is not None:
+                new_content = await self.read(document)
+                asyncio.create_task(
+                    self._embedding_index.update_document(document.value, new_content)
+                )
 
     def _append_sync(self, document: ContextDocument, delta: str) -> None:
         path = self._path(document)

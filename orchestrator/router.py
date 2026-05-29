@@ -6,8 +6,11 @@ See docs/CODING_STYLE.md Sections 5.3, 6.5, 9.7, 13.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 from agents import AgentRegistry
 from inference import CompletionRequest, InferenceRouter, PoolPriority
@@ -90,7 +93,8 @@ class ExecutionPlanner:
                     json_mode=True,
                 )
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Router LLM call failed — falling back to single %s agent: %s", classification.domain, exc)
             return self._build_fallback_plan(classification.domain, task_id)
 
         text = response.text.strip()
@@ -101,7 +105,8 @@ class ExecutionPlanner:
 
         try:
             data = json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            logger.warning("Router LLM response was not valid JSON — falling back to single %s agent: %s", classification.domain, exc)
             return self._build_fallback_plan(classification.domain, task_id)
 
         return self._build_plan_from_response(data, classification.domain, task_id)
@@ -145,7 +150,8 @@ class ExecutionPlanner:
                     json_mode=True,
                 )
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Planner LLM call failed — falling back to general single-agent plan: %s", exc)
             return _FALLBACK_CLASSIFICATION, self._build_fallback_plan("general", task_id)
 
         text = response.text.strip()
@@ -156,7 +162,8 @@ class ExecutionPlanner:
 
         try:
             data = json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            logger.warning("Planner LLM response was not valid JSON — falling back to general single-agent plan: %s", exc)
             return _FALLBACK_CLASSIFICATION, self._build_fallback_plan("general", task_id)
 
         classification = IntentClassification(
@@ -241,7 +248,14 @@ class ExecutionPlanner:
 
         parallel_groups = data.get("parallel_groups")
         if not self._is_valid_parallel_groups(parallel_groups, agents):
-            parallel_groups = self._compute_parallel_groups(agents, dependencies)
+            try:
+                parallel_groups = self._compute_parallel_groups(agents, dependencies)
+            except RoutingError:
+                logger.warning(
+                    "Dependency cycle in LLM response for agents %s — falling back to single agent",
+                    agents,
+                )
+                return self._build_fallback_plan(domain, task_id)
 
         return ExecutionPlan(
             task_id=task_id,
@@ -286,15 +300,21 @@ class ExecutionPlanner:
     def _compute_parallel_groups(
         agents: list[str], dependencies: dict[str, list[str]]
     ) -> list[list[str]]:
-        """Layer-based topological sort to compute parallel execution groups."""
+        """Layer-based topological sort to compute parallel execution groups.
+
+        Raises RoutingError if a dependency cycle is detected so callers can
+        fall back to a safe single-agent plan rather than silently running
+        dependent agents in parallel.
+        """
         remaining = set(agents)
         deps = {a: set(dependencies.get(a, [])) for a in agents}
         groups: list[list[str]] = []
         while remaining:
             layer = [a for a in sorted(remaining) if not (deps[a] & remaining)]
             if not layer:
-                groups.append(sorted(remaining))
-                break
+                raise RoutingError(
+                    f"Dependency cycle detected among agents: {sorted(remaining)}"
+                )
             groups.append(layer)
             remaining -= set(layer)
         return groups

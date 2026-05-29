@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Pre-shared secret override — set NORTH_SECRET in Docker instead of using a key file
     north_secret: str = os.environ.get("NORTH_SECRET", "")
 
+    # Base URL for the main orchestrator server — override in Docker/multi-host deployments.
+    north_orchestrator_url: str = "http://127.0.0.1:8000"
+
     # Runtime environment
     north_env: Literal["development", "production", "test"] = "development"
 

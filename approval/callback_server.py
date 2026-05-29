@@ -39,8 +39,6 @@ app = FastAPI(
     version="1.0.0",
 )
 
-_ORCHESTRATOR_BASE_URL = "http://127.0.0.1:8000"
-
 
 @app.post("/callback/decision", response_model=CallbackResponse)
 async def receive_decision(
@@ -62,7 +60,7 @@ async def receive_decision(
     async with httpx.AsyncClient() as client:
         try:
             await client.post(
-                f"{_ORCHESTRATOR_BASE_URL}/orchestrator/approval/respond",
+                f"{settings.north_orchestrator_url}/orchestrator/approval/respond",
                 json={
                     "card_id": payload.card_id,
                     "task_id": payload.task_id,

@@ -55,18 +55,26 @@ from web.routes import router as web_router
 logger = logging.getLogger(__name__)
 
 
-async def _cleanup_stale_task_files(north_home: Path) -> int:
-    """Delete task SQLite files older than 7 days. Returns the count removed."""
+async def _cleanup_stale_task_files(
+    north_home: Path, active_task_ids: frozenset[str] = frozenset()
+) -> int:
+    """Delete task SQLite files older than 7 days. Returns the count removed.
+
+    Skips any file whose task_id is in *active_task_ids* so in-flight tasks
+    are never evicted.
+    """
     tasks_dir = north_home / "tasks"
     if not tasks_dir.exists():
         return 0
 
     cutoff = utcnow() - datetime.timedelta(days=7)
-    deleted = 0
 
     def _run() -> int:
         count = 0
         for db_file in tasks_dir.glob("task_*.db"):
+            task_id = db_file.stem.removeprefix("task_")
+            if task_id in active_task_ids:
+                continue
             mtime = datetime.datetime.fromtimestamp(
                 db_file.stat().st_mtime, tz=datetime.timezone.utc
             )
@@ -202,14 +210,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     async def _dispatch_job(job: Job) -> None:
         if job.task == "task_context_cleanup":
-            n = await _cleanup_stale_task_files(settings.north_home)
-            asyncio.create_task(deps.ledger.write(LedgerEntry(
+            n = await _cleanup_stale_task_files(settings.north_home, frozenset(orchestrator._active_tasks))
+            await deps.ledger.write(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
                 source=LedgerSource.SYSTEM,
                 action=f"task_context_cleanup: removed {n} stale task files",
                 status=LedgerStatus.COMPLETED,
-            )))
+            ))
             return
         await orchestrator.submit_task(
             TaskRequest(prompt=f"[scheduled] {job.task}", source=LedgerSource.CRON)

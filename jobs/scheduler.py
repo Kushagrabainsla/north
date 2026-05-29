@@ -125,19 +125,36 @@ class CronScheduler:
             scheduled_at=scheduled_at,
         )
 
+    # How far back to look on startup for missed firings (e.g. process restart
+    # after a scheduled time had already passed).
+    _STARTUP_CATCHUP_MINUTES: int = 15
+
     async def run(self) -> None:
         """Loop forever: pick the next due entry, sleep, enqueue, repeat.
 
         Sleep is capped at 60 s so user-added entries take effect within a minute.
+        On the first iteration a catch-up window is applied so firings missed
+        during a brief outage (≤ _STARTUP_CATCHUP_MINUTES) are enqueued
+        immediately rather than skipped until the next scheduled cycle.
         Returns only on cancellation.
         """
+        first_tick = True
         while True:
             entries = await self._all_entries()
             if not entries:
                 await asyncio.sleep(60)
                 continue
             now = self._clock()
-            due = next_due_entry(entries, now)
+            # On first tick look back up to CATCHUP_WINDOW so a just-missed
+            # firing (e.g. process restarted 5 min after the scheduled time)
+            # is caught rather than waiting a full day/week.
+            reference = (
+                now - timedelta(minutes=self._STARTUP_CATCHUP_MINUTES)
+                if first_tick
+                else now
+            )
+            first_tick = False
+            due = next_due_entry(entries, reference)
             if due is None:
                 await asyncio.sleep(60)
                 continue

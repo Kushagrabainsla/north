@@ -117,6 +117,9 @@ class SQLiteLedgerWriter(LedgerWriter):
         if filters.source is not None:
             clauses.append("source = ?")
             params.append(filters.source.value)
+        if filters.status is not None:
+            clauses.append("status = ?")
+            params.append(filters.status.value)
         if filters.since is not None:
             clauses.append("timestamp >= ?")
             params.append(filters.since.isoformat())

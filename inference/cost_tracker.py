@@ -72,10 +72,20 @@ class CostTracker(InferenceRouter):
         return response
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
-        return await self._inner.embed(request)
+        response = await self._inner.embed(request)
+        if request.task_id and response.cost_usd:
+            self._task_costs[request.task_id] = (
+                self._task_costs.get(request.task_id, 0.0) + response.cost_usd
+            )
+        return response
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
-        return await self._inner.transcribe(request)
+        response = await self._inner.transcribe(request)
+        if request.task_id and response.cost_usd:
+            self._task_costs[request.task_id] = (
+                self._task_costs.get(request.task_id, 0.0) + response.cost_usd
+            )
+        return response
 
     async def get_model(self, priority: PoolPriority) -> str:
         return await self._inner.get_model(priority)

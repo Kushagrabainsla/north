@@ -61,13 +61,27 @@ class EventStreamManager:
                 )
 
     async def emit_done(self, task_id: str) -> None:
-        """Signal the end of a task stream, causing subscribers to close."""
+        """Signal the end of a task stream, causing subscribers to close.
+
+        The None sentinel must always reach every subscriber — a subscriber
+        that never receives it will block forever on queue.get().  If the
+        queue is full, drain it first so the sentinel fits.
+        """
         queues = self._subscribers.get(task_id, [])
         for q in queues:
             try:
-                q.put_nowait(None)  # None is the sentinel for "stream closed"
+                q.put_nowait(None)
             except asyncio.QueueFull:
-                pass
+                # Drain buffered messages to make room, then force the sentinel.
+                while not q.empty():
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                logger.warning(
+                    "SSE queue was full for task %s; drained to deliver done sentinel.", task_id
+                )
+                q.put_nowait(None)
 
     async def subscribe(
         self, task_id: str, max_queue_size: int = 256
