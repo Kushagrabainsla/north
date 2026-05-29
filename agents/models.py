@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import yaml
 from pydantic import BaseModel, Field
@@ -13,6 +13,9 @@ from context.base import ContextStore
 from inference.base import InferenceRouter
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from approval.store import ApprovalStore
 
 
 @runtime_checkable
@@ -29,6 +32,7 @@ class AgentPayload(BaseModel):
     prompt: str
     context: str = ""  # optional pre-loaded context summary
     workspace: str = ""  # root directory for filesystem/shell tools
+    delegation_depth: int = 0  # incremented on each delegate_task call; capped at _MAX_DELEGATION_DEPTH
 
 
 class AgentResult(BaseModel):
@@ -92,3 +96,5 @@ class AgentDependencies:
     # Agent registry — injected after construction to avoid circular dependency.
     # Used by AgenticLLMAgent's delegate_task tool for hierarchical execution.
     agent_registry: "Any | None" = field(default=None)
+    # Injected approval store so agents don't rely on the module-level singleton.
+    approval_store: "ApprovalStore | None" = field(default=None)

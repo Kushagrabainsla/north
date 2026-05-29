@@ -24,6 +24,9 @@ from utils.ids import generate_id
 
 logger = logging.getLogger(__name__)
 
+_MAX_EPISODES = 500    # hard cap on rows kept in the database
+_RETENTION_DAYS = 90   # episodes older than this are eligible for deletion
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
     id        TEXT    PRIMARY KEY,
@@ -78,7 +81,7 @@ class EpisodicStore:
             conn.execute(_SCHEMA_INDEX)
 
     async def record(self, task_id: str, domain: str, summary: str) -> None:
-        """Store a task episode.  Embedding is generated if an embed_fn is available."""
+        """Store a task episode and prune old entries to keep the database bounded."""
         embedding: list[float] | None = None
         if self._embed_fn is not None:
             try:
@@ -89,7 +92,7 @@ class EpisodicStore:
         now = datetime.now(timezone.utc).isoformat()
         emb_json = json.dumps(embedding) if embedding is not None else None
         await asyncio.to_thread(
-            self._insert_sync,
+            self._insert_and_prune_sync,
             generate_id(), task_id, domain, summary, emb_json, now,
         )
 
@@ -137,7 +140,7 @@ class EpisodicStore:
 
     # ------------------------------------------------------------------ #
 
-    def _insert_sync(
+    def _insert_and_prune_sync(
         self,
         ep_id: str,
         task_id: str,
@@ -146,12 +149,29 @@ class EpisodicStore:
         emb_json: str | None,
         now: str,
     ) -> None:
+        """Insert the new episode then remove stale rows in the same transaction."""
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 "INSERT INTO episodes (id, task_id, domain, summary, embedding, timestamp) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (ep_id, task_id, domain, summary, emb_json, now),
             )
+            # Delete episodes older than the retention window.
+            from datetime import timedelta
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(days=_RETENTION_DAYS)
+            ).isoformat()
+            conn.execute("DELETE FROM episodes WHERE timestamp < ?", (cutoff,))
+            # If we're still above the hard cap, trim the oldest rows.
+            count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            if count > _MAX_EPISODES:
+                excess = count - _MAX_EPISODES
+                conn.execute(
+                    "DELETE FROM episodes WHERE id IN "
+                    "(SELECT id FROM episodes ORDER BY timestamp ASC LIMIT ?)",
+                    (excess,),
+                )
+            conn.commit()
 
     def _load_all_sync(self) -> list[tuple[str, str, str | None]]:
         with open_db_connection(self._db_path) as conn:

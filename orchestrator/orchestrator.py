@@ -14,6 +14,7 @@ from typing import Any
 from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
 from approval import Card, CardType, JudgementFilter, Notifier
+from approval.store import ApprovalStore
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from inference.cost_tracker import CostTracker
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, RoutingError
@@ -28,6 +29,14 @@ from tools.registry import ToolRegistry
 from tools.models import ToolInput
 from utils.ids import generate_id, generate_task_id
 from utils.time import format_timestamp, utcnow
+
+# Maximum tasks allowed to be in-flight at the same time.  Prevents runaway
+# webhook integrations or buggy clients from burning API credits.
+_MAX_CONCURRENT_TASKS = 10
+
+# Classifier confidence below this threshold skips the north star check to
+# avoid interrupting the user on borderline-classified tasks.
+_NORTH_STAR_CONFIDENCE_THRESHOLD = 0.7
 
 _STRATEGY_RE = re.compile(r"\b(eco|cruise|sport)\b", re.IGNORECASE)
 
@@ -83,6 +92,7 @@ class Orchestrator:
         cost_tracker: CostTracker | None = None,
         episodic_store: Any | None = None,
         tool_registry: ToolRegistry | None = None,
+        approval_store: ApprovalStore | None = None,
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
@@ -98,6 +108,13 @@ class Orchestrator:
         self._cost_tracker = cost_tracker
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
+        # Use the injected store; fall back to the module singleton so existing
+        # code that hasn't been updated yet still works.
+        if approval_store is not None:
+            self._approval_store = approval_store
+        else:
+            from approval.store import approval_store as _singleton
+            self._approval_store = _singleton
         # Maps task_id → running asyncio.Task so cancel_task() can stop it.
         self._active_tasks: dict[str, asyncio.Task] = {}
 
@@ -106,7 +123,16 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
 
     async def submit_task(self, request: TaskRequest) -> TaskResponse:
-        """Register and begin processing a new task. Returns immediately."""
+        """Register and begin processing a new task. Returns immediately.
+
+        Raises OrchestratorError when the concurrent-task cap is reached so
+        callers (API routes, webhook handler) can return 429 to the client.
+        """
+        if len(self._active_tasks) >= _MAX_CONCURRENT_TASKS:
+            raise OrchestratorError(
+                f"Too many concurrent tasks ({len(self._active_tasks)} active, "
+                f"max {_MAX_CONCURRENT_TASKS}). Try again once a task finishes."
+            )
         task_id = generate_task_id()
         now = utcnow()
 
@@ -183,8 +209,7 @@ class Orchestrator:
             output=f"chosen_option={chosen_option}",
             status=status,
         ))
-        from approval.store import approval_store
-        approval_store.resolve(card_id, decision, chosen_option=chosen_option)
+        self._approval_store.resolve(card_id, decision, chosen_option=chosen_option)
         await self._stream_manager.emit(task_id, "approval_responded", {
             "card_id": card_id,
             "decision": decision,
@@ -234,8 +259,7 @@ class Orchestrator:
                     output=chosen_option or decision,
                     status=LedgerStatus.COMPLETED,
                 ))
-                from approval.store import approval_store
-                approval_store.resolve(card.id, decision)
+                self._approval_store.resolve(card.id, decision)
                 return
         await self._notifier.notify(card)
 
@@ -348,6 +372,23 @@ class Orchestrator:
         if not classification.is_consequential:
             return
 
+        # Skip when the classifier is uncertain to avoid false interruptions on
+        # borderline tasks (e.g. "schedule a reminder" that could be either).
+        if classification.confidence < _NORTH_STAR_CONFIDENCE_THRESHOLD:
+            logger.info(
+                "Skipping north star check for task %s — classifier confidence "
+                "%.2f < %.2f threshold",
+                task_id,
+                classification.confidence,
+                _NORTH_STAR_CONFIDENCE_THRESHOLD,
+            )
+            await self._stream_manager.emit(
+                task_id,
+                "north_star_aligned",
+                {"reasoning": "skipped: low-confidence consequential classification"},
+            )
+            return
+
         await self._stream_manager.emit(task_id, "north_star_checking", {})
         try:
             aligned, tension, reasoning = await self._north_star_checker.check_alignment(
@@ -370,7 +411,6 @@ class Orchestrator:
         ))
 
         if not aligned:
-            from approval.store import approval_store
             card = Card(
                 id=generate_id(),
                 type=CardType.APPROVAL,
@@ -380,7 +420,7 @@ class Orchestrator:
                 message=tension or "This task conflicts with one of your active goals. Proceed?",
                 options=["Proceed anyway", "Cancel"],
             )
-            approval_store.add(card)
+            self._approval_store.add(card)
             await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
             await self._stream_manager.emit(task_id, "approval_required", {
                 "card_id": card.id,
@@ -390,7 +430,7 @@ class Orchestrator:
                 "message": card.message,
                 "options": card.options,
             })
-            current = await approval_store.wait_for_decision(card.id, timeout=300.0)
+            current = await self._approval_store.wait_for_decision(card.id, timeout=300.0)
             if current is None:
                 logger.warning("North Star approval timed out for task %s — treating as rejection", task_id)
             chosen_opt = (current.chosen_option if current else "").lower()

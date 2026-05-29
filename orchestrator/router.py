@@ -19,7 +19,7 @@ from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassificati
 from utils.prompts import load_prompt
 
 _FALLBACK_CLASSIFICATION = IntentClassification(
-    is_consequential=False, domain="general", reasoning="planner fallback"
+    is_consequential=False, domain="general", reasoning="planner fallback", confidence=1.0
 )
 
 if TYPE_CHECKING:
@@ -166,10 +166,16 @@ class ExecutionPlanner:
             logger.warning("Planner LLM response was not valid JSON — falling back to general single-agent plan: %s", exc)
             return _FALLBACK_CLASSIFICATION, self._build_fallback_plan("general", task_id)
 
+        raw_confidence = data.get("confidence", 0.9)
+        try:
+            confidence = max(0.0, min(1.0, float(raw_confidence)))
+        except (TypeError, ValueError):
+            confidence = 0.9
         classification = IntentClassification(
             is_consequential=bool(data.get("is_consequential", False)),
             domain=str(data.get("domain", "general")),
             reasoning=str(data.get("reasoning", "")),
+            confidence=confidence,
         )
         plan = self._build_plan_from_response(data, classification.domain, task_id)
         return classification, plan

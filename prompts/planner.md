@@ -23,13 +23,32 @@ Choose the most specific domain that fits. Use `general` for anything conversati
 | `general` | everything else |
 
 ### Is it consequential?
-Set `is_consequential: true` if the task involves:
-- External operations (sending emails, submitting forms, posting anything)
-- Financial operations (recording expenses, querying assets, making transactions)
-- Scheduling commitments (creating or modifying calendar events)
-- Any action that is hard or impossible to undo
+Set `is_consequential: true` ONLY when the task **directly causes** an irreversible external action:
+- **Sending** emails, messages, or forms (not drafting)
+- **Moving money** — recording expenses, making transactions, buying/selling assets
+- **Creating or modifying** calendar events that involve other people
+- **Deleting** or permanently altering data
 
-Set `is_consequential: false` for: reading, reasoning, drafting (not sending), planning, searching, computing, system operations like creating local files.
+Set `is_consequential: false` for everything else: reading, reasoning, drafting, planning, searching, computing, creating local files, generating lists or meal plans, answering questions, summarising.
+
+**When in doubt: set `is_consequential: false`.** The north star check is expensive. Reserve it for actions that cannot be undone.
+
+Boundary examples:
+- "write a grocery list" → false (local, reversible)
+- "order groceries via Instacart" → true (external purchase)
+- "draft an email to my professor" → false (draft only, not sent)
+- "send the email to my professor" → true (irreversible external action)
+- "research investment options" → false (reading/reasoning)
+- "buy 10 shares of NVDA" → true (financial transaction)
+- "generate a meal plan" → false (no external action)
+- "book a flight to New York" → true (purchase + irreversible commitment)
+
+### Confidence
+Set `confidence` to a float between 0.0 and 1.0 reflecting how certain you are about the `is_consequential` classification.
+- Use `0.9–1.0` when the task wording makes the classification unambiguous.
+- Use `0.6–0.8` when the task is borderline (e.g. "schedule a reminder" — local? external?).
+- Use below `0.6` only when you genuinely cannot tell.
+A confidence below 0.7 causes the system to skip the north star check to avoid interrupting the user unnecessarily.
 
 ---
 
@@ -69,12 +88,13 @@ The coordinator agent (first in the list) uses the `delegate_task` tool to hand 
 
 Return a valid JSON object only. No explanation outside the JSON block.
 
-All seven fields are required in every response.
+All eight fields are required in every response.
 
 **`single_tool` example:**
 ```json
 {
   "is_consequential": false,
+  "confidence": 0.95,
   "domain": "general",
   "mode": "single_tool",
   "direct_tool": "write_file",
@@ -90,6 +110,7 @@ All seven fields are required in every response.
 ```json
 {
   "is_consequential": false,
+  "confidence": 0.95,
   "domain": "code",
   "mode": "single_agent",
   "direct_tool": null,
@@ -105,6 +126,7 @@ All seven fields are required in every response.
 ```json
 {
   "is_consequential": false,
+  "confidence": 0.9,
   "domain": "general",
   "mode": "parallel",
   "direct_tool": null,
@@ -120,6 +142,7 @@ All seven fields are required in every response.
 ```json
 {
   "is_consequential": false,
+  "confidence": 0.9,
   "domain": "general",
   "mode": "hierarchical",
   "direct_tool": null,

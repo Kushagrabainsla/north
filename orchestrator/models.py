@@ -44,6 +44,7 @@ class IntentClassification(BaseModel):
     is_consequential: bool
     domain: str
     reasoning: str
+    confidence: float = 1.0  # 0–1; below 0.7 skips the north star check to avoid false interruptions
 
 
 @dataclass

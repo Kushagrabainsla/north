@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_SECONDS = 120
 _BATCH_SIZE = 50
+_MAX_CONCURRENT_EXTRACTIONS = 5  # semaphore cap: fast enough, stays under rate limits
 _WATERMARK_FILENAME = "extraction_watermark.txt"
 
 _DOCUMENT_MAP: dict[str, ContextDocument] = {
@@ -114,23 +115,46 @@ class ExtractionPipeline:
         )
         # query returns DESC; process oldest first so watermark advances correctly
         entries = list(reversed(entries))
+        if not entries:
+            return 0
 
-        extractions = 0
+        # Advance watermark past skipped sources immediately, collect the rest.
+        to_process: list = []
         for entry in entries:
             if entry.source in _SKIPPED_SOURCES:
                 self._save_watermark(entry.timestamp)
-                continue
-            try:
-                made = await self._process_entry(entry)
-                if made:
-                    extractions += 1
-            except Exception:
+            else:
+                to_process.append(entry)
+
+        if not to_process:
+            return 0
+
+        # Run up to _MAX_CONCURRENT_EXTRACTIONS LLM calls in parallel.
+        # Each call is independent so the semaphore just prevents rate-limit bursts.
+        sem = asyncio.Semaphore(_MAX_CONCURRENT_EXTRACTIONS)
+        results: list[bool | Exception] = [False] * len(to_process)
+
+        async def _bounded(idx: int, entry: LedgerEntry) -> None:
+            async with sem:
+                try:
+                    results[idx] = await self._process_entry(entry)
+                except Exception as exc:
+                    results[idx] = exc
+
+        await asyncio.gather(*[_bounded(i, e) for i, e in enumerate(to_process)])
+
+        # Advance watermark sequentially, stopping at the first failure so the
+        # failed entry is retried on the next poll cycle.
+        extractions = 0
+        for entry, result in zip(to_process, results):
+            if isinstance(result, Exception):
                 logger.exception(
-                    "ExtractionPipeline: failed on entry %s — watermark NOT advanced, will retry",
+                    "ExtractionPipeline: failed on entry %s — watermark NOT advanced past this point, will retry",
                     entry.id,
                 )
-                # Stop the batch here so the failed entry is retried next time.
                 break
+            if result:
+                extractions += 1
             self._save_watermark(entry.timestamp)
 
         return extractions

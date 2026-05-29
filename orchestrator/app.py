@@ -6,7 +6,6 @@ See docs/CODING_STYLE.md Sections 10.4, 12, 17.
 from __future__ import annotations
 
 import asyncio
-import datetime
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -49,41 +48,13 @@ from utils.security import load_secret
 from utils.time import utcnow
 from approval.callback_server import app as callback_app
 from approval.judgement_filter import JudgementFilter
+from approval.store import ApprovalStore
 from web.routes import configure as configure_web
 from web.routes import router as web_router
 
 logger = logging.getLogger(__name__)
 
 
-async def _cleanup_stale_task_files(
-    north_home: Path, active_task_ids: frozenset[str] = frozenset()
-) -> int:
-    """Delete task SQLite files older than 7 days. Returns the count removed.
-
-    Skips any file whose task_id is in *active_task_ids* so in-flight tasks
-    are never evicted.
-    """
-    tasks_dir = north_home / "tasks"
-    if not tasks_dir.exists():
-        return 0
-
-    cutoff = utcnow() - datetime.timedelta(days=7)
-
-    def _run() -> int:
-        count = 0
-        for db_file in tasks_dir.glob("task_*.db"):
-            task_id = db_file.stem.removeprefix("task_")
-            if task_id in active_task_ids:
-                continue
-            mtime = datetime.datetime.fromtimestamp(
-                db_file.stat().st_mtime, tz=datetime.timezone.utc
-            )
-            if mtime < cutoff:
-                db_file.unlink(missing_ok=True)
-                count += 1
-        return count
-
-    return await asyncio.to_thread(_run)
 
 
 @asynccontextmanager
@@ -150,6 +121,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     stream_manager = EventStreamManager()
 
+    # Single ApprovalStore instance shared by Orchestrator and every agent so
+    # all approval waits and resolutions touch the same in-memory registry.
+    approval_store = ApprovalStore()
+
     agent_deps = AgentDependencies(
         context_store=deps.context_store,
         inference_router=cost_tracker,
@@ -157,6 +132,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         confidence_tracker=confidence_tracker,
         stream_manager=stream_manager,
         episodic_store=episodic_store,
+        approval_store=approval_store,
     )
     _step("scanning agent registry")
     agent_registry = AgentRegistry(agents_dir=agents_dir, deps=agent_deps)
@@ -197,6 +173,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cost_tracker=cost_tracker,
         episodic_store=episodic_store,
         tool_registry=tool_registry,
+        approval_store=approval_store,
     )
 
     context_injector = ContextInjector(
@@ -216,12 +193,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     async def _dispatch_job(job: Job) -> None:
         if job.task == "task_context_cleanup":
-            n = await _cleanup_stale_task_files(settings.north_home, frozenset(orchestrator._active_tasks))
+            n = await task_context_store.cleanup_stale_tasks(
+                active_task_ids=frozenset(orchestrator._active_tasks),
+            )
             await deps.ledger.write(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
                 source=LedgerSource.SYSTEM,
-                action=f"task_context_cleanup: removed {n} stale task files",
+                action=f"task_context_cleanup: removed {n} stale rows",
                 status=LedgerStatus.COMPLETED,
             ))
             return

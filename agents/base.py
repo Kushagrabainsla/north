@@ -61,18 +61,19 @@ class Agent(ABC):
         """Domain-specific logic. Returns a dict that maps onto `AgentResult` fields."""
 
     async def _load_context(self, payload: AgentPayload) -> str:
-        """Concatenate public.md + judgement_rules.md + relevant past episodes.
+        """Load permitted context documents + relevant past episodes.
 
-        Each context document is capped at _MAX_CONTEXT_CHARS to prevent large
-        accumulated documents from overflowing the model's context window.
+        Reads privacy_rules.md to determine which documents this agent is
+        allowed to access before injecting anything into the prompt.  Each
+        document is capped at _MAX_CONTEXT_CHARS.
         """
         if payload.context:
             return payload.context
         store = self._deps.context_store
-        raw_parts = [
-            await store.read(ContextDocument.PUBLIC),
-            await store.read(ContextDocument.JUDGEMENT_RULES),
-        ]
+
+        allowed_docs = await self._allowed_documents()
+        raw_parts = [await store.read(doc) for doc in allowed_docs]
+
         parts = []
         for text in raw_parts:
             if len(text) > _MAX_CONTEXT_CHARS:
@@ -92,6 +93,42 @@ class Agent(ABC):
             except Exception as exc:
                 logger.warning("Episodic context search failed for task %s: %s", payload.task_id, exc)
         return "\n\n".join(p for p in parts if p)
+
+    async def _allowed_documents(self) -> list[ContextDocument]:
+        """Return the context documents this agent is permitted to read.
+
+        Parses lines of the form ``<agent>: can_read: <doc>, <doc>`` from
+        privacy_rules.md.  Falls back to [PUBLIC, JUDGEMENT_RULES] when the
+        file is missing, empty, or contains no rule for this agent.
+
+        Example privacy_rules.md line:
+            health: can_read: public.md, judgement_rules.md
+        """
+        _DEFAULT = [ContextDocument.PUBLIC, ContextDocument.JUDGEMENT_RULES]
+        try:
+            rules_text = await self._deps.context_store.read(ContextDocument.PRIVACY_RULES)
+        except Exception:
+            return _DEFAULT
+        if not rules_text.strip():
+            return _DEFAULT
+        for line in rules_text.splitlines():
+            line = line.strip()
+            if not line.startswith(f"{self.name}:") or "can_read:" not in line:
+                continue
+            after = line.split("can_read:", 1)[1]
+            docs: list[ContextDocument] = []
+            for token in after.split(","):
+                token = token.strip()
+                try:
+                    docs.append(ContextDocument(token))
+                except ValueError:
+                    logger.debug(
+                        "privacy_rules.md: unknown document %r for agent %s — skipping",
+                        token,
+                        self.name,
+                    )
+            return docs if docs else _DEFAULT
+        return _DEFAULT
 
     async def _load_tools(self) -> list[tuple[Tool, float]]:
         """Return (tool, confidence_score) pairs, sorted by score descending.

@@ -21,6 +21,7 @@ from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 
 _MAX_ITERATIONS = 40  # overridden at runtime by settings.agent_max_iterations
+_MAX_DELEGATION_DEPTH = 2  # top-level agent may delegate once; that delegate cannot delegate further
 # Cap the JSON-serialised tool result injected back into the conversation.
 # ~40k chars ≈ 10k tokens — generous but bounded.
 _MAX_TOOL_RESULT_CHARS = 40_000
@@ -247,6 +248,15 @@ class AgenticLLMAgent(LLMAgent):
         self, payload: AgentPayload, params: dict[str, Any]
     ) -> str:
         """Run a specialist sub-agent and return its output as a tool result."""
+        if payload.delegation_depth >= _MAX_DELEGATION_DEPTH:
+            return json.dumps({
+                "success": False,
+                "error": (
+                    f"Delegation depth limit ({_MAX_DELEGATION_DEPTH}) reached. "
+                    "Solve this sub-task directly instead of delegating further."
+                ),
+            })
+
         registry = self._deps.agent_registry
         if registry is None:
             return json.dumps({"success": False, "error": "Agent registry not available for delegation."})
@@ -268,6 +278,7 @@ class AgenticLLMAgent(LLMAgent):
             task_id=payload.task_id,
             prompt=task,
             workspace=payload.workspace,
+            delegation_depth=payload.delegation_depth + 1,
         )
         try:
             result = await agent.run(sub_payload)
@@ -279,8 +290,12 @@ class AgenticLLMAgent(LLMAgent):
         self, payload: AgentPayload, params: dict[str, Any]
     ) -> str:
         from approval.models import Card, CardType
-        from approval.store import approval_store
+        from approval.store import approval_store as _global_store
         from utils.ids import generate_id
+
+        # Prefer the injected store; fall back to the module singleton for
+        # any code path that hasn't wired the dependency yet.
+        store = self._deps.approval_store or _global_store
 
         message = str(params.get("message", "Action requires your approval."))
         options = list(params.get("options", ["Approve", "Reject"]))
@@ -295,7 +310,7 @@ class AgenticLLMAgent(LLMAgent):
             message=message,
             options=options,
         )
-        approval_store.add(card)
+        store.add(card)
 
         if self._deps.stream_manager and payload.task_id:
             await self._deps.stream_manager.emit(
@@ -311,9 +326,9 @@ class AgenticLLMAgent(LLMAgent):
                 },
             )
 
-        current = await approval_store.wait_for_decision(card_id, timeout=300.0)
+        current = await store.wait_for_decision(card_id, timeout=300.0)
         if current is None:
-            approval_store.resolve(card_id, "rejected")
+            store.resolve(card_id, "rejected")
             return "timeout_rejected"
         return current.status
 
