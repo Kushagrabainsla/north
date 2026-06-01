@@ -49,7 +49,9 @@ class LLMAgent(Agent):
                 raise AgentConfigError(
                     f"Missing system prompt at {path}. Every LLMAgent needs one."
                 )
-            self._system_prompt_cache: str = path.read_text(encoding="utf-8")
+            self._system_prompt_cache: str = (
+                path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY
+            )
         return self._system_prompt_cache
 
     def _build_user_message(
@@ -122,3 +124,19 @@ class LLMAgent(Agent):
                 f"{self.name} returned non-object JSON: {type(parsed).__name__}"
             )
         return parsed
+
+
+_TOOL_CREATION_POLICY = """
+
+## Tool creation policy
+
+You have a `create_tool` tool that can extend the system with new capabilities.
+Follow this strict priority order — only escalate when the step above cannot solve the problem:
+
+1. **Use an existing tool.** Check your available tools first. If one fits, use it.
+2. **Extend an existing tool.** Call `create_tool(action=list)` to see all tools. If a similar tool exists, call `create_tool(action=read, name=<tool>)` to inspect it, then `create_tool(action=update, ...)` to add the new capability while keeping all existing behaviour intact.
+3. **Create a new tool.** Only if no existing tool is close enough. Call `create_tool(action=create, ...)` with a complete working implementation in the `content` parameter so the tool is immediately usable.
+
+Never create or update a tool for something an existing tool already handles.
+Never create a tool when `bash` or `write_file` can do the job directly.
+After creating or updating a tool, you can use it immediately in the next step of this task."""

@@ -170,16 +170,21 @@ class AgenticLLMAgent(LLMAgent):
             {"role": "user", "content": user_text},
         ]
 
-        tools = (
-            [t.schema() for t, _ in scored_tools]
-            + [_DELEGATE_TASK_SCHEMA, _REQUEST_APPROVAL_SCHEMA]
-        )
         tool_map = {t.name: t for t, _ in scored_tools}
         total_cost_usd: float = 0.0
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
             _compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
+
+            # Refresh tool_map each iteration so tools hot-loaded mid-task
+            # (e.g. by create_tool) are immediately available to the LLM.
+            _sync_hot_loaded_tools(self._deps, self.name, tool_map)
+            tools = (
+                [t.schema() for t in tool_map.values()]
+                + [_DELEGATE_TASK_SCHEMA, _REQUEST_APPROVAL_SCHEMA]
+            )
+
             token_cb = self._make_token_callback(payload.task_id)
 
             response = await self._deps.inference_router.complete_with_tools(
@@ -452,6 +457,16 @@ def _extract_success(tool_result_str: str) -> bool:
         return bool(json.loads(tool_result_str).get("success", False))
     except (json.JSONDecodeError, AttributeError):
         return False
+
+
+def _sync_hot_loaded_tools(deps: Any, agent_name: str, tool_map: dict[str, Tool]) -> None:
+    """Add any tools registered in the registry since this agent started executing."""
+    registry = getattr(deps, "tool_registry", None)
+    if registry is None:
+        return
+    for tool in registry.tools_for_agent(agent_name):
+        if tool.name not in tool_map:
+            tool_map[tool.name] = tool
 
 
 def _final_answer(output: str, summary: str, cost_usd: float = 0.0) -> dict[str, Any]:

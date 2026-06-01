@@ -36,6 +36,7 @@ from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
+from tools.universal.create_tool import CreateToolTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from tools.registry import ToolRegistry
 from utils.ids import generate_id
@@ -95,6 +96,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store)
     )
     tool_registry.make_universal("schedule_task")
+    # Overwrite the auto-discovered CreateToolTool (no registry ref) with one
+    # that holds a live registry reference for hot-loading newly created tools.
+    tool_registry.register(CreateToolTool(tool_registry=tool_registry))
 
     _step("seeding confidence defaults")
     _RELIABLE_TOOLS = frozenset({
