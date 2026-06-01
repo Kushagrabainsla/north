@@ -36,7 +36,7 @@ from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
-from tools.specialized.schedule_task import ScheduleTaskTool
+from tools.universal.schedule_task import ScheduleTaskTool
 from tools.registry import ToolRegistry
 from utils.ids import generate_id
 from utils.logging import configure_structured_logging
