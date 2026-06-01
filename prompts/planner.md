@@ -20,6 +20,7 @@ Choose the most specific domain that fits. Use `general` for anything conversati
 | `university` | coursework, assignments, exams, academic planning |
 | `job` | job search, interviews, career, professional outreach |
 | `finance` | money, budgeting, investments, expenses, savings |
+| `home` | smart home, lights, bulbs, lamps, Kasa devices, home automation |
 | `general` | everything else |
 
 ### Is it consequential?
@@ -59,8 +60,9 @@ Work through the four modes in order. Stop at the first that fits.
 ### `single_tool`
 One deterministic tool call, no agent needed.
 Every required parameter must be derivable from the prompt alone — with certainty, right now.
-**Fits:** "create a file called notes.txt with content 'hello'", "list files in ~/projects", "search for 'TODO' in the codebase"
+**Fits:** "create a file called notes.txt with content 'hello'", "list files in ~/projects", "search for 'TODO' in the codebase", "turn off the lights" (→ `kasa` tool)
 **Hard stops:** ambiguous intent, any required param is unknown, result needs interpretation.
+**Never use `bash` as a `single_tool`** — bash output always requires an agent to interpret errors and results. Route bash-needing tasks to `single_agent` instead.
 
 ### `single_agent`
 One agent's ReAct loop. Right for the vast majority of tasks.

@@ -21,13 +21,13 @@ echo ""
 echo -e "${bold}★ north — Personal Life Operating System${reset}"
 echo ""
 
-# ── 1. Check for Docker ───────────────────────────────────────────────────────
+# ── 1. Check for Docker (optional — only needed for --docker server mode) ─────
 
-info "Checking for Docker..."
-if ! command -v docker &>/dev/null; then
-    fail "Docker is required but not installed. Get it at https://docs.docker.com/get-docker/"
+if command -v docker &>/dev/null; then
+    success "Docker found ($(docker --version | cut -d' ' -f3 | tr -d ',')) — available for --docker mode"
+else
+    info "Docker not found — north will run in local mode (recommended for personal use)"
 fi
-success "Docker found ($(docker --version | cut -d' ' -f3 | tr -d ','))"
 
 # ── 2. Install uv if needed ───────────────────────────────────────────────────
 

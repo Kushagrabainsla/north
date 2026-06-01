@@ -1,15 +1,3 @@
-tools:
-  - name: web_search
-    purpose: "Look up real-time prices, tax rules, financial news, or market data."
-  - name: read_file
-    purpose: "Read a budget spreadsheet, expense log, or financial document saved locally."
-  - name: write_file
-    purpose: "Write a budget plan, expense summary, or financial analysis to disk."
-  - name: list_dir
-    purpose: "Browse a directory of financial documents or logs."
-  - name: search_files
-    purpose: "Search across local financial files for a pattern or amount."
-  - name: schedule_task
-    purpose: "Schedule a one-shot or recurring financial review, bill reminder, or budget check."
-  - name: fetch_url
-    purpose: "Fetch and read the full text content of a specific URL — use when web_search results aren't enough and you need the full page."
+# Specialized tools for this agent. Universal tools are
+# automatically available to all agents and do not need to be listed here.
+tools: []

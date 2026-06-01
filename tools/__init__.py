@@ -15,7 +15,7 @@ from tools.exceptions import (
     ToolNotFoundError,
 )
 from tools.models import ConfidenceScore, ToolInput, ToolOutput
-from tools.registry import TOOL_GRAPH, ToolRegistry
+from tools.registry import ToolRegistry
 
 __all__ = [
     "AuthenticatedTool",
@@ -26,7 +26,6 @@ __all__ = [
     "DEFAULT_CONFIDENCE",
     "MAX_CONFIDENCE",
     "MIN_CONFIDENCE",
-    "TOOL_GRAPH",
     "Tool",
     "ToolAuthError",
     "ToolError",

@@ -92,12 +92,15 @@ def configure_structured_logging(level: int = logging.INFO) -> None:
     Call this once at application startup (``orchestrator/app.py``) before
     uvicorn sets up its own handlers.  Uvicorn's own log records flow through
     the root logger and are therefore also JSON-formatted.
+
+    When NORTH_LOG_FILE is set, logs go to that file instead of stdout so the
+    interactive chat REPL isn't polluted by server output.
     """
+    import os
+
     root = logging.getLogger()
     root.setLevel(level)
 
-    # Replace any handlers already attached (e.g. a default StreamHandler
-    # added by a library import before this call).
     for h in root.handlers[:]:
         root.removeHandler(h)
 

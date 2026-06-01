@@ -15,7 +15,8 @@ class TerminalNotifier(Notifier):
     """Prints Card details directly to standard output."""
 
     async def notify(self, card: Card) -> None:
-        """Draw a box around the card details and print it to stdout."""
+        """Draw a box around the card details and write it to the log or stdout."""
+        import os
         header = f"=== NORTH {card.type.value.upper()} CARD ({card.id}) ==="
         border = "=" * len(header)
 
@@ -39,5 +40,10 @@ class TerminalNotifier(Notifier):
         ])
 
         output = "\n".join(lines) + "\n"
-        sys.stdout.write(output)
-        sys.stdout.flush()
+        log_file = os.environ.get("NORTH_LOG_FILE", "").strip()
+        if log_file:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(output)
+        else:
+            sys.stdout.write(output)
+            sys.stdout.flush()

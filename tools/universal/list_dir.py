@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.base import Tool
-from tools.implementations._path import resolve_path
+from tools._path import resolve_path
 from tools.models import ToolInput, ToolOutput
 
 _MAX_ENTRIES = 200

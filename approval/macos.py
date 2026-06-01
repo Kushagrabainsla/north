@@ -34,12 +34,10 @@ class MacOSNotifier(Notifier):
         """
         alerter_path = shutil.which("alerter")
         if not alerter_path:
-            # Fall back gracefully to TerminalNotifier
-            sys.stderr.write(
-                "WARNING: 'alerter' executable not found on PATH. "
-                f"Falling back to terminal presentation for card {card.id}.\n"
+            import logging
+            logging.getLogger(__name__).warning(
+                "alerter not found on PATH — falling back to terminal notifier for card %s", card.id
             )
-            sys.stderr.flush()
             await self._terminal_fallback.notify(card)
             return
 

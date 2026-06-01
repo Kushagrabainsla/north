@@ -83,8 +83,10 @@ class BashTool(Tool):
         stderr = stderr_b.decode("utf-8", errors="replace")
         stdout = _cap(stdout)
         stderr = _cap(stderr)
+        success = proc.returncode == 0
         return ToolOutput(
-            success=proc.returncode == 0,
+            success=success,
+            error=None if success else (stderr.strip() or f"exit code {proc.returncode}"),
             data={
                 "stdout": stdout,
                 "stderr": stderr,

@@ -716,7 +716,12 @@ def create_agent(
         default=True,
     )
 
-    raw_tools = typer.prompt("Tools (comma-separated, or blank)", default="web_search")
+    raw_tools = typer.prompt(
+        "Specialized tools (comma-separated, or blank).\n"
+        "  Universal tools (web_search, fetch_url, read_file, write_file,\n"
+        "  list_dir, search_files, schedule_task) are auto-included — skip them",
+        default="",
+    )
     tools = [t.strip() for t in raw_tools.split(",") if t.strip()]
 
     raw_accepts = typer.prompt("Accepts task keywords (comma-separated, or blank)", default=domain)
@@ -798,11 +803,36 @@ def create_agent(
         encoding="utf-8",
     )
 
-    tools_data = {"tools": [{"name": t, "purpose": f"Used by {name} agent."} for t in tools]}
-    (agent_dir / "tools.yaml").write_text(
-        yaml.dump(tools_data, default_flow_style=False),
-        encoding="utf-8",
+    # Discover universal tool names by scanning the installed package.
+    try:
+        import importlib.util as _ilu
+        _spec = _ilu.find_spec("tools.universal")
+        if _spec and _spec.submodule_search_locations:
+            _udir = Path(list(_spec.submodule_search_locations)[0])
+            _universal = {p.stem for p in _udir.glob("*.py") if not p.stem.startswith("_")}
+        else:
+            _universal = set()
+    except Exception:
+        _universal = set()
+
+    universal_requested = [t for t in tools if t in _universal]
+    specialized_tools = [t for t in tools if t not in _universal]
+
+    if universal_requested:
+        typer.secho(
+            f"  Note: {', '.join(universal_requested)} are universal — auto-included, omitted from tools.yaml",
+            fg=typer.colors.BRIGHT_BLACK,
+        )
+
+    _tools_comment = (
+        "# Specialized tools for this agent. Universal tools are\n"
+        "# automatically available to all agents and do not need to be listed here.\n"
     )
+    _tools_body = (
+        "tools:\n" + "".join(f"  - {t}\n" for t in specialized_tools)
+        if specialized_tools else "tools: []\n"
+    )
+    (agent_dir / "tools.yaml").write_text(_tools_comment + _tools_body, encoding="utf-8")
 
     (agent_dir / "prompts" / "system.md").write_text(system_prompt, encoding="utf-8")
     (agent_dir / "README.md").write_text(
@@ -1218,10 +1248,10 @@ def _docker_available() -> bool:
 
 @app.command("start")
 def start(
-    host: str = typer.Option("127.0.0.1", "--host", help="Bind host (local mode only)."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (local mode only)."),
-    local: bool = typer.Option(False, "--local", help="Skip Docker; run directly with uvicorn."),
+    docker: bool = typer.Option(False, "--docker", help="Run via Docker Compose (for server/headless deployments)."),
     no_chat: bool = typer.Option(False, "--no-chat", help="Start server only; skip interactive chat."),
     workspace: str | None = typer.Option(
         None, "--workspace", "-w",
@@ -1230,15 +1260,22 @@ def start(
 ) -> None:
     """Start north, then drop into interactive chat.
 
-    By default uses Docker Compose when a docker-compose.yml is found and
-    Docker is available. Pass --local to force direct uvicorn launch.
+    Runs locally with uvicorn by default — the right choice for personal use
+    on your own machine. Pass --docker for server or headless deployments.
     Pass --no-chat to start the server without entering the chat REPL.
     """
     base = Path(workspace).resolve() if workspace else Path.home()
     resolved_workspace = str(base)
 
     compose_file = _find_compose_file()
-    use_docker = not local and _docker_available() and compose_file is not None
+    use_docker = docker and _docker_available() and compose_file is not None
+
+    if docker and not _docker_available():
+        typer.secho("Docker not found. Install Docker or run without --docker.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    if docker and compose_file is None:
+        typer.secho("No docker-compose.yml found. Run from the project root or omit --docker.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
 
     if use_docker:
         typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
@@ -1264,18 +1301,6 @@ def start(
             _chat_loop(workspace=resolved_workspace)
         return
 
-    if not local and not _docker_available():
-        typer.secho(
-            "Docker not found — falling back to local mode. Install Docker for container support.",
-            fg=typer.colors.YELLOW,
-        )
-    elif not local and compose_file is None:
-        typer.secho(
-            "No docker-compose.yml found — falling back to local mode. "
-            "Run from the project root for Docker support.",
-            fg=typer.colors.YELLOW,
-        )
-
     # ── Local uvicorn launch ──────────────────────────────────────────────
     from config.settings import settings
     from utils.security import load_secret
@@ -1285,6 +1310,9 @@ def start(
     (settings.north_home / "context").mkdir(parents=True, exist_ok=True)
     load_secret()
 
+    log_path = settings.north_home / "north.log"
+    pid_path = settings.north_home / "north.pid"
+
     if _port_in_use(host, port):
         if _is_north_server(host, port):
             typer.secho(f"north is already running on port {port}.", fg=typer.colors.YELLOW)
@@ -1292,8 +1320,7 @@ def start(
                 typer.echo("")
                 _chat_loop(workspace=resolved_workspace)
             return
-        else:
-            typer.secho(f"Port {port} is in use by another application.", fg=typer.colors.YELLOW)
+        typer.secho(f"Port {port} is in use by another application.", fg=typer.colors.YELLOW)
         kill = typer.confirm("Kill the existing process and restart?", default=False)
         if not kill:
             raise typer.Exit(0)
@@ -1313,49 +1340,50 @@ def start(
     typer.echo(f"  API docs     → http://{host}:{port}/docs")
     typer.echo(f"  Home         → {settings.north_home}")
     typer.echo(f"  Workspace    → {resolved_workspace}")
+    typer.echo(f"  Logs         → {log_path}")
     typer.echo("")
 
-    import uvicorn
+    # Launch the server as a subprocess so its stdout/stderr are fully
+    # redirected to the log file at the OS level — no monkey-patching needed.
+    # Every print(), logging call, traceback, and uvicorn line goes to the file.
+    cmd = [
+        sys.executable, "-m", "uvicorn", "orchestrator.app:app",
+        "--host", host, "--port", str(port), "--log-level", "info",
+    ]
+    if reload:
+        cmd.append("--reload")
 
-    from config.settings import settings as _cfg
-    _cfg.north_workspace = resolved_workspace
+    server_env = {
+        **os.environ,
+        "NORTH_NORTH_WORKSPACE": resolved_workspace,
+    }
 
-    if reload or no_chat:
-        # reload uses multiprocessing and can't share a thread with the chat REPL
-        uvicorn.run(
-            "orchestrator.app:app",
-            host=host,
-            port=port,
-            reload=reload,
-            log_level="info",
-        )
+    log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
+    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
+    pid_path.write_text(str(proc.pid), encoding="utf-8")
+
+    _wait_for_server(host, port)
+
+    if no_chat:
+        typer.secho(f"north running (pid {proc.pid}). Stop with: north stop", fg=typer.colors.GREEN)
         return
 
-    # Start server in a background daemon thread, then enter chat
-    import threading
-
-    def _run_server() -> None:
-        uvicorn.run(
-            "orchestrator.app:app",
-            host=host,
-            port=port,
-            log_level="error",
-            access_log=False,
-        )
-
-    threading.Thread(target=_run_server, daemon=True).start()
-    _wait_for_server(host, port)
     _chat_loop(workspace=resolved_workspace)
 
 
 @app.command("stop")
 def stop(
     port: int = typer.Option(8000, "--port", "-p", help="Port to stop."),
+    docker: bool = typer.Option(False, "--docker", help="Stop the Docker Compose deployment instead of a local process."),
 ) -> None:
-    """Stop north (Docker Compose or local process)."""
-    compose_file = _find_compose_file()
+    """Stop north."""
+    import signal
 
-    if _docker_available() and compose_file is not None:
+    if docker:
+        compose_file = _find_compose_file()
+        if not _docker_available() or compose_file is None:
+            typer.secho("Docker or docker-compose.yml not found.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
         typer.echo("Stopping Docker Compose services…")
         subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "down"],
@@ -1363,6 +1391,24 @@ def stop(
         )
         return
 
+    from config.settings import settings
+    pid_path = settings.north_home / "north.pid"
+
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+            os.kill(pid, signal.SIGTERM)
+            pid_path.unlink()
+            typer.secho(f"✓ Stopped (pid {pid}).", fg=typer.colors.GREEN)
+        except ProcessLookupError:
+            pid_path.unlink()
+            typer.secho("north was not running (removed stale PID file).", fg=typer.colors.YELLOW)
+        except Exception as exc:
+            typer.secho(f"Failed to stop: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        return
+
+    # Fallback: no PID file, try port-based kill
     if _port_in_use("127.0.0.1", port):
         typer.echo(f"Stopping process on port {port}…")
         if _kill_port("127.0.0.1", port):
@@ -1372,6 +1418,63 @@ def stop(
             raise typer.Exit(1)
     else:
         typer.echo("north is not running.")
+
+
+@app.command("reset")
+def reset(
+    all: bool = typer.Option(False, "--all", help="Also remove the API key and .env config."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Wipe north's data and start fresh.
+
+    Stops the server and deletes all local state — ledger, context, tasks,
+    logs, learned preferences, and the secret key. Your API key in .env is
+    kept unless you pass --all.
+    """
+    from config.settings import settings
+
+    north_home = settings.north_home
+
+    # What gets wiped
+    data_dirs = ["tasks", "context", "embeddings.db", "north.log", "north.pid", "secret.key"]
+    if all:
+        scope = f"{north_home}/ (everything including .env and API key)"
+    else:
+        scope = f"{north_home}/ (data only — .env and API key are kept)"
+
+    if not yes:
+        typer.secho(f"This will permanently delete: {scope}", fg=typer.colors.YELLOW)
+        typer.confirm("Are you sure?", abort=True)
+
+    # Stop the server first
+    import signal
+    pid_path = north_home / "north.pid"
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+            os.kill(pid, signal.SIGTERM)
+            typer.echo(f"  Stopped server (pid {pid})")
+        except ProcessLookupError:
+            pass
+
+    if all:
+        shutil.rmtree(north_home, ignore_errors=True)
+        typer.secho("✓ north fully removed. Run north start to begin fresh.", fg=typer.colors.GREEN)
+        return
+
+    # Selective wipe — keep .env
+    env_backup = None
+    env_file = north_home / ".env"
+    if env_file.exists():
+        env_backup = env_file.read_text(encoding="utf-8")
+
+    shutil.rmtree(north_home, ignore_errors=True)
+
+    if env_backup is not None:
+        north_home.mkdir(parents=True, exist_ok=True)
+        env_file.write_text(env_backup, encoding="utf-8")
+
+    typer.secho("✓ Data wiped. API key kept. Run north start to begin fresh.", fg=typer.colors.GREEN)
 
 
 if __name__ == "__main__":

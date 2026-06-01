@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/
 north start
 ```
 
-The install script checks for Docker, installs the `north` CLI via `uv`, and prompts for your [OpenRouter](https://openrouter.ai/keys) API key. That's it.
+The install script installs the `north` CLI via `uv` and prompts for your [OpenRouter](https://openrouter.ai/keys) API key. That's it.
 
 ### Manual install (alternative)
 
@@ -34,6 +34,18 @@ uv tool install git+https://github.com/Kushagrabainsla/north
 echo "NORTH_OPENROUTER_API_KEY=sk-or-your-key" >> ~/.north/.env
 north start
 ```
+
+### Server / headless deployments
+
+Running north on a remote server or home server? Use the Docker Compose mode:
+
+```bash
+north start --docker   # start
+north stop --docker    # stop
+```
+
+This requires Docker and a `docker-compose.yml` in the current directory or `~/.north/`.
+Note: Docker mode isolates north from your local network, so LAN device control (e.g. smart home) won't work in this mode.
 
 When ready:
 
@@ -80,6 +92,28 @@ The Web UI at `localhost:8000/ui` gives a live activity feed, approval surface, 
 north is built in eight layers: Perception → Orchestrator → Agent Layer → Approval Layer, with a Ledger (append-only audit trail) and Context Layer (your goals, preferences, and decision patterns) shared across everything.
 
 Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+---
+
+## Uninstall / Reset
+
+**Start fresh** — wipe all data but keep your API key:
+```bash
+north reset
+```
+
+**Full reset** — wipe everything including your API key and config:
+```bash
+north reset --all
+```
+
+Both commands stop the server automatically before wiping.
+
+**Uninstall completely:**
+```bash
+north reset --all          # wipe all data
+uv tool uninstall north    # remove the CLI
+```
 
 ---
 

@@ -1,0 +1,20 @@
+agent: home
+domain: home
+model_pool: fast_cheap
+accepts:
+  - "light"
+  - "lights"
+  - "bulb"
+  - "bulbs"
+  - "lamp"
+  - "kasa"
+  - "smart home"
+  - "home automation"
+  - "turn on"
+  - "turn off"
+  - "toggle"
+  - "dim"
+  - "brightness"
+output_format: structured_json
+version: 1.0.0
+class_name: HomeAgent

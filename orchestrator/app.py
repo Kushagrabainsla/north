@@ -36,7 +36,7 @@ from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
-from tools.implementations.schedule_task import ScheduleTaskTool
+from tools.specialized.schedule_task import ScheduleTaskTool
 from tools.registry import ToolRegistry
 from utils.ids import generate_id
 from utils.logging import configure_structured_logging
@@ -56,7 +56,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_structured_logging()  # JSON logs with task_id correlation IDs
 
     def _step(msg: str) -> None:
-        print(f"  [startup] {msg}", flush=True, file=sys.stderr)
+        import os
+        log_file = os.environ.get("NORTH_LOG_FILE", "").strip()
+        if log_file:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"  [startup] {msg}\n")
+        else:
+            print(f"  [startup] {msg}", flush=True, file=sys.stderr)
 
     _step("loading secret")
     load_secret()
@@ -88,6 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     tool_registry.register(
         ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store)
     )
+    tool_registry.make_universal("schedule_task")
 
     _step("seeding confidence defaults")
     _RELIABLE_TOOLS = frozenset({

@@ -55,7 +55,11 @@ class AgentRegistry:
 
     @staticmethod
     def _load_tool_names(agent_dir: Path) -> list[str]:
-        """Return the tool names declared in tools.yaml, or [] if the file is absent."""
+        """Return the specialized tool names declared in tools.yaml.
+
+        Supports both plain string entries ("- bash") and dict entries
+        ("- name: bash") for backward compatibility.
+        """
         tools_yaml = agent_dir / "tools.yaml"
         if not tools_yaml.exists():
             return []
@@ -63,8 +67,13 @@ class AgentRegistry:
             data = yaml.safe_load(f)
         if not isinstance(data, dict):
             return []
-        tools = data.get("tools", [])
-        return [t["name"] for t in tools if isinstance(t, dict) and "name" in t]
+        names = []
+        for t in data.get("tools", []):
+            if isinstance(t, str):
+                names.append(t)
+            elif isinstance(t, dict) and "name" in t:
+                names.append(t["name"])
+        return names
 
     def _discover(self) -> None:
         if not self._agents_dir.exists():
