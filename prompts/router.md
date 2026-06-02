@@ -107,10 +107,10 @@ Fields required in every response: `mode`, `direct_tool`, `direct_tool_params`, 
   "mode": "single_agent",
   "direct_tool": null,
   "direct_tool_params": {},
-  "agents": ["code"],
-  "parallel_groups": [["code"]],
+  "agents": ["coder"],
+  "parallel_groups": [["coder"]],
   "dependencies": {},
-  "reasoning": "Debugging requires iterative file reads and bash execution in the code domain."
+  "reasoning": "Targeted fix — coder handles iterative file reads and bash execution."
 }
 ```
 
@@ -133,9 +133,9 @@ Fields required in every response: `mode`, `direct_tool`, `direct_tool_params`, 
   "mode": "hierarchical",
   "direct_tool": null,
   "direct_tool_params": {},
-  "agents": ["general", "code"],
-  "parallel_groups": [["general"], ["code"]],
-  "dependencies": {"code": ["general"]},
-  "reasoning": "The code agent needs the research output to know what to implement."
+  "agents": ["finance", "general"],
+  "parallel_groups": [["finance"], ["general"]],
+  "dependencies": {"general": ["finance"]},
+  "reasoning": "Spending analysis must finish before the savings plan. General agent receives finance output as context."
 }
 ```

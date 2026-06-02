@@ -1155,7 +1155,7 @@ north task cancel {id}
 
 # Interactive chat REPL (with conversation history)
 north chat                               # general-purpose REPL
-north chat --workspace /path/to/project  # attach code agent to a workspace
+north chat --workspace /path/to/project  # attach engineering agents to a workspace
 
 # Voice input (push-to-talk)
 north dictate                            # hold hotkey, speak, release to submit

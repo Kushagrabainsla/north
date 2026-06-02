@@ -1,8 +1,8 @@
-"""GitTool — structured git operations for the code agent.
+"""GitTool — structured git operations for engineering agents.
 
 Safe read-only operations (status, diff, log, branch, show) execute
 immediately.  Write operations (add, commit, push, stash) are allowed but
-the code agent's system prompt instructs it to call ``request_approval``
+the coder agent's system prompt instructs it to call ``request_approval``
 before any of them.  Truly dangerous operations (force-push, reset --hard,
 clean -fdx) are permanently blocked with a clear error message.
 """

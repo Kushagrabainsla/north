@@ -1,0 +1,16 @@
+agent: tester
+domain: engineering
+model_pool: fast_cheap
+accepts:
+  - "test"
+  - "verify"
+  - "validate"
+  - "qa"
+  - "quality"
+  - "check"
+produces:
+  - ".north/tasks/{task_id}/qa/qa_report_latest.md"
+  - ".north/tasks/{task_id}/qa/qa_report_vN.md"
+output_format: structured_json
+version: 1.0.0
+class_name: TesterAgent

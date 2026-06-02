@@ -1,0 +1,4 @@
+tools:
+  - bash
+  - git
+  - patch_file

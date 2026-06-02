@@ -21,7 +21,8 @@ class AgentRegistry:
     A folder is valid if it contains `config.yaml` and `agent.py`. The
     registry imports each agent's module, looks up the class named
     `config.resolved_class_name`, and instantiates it with `(config, deps)`.
-    Adding a new agent at runtime is dropping a new folder and restarting.
+    New agent folders dropped at runtime are picked up automatically on the
+    next call to `get()` — no restart required.
     """
 
     def __init__(self, agents_dir: Path, deps: AgentDependencies) -> None:
@@ -111,7 +112,40 @@ class AgentRegistry:
         agent_class = getattr(module, class_name)
         return agent_class(config=config, deps=self._deps)
 
+    def reload(self) -> list[str]:
+        """Discover agent directories added since startup.
+
+        Existing agents are not re-instantiated — only new folders are loaded.
+        Returns the names of newly registered agents.
+        """
+        new_names: list[str] = []
+        if not self._agents_dir.exists():
+            return new_names
+        for entry in sorted(self._agents_dir.iterdir()):
+            if not self._is_valid_agent_directory(entry):
+                continue
+            try:
+                config = AgentConfig.from_yaml(entry / "config.yaml")
+            except Exception:
+                continue
+            if config.agent in self._agents:
+                continue
+            try:
+                agent = self._load_agent_from_directory(entry)
+                self._agents[agent.name] = agent
+                new_names.append(agent.name)
+                logger.info("AgentRegistry.reload: picked up new agent %r", agent.name)
+            except Exception as exc:
+                logger.warning(
+                    "AgentRegistry.reload: failed to load %s: %s", entry.name, exc
+                )
+        return new_names
+
     def get(self, name: str) -> Agent:
+        if name not in self._agents:
+            # Trigger a live filesystem scan before raising — new agent folders
+            # dropped at runtime are registered here without a server restart.
+            self.reload()
         if name not in self._agents:
             raise AgentNotFoundError(f"No agent registered with name: {name}")
         return self._agents[name]

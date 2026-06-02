@@ -21,7 +21,24 @@ Choose the most specific domain that fits. Use `general` for anything conversati
 | `job` | job search, interviews, career, professional outreach |
 | `finance` | money, budgeting, investments, expenses, savings |
 | `home` | smart home, lights, bulbs, lamps, Kasa devices, home automation |
+| `engineering` | implement a feature, build a system, write code, fix a non-trivial bug, design architecture, research a technical topic — tasks involving code, specs, or technical investigation |
 | `general` | everything else |
+
+#### Engineering entry point
+When `domain = engineering`, always use `single_agent` mode. The chain unfolds inside agents via `delegate_task` — the planner only picks the entry point. **Never use `hierarchical` mode for engineering tasks.**
+
+Choose the entry agent based on the task description:
+
+| Task description | Entry agent |
+|---|---|
+| "research", "investigate", "explore", "find out", "look into", "analyze" | `researcher` |
+| "design", "architect", "spec", "plan", "high level design", "how should X be structured" | `architect` |
+| "build", "implement", "create", "develop", "ship", "make" | `researcher` (full pipeline) |
+| "code", "write the code", "program" | `coder` |
+| "fix", "debug", "patch", "the bug in X", "X is broken" | `coder` |
+| "test", "verify", "validate", "does X work", "run QA" | `tester` |
+
+Use `engineering` only for substantial tasks involving code, specs, or technical investigation. For single-line edits where the solution is completely obvious, prefer `general` with `single_agent`.
 
 ### Is it consequential?
 Set `is_consequential: true` ONLY when the task **directly causes** an irreversible external action:
@@ -113,14 +130,14 @@ All eight fields are required in every response.
 {
   "is_consequential": false,
   "confidence": 0.95,
-  "domain": "code",
+  "domain": "engineering",
   "mode": "single_agent",
   "direct_tool": null,
   "direct_tool_params": {},
-  "agents": ["code"],
-  "parallel_groups": [["code"]],
+  "agents": ["coder"],
+  "parallel_groups": [["coder"]],
   "dependencies": {},
-  "reasoning": "Debugging requires iterative reads and bash execution. Not consequential — no external actions."
+  "reasoning": "Targeted fix — route directly to coder. Not consequential — no external actions."
 }
 ```
 
@@ -149,9 +166,9 @@ All eight fields are required in every response.
   "mode": "hierarchical",
   "direct_tool": null,
   "direct_tool_params": {},
-  "agents": ["general", "code"],
-  "parallel_groups": [["general"], ["code"]],
-  "dependencies": {"code": ["general"]},
-  "reasoning": "Research must finish before implementation. The code agent receives the general agent's findings as context."
+  "agents": ["finance", "general"],
+  "parallel_groups": [["finance"], ["general"]],
+  "dependencies": {"general": ["finance"]},
+  "reasoning": "Spending analysis must finish before building the savings plan. General agent receives finance findings as context."
 }
 ```

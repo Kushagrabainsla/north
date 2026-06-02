@@ -60,6 +60,7 @@ class AgentConfig(BaseModel):
     model_pool: str = "fast_cheap"
     similar_to: str | None = None
     accepts: list[str] = Field(default_factory=list)
+    produces: list[str] = Field(default_factory=list)
     output_format: str = "structured_json"
     version: str = "1.0.0"
     class_name: str | None = None

@@ -1,0 +1,15 @@
+agent: coder
+domain: engineering
+model_pool: fast_cheap
+accepts:
+  - "code"
+  - "implement"
+  - "fix"
+  - "debug"
+  - "write"
+  - "program"
+produces:
+  - ".north/tasks/{task_id}/implementation/implementation_notes.md"
+output_format: structured_json
+version: 1.0.0
+class_name: CoderAgent

@@ -65,6 +65,10 @@ class ToolRegistry:
     Universal tools are returned for every agent.
     Specialized tools are returned only for agents that declare them in their
     tool graph (built from tools.yaml).
+
+    New tool files dropped into tools/universal/ or tools/specialized/ at
+    runtime are picked up automatically the first time any agent tries to call
+    them — no restart required.
     """
 
     def __init__(
@@ -89,6 +93,26 @@ class ToolRegistry:
         for tool in specialized.values():
             self._tools[tool.name] = tool
 
+    def reload(self) -> None:
+        """Re-scan tool directories for new files.
+
+        Only adds tools not already registered — existing tools are not
+        replaced so in-flight tasks are unaffected.
+        """
+        universal = _discover(_TOOLS_ROOT / "universal", "tools.universal")
+        for tool in universal.values():
+            if tool.name not in self._tools:
+                self._tools[tool.name] = tool
+                if tool.name not in self._universal:
+                    self._universal.append(tool.name)
+                logger.info("ToolRegistry.reload: picked up new universal tool %r", tool.name)
+
+        specialized = _discover(_TOOLS_ROOT / "specialized", "tools.specialized")
+        for tool in specialized.values():
+            if tool.name not in self._tools:
+                self._tools[tool.name] = tool
+                logger.info("ToolRegistry.reload: picked up new specialized tool %r", tool.name)
+
     def register(self, tool: Tool) -> None:
         """Manually register a tool (e.g. one that needs constructor args)."""
         self._tools[tool.name] = tool
@@ -108,7 +132,13 @@ class ToolRegistry:
         return self._tools[name]
 
     def tools_for_agent(self, agent: str) -> list[Tool]:
-        """Return universal tools + any specialized tools the agent declared."""
+        """Return universal tools + any specialized tools the agent declared.
+
+        Scans the filesystem on every call so new tool files dropped at runtime
+        — including files written by create_tool mid-task — are available in
+        the next step with no polling, no TTL, and no miss-then-retry.
+        """
+        self.reload()
         result: list[Tool] = []
         seen: set[str] = set()
 

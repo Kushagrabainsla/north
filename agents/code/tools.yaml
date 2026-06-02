@@ -1,6 +1,0 @@
-# Specialized tools for this agent. Universal tools are
-# automatically available to all agents and do not need to be listed here.
-tools:
-  - bash
-  - patch_file
-  - git

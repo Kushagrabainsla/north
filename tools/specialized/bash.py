@@ -36,7 +36,7 @@ class BashTool(Tool):
     """Runs a shell command and returns stdout, stderr, and return code."""
 
     name = "bash"
-    description = "Run a shell command (30 s timeout) and return stdout/stderr/returncode."
+    description = "Run a shell command and return stdout/stderr/returncode. Default timeout 30 s, pass timeout= (max 300) for longer commands."
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -44,6 +44,13 @@ class BashTool(Tool):
             "workspace": {
                 "type": "string",
                 "description": "Working directory for the command (optional)",
+            },
+            "timeout": {
+                "type": "integer",
+                "description": (
+                    "Timeout in seconds (default 30, max 300). "
+                    "Use higher values for test suites or long-running builds."
+                ),
             },
         },
         "required": ["command"],
@@ -62,6 +69,8 @@ class BashTool(Tool):
                 return ToolOutput(success=False, error=f"Blocked pattern in command: {blocked!r}")
 
         cwd = input.params.get("workspace") or None
+        raw_timeout = input.params.get("timeout")
+        timeout = min(max(int(raw_timeout), 1), 300) if raw_timeout is not None else _TIMEOUT
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -71,11 +80,11 @@ class BashTool(Tool):
                 cwd=cwd,
             )
             try:
-                stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT)
+                stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             except TimeoutError:
                 proc.kill()
                 await proc.communicate()
-                return ToolOutput(success=False, error=f"Command timed out after {_TIMEOUT}s.")
+                return ToolOutput(success=False, error=f"Command timed out after {timeout}s.")
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))
 

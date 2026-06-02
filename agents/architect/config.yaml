@@ -1,0 +1,16 @@
+agent: architect
+domain: engineering
+model_pool: reasoning
+accepts:
+  - "design"
+  - "architecture"
+  - "spec"
+  - "plan"
+  - "structure"
+  - "architect"
+produces:
+  - ".north/tasks/{task_id}/architecture/spec.md"
+  - ".north/tasks/{task_id}/architecture/decision_log.md"
+output_format: structured_json
+version: 1.0.0
+class_name: ArchitectAgent

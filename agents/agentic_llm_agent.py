@@ -20,8 +20,11 @@ from inference.models import CompletionRequest, PoolPriority, ToolCall, ToolCall
 from tools.base import Tool
 from tools.models import ToolInput
 
-# top-level agent may delegate once; that delegate cannot delegate further
-_MAX_DELEGATION_DEPTH = 2
+# supports full researcher→architect→coder↔tester chains with multiple fix cycles
+_MAX_DELEGATION_DEPTH = 10
+
+# engineering agents must be found exactly — no silent fallback to general
+_ENGINEERING_AGENTS: frozenset[str] = frozenset({"researcher", "architect", "coder", "tester"})
 # Cap the JSON-serialised tool result injected back into the conversation.
 # ~40k chars ≈ 10k tokens — generous but bounded.
 _MAX_TOOL_RESULT_CHARS = 40_000
@@ -45,7 +48,8 @@ _DELEGATE_TASK_SCHEMA: dict = {
                     "type": "string",
                     "description": (
                         "Name of the specialist agent "
-                        "(e.g. 'code', 'finance', 'health', 'general')."
+                        "(e.g. 'researcher', 'architect', 'coder', 'tester', "
+                        "'finance', 'health', 'university', 'job', 'home', 'general')."
                     ),
                 },
                 "task": {
@@ -288,6 +292,7 @@ class AgenticLLMAgent(LLMAgent):
         )
         return (
             f"## Task\n{payload.prompt}\n\n"
+            f"## Task ID\n{payload.task_id}\n\n"
             f"## Context\n{context or '(none)'}\n\n"
             f"## Tool reliability hints\n{reliability_lines or '(none)'}\n"
         )
@@ -334,6 +339,15 @@ class AgenticLLMAgent(LLMAgent):
         try:
             agent = registry.get(agent_name)
         except Exception:
+            if agent_name in _ENGINEERING_AGENTS:
+                return json.dumps({
+                    "success": False,
+                    "error": (
+                        f"Engineering agent '{agent_name}' not found. "
+                        "Cannot fall back to general for engineering tasks. "
+                        "Ensure the agent is registered and retry."
+                    ),
+                })
             try:
                 agent = registry.get("general")
             except Exception:

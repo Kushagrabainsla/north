@@ -2,6 +2,31 @@
 
 All notable changes to north are documented here.
 
+## [1.2.4] - 2026-06-01
+### Added
+- Four engineering agents: `researcher` (Feynman + Liskov), `architect` (Brooks + Hickey, reasoning model), `coder` (Beck + Torvalds + Uncle Bob, with `bash`/`git`/`patch_file`), `tester` (Dijkstra + Bach, full QA — writes and runs tests)
+- Each agent has hard responsibility boundaries, scope-aware delegation (chains only when task scope requires it), and founding engineer principles that shape default behaviour
+- Agents ask clarifying questions via `request_approval` when scope is ambiguous; answers accumulate into `judgement_rules.md` via the extraction pipeline, making the system progressively less reliant on questions over time
+- `engineering` domain added to planner with entry point heuristic: "research" → researcher, "design" → architect, "build" → full chain, "fix"/"code" → coder, "test" → tester
+- Task-scoped artifact layout: `.north/tasks/{task_id}/research/`, `architecture/`, `implementation/`, `qa/` — concurrent tasks never corrupt each other's files
+- Tester produces versioned QA reports (`qa_report_vN.md` + `qa_report_latest.md`), detects infinite fix loops at v4+, and routes code bugs to coder vs spec problems to architect
+- `produces` field added to `AgentConfig` — each agent declares its output artifacts
+- `BashTool` now accepts an optional `timeout` parameter (1–300 s, default 30) — tester uses higher values for full test suites
+- `_ENGINEERING_AGENTS` frozenset: delegation to engineering agents fails hard if the agent is not registered — no silent fallback to `general`
+- `task_id` injected into every agent's task message so agents can construct scoped artifact paths without any additional plumbing
+
+### Changed
+- `_MAX_DELEGATION_DEPTH` raised from 2 to 10 — supports researcher→architect→coder↔tester chains with multiple fix cycles
+- `delegate_task` schema description updated to list all engineering agents by name
+- `AgentRegistry.get()` now triggers a live filesystem scan on cache miss — new agent folders dropped at runtime are registered on the next call, no restart required
+- `ToolRegistry.tools_for_agent()` now scans the filesystem on every call — new tool files (including those written by `create_tool` mid-task) are available in the next ReAct step with no polling, no TTL, and no miss-then-retry
+- Learning loop is fully system-owned: agents carry no memory-management instructions; the extraction pipeline handles all learning into `~/.north/judgement_rules.md` transparently
+- `prompts/router.md` and `prompts/planner.md` examples updated — all stale "code" agent references replaced
+
+### Removed
+- Deprecated `code` agent (`agents/code/`) — replaced by the four engineering agents
+- `AGENT_IMPLEMENTATION_PLAN.md` — plan is fully implemented
+
 ## [1.2.3] - 2026-06-01
 ### Added
 - Full TUI: `north` (no subcommand) opens a single-terminal interface combining chat, live tool activity, and inline approval prompts — no separate windows needed

@@ -1,0 +1,19 @@
+agent: researcher
+domain: engineering
+model_pool: fast_cheap
+accepts:
+  - "research"
+  - "investigate"
+  - "explore"
+  - "analyze"
+  - "find"
+  - "build"
+  - "implement"
+  - "create"
+  - "develop"
+produces:
+  - ".north/tasks/{task_id}/research/context.md"
+  - ".north/tasks/{task_id}/research/references.json"
+output_format: structured_json
+version: 1.0.0
+class_name: ResearcherAgent

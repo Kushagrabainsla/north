@@ -412,10 +412,10 @@ async def test_allowed_documents_respects_rules(tmp_path):
     from context.models import ContextDocument
 
     context_store = FileContextStore(tmp_path / "context")
-    # Write a rule that restricts 'code' to only public.md
+    # Write a rule that restricts 'coder' to only public.md
     rules_path = tmp_path / "context" / "privacy_rules.md"
     rules_path.parent.mkdir(parents=True, exist_ok=True)
-    rules_path.write_text("code: can_read: public.md\n", encoding="utf-8")
+    rules_path.write_text("coder: can_read: public.md\n", encoding="utf-8")
 
     inference = MockInferenceRouter()
     tool_registry = ToolRegistry(graph={}, auto_register=False)
@@ -433,7 +433,7 @@ async def test_allowed_documents_respects_rules(tmp_path):
             return {"output": "", "summary": "", "data": {}, "requires_approval": False,
                     "has_question": False, "question": None, "question_options": [], "cost_usd": 0.0}
 
-    config = AgentConfig(agent="code", domain="code", model_pool="fast_cheap")
+    config = AgentConfig(agent="coder", domain="engineering", model_pool="fast_cheap")
     agent = _TestAgent(config, agent_deps)
 
     docs = await agent._allowed_documents()
@@ -474,7 +474,7 @@ async def test_delegate_task_blocked_at_depth_limit(tmp_path):
         delegation_depth=_MAX_DELEGATION_DEPTH,  # already at the limit
     )
 
-    result_str = await agent._delegate_task(deep_payload, {"agent": "code", "task": "write code"})
+    result_str = await agent._delegate_task(deep_payload, {"agent": "general", "task": "do something"})
     result = json.loads(result_str)
     assert result["success"] is False
     assert "depth limit" in result["error"].lower()
