@@ -81,7 +81,9 @@ class _Spinner:
     def _draw(self) -> None:
         f = _SPIN[self._frame % len(_SPIN)]
         line = f"  {f} {self._text}"
-        self._raw(f"\r{line}")
+        # Pad with spaces to erase residual chars when switching to shorter text.
+        padding = max(0, self._width - len(line))
+        self._raw(f"\r{line}{' ' * padding}")
         self._width = len(line)
 
     # ── public API ────────────────────────────────────────────────────────────
