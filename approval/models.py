@@ -6,12 +6,12 @@ See docs/CODING_STYLE.md Section 7.3 and README Section 9.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class CardType(str, Enum):
+class CardType(StrEnum):
     """The three supported card types in north."""
 
     INFORMATION = "information"
@@ -19,7 +19,7 @@ class CardType(str, Enum):
     QUESTION = "question"
 
 
-class ApprovalDecision(str, Enum):
+class ApprovalDecision(StrEnum):
     """Possible outcomes for a user approval card decision."""
 
     APPROVED = "approved"

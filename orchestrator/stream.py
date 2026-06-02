@@ -9,6 +9,7 @@ See docs/CODING_STYLE.md Sections 6.7, 10, 12.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -116,10 +117,8 @@ class EventStreamManager:
                     return
                 yield message
         finally:
-            try:
+            with contextlib.suppress(KeyError, ValueError):
                 self._subscribers[task_id].remove(queue)
-            except (KeyError, ValueError):
-                pass
             if not self._subscribers.get(task_id):
                 self._subscribers.pop(task_id, None)
 
@@ -140,9 +139,7 @@ class EventStreamManager:
                     return
                 yield message
         finally:
-            try:
+            with contextlib.suppress(ValueError):
                 self._global_subs.remove(queue)
-            except ValueError:
-                pass
             if not self._global_subs:
                 self.tui_connected = False

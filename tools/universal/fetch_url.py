@@ -58,10 +58,7 @@ def _fetch_sync(url: str) -> ToolOutput:
         return ToolOutput(success=False, error=f"Request failed: {e}")
 
     content_type = resp.headers.get("content-type", "")
-    if "html" in content_type:
-        text = _strip_html(resp.text)
-    else:
-        text = resp.text
+    text = _strip_html(resp.text) if "html" in content_type else resp.text
 
     if len(text) > _MAX_CHARS:
         omitted = len(text) - _MAX_CHARS

@@ -275,10 +275,9 @@ class ExtractionPipeline:
         return True
 
     async def _is_duplicate(
-        self, doc: "ContextDocument", delta: str, task_id: str | None
+        self, doc: ContextDocument, delta: str, task_id: str | None
     ) -> bool:
         """Return True if delta is already captured in the document."""
-        from context.models import ContextDocument
         try:
             existing = await self._context_store.read(doc)
         except Exception:
@@ -308,7 +307,7 @@ class ExtractionPipeline:
                 return False
         return False
 
-    async def _maybe_trim(self, doc: "ContextDocument", task_id: str | None) -> None:
+    async def _maybe_trim(self, doc: ContextDocument, task_id: str | None) -> None:
         """Summarise and rewrite the document if it exceeds the size cap."""
         try:
             existing = await self._context_store.read(doc)

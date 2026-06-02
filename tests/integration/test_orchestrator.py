@@ -50,7 +50,7 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
     ledger = SQLiteLedgerWriter(tmp_path / "ledger.db")
     inference = MockInferenceRouter()
     context_store = FileContextStore(tmp_path / "context")
-    job_processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    SQLiteJobProcessor(tmp_path / "jobs.db")
     stream = EventStreamManager()
     approval = ApprovalStore()
     task_ctx = TaskContextStore(db_path=tmp_path / "tasks.db")
@@ -212,7 +212,7 @@ async def test_north_star_skipped_on_low_confidence(tmp_path):
     with mock.patch.object(
         orch._execution_planner, "plan_all", return_value=(low_conf, dummy_plan)
     ), mock.patch.object(orch._north_star_checker, "check_alignment") as mock_check:
-        response = await orch.submit_task(
+        await orch.submit_task(
             TaskRequest(prompt="send an email", source=LedgerSource.PROMPT)
         )
         await asyncio.sleep(0.3)

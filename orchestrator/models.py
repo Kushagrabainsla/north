@@ -5,7 +5,7 @@ See docs/CODING_STYLE.md Section 9.7.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from ledger.models import LedgerSource
 
 
-class ExecutionMode(str, Enum):
+class ExecutionMode(StrEnum):
     """Execution structure chosen by the router for a given task."""
     SINGLE_TOOL = "single_tool"      # one deterministic tool call, no agent
     SINGLE_AGENT = "single_agent"    # one agent's ReAct loop

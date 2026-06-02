@@ -8,6 +8,7 @@ via the persistent global SSE stream (/stream) — no per-task subscription need
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 from datetime import datetime
@@ -174,26 +175,25 @@ async def run(
     async def _listen() -> None:
         while True:
             try:
-                async with httpx.AsyncClient() as client:
-                    async with client.stream(
-                        "GET",
-                        f"{base_url}/stream",
-                        headers=headers,
-                        timeout=None,
-                    ) as resp:
-                        current_event = ""
-                        async for line in resp.aiter_lines():
-                            if line.startswith("event:"):
-                                current_event = line[6:].strip()
-                            elif line.startswith("data:"):
-                                try:
-                                    payload = json.loads(line[5:].strip())
-                                except json.JSONDecodeError:
-                                    current_event = ""
-                                    continue
-                                event = current_event or payload.get("event", "")
-                                await _handle_event(event, payload)
+                async with httpx.AsyncClient() as client, client.stream(
+                    "GET",
+                    f"{base_url}/stream",
+                    headers=headers,
+                    timeout=None,
+                ) as resp:
+                    current_event = ""
+                    async for line in resp.aiter_lines():
+                        if line.startswith("event:"):
+                            current_event = line[6:].strip()
+                        elif line.startswith("data:"):
+                            try:
+                                payload = json.loads(line[5:].strip())
+                            except json.JSONDecodeError:
                                 current_event = ""
+                                continue
+                            event = current_event or payload.get("event", "")
+                            await _handle_event(event, payload)
+                            current_event = ""
             except asyncio.CancelledError:
                 return
             except Exception:
@@ -302,7 +302,5 @@ async def run(
                 continue
 
     listener.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await listener
-    except asyncio.CancelledError:
-        pass

@@ -72,7 +72,7 @@ else
         echo "NORTH_OPENROUTER_API_KEY=$api_key" >> "$ENV_FILE"
         success "API key saved to $ENV_FILE"
     else
-        warn "Skipped — add it later: echo 'NORTH_OPENROUTER_API_KEY=sk-or-...' >> $ENV_FILE"
+        warn "Skipped — north start will prompt you for it when you first run."
     fi
 fi
 

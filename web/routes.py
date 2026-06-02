@@ -101,9 +101,8 @@ async def dashboard(request: Request) -> HTMLResponse:
     # the first entry we encounter for a task_id is its latest status.
     task_latest_entries = {}
     for e in entries:
-        if e.task_id is not None:
-            if e.task_id not in task_latest_entries:
-                task_latest_entries[e.task_id] = e
+        if e.task_id is not None and e.task_id not in task_latest_entries:
+            task_latest_entries[e.task_id] = e
 
     active_tasks = [
         entry for entry in task_latest_entries.values()

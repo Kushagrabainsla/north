@@ -96,7 +96,6 @@ def configure_structured_logging(level: int = logging.INFO) -> None:
     When NORTH_LOG_FILE is set, logs go to that file instead of stdout so the
     interactive chat REPL isn't polluted by server output.
     """
-    import os
 
     root = logging.getLogger()
     root.setLevel(level)

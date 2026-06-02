@@ -721,7 +721,7 @@ class Orchestrator:
         )
 
         failed: list[str] = []
-        for agent, result in zip(agents, results):
+        for agent, result in zip(agents, results, strict=False):
             if isinstance(result, asyncio.CancelledError):
                 # A cancelled task means cancel_task() was called — propagate
                 # so the outer _process_task handler can write the ledger entry.

@@ -15,20 +15,17 @@ See docs/CODING_STYLE.md Sections 5.2, 6.7, 10.3, 11, 13, 14.1.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import pytest_asyncio
 
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.task_context import TaskContextStore
 from utils.db import open_db_connection
 from utils.ids import generate_id
-
 
 # ---------------------------------------------------------------------------
 # Helpers

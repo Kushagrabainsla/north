@@ -6,11 +6,11 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context.models import ContextDocument
 from tools.base import Tool
+
+logger = logging.getLogger(__name__)
 
 # Per-document cap before truncation.  ~12k chars ≈ 3k tokens — enough for rich
 # personal context without blowing a model's context window on large docs.

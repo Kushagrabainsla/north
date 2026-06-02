@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 
-class StrategyMode(str, Enum):
+class StrategyMode(StrEnum):
     ECO = "eco"        # cheapest model first — maximise cost savings
     CRUISE = "cruise"  # role-aware best fit (default)
     SPORT = "sport"    # most capable model first — maximise quality

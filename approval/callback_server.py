@@ -8,6 +8,8 @@ See docs/CODING_STYLE.md Sections 12, 17.
 
 from __future__ import annotations
 
+import contextlib
+
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
@@ -58,7 +60,7 @@ async def receive_decision(
     # Forward the decision to the main orchestrator
     secret = load_secret()
     async with httpx.AsyncClient() as client:
-        try:
+        with contextlib.suppress(httpx.RequestError):
             await client.post(
                 f"{settings.north_orchestrator_url}/orchestrator/approval/respond",
                 json={
@@ -71,9 +73,6 @@ async def receive_decision(
                 headers={"X-North-Secret": secret},
                 timeout=10.0,
             )
-        except httpx.RequestError:
-            # Log but don't crash — the callback was received, relay is best-effort
-            pass
 
     return CallbackResponse(received=True, card_id=payload.card_id)
 

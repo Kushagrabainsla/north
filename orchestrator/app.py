@@ -19,6 +19,7 @@ from agents.models import AgentDependencies
 from agents.registry import AgentRegistry
 from approval.callback_server import app as callback_app
 from approval.judgement_filter import JudgementFilter
+from approval.tui import TUIAwareNotifier
 from config.dependencies import build_production_dependencies
 from config.settings import settings
 from context.embedding_index import EmbeddingIndex
@@ -36,10 +37,9 @@ from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
-from approval.tui import TUIAwareNotifier
+from tools.registry import ToolRegistry
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.schedule_task import ScheduleTaskTool
-from tools.registry import ToolRegistry
 from utils.ids import generate_id
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
@@ -143,6 +143,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         inference_router=deps.cost_tracker,
     )
 
+    extraction_pipeline = ExtractionPipeline(
+        ledger=deps.ledger,
+        context_store=deps.context_store,
+        inference_router=deps.cost_tracker,
+        north_home=settings.north_home,
+    )
+
     orchestrator = Orchestrator(
         ledger=deps.ledger,
         agent_registry=agent_registry,
@@ -209,13 +216,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Reconciliation: no orphaned PENDING tasks found.")
     except Exception:
         logger.exception("Startup reconciliation sweep failed")
-
-    extraction_pipeline = ExtractionPipeline(
-        ledger=deps.ledger,
-        context_store=deps.context_store,
-        inference_router=deps.cost_tracker,
-        north_home=settings.north_home,
-    )
 
     # ── Job dispatcher: maps cron/async jobs to Orchestrator tasks ──────────
 

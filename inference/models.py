@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class PoolPriority(str, Enum):
+class PoolPriority(StrEnum):
     """Priority signal that determines which model pool a call uses.
 
     See README 8.3 for the mapping rules (consequential→HIGH, background→LOW).

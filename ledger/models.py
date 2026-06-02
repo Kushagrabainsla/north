@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class LedgerSource(str, Enum):
+class LedgerSource(StrEnum):
     """Origin of a Ledger entry. Canonical list — see README Section 4.3."""
 
     PROMPT = "prompt"
@@ -24,7 +24,7 @@ class LedgerSource(str, Enum):
     WEBHOOK = "webhook"
 
 
-class LedgerStatus(str, Enum):
+class LedgerStatus(StrEnum):
     """Lifecycle status of a Ledger entry. See README Section 4.2 schema."""
 
     COMPLETED = "completed"

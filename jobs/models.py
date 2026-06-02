@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class JobType(str, Enum):
+class JobType(StrEnum):
     """How a job entered the queue. See README 11.1."""
 
     CRON = "cron"
@@ -18,7 +18,7 @@ class JobType(str, Enum):
     RETRY = "retry"
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     """Lifecycle status of a job. See README 11.1."""
 
     PENDING = "pending"

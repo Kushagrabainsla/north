@@ -135,7 +135,7 @@ class EmbeddingIndex:
                 "VALUES (?, ?, ?, ?)",
                 [
                     (doc_name, idx, chunk, json.dumps(emb))
-                    for idx, (chunk, emb) in enumerate(zip(chunks, embeddings))
+                    for idx, (chunk, emb) in enumerate(zip(chunks, embeddings, strict=False))
                 ],
             )
 

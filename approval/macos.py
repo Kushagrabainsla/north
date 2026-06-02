@@ -81,7 +81,7 @@ class MacOSNotifier(Notifier):
     async def _wait_and_handle_exit(self, proc: asyncio.subprocess.Process, card: Card) -> None:
         stdout, _ = await proc.communicate()
         if proc.returncode == 0 and stdout:
-            clicked_action = stdout.decode("utf-8").strip()
+            stdout.decode("utf-8").strip()
             # If the user clicked a valid action button, we can relay this
             # back to the orchestrator if a callback server is active.
             # Standard callback handling is done in callback_server.py.

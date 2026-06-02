@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class ContextDocument(str, Enum):
+class ContextDocument(StrEnum):
     """The five markdown files that constitute north's context. See README 5.1.
 
     Members are the file names on disk. Using the enum at API boundaries means
