@@ -67,12 +67,12 @@ else
     warn "You need an OpenRouter API key for LLM inference and voice."
     warn "Get one free at: https://openrouter.ai/keys"
     echo ""
-    read -rp "  Enter your OpenRouter API key (or press Enter to skip): " api_key
+    read -rp "  Enter your OpenRouter API key (or press Enter to skip): " api_key </dev/tty
     if [[ -n "$api_key" ]]; then
         echo "NORTH_OPENROUTER_API_KEY=$api_key" >> "$ENV_FILE"
         success "API key saved to $ENV_FILE"
     else
-        warn "Skipped — north start will prompt you for it when you first run."
+        warn "Skipped — add it later: echo 'NORTH_OPENROUTER_API_KEY=sk-or-...' >> $ENV_FILE"
     fi
 fi
 
