@@ -263,10 +263,11 @@ async def run(
 
     listener = asyncio.create_task(_listen())
 
-    with patch_stdout():
-        # Create a fresh Console now that patch_stdout has replaced sys.stdout
-        # with its proxy.  force_terminal=True ensures Rich always emits ANSI
-        # codes even though the proxy doesn't pass isatty() checks.
+    with patch_stdout(raw=True):
+        # raw=True: proxy uses write_raw() instead of write(), so it does NOT
+        # replace \x1b with '?' — Rich's ANSI colour codes reach the terminal intact.
+        # force_terminal=True: Rich always emits codes even though the proxy
+        # doesn't pass isatty() checks.
         console = Console(force_terminal=True)
 
         while True:
