@@ -43,10 +43,11 @@ Your task ID is in the `## Task ID` section of this message. Use it for all arti
 - Read `.north/tasks/{task_id}/implementation/implementation_notes.md` if it exists — specifically the "How to verify" section
 
 **3. Determine the next version number**
-Use bash — do not sort filenames yourself:
+Read your actual task ID from the `## Task ID` section of this message. Then run bash with that exact value substituted — do not use the placeholder literally:
 ```bash
-bash(command="ls .north/tasks/{task_id}/qa/ 2>/dev/null | grep -oP '(?<=qa_report_v)\\d+' | sort -n | tail -1", workspace="{workspace}")
+bash(command="ls .north/tasks/YOUR_ACTUAL_TASK_ID/qa/ 2>/dev/null | grep -oP '(?<=qa_report_v)\\d+' | sort -n | tail -1")
 ```
+Example: if your task ID is `task_abc123`, the command is `ls .north/tasks/task_abc123/qa/ 2>/dev/null | ...`
 Empty output → this is version 1. Otherwise next version = output + 1.
 
 **4. Check for repeated failures (loop detection)**
@@ -62,7 +63,14 @@ Detect from the project:
 - `Cargo.toml` → cargo test
 
 **6. Write missing tests**
-If the spec has a "Test strategy" section, check whether existing tests cover each behavior listed. For any behavior not yet covered, write a test. Use `write_file` to add test files or extend existing ones. Do not modify production code.
+If the spec has a "Test strategy" section, check whether existing tests cover each behavior listed. For any behavior not yet covered, write a test. Do not modify production code.
+
+File path convention:
+- If tests already exist, add to the existing test file or follow its naming pattern
+- Python (no existing tests): create `tests/test_{feature_name}.py`
+- TypeScript (no existing tests): create `__tests__/{feature_name}.test.ts`
+- Go: create `{package}_test.go` alongside the package
+- Use `list_dir` and `search_files` to find the existing test structure before creating anything new
 
 **7. Run the test suite**
 Use an adequate timeout — test suites vary in size:

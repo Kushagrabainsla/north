@@ -175,6 +175,12 @@ class AgenticLLMAgent(LLMAgent):
         ]
 
         tool_map = {t.name: t for t, _ in scored_tools}
+        # Agents with bash/git/patch_file produce larger tool outputs; give their
+        # compaction summaries more room to preserve file paths and error messages.
+        compact_tokens = (
+            _COMPACT_TOKENS_HEAVY if tool_map.keys() & _HEAVY_OUTPUT_TOOLS
+            else _COMPACT_TOKENS_DEFAULT
+        )
         total_cost_usd: float = 0.0
         last_tokens_in: int = 0
         last_model_used: str = ""
@@ -182,7 +188,7 @@ class AgenticLLMAgent(LLMAgent):
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
             # Token-aware compaction: summarise old history when we approach the
-            # model's context window (40% threshold). Runs before the next API
+            # model's context window (75% threshold). Runs before the next API
             # call so the compacted messages are what gets sent.
             if last_tokens_in > 0:
                 await _compact_if_needed(
@@ -193,6 +199,7 @@ class AgenticLLMAgent(LLMAgent):
                     component=self.name,
                     task_id=payload.task_id,
                     keep_recent=self._deps.agent_history_keep_recent,
+                    max_summary_tokens=compact_tokens,
                 )
             else:
                 # First iteration: apply the lightweight truncation as a baseline.
@@ -318,8 +325,10 @@ class AgenticLLMAgent(LLMAgent):
             return json.dumps({
                 "success": False,
                 "error": (
-                    f"Delegation depth limit ({_MAX_DELEGATION_DEPTH}) reached. "
-                    "Solve this sub-task directly instead of delegating further."
+                    f"Delegation depth limit ({_MAX_DELEGATION_DEPTH}) reached — "
+                    "you cannot delegate further. Write a final summary of what was "
+                    "accomplished, what was attempted, and what remains unresolved, "
+                    "then return that as your answer."
                 ),
             })
 
@@ -508,7 +517,13 @@ def _extract_success(tool_result_str: str) -> bool:
         return False
 
 
-_COMPACTION_THRESHOLD = 0.40  # compact when tokens_in hits this fraction of context window
+_COMPACTION_THRESHOLD = 0.75  # compact when tokens_in hits this fraction of context window
+
+# Agents with these tools produce larger, denser outputs (file contents, diffs, bash stdout).
+# Their summaries need more room to preserve file paths, function names, and error messages.
+_HEAVY_OUTPUT_TOOLS: frozenset[str] = frozenset({"bash", "git", "patch_file"})
+_COMPACT_TOKENS_DEFAULT = 512   # ~350 words — general agents
+_COMPACT_TOKENS_HEAVY   = 1000  # ~700 words — agents with bash/git/patch_file
 
 
 def _context_window_for(model: str) -> int:
@@ -589,8 +604,9 @@ async def _compact_if_needed(
     component: str,
     task_id: str | None,
     keep_recent: int,
+    max_summary_tokens: int = _COMPACT_TOKENS_DEFAULT,
 ) -> None:
-    """LLM-summarise old exchanges when token usage exceeds 40% of the context window.
+    """LLM-summarise old exchanges when token usage exceeds 75% of the context window.
 
     Keeps [0] system, [1] user-task, and the last `keep_recent` tool exchanges
     verbatim. Everything in between is replaced with a single summarised block.
@@ -616,12 +632,14 @@ async def _compact_if_needed(
         return
 
     history_text = _render_exchange_for_summary(to_summarise)
+    max_words = int(max_summary_tokens * 0.70)  # tokens → approximate word budget
     prompt = (
         "You are summarising intermediate steps of an ongoing AI agent task.\n"
         "Condense the following tool calls and results into a concise bullet-point summary.\n"
-        "Preserve: what was accomplished, key facts discovered, and any important data values.\n"
+        "Preserve: what was accomplished, key facts discovered, file paths, function names, "
+        "error messages, and any important data values.\n"
         "Omit: raw file contents, verbose outputs, redundant retries.\n"
-        "Max 350 words.\n\n"
+        f"Max {max_words} words.\n\n"
         f"<history>\n{history_text}\n</history>"
     )
 
@@ -633,7 +651,7 @@ async def _compact_if_needed(
                 priority=PoolPriority.LOW,
                 component=f"{component}:compact",
                 task_id=task_id,
-                max_tokens=512,
+                max_tokens=max_summary_tokens,
             )
         )
         summary = resp.text.strip()

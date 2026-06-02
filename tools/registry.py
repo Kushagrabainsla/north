@@ -113,6 +113,19 @@ class ToolRegistry:
                 self._tools[tool.name] = tool
                 logger.info("ToolRegistry.reload: picked up new specialized tool %r", tool.name)
 
+    def update_graph(self, agent_name: str, tool_names: list[str]) -> None:
+        """Add or extend the specialized tool list for an agent.
+
+        Called when a new agent is discovered at runtime so its tools.yaml
+        bindings are honoured without a restart.
+        """
+        existing = self._graph.get(agent_name, [])
+        merged = list(existing)
+        for name in tool_names:
+            if name not in merged:
+                merged.append(name)
+        self._graph[agent_name] = merged
+
     def register(self, tool: Tool) -> None:
         """Manually register a tool (e.g. one that needs constructor args)."""
         self._tools[tool.name] = tool

@@ -82,6 +82,7 @@ class Orchestrator:
         episodic_store: Any | None = None,
         tool_registry: ToolRegistry | None = None,
         default_workspace: str = "",
+        extraction_pipeline: Any | None = None,
     ) -> None:
         self._ledger = ledger
         self._agent_registry = agent_registry
@@ -99,6 +100,7 @@ class Orchestrator:
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
         self._default_workspace = default_workspace
+        self._extraction_pipeline = extraction_pipeline
         # Maps task_id → running asyncio.Task so cancel_task() can stop it.
         self._active_tasks: dict[str, asyncio.Task] = {}
 
@@ -604,9 +606,9 @@ class Orchestrator:
         ))
 
         await self._stream_manager.emit(task_id, "token", {"text": output})
-        await self._finish_task(task_id)
+        await self._finish_task(task_id, skip_extraction=True)
 
-    async def _finish_task(self, task_id: str) -> None:
+    async def _finish_task(self, task_id: str, *, skip_extraction: bool = False) -> None:
         """Write completion ledger entry and emit done events."""
         task_cost_usd = self._cost_tracker.pop_task_cost(task_id) if self._cost_tracker else 0.0
         await self._write_ledger(LedgerEntry(
@@ -619,6 +621,16 @@ class Orchestrator:
         ))
         await self._stream_manager.emit(task_id, "task_completed", {"cost_usd": task_cost_usd})
         await self._stream_manager.emit_done(task_id)
+        # Trigger extraction immediately after agent tasks so preferences stated
+        # mid-task land in judgement_rules.md before the next task starts.
+        # Single-tool tasks (deterministic, no agent reasoning) are skipped —
+        # they produce no signal worth extracting.
+        if self._extraction_pipeline is not None and not skip_extraction:
+            t = asyncio.create_task(self._extraction_pipeline.run_once())
+            t.add_done_callback(
+                lambda t: logger.warning("post-task extraction failed: %s", t.exception())
+                if not t.cancelled() and t.exception() is not None else None
+            )
 
     async def _record_episode(
         self, task_id: str, prompt: str, agents: list[str], domain: str

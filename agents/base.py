@@ -100,10 +100,17 @@ class Agent(ABC):
         privacy_rules.md.  Falls back to [PUBLIC, JUDGEMENT_RULES] when the
         file is missing, empty, or contains no rule for this agent.
 
+        Engineering agents also read north_stars by default — design and
+        implementation decisions should be checked against long-term goals.
+
         Example privacy_rules.md line:
             health: can_read: public.md, judgement_rules.md
         """
-        _DEFAULT = [ContextDocument.PUBLIC, ContextDocument.JUDGEMENT_RULES]
+        _DEFAULT = (
+            [ContextDocument.PUBLIC, ContextDocument.JUDGEMENT_RULES, ContextDocument.NORTH_STARS]
+            if self.domain == "engineering"
+            else [ContextDocument.PUBLIC, ContextDocument.JUDGEMENT_RULES]
+        )
         try:
             rules_text = await self._deps.context_store.read(ContextDocument.PRIVACY_RULES)
         except Exception:

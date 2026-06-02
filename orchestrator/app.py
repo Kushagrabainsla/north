@@ -167,6 +167,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         episodic_store=deps.episodic_store,
         tool_registry=tool_registry,
         default_workspace=settings.north_workspace,
+        extraction_pipeline=extraction_pipeline,
     )
 
     context_injector = ContextInjector(

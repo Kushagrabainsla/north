@@ -126,6 +126,9 @@ class ExtractionPipeline:
         self._inference_router = inference_router
         self._watermark_path = north_home / _WATERMARK_FILENAME
         self._poll_interval = poll_interval_seconds
+        # Prevents concurrent _process_batch calls (background loop + per-task
+        # trigger) from reading the same watermark and double-processing entries.
+        self._lock = asyncio.Lock()
 
     async def run(self) -> None:
         """Loop forever, polling for new entries. Returns only on cancellation."""
@@ -193,6 +196,12 @@ class ExtractionPipeline:
         return extractions
 
     async def _process_batch(
+        self, since_override: datetime.datetime | None = None
+    ) -> int:
+        async with self._lock:
+            return await self._process_batch_locked(since_override)
+
+    async def _process_batch_locked(
         self, since_override: datetime.datetime | None = None
     ) -> int:
         since = since_override or self._load_watermark()

@@ -135,6 +135,12 @@ class AgentRegistry:
                 self._agents[agent.name] = agent
                 new_names.append(agent.name)
                 logger.info("AgentRegistry.reload: picked up new agent %r", agent.name)
+                # Wire the new agent's specialized tools into the ToolRegistry
+                # graph so tools_for_agent() returns its full tool set.
+                tool_registry = getattr(self._deps, "tool_registry", None)
+                if tool_registry is not None:
+                    tool_names = self._load_tool_names(entry)
+                    tool_registry.update_graph(agent.name, tool_names)
             except Exception as exc:
                 logger.warning(
                     "AgentRegistry.reload: failed to load %s: %s", entry.name, exc
