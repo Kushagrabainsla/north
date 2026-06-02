@@ -144,14 +144,16 @@ class ToolRegistry:
             raise ToolNotFoundError(f"No tool registered with name: {name}")
         return self._tools[name]
 
-    def tools_for_agent(self, agent: str) -> list[Tool]:
+    def tools_for_agent(self, agent: str, *, auto_reload: bool = True) -> list[Tool]:
         """Return universal tools + any specialized tools the agent declared.
 
         Scans the filesystem on every call so new tool files dropped at runtime
         — including files written by create_tool mid-task — are available in
         the next step with no polling, no TTL, and no miss-then-retry.
+        Pass auto_reload=False to skip the filesystem scan (useful in tests).
         """
-        self.reload()
+        if auto_reload:
+            self.reload()
         result: list[Tool] = []
         seen: set[str] = set()
 
