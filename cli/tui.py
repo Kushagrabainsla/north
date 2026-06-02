@@ -1,9 +1,4 @@
-"""North TUI — single-terminal chat + live task activity + inline approvals.
-
-Replaces the old readline-based _chat_loop with a prompt_toolkit PromptSession
-so concurrent SSE output never clobbers the input line.  All task events arrive
-via the persistent global SSE stream (/stream) — no per-task subscription needed.
-"""
+"""North TUI — single-terminal chat + live task activity + inline approvals."""
 
 from __future__ import annotations
 
@@ -22,6 +17,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.text import Text
 
 _STRATEGY_COLORS = {
@@ -49,18 +45,14 @@ def _prompt_tokens() -> FormattedText:
     ])
 
 
-def _ts() -> str:
-    return datetime.now().strftime("%H:%M:%S")
-
-
 def _fmt_params(params: dict) -> str:
     parts = []
     for k, v in params.items():
         if k == "workspace":
             continue
         v_str = repr(v)
-        if len(v_str) > 40:
-            v_str = v_str[:37] + "…'"
+        if len(v_str) > 60:
+            v_str = v_str[:57] + "…'"
         parts.append(f"{k}={v_str}")
     return ", ".join(parts[:4])
 
@@ -80,14 +72,11 @@ async def run(
         mouse_support=False,
     )
 
-    # token_buffer accumulates streamed tokens per task until task_completed.
     token_buffer: dict[str, str] = {}
-    # approval_queue receives approval_required payloads from the listener.
     approval_queue: asyncio.Queue[dict] = asyncio.Queue()
 
-    # Placeholder — replaced with a patch_stdout-aware Console once the
-    # with patch_stdout() block is entered, so Rich writes go through
-    # prompt_toolkit's proxy and escape codes are rendered correctly.
+    # Placeholder — replaced with a patch_stdout-aware console once
+    # the with-patch_stdout block is entered (see below).
     console: Console = Console()
 
     # ── SSE event renderer ────────────────────────────────────────────────────
@@ -95,31 +84,73 @@ async def run(
     async def _handle_event(event: str, data: dict) -> None:
         task_id = data.get("task_id", "")
 
-        if event == "agent_started":
+        if event == "classifying":
+            # Emitted immediately — skip; the "○ …" line already signals activity.
+            pass
+
+        elif event == "classified":
+            domain = data.get("domain", "")
+            flag = " [yellow](consequential)[/yellow]" if data.get("is_consequential") else ""
+            console.print(f"  [dim]· {domain}{flag}[/dim]")
+
+        elif event == "routed":
+            agents = data.get("agents") or []
+            mode = data.get("mode", "")
+            label = ", ".join(agents) if agents else "general"
+            suffix = f" [dim]({mode})[/dim]" if mode and mode != "parallel" else ""
+            console.print(f"  [dim]↳ {label}{suffix}[/dim]")
+
+        elif event == "north_star_checking":
+            console.print("  [dim]· north stars…[/dim]")
+
+        elif event == "north_star_aligned":
+            pass  # too noisy to show for every task
+
+        elif event == "north_star_conflict":
+            tension = (data.get("tension") or "")[:120]
+            console.print(
+                Panel(
+                    Text(tension, style="yellow"),
+                    title="[bold yellow]⚠ north star conflict[/bold yellow]",
+                    border_style="yellow",
+                    padding=(0, 2),
+                )
+            )
+
+        elif event == "executing":
+            agents = data.get("agents") or []
+            if agents:
+                console.print(f"  [dim]◎ {', '.join(agents)}…[/dim]")
+
+        elif event == "agent_started":
             agent = data.get("agent", "")
             console.print(f"  [dim]◎ {agent} running…[/dim]")
 
         elif event == "tool_called":
             tool = data.get("tool", "")
             params = data.get("params") or {}
-            console.print(f"  [dim]· {tool}({_fmt_params(params)})[/dim]")
+            args = _fmt_params(params)
+            console.print(f"  [dim]· {tool}({args})[/dim]")
 
         elif event == "tool_result":
             tool = data.get("tool", "")
             success = data.get("success", True)
-            style = "dim green" if success else "dim red"
-            icon = "✓" if success else "✗"
-            console.print(f"  [{style}]{icon} {tool}[/{style}]")
+            if success:
+                console.print(f"  [dim green]✓ {tool}[/dim green]")
+            else:
+                console.print(f"  [dim red]✗ {tool}[/dim red]")
 
         elif event == "token":
             token_buffer[task_id] = token_buffer.get(task_id, "") + data.get("text", "")
+
+        elif event == "task_synthesis":
+            console.print("  [dim]◎ synthesising…[/dim]")
 
         elif event == "task_completed":
             sys.stdout.write("\a")
             sys.stdout.flush()
             output = token_buffer.pop(task_id, "")
             if not output:
-                # Multi-agent path — fetch from ledger
                 try:
                     async with httpx.AsyncClient() as c:
                         r = await c.get(
@@ -151,12 +182,17 @@ async def run(
             token_buffer.pop(task_id, None)
             error = data.get("error", "Task failed.")
             console.print(
-                Panel(Text(error, style="red"), title="[red]north — failed[/red]", border_style="red")
+                Panel(
+                    Text(error, style="red"),
+                    title="[bold red]north — failed[/bold red]",
+                    border_style="red",
+                    padding=(0, 2),
+                )
             )
 
         elif event == "task_cancelled":
             token_buffer.pop(task_id, None)
-            console.print("[dim]Task cancelled.[/dim]")
+            console.print("  [dim]Task cancelled.[/dim]")
 
         elif event == "approval_required":
             await approval_queue.put(data)
@@ -170,8 +206,8 @@ async def run(
             )
             options = data.get("options") or ["Approve", "Reject"]
             for i, opt in enumerate(options, 1):
-                console.print(f"  [{i}] {opt}")
-            console.print("[dim]  — press Enter to respond —[/dim]")
+                console.print(f"  [dim][{i}] {opt}[/dim]")
+            console.print("[dim]  — type a number and press Enter —[/dim]")
 
     # ── Global SSE listener ───────────────────────────────────────────────────
 
@@ -204,7 +240,6 @@ async def run(
             except asyncio.CancelledError:
                 return
             except Exception:
-                # Reconnect after brief pause (server restart, network blip)
                 await asyncio.sleep(2)
 
     # ── Approval handler ──────────────────────────────────────────────────────
@@ -251,8 +286,6 @@ async def run(
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
-    # Welcome banner — printed before patch_stdout is active, so the default
-    # Console writes directly to the real terminal (no proxy in the way yet).
     Console().print(
         Panel(
             Text("Type your message and press Enter · Ctrl+C or 'exit' to quit", style="dim"),
@@ -264,14 +297,11 @@ async def run(
     listener = asyncio.create_task(_listen())
 
     with patch_stdout(raw=True):
-        # raw=True: proxy uses write_raw() instead of write(), so it does NOT
-        # replace \x1b with '?' — Rich's ANSI colour codes reach the terminal intact.
-        # force_terminal=True: Rich always emits codes even though the proxy
-        # doesn't pass isatty() checks.
+        # raw=True: proxy uses write_raw() so Rich's ANSI codes reach the terminal intact.
+        # force_terminal=True: emit ANSI codes even though the proxy isn't a real TTY.
         console = Console(force_terminal=True)
 
         while True:
-            # Pending approval takes priority — capture the response first.
             if not approval_queue.empty():
                 await _handle_pending_approval()
                 continue
@@ -292,11 +322,12 @@ async def run(
                 console.print("[dim]Goodbye.[/dim]")
                 break
 
-            # If an approval arrived while the user was typing, handle it first.
             if not approval_queue.empty():
                 await _handle_pending_approval()
 
-            # Submit the task
+            # Show immediate feedback before the first SSE event arrives.
+            console.print("  [dim]○ …[/dim]")
+
             body: dict = {"prompt": text}
             if workspace:
                 body["workspace"] = workspace
