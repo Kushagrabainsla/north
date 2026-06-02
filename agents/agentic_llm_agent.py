@@ -16,7 +16,7 @@ from typing import Any
 
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
-from inference.models import ToolCall, ToolCallRequest
+from inference.models import CompletionRequest, PoolPriority, ToolCall, ToolCallRequest
 from tools.base import Tool
 from tools.models import ToolInput
 
@@ -172,10 +172,27 @@ class AgenticLLMAgent(LLMAgent):
 
         tool_map = {t.name: t for t, _ in scored_tools}
         total_cost_usd: float = 0.0
+        last_tokens_in: int = 0
+        last_model_used: str = ""
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
-            _compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
+            # Token-aware compaction: summarise old history when we approach the
+            # model's context window (40% threshold). Runs before the next API
+            # call so the compacted messages are what gets sent.
+            if last_tokens_in > 0:
+                await _compact_if_needed(
+                    messages,
+                    tokens_in=last_tokens_in,
+                    model_used=last_model_used,
+                    inference_router=self._deps.inference_router,
+                    component=self.name,
+                    task_id=payload.task_id,
+                    keep_recent=self._deps.agent_history_keep_recent,
+                )
+            else:
+                # First iteration: apply the lightweight truncation as a baseline.
+                _compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
 
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
@@ -198,6 +215,8 @@ class AgenticLLMAgent(LLMAgent):
                 token_callback=token_cb,
             )
             total_cost_usd += response.cost_usd
+            last_tokens_in = response.tokens_in
+            last_model_used = response.model_used
 
             if response.type == "message":
                 # Final answer — tokens were already streamed via token_cb.
@@ -235,6 +254,22 @@ class AgenticLLMAgent(LLMAgent):
             result_str = json.dumps({"decision": decision})
             success = decision.lower() not in ("reject", "rejected", "timeout_rejected")
             return call, result_str, success
+        if call.name == "create_tool" and params.get("action") in ("create", "update"):
+            name = params.get("name", "unknown")
+            action = params.get("action", "create")
+            tool_type = params.get("tool_type", "specialized")
+            content = params.get("content", "").strip()
+            preview = (content[:1500] + "\n…") if len(content) > 1500 else content
+            msg = (
+                f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n"
+                + (f"```python\n{preview}\n```" if preview else "(stub — no implementation provided)")
+            )
+            decision = await self._request_approval(payload, {
+                "message": msg,
+                "options": ["Approve", "Reject"],
+            })
+            if decision.lower() in ("reject", "rejected", "timeout_rejected"):
+                return call, json.dumps({"success": False, "error": "User rejected tool creation."}), False
         if payload.workspace and "workspace" not in params:
             params["workspace"] = payload.workspace
         result_str = await self._call_tool(tool_map, call.name, params)
@@ -457,6 +492,154 @@ def _extract_success(tool_result_str: str) -> bool:
         return bool(json.loads(tool_result_str).get("success", False))
     except (json.JSONDecodeError, AttributeError):
         return False
+
+
+_COMPACTION_THRESHOLD = 0.40  # compact when tokens_in hits this fraction of context window
+
+
+def _context_window_for(model: str) -> int:
+    """Return the published context-window size (tokens) for a model identifier."""
+    m = model.lower()
+    if "gemini-2" in m or "gemini-1.5" in m:
+        return 1_000_000
+    if "gemini" in m:
+        return 128_000
+    if "claude" in m:
+        return 200_000
+    if "gpt-4o" in m or "gpt-4-turbo" in m or "gpt-4.1" in m:
+        return 128_000
+    if "llama" in m or "qwen" in m or "mistral" in m or "deepseek" in m:
+        return 128_000
+    return 128_000  # conservative default
+
+
+def _exchange_boundaries(messages: list[dict]) -> list[tuple[int, int]]:
+    """Return (start, end_inclusive) index pairs for each tool-call exchange.
+
+    An exchange = one assistant message that has tool_calls + all the tool
+    result messages that immediately follow it.
+    """
+    exchanges: list[tuple[int, int]] = []
+    i = 2  # skip [0]=system, [1]=user-task
+    while i < len(messages):
+        if messages[i].get("role") == "assistant" and messages[i].get("tool_calls"):
+            start = i
+            j = i + 1
+            while j < len(messages) and messages[j].get("role") == "tool":
+                j += 1
+            exchanges.append((start, j - 1))
+            i = j
+        else:
+            i += 1
+    return exchanges
+
+
+def _render_exchange_for_summary(messages: list[dict]) -> str:
+    """Format a slice of the message list into a short readable string for summarisation."""
+    lines: list[str] = []
+    for msg in messages:
+        role = msg.get("role")
+        if role == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                name = fn.get("name", "?")
+                try:
+                    args = json.loads(fn.get("arguments", "{}"))
+                    args_str = json.dumps(args)[:200]
+                except Exception:
+                    args_str = str(fn.get("arguments", ""))[:200]
+                lines.append(f"→ tool call: {name}({args_str})")
+        elif role == "tool":
+            content = msg.get("content", "")
+            try:
+                data = json.loads(content) if isinstance(content, str) else {}
+                success = data.get("success", True)
+                result_parts = ["ok" if success else "failed"]
+                for k, v in data.items():
+                    if k not in ("success", "_note"):
+                        result_parts.append(f"{k}={str(v)[:80]}")
+                lines.append(f"  ← result: {', '.join(result_parts[:5])}")
+            except Exception:
+                lines.append(f"  ← result: {str(content)[:200]}")
+        elif role == "user":
+            lines.append(f"[user context: {str(msg.get('content', ''))[:200]}]")
+    return "\n".join(lines)
+
+
+async def _compact_if_needed(
+    messages: list[dict],
+    *,
+    tokens_in: int,
+    model_used: str,
+    inference_router: Any,
+    component: str,
+    task_id: str | None,
+    keep_recent: int,
+) -> None:
+    """LLM-summarise old exchanges when token usage exceeds 40% of the context window.
+
+    Keeps [0] system, [1] user-task, and the last `keep_recent` tool exchanges
+    verbatim. Everything in between is replaced with a single summarised block.
+    Falls back to truncation-only if the summarisation call fails.
+    """
+    context_window = _context_window_for(model_used)
+    if tokens_in < context_window * _COMPACTION_THRESHOLD:
+        # Still well within budget — just do the lightweight truncation.
+        _compact_history(messages, keep_recent=keep_recent)
+        return
+
+    exchanges = _exchange_boundaries(messages)
+    if len(exchanges) <= keep_recent:
+        # Not enough history to make summarisation worthwhile.
+        _compact_history(messages, keep_recent=keep_recent)
+        return
+
+    # Split: summarise everything before the last `keep_recent` exchanges.
+    first_kept = exchanges[-keep_recent][0]
+    to_summarise = messages[2:first_kept]  # exclude system(0) + user-task(1)
+
+    if not to_summarise:
+        return
+
+    history_text = _render_exchange_for_summary(to_summarise)
+    prompt = (
+        "You are summarising intermediate steps of an ongoing AI agent task.\n"
+        "Condense the following tool calls and results into a concise bullet-point summary.\n"
+        "Preserve: what was accomplished, key facts discovered, and any important data values.\n"
+        "Omit: raw file contents, verbose outputs, redundant retries.\n"
+        "Max 350 words.\n\n"
+        f"<history>\n{history_text}\n</history>"
+    )
+
+    summary: str
+    try:
+        resp = await inference_router.complete(
+            CompletionRequest(
+                prompt=prompt,
+                priority=PoolPriority.LOW,
+                component=f"{component}:compact",
+                task_id=task_id,
+                max_tokens=512,
+            )
+        )
+        summary = resp.text.strip()
+    except Exception:
+        # Summarisation failed — fall back to the character-truncation path.
+        _compact_history(messages, keep_recent=keep_recent)
+        return
+
+    # Replace the old exchanges with a pair of messages that preserve the
+    # user/assistant turn structure the API requires.
+    messages[2:first_kept] = [
+        {
+            "role": "user",
+            "content": f"## Earlier context (auto-compacted)\n{summary}",
+        },
+        {
+            "role": "assistant",
+            "content": "Understood — I have the compacted context.",
+        },
+    ]
 
 
 def _sync_hot_loaded_tools(deps: Any, agent_name: str, tool_map: dict[str, Tool]) -> None:

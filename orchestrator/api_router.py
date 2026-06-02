@@ -234,6 +234,25 @@ async def stream_task_events(task_id: str) -> StreamingResponse:
     )
 
 
+@router.get("/stream")
+async def stream_global_events() -> StreamingResponse:
+    """Global SSE stream — all events across all tasks.
+
+    Used by the TUI to receive a single persistent connection for every task
+    without needing to subscribe per task_id.
+    """
+
+    async def _global_generator() -> AsyncIterator[str]:
+        async for chunk in _streams().subscribe_global():
+            yield chunk
+
+    return StreamingResponse(
+        _global_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── Ledger endpoints ──────────────────────────────────────────────────────────
 
 _LEDGER_EXCLUDE = {"agent_output", "tools_used"}

@@ -40,31 +40,67 @@ _SKIPPED_SOURCES = {LedgerSource.SYSTEM, LedgerSource.INFERENCE_ROUTER}
 _SKIPPED_STATUSES = {LedgerStatus.FAILED}
 
 _EXTRACTION_PROMPT = """\
-You are the extraction pipeline for a personal AI operating system.
+You are the memory extraction pipeline for a personal AI operating system.
 
-Below is a new event from the system's audit log:
+A new event from the system audit log:
 
 Source: {source}
 Action: {action}
 Input: {input}
 Output: {output}
 
-Your job: decide if this event reveals something NEW, MEANINGFUL, and DURABLE about \
-the user — a preference, habit, goal, constraint, or decision pattern worth remembering.
+Decide if this event reveals something NEW, MEANINGFUL, and DURABLE about the user.
+Durable means it will still be true or useful weeks from now.
 
-If yes, respond with JSON in exactly this format:
-{{"extract": true, "document": "<public|judgement_rules|north_stars>", \
-"delta": "<one concise line>"}}
+If yes, respond with JSON:
+{{"extract": true, "document": "<public|judgement_rules|north_stars>", "delta": "<fact>"}}
 
 If no, respond with:
 {{"extract": false}}
 
-Rules:
-- "public" for general non-sensitive facts (schedule patterns, preferences, career details).
-- "judgement_rules" for how the user makes decisions (approvals, rejections, thresholds).
-- "north_stars" for goals across time horizons.
-- Never extract internal system events, error messages, or transient state.
-- Be conservative: when in doubt, respond with {{"extract": false}}.
+Document rules:
+- "public": stable facts — name, role, schedule patterns, preferences, tools they use, people they work with.
+- "judgement_rules": how the user decides — what they approve/reject, thresholds, priorities, communication style.
+- "north_stars": goals with time horizons — career, projects, personal growth, this week's focus.
+
+Fact format:
+- One sentence, present tense, third-person neutral ("User prefers X", "User works at Y").
+- Include specifics: names, numbers, dates when available.
+- Never extract: error messages, transient state, system internals, one-off tasks with no lasting signal.
+
+Be conservative — extract only when clearly useful for future tasks.
+"""
+
+_DEDUP_PROMPT = """\
+You are checking whether a new memory fact is already captured in an existing document.
+
+Existing document (last 2000 chars):
+---
+{existing}
+---
+
+New fact to add:
+"{delta}"
+
+Is the core information in the new fact ALREADY present in the document (even if worded differently)?
+Reply with JSON only: {{"duplicate": true}} or {{"duplicate": false}}
+"""
+
+_MAX_DOCUMENT_CHARS = 8_000   # trim when a context doc exceeds this
+_TRIM_TARGET_CHARS  = 5_000   # target size after trimming
+
+_TRIM_PROMPT = """\
+The following personal context document has grown too long. Condense it by:
+1. Merging duplicate or near-duplicate facts into one line.
+2. Removing facts that are clearly outdated or no longer relevant.
+3. Keeping every distinct fact that is still likely to be useful.
+
+Return ONLY the condensed document text, no explanation.
+
+Document:
+---
+{content}
+---
 """
 
 
@@ -180,8 +216,8 @@ class ExtractionPipeline:
         prompt = _EXTRACTION_PROMPT.format(
             source=entry.source.value,
             action=entry.action or "",
-            input=entry.input or "",
-            output=entry.output or "",
+            input=(entry.input or "")[:1000],
+            output=(entry.output or "")[:2000],
         )
 
         response = await self._inference_router.complete(
@@ -208,7 +244,15 @@ class ExtractionPipeline:
             return False
 
         doc = _DOCUMENT_MAP[doc_key]
+
+        # Deduplication: skip if the fact is already captured in the document.
+        if await self._is_duplicate(doc, delta, entry.task_id):
+            return False
+
         await self._context_store.append(doc, delta)
+
+        # Trim document if it has grown too large.
+        await self._maybe_trim(doc, entry.task_id)
 
         await self._ledger.write(LedgerEntry(
             id=generate_id(),
@@ -220,6 +264,70 @@ class ExtractionPipeline:
             status=LedgerStatus.COMPLETED,
         ))
         return True
+
+    async def _is_duplicate(
+        self, doc: "ContextDocument", delta: str, task_id: str | None
+    ) -> bool:
+        """Return True if delta is already captured in the document."""
+        from context.models import ContextDocument
+        try:
+            existing = await self._context_store.read(doc)
+        except Exception:
+            return False
+        if not existing or len(existing) < 20:
+            return False
+
+        # Fast path: literal substring match (case-insensitive key phrase).
+        key_words = {w.lower() for w in delta.split() if len(w) > 4}
+        existing_lower = existing.lower()
+        if sum(1 for w in key_words if w in existing_lower) >= max(2, len(key_words) // 2):
+            # Enough overlap — ask the LLM to confirm.
+            prompt = _DEDUP_PROMPT.format(existing=existing[-2000:], delta=delta)
+            try:
+                resp = await self._inference_router.complete(
+                    CompletionRequest(
+                        prompt=prompt,
+                        priority=PoolPriority.LOW,
+                        component="extraction_pipeline:dedup",
+                        task_id=task_id,
+                        json_mode=True,
+                        max_tokens=20,
+                    )
+                )
+                return bool(json.loads(resp.text.strip()).get("duplicate", False))
+            except Exception:
+                return False
+        return False
+
+    async def _maybe_trim(self, doc: "ContextDocument", task_id: str | None) -> None:
+        """Summarise and rewrite the document if it exceeds the size cap."""
+        try:
+            existing = await self._context_store.read(doc)
+        except Exception:
+            return
+        if not existing or len(existing) <= _MAX_DOCUMENT_CHARS:
+            return
+
+        prompt = _TRIM_PROMPT.format(content=existing)
+        try:
+            resp = await self._inference_router.complete(
+                CompletionRequest(
+                    prompt=prompt,
+                    priority=PoolPriority.LOW,
+                    component="extraction_pipeline:trim",
+                    task_id=task_id,
+                    max_tokens=1024,
+                )
+            )
+            trimmed = resp.text.strip()
+            if trimmed and len(trimmed) < len(existing):
+                await self._context_store.write(doc, trimmed)
+                logger.info(
+                    "ExtractionPipeline: trimmed %s from %d → %d chars",
+                    doc.value, len(existing), len(trimmed),
+                )
+        except Exception:
+            logger.warning("ExtractionPipeline: trim failed for %s", doc.value)
 
     def _load_watermark(self) -> datetime.datetime | None:
         if not self._watermark_path.exists():

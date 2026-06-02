@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import os
-import readline  # noqa: F401 — enables arrow-key/history editing in input()
 import shutil
 import socket
 import subprocess
@@ -48,54 +47,68 @@ from rich.text import Text
 _console = Console(force_terminal=sys.stdout.isatty())
 
 
-def _setup_readline() -> None:
-    """Configure readline key bindings for comfortable terminal editing."""
-    try:
-        using_libedit = "libedit" in (getattr(readline, "__doc__", "") or "")
-        if using_libedit:
-            readline.parse_and_bind("bind -e")
-            # libedit uses ^[ for ESC (not \e) and different function names.
-            # Bind every common sequence so it works regardless of terminal app.
-            for seq, fn in [
-                ("^[b",      "ed-prev-word"),   # ESC b  — Terminal.app, VS Code
-                ("^[f",      "em-next-word"),   # ESC f
-                ("^[[1;3D",  "ed-prev-word"),   # opt+left  iTerm2
-                ("^[[1;3C",  "em-next-word"),   # opt+right iTerm2
-                ("^[[3D",    "ed-prev-word"),   # opt+left  some terminals
-                ("^[[3C",    "em-next-word"),   # opt+right some terminals
-                ("^[^[[D",   "ed-prev-word"),   # opt+left  VS Code
-                ("^[^[[C",   "em-next-word"),   # opt+right VS Code
-            ]:
-                try:
-                    readline.parse_and_bind(f'bind "{seq}" {fn}')
-                except Exception:
-                    pass
-        else:
-            for binding in [
-                r'"\e[1;3D": backward-word',   # opt+left  iTerm2
-                r'"\e[1;3C": forward-word',    # opt+right iTerm2
-                r'"\eb": backward-word',       # ESC b
-                r'"\ef": forward-word',        # ESC f
-            ]:
-                try:
-                    readline.parse_and_bind(binding)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
 from utils.security import load_secret
 
 app = typer.Typer(
     name="north",
     help="north — Personal Life Operating System CLI",
-    no_args_is_help=True,
+    no_args_is_help=False,
     add_completion=False,
+    invoke_without_command=True,
 )
 
 _BASE_URL = "http://127.0.0.1:8000"
 _TIMEOUT = 30.0
+
+
+@app.callback()
+def _root(ctx: typer.Context) -> None:
+    """north — Personal Life Operating System.
+
+    Run without a subcommand to open the interactive TUI.
+    """
+    if ctx.invoked_subcommand is None:
+        # No subcommand — boot the server if needed, then open the TUI.
+        _launch_tui()
+
+
+def _launch_tui(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    workspace: str | None = None,
+) -> None:
+    """Auto-start the server if not running, then launch the TUI."""
+    if not _port_in_use(host, port) or not _is_north_server(host, port):
+        typer.secho("north server is not running — starting it now…", fg=typer.colors.BRIGHT_BLACK)
+        # Re-invoke `north start --no-chat` to start the server only, then TUI below.
+        from config.settings import settings
+        from utils.security import load_secret
+
+        settings.north_home.mkdir(parents=True, exist_ok=True)
+        load_secret()
+
+        log_path = settings.north_home / "north.log"
+        pid_path = settings.north_home / "north.pid"
+        resolved_workspace = workspace or str(Path.home())
+
+        cmd = [
+            sys.executable, "-m", "uvicorn", "orchestrator.app:app",
+            "--host", host, "--port", str(port), "--log-level", "info",
+        ]
+        server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
+        log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
+        proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
+        pid_path.write_text(str(proc.pid), encoding="utf-8")
+        _wait_for_server(host, port)
+        workspace = resolved_workspace
+
+    base_url = f"http://{host}:{port}"
+    headers = _headers()
+    resolved_workspace = workspace or str(_find_git_root(Path.cwd()))
+
+    import asyncio
+    from cli.tui import run as _tui_run
+    asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace))
 
 
 def _headers() -> dict[str, str]:
@@ -176,107 +189,6 @@ def list_tasks() -> None:
 
 
 # ── chat ─────────────────────────────────────────────────────────────────────
-
-@app.command("chat")
-def chat(
-    workspace: str | None = typer.Option(
-        None, "--workspace", "-w",
-        help="Root directory agents can read/write. Defaults to git root of current directory.",
-    ),
-) -> None:
-    """Interactive chat with north — live pipeline steps and markdown responses."""
-    resolved = workspace or str(_find_git_root(Path.cwd()))
-    _chat_loop(workspace=resolved)
-
-
-def _strip_history_prefix(prompt: str) -> str:
-    """Extract the raw user message from a prompt that may contain injected history."""
-    marker = "[Current message]\n"
-    idx = prompt.find(marker)
-    return prompt[idx + len(marker):] if idx != -1 else prompt
-
-
-def _load_history_from_ledger(limit: int = 20) -> list[tuple[str, str]]:
-    """Reconstruct recent conversation turns from the ledger."""
-    try:
-        resp = _api("GET", "/orchestrator/ledger?limit=300")
-        entries = resp.json()
-    except Exception:
-        return []
-
-    tasks: dict[str, dict] = {}
-    for e in entries:
-        tid = e.get("task_id")
-        if not tid:
-            continue
-        if tid not in tasks:
-            tasks[tid] = {"user": None, "assistant": None, "ts": ""}
-        action = e.get("action", "")
-        if action == "task_received" and e.get("input"):
-            tasks[tid]["user"] = _strip_history_prefix(e["input"])
-            tasks[tid]["ts"] = e.get("timestamp", "")
-        elif action == "agent_completed" and e.get("output"):
-            # Last agent's output wins if multiple agents ran
-            tasks[tid]["assistant"] = e["output"]
-
-    pairs = [
-        (t["user"], t["assistant"])
-        for t in sorted(tasks.values(), key=lambda x: x["ts"])
-        if t["user"] and t["assistant"]
-    ]
-    return pairs[-limit:]
-
-
-def _inject_history(prompt: str, history: list[tuple[str, str]]) -> str:
-    """Prepend the last N conversation turns so the agent keeps context."""
-    if not history:
-        return prompt
-    turns = "\n".join(f"User: {u}\nAssistant: {a}" for u, a in history[-5:])
-    return f"[Conversation so far]\n{turns}\n\n[Current message]\n{prompt}"
-
-
-def _chat_loop(workspace: str | None = None) -> None:
-    """Inner chat REPL — called by both `chat` command and `start` command."""
-    _setup_readline()
-    subtitle = f"workspace: {workspace}" if workspace else "Type your message and press Enter. Ctrl+C or 'exit' to quit."
-    _console.print(
-        Panel(
-            Text(subtitle, style="dim"),
-            title="[bold]★ north[/bold]",
-            border_style="bright_black",
-        )
-    )
-    # \001/\002 wrap non-printing ANSI bytes so readline measures prompt width correctly.
-    # Without them Option+Left overshoots and eats the ❯ character.
-    _STRATEGY_COLORS = {"eco": "\x1b[1;32m", "cruise": "\x1b[1;36m", "sport": "\x1b[1;33m"}
-
-    def _chat_prompt() -> str:
-        from config.settings import settings as _settings
-        from config.strategy import NorthSettings as _NS
-        try:
-            mode = _NS(_settings.north_home / "settings.json").strategy.value
-        except Exception:
-            mode = "cruise"
-        color = _STRATEGY_COLORS.get(mode, "\x1b[1;36m")
-        return f"\n\001{color}\002[{mode}] ❯ \001\x1b[0m\002"
-
-    history = _load_history_from_ledger(limit=20)
-    while True:
-        try:
-            prompt = input(_chat_prompt()).strip()
-        except (KeyboardInterrupt, EOFError):
-            _console.print("\n[dim]Goodbye.[/dim]")
-            break
-        if not prompt or prompt.lower() in ("exit", "quit", "bye"):
-            _console.print("[dim]Goodbye.[/dim]")
-            break
-        full_prompt = _inject_history(prompt, history)
-        output = _run_task(full_prompt, workspace=workspace)
-        if output and output != "Task completed.":
-            history.append((prompt, output))
-            if len(history) > 20:
-                history = history[-20:]
-
 
 # ── shared task runner ────────────────────────────────────────────────────────
 
@@ -841,12 +753,55 @@ def create_agent(
         encoding="utf-8",
     )
 
+    # Update prompts/planner.md so the new domain is routable.
+    planner_updated = _update_planner_routing(
+        domain=domain,
+        description=description,
+        output_dir=output_dir,
+    )
+
     typer.secho(f"\n✓ Agent scaffold created at {agent_dir}", fg=typer.colors.GREEN)
     typer.echo(f"  {agent_dir}/agent.py")
     typer.echo(f"  {agent_dir}/config.yaml")
     typer.echo(f"  {agent_dir}/tools.yaml")
     typer.echo(f"  {agent_dir}/prompts/system.md")
+    if planner_updated:
+        typer.echo(f"  prompts/planner.md  ← domain '{domain}' added to routing table")
+    else:
+        typer.secho(
+            "  Note: could not find prompts/planner.md — add the domain row manually.",
+            fg=typer.colors.YELLOW,
+        )
     typer.echo("\nRestart north to load the new agent.")
+
+
+def _update_planner_routing(domain: str, description: str, output_dir: Path) -> bool:
+    """Insert a new domain row into prompts/planner.md routing table.
+
+    Walks up from output_dir to find the project root (has prompts/planner.md).
+    Returns True if the file was found and updated (or already had the domain).
+    """
+    planner: Path | None = None
+    for candidate in [output_dir, *output_dir.parents]:
+        p = candidate / "prompts" / "planner.md"
+        if p.exists():
+            planner = p
+            break
+
+    if planner is None:
+        return False
+
+    content = planner.read_text(encoding="utf-8")
+    marker = "| `general` |"
+    if f"| `{domain}`" in content:
+        return True  # already present
+
+    # Summarise description to a short table entry (max 60 chars).
+    summary = description[:60].rstrip(".")
+    new_row = f"| `{domain}` | {summary} |\n"
+    content = content.replace(marker, new_row + marker, 1)
+    planner.write_text(content, encoding="utf-8")
+    return True
 
 
 @agent_app.command("run")
@@ -1298,7 +1253,7 @@ def start(
         _sync_docker_secret(compose_file)
 
         if not no_chat:
-            _chat_loop(workspace=resolved_workspace)
+            _launch_tui(host="127.0.0.1", port=port, workspace=resolved_workspace)
         return
 
     # ── Local uvicorn launch ──────────────────────────────────────────────
@@ -1318,7 +1273,7 @@ def start(
             typer.secho(f"north is already running on port {port}.", fg=typer.colors.YELLOW)
             if not no_chat:
                 typer.echo("")
-                _chat_loop(workspace=resolved_workspace)
+                _launch_tui(host=host, port=port, workspace=resolved_workspace)
             return
         typer.secho(f"Port {port} is in use by another application.", fg=typer.colors.YELLOW)
         kill = typer.confirm("Kill the existing process and restart?", default=False)
@@ -1368,7 +1323,7 @@ def start(
         typer.secho(f"north running (pid {proc.pid}). Stop with: north stop", fg=typer.colors.GREEN)
         return
 
-    _chat_loop(workspace=resolved_workspace)
+    _launch_tui(host=host, port=port, workspace=resolved_workspace)
 
 
 @app.command("stop")

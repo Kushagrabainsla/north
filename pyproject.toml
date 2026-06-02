@@ -1,6 +1,6 @@
 [project]
 name = "north"
-version = "1.0.0"
+version = "1.2.3"
 description = "north — Personal Life Operating System."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -23,6 +23,7 @@ dependencies = [
     "numpy>=1.26.0; sys_platform == 'darwin'",
     "psutil>=5.9.0",
     "rich>=13.0.0",
+    "prompt-toolkit>=3.0.0",
     "ddgs>=1.0.0",
     "python-kasa>=0.7.0",
 ]

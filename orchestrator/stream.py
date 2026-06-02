@@ -32,6 +32,10 @@ class EventStreamManager:
     def __init__(self) -> None:
         # Maps task_id → list of subscriber queues
         self._subscribers: dict[str, list[asyncio.Queue[str | None]]] = {}
+        # Global subscribers receive every event (used by the TUI)
+        self._global_subs: list[asyncio.Queue[str | None]] = []
+        # True while at least one TUI session is subscribed to the global stream
+        self.tui_connected: bool = False
 
     async def emit(self, task_id: str, event: str, data: dict[str, Any]) -> None:
         """Publish an event to all subscribers for task_id.
@@ -60,6 +64,13 @@ class EventStreamManager:
                 logger.warning(
                     "SSE queue full for task %s — dropping event '%s'.", task_id, event
                 )
+
+        # Mirror every event to the global stream (TUI / watch clients).
+        for q in self._global_subs:
+            try:
+                q.put_nowait(message)
+            except asyncio.QueueFull:
+                logger.warning("Global SSE queue full — dropping event '%s'.", event)
 
     async def emit_done(self, task_id: str) -> None:
         """Signal the end of a task stream, causing subscribers to close.
@@ -111,3 +122,27 @@ class EventStreamManager:
                 pass
             if not self._subscribers.get(task_id):
                 self._subscribers.pop(task_id, None)
+
+    async def subscribe_global(self, max_queue_size: int = 512) -> AsyncIterator[str]:
+        """Async generator that yields all task events across the system.
+
+        Stays open indefinitely — callers disconnect by cancelling the task or
+        closing the HTTP connection.  The None sentinel is never sent here;
+        the stream closes only when the caller disconnects.
+        """
+        queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=max_queue_size)
+        self._global_subs.append(queue)
+        self.tui_connected = True
+        try:
+            while True:
+                message = await queue.get()
+                if message is None:
+                    return
+                yield message
+        finally:
+            try:
+                self._global_subs.remove(queue)
+            except ValueError:
+                pass
+            if not self._global_subs:
+                self.tui_connected = False

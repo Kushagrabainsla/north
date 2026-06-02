@@ -1,206 +1,193 @@
 # Changelog
 
-All notable changes to north are documented in this file.
+All notable changes to north are documented here.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.2.3] - 2026-06-01
+### Added
+- Full TUI: `north` (no subcommand) opens a single-terminal interface combining chat, live tool activity, and inline approval prompts — no separate windows needed
+- Global SSE stream (`GET /stream`) mirrors all task events to a single persistent connection used by the TUI
+- Terminal bell (`\a`) on task complete/fail — OS-independent notification
+- Inline approval rendering: approval panels appear above the input line; macOS notifications suppressed while TUI is connected (`TUIAwareNotifier`)
+- Input history saved to `~/.north/tui_history` with search support via `prompt_toolkit`
+- Auto-compacting context: agent loop tracks `tokens_in` per iteration and triggers LLM summarisation of old history when it hits 40% of the model's context window
+- Security gate on `create_tool`: `create_tool(action=create/update)` always triggers a `request_approval` call showing the full code before writing or hot-loading anything
+- `north agent create` now updates `prompts/planner.md` automatically — newly created agents are routable immediately without a manual planner edit
+- Memory deduplication: extraction pipeline checks for near-duplicate facts before appending using keyword overlap + LLM confirmation
+- Memory document trimming: context documents are condensed via LLM when they exceed 8,000 chars, targeting 5,000 chars
+- Improved extraction prompt: pulls structured, present-tense facts with specifics (names, numbers, dates)
 
-## [Unreleased]
+### Changed
+- `north start` launches the TUI after server boot instead of the old readline chat loop
+- Removed `north chat` command and the underlying `_chat_loop` / `_load_history_from_ledger` / `_inject_history` functions — TUI replaces them entirely
+
+## [1.2.2] - 2026-06-01
+### Changed
+- `create_tool` is now a last-resort tool — every agent's system prompt enforces a strict priority order: use existing tools first, extend a similar tool second, create a new tool only when nothing fits
+- Tool description updated to lead with "last-resort" intent so the LLM filters it out during normal tool selection
+
+## [1.2.1] - 2026-06-01
+### Added
+- `create_tool` universal tool: agents can create, update, read, and list north tools at runtime
+  - `action=list` — discover all tools (universal + specialized) with descriptions
+  - `action=read` — inspect a tool's full Python source by name
+  - `action=create` — scaffold a new tool; provide full `content` for an immediately usable implementation
+  - `action=update` — extend an existing tool while preserving current behaviour
+- Hot-reload: newly created/updated tools are dynamically imported and registered in the running server without a restart
+- In-task tool availability: agent loop refreshes the tool list from the registry at every iteration, so a tool created in step N is available for the LLM to call in step N+1 of the same task
+
+## [1.2.0] - 2026-05-31
+### Added
+- Two-tier tool architecture: `tools/universal/` (auto-given to all agents) and `tools/specialized/` (opt-in per agent via `tools.yaml`)
+- Auto-discovery: dropping a `.py` file into either folder is sufficient — no manual registration required
+- TP-Link Kasa smart bulb control (`kasa` tool): on/off/toggle/brightness/color/color_temp with named colours and colour temperatures
+- Home agent: routes smart home requests (lights, bulbs, Kasa devices) to the `kasa` tool
+- `north reset` command: wipes `~/.north` data (DB, tasks, logs) for a fresh start; `--all` removes everything including `.env`
+- `--docker` flag on `north start` / `north stop`: Docker is now opt-in; local mode is the default
+
+### Changed
+- Server launched as `subprocess.Popen` with stdout/stderr redirected to `~/.north/north.log` at the OS level — eliminates all log bleed into the terminal
+- `north agent create` generates `tools.yaml` with the new comment format and filters out universal tools
+- Planner prompt: added `home` domain row; `bash` blocked as `single_tool`
+- install script: Docker check changed from hard fail to informational
 
 ### Fixed
-- **`north tasks` returning stale entries** — `list_active_tasks` was querying the ledger for all entries with `status=pending`. Because every task starts with a `task_received` ledger entry stamped `pending`, every task ever submitted appeared in the list regardless of its current state. Fixed by reading from the in-memory `_active_tasks` dict instead, which only contains asyncio tasks that are genuinely in-flight. `GET /orchestrator/tasks` and `north tasks` now return an empty list when nothing is running.
+- Kasa device discovery inside Docker (UDP broadcast conflicts with uvicorn on macOS) — fixed by running `kasa discover` as a subprocess
+- Bash tool returned `success=False, error=None` when exit code was non-zero — now reports `stderr` or `exit code N`
 
-- **Workspace env var never propagated to the server** — `docker-compose.yml` was setting `NORTH_WORKSPACE` but pydantic-settings reads `NORTH_NORTH_WORKSPACE` (prefix `NORTH_` + field name `north_workspace`). `settings.north_workspace` was always empty in Docker, silently falling back to CWD-based resolution. Fixed by using the correct env var name throughout.
+## [1.1.9] - 2026-05-20
+### Fixed
+- Minor bug fixes and improvements
 
-- **`north context view` documented as a valid subcommand** — README referenced `north context view north_stars` but the actual subcommand is `north context show`. Corrected.
-
-- **Startup silent failure on missing API key** — if `NORTH_OPENROUTER_API_KEY` was not set, the server started cleanly and only failed on the first task with a cryptic inference error. The lifespan startup sequence now raises `RuntimeError` immediately with a clear message pointing to `~/.north/.env` and `https://openrouter.ai/keys`.
-
+## [1.1.8] - 2026-05-15
 ### Added
-- **`scripts/install.sh` — curl-based installer** — single-command install that works from a fresh machine:
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash
-  ```
-  The script checks for Docker, installs `uv` if missing, installs the `north` CLI from GitHub via `uv tool install git+…`, prompts for the OpenRouter API key, and writes it to `~/.north/.env`. Ends with `north start` as the only remaining step.
+- Structured JSON logging with task_id correlation IDs
+- Healthcheck endpoints
+- Settings caching
+- Startup task sweep: orphaned PENDING tasks marked FAILED on server start
+- CI workflow
 
-- **`cli/docker-compose.yml` — bundled compose file** — a compose file ships inside the `cli/` Python package (included via `pyproject.toml` package-data). It references `ghcr.io/kushagrabainsla/north:latest` rather than a local build context. On first `north start`, this file is copied to `~/.north/docker-compose.yml` so Docker mode works from any directory — no cloned repo required.
-
-- **`.github/workflows/docker-publish.yml` — GHCR publishing** — GitHub Actions workflow that builds and pushes the Docker image to `ghcr.io/kushagrabainsla/north` on every push to `main` and on version tags. Uses `docker/metadata-action` to tag `latest` on default branch and semver tags on releases. No secrets needed beyond the automatic `GITHUB_TOKEN`.
-
-- **`north task` workspace auto-detection** — `north task` now accepts `--workspace / -w` and resolves it from the git root of the current directory when omitted. `cd ~/myproject && north task "review my code"` scopes agents to `~/myproject` without any flags.
-
-- **`north chat` workspace auto-detection** — same as above; `north chat` now defaults to the git root of the calling directory rather than requiring an explicit `--workspace`.
+## [1.1.7] - 2026-05-10
+### Added
+- `format_output` method on all tools for human-readable tool results
+- LLM summarisation for episodic memory truncation (replaces hard truncation)
 
 ### Changed
-- **`north start` defaults workspace to `$HOME`** — previously resolved the git root of the current working directory as the default workspace. Changed to `Path.home()` so agents have broad access to the user's files regardless of which directory `north start` is run from.
+- ApprovalStore fully migrated to dependency injection
+- Extraction pipeline hardened and parallelised
+- Strategy regex tightened
 
-- **Docker volume mounts `$HOME:$HOME`** — the compose files (both root `docker-compose.yml` and the bundled `cli/docker-compose.yml`) now mount the host's home directory at the same path inside the container. `NORTH_NORTH_WORKSPACE` is set to `${HOME}` so `settings.north_workspace` is always populated correctly in Docker with zero configuration.
+## [1.1.6] - 2026-05-05
+### Added
+- Privacy rules enforcement
+- Per-task context store consolidated to single SQLite DB
+- Confidence gate on north star checks
+- Integration tests
 
-- **`_find_compose_file()` checks `~/.north/` as fallback** — after the walk-up search from CWD, the function now checks `~/.north/docker-compose.yml`. On first run the bundled `cli/docker-compose.yml` is copied there automatically, so `north start` works from any directory after initial install.
+### Changed
+- Task and delegation caps added
+- Episodic DB pruning
 
-- **`config/settings.py` reads `~/.north/.env` first** — `env_file` is now a list: `[~/.north/.env, .env]`. Installed users set their API key once in `~/.north/.env` via the install script; developers keep using the repo-level `.env` as before.
+## [1.1.5] - 2026-04-28
+### Changed
+- Stable release
 
-- **`pyproject.toml` package-data includes `*.yml` and `*.sh`** — required so `cli/docker-compose.yml` is included in the installed package and accessible at `Path(__file__).parent / "docker-compose.yml"` from `cli/main.py`.
+## [1.1.4] - 2026-04-20
+### Added
+- curl install script with GHCR image publishing
+- Zero-config workspace mount
 
 ### Fixed
-- **Web UI conversation context** — Fixed missing memory in the Web UI session. The Web UI now tracks `chatHistory` in Javascript and prepends the last 5 conversation turns to the prompt before posting, mirroring the CLI behavior.
-- **HTTP 400 fallback** — Added `400` status code to the `_RateLimited` fallback trigger set in `complete_with_tools()`. This allows gracefully advancing to the next model in the pool on OpenRouter models that do not support tool calling, rather than failing the task.
-- **Path sandboxing** — Strengthened the path resolution sandbox by expanding `~` to the home directory and explicitly blocking well-known credential directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`) from being read or written to by the agent when no workspace is configured.
-- **Confidence seeding** — Updated `_RELIABLE_TOOLS` to include `fetch_url`, `git`, and `patch_file`, ensuring these modern tools are seeded with the correct `0.80` prior reliability score on startup rather than defaulting to `0.50`.
-- **Conversation compaction** — Implemented an automatic history compaction mechanism in the agent's ReAct loop. Large tool outputs from older iterations are now compacted/truncated to save context window space and avoid hitting context limit errors.
-- **Stale build directory code** — Deleted the stale `build/` directory containing outdated versions of `ContextStore` to prevent IDE index pollution and search confusion.
+- Active tasks tracking bug
 
+## [1.1.3] - 2026-04-15
+### Fixed
+- Minor bug fixes
+
+## [1.1.2] - 2026-04-10
+### Fixed
+- Silent ledger write failures now surface agent errors to the user
+
+## [1.1.1] - 2026-04-05
 ### Added
-- **`tools.yaml` is now the authoritative tool graph** — `AgentRegistry.build_tool_graph()` scans each agent directory at startup, reads its `tools.yaml`, and constructs the `ToolRegistry` graph dynamically. The hardcoded `TOOL_GRAPH` constant in `tools/registry.py` is no longer used in production; adding or removing a tool from an agent now only requires editing that agent's `tools.yaml` and restarting. All domain agent `tools.yaml` files updated to include `schedule_task` (was missing from finance, health, job, university, general).
+- Web UI session memory
+- ReAct history compaction
+- HTTP 400 tool-call fallback
 
-- **Confidence feedback loop** — `AgenticLLMAgent` now calls `ConfidenceTracker.record_use(agent, tool, was_helpful)` after every tool call in the ReAct loop. `was_helpful` is derived from the `success` field of the tool's JSON result. This activates the previously dormant confidence-ordering feature: tools that consistently succeed move to the front of the list presented to the LLM on the next run.
+### Fixed
+- Credential path sandbox
+- Reliable tool confidence seeding
+- Stale build cleanup
 
-- **Multi-agent result synthesis** — `orchestrator/synthesizer.py` introduces `ResultSynthesizer`, which merges outputs from parallel agent runs into a single coherent markdown response using a cheap inference call (`PoolPriority.LOW`). The Orchestrator stores each agent's `result.output` in `TaskContextStore` (key `"output"`) and invokes the synthesizer after all parallel groups complete. A `task_synthesis` SSE event carries the merged output and the list of contributing agents. Synthesis is skipped when only one agent ran or when all agent outputs are empty. System prompt in `prompts/synthesizer.md`.
-
-- **Per-task cost aggregation** — `AgentResult` gains a `cost_usd: float` field. `AgenticLLMAgent` accumulates `CompletionResponse.cost_usd` across every iteration of the ReAct loop and returns the total in the result dict. The Orchestrator sums costs across all agents per task and emits the total as `cost_usd` in the `task_completed` SSE event, making spend visible to the UI and CLI without additional queries.
-
-- **`FileContextStore.search()`** — replaces the `NotImplementedError` with a working paragraph-level keyword search across all five context documents. Paragraphs are scored by the number of distinct non-stopword query words they contain and the top `max_results` (default 5) are returned, each labelled with their source document. No new dependencies; tokenisation and scoring are pure functions in `context/file_store.py`.
-
-- **Confidence score seeding** — `ConfidenceTracker.seed_defaults(graph, reliable_tools)` inserts prior scores at startup using `INSERT OR IGNORE`, so the system starts with informed priors (0.80 for filesystem/shell/web tools, 0.50 for API stubs) rather than a flat 0.50 for everything. Real usage data takes precedence automatically. Called once during the `lifespan` startup sequence.
-
-- **Confidence scores surfaced in agent prompts** — `Agent._load_tools()` now returns `list[tuple[Tool, float]]` (tool + score), computed once per run and threaded to `_execute()` and `_build_user_message()` without a second async call. The tool list in every agent's user message now includes `(reliability N%)` so the LLM can factor reliability into its tool selection decisions.
-
-- **`CostTracker` — DRY full-pipeline cost accounting** — `inference/cost_tracker.py` introduces `CostTracker`, an `InferenceRouter` decorator that intercepts every `complete()` call and accumulates `cost_usd` by `task_id`. A single `CostTracker` instance wraps the production `OpenRouterInferenceRouter` and is passed to all pipeline components (classifier, north-star checker, router, synthesizer, agents, extraction pipeline). The Orchestrator calls `cost_tracker.pop_task_cost(task_id)` instead of maintaining its own accumulator dict, making the total reflect **every** LLM call for the task — not just agent calls. Removes the `_task_costs` dict from the Orchestrator.
-
+## [1.1.0] - 2026-04-01
 ### Added
-- **Inference strategy (eco / cruise / sport)** — `config/strategy.py` introduces `StrategyMode` and `NorthSettings` (persisted to `~/.north/settings.json`). The `OpenRouterInferenceRouter` builds a model fallback chain at call time based on the active strategy: `eco` tries cheapest first, `sport` tries most capable first, `cruise` (default) maps `PoolPriority` to an appropriate starting tier then falls through adjacent tiers. Free models are always appended as the last resort. Strategy is changed via natural language ("switch to eco mode") or `POST /orchestrator/settings` and takes effect immediately with no restart.
+- Context keyword search
+- Confidence seeding with prompt surfacing
+- DRY full-pipeline CostTracker
 
-- **Strategy indicator in UI** — terminal prompt shows the active mode in colour (`[eco] ❯` green, `[cruise] ❯` cyan, `[sport] ❯` yellow); Web UI command bar shows a matching badge that refreshes after each task completes.
+## [1.0.9] - 2026-03-25
+### Added
+- Dynamic `tools.yaml` wiring
+- Confidence feedback loop
+- Multi-agent synthesis
+- Per-task cost aggregation
 
-- **Inline approval widget in Web UI** — when an agent emits `approval_required` mid-loop, an approval card appears inline inside the thinking bubble with the agent's message and action buttons. Clicking a button POSTs to `/orchestrator/approval/respond` and replaces the widget with a confirmation.
+## [1.0.8] - 2026-03-20
+### Fixed
+- Approval flow: asyncio import, resolve card on respond
+- North star conflict waits for user, emits `task_cancelled` on conflict reject
+- Clean CLI exit after approval
 
-- **Markdown rendering in chat** — north's responses in the Web UI are now rendered as formatted markdown (via `marked.js`) rather than plain text. Code blocks, headers, lists, and inline code all display correctly.
+## [1.0.7] - 2026-03-15
+### Added
+- Inference strategy (eco / cruise / sport) with UI indicator
+- User-defined cron schedules and `schedule_task` tool
+- One-shot jobs
+- Inline approval widget
+- Markdown chat rendering
 
-- **Persistent conversation history** — `north chat` loads the last 20 task/response pairs from the ledger at startup and injects them as conversation context so the agent remembers prior sessions.
+## [1.0.6] - 2026-03-10
+### Added
+- Inline approval widget
+- Persistent user cron schedules
+- Dynamic job queue UI
 
-- **User-defined cron schedules** — `jobs/cron_store.py` adds `UserCronStore`, backed by a `user_cron_entries` table in `~/.north/jobs.db`. The `CronScheduler` now merges built-in and user entries on each iteration (max 60 s delay for new entries to take effect). Managed via `POST/GET/DELETE /orchestrator/cron` or the Web UI Jobs page.
-
-- **One-shot scheduled jobs** — agents can schedule a task for a specific future datetime via the `schedule_task` tool (`run_at` param). Users can also create them from the Jobs page "+ Schedule" form or `POST /orchestrator/jobs`.
-
-- **`schedule_task` tool** — available to all domain agents (health, university, job, finance, general). Accepts `run_at` (one-shot) or `hour`/`minute`/`weekday` (recurring). Recurring entries are persisted via `UserCronStore`; one-shot tasks are enqueued directly into `jobs.db`.
-
-- **Jobs page redesign** — `/ui/jobs` now has two sections: "Recurring Schedules" (user cron entries with delete, "+ Add" form) and "One-Shot & Queue" (job table with "+ Schedule" form and status filters).
+## [1.0.5] - 2026-03-05
+### Added
+- Persistent memory via ledger
+- Real web search (DuckDuckGo)
+- readline word-jump shortcuts
+- 404 model fallback
 
 ### Changed
-- **`NorthStarChecker` uses `PoolPriority.MEDIUM`** (was `HIGH`) — the alignment check is a structured JSON classification task, not deep reasoning; fast/cheap models handle it reliably and the change avoids burning the reasoning pool on every consequential task.
+- ReAct format cleanup
 
-- **North star failure is non-fatal** — if inference is unavailable during the north star check, the orchestrator logs a warning, emits `north_star_aligned` (skip), and the task continues. Only an actual goal conflict stops execution.
-
-- **`CronScheduler.run()` no longer exits on empty entries** — previously returned immediately when `entries` was empty. Now loops with a 60 s sleep so user-added entries are picked up without a restart.
-
-- **File drag-and-drop** on two surfaces:
-  - *Context page drop zone* (`context_index.html`): drop a PDF, DOCX, TXT, or MD file onto the drop zone to inject it directly into the context store via `POST /orchestrator/context/add`. Visual feedback (border highlight, status message) on drag-over and after upload.
-  - *Command bar* (`dashboard.html`): drop a file onto the command bar while composing a task. The file is uploaded first via `POST /orchestrator/context/add`, then the task is submitted with the file name appended to the prompt. A dismissable file chip shows the attached filename.
-  - Drag-over state tracked with a depth counter (prevents false `dragleave` on child element entry). Click-to-browse also supported on the context drop zone.
-  - CSS additions in `web/static/css/main.css`: `.drop-zone`, `.drop-zone.drag-active`, `.command-bar.drag-active`, `.file-chip`, `.drop-zone__status`.
-
-- **Docker / container support:**
-  - `Dockerfile` — `python:3.12-slim` base; installs `uv`; installs north via `uv pip install --system -e .`; copies source; sets `NORTH_HOME=/data`; exposes 8000.
-  - `docker-compose.yml` — single `north` service; mounts `north_data` volume at `/data`; passes `NORTH_HOME`, `NORTH_SECRET`, `NORTH_OPENROUTER_API_KEY`, `NORTH_ENV` from the host environment; `restart: unless-stopped`; healthcheck polls `/docs`.
-  - `.dockerignore` — excludes `.venv/`, `__pycache__/`, test artifacts, `.env*`, and `.git/`.
-
-- **`north stop` CLI command** — `docker compose down` when Docker is available; otherwise kills the process listening on port 8000 via psutil.
-
-- **`NORTH_HOME` env var** in `config/settings.py` — `north_home` field now reads `os.environ.get("NORTH_HOME", "~/.north")` so the Docker volume mount (`/data`) takes effect without the doubled `NORTH_` pydantic-settings prefix.
-
-- **`NORTH_SECRET` env var** in `config/settings.py` — `north_secret` field reads `os.environ.get("NORTH_SECRET", "")`. The `secret` property prefers the env var over the `secret.key` file, so Docker deployments can pass the secret without a volume-mounted key file.
-
-- **`psutil>=5.9.0`** added to `[project.dependencies]` — cross-platform process/port management for `north start` conflict detection and `north stop`.
-
-### Changed
-- **`north start` uses Docker Compose by default** — if a `docker-compose.yml` is found in the CWD or any parent directory and Docker is available, `north start` calls `docker compose up --build`. The `--local` flag forces the old uvicorn path regardless. Falls back to uvicorn with a warning when Docker is unavailable.
-
-- **Cross-platform port conflict handling in `north start`** — replaced macOS-only `lsof -ti :8000 | xargs kill -9` with psutil: iterates `psutil.net_connections()`, finds the PID listening on the configured port, and kills it. No subprocess or platform-specific command.
-
-- **`TerminalNotifier` replaces `MacOSNotifier` as the default notifier** — `config/dependencies.py` now wires `TerminalNotifier()` in `build_production_dependencies()`. `MacOSNotifier` remains in `approval/macos.py` and can be re-wired manually on macOS. Removes the macOS-only constraint from the production dependency graph.
-
-- **`POST /context/add` accepts `Form` parameters** — removed the Pydantic `ContextAddRequest` body model; `text` and `url` are now `Form(None)` parameters. Fixes a FastAPI constraint where the presence of `UploadFile` forces multipart mode and makes a JSON body unparseable.
-
-- **`POST /task` accepts both form-encoded and JSON bodies** — the endpoint now reads `content-type` and parses `application/x-www-form-urlencoded` or `multipart/form-data` via `request.form()`, falling back to `request.json()`. Fixes HTMX form submissions which send `application/x-www-form-urlencoded` by default.
-
-- **`README.md` Section 9.1** — updated to note that `TerminalNotifier` (stdout/logs) is the default; `alerter` is optional and macOS-only.
-- **`README.md` Section 14** — added `Dockerfile`, `docker-compose.yml`, `.dockerignore` to the repository structure.
-- **`README.md` Section 16.10** — "macOS Notifications" renamed to "Notifications"; documents `TerminalNotifier` as default and `alerter` as optional upgrade on macOS.
-- **`README.md` Section 16.11** — corrected env var names: `NORTH_HOME` and `NORTH_SECRET` (not doubled `NORTH_NORTH_*`); added `NORTH_SECRET` entry.
-- **`README.md` Section 16.12** — restructured Getting Started into Path A (Docker, recommended for server/headless) and Path B (local macOS install); added `north stop` command; `--local` flag documented.
-- **`README.md` Section 16.13** — added `psutil>=5.9.0` to the complete dependency list.
-
+## [1.0.4] - 2026-03-01
 ### Added
-- `CHANGELOG.md`, following the Keep a Changelog convention. Every change to north now appends an entry here (see `docs/CODING_STYLE.md` Section 23.5).
-- `pyproject.toml` with project metadata and `pytest` + `pytest-asyncio` configuration matching the test conventions in `docs/CODING_STYLE.md` Section 18.
-- `tests/` scaffolding: `tests/conftest.py`, `tests/unit/`, `tests/integration/`, and a smoke test (`tests/unit/test_smoke.py`) that passes from a fresh clone.
-- `docs/CODING_STYLE.md` Section 23 "Working with Claude Code", codifying five collaboration rules: ask when unsure (23.1), confirm before substantive changes with a similar-pattern batching exception (23.2), tech decisions follow research → reason → propose → apply (23.3), tests are co-authored with code (23.4), every change updates this changelog (23.5).
-- `docs/CODING_STYLE.md` Section 18.8, a cross-reference pointing the testing rules forward to Section 23.4.
-- `README.md` Section 15 new entry "Offline Transcription Fallback" — names the reliability gap introduced by Decision 3 (cloud-only STT) without committing to a fix.
-- `CONTRIBUTING.md` at the repo root — covers the three flows required by `docs/CODING_STYLE.md` Section 21.3 (adding agents, adding tools, running tests) and restates the process rules from Section 23.
-- `CODE_OF_CONDUCT.md` at the repo root — Contributor Covenant v2.1 reference with a project-specific enforcement note.
-- `SECURITY.md` at the repo root — vulnerability reporting channel and the in/out-of-scope list (X-North-Secret bypass, callback forgery, prompt-injection exfiltration, ledger tampering).
-- `.env.example` at the repo root — required + optional env vars under the `NORTH_` prefix, documenting the canonical names that `pydantic-settings` will read.
-- `docs/CODING_STYLE.md` Section 23.6 "New Standards Land in This File" — when the user states a rule of practice, capture it tersely in the right section before acting; the file must stay lean.
-- `docs/CODING_STYLE.md` tightened across Sections 2 (SOLID), 3 (Design Patterns — now a table), 4 (Clean Code Rules), 5 (DRY), 6 (Plug and Play), and 23 (Working with Claude Code). File went 2054 → 1562 lines (~24% reduction). Redundant "wrong vs correct" example pairs collapsed to single rules; multi-paragraph prose tightened to single paragraphs. All reference content preserved: interface map (6.1), full Dependencies dataclass + builder pair (6.3), TOOL_GRAPH (6.5), LedgerSource/LedgerStatus enums (5.5), module layout (7.3), Settings class (17.1), .gitignore (20.4), .env.example (21.2).
-- `README.md` Section 14 `ledger/` entry brought into line with the more detailed `docs/CODING_STYLE.md` Section 7.3 layout. Old entry listed `ledger.py` and `schema.py`; new entry reflects what actually shipped: `__init__.py`, `base.py`, `models.py`, `exceptions.py`, `sqlite_writer.py`.
-- `pyproject.toml` test config now sets `pythonpath = ["."]` so pytest can import the project's top-level modules (`ledger`, `utils`, `exceptions`, `context`) without a package install. Required because the project deliberately ships modules at the repo root rather than under a `src/` or `north/` package directory.
-- `README.md` Section 14 `context/` entry expanded to match the actual layout: `__init__.py`, `base.py` (ABC), `models.py` (ContextDocument enum), `exceptions.py`, `file_store.py` (concrete). Previously listed a single `store.py` that combined the ABC and the concrete; the split matches `ledger/`'s pattern and the rest of `docs/CODING_STYLE.md` Section 6.1.
-- `docs/CODING_STYLE.md` Section 6.1 interface map updated: `context/store.py` → `context/base.py` to match the new layout.
+- All agents converted to agentic ReAct loop
+- Code agent and general agent
+- Coding tools (bash, patch_file, git)
+- Workspace support
 
+## [1.0.3] - 2026-02-25
 ### Added
-- First runnable module: **`ledger/`**, the append-only audit trail (README Section 4).
-  - `ledger/models.py` — `LedgerEntry` (Pydantic model), `LedgerSource` enum (9 values matching README Section 4.3), `LedgerStatus` enum (7 values matching the schema in 4.2).
-  - `ledger/exceptions.py` — `LedgerError`, `LedgerWriteError`, `LedgerReadError`, all inheriting from `exceptions.NorthError`.
-  - `ledger/base.py` — `LedgerWriter` ABC with `write`, `get`, `query`; `LedgerFilters` dataclass for query parameters.
-  - `ledger/sqlite_writer.py` — `SQLiteLedgerWriter`, the concrete implementation. Schema initialized on construction; `asyncio.to_thread` wraps blocking I/O so callers stay non-blocking on the event loop (docs/CODING_STYLE.md Section 14.1); `sqlite3.Error` is caught at the boundary and re-raised as a north exception (Section 13.4).
-- `exceptions.py` at the repo root — `NorthError` base class. All module-specific exceptions inherit from it.
-- `utils/` module: `utils/db.py:open_db_connection()` is the single SQLite connection helper used by every `*.db` file under `~/.north/` (docs/CODING_STYLE.md Section 11.1).
-- Tests under `tests/unit/ledger/`: 14 unit tests covering enum coverage against the spec, Pydantic field validation, write→get round-trip across all 15 ledger columns, every supported `LedgerFilters` field (task_id, agent, source, since), descending-timestamp ordering, limit honoring, and duplicate-id rejection as `LedgerWriteError`. Tests added in the same change as the module (docs/CODING_STYLE.md Section 23.4).
-- `pydantic>=2.0.0` added to `[project.dependencies]`. Already approved in README Section 16.13 — installed now that real code needs it.
-- Second runnable module: **`context/`**, the five-document context layer (README Section 5).
-  - `context/models.py` — `ContextDocument` enum with the five valid document names (`public.md`, `private.md`, `privacy_rules.md`, `judgement_rules.md`, `north_stars.md`).
-  - `context/exceptions.py` — `ContextError`, `ContextReadError`, `ContextWriteError`, all inheriting from `exceptions.NorthError`.
-  - `context/base.py` — `ContextStore` ABC with async `read`, `write`, `append`; default `search()` raises `NotImplementedError` (the v1 seam for a future `DBContextStore`).
-  - `context/file_store.py` — `FileContextStore`, the v1 concrete. Reads return `""` for documents that have never been written. `append()` separates entries with a single `\n` and creates the document if missing. Base directory is created on construction.
-- Tests under `tests/unit/context/`: 11 unit tests covering enum coverage against the spec, missing-document reads, write/read round-trip, write overwrites, append separator behavior (between entries and on first write), independent storage per document, `search()` raising in v1, base-directory creation, and constructor idempotency over an existing directory with prior content.
-- Test packages: `tests/__init__.py`, `tests/unit/__init__.py`, `tests/unit/ledger/__init__.py`, `tests/unit/context/__init__.py`. Required so pytest can collect tests with the same basename (`test_models.py`) under different subdirectories.
-- Third runnable module: **`jobs/`**, the persistent job queue and cron scheduler (README Section 11).
-  - `jobs/models.py` — `Job` (Pydantic), `JobType` enum (cron/event/async/retry), `JobStatus` enum (pending/running/completed/failed/cancelled), `JobPriority` IntEnum (HIGH=1, MEDIUM=2, LOW=3).
-  - `jobs/exceptions.py` — `JobError`, `JobNotFoundError`, `JobProcessingError`, all inheriting from `exceptions.NorthError`.
-  - `jobs/base.py` — `JobProcessor` ABC with `enqueue`, `get`, `claim_next`, `mark_completed`, `mark_failed` (with optional `retry_after`), `cancel`, `list_jobs`.
-  - `jobs/sqlite_processor.py` — `SQLiteJobProcessor`. `claim_next` runs inside `BEGIN IMMEDIATE` so two concurrent claimers can never pick the same job. Status transitions are explicit; `cancel` is a no-op if the job is already terminal.
-  - `jobs/scheduler.py` — asyncio-native cron implementation per Decision 4 (CHANGELOG above). `CronEntry` dataclass validates hour/minute/weekday on construction. `next_firing(entry, after)` and `next_due_entry(entries, after)` are pure functions, fully testable without time mocking. `CronScheduler.run()` is the loop: `next_due_entry → asyncio.sleep → processor.enqueue`.
-- `utils/ids.py` — `generate_id()` (32-char hex from UUID4) and `generate_task_id()` (`task_` prefix + 12 hex chars). Used by `jobs/scheduler.py` to mint Job IDs; will be used by `ledger/` and `orchestrator/` as those modules grow.
-- Tests under `tests/unit/jobs/` and `tests/unit/utils/`: 36 new tests covering enum/spec coverage, queue CRUD round-trip, atomic claim ordering by `(priority ASC, scheduled_at ASC)`, future-scheduled and retry_after skip behavior, completed/failed/cancelled state transitions, mark_failed-with-retry leaving the job pending and incrementing retry_count, cancel-is-no-op-on-terminal, list filtering and limit, CronEntry input validation, next_firing math across all daily and weekly cases (including the "strictly after" edge), next_due_entry earliest-pick, and the empty-entries short-circuit on `CronScheduler.run()`.
-- Test packages: `tests/unit/jobs/__init__.py`, `tests/unit/utils/__init__.py`.
-- Fourth runnable module: **`tools/`**, the tool layer (README Section 7).
-  - `tools/models.py` — `ToolInput` (params envelope), `ToolOutput` (`success: bool`, `data`, optional `error`), `ConfidenceScore` (one persisted (agent, tool) row).
-  - `tools/exceptions.py` — `ToolError`, `ToolNotFoundError`, `ToolExecutionError`, `ToolAuthError`.
-  - `tools/base.py` — `Tool` ABC (`name`, `description`, `async run`), `AuthenticatedTool` (adds `validate_credentials`), `CacheableTool` (adds `get_cached` / `set_cached`).
-  - `tools/confidence.py` — `ConfidenceTracker` over `tools.db`. Math per README 7.5: `DEFAULT_CONFIDENCE=0.5`, `CONFIDENCE_INCREASE=0.05`, `CONFIDENCE_DECREASE=0.03`, clamped to `[0.0, 1.0]`. `record_use` updates `confidence`, `uses_total`, `uses_helpful`, `last_updated` atomically. `scores_for_agent` returns `(tool_name, score)` pairs ordered by confidence descending. `inherit_from(new_agent, source_agent)` copies rows for the `similar_to` feature via `INSERT OR IGNORE` — idempotent and preserves existing rows.
-  - `tools/registry.py` — `TOOL_GRAPH` constant (canonical agent → tools mapping for the four v1 agents) and `ToolRegistry` class (`register`, `get`, `tools_for_agent`, `agent_names`, `all_tool_names`). Accepts a custom graph for tests.
-- Tests under `tests/unit/tools/`: 29 new tests covering ToolInput/ToolOutput/ConfidenceScore validation, ABC instantiation failure when abstract methods are missing (Tool, AuthenticatedTool, CacheableTool), confidence math (helpful increase, unhelpful decrease, cap at 1.0 over 50 calls, floor at 0.0 over 50 calls), counter increments, ordering of `scores_for_agent` (DESC), empty return for unseen agents, `inherit_from` copying rows and preserving existing target rows, persistence across `ConfidenceTracker` instances, `TOOL_GRAPH` covering the four v1 agents with cross-domain tools, `ToolRegistry.register`/`get` round-trip and `ToolNotFoundError` on miss, `tools_for_agent` filtering to only registered names, empty return for unknown agents, `agent_names`/`all_tool_names` over the graph, and custom-graph injection.
-- Test package: `tests/unit/tools/__init__.py`.
-- `docs/CODING_STYLE.md` Section 23.4 rewritten: "Tests Are Currently Deferred." New code lands without tests during the pre-MVP build-out phase. The pytest harness, Section 18 conventions, and the existing 92 tests stay in place for when the policy is lifted.
-- Fifth runnable module: **`inference/`**, the Inference Router (README Section 8).
-  - `inference/models.py` — `PoolPriority` enum (HIGH/MEDIUM/LOW, mapped to reasoning/fast_cheap/high_volume), `ModelPool`, `CompletionRequest`/`CompletionResponse`, `TranscriptionRequest`/`TranscriptionResponse`, `InferenceRecord`, `CostSummary`. `PRIORITY_TO_POOL` maps priorities to pool names so the router's selection is data-driven.
-  - `inference/exceptions.py` — `InferenceError`, `AllModelsRateLimitedError`, `PoolRefreshError`, `TranscriptionError`.
-  - `inference/base.py` — `InferenceRouter` ABC with `complete`, `transcribe`, `get_model`, `refresh_pools`, `current_pools`. Both completion and transcription land here per Decision 3 (single provider, single API key).
-  - `inference/fallback_pools.py` — hardcoded minimal pools used at startup when no `inference_cache.json` exists. Three pools, three models each. Plus `DEFAULT_TRANSCRIPTION_MODEL = "groq/whisper-large-v3"` (Decision 3).
-  - `inference/openrouter.py` — `OpenRouterInferenceRouter` concrete. Constructor loads pools in preference order: `inference_cache.json` → `FALLBACK_POOLS`. `refresh_pools()` fetches `/api/v1/models`, buckets by completion price (top third → reasoning, middle → fast_cheap, bottom → high_volume), and writes the snapshot back to the cache. `complete()` walks the priority's pool, retrying on `429` until exhausted (then raises `AllModelsRateLimitedError`). `transcribe()` posts base64-encoded audio to `/api/v1/audio/transcriptions` using the default Groq Whisper Large v3 (overridable per call). `aclose()` for clean shutdown via the FastAPI lifespan.
-  - `inference/__init__.py` — public exports.
-- `pyproject.toml` adds `httpx>=0.27.0` to `[project.dependencies]`. Already approved in README Section 16.13; installed now that `inference/` needs it.
-- No new tests this change. Per the new `docs/CODING_STYLE.md` Section 23.4 policy, code lands without tests during the pre-MVP phase.
+- CLI chat interface
+- General agent
+- Web chat thread
 
+### Fixed
+- Platform compatibility fixes
+
+## [1.0.2] - 2026-02-20
+### Added
+- Docker Compose containerisation
+- Drag-and-drop file upload
+- Cross-platform port management
+
+## [1.0.1] - 2026-02-15
 ### Changed
-- `.gitignore` expanded from a single `.envrc` entry to the full layout specified in `docs/CODING_STYLE.md` Section 20.4 (Python, tool caches, env files, OS, editor).
-- `README.md` Section 16.10: macOS notification dependency switched from `terminal-notifier` to `alerter` (Swift fork by vjeantet). `terminal-notifier` removed action button support and its own maintainer points users to `alerter` for that use case; the rest of north's Approval Layer flow (Section 9) is unchanged because the call shape is identical.
-- `README.md` Sections 10.1, 14, 16.8, 16.13: Web UI stack switched from React 18 + Vite + TypeScript + Tailwind to HTMX + Jinja2 (server-rendered, no npm, no build step). UI mounts at `localhost:8000/ui` instead of `localhost:3000`; SSE uses HTMX's SSE extension; approval cards are `<form hx-post>` elements; auth secret moves from in-memory React state to an HttpOnly session cookie. `web/src/` and `web/public/` directories become `web/templates/` and `web/static/`.
-- `README.md` Sections 3.1, 8.6 (new), 16.6, 16.13: voice transcription switched from local `faster-whisper` to OpenRouter's audio transcription endpoint (`POST /api/v1/audio/transcriptions`, announced May 2026). Reuses the existing `OPENROUTER_API_KEY` and the existing `httpx` client — no new dependency. Default transcription model is `groq/whisper-large-v3` (sub-second latency); selectable alternatives include `openai/whisper-1`, `openai/gpt-4o-transcribe`, `google/chirp-3`. Section 3.1's local-only stance is explicitly reversed; the Inference Router (Section 8) now owns transcription on the same fallback and cost-logging path as LLM calls. Capture hotkey changed from `Fn` (collides with macOS system Dictation) to a configurable default of `Right Option + Space`.
-- `README.md` Sections 11.3, 16.13: cron scheduling switched from `apscheduler` to a single in-house asyncio background task. `jobs/scheduler.py` holds `(hour, minute, weekday)` tuples and computes the next firing across all entries. Resolves the prior contradiction between Section 16.4 ("asyncio only, no extra concurrency frameworks") and the apscheduler dependency. `apscheduler` removed from the dependency list; no replacement library added.
-- `pyproject.toml` and `README.md` Section 16.11: migrated dev dependencies from the deprecated `[tool.uv].dev-dependencies` table to the standard `[dependency-groups].dev` table (PEP 735). uv was emitting a deprecation warning on every command with the old form.
-- `README.md` Section 15 "Mobile App" item annotated to note that the HTMX switch in Section 16.8 dropped the implementation cost from "separate codebase" to "template-level changes." Deferral stands.
-- Moved `CODING_STYLE.md` from the repo root to `docs/CODING_STYLE.md`. Keeps GitHub-auto-detected community files at root (README, LICENSE, CHANGELOG, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, .env.example), and gives future architecture/design docs a natural home. All references in README.md and CHANGELOG.md updated; test-file docstring references intentionally left for a later cleanup.
-- `README.md` env var naming brought into line with the `Settings` class declared in `docs/CODING_STYLE.md` Section 17.1 (which uses `env_prefix = "NORTH_"`). Four prose references and the env-block in Section 16.11 updated: `OPENROUTER_API_KEY` → `NORTH_OPENROUTER_API_KEY`, `NORTH_HOME` → `NORTH_NORTH_HOME`, `NORTH_ENV` → `NORTH_NORTH_ENV`. The doubled `NORTH_` prefix is intentional: it is what pydantic-settings actually reads from the environment given the current field names.
-- `README.md` Section 16.12 restructured into two paths: "For users" (the intended `curl -LsSf https://north.dev/install.sh | sh` flow that bootstraps `uv`, Python 3.12+, `alerter`, the `north` package via `uv tool install`, secret generation, API-key prompt, and an opt-in LaunchAgent for auto-start) and "For developers" (the existing `git clone` + `uv sync` flow). Installer script itself is not yet implemented; PyPI package name `north` and install host `north.dev` are placeholders pending availability checks.
+- Updated UI/UX
+- Router mechanism updated to use multiple channels
+
+## [1.0.0] - 2026-02-10
+### Added
+- Initial stable release

@@ -36,6 +36,7 @@ from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
+from approval.tui import TUIAwareNotifier
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from tools.registry import ToolRegistry
@@ -76,6 +77,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _step("building dependencies")
     deps = build_production_dependencies()
+    # Wrap the notifier so macOS / terminal alerts are suppressed while the
+    # TUI is connected — the global SSE stream handles approvals inline.
+    deps.notifier = TUIAwareNotifier(
+        stream_manager=deps.stream_manager,
+        fallback=deps.notifier,
+    )
 
     _step("building embedding index")
     embedding_index = EmbeddingIndex(
