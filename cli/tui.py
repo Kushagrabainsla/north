@@ -24,8 +24,6 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-_console = Console()
-
 _STRATEGY_COLORS = {
     "eco":    "ansigreen",
     "cruise": "ansicyan",
@@ -87,6 +85,11 @@ async def run(
     # approval_queue receives approval_required payloads from the listener.
     approval_queue: asyncio.Queue[dict] = asyncio.Queue()
 
+    # Placeholder — replaced with a patch_stdout-aware Console once the
+    # with patch_stdout() block is entered, so Rich writes go through
+    # prompt_toolkit's proxy and escape codes are rendered correctly.
+    console: Console = Console()
+
     # ── SSE event renderer ────────────────────────────────────────────────────
 
     async def _handle_event(event: str, data: dict) -> None:
@@ -94,19 +97,19 @@ async def run(
 
         if event == "agent_started":
             agent = data.get("agent", "")
-            _console.print(f"  [dim]◎ {agent} running…[/dim]")
+            console.print(f"  [dim]◎ {agent} running…[/dim]")
 
         elif event == "tool_called":
             tool = data.get("tool", "")
             params = data.get("params") or {}
-            _console.print(f"  [dim]· {tool}({_fmt_params(params)})[/dim]")
+            console.print(f"  [dim]· {tool}({_fmt_params(params)})[/dim]")
 
         elif event == "tool_result":
             tool = data.get("tool", "")
             success = data.get("success", True)
             style = "dim green" if success else "dim red"
             icon = "✓" if success else "✗"
-            _console.print(f"  [{style}]{icon} {tool}[/{style}]")
+            console.print(f"  [{style}]{icon} {tool}[/{style}]")
 
         elif event == "token":
             token_buffer[task_id] = token_buffer.get(task_id, "") + data.get("text", "")
@@ -133,7 +136,7 @@ async def run(
                 except Exception:
                     pass
             if output:
-                _console.print(
+                console.print(
                     Panel(
                         Markdown(output),
                         title="[bold green]north[/bold green]",
@@ -147,17 +150,17 @@ async def run(
             sys.stdout.flush()
             token_buffer.pop(task_id, None)
             error = data.get("error", "Task failed.")
-            _console.print(
+            console.print(
                 Panel(Text(error, style="red"), title="[red]north — failed[/red]", border_style="red")
             )
 
         elif event == "task_cancelled":
             token_buffer.pop(task_id, None)
-            _console.print("[dim]Task cancelled.[/dim]")
+            console.print("[dim]Task cancelled.[/dim]")
 
         elif event == "approval_required":
             await approval_queue.put(data)
-            _console.print(
+            console.print(
                 Panel(
                     Text(data.get("message", ""), style="white"),
                     title=f"[bold yellow]? {data.get('title', 'Approval Required')}[/bold yellow]",
@@ -167,8 +170,8 @@ async def run(
             )
             options = data.get("options") or ["Approve", "Reject"]
             for i, opt in enumerate(options, 1):
-                _console.print(f"  [{i}] {opt}")
-            _console.print("[dim]  — press Enter to respond —[/dim]")
+                console.print(f"  [{i}] {opt}")
+            console.print("[dim]  — press Enter to respond —[/dim]")
 
     # ── Global SSE listener ───────────────────────────────────────────────────
 
@@ -248,7 +251,9 @@ async def run(
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
-    _console.print(
+    # Welcome banner — printed before patch_stdout is active, so the default
+    # Console writes directly to the real terminal (no proxy in the way yet).
+    Console().print(
         Panel(
             Text("Type your message and press Enter · Ctrl+C or 'exit' to quit", style="dim"),
             title="[bold]★ north[/bold]",
@@ -259,6 +264,11 @@ async def run(
     listener = asyncio.create_task(_listen())
 
     with patch_stdout():
+        # Create a fresh Console now that patch_stdout has replaced sys.stdout
+        # with its proxy.  force_terminal=True ensures Rich always emits ANSI
+        # codes even though the proxy doesn't pass isatty() checks.
+        console = Console(force_terminal=True)
+
         while True:
             # Pending approval takes priority — capture the response first.
             if not approval_queue.empty():
@@ -268,17 +278,17 @@ async def run(
             try:
                 text = await session.prompt_async(_prompt_tokens)
             except KeyboardInterrupt:
-                _console.print("\n[dim]Ctrl+C — type 'exit' to quit.[/dim]")
+                console.print("\n[dim]Ctrl+C — type 'exit' to quit.[/dim]")
                 continue
             except EOFError:
-                _console.print("[dim]Goodbye.[/dim]")
+                console.print("[dim]Goodbye.[/dim]")
                 break
 
             text = text.strip()
             if not text:
                 continue
             if text.lower() in ("exit", "quit", "bye"):
-                _console.print("[dim]Goodbye.[/dim]")
+                console.print("[dim]Goodbye.[/dim]")
                 break
 
             # If an approval arrived while the user was typing, handle it first.
@@ -299,10 +309,10 @@ async def run(
                     )
                     resp.raise_for_status()
             except httpx.ConnectError:
-                _console.print("[red]Cannot reach north server. Is it running?[/red]")
+                console.print("[red]Cannot reach north server. Is it running?[/red]")
                 continue
             except Exception as exc:
-                _console.print(f"[red]Error submitting task: {exc}[/red]")
+                console.print(f"[red]Error submitting task: {exc}[/red]")
                 continue
 
     listener.cancel()
