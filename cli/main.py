@@ -49,6 +49,42 @@ _console = Console(force_terminal=sys.stdout.isatty())
 
 from utils.security import load_secret
 
+
+def _ensure_api_key() -> None:
+    """Prompt for the OpenRouter API key if it is not already set.
+
+    Checks env var first, then ~/.north/.env. If neither has the key,
+    prompts interactively and writes it to ~/.north/.env so subsequent
+    starts work without prompting again.
+    """
+    from config.settings import settings
+
+    if os.environ.get("NORTH_OPENROUTER_API_KEY", "").strip():
+        return
+
+    env_file = settings.north_home / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("NORTH_OPENROUTER_API_KEY=") and line.split("=", 1)[1].strip():
+                return
+
+    typer.echo("")
+    typer.secho("No OpenRouter API key found.", fg=typer.colors.YELLOW)
+    typer.echo("Get one at https://openrouter.ai/keys")
+    api_key = typer.prompt("Enter your OpenRouter API key").strip()
+    if not api_key:
+        typer.secho("No API key provided — north cannot start.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    settings.north_home.mkdir(parents=True, exist_ok=True)
+    existing = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+    if "NORTH_OPENROUTER_API_KEY" not in existing:
+        with env_file.open("a", encoding="utf-8") as f:
+            f.write(f"NORTH_OPENROUTER_API_KEY={api_key}\n")
+
+    os.environ["NORTH_OPENROUTER_API_KEY"] = api_key
+    typer.secho("✓ API key saved to ~/.north/.env", fg=typer.colors.GREEN)
+
 app = typer.Typer(
     name="north",
     help="north — Personal Life Operating System CLI",
@@ -1263,6 +1299,7 @@ def start(
     settings.north_home.mkdir(parents=True, exist_ok=True)
     (settings.north_home / "tasks").mkdir(parents=True, exist_ok=True)
     (settings.north_home / "context").mkdir(parents=True, exist_ok=True)
+    _ensure_api_key()
     load_secret()
 
     log_path = settings.north_home / "north.log"
