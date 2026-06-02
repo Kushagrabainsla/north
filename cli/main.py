@@ -26,6 +26,7 @@ See docs/CODING_STYLE.md Section 8 and README Section 10.2.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -44,10 +45,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-_console = Console(force_terminal=sys.stdout.isatty())
-
-
 from utils.security import load_secret
+
+_console = Console(force_terminal=sys.stdout.isatty())
 
 
 def _ensure_api_key() -> None:
@@ -74,7 +74,7 @@ def _ensure_api_key() -> None:
     api_key = typer.prompt("Enter your OpenRouter API key").strip()
     if not api_key:
         typer.secho("No API key provided — north cannot start.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     settings.north_home.mkdir(parents=True, exist_ok=True)
     existing = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
@@ -143,6 +143,7 @@ def _launch_tui(
     resolved_workspace = workspace or str(_find_git_root(Path.cwd()))
 
     import asyncio
+
     from cli.tui import run as _tui_run
     asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace))
 
@@ -165,14 +166,14 @@ def _api(method: str, path: str, **kwargs: object) -> httpx.Response:
             fg=typer.colors.RED,
             err=True,
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
     except httpx.HTTPStatusError as exc:
         typer.secho(
             f"ERROR: Server returned {exc.response.status_code}: {exc.response.text}",
             fg=typer.colors.RED,
             err=True,
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
 # ── task ─────────────────────────────────────────────────────────────────────
@@ -302,8 +303,10 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
     token_buffer: str = ""
 
     try:
-        with Live(_make_renderable(), console=_console, refresh_per_second=8) as live:
-            with httpx.stream("GET", url, headers=_headers(), timeout=None) as stream:
+        with (
+            Live(_make_renderable(), console=_console, refresh_per_second=8) as live,
+            httpx.stream("GET", url, headers=_headers(), timeout=None) as stream,
+        ):
                 current_event = ""
                 for line in stream.iter_lines():
                     if line.startswith("event:"):
@@ -359,7 +362,7 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                             decision = "approved" if chosen.lower() in ("approve", "approved", "yes") else \
                                        "rejected" if chosen.lower() in ("reject", "rejected", "no") else \
                                        "answered"
-                            try:
+                            with contextlib.suppress(SystemExit):
                                 _api("POST", "/orchestrator/approval/respond", json={
                                     "card_id": data.get("card_id", ""),
                                     "task_id": task_id,
@@ -367,8 +370,6 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                                     "decision": decision,
                                     "chosen_option": chosen,
                                 })
-                            except SystemExit:
-                                pass
                             steps[-1] = ("✓" if decision != "rejected" else "✗", f"Approval: {chosen}", False)
                             # Do NOT restart Live — cursor is now past the approval panel.
                             # Subsequent live.update() calls on a stopped Live are no-ops;
@@ -513,7 +514,7 @@ def context_add(
     if file is not None:
         if not file.exists():
             typer.secho(f"ERROR: File not found: {file}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         with open(file, "rb") as fh:
             files = {"file": (file.name, fh, "application/octet-stream")}
             response = _api("POST", "/orchestrator/context/add", files=files)  # type: ignore[arg-type]
@@ -523,7 +524,7 @@ def context_add(
         response = _api("POST", "/orchestrator/context/add", data={"text": text})
     else:
         typer.secho("Provide --text, --url, or --file.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     data = response.json()
     typer.secho(
@@ -640,7 +641,7 @@ def create_agent(
     domain: str | None = typer.Option(None, "--domain", help="Domain (e.g. health, finance)."),
     description: str | None = typer.Option(None, "--description", help="One-line description."),
     model_pool: str = typer.Option("fast_cheap", "--pool", help="Model pool: reasoning / fast_cheap / high_volume."),
-    output_dir: Path | None = typer.Option(None, "--output-dir", help="Where to create the agent folder (default: ./agents/)."),
+    output_dir: Path | None = typer.Option(None, "--output-dir", help="Agent folder to create in (default: ./agents/)"),
 ) -> None:
     """Interactively scaffold a new domain-specialist agent."""
     import re
@@ -650,7 +651,7 @@ def create_agent(
     name = name.strip().lower().replace(" ", "_")
     if not re.match(r"^[a-z][a-z0-9_]*$", name):
         typer.secho("ERROR: Name must be lowercase letters, digits, underscores.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     if domain is None:
         domain = typer.prompt("Domain (e.g. travel, fitness, finance)", default=name)
@@ -679,17 +680,14 @@ def create_agent(
     if output_dir is None:
         # Try to detect project root (has pyproject.toml or agents/ folder)
         cwd = Path.cwd()
-        if (cwd / "agents").is_dir():
-            output_dir = cwd / "agents"
-        else:
-            output_dir = cwd
+        output_dir = cwd / "agents" if (cwd / "agents").is_dir() else cwd
     else:
         output_dir = output_dir.resolve()
 
     agent_dir = output_dir / name
     if agent_dir.exists():
         typer.secho(f"ERROR: Directory already exists: {agent_dir}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Generate system.md via LLM
     typer.echo("Generating system prompt via LLM…")
@@ -925,7 +923,7 @@ def dictate(
             f"ERROR: Missing dependency: {exc}. Install with: uv add sounddevice pynput",
             fg=typer.colors.RED, err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Parse hotkey string into a frozenset of pynput Key/KeyCode objects
     def _parse_key(part: str) -> object:
@@ -1088,7 +1086,7 @@ def config_set(
             f"Unknown key {key!r}. Valid keys: {', '.join(_CONFIG_KEYS)}",
             fg=typer.colors.RED, err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     _, cast = _CONFIG_KEYS[key]
     try:
@@ -1098,7 +1096,7 @@ def config_set(
             f"Invalid value {value!r} for {key}: expected {cast.__name__}",
             fg=typer.colors.RED, err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     env_file = settings.north_home / ".env"
     settings.north_home.mkdir(parents=True, exist_ok=True)
@@ -1147,7 +1145,7 @@ def _wait_for_server(host: str, port: int, timeout: int = 90) -> None:
         time.sleep(1)
     typer.echo("")
     typer.secho("Server did not become ready in time.", fg=typer.colors.RED, err=True)
-    raise typer.Exit(1)
+    raise typer.Exit(1) from None
 
 
 def _sync_docker_secret(compose_file: Path) -> None:
@@ -1263,10 +1261,13 @@ def start(
 
     if docker and not _docker_available():
         typer.secho("Docker not found. Install Docker or run without --docker.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     if docker and compose_file is None:
-        typer.secho("No docker-compose.yml found. Run from the project root or omit --docker.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        typer.secho(
+            "No docker-compose.yml found. Run from the project root or omit --docker.",
+            fg=typer.colors.RED, err=True,
+        )
+        raise typer.Exit(1) from None
 
     if use_docker:
         typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
@@ -1283,7 +1284,7 @@ def start(
         )
         if result.returncode != 0:
             typer.secho("Docker Compose failed to start.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
         _wait_for_server("127.0.0.1", port)
         _sync_docker_secret(compose_file)
@@ -1322,7 +1323,7 @@ def start(
                 f"Could not stop the existing process. Try killing port {port} manually.",
                 fg=typer.colors.RED, err=True,
             )
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         time.sleep(1)
 
     typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
@@ -1366,7 +1367,7 @@ def start(
 @app.command("stop")
 def stop(
     port: int = typer.Option(8000, "--port", "-p", help="Port to stop."),
-    docker: bool = typer.Option(False, "--docker", help="Stop the Docker Compose deployment instead of a local process."),
+    docker: bool = typer.Option(False, "--docker", help="Stop Docker Compose deployment instead of a local process."),
 ) -> None:
     """Stop north."""
     import signal
@@ -1375,7 +1376,7 @@ def stop(
         compose_file = _find_compose_file()
         if not _docker_available() or compose_file is None:
             typer.secho("Docker or docker-compose.yml not found.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         typer.echo("Stopping Docker Compose services…")
         subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "down"],
@@ -1397,7 +1398,7 @@ def stop(
             typer.secho("north was not running (removed stale PID file).", fg=typer.colors.YELLOW)
         except Exception as exc:
             typer.secho(f"Failed to stop: {exc}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         return
 
     # Fallback: no PID file, try port-based kill
@@ -1407,7 +1408,7 @@ def stop(
             typer.secho("✓ Stopped.", fg=typer.colors.GREEN)
         else:
             typer.secho("Could not stop the process. Try killing it manually.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
     else:
         typer.echo("north is not running.")
 
@@ -1428,7 +1429,6 @@ def reset(
     north_home = settings.north_home
 
     # What gets wiped
-    data_dirs = ["tasks", "context", "embeddings.db", "north.log", "north.pid", "secret.key"]
     if all:
         scope = f"{north_home}/ (everything including .env and API key)"
     else:

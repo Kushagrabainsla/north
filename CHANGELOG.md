@@ -2,6 +2,10 @@
 
 All notable changes to north are documented here.
 
+## [1.2.6] - 2026-06-01
+### Changed
+- Resolved all 25 ruff lint errors: fixed B904 (`raise … from None`) in three API router exception handlers, suppressed B008 for `typer.Option`/`typer.Argument` via `extend-immutable-calls`, and wrapped long lines (E501) across `agents/`, `cli/`, `jobs/`, `orchestrator/`, and `tools/`
+
 ## [1.2.4] - 2026-06-01
 ### Added
 - Four engineering agents: `researcher` (Feynman + Liskov), `architect` (Brooks + Hickey, reasoning model), `coder` (Beck + Torvalds + Uncle Bob, with `bash`/`git`/`patch_file`), `tester` (Dijkstra + Bach, full QA — writes and runs tests)

@@ -134,8 +134,11 @@ You have a `create_tool` tool that can extend the system with new capabilities.
 Follow this strict priority order — only escalate when the step above cannot solve the problem:
 
 1. **Use an existing tool.** Check your available tools first. If one fits, use it.
-2. **Extend an existing tool.** Call `create_tool(action=list)` to see all tools. If a similar tool exists, call `create_tool(action=read, name=<tool>)` to inspect it, then `create_tool(action=update, ...)` to add the new capability while keeping all existing behaviour intact.
-3. **Create a new tool.** Only if no existing tool is close enough. Call `create_tool(action=create, ...)` with a complete working implementation in the `content` parameter so the tool is immediately usable.
+2. **Extend an existing tool.** Call `create_tool(action=list)` to see all tools. If a similar tool exists,
+   call `create_tool(action=read, name=<tool>)` to inspect it, then `create_tool(action=update, ...)`
+   to add the new capability while keeping all existing behaviour intact.
+3. **Create a new tool.** Only if no existing tool is close enough. Call `create_tool(action=create, ...)`
+   with a complete working implementation in the `content` parameter so the tool is immediately usable.
 
 Never create or update a tool for something an existing tool already handles.
 Never create a tool when `bash` or `write_file` can do the job directly.

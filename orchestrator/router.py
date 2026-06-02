@@ -10,13 +10,13 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
-logger = logging.getLogger(__name__)
-
 from agents import AgentRegistry
 from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
 from utils.prompts import load_prompt
+
+logger = logging.getLogger(__name__)
 
 _FALLBACK_CLASSIFICATION = IntentClassification(
     is_consequential=False, domain="general", reasoning="planner fallback", confidence=1.0
@@ -91,7 +91,10 @@ class ExecutionPlanner:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as exc:
-            logger.warning("Planner LLM response was not valid JSON — falling back to general single-agent plan: %s", exc)
+            logger.warning(
+                "Planner LLM response was not valid JSON — falling back to general single-agent plan: %s",
+                exc,
+            )
             return _FALLBACK_CLASSIFICATION, self._build_fallback_plan("general", task_id)
 
         raw_confidence = data.get("confidence", 0.9)

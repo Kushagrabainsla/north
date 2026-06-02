@@ -204,7 +204,7 @@ class KasaTool(Tool):
                 data={"devices": [], "message": "Devices discovered but could not connect to any."},
             )
 
-        alias_map = {host: alias for host, alias in pairs}
+        alias_map = dict(pairs)
         target_hint = input.params.get("device", "").strip().lower()
 
         if target_hint:
@@ -275,7 +275,10 @@ class KasaTool(Tool):
                         return ToolOutput(success=False, error="color_temp must be 2500–6500 K.")
                 except ValueError:
                     known = ", ".join(_COLOR_TEMPS)
-                    return ToolOutput(success=False, error=f"Unknown color_temp {raw_ct!r}. Use: {known} or a number 2500–6500.")
+                    return ToolOutput(
+                        success=False,
+                        error=f"Unknown color_temp {raw_ct!r}. Use: {known} or a number 2500–6500.",
+                    )
 
         elif action == "brightness":
             raw_br = input.params.get("brightness")

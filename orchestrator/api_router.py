@@ -274,7 +274,7 @@ async def query_ledger(
             raise HTTPException(
                 status_code=422,
                 detail=f"Unknown source {source!r}. Valid: {[s.value for s in LedgerSource]}",
-            )
+            ) from None
     return await _ldgr().query(
         LedgerFilters(task_id=task_id, agent=agent, source=src, limit=limit)
     )
@@ -425,7 +425,7 @@ async def list_jobs(
             raise HTTPException(
                 status_code=422,
                 detail=f"Unknown status {status!r}. Valid: {[s.value for s in JobStatus]}",
-            )
+            ) from None
     jobs = await _jobs().list_jobs(status=js, limit=limit)
     return [_job_to_out(j) for j in jobs]
 
@@ -668,7 +668,7 @@ async def update_settings(body: SettingsUpdate) -> SettingsOut:
         raise HTTPException(
             status_code=422,
             detail=f"Unknown strategy {body.strategy!r}. Valid: eco, cruise, sport",
-        )
+        ) from None
     if _north_settings is not None:
         _north_settings.set_strategy(mode)
     return SettingsOut(strategy=mode.value)

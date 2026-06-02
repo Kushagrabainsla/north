@@ -36,7 +36,10 @@ class BashTool(Tool):
     """Runs a shell command and returns stdout, stderr, and return code."""
 
     name = "bash"
-    description = "Run a shell command and return stdout/stderr/returncode. Default timeout 30 s, pass timeout= (max 300) for longer commands."
+    description = (
+        "Run a shell command and return stdout/stderr/returncode."
+        " Default timeout 30 s, pass timeout= (max 300) for longer commands."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {

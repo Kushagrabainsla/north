@@ -37,8 +37,10 @@ class CreateToolTool(Tool):
         "Always call action='list' first to check what tools exist before creating anything. "
         "action='list': show all tools with descriptions. "
         "action='read': return full source of a tool by name. "
-        "action='update': extend an existing tool with new behaviour (preferred over creating a new one when a similar tool exists). "
-        "action='create': write a brand-new tool — provide full working Python in 'content' so it is immediately usable. "
+        "action='update': extend an existing tool with new behaviour "
+        "(preferred over creating a new one when a similar tool exists). "
+        "action='create': write a brand-new tool — "
+        "provide full working Python in 'content' so it is immediately usable. "
         "Hot-loads into the running server so the new tool is available in the very next step."
     )
     parameters_schema = {
@@ -229,7 +231,10 @@ class CreateToolTool(Tool):
         if not tool_name:
             return ToolOutput(success=False, error="Parameter 'name' is required for action=update.")
         if not content:
-            return ToolOutput(success=False, error="Parameter 'content' (full updated Python source) is required for action=update.")
+            return ToolOutput(
+                success=False,
+                error="Parameter 'content' (full updated Python source) is required for action=update.",
+            )
 
         path = _find_tool_path(tool_name)
         if path is None:
@@ -357,7 +362,8 @@ def _render_schema(parameters: list[dict]) -> str:
     prop_lines, required_names = [], []
     for p in parameters:
         p_desc = p.get("description", "").replace('"', '\\"')
-        prop_lines.append(f'            "{p["name"]}": {{"type": "{p.get("type", "string")}", "description": "{p_desc}"}},')
+        entry = f'            "{p["name"]}": {{"type": "{p.get("type", "string")}", "description": "{p_desc}"}},'
+        prop_lines.append(entry)
         if p.get("required", True):
             required_names.append(p["name"])
 

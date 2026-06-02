@@ -1,6 +1,6 @@
 [project]
 name = "north"
-version = "1.2.3"
+version = "1.2.6"
 description = "north — Personal Life Operating System."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -61,11 +61,14 @@ markers = [
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "PIE", "SIM"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
