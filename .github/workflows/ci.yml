@@ -35,4 +35,4 @@ jobs:
           NORTH_ENV: test
           # A dummy key satisfies the non-empty check without making real calls.
           NORTH_OPENROUTER_API_KEY: ci-dummy-key
-        run: pytest -x -q --tb=short -m "not integration"
+        run: python -m pytest -x -q --tb=short -m "not integration"
