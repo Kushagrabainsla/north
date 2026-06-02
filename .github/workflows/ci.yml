@@ -23,7 +23,7 @@ jobs:
         run: pip install --quiet uv
 
       - name: Install dependencies (including dev extras)
-        run: uv pip install --system --no-cache -e ".[dev]" ruff
+        run: uv pip install --system --no-cache -e . pytest pytest-asyncio ruff
 
       - name: Lint with ruff
         run: ruff check .
