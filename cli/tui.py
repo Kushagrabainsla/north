@@ -177,10 +177,14 @@ async def run(
             try:
                 async with httpx.AsyncClient() as client, client.stream(
                     "GET",
-                    f"{base_url}/stream",
+                    f"{base_url}/orchestrator/stream",
                     headers=headers,
                     timeout=None,
                 ) as resp:
+                    if resp.status_code != 200:
+                        await resp.aread()
+                        await asyncio.sleep(2)
+                        continue
                     current_event = ""
                     async for line in resp.aiter_lines():
                         if line.startswith("event:"):
