@@ -120,7 +120,12 @@ class TaskContextStore:
                 status = row["status"]
                 if status == "completed":
                     val_str = row["value"]
-                    return json.loads(val_str) if val_str is not None else None
+                    if val_str is None:
+                        return None
+                    try:
+                        return json.loads(val_str)
+                    except json.JSONDecodeError:
+                        return None
                 elif status == "failed":
                     raise OrchestratorError(
                         f"Source agent '{source_agent}' failed. Cannot read '{key}'."
@@ -216,11 +221,22 @@ class TaskContextStore:
             for row in rows:
                 agent = row["agent"]
                 key = row["key"]
-                val = json.loads(row["value"]) if row["value"] is not None else None
+                try:
+                    val = json.loads(row["value"]) if row["value"] is not None else None
+                except json.JSONDecodeError:
+                    val = None
                 results.setdefault(agent, {})[key] = val
             return results
 
         return await asyncio.to_thread(_run)
+
+    def release_conditions(self, task_id: str) -> None:
+        """Drop the in-memory Condition for a finished task. DB rows are preserved.
+
+        Call this when a task completes so the conditions dict doesn't grow
+        unboundedly. cleanup_stale_tasks() handles periodic DB pruning separately.
+        """
+        self._conditions.pop(task_id, None)
 
     async def delete_task(self, task_id: str) -> None:
         """Delete all rows belonging to a task_id."""
@@ -234,29 +250,68 @@ class TaskContextStore:
     async def cleanup_stale_tasks(
         self,
         active_task_ids: frozenset[str],
-        retention_days: int = 7,
+        completed_retention_days: int = 7,
+        failed_retention_days: int = 30,
+        # Legacy alias kept for callers that pass retention_days= by keyword.
+        retention_days: int | None = None,
     ) -> int:
-        """Delete rows for tasks older than retention_days that are not active.
+        """Delete rows for inactive tasks past their retention window.
 
+        Failed tasks (any row with status='failed') are kept for
+        failed_retention_days; all others for completed_retention_days.
+        Conditions for deleted task_ids are pruned from the in-memory dict.
         Returns the number of rows removed.
         """
-        cutoff = (utcnow() - datetime.timedelta(days=retention_days)).isoformat()
+        if retention_days is not None:
+            completed_retention_days = retention_days
 
-        def _run() -> int:
+        completed_cutoff = (utcnow() - datetime.timedelta(days=completed_retention_days)).isoformat()
+        failed_cutoff = (utcnow() - datetime.timedelta(days=failed_retention_days)).isoformat()
+
+        def _run() -> tuple[list[str], int]:
             with open_db_connection(self._db_path) as conn:
                 if active_task_ids:
                     placeholders = ",".join("?" * len(active_task_ids))
-                    result = conn.execute(
-                        f"DELETE FROM task_state "
-                        f"WHERE task_id NOT IN ({placeholders}) AND written_at < ?",
-                        (*active_task_ids, cutoff),
-                    )
+                    candidate_rows = conn.execute(
+                        f"""
+                        SELECT task_id,
+                               MAX(written_at) AS latest,
+                               MAX(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS has_failure
+                        FROM task_state
+                        WHERE task_id NOT IN ({placeholders})
+                        GROUP BY task_id
+                        """,
+                        tuple(active_task_ids),
+                    ).fetchall()
                 else:
-                    result = conn.execute(
-                        "DELETE FROM task_state WHERE written_at < ?",
-                        (cutoff,),
-                    )
-                conn.commit()
-                return result.rowcount
+                    candidate_rows = conn.execute(
+                        """
+                        SELECT task_id,
+                               MAX(written_at) AS latest,
+                               MAX(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS has_failure
+                        FROM task_state
+                        GROUP BY task_id
+                        """
+                    ).fetchall()
 
-        return await asyncio.to_thread(_run)
+                to_delete = [
+                    row["task_id"]
+                    for row in candidate_rows
+                    if row["latest"] < (failed_cutoff if row["has_failure"] else completed_cutoff)
+                ]
+
+                if not to_delete:
+                    return [], 0
+
+                del_placeholders = ",".join("?" * len(to_delete))
+                result = conn.execute(
+                    f"DELETE FROM task_state WHERE task_id IN ({del_placeholders})",
+                    to_delete,
+                )
+                conn.commit()
+                return to_delete, result.rowcount
+
+        deleted_ids, count = await asyncio.to_thread(_run)
+        for task_id in deleted_ids:
+            self._conditions.pop(task_id, None)
+        return count

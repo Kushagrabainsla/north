@@ -78,7 +78,7 @@ class Orchestrator:
         judgement_filter: JudgementFilter | None = None,
         north_settings: NorthSettings | None = None,
         synthesizer: ResultSynthesizer | None = None,
-        cost_tracker: CostTracker | None = None,
+        tracked_router: CostTracker | None = None,
         episodic_store: Any | None = None,
         tool_registry: ToolRegistry | None = None,
         default_workspace: str = "",
@@ -96,13 +96,16 @@ class Orchestrator:
         self._judgement_filter = judgement_filter
         self._north_settings = north_settings
         self._synthesizer = synthesizer
-        self._cost_tracker = cost_tracker
+        self._tracked_router = tracked_router
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
         self._default_workspace = default_workspace
         self._extraction_pipeline = extraction_pipeline
         # Maps task_id → running asyncio.Task so cancel_task() can stop it.
         self._active_tasks: dict[str, asyncio.Task] = {}
+        # Holds references to short-lived fire-and-forget tasks (episode recording,
+        # etc.) so they are not garbage-collected before they finish.
+        self._background_tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -146,6 +149,7 @@ class Orchestrator:
 
     async def get_task(self, task_id: str) -> TaskResponse | None:
         """Return the current status of a task by reading its most recent ledger entry."""
+        # Relies on LedgerWriter.query() returning entries ORDER BY timestamp DESC (see base.py).
         entries = await self._ledger.query(LedgerFilters(task_id=task_id, limit=1))
         if not entries:
             return None
@@ -395,14 +399,17 @@ class Orchestrator:
         # _notify() registers the card in the ApprovalStore, applies the
         # JudgementFilter (auto-resolve if rules match), and fires the Notifier.
         await self._notify(card)
-        current = await self._approval_store.wait_for_decision(card.id, timeout=300.0)
+        timeout = (
+            self._north_settings.approval_timeout_seconds if self._north_settings else 300.0
+        )
+        current = await self._approval_store.wait_for_decision(card.id, timeout=timeout)
         if current is None:
             logger.warning(
                 "North Star approval timed out for task %s — treating as rejection",
                 task_id,
             )
         chosen_opt = (current.chosen_option if current else "").lower()
-        if chosen_opt not in ("proceed anyway", "proceed", "approve", "approved", "yes"):
+        if chosen_opt != card.options[0].lower():
             raise NorthStarConflictError(tension or "North Star conflict")
 
     async def _stage_north_star(
@@ -439,7 +446,18 @@ class Orchestrator:
             )
         except OrchestratorError as e:
             logger.warning("North Star check skipped (inference unavailable): %s", e)
-            await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": "check skipped"})
+            await self._write_ledger(LedgerEntry(
+                id=generate_id(),
+                timestamp=utcnow(),
+                source=LedgerSource.SYSTEM,
+                task_id=task_id,
+                action="north_star_check_skipped",
+                output=str(e),
+                status=LedgerStatus.COMPLETED,
+            ))
+            await self._stream_manager.emit(
+                task_id, "north_star_check_skipped", {"reason": str(e)}
+            )
             return
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
@@ -534,14 +552,14 @@ class Orchestrator:
                 task_id, prompt, plan, workspace, context=context
             )
 
-        await self._maybe_synthesize(task_id, plan.agents, plan.mode)
-
         if all_failures:
             await self._report_execution_failures(task_id, all_failures)
 
-        asyncio.create_task(
-            self._record_episode(task_id, prompt, plan.agents, domain)
-        )
+        await self._maybe_synthesize(task_id, plan.agents, plan.mode, failures=all_failures)
+
+        t = asyncio.create_task(self._record_episode(task_id, prompt, plan.agents, domain))
+        self._background_tasks.add(t)
+        t.add_done_callback(self._background_tasks.discard)
         await self._finish_task(task_id)
 
     async def _execute_single_tool(
@@ -573,7 +591,7 @@ class Orchestrator:
             )
         except ToolNotFoundError:
             logger.warning("single_tool fallback: tool %r not found, re-routing to agent", plan.direct_tool)
-            fallback = self._execution_planner._build_fallback_plan("general", task_id)
+            fallback = self._execution_planner.build_fallback_plan("general", task_id)
             await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
             fallback_failures: list[str] = []
             for group in fallback.parallel_groups:
@@ -610,7 +628,7 @@ class Orchestrator:
 
     async def _finish_task(self, task_id: str, *, skip_extraction: bool = False) -> None:
         """Write completion ledger entry and emit done events."""
-        task_cost_usd = self._cost_tracker.pop_task_cost(task_id) if self._cost_tracker else 0.0
+        task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
         await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
@@ -621,6 +639,9 @@ class Orchestrator:
         ))
         await self._stream_manager.emit(task_id, "task_completed", {"cost_usd": task_cost_usd})
         await self._stream_manager.emit_done(task_id)
+        # Release the in-memory Condition for this task; DB rows are kept for
+        # the retention window but no more readers will wait on this task_id.
+        self._task_context_store.release_conditions(task_id)
         # Trigger extraction immediately after agent tasks so preferences stated
         # mid-task land in judgement_rules.md before the next task starts.
         # Single-tool tasks (deterministic, no agent reasoning) are skipped —
@@ -663,10 +684,10 @@ class Orchestrator:
         *something* rather than nothing.
         """
         fallback = f"Task: {prompt[:200]}\nResult: {output[:500]}"
-        if self._cost_tracker is None:
+        if self._tracked_router is None:
             return fallback
         try:
-            response = await self._cost_tracker.complete(
+            response = await self._tracked_router.complete(  # CostTracker is also an InferenceRouter
                 CompletionRequest(
                     prompt=(
                         "Summarize this completed AI task in 2–3 sentences for future retrieval. "
@@ -683,9 +704,15 @@ class Orchestrator:
             return fallback
 
     async def _maybe_synthesize(
-        self, task_id: str, agents: list[str], mode: ExecutionMode = ExecutionMode.PARALLEL
+        self,
+        task_id: str,
+        agents: list[str],
+        mode: ExecutionMode = ExecutionMode.PARALLEL,
+        failures: list[str] | None = None,
     ) -> None:
         """Synthesize outputs from multiple agents into one response, if applicable."""
+        if failures:
+            return  # Partial data — skip synthesis to avoid a confidently wrong summary.
         if self._synthesizer is None or len(agents) < 2:
             return
         if mode not in (ExecutionMode.PARALLEL, ExecutionMode.HIERARCHICAL):

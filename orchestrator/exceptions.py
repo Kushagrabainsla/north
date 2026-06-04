@@ -18,7 +18,3 @@ class NorthStarConflictError(OrchestratorError):
 
 class RoutingError(OrchestratorError):
     """Raised when intent routing or execution plan construction fails."""
-
-
-class ClassifierError(OrchestratorError):
-    """Raised when intent classification fails."""

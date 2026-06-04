@@ -51,7 +51,10 @@ class WebSearchTool(Tool):
         if not query:
             return ToolOutput(success=False, error="Parameter 'query' is required.")
 
-        max_results = int(input.params.get("max_results", 5))
+        try:
+            max_results = int(input.params.get("max_results", 5))
+        except (ValueError, TypeError):
+            max_results = 5
         max_results = min(max(1, max_results), 10)
 
         try:

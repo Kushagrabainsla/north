@@ -257,8 +257,11 @@ class KasaTool(Tool):
                     return ToolOutput(success=False, error=f"Unknown colour {color_name!r}. Known: {known}")
                 hue, saturation = _COLOR_NAMES[color_name]
             elif (raw_hue := input.params.get("hue")) is not None:
-                hue = int(raw_hue)
-                saturation = int(input.params.get("saturation", 100))
+                try:
+                    hue = int(raw_hue)
+                    saturation = int(input.params.get("saturation", 100))
+                except (ValueError, TypeError):
+                    return ToolOutput(success=False, error="'hue' and 'saturation' must be integers.")
             else:
                 return ToolOutput(success=False, error="action='color' requires 'color' (name) or 'hue'.")
 
@@ -284,7 +287,10 @@ class KasaTool(Tool):
             raw_br = input.params.get("brightness")
             if raw_br is None:
                 return ToolOutput(success=False, error="action='brightness' requires 'brightness' (0–100).")
-            brightness_val = max(0, min(100, int(raw_br)))
+            try:
+                brightness_val = max(0, min(100, int(raw_br)))
+            except (ValueError, TypeError):
+                return ToolOutput(success=False, error="'brightness' must be an integer 0–100.")
 
         results = []
         errors = []

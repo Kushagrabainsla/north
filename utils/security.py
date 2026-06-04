@@ -25,7 +25,12 @@ def load_secret() -> str:
 
     settings.north_home.mkdir(parents=True, exist_ok=True)
     secret = generate_secret()
-    secret_file.write_text(secret, encoding="utf-8")
+    try:
+        # Exclusive create — raises FileExistsError if another process won the race.
+        with secret_file.open("x") as f:
+            f.write(secret)
+    except FileExistsError:
+        return secret_file.read_text(encoding="utf-8").strip()
     return secret
 
 

@@ -80,7 +80,7 @@ class ExecutionPlanner:
             )
         except Exception as exc:
             logger.warning("Planner LLM call failed — falling back to general single-agent plan: %s", exc)
-            return _FALLBACK_CLASSIFICATION, self._build_fallback_plan("general", task_id)
+            return _FALLBACK_CLASSIFICATION, self.build_fallback_plan("general", task_id)
 
         text = response.text.strip()
         if text.startswith("```"):
@@ -95,7 +95,7 @@ class ExecutionPlanner:
                 "Planner LLM response was not valid JSON — falling back to general single-agent plan: %s",
                 exc,
             )
-            return _FALLBACK_CLASSIFICATION, self._build_fallback_plan("general", task_id)
+            return _FALLBACK_CLASSIFICATION, self.build_fallback_plan("general", task_id)
 
         raw_confidence = data.get("confidence", 0.9)
         try:
@@ -149,13 +149,13 @@ class ExecutionPlanner:
             direct_tool = data.get("direct_tool")
             direct_tool_params = data.get("direct_tool_params") or {}
             if not direct_tool or not isinstance(direct_tool_params, dict):
-                return self._build_fallback_plan(domain, task_id)
+                return self.build_fallback_plan(domain, task_id)
             # Verify the tool actually exists
             if self._tool_registry is not None:
                 try:
                     self._tool_registry.get(direct_tool)
                 except Exception:
-                    return self._build_fallback_plan(domain, task_id)
+                    return self.build_fallback_plan(domain, task_id)
             return ExecutionPlan(
                 task_id=task_id,
                 agents=[],
@@ -169,12 +169,12 @@ class ExecutionPlanner:
         # agent-based paths
         raw_agents = data.get("agents")
         if not isinstance(raw_agents, list) or not raw_agents:
-            return self._build_fallback_plan(domain, task_id)
+            return self.build_fallback_plan(domain, task_id)
 
         registered = set(self._agent_registry.names())
         agents = [a for a in raw_agents if a in registered]
         if not agents:
-            return self._build_fallback_plan(domain, task_id)
+            return self.build_fallback_plan(domain, task_id)
 
         raw_deps = data.get("dependencies")
         dependencies: dict[str, list[str]] = {}
@@ -192,7 +192,7 @@ class ExecutionPlanner:
                     "Dependency cycle in LLM response for agents %s — falling back to single agent",
                     agents,
                 )
-                return self._build_fallback_plan(domain, task_id)
+                return self.build_fallback_plan(domain, task_id)
 
         return ExecutionPlan(
             task_id=task_id,
@@ -202,7 +202,7 @@ class ExecutionPlanner:
             mode=mode,
         )
 
-    def _build_fallback_plan(self, domain: str, task_id: str) -> ExecutionPlan:
+    def build_fallback_plan(self, domain: str, task_id: str) -> ExecutionPlan:
         """Simple fallback: single agent matching the classified domain."""
         matching = self._agent_registry.for_domain(domain)
         if not matching:

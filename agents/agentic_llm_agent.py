@@ -97,24 +97,20 @@ class AgenticLLMAgent(LLMAgent):
     as they arrive so the UI can render them progressively.
     """
 
+    def __init__(self, config: Any, deps: Any) -> None:
+        super().__init__(config, deps)
+        # Strong references to fire-and-forget confidence-recording tasks so
+        # they are not garbage-collected before the DB write completes.
+        self._background_tasks: set[asyncio.Task] = set()
+
     async def _record_tool_call_confidence(self, tool_name: str, success: bool) -> None:
         """Record tool execution confidence if not a special internal tool."""
         if tool_name not in ("request_approval", "delegate_task"):
-            asyncio.create_task(
+            t = asyncio.create_task(
                 self._deps.confidence_tracker.record_use(self.name, tool_name, success)
             )
-
-    async def _emit_tool_call_events(
-        self, task_id: str, tool_name: str, params: dict, success: bool
-    ) -> None:
-        """Emit stream events for a completed tool call."""
-        if self._deps.stream_manager and task_id:
-            await self._deps.stream_manager.emit(
-                task_id, "tool_called", {"tool": tool_name, "params": params}
-            )
-            await self._deps.stream_manager.emit(
-                task_id, "tool_result", {"tool": tool_name, "success": success}
-            )
+            self._background_tasks.add(t)
+            t.add_done_callback(self._background_tasks.discard)
 
     def _append_tool_call_exchange(
         self, messages: list[dict], results: list[tuple[ToolCall, str, bool]]
@@ -150,12 +146,23 @@ class AgenticLLMAgent(LLMAgent):
         messages: list[dict],
     ) -> None:
         """Execute multiple tool calls in parallel and update logging/history."""
+        # Announce every call *before* execution so the UI shows live in-progress
+        # state rather than a retrospective log after the tool has already finished.
+        if self._deps.stream_manager and payload.task_id:
+            for call in calls:
+                await self._deps.stream_manager.emit(
+                    payload.task_id, "tool_called", {"tool": call.name, "params": call.params}
+                )
+
         results: list[tuple[ToolCall, str, bool]] = await asyncio.gather(
             *[self._execute_call(call, payload, tool_map) for call in calls]
         )
 
         for call, _, success in results:
-            await self._emit_tool_call_events(payload.task_id, call.name, call.params, success)
+            if self._deps.stream_manager and payload.task_id:
+                await self._deps.stream_manager.emit(
+                    payload.task_id, "tool_result", {"tool": call.name, "success": success}
+                )
             await self._record_tool_call_confidence(call.name, success)
 
         self._append_tool_call_exchange(messages, results)
@@ -283,6 +290,8 @@ class AgenticLLMAgent(LLMAgent):
                 return call, json.dumps({"success": False, "error": "User rejected tool creation."}), False
         if payload.workspace and "workspace" not in params:
             params["workspace"] = payload.workspace
+        if payload.task_id and "task_id" not in params:
+            params["task_id"] = payload.task_id
         result_str = await self._call_tool(tool_map, call.name, params)
         return call, result_str, _extract_success(result_str)
 
@@ -421,7 +430,7 @@ class AgenticLLMAgent(LLMAgent):
                 },
             )
 
-        current = await store.wait_for_decision(card_id, timeout=300.0)
+        current = await store.wait_for_decision(card_id, timeout=self._deps.approval_timeout_seconds)
         if current is None:
             store.resolve(card_id, "rejected")
             return "timeout_rejected"
@@ -440,14 +449,23 @@ class AgenticLLMAgent(LLMAgent):
             })
         try:
             result = await tool_map[tool_name].run(ToolInput(params=params))
-            raw = json.dumps(result.model_dump())
+            data = result.model_dump()
         except Exception as exc:
             return json.dumps({"success": False, "error": str(exc)})
-        # Cap the serialised result so a single large tool response can't exhaust
-        # the model's context window.
+        raw = json.dumps(data)
+        # Cap the result so a single large tool response can't exhaust the
+        # model's context window. Truncate *inside* the data dict so the JSON
+        # returned to the model is always syntactically valid.
         if len(raw) > _MAX_TOOL_RESULT_CHARS:
             omitted = len(raw) - _MAX_TOOL_RESULT_CHARS
-            raw = raw[:_MAX_TOOL_RESULT_CHARS] + f'…[{omitted} chars truncated]"'
+            inner = data.get("data", {})
+            per_field = max(200, (_MAX_TOOL_RESULT_CHARS - 200) // max(len(inner), 1))
+            data["data"] = {
+                k: (v[:per_field] + "…[truncated]" if isinstance(v, str) and len(v) > per_field else v)
+                for k, v in inner.items()
+            }
+            data["_note"] = f"{omitted} chars omitted from original output."
+            raw = json.dumps(data)
         return raw
 
 
@@ -526,20 +544,35 @@ _COMPACT_TOKENS_DEFAULT = 512   # ~350 words — general agents
 _COMPACT_TOKENS_HEAVY   = 1000  # ~700 words — agents with bash/git/patch_file
 
 
+# Ordered from most-specific to least-specific so the first match wins.
+# Covers provider-prefixed IDs (e.g. "anthropic/claude-3-haiku") as well as
+# bare names.  Add new families here rather than extending with more elif chains.
+_CONTEXT_WINDOW_TABLE: tuple[tuple[str, int], ...] = (
+    ("gemini-2",      1_000_000),
+    ("gemini-1.5",    1_000_000),
+    ("gemini",          128_000),
+    ("claude",          200_000),
+    ("o1",              200_000),
+    ("o3",              200_000),
+    ("gpt-4o",          128_000),
+    ("gpt-4-turbo",     128_000),
+    ("gpt-4.1",         128_000),
+    ("llama",           128_000),
+    ("qwen",            128_000),
+    ("mistral",         128_000),
+    ("deepseek",        128_000),
+    ("phi",              16_000),
+)
+_DEFAULT_CONTEXT_WINDOW = 128_000
+
+
 def _context_window_for(model: str) -> int:
     """Return the published context-window size (tokens) for a model identifier."""
     m = model.lower()
-    if "gemini-2" in m or "gemini-1.5" in m:
-        return 1_000_000
-    if "gemini" in m:
-        return 128_000
-    if "claude" in m:
-        return 200_000
-    if "gpt-4o" in m or "gpt-4-turbo" in m or "gpt-4.1" in m:
-        return 128_000
-    if "llama" in m or "qwen" in m or "mistral" in m or "deepseek" in m:
-        return 128_000
-    return 128_000  # conservative default
+    for fragment, size in _CONTEXT_WINDOW_TABLE:
+        if fragment in m:
+            return size
+    return _DEFAULT_CONTEXT_WINDOW
 
 
 def _exchange_boundaries(messages: list[dict]) -> list[tuple[int, int]]:

@@ -40,6 +40,28 @@ from utils.time import utcnow
 # Helpers
 # ---------------------------------------------------------------------------
 
+async def _wait_for_ledger_action(
+    ledger: SQLiteLedgerWriter,
+    task_id: str,
+    action: str,
+    timeout: float = 5.0,
+) -> None:
+    """Poll the ledger until `action` appears for `task_id` or `timeout` expires.
+
+    Replaces asyncio.sleep() in pipeline tests — correct on slow machines,
+    fast on fast ones.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        entries = await ledger.query(LedgerFilters(task_id=task_id))
+        if any(e.action == action for e in entries):
+            return
+        await asyncio.sleep(0.05)
+    raise TimeoutError(
+        f"Ledger action '{action}' never appeared for task '{task_id}' within {timeout}s"
+    )
+
+
 def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter, ApprovalStore]:
     """Build a minimal Orchestrator wired to tmp_path with mock inference."""
     from agents.registry import AgentRegistry
@@ -125,8 +147,7 @@ async def test_task_pipeline_completes(tmp_path):
     response = await orch.submit_task(
         TaskRequest(prompt="List something", source=LedgerSource.PROMPT)
     )
-    # Give the async pipeline a moment to finish (MockInferenceRouter is instant)
-    await asyncio.sleep(0.3)
+    await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
 
     entries = await ledger.query(LedgerFilters(task_id=response.task_id))
     actions = [e.action for e in entries]
@@ -172,7 +193,7 @@ async def test_strategy_command_completes_without_agent(tmp_path):
     response = await orch.submit_task(
         TaskRequest(prompt="switch to eco mode", source=LedgerSource.PROMPT)
     )
-    await asyncio.sleep(0.1)
+    await _wait_for_ledger_action(ledger, response.task_id, "agent_completed")
 
     entries = await ledger.query(LedgerFilters(task_id=response.task_id))
     actions = [e.action for e in entries]
@@ -212,10 +233,10 @@ async def test_north_star_skipped_on_low_confidence(tmp_path):
     with mock.patch.object(
         orch._execution_planner, "plan_all", return_value=(low_conf, dummy_plan)
     ), mock.patch.object(orch._north_star_checker, "check_alignment") as mock_check:
-        await orch.submit_task(
+        response = await orch.submit_task(
             TaskRequest(prompt="send an email", source=LedgerSource.PROMPT)
         )
-        await asyncio.sleep(0.3)
+        await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
         # check_alignment must NOT have been called
         mock_check.assert_not_called()
 
@@ -253,7 +274,7 @@ async def test_task_context_cleanup_removes_old_rows(tmp_path):
             conn.commit()
     await asyncio.to_thread(_backdate)
 
-    removed = await store.cleanup_stale_tasks(active_task_ids=frozenset(), retention_days=7)
+    removed = await store.cleanup_stale_tasks(active_task_ids=frozenset(), completed_retention_days=7)
     assert removed > 0
 
     # Verify rows are gone
@@ -282,7 +303,7 @@ async def test_task_context_cleanup_skips_active(tmp_path):
     await asyncio.to_thread(_backdate)
 
     removed = await store.cleanup_stale_tasks(
-        active_task_ids=frozenset(["active_task"]), retention_days=7
+        active_task_ids=frozenset(["active_task"]), completed_retention_days=7
     )
     assert removed == 0
 

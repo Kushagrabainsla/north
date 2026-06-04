@@ -5,9 +5,7 @@ See docs/CODING_STYLE.md Section 7.2.
 
 from __future__ import annotations
 
-from orchestrator.classifier import IntentClassifier
 from orchestrator.exceptions import (
-    ClassifierError,
     NorthStarConflictError,
     OrchestratorError,
     RoutingError,
@@ -21,13 +19,11 @@ from orchestrator.stream import EventStreamManager
 from orchestrator.task_context import TaskContextStore
 
 __all__ = [
-    "ClassifierError",
     "ExecutionPlan",
     "ExecutionPlanner",
     "EventStreamManager",
     "FailureHandler",
     "IntentClassification",
-    "IntentClassifier",
     "NorthStarChecker",
     "NorthStarConflictError",
     "Orchestrator",

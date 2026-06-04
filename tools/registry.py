@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+import time
 from pathlib import Path
 
 from tools.base import Tool
@@ -23,6 +24,10 @@ from tools.exceptions import ToolNotFoundError
 logger = logging.getLogger(__name__)
 
 _TOOLS_ROOT = Path(__file__).parent
+# Hot-reload TTL: re-scan tool directories at most once per this many seconds.
+# Short enough that tools written by create_tool mid-task appear quickly;
+# long enough that a 12-iteration ReAct loop doesn't scan 12 times.
+_RELOAD_TTL_SECONDS = 2.0
 
 
 def _discover(directory: Path, package: str) -> dict[str, Tool]:
@@ -54,8 +59,11 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
                 try:
                     instance = obj()
                     tools[instance.name] = instance
-                except Exception:
-                    pass  # needs constructor args — caller registers manually
+                except Exception as exc:
+                    logger.debug(
+                        "tool discovery: %s skipped (needs manual registration): %s",
+                        obj.__name__, exc,
+                    )
     return tools
 
 
@@ -79,6 +87,7 @@ class ToolRegistry:
         self._graph: dict[str, list[str]] = graph or {}
         self._tools: dict[str, Tool] = {}
         self._universal: list[str] = []
+        self._last_reload: float = 0.0  # monotonic timestamp of last filesystem scan
 
         if auto_register:
             self._auto_discover()
@@ -147,13 +156,14 @@ class ToolRegistry:
     def tools_for_agent(self, agent: str, *, auto_reload: bool = True) -> list[Tool]:
         """Return universal tools + any specialized tools the agent declared.
 
-        Scans the filesystem on every call so new tool files dropped at runtime
-        — including files written by create_tool mid-task — are available in
-        the next step with no polling, no TTL, and no miss-then-retry.
+        Rescans the filesystem at most once per _RELOAD_TTL_SECONDS so new tool
+        files written by create_tool mid-task appear within the TTL window without
+        scanning on every ReAct iteration.
         Pass auto_reload=False to skip the filesystem scan (useful in tests).
         """
-        if auto_reload:
+        if auto_reload and (time.monotonic() - self._last_reload) > _RELOAD_TTL_SECONDS:
             self.reload()
+            self._last_reload = time.monotonic()
         result: list[Tool] = []
         seen: set[str] = set()
 

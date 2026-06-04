@@ -35,8 +35,15 @@ class EventStreamManager:
         self._subscribers: dict[str, list[asyncio.Queue[str | None]]] = {}
         # Global subscribers receive every event (used by the TUI)
         self._global_subs: list[asyncio.Queue[str | None]] = []
-        # True while at least one TUI session is subscribed to the global stream
-        self.tui_connected: bool = False
+
+    @property
+    def tui_connected(self) -> bool:
+        """True while at least one TUI session is subscribed to the global stream.
+
+        Derived directly from the subscriber list so it can never get stuck
+        True after an abrupt client disconnect.
+        """
+        return bool(self._global_subs)
 
     async def emit(self, task_id: str, event: str, data: dict[str, Any]) -> None:
         """Publish an event to all subscribers for task_id.
@@ -131,7 +138,6 @@ class EventStreamManager:
         """
         queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=max_queue_size)
         self._global_subs.append(queue)
-        self.tui_connected = True
         try:
             while True:
                 message = await queue.get()
@@ -141,5 +147,3 @@ class EventStreamManager:
         finally:
             with contextlib.suppress(ValueError):
                 self._global_subs.remove(queue)
-            if not self._global_subs:
-                self.tui_connected = False

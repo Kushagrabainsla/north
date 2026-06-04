@@ -38,6 +38,7 @@ from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
 from tools.registry import ToolRegistry
+from tools.specialized.bash import BashTool
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from utils.ids import generate_id
@@ -106,6 +107,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Overwrite the auto-discovered CreateToolTool (no registry ref) with one
     # that holds a live registry reference for hot-loading newly created tools.
     tool_registry.register(CreateToolTool(tool_registry=tool_registry))
+    # BashTool requires an ApprovalStore to gate every command behind user approval,
+    # so it cannot be auto-discovered and must be registered manually here.
+    tool_registry.register(
+        BashTool(
+            approval_store=deps.approval_store,
+            stream_manager=deps.stream_manager,
+            approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+        )
+    )
 
     _step("seeding confidence defaults")
     _RELIABLE_TOOLS = frozenset({
@@ -124,6 +134,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         approval_store=deps.approval_store,
         agent_max_iterations=settings.agent_max_iterations,
         agent_history_keep_recent=settings.agent_history_keep_recent,
+        approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
     )
 
     _step("scanning agent registry")
@@ -170,7 +181,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         judgement_filter=judgement_filter,
         north_settings=deps.north_settings,
         synthesizer=ResultSynthesizer(inference_router=deps.cost_tracker),
-        cost_tracker=deps.cost_tracker,
+        tracked_router=deps.cost_tracker,
         episodic_store=deps.episodic_store,
         tool_registry=tool_registry,
         default_workspace=settings.north_workspace,

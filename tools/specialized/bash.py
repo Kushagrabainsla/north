@@ -1,22 +1,36 @@
 """BashTool — run shell commands inside the workspace.
 
+Every command is gated behind an explicit user approval card before the
+subprocess is spawned. The ApprovalStore + EventStreamManager are injected
+at startup (see orchestrator/app.py), so this tool must be registered
+manually rather than auto-discovered.
+
 See docs/CODING_STYLE.md Section 16.1.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+
+if TYPE_CHECKING:
+    from approval.store import ApprovalStore
+    from orchestrator.stream import EventStreamManager
 
 _TIMEOUT = 30
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the
 # model's context window.  The tail is truncated with a visible marker.
 _MAX_OUTPUT_CHARS = 30_000
 
-_BLOCKED = [
+# These patterns are caught as a UX convenience — NOT a security boundary.
+# The approval gate above is the actual guard: the user sees the exact command
+# and decides. This list only catches the most obviously destructive typos.
+# Do not rely on it to stop a determined attacker or a misbehaving model —
+# any determined bypass (extra spaces, equivalent syntax) will get through.
+_OBVIOUS_DESTRUCTIVE_HINTS = [
     "rm -rf /",
     ":(){ :|:& };:",
     "dd if=",
@@ -33,12 +47,17 @@ def _cap(text: str) -> str:
 
 
 class BashTool(Tool):
-    """Runs a shell command and returns stdout, stderr, and return code."""
+    """Runs a shell command and returns stdout, stderr, and return code.
+
+    Requires explicit user approval before executing any command — the approval
+    card shows the exact command string so the user sees precisely what will run.
+    """
 
     name = "bash"
     description = (
         "Run a shell command and return stdout/stderr/returncode."
         " Default timeout 30 s, pass timeout= (max 300) for longer commands."
+        " Every command requires user approval before it executes."
     )
     parameters_schema = {
         "type": "object",
@@ -59,21 +78,78 @@ class BashTool(Tool):
         "required": ["command"],
     }
 
+    def __init__(
+        self,
+        approval_store: ApprovalStore,
+        stream_manager: EventStreamManager | None = None,
+        approval_timeout_seconds: float = 300.0,
+    ) -> None:
+        self._approval_store = approval_store
+        self._stream_manager = stream_manager
+        self._approval_timeout_seconds = approval_timeout_seconds
+
     def format_output(self, data: dict[str, Any]) -> str:
         return str(data.get("stdout", data.get("output", ""))).strip()
+
+    async def _request_approval(self, task_id: str | None, command: str) -> bool:
+        """Emit an approval card for the command. Returns True if the user approves."""
+        from approval.models import Card, CardType
+        from utils.ids import generate_id
+
+        card_id = generate_id()
+        card = Card(
+            id=card_id,
+            type=CardType.APPROVAL,
+            task_id=task_id or "",
+            agent="bash",
+            title="Shell Command — Approval Required",
+            message=f"```\n{command}\n```",
+            options=["Run", "Cancel"],
+        )
+        self._approval_store.add(card)
+
+        if self._stream_manager and task_id:
+            await self._stream_manager.emit(
+                task_id,
+                "approval_required",
+                {
+                    "card_id": card_id,
+                    "task_id": task_id,
+                    "agent": "bash",
+                    "title": card.title,
+                    "message": card.message,
+                    "options": card.options,
+                },
+            )
+
+        resolved = await self._approval_store.wait_for_decision(
+            card_id, timeout=self._approval_timeout_seconds
+        )
+        if resolved is None:
+            self._approval_store.resolve(card_id, "rejected")
+            return False
+        return resolved.chosen_option.lower() == card.options[0].lower()
 
     async def run(self, input: ToolInput) -> ToolOutput:
         command = input.params.get("command")
         if not command:
             return ToolOutput(success=False, error="Parameter 'command' is required.")
 
-        for blocked in _BLOCKED:
+        for blocked in _OBVIOUS_DESTRUCTIVE_HINTS:
             if blocked in command:
                 return ToolOutput(success=False, error=f"Blocked pattern in command: {blocked!r}")
 
+        task_id: str | None = input.params.get("task_id")
+        approved = await self._request_approval(task_id, command)
+        if not approved:
+            return ToolOutput(success=False, error="Command cancelled by user.")
+
         cwd = input.params.get("workspace") or None
         raw_timeout = input.params.get("timeout")
-        timeout = min(max(int(raw_timeout), 1), 300) if raw_timeout is not None else _TIMEOUT
+        try:
+            timeout = min(max(int(raw_timeout), 1), 300) if raw_timeout is not None else _TIMEOUT
+        except (ValueError, TypeError):
+            timeout = _TIMEOUT
 
         try:
             proc = await asyncio.create_subprocess_shell(

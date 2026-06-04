@@ -39,6 +39,9 @@ class FileContextStore(ContextStore):
         # read-modify-write inside _append_sync is always atomic from the
         # perspective of async callers.
         self._locks: dict[str, asyncio.Lock] = {}
+        # Holds strong references to fire-and-forget embedding tasks so they
+        # are not garbage-collected before they complete.
+        self._embedding_tasks: set[asyncio.Task] = set()
 
     def _path(self, document: ContextDocument) -> Path:
         return self._base_path / document.value
@@ -65,9 +68,11 @@ class FileContextStore(ContextStore):
             # background update completes will reload from DB rather than
             # serving the pre-write cache.
             self._embedding_index.invalidate_cache()
-            asyncio.create_task(
+            t = asyncio.create_task(
                 self._embedding_index.update_document(document.value, content)
             )
+            self._embedding_tasks.add(t)
+            t.add_done_callback(self._embedding_tasks.discard)
 
     def _write_sync(self, document: ContextDocument, content: str) -> None:
         self._path(document).write_text(content, encoding="utf-8")
@@ -81,9 +86,11 @@ class FileContextStore(ContextStore):
                 raise ContextWriteError(f"Failed to append to {document.value}: {e}") from e
             if self._embedding_index is not None:
                 new_content = await self.read(document)
-                asyncio.create_task(
+                t = asyncio.create_task(
                     self._embedding_index.update_document(document.value, new_content)
                 )
+                self._embedding_tasks.add(t)
+                t.add_done_callback(self._embedding_tasks.discard)
 
     def _append_sync(self, document: ContextDocument, delta: str) -> None:
         path = self._path(document)

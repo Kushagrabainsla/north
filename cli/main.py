@@ -501,7 +501,9 @@ def context_edit(
         doc_path.touch()
 
     editor = os.environ.get("EDITOR", "nano")
-    subprocess.call([editor, str(doc_path)])
+    rc = subprocess.call([editor, str(doc_path)])
+    if rc != 0:
+        typer.echo(f"Editor exited with code {rc}.", err=True)
 
 
 @context_app.command("add")

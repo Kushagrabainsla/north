@@ -267,7 +267,11 @@ class ContextStore(ABC):
 General facts about the user freely available to all agents. Goals, preferences, schedule patterns, dietary habits, risk appetite, professional background. Updated continuously by the extraction pipeline.
 
 #### private.md
-Sensitive information agents cannot read automatically. Specific account numbers, medical details, relationship dynamics. When an agent needs it, it raises a request through the Orchestrator. The user approves via an Approval card. That session uses the data and closes cleanly. **Stored locally only. Never leaves the machine.**
+Sensitive information agents cannot read automatically. Specific account numbers, medical details, relationship dynamics. **Stored locally only. Never leaves the machine.**
+
+`private.md` is excluded from every agent's context by default — only agents with an explicit `can_read: private.md` entry in `privacy_rules.md` can access it, and this is enforced at context-load time in `Agent._load_context()`.
+
+The dynamic flow described below (agent raises a runtime request → user approves → agent gets temporary access) is **not yet implemented**. Until it is, agents that need specific private facts should have them injected via `north context add --text "..."`, which routes through the extraction pipeline into the appropriate document.
 
 #### privacy_rules.md
 Edited directly by the user. Defines which agents can request private context, which have automatic access, and which topics always route to private context. Also defines trust thresholds per action category used by the Approval Layer.
@@ -409,27 +413,23 @@ Every input goes through four stages in order:
 Input arrives directly from Perception Layer (voice or text)
        |
        v
-Stage 1: Classifier (high_volume pool: fast, cheap)
-  -> trivial or consequential?
-  -> trivial:       skip to Stage 3
+Stages 1+3 combined: ExecutionPlanner.plan_all() (single LLM call, reasoning pool)
+  -> classifies intent (trivial or consequential?) AND builds execution plan
+  -> trivial:       skip Stage 2, proceed directly to Stage 4
   -> consequential: proceed to Stage 2
   -> Ledger write: source=system, action="classified as [trivial|consequential]"
+  -> Ledger write: source=system, action="routed", agents=[...]
+
+  Note: Stages 1 and 3 are merged into one LLM call in ExecutionPlanner.plan_all()
+  to save cost and latency.  The IntentClassification and ExecutionPlan are returned
+  together.  A separate IntentClassifier class no longer exists.
        |
        v
-Stage 2: North Star Check (reasoning pool)
+Stage 2: North Star Check (reasoning pool) — consequential tasks only
   -> reads north_stars.md via ContextStore
-  -> aligns:    proceed to Stage 3
+  -> aligns:    proceed to Stage 4
   -> conflicts: surface tension card to user, await decision before continuing
   -> Ledger write: source=system, action="north_star_check: [aligned|conflict]"
-       |
-       v
-Stage 3: Routing Decision (reasoning pool)
-  -> reads public.md and agent registry via ContextStore and filesystem
-  -> decides which agents are needed
-  -> identifies dependencies between agents
-  -> creates parallel execution groups
-  -> creates Task Context Object (new SQLite file for this task_id)
-  -> Ledger write: source=system, action="routed", agents=[...]
        |
        v
 Stage 4: Parallel Execution
@@ -1625,8 +1625,10 @@ Loading mental models of specific thinkers as advisory lenses on Orchestrator de
 **Offline Transcription Fallback**
 Voice input depends on OpenRouter being reachable. A local Whisper variant (`mlx-whisper`) behind the same `InferenceRouter` interface would close this gap, but the switching policy is not yet defined.
 
-**Privacy Enforcement Layer**
-The `privacy_rules.md` document defines which agents can access which data, but there is no active enforcement layer that reads these rules before injecting context into agent prompts.  The `_load_context()` override in `AgentBase` is the correct place to add this check.  Deferred.
+**Private Context Request Flow**
+Static access control is enforced: `Agent._load_context()` calls `_allowed_documents()` which reads `privacy_rules.md` before injecting any context into an agent's prompt. `private.md` is never included by default — only agents with an explicit `can_read: private.md` rule in `privacy_rules.md` can access it.
+
+What is **not yet implemented** is the *dynamic* private context request described in §5.3: the flow where an agent mid-task raises a request through the Orchestrator, the user approves via an Approval card, and the agent gets temporary access to `private.md` for that session only. Until this is built, agents that need private data must have it pre-granted in `privacy_rules.md`, or the user must inject the relevant facts via `north context add`.
 
 ---
 
