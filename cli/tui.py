@@ -40,15 +40,17 @@ def _prompt_tokens() -> FormattedText:
     mode = _get_strategy()
     color = _STRATEGY_COLORS.get(mode, "ansicyan")
     return FormattedText([
-        ("", "\n"),
-        (f"bold {color}", f"[{mode}] ❯ "),
+        ("", "\n  "),
+        (f"{color}", mode),
+        ("", "  "),
+        ("bold", "❯ "),
     ])
 
 
 def _fmt_params(params: dict) -> str:
     parts = []
     for k, v in params.items():
-        if k == "workspace":
+        if k in ("workspace", "task_id"):
             continue
         v_str = repr(v)
         if len(v_str) > 60:
@@ -66,30 +68,23 @@ class _Spinner:
         self._frame = 0
         self._width = 0
 
-    # ── internal ──────────────────────────────────────────────────────────────
-
     def _raw(self, s: str) -> None:
         sys.stdout.write(s)
         sys.stdout.flush()
 
     def _erase(self) -> None:
-        """Overwrite the current spinner line with spaces, cursor → col 0."""
         if self._width:
             self._raw(f"\r{' ' * self._width}\r")
             self._width = 0
 
     def _draw(self) -> None:
         f = _SPIN[self._frame % len(_SPIN)]
-        line = f"  {f} {self._text}"
-        # Pad with spaces to erase residual chars when switching to shorter text.
+        line = f"  {f}  {self._text}"
         padding = max(0, self._width - len(line))
         self._raw(f"\r{line}{' ' * padding}")
         self._width = len(line)
 
-    # ── public API ────────────────────────────────────────────────────────────
-
     def start(self, text: str) -> None:
-        """Begin animating with the given status text."""
         self._erase()
         self._text = text
         self._active = True
@@ -97,28 +92,23 @@ class _Spinner:
         self._draw()
 
     def update(self, text: str) -> None:
-        """Change the status text without resetting the frame counter."""
         self._text = text
         if self._active:
             self._draw()
 
     def tick(self) -> None:
-        """Advance one animation frame (call every ~80 ms)."""
         if self._active:
             self._frame += 1
             self._draw()
 
     def before_print(self) -> None:
-        """Erase the spinner line before a console.print() call."""
         self._erase()
 
     def after_print(self) -> None:
-        """Redraw the spinner below whatever was just printed."""
         if self._active:
             self._draw()
 
     def stop(self) -> None:
-        """Erase the spinner and deactivate (cursor sits at col 0, ready for panel output)."""
         self._erase()
         self._active = False
 
@@ -140,40 +130,29 @@ async def run(
 
     token_buffer: dict[str, str] = {}
     approval_queue: asyncio.Queue[dict] = asyncio.Queue()
-    # Only show pipeline activity and response panels for tasks the user submitted.
-    # All other task_ids (cron, background) are silently filtered out.
     user_task_ids: set[str] = set()
 
     spinner = _Spinner()
-    # Placeholder — replaced with a patch_stdout-aware console once
-    # the with-patch_stdout(raw=True) block is entered.
     console: Console = Console()
 
-    # ── helpers ───────────────────────────────────────────────────────────────
-
     def _print(obj: object) -> None:
-        """Print a Rich renderable while keeping the spinner below it."""
         spinner.before_print()
         console.print(obj)
         spinner.after_print()
 
-    # ── SSE event renderer ────────────────────────────────────────────────────
-
     async def _handle_event(event: str, data: dict) -> None:  # noqa: C901
         task_id = data.get("task_id", "")
 
-        # Ignore events from background / cron tasks the user didn't initiate.
         if task_id and task_id not in user_task_ids:
             return
 
         if event == "classifying":
-            pass  # spinner already shows "…"; this fires too fast to be useful
+            spinner.update("classifying…")
 
         elif event == "classified":
             domain = data.get("domain", "")
-            flag = " [yellow](consequential)[/yellow]" if data.get("is_consequential") else ""
-            spinner.update(f"routing → {domain}…")
-            _print(f"  [dim]· {domain}{flag}[/dim]")
+            flag = "  ·  consequential" if data.get("is_consequential") else ""
+            spinner.update(f"routing → {domain}{flag}…")
 
         elif event == "routed":
             agents = data.get("agents") or []
@@ -181,20 +160,24 @@ async def run(
             spinner.update(f"running {label}…")
 
         elif event == "north_star_checking":
-            spinner.update("north stars…")
+            spinner.update("checking goals…")
 
         elif event == "north_star_aligned":
-            pass  # fires on every task, too noisy
+            pass
+
+        elif event == "north_star_check_skipped":
+            pass
 
         elif event == "north_star_conflict":
-            tension = (data.get("tension") or "")[:160]
+            tension = (data.get("tension") or "")[:200]
             spinner.stop()
+            console.print()
             console.print(
                 Panel(
-                    Text(tension, style="yellow"),
-                    title="[bold yellow]⚠  north star conflict[/bold yellow]",
+                    Text(tension, style="white"),
+                    title="[yellow]goal conflict[/yellow]",
                     border_style="yellow",
-                    padding=(0, 2),
+                    padding=(1, 2),
                 )
             )
 
@@ -209,15 +192,18 @@ async def run(
         elif event == "tool_called":
             tool = data.get("tool", "")
             params = data.get("params") or {}
-            _print(f"  [dim]· {tool}({_fmt_params(params)})[/dim]")
+            params_str = _fmt_params(params)
+            suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
+            _print(f"  [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
             spinner.update(f"{tool}…")
 
         elif event == "tool_result":
             tool = data.get("tool", "")
             success = data.get("success", True)
-            icon = "✓" if success else "✗"
-            style = "dim green" if success else "dim red"
-            _print(f"  [{style}]{icon} {tool}[/{style}]")
+            if success:
+                _print(f"  [dim green]✓  {tool}[/dim green]")
+            else:
+                _print(f"  [dim red]✗  {tool}[/dim red]")
             spinner.update("thinking…")
 
         elif event == "token":
@@ -249,11 +235,12 @@ async def run(
             spinner.stop()
             user_task_ids.discard(task_id)
             if output:
+                console.print()
                 console.print(
                     Panel(
                         Markdown(output),
-                        title="[bold green]north[/bold green]",
-                        border_style="green",
+                        title="[dim]north[/dim]",
+                        border_style="bright_black",
                         padding=(1, 2),
                     )
                 )
@@ -265,12 +252,13 @@ async def run(
             error = data.get("error", "Task failed.")
             spinner.stop()
             user_task_ids.discard(task_id)
+            console.print()
             console.print(
                 Panel(
                     Text(error, style="red"),
-                    title="[bold red]north — failed[/bold red]",
-                    border_style="red",
-                    padding=(0, 2),
+                    title="[dim]north — error[/dim]",
+                    border_style="bright_black",
+                    padding=(1, 2),
                 )
             )
 
@@ -278,25 +266,24 @@ async def run(
             token_buffer.pop(task_id, None)
             spinner.stop()
             user_task_ids.discard(task_id)
-            console.print("[dim]  Task cancelled.[/dim]")
+            console.print("\n  [dim]cancelled[/dim]")
 
         elif event == "approval_required":
             await approval_queue.put(data)
             spinner.stop()
+            console.print()
             console.print(
                 Panel(
                     Text(data.get("message", ""), style="white"),
-                    title=f"[bold yellow]? {data.get('title', 'Approval Required')}[/bold yellow]",
+                    title="[yellow]approval required[/yellow]",
                     border_style="yellow",
                     padding=(1, 2),
                 )
             )
             options = data.get("options") or ["Approve", "Reject"]
             for i, opt in enumerate(options, 1):
-                console.print(f"  [dim][{i}] {opt}[/dim]")
-            console.print("[dim]  — type a number and press Enter —[/dim]")
-
-    # ── Global SSE listener ───────────────────────────────────────────────────
+                console.print(f"  [bright_black][{i}][/bright_black]  {opt}")
+            console.print()
 
     async def _listen() -> None:
         while True:
@@ -329,14 +316,12 @@ async def run(
             except Exception:
                 await asyncio.sleep(2)
 
-    # ── Approval handler ──────────────────────────────────────────────────────
-
     async def _handle_pending_approval() -> None:
         if approval_queue.empty():
             return
         data = await approval_queue.get()
         options = data.get("options") or ["Approve", "Reject"]
-        raw = (await session.prompt_async(" ❯ ")).strip()
+        raw = (await session.prompt_async("  ❯ ")).strip()
         try:
             idx = int(raw) - 1
             chosen = options[idx] if 0 <= idx < len(options) else raw
@@ -370,30 +355,22 @@ async def run(
         except Exception:
             pass
 
-    # ── Spinner tick background task ──────────────────────────────────────────
-
     async def _spin_loop() -> None:
         while True:
             await asyncio.sleep(0.08)
             spinner.tick()
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
-
-    # Welcome banner — printed before patch_stdout is active.
-    Console().print(
-        Panel(
-            Text("Type your message and press Enter · Ctrl+C or 'exit' to quit", style="dim"),
-            title="[bold]★ north[/bold]",
-            border_style="bright_black",
-        )
-    )
+    # Welcome banner
+    _banner = Console()
+    _banner.print()
+    _banner.print("  [bold white]north[/bold white]  [bright_black]personal operating system[/bright_black]")
+    _banner.print(f"  [bright_black]{'─' * 44}[/bright_black]")
+    _banner.print(f"  [dim]strategy: {_get_strategy()}  ·  exit to quit[/dim]")
+    _banner.print()
 
     listener = asyncio.create_task(_listen())
 
     with patch_stdout(raw=True):
-        # raw=True: proxy uses write_raw() so Rich ANSI codes and \r reach the
-        # terminal intact.  force_terminal=True: emit codes even though the
-        # proxy doesn't pass isatty() checks.
         console = Console(force_terminal=True)
         spin_task = asyncio.create_task(_spin_loop())
 
@@ -405,23 +382,22 @@ async def run(
             try:
                 text = await session.prompt_async(_prompt_tokens)
             except KeyboardInterrupt:
-                console.print("\n[dim]Ctrl+C — type 'exit' to quit.[/dim]")
+                console.print("  [dim]interrupted  (exit to quit)[/dim]")
                 continue
             except EOFError:
-                console.print("[dim]Goodbye.[/dim]")
+                console.print("  [dim]goodbye[/dim]")
                 break
 
             text = text.strip()
             if not text:
                 continue
             if text.lower() in ("exit", "quit", "bye"):
-                console.print("[dim]Goodbye.[/dim]")
+                console.print("  [dim]goodbye[/dim]")
                 break
 
             if not approval_queue.empty():
                 await _handle_pending_approval()
 
-            # Immediate visual feedback — spinner starts before the POST returns.
             spinner.start("…")
 
             body: dict = {"prompt": text}
@@ -441,11 +417,11 @@ async def run(
                         user_task_ids.add(task_id)
             except httpx.ConnectError:
                 spinner.stop()
-                console.print("[red]Cannot reach north server. Is it running?[/red]")
+                console.print("  [red]cannot reach north server[/red]")
                 continue
             except Exception as exc:
                 spinner.stop()
-                console.print(f"[red]Error submitting task: {exc}[/red]")
+                console.print(f"  [red]error: {exc}[/red]")
                 continue
 
     spin_task.cancel()

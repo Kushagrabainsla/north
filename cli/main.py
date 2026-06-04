@@ -115,7 +115,7 @@ def _launch_tui(
 ) -> None:
     """Auto-start the server if not running, then launch the TUI."""
     if not _port_in_use(host, port) or not _is_north_server(host, port):
-        typer.secho("north server is not running — starting it now…", fg=typer.colors.BRIGHT_BLACK)
+        _console.print("  [dim]server offline — starting…[/dim]")
         # Re-invoke `north start --no-chat` to start the server only, then TUI below.
         from config.settings import settings
         from utils.security import load_secret
@@ -218,11 +218,12 @@ def list_tasks() -> None:
     response = _api("GET", "/orchestrator/tasks")
     tasks = response.json()
     if not tasks:
-        typer.echo("No pending tasks.")
+        _console.print("  [dim]no active tasks[/dim]")
         return
+    _console.print()
     for t in tasks:
-        typer.secho(f"  {t['task_id']}", fg=typer.colors.CYAN, nl=False)
-        typer.echo(f"  {t['status']}  {t['created_at']}")
+        _console.print(f"  [bright_black]{t['task_id']}[/bright_black]  [dim]{t['status']}[/dim]  [bright_black]{t['created_at']}[/bright_black]")
+    _console.print()
 
 
 # ── chat ─────────────────────────────────────────────────────────────────────
@@ -230,44 +231,44 @@ def list_tasks() -> None:
 # ── shared task runner ────────────────────────────────────────────────────────
 
 _STEP_ICONS: dict[str, str] = {
-    "classifying":           "◎",
+    "classifying":           "→",
     "classified":            "✓",
     "classified_as_trivial": "✓",
-    "north_star_checking":   "★",
+    "north_star_checking":   "→",
     "north_star_aligned":    "✓",
-    "north_star_conflict":   "!",
-    "routing":               "⇢",
+    "north_star_conflict":   "◆",
+    "routing":               "→",
     "routed":                "✓",
-    "executing":             "▶",
-    "agent_started":         "◎",
+    "executing":             "→",
+    "agent_started":         "→",
     "agent_completed":       "✓",
-    "tool_called":           "⚙",
+    "tool_called":           "→",
     "tool_result":           "✓",
 }
 
 _STEP_LABELS: dict[str, str] = {
-    "classifying":           "Classifying…",
-    "classified":            "Classified",
-    "classified_as_trivial": "Quick task — skipping north star check",
-    "north_star_checking":   "Checking north stars…",
-    "north_star_aligned":    "Aligned with goals",
-    "north_star_conflict":   "North star conflict — check approvals",
-    "routing":               "Planning execution…",
-    "routed":                "Execution plan ready",
-    "executing":             "Running agents…",
+    "classifying":           "classifying…",
+    "classified":            "classified",
+    "classified_as_trivial": "quick task",
+    "north_star_checking":   "checking goals…",
+    "north_star_aligned":    "goals aligned",
+    "north_star_conflict":   "goal conflict",
+    "routing":               "planning…",
+    "routed":                "plan ready",
+    "executing":             "running agents…",
 }
 
 
 def _build_steps_table(steps: list[tuple[str, str, bool]]) -> Table:
     """Render pipeline steps as a borderless table. Each step is (icon, label, active)."""
-    t = Table.grid(padding=(0, 1))
-    t.add_column(width=2)
+    t = Table.grid(padding=(0, 2))
+    t.add_column(width=1)
     t.add_column()
     for icon, label, active in steps:
         if active:
             t.add_row(
-                Text(icon, style="bold blue"),
-                Text(label, style="bold white"),
+                Text(icon, style="white"),
+                Text(label, style="white"),
             )
         else:
             t.add_row(
@@ -292,9 +293,9 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
 
     def _make_renderable() -> Panel:
         return Panel(
-            _build_steps_table(steps) if steps else Text("Starting…", style="dim"),
-            title=f"[dim]{task_id}[/dim]",
+            _build_steps_table(steps) if steps else Text("starting…", style="dim"),
             border_style="bright_black",
+            padding=(0, 1),
         )
 
     url = f"{_BASE_URL}/orchestrator/stream/{task_id}"
@@ -334,11 +335,11 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                             steps.append(("✓", label, True))
                         elif event == "tool_called":
                             tool = data.get("tool", "tool")
-                            steps.append(("⚙", f"  {tool}…", True))
+                            steps.append(("→", f"  {tool}…", True))
                         elif event == "tool_result":
                             tool = data.get("tool", "tool")
                             success = data.get("success", True)
-                            steps.append(("✓" if success else "✗", f"  {tool} done", True))
+                            steps.append(("✓" if success else "✗", f"  {tool}", True))
                         elif event == "approval_required":
                             steps.append(("?", "Approval required", False))
                             live.update(_make_renderable())
@@ -346,14 +347,15 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                             _console.print()
                             _console.print(Panel(
                                 Text(data.get("message", ""), style="white"),
-                                title=f"[bold yellow]? {data.get('title', 'Approval Required')}[/bold yellow]",
+                                title="[yellow]approval required[/yellow]",
                                 border_style="yellow",
                                 padding=(1, 2),
                             ))
                             options = data.get("options", ["Approve", "Reject"])
                             for i, opt in enumerate(options, 1):
-                                _console.print(f"  [{i}] {opt}")
-                            raw_choice = input("\n ❯ ").strip()
+                                _console.print(f"  [bright_black][{i}][/bright_black]  {opt}")
+                            _console.print()
+                            raw_choice = input("  ❯ ").strip()
                             try:
                                 idx = int(raw_choice) - 1
                                 chosen = options[idx] if 0 <= idx < len(options) else raw_choice
@@ -413,10 +415,12 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
         return ""
 
     if failed_msg:
+        _console.print()
         _console.print(Panel(
             Text(failed_msg, style="red"),
-            title="[red]north — failed[/red]",
-            border_style="red",
+            title="[dim]north — error[/dim]",
+            border_style="bright_black",
+            padding=(1, 2),
         ))
         return ""
 
@@ -436,10 +440,11 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
         except Exception:
             output_text = "Task completed."
 
+    _console.print()
     _console.print(Panel(
         Markdown(output_text),
-        title="[bold green]north[/bold green]",
-        border_style="green",
+        title="[dim]north[/dim]",
+        border_style="bright_black",
         padding=(1, 2),
     ))
     return output_text
@@ -556,20 +561,33 @@ def show_ledger(
     response = _api("GET", "/orchestrator/ledger", params=params)
     entries = response.json()
     if not entries:
-        typer.echo("No ledger entries found.")
+        _console.print("  [dim]no ledger entries[/dim]")
         return
 
+    table = Table(box=None, padding=(0, 2), show_header=True, header_style="dim")
+    table.add_column("time", style="bright_black", no_wrap=True)
+    table.add_column("source", no_wrap=True)
+    table.add_column("action")
+    table.add_column("status", no_wrap=True)
+    table.add_column("agent", style="dim")
     for entry in entries:
         ts = entry["timestamp"][:19].replace("T", " ")
-        agent_str = f"  agent={entry['agent']}" if entry.get("agent") else ""
-        typer.secho(f"[{ts}] ", fg=typer.colors.BRIGHT_BLACK, nl=False)
-        typer.secho(f"{entry['source']:<18}", fg=typer.colors.CYAN, nl=False)
-        typer.secho(f" {(entry.get('action') or ''):<40}", nl=False)
-        status = entry.get("status")
-        if status:
-            colour = typer.colors.GREEN if status == "completed" else typer.colors.RED
-            typer.secho(f" {status}", fg=colour, nl=False)
-        typer.echo(agent_str)
+        status = entry.get("status") or ""
+        status_fmt = (
+            f"[green]{status}[/green]" if status == "completed" else
+            f"[red]{status}[/red]" if status == "failed" else
+            f"[dim]{status}[/dim]"
+        )
+        table.add_row(
+            ts,
+            f"[dim]{entry['source']}[/dim]",
+            entry.get("action") or "",
+            status_fmt,
+            entry.get("agent") or "",
+        )
+    _console.print()
+    _console.print(table)
+    _console.print()
 
 
 # ── jobs ──────────────────────────────────────────────────────────────────────
@@ -587,12 +605,24 @@ def show_jobs(
     response = _api("GET", "/orchestrator/jobs", params=params)
     jobs = response.json()
     if not jobs:
-        typer.echo("No jobs found.")
+        _console.print("  [dim]no jobs[/dim]")
         return
 
+    _console.print()
     for job in jobs:
-        typer.secho(f"  {job['job_id']:<36}", fg=typer.colors.CYAN, nl=False)
-        typer.echo(f"  {job['status']:<12}  {job['type']:<10}  {job['agent']}")
+        status = job["status"]
+        status_style = (
+            "green" if status == "completed" else
+            "yellow" if status == "pending" else
+            "red" if status == "failed" else
+            "dim"
+        )
+        _console.print(
+            f"  [bright_black]{job['job_id']}[/bright_black]  "
+            f"[{status_style}]{status}[/{status_style}]  "
+            f"[dim]{job['type']}[/dim]  {job['agent']}"
+        )
+    _console.print()
 
 
 job_app = typer.Typer(help="Job management.", no_args_is_help=True)
@@ -630,11 +660,16 @@ def _list_agents_impl() -> None:
     response = _api("GET", "/orchestrator/agents")
     agents = response.json()
     if not agents:
-        typer.echo("No agents registered.")
+        _console.print("  [dim]no agents registered[/dim]")
         return
+    _console.print()
     for a in agents:
-        typer.secho(f"  {a['name']:<16}", fg=typer.colors.CYAN, nl=False)
-        typer.echo(f"  domain={a['domain']:<12}  pool={a['model_pool']}")
+        _console.print(
+            f"  [white]{a['name']:<16}[/white]  "
+            f"[dim]{a['domain']:<12}[/dim]  "
+            f"[bright_black]{a['model_pool']}[/bright_black]"
+        )
+    _console.print()
 
 
 @agent_app.command("create")
@@ -873,20 +908,21 @@ def inference_costs(
     response = _api("GET", "/orchestrator/inference/costs", params=params)
     data = response.json()
 
-    typer.secho(f"\nInference costs — {data['period']}", fg=typer.colors.BRIGHT_WHITE)
-    typer.echo(f"  Total: ${data['total_cost_usd']:.6f}")
+    _console.print()
+    _console.print(f"  [bold white]inference costs[/bold white]  [dim]{data['period']}[/dim]")
+    _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
+    _console.print(f"  [dim]total      [/dim]  ${data['total_cost_usd']:.6f}")
 
     if data.get("by_component"):
-        typer.echo("\nBy component:")
+        _console.print("\n  [dim]by component[/dim]")
         for comp, cost in sorted(data["by_component"].items(), key=lambda x: -x[1]):
-            typer.secho(f"  {comp:<24}", fg=typer.colors.CYAN, nl=False)
-            typer.echo(f"  ${cost:.6f}")
+            _console.print(f"    [dim]{comp:<24}[/dim]  ${cost:.6f}")
 
     if data.get("by_model"):
-        typer.echo("\nBy model:")
+        _console.print("\n  [dim]by model[/dim]")
         for model, cost in sorted(data["by_model"].items(), key=lambda x: -x[1]):
-            typer.secho(f"  {model:<40}", fg=typer.colors.CYAN, nl=False)
-            typer.echo(f"  ${cost:.6f}")
+            _console.print(f"    [dim]{model:<40}[/dim]  ${cost:.6f}")
+    _console.print()
 
 
 @inference_app.command("models")
@@ -894,10 +930,12 @@ def inference_models() -> None:
     """Show current model pool state."""
     response = _api("GET", "/orchestrator/inference/models")
     pools = response.json()
+    _console.print()
     for pool_name, pool_data in pools.items():
-        typer.secho(f"\n  {pool_name}", fg=typer.colors.BRIGHT_WHITE)
+        _console.print(f"  [bold white]{pool_name}[/bold white]")
         for model in pool_data.get("models", []):
-            typer.echo(f"    {model}")
+            _console.print(f"    [dim]{model}[/dim]")
+        _console.print()
 
 
 # ── dictate ───────────────────────────────────────────────────────────────────
@@ -1052,14 +1090,21 @@ def tools_confidence(
         return
 
     current_agent = None
+    _console.print()
     for row in scores:
         if row["agent"] != current_agent:
             current_agent = row["agent"]
-            typer.secho(f"\n  {current_agent}", fg=typer.colors.BRIGHT_WHITE)
-        bar_len = int(row["confidence"] * 20)
+            _console.print(f"  [bold white]{current_agent}[/bold white]")
+        conf = row["confidence"]
+        bar_len = int(conf * 20)
         bar = "█" * bar_len + "░" * (20 - bar_len)
-        typer.secho(f"    {row['tool']:<24}", fg=typer.colors.CYAN, nl=False)
-        typer.echo(f"  {bar}  {row['confidence']:.2f}")
+        bar_color = "green" if conf >= 0.7 else "yellow" if conf >= 0.4 else "red"
+        _console.print(
+            f"    [dim]{row['tool']:<24}[/dim]  "
+            f"[{bar_color}]{bar}[/{bar_color}]  "
+            f"[dim]{conf:.2f}[/dim]"
+        )
+    _console.print()
 
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -1137,16 +1182,13 @@ def _is_north_server(host: str, port: int) -> bool:
 
 def _wait_for_server(host: str, port: int, timeout: int = 90) -> None:
     """Poll until the server responds or timeout expires."""
-    typer.echo("Waiting for server ", nl=False)
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _is_north_server(host, port):
-            typer.secho(" ready.", fg=typer.colors.GREEN)
+            _console.print("  [dim green]✓[/dim green]  server ready")
             return
-        typer.echo(".", nl=False)
         time.sleep(1)
-    typer.echo("")
-    typer.secho("Server did not become ready in time.", fg=typer.colors.RED, err=True)
+    _console.print("  [red]server did not respond in time[/red]", err=True)
     raise typer.Exit(1) from None
 
 
@@ -1272,12 +1314,13 @@ def start(
         raise typer.Exit(1) from None
 
     if use_docker:
-        typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
-        typer.echo("  Mode         → Docker Compose")
-        typer.echo(f"  Compose file → {compose_file}")
-        typer.echo(f"  Workspace    → {resolved_workspace}")
-        typer.echo(f"  Web UI       → http://127.0.0.1:{port}/ui/")
-        typer.echo("")
+        _console.print()
+        _console.print("  [bold white]north[/bold white]  [bright_black]docker[/bright_black]")
+        _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
+        _console.print(f"  [dim]compose    [/dim]  {compose_file}")
+        _console.print(f"  [dim]address    [/dim]  http://127.0.0.1:{port}")
+        _console.print(f"  [dim]workspace  [/dim]  {resolved_workspace}")
+        _console.print()
         docker_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
         result = subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
@@ -1328,15 +1371,14 @@ def start(
             raise typer.Exit(1) from None
         time.sleep(1)
 
-    typer.secho("★ north", fg=typer.colors.BRIGHT_WHITE, bold=True, nl=False)
-    typer.echo("  Mode         → Local")
-    typer.echo(f"  Orchestrator → http://{host}:{port}")
-    typer.echo(f"  Web UI       → http://{host}:{port}/ui/")
-    typer.echo(f"  API docs     → http://{host}:{port}/docs")
-    typer.echo(f"  Home         → {settings.north_home}")
-    typer.echo(f"  Workspace    → {resolved_workspace}")
-    typer.echo(f"  Logs         → {log_path}")
-    typer.echo("")
+    _console.print()
+    _console.print("  [bold white]north[/bold white]  [bright_black]local[/bright_black]")
+    _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
+    _console.print(f"  [dim]address    [/dim]  http://{host}:{port}")
+    _console.print(f"  [dim]workspace  [/dim]  {resolved_workspace}")
+    _console.print(f"  [dim]home       [/dim]  {settings.north_home}")
+    _console.print(f"  [dim]logs       [/dim]  {log_path}")
+    _console.print()
 
     # Launch the server as a subprocess so its stdout/stderr are fully
     # redirected to the log file at the OS level — no monkey-patching needed.
