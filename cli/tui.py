@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,9 +14,11 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.text import Text
 
 _STRATEGY_COLORS = {
@@ -25,6 +28,10 @@ _STRATEGY_COLORS = {
 }
 
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+_PROMPT_STYLE = Style.from_dict({
+    "bottom-toolbar": "bg:default fg:ansibrightblack",
+})
 
 
 def _get_strategy() -> str:
@@ -36,12 +43,14 @@ def _get_strategy() -> str:
         return "cruise"
 
 
+def _term_width() -> int:
+    return shutil.get_terminal_size((80, 24)).columns
+
+
 def _prompt_tokens() -> FormattedText:
-    mode = _get_strategy()
-    color = _STRATEGY_COLORS.get(mode, "ansicyan")
+    sep = "─" * _term_width()
     return FormattedText([
-        ("", "\n  "),
-        (f"{color}", mode),
+        ("fg:ansibrightblack", sep + "\n"),
         ("", "  "),
         ("bold", "❯ "),
     ])
@@ -122,10 +131,26 @@ async def run(
     history_file = Path.home() / ".north" / "tui_history"
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
+    approval_pending: list[bool] = [False]
+
+    def _toolbar() -> FormattedText:
+        mode = _get_strategy()
+        sep = "─" * _term_width()
+        if approval_pending[0]:
+            hint = f"  [1] approve  [2] cancel  ·  strategy: {mode}"
+        else:
+            hint = f"  strategy: {mode}  ·  ↑↓ history  ·  exit to quit"
+        return FormattedText([
+            ("fg:ansibrightblack", sep + "\n"),
+            ("fg:ansibrightblack", hint),
+        ])
+
     session = PromptSession(
         history=FileHistory(str(history_file)),
         enable_history_search=True,
         mouse_support=False,
+        bottom_toolbar=_toolbar,
+        style=_PROMPT_STYLE,
     )
 
     token_buffer: dict[str, str] = {}
@@ -270,6 +295,7 @@ async def run(
 
         elif event == "approval_required":
             await approval_queue.put(data)
+            approval_pending[0] = True
             spinner.stop()
             console.print()
             console.print(
@@ -316,12 +342,16 @@ async def run(
             except Exception:
                 await asyncio.sleep(2)
 
-    async def _handle_pending_approval() -> None:
+    async def _handle_pending_approval(prefilled: str | None = None) -> None:
         if approval_queue.empty():
             return
         data = await approval_queue.get()
         options = data.get("options") or ["Approve", "Reject"]
-        raw = (await session.prompt_async("  ❯ ")).strip()
+        if prefilled is not None:
+            raw = prefilled
+        else:
+            raw = (await session.prompt_async("  ❯ ")).strip()
+        approval_pending[0] = not approval_queue.empty()
         try:
             idx = int(raw) - 1
             chosen = options[idx] if 0 <= idx < len(options) else raw
@@ -364,8 +394,8 @@ async def run(
     _banner = Console()
     _banner.print()
     _banner.print("  [bold white]north[/bold white]  [bright_black]personal operating system[/bright_black]")
-    _banner.print(f"  [bright_black]{'─' * 44}[/bright_black]")
-    _banner.print(f"  [dim]strategy: {_get_strategy()}  ·  exit to quit[/dim]")
+    _banner.print(Rule(style="bright_black"))
+    _banner.print(f"  [dim]strategy: {_get_strategy()}[/dim]")
     _banner.print()
 
     listener = asyncio.create_task(_listen())
@@ -396,7 +426,8 @@ async def run(
                 break
 
             if not approval_queue.empty():
-                await _handle_pending_approval()
+                await _handle_pending_approval(prefilled=text)
+                continue
 
             spinner.start("…")
 
