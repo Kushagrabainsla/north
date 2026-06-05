@@ -67,10 +67,18 @@ class CreateToolTool(Tool):
             "content": {
                 "type": "string",
                 "description": (
-                    "Full Python source for the tool file. "
-                    "For action=create: if provided, used as-is instead of generating a stub — "
-                    "the tool is immediately usable without a restart. "
-                    "For action=update: required — the complete updated source."
+                    "Full Python source for the tool file. MUST define a subclass of Tool (from tools.base) "
+                    "with name, description, parameters_schema, format_output, and async def run. Example:\n"
+                    "from tools.base import Tool\n"
+                    "from tools.models import ToolInput, ToolOutput\n"
+                    "class MyTool(Tool):\n"
+                    "    name = 'my_tool'\n"
+                    "    description = '...'\n"
+                    "    parameters_schema = {'type': 'object', 'properties': {}}\n"
+                    "    def format_output(self, data: dict) -> str:\n"
+                    "        return 'success'\n"
+                    "    async def run(self, input: ToolInput) -> ToolOutput:\n"
+                    "        return ToolOutput(success=True, data={})"
                 ),
             },
             "tool_type": {
