@@ -13,10 +13,6 @@ class AgentNotFoundError(AgentError):
     """Raised when an agent name is not registered."""
 
 
-class AgentExecutionError(AgentError):
-    """Raised when an agent's `_execute()` fails irrecoverably."""
-
-
 class AgentConfigError(AgentError):
     """Raised when `config.yaml` is missing, malformed, or contradicts the runtime."""
 

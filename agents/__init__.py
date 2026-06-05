@@ -4,7 +4,6 @@ from agents.base import Agent
 from agents.exceptions import (
     AgentConfigError,
     AgentError,
-    AgentExecutionError,
     AgentNotFoundError,
     AgentOutputParseError,
 )
@@ -23,7 +22,6 @@ __all__ = [
     "AgentConfigError",
     "AgentDependencies",
     "AgentError",
-    "AgentExecutionError",
     "AgentNotFoundError",
     "AgentOutputParseError",
     "AgentPayload",

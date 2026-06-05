@@ -12,5 +12,3 @@ class ApprovalError(NorthError):
     """Base class for all approval and notification errors."""
 
 
-class NotificationError(ApprovalError):
-    """Raised when sending a macOS or terminal notification fails."""

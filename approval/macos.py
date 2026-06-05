@@ -85,7 +85,3 @@ class MacOSNotifier(Notifier):
             # If the user clicked a valid action button, we can relay this
             # back to the orchestrator if a callback server is active.
             # Standard callback handling is done in callback_server.py.
-
-
-# Provide AlerterNotifier alias as used in dependencies.py
-AlerterNotifier = MacOSNotifier
