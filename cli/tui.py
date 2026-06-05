@@ -67,13 +67,14 @@ def _fmt_params(params: dict) -> str:
 
 
 class _Spinner:
-    """Animated status line that rewrites itself in-place using \\r."""
+    """Animated status line — raw \\r writes only when no prompt is active."""
 
     def __init__(self) -> None:
         self._active = False
         self._text = ""
         self._frame = 0
         self._width = 0
+        self.prompt_active = False  # set True while prompt_async() is running
 
     def _raw(self, s: str) -> None:
         sys.stdout.write(s)
@@ -85,6 +86,8 @@ class _Spinner:
             self._width = 0
 
     def _draw(self) -> None:
+        if self.prompt_active:
+            return  # toolbar handles display; raw writes would corrupt the prompt
         f = _SPIN[self._frame % len(_SPIN)]
         line = f"  {f}  {self._text}"
         padding = max(0, self._width - len(line))
@@ -130,12 +133,17 @@ async def run(
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     approval_pending: list[bool] = [False]
+    toolbar_status: list[str] = [""]   # current processing status for toolbar
+    spin_frame: list[int] = [0]        # shared frame counter for toolbar animation
 
     def _toolbar() -> FormattedText:
         mode = _get_strategy()
         sep = "─" * _term_width()
         if approval_pending[0]:
             hint = f"  [1] approve  [2] cancel  ·  strategy: {mode}"
+        elif toolbar_status[0]:
+            f = _SPIN[spin_frame[0] % len(_SPIN)]
+            hint = f"  {f}  {toolbar_status[0]}"
         else:
             hint = f"  strategy: {mode}  ·  ↑↓ history  ·  exit to quit"
         return FormattedText([
@@ -163,6 +171,11 @@ async def run(
         console.print(obj)
         spinner.after_print()
 
+    def _set_status(text: str) -> None:
+        """Update both the raw spinner and the toolbar status."""
+        spinner.update(text)
+        toolbar_status[0] = text
+
     async def _handle_event(event: str, data: dict) -> None:  # noqa: C901
         task_id = data.get("task_id", "")
 
@@ -170,20 +183,20 @@ async def run(
             return
 
         if event == "classifying":
-            spinner.update("classifying…")
+            _set_status("classifying…")
 
         elif event == "classified":
             domain = data.get("domain", "")
             flag = "  ·  consequential" if data.get("is_consequential") else ""
-            spinner.update(f"routing → {domain}{flag}…")
+            _set_status(f"routing → {domain}{flag}…")
 
         elif event == "routed":
             agents = data.get("agents") or []
             label = ", ".join(agents) if agents else "general"
-            spinner.update(f"running {label}…")
+            _set_status(f"running {label}…")
 
         elif event == "north_star_checking":
-            spinner.update("checking goals…")
+            _set_status("checking goals…")
 
         elif event == "north_star_aligned":
             pass
@@ -194,23 +207,23 @@ async def run(
         elif event == "north_star_conflict":
             tension = (data.get("tension") or "")[:200]
             spinner.stop()
-            console.print()
+            toolbar_status[0] = ""
             console.print(
                 Panel(
                     Text(tension, style="white"),
                     title="[yellow]goal conflict[/yellow]",
                     border_style="yellow",
-                    padding=(1, 2),
+                    padding=(0, 2),
                 )
             )
 
         elif event == "executing":
             agents = data.get("agents") or []
             if agents:
-                spinner.update(f"running {', '.join(agents)}…")
+                _set_status(f"running {', '.join(agents)}…")
 
         elif event == "agent_started":
-            spinner.update(f"running {data.get('agent', '')}…")
+            _set_status(f"running {data.get('agent', '')}…")
 
         elif event == "tool_called":
             tool = data.get("tool", "")
@@ -218,7 +231,7 @@ async def run(
             params_str = _fmt_params(params)
             suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
             _print(f"  [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
-            spinner.update(f"{tool}…")
+            _set_status(f"{tool}…")
 
         elif event == "tool_result":
             tool = data.get("tool", "")
@@ -227,13 +240,13 @@ async def run(
                 _print(f"  [dim green]✓  {tool}[/dim green]")
             else:
                 _print(f"  [dim red]✗  {tool}[/dim red]")
-            spinner.update("thinking…")
+            _set_status("thinking…")
 
         elif event == "token":
             token_buffer[task_id] = token_buffer.get(task_id, "") + data.get("text", "")
 
         elif event == "task_synthesis":
-            spinner.update("synthesising…")
+            _set_status("synthesising…")
 
         elif event == "task_completed":
             sys.stdout.write("\a")
@@ -256,15 +269,15 @@ async def run(
                 except Exception:
                     pass
             spinner.stop()
+            toolbar_status[0] = ""
             user_task_ids.discard(task_id)
             if output:
-                console.print()
                 console.print(
                     Panel(
                         Markdown(output),
                         title="[dim]north[/dim]",
                         border_style="bright_black",
-                        padding=(1, 2),
+                        padding=(0, 2),
                     )
                 )
             console.print(Rule(style="bright_black"))
@@ -275,14 +288,14 @@ async def run(
             token_buffer.pop(task_id, None)
             error = data.get("error", "Task failed.")
             spinner.stop()
+            toolbar_status[0] = ""
             user_task_ids.discard(task_id)
-            console.print()
             console.print(
                 Panel(
                     Text(error, style="red"),
                     title="[dim]north — error[/dim]",
                     border_style="bright_black",
-                    padding=(1, 2),
+                    padding=(0, 2),
                 )
             )
             console.print(Rule(style="bright_black"))
@@ -290,27 +303,27 @@ async def run(
         elif event == "task_cancelled":
             token_buffer.pop(task_id, None)
             spinner.stop()
+            toolbar_status[0] = ""
             user_task_ids.discard(task_id)
-            console.print("\n  [dim]cancelled[/dim]")
+            console.print("  [dim]cancelled[/dim]")
             console.print(Rule(style="bright_black"))
 
         elif event == "approval_required":
             await approval_queue.put(data)
             approval_pending[0] = True
             spinner.stop()
-            console.print()
+            toolbar_status[0] = ""
             console.print(
                 Panel(
                     Text(data.get("message", ""), style="white"),
                     title="[yellow]approval required[/yellow]",
                     border_style="yellow",
-                    padding=(1, 2),
+                    padding=(0, 2),
                 )
             )
             options = data.get("options") or ["Approve", "Reject"]
             for i, opt in enumerate(options, 1):
                 console.print(f"  [bright_black][{i}][/bright_black]  {opt}")
-            console.print()
 
     async def _listen() -> None:
         while True:
@@ -387,9 +400,18 @@ async def run(
             pass
 
     async def _spin_loop() -> None:
+        from prompt_toolkit.application.current import get_app
         while True:
             await asyncio.sleep(0.08)
+            spin_frame[0] += 1
             spinner.tick()
+            # When the prompt is active, the raw spinner is suppressed; invalidate
+            # the prompt_toolkit app instead so the toolbar re-renders with fresh status.
+            if spinner.prompt_active:
+                try:
+                    get_app().invalidate()
+                except Exception:
+                    pass
 
     # Welcome banner
     _banner = Console()
@@ -410,14 +432,18 @@ async def run(
                 await _handle_pending_approval()
                 continue
 
+            spinner.prompt_active = True
             try:
                 text = await session.prompt_async(_prompt_tokens)
             except KeyboardInterrupt:
+                spinner.prompt_active = False
                 console.print("  [dim]interrupted  (exit to quit)[/dim]")
                 continue
             except EOFError:
+                spinner.prompt_active = False
                 console.print("  [dim]goodbye[/dim]")
                 break
+            spinner.prompt_active = False
 
             text = text.strip()
             if not text:
@@ -431,6 +457,7 @@ async def run(
                 continue
 
             spinner.start("…")
+            toolbar_status[0] = "…"
 
             body: dict = {"prompt": text}
             if workspace:
@@ -449,10 +476,12 @@ async def run(
                         user_task_ids.add(task_id)
             except httpx.ConnectError:
                 spinner.stop()
+                toolbar_status[0] = ""
                 console.print("  [red]cannot reach north server[/red]")
                 continue
             except Exception as exc:
                 spinner.stop()
+                toolbar_status[0] = ""
                 console.print(f"  [red]error: {exc}[/red]")
                 continue
 
