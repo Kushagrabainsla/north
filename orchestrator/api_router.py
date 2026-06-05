@@ -19,7 +19,7 @@ from context.base import ContextStore
 from context.injection import ContextInjector
 from context.models import ContextDocument
 from inference.base import InferenceRouter
-from inference.models import CostSummary
+from inference.models import CompletionRequest, CostSummary, PoolPriority, TranscriptionRequest
 from jobs.base import JobProcessor
 from jobs.cron_store import UserCronStore
 from jobs.models import Job, JobPriority, JobStatus, JobType
@@ -30,7 +30,7 @@ from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
 from tools.confidence import ConfidenceTracker
 from utils.ids import generate_id
-from utils.security import verify_request_secret
+from utils.security import load_secret, verify_request_secret
 from utils.time import utcnow
 
 router = APIRouter(
@@ -165,14 +165,12 @@ async def transcribe_audio(request: Request) -> TranscriptionOut:
     The request body must be the raw audio file bytes. The Content-Type
     header should be audio/wav or audio/mpeg.
     """
-    from inference.models import TranscriptionRequest as TReq
-
     audio_bytes = await request.body()
     if not audio_bytes:
         raise HTTPException(status_code=422, detail="Empty audio body.")
 
     result = await _inference().transcribe(
-        TReq(audio=audio_bytes, component="perception")
+        TranscriptionRequest(audio=audio_bytes, component="perception")
     )
     return TranscriptionOut(
         text=result.text,
@@ -631,7 +629,6 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
         f"Output ONLY the system prompt text, no preamble."
     )
 
-    from inference.models import CompletionRequest, PoolPriority
     result = await router_obj.complete(
         CompletionRequest(
             prompt=prompt,
@@ -701,11 +698,8 @@ async def receive_webhook(source: str, request: Request) -> dict:
     Authentication is via the ``X-Webhook-Secret`` header — same secret as
     the rest of the API.
     """
-    from utils.security import load_secret
-
     secret = load_secret()
     if request.headers.get("X-Webhook-Secret", "") != secret:
-        from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="Invalid or missing X-Webhook-Secret header.")
 
     try:

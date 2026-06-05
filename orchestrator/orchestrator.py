@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
+import time
 from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
@@ -18,6 +18,12 @@ from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
+from orchestrator.constants import (
+    MAX_CONCURRENT_TASKS,
+    NORTH_STAR_CONFIDENCE_THRESHOLD,
+    POOL_REFRESH_COOLDOWN,
+    STRATEGY_CMD_RE,
+)
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError
 from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.models import (
@@ -32,28 +38,12 @@ from orchestrator.router import ExecutionPlanner
 from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
+from tools.exceptions import ToolNotFoundError
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
 from utils.time import format_timestamp, utcnow
-
-# Maximum tasks allowed to be in-flight at the same time.  Prevents runaway
-# webhook integrations or buggy clients from burning API credits.
-_MAX_CONCURRENT_TASKS = 10
-
-# Classifier confidence below this threshold skips the north star check to
-# avoid interrupting the user on borderline-classified tasks.
-_NORTH_STAR_CONFIDENCE_THRESHOLD = 0.7
-
-# Matches the exact command form "/strategy <mode>" or bare shorthand like
-# "eco mode" / "switch to cruise" so that incidental mentions of these words
-# ("I was in sport mode") never accidentally mutate the strategy.
-_STRATEGY_CMD_RE = re.compile(
-    r"^(?:(?:set|switch|use|change|enable|activate)\s+(?:to\s+)?)?(?:the\s+)?"
-    r"(eco|cruise|sport)\s*(?:mode|strategy)?$",
-    re.IGNORECASE,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +96,7 @@ class Orchestrator:
         # Holds references to short-lived fire-and-forget tasks (episode recording,
         # etc.) so they are not garbage-collected before they finish.
         self._background_tasks: set[asyncio.Task] = set()
+        self._last_pool_refresh_at: float = 0.0
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -117,10 +108,10 @@ class Orchestrator:
         Raises OrchestratorError when the concurrent-task cap is reached so
         callers (API routes, webhook handler) can return 429 to the client.
         """
-        if len(self._active_tasks) >= _MAX_CONCURRENT_TASKS:
+        if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
             raise OrchestratorError(
                 f"Too many concurrent tasks ({len(self._active_tasks)} active, "
-                f"max {_MAX_CONCURRENT_TASKS}). Try again once a task finishes."
+                f"max {MAX_CONCURRENT_TASKS}). Try again once a task finishes."
             )
         task_id = generate_task_id()
         now = utcnow()
@@ -270,7 +261,7 @@ class Orchestrator:
         prose — so incidental mentions ("I was in sport mode") never mutate
         the running strategy.
         """
-        match = _STRATEGY_CMD_RE.match(prompt.strip())
+        match = STRATEGY_CMD_RE.match(prompt.strip())
         if match:
             return StrategyMode(match.group(1).lower())
         return None
@@ -302,7 +293,6 @@ class Orchestrator:
 
     async def _process_task(self, task_id: str, request: TaskRequest) -> None:
         """Full pipeline: classify → north-star → route → execute."""
-        import time
         bind_task_id(task_id)  # attach correlation ID to every log line in this context
         task_start = time.monotonic()
         try:
@@ -437,13 +427,13 @@ class Orchestrator:
 
         # Skip when the classifier is uncertain to avoid false interruptions on
         # borderline tasks (e.g. "schedule a reminder" — local? external?).
-        if classification.confidence < _NORTH_STAR_CONFIDENCE_THRESHOLD:
+        if classification.confidence < NORTH_STAR_CONFIDENCE_THRESHOLD:
             logger.info(
                 "Skipping north star check for task %s — classifier confidence "
                 "%.2f < %.2f threshold",
                 task_id,
                 classification.confidence,
-                _NORTH_STAR_CONFIDENCE_THRESHOLD,
+                NORTH_STAR_CONFIDENCE_THRESHOLD,
             )
             await self._stream_manager.emit(
                 task_id,
@@ -579,8 +569,6 @@ class Orchestrator:
         self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
     ) -> None:
         """Execute a single tool call directly, bypassing the agent layer."""
-        from tools.exceptions import ToolNotFoundError
-
         await self._stream_manager.emit(task_id, "executing", {"agents": []})
         await self._stream_manager.emit(task_id, "tool_called", {
             "tool": plan.direct_tool, "params": plan.direct_tool_params
@@ -791,11 +779,29 @@ class Orchestrator:
                 await self._handle_agent_result(task_id, agent, result)
         return failed
 
+    def _maybe_refresh_pools_background(self) -> None:
+        if self._tracked_router is None:
+            return
+        now = time.monotonic()
+        if now - self._last_pool_refresh_at < POOL_REFRESH_COOLDOWN:
+            return
+        self._last_pool_refresh_at = now
+
+        async def _refresh() -> None:
+            try:
+                await self._tracked_router.refresh_pools()  # type: ignore[union-attr]
+                logger.info("Inference pool refreshed after agent failure")
+            except Exception:
+                logger.warning("Post-failure inference pool refresh failed", exc_info=True)
+
+        t = asyncio.create_task(_refresh())
+        self._background_tasks.add(t)
+        t.add_done_callback(self._background_tasks.discard)
+
     async def _run_agent_with_retry(
         self, agent: Agent, payload: AgentPayload
     ) -> AgentResult:
         """Run an agent, retrying on failure up to the handler's max_retries."""
-        import time
         task_id = payload.task_id
         await self._stream_manager.emit(task_id, "agent_started", {"agent": agent.name})
 
@@ -819,6 +825,7 @@ class Orchestrator:
                 )
                 if not should_retry:
                     raise
+                self._maybe_refresh_pools_background()
 
     async def _handle_agent_result(
         self, task_id: str, agent: Agent, result: AgentResult

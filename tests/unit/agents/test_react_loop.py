@@ -10,7 +10,6 @@ No real network calls are made; inference is fully mocked.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest

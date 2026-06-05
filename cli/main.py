@@ -222,7 +222,11 @@ def list_tasks() -> None:
         return
     _console.print()
     for t in tasks:
-        _console.print(f"  [bright_black]{t['task_id']}[/bright_black]  [dim]{t['status']}[/dim]  [bright_black]{t['created_at']}[/bright_black]")
+        _console.print(
+            f"  [bright_black]{t['task_id']}[/bright_black]"
+            f"  [dim]{t['status']}[/dim]"
+            f"  [bright_black]{t['created_at']}[/bright_black]"
+        )
     _console.print()
 
 

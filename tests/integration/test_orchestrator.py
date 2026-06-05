@@ -174,7 +174,7 @@ async def test_concurrent_task_cap_raises(tmp_path):
     import unittest.mock as mock
 
     from orchestrator.exceptions import OrchestratorError
-    from orchestrator.orchestrator import _MAX_CONCURRENT_TASKS
+    from orchestrator.constants import MAX_CONCURRENT_TASKS as _MAX_CONCURRENT_TASKS
 
     orch, _, _ = _make_orchestrator(tmp_path)
 
@@ -211,7 +211,7 @@ async def test_north_star_skipped_on_low_confidence(tmp_path):
     import unittest.mock as mock
 
     from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
-    from orchestrator.orchestrator import _NORTH_STAR_CONFIDENCE_THRESHOLD
+    from orchestrator.constants import NORTH_STAR_CONFIDENCE_THRESHOLD as _NORTH_STAR_CONFIDENCE_THRESHOLD
 
     orch, ledger, _ = _make_orchestrator(tmp_path)
 
@@ -471,7 +471,8 @@ async def test_delegate_task_blocked_at_depth_limit(tmp_path):
     """_delegate_task() must return a failure JSON when delegation_depth >= limit."""
     import json
 
-    from agents.agentic_llm_agent import _MAX_DELEGATION_DEPTH, AgenticLLMAgent
+    from agents.agentic_llm_agent import AgenticLLMAgent
+    from agents.constants import MAX_DELEGATION_DEPTH as _MAX_DELEGATION_DEPTH
     from agents.models import AgentConfig
 
     context_store = FileContextStore(tmp_path / "context")

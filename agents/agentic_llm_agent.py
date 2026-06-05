@@ -15,81 +15,24 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
+from agents.constants import ENGINEERING_AGENTS, MAX_DELEGATION_DEPTH, MAX_TOOL_RESULT_CHARS
+from agents.context_compaction import (
+    COMPACT_TOKENS_DEFAULT,
+    COMPACT_TOKENS_HEAVY,
+    HEAVY_OUTPUT_TOOLS,
+    compact_history,
+    compact_if_needed,
+)
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
-from inference.models import CompletionRequest, PoolPriority, ToolCall, ToolCallRequest
+from agents.schemas import DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
+from approval.models import Card, CardType
+from inference.models import ToolCall, ToolCallRequest
 from tools.base import Tool
 from tools.models import ToolInput
+from utils.ids import generate_id
 
-# supports full researcher→architect→coder↔tester chains with multiple fix cycles
-_MAX_DELEGATION_DEPTH = 10
-
-# engineering agents must be found exactly — no silent fallback to general
-_ENGINEERING_AGENTS: frozenset[str] = frozenset({"researcher", "architect", "coder", "tester"})
-# Cap the JSON-serialised tool result injected back into the conversation.
-# ~40k chars ≈ 10k tokens — generous but bounded.
-_MAX_TOOL_RESULT_CHARS = 40_000
-
-# Special tool offered to every agent so it can gate irreversible actions.
-_DELEGATE_TASK_SCHEMA: dict = {
-    "type": "function",
-    "function": {
-        "name": "delegate_task",
-        "description": (
-            "Delegate a sub-task to a specialist agent. "
-            "Use when a sub-problem clearly belongs to a different domain specialist "
-            "(e.g. code, finance, health). The specialist runs its own ReAct loop and "
-            "returns a result. Only use when the sub-task genuinely requires domain expertise "
-            "you don't have — don't delegate work you can do yourself."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "agent": {
-                    "type": "string",
-                    "description": (
-                        "Name of the specialist agent "
-                        "(e.g. 'researcher', 'architect', 'coder', 'tester', "
-                        "'finance', 'health', 'university', 'job', 'home', 'general')."
-                    ),
-                },
-                "task": {
-                    "type": "string",
-                    "description": "The full sub-task prompt for the specialist. Be specific.",
-                },
-            },
-            "required": ["agent", "task"],
-        },
-    },
-}
-
-_REQUEST_APPROVAL_SCHEMA: dict = {
-    "type": "function",
-    "function": {
-        "name": "request_approval",
-        "description": (
-            "Request explicit user approval before taking an irreversible action "
-            "(send email, submit form, delete data, etc.)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "message": {
-                    "type": "string",
-                    "description": "Describe exactly what you plan to do and why.",
-                },
-                "options": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Choices shown to the user (default ['Approve','Reject']).",
-                },
-            },
-            "required": ["message"],
-        },
-    },
-}
+logger = logging.getLogger(__name__)
 
 
 class AgenticLLMAgent(LLMAgent):
@@ -195,8 +138,8 @@ class AgenticLLMAgent(LLMAgent):
         # Agents with bash/git/patch_file produce larger tool outputs; give their
         # compaction summaries more room to preserve file paths and error messages.
         compact_tokens = (
-            _COMPACT_TOKENS_HEAVY if tool_map.keys() & _HEAVY_OUTPUT_TOOLS
-            else _COMPACT_TOKENS_DEFAULT
+            COMPACT_TOKENS_HEAVY if tool_map.keys() & HEAVY_OUTPUT_TOOLS
+            else COMPACT_TOKENS_DEFAULT
         )
         total_cost_usd: float = 0.0
         last_tokens_in: int = 0
@@ -208,7 +151,7 @@ class AgenticLLMAgent(LLMAgent):
             # model's context window (75% threshold). Runs before the next API
             # call so the compacted messages are what gets sent.
             if last_tokens_in > 0:
-                await _compact_if_needed(
+                await compact_if_needed(
                     messages,
                     tokens_in=last_tokens_in,
                     model_used=last_model_used,
@@ -220,14 +163,14 @@ class AgenticLLMAgent(LLMAgent):
                 )
             else:
                 # First iteration: apply the lightweight truncation as a baseline.
-                _compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
+                compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
 
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
             _sync_hot_loaded_tools(self._deps, self.name, tool_map)
             tools = (
                 [t.schema() for t in tool_map.values()]
-                + [_DELEGATE_TASK_SCHEMA, _REQUEST_APPROVAL_SCHEMA]
+                + [DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA]
             )
 
             token_cb = self._make_token_callback(payload.task_id)
@@ -340,11 +283,11 @@ class AgenticLLMAgent(LLMAgent):
         self, payload: AgentPayload, params: dict[str, Any]
     ) -> str:
         """Run a specialist sub-agent and return its output as a tool result."""
-        if payload.delegation_depth >= _MAX_DELEGATION_DEPTH:
+        if payload.delegation_depth >= MAX_DELEGATION_DEPTH:
             return json.dumps({
                 "success": False,
                 "error": (
-                    f"Delegation depth limit ({_MAX_DELEGATION_DEPTH}) reached — "
+                    f"Delegation depth limit ({MAX_DELEGATION_DEPTH}) reached — "
                     "you cannot delegate further. Write a final summary of what was "
                     "accomplished, what was attempted, and what remains unresolved, "
                     "then return that as your answer."
@@ -367,7 +310,7 @@ class AgenticLLMAgent(LLMAgent):
         try:
             agent = registry.get(agent_name)
         except Exception:
-            if agent_name in _ENGINEERING_AGENTS:
+            if agent_name in ENGINEERING_AGENTS:
                 return json.dumps({
                     "success": False,
                     "error": (
@@ -404,9 +347,6 @@ class AgenticLLMAgent(LLMAgent):
     async def _request_approval(
         self, payload: AgentPayload, params: dict[str, Any]
     ) -> str:
-        from approval.models import Card, CardType
-        from utils.ids import generate_id
-
         store = self._deps.approval_store
         if store is None:
             raise RuntimeError(
@@ -470,10 +410,10 @@ class AgenticLLMAgent(LLMAgent):
         # Cap the result so a single large tool response can't exhaust the
         # model's context window. Truncate *inside* the data dict so the JSON
         # returned to the model is always syntactically valid.
-        if len(raw) > _MAX_TOOL_RESULT_CHARS:
-            omitted = len(raw) - _MAX_TOOL_RESULT_CHARS
+        if len(raw) > MAX_TOOL_RESULT_CHARS:
+            omitted = len(raw) - MAX_TOOL_RESULT_CHARS
             inner = data.get("data", {})
-            per_field = max(200, (_MAX_TOOL_RESULT_CHARS - 200) // max(len(inner), 1))
+            per_field = max(200, (MAX_TOOL_RESULT_CHARS - 200) // max(len(inner), 1))
             data["data"] = {
                 k: (v[:per_field] + "…[truncated]" if isinstance(v, str) and len(v) > per_field else v)
                 for k, v in inner.items()
@@ -483,242 +423,11 @@ class AgenticLLMAgent(LLMAgent):
         return raw
 
 
-def _compact_history(messages: list[dict], keep_recent: int = 4) -> None:
-    """Compacts the history by truncating older tool responses to save context.
-
-    Also truncates the arguments on the paired assistant tool_call so both
-    halves of the exchange shrink together — preventing context bloat from
-    large input payloads that were already executed.
-    """
-    tool_indices = [i for i, msg in enumerate(messages) if msg.get("role") == "tool"]
-    if len(tool_indices) <= keep_recent:
-        return
-
-    # Build a map from tool_call_id -> index of the assistant message that owns it.
-    call_id_to_assistant: dict[str, int] = {}
-    for i, msg in enumerate(messages):
-        if msg.get("role") == "assistant":
-            for tc in msg.get("tool_calls") or []:
-                cid = tc.get("id")
-                if cid:
-                    call_id_to_assistant[cid] = i
-
-    to_compact = tool_indices[:-keep_recent]
-    compacted_assistant: set[int] = set()
-
-    for idx in to_compact:
-        msg = messages[idx]
-        content = msg.get("content")
-        if isinstance(content, str) and len(content) > 500:
-            truncated = True
-            try:
-                data = json.loads(content)
-                if isinstance(data, dict):
-                    minimal = {}
-                    if "success" in data:
-                        minimal["success"] = data["success"]
-                    if "error" in data:
-                        minimal["error"] = data["error"]
-                    minimal["_note"] = "Large tool output truncated to save context window."
-                    msg["content"] = json.dumps(minimal)
-                    truncated = False
-            except Exception:
-                pass
-
-            if truncated:
-                msg["content"] = content[:300] + "... [Large tool output truncated to save context]"
-
-        # Also compact the arguments on the paired assistant tool_call.
-        call_id = msg.get("tool_call_id")
-        if call_id and call_id in call_id_to_assistant:
-            ast_idx = call_id_to_assistant[call_id]
-            if ast_idx not in compacted_assistant:
-                ast_msg = messages[ast_idx]
-                for tc in ast_msg.get("tool_calls") or []:
-                    fn = tc.get("function", {})
-                    args = fn.get("arguments", "")
-                    if isinstance(args, str) and len(args) > 200:
-                        fn["arguments"] = "{}"  # keep structure, drop large args
-                compacted_assistant.add(ast_idx)
-
-
 def _extract_success(tool_result_str: str) -> bool:
     try:
         return bool(json.loads(tool_result_str).get("success", False))
     except (json.JSONDecodeError, AttributeError):
         return False
-
-
-_COMPACTION_THRESHOLD = 0.75  # compact when tokens_in hits this fraction of context window
-
-# Agents with these tools produce larger, denser outputs (file contents, diffs, bash stdout).
-# Their summaries need more room to preserve file paths, function names, and error messages.
-_HEAVY_OUTPUT_TOOLS: frozenset[str] = frozenset({"bash", "git", "patch_file"})
-_COMPACT_TOKENS_DEFAULT = 512   # ~350 words — general agents
-_COMPACT_TOKENS_HEAVY   = 1000  # ~700 words — agents with bash/git/patch_file
-
-
-# Ordered from most-specific to least-specific so the first match wins.
-# Covers provider-prefixed IDs (e.g. "anthropic/claude-3-haiku") as well as
-# bare names.  Add new families here rather than extending with more elif chains.
-_CONTEXT_WINDOW_TABLE: tuple[tuple[str, int], ...] = (
-    ("gemini-2",      1_000_000),
-    ("gemini-1.5",    1_000_000),
-    ("gemini",          128_000),
-    ("claude",          200_000),
-    ("o1",              200_000),
-    ("o3",              200_000),
-    ("gpt-4o",          128_000),
-    ("gpt-4-turbo",     128_000),
-    ("gpt-4.1",         128_000),
-    ("llama",           128_000),
-    ("qwen",            128_000),
-    ("mistral",         128_000),
-    ("deepseek",        128_000),
-    ("phi",              16_000),
-)
-_DEFAULT_CONTEXT_WINDOW = 128_000
-
-
-def _context_window_for(model: str) -> int:
-    """Return the published context-window size (tokens) for a model identifier."""
-    m = model.lower()
-    for fragment, size in _CONTEXT_WINDOW_TABLE:
-        if fragment in m:
-            return size
-    return _DEFAULT_CONTEXT_WINDOW
-
-
-def _exchange_boundaries(messages: list[dict]) -> list[tuple[int, int]]:
-    """Return (start, end_inclusive) index pairs for each tool-call exchange.
-
-    An exchange = one assistant message that has tool_calls + all the tool
-    result messages that immediately follow it.
-    """
-    exchanges: list[tuple[int, int]] = []
-    i = 2  # skip [0]=system, [1]=user-task
-    while i < len(messages):
-        if messages[i].get("role") == "assistant" and messages[i].get("tool_calls"):
-            start = i
-            j = i + 1
-            while j < len(messages) and messages[j].get("role") == "tool":
-                j += 1
-            exchanges.append((start, j - 1))
-            i = j
-        else:
-            i += 1
-    return exchanges
-
-
-def _render_exchange_for_summary(messages: list[dict]) -> str:
-    """Format a slice of the message list into a short readable string for summarisation."""
-    lines: list[str] = []
-    for msg in messages:
-        role = msg.get("role")
-        if role == "assistant":
-            for tc in msg.get("tool_calls") or []:
-                fn = tc.get("function", {})
-                name = fn.get("name", "?")
-                try:
-                    args = json.loads(fn.get("arguments", "{}"))
-                    args_str = json.dumps(args)[:200]
-                except Exception:
-                    args_str = str(fn.get("arguments", ""))[:200]
-                lines.append(f"→ tool call: {name}({args_str})")
-        elif role == "tool":
-            content = msg.get("content", "")
-            try:
-                data = json.loads(content) if isinstance(content, str) else {}
-                success = data.get("success", True)
-                result_parts = ["ok" if success else "failed"]
-                for k, v in data.items():
-                    if k not in ("success", "_note"):
-                        result_parts.append(f"{k}={str(v)[:80]}")
-                lines.append(f"  ← result: {', '.join(result_parts[:5])}")
-            except Exception:
-                lines.append(f"  ← result: {str(content)[:200]}")
-        elif role == "user":
-            lines.append(f"[user context: {str(msg.get('content', ''))[:200]}]")
-    return "\n".join(lines)
-
-
-async def _compact_if_needed(
-    messages: list[dict],
-    *,
-    tokens_in: int,
-    model_used: str,
-    inference_router: Any,
-    component: str,
-    task_id: str | None,
-    keep_recent: int,
-    max_summary_tokens: int = _COMPACT_TOKENS_DEFAULT,
-) -> None:
-    """LLM-summarise old exchanges when token usage exceeds 75% of the context window.
-
-    Keeps [0] system, [1] user-task, and the last `keep_recent` tool exchanges
-    verbatim. Everything in between is replaced with a single summarised block.
-    Falls back to truncation-only if the summarisation call fails.
-    """
-    context_window = _context_window_for(model_used)
-    if tokens_in < context_window * _COMPACTION_THRESHOLD:
-        # Still well within budget — just do the lightweight truncation.
-        _compact_history(messages, keep_recent=keep_recent)
-        return
-
-    exchanges = _exchange_boundaries(messages)
-    if len(exchanges) <= keep_recent:
-        # Not enough history to make summarisation worthwhile.
-        _compact_history(messages, keep_recent=keep_recent)
-        return
-
-    # Split: summarise everything before the last `keep_recent` exchanges.
-    first_kept = exchanges[-keep_recent][0]
-    to_summarise = messages[2:first_kept]  # exclude system(0) + user-task(1)
-
-    if not to_summarise:
-        return
-
-    history_text = _render_exchange_for_summary(to_summarise)
-    max_words = int(max_summary_tokens * 0.70)  # tokens → approximate word budget
-    prompt = (
-        "You are summarising intermediate steps of an ongoing AI agent task.\n"
-        "Condense the following tool calls and results into a concise bullet-point summary.\n"
-        "Preserve: what was accomplished, key facts discovered, file paths, function names, "
-        "error messages, and any important data values.\n"
-        "Omit: raw file contents, verbose outputs, redundant retries.\n"
-        f"Max {max_words} words.\n\n"
-        f"<history>\n{history_text}\n</history>"
-    )
-
-    summary: str
-    try:
-        resp = await inference_router.complete(
-            CompletionRequest(
-                prompt=prompt,
-                priority=PoolPriority.LOW,
-                component=f"{component}:compact",
-                task_id=task_id,
-                max_tokens=max_summary_tokens,
-            )
-        )
-        summary = resp.text.strip()
-    except Exception:
-        logger.warning("Context compaction summarization failed for %s — falling back to truncation", component, exc_info=True)
-        _compact_history(messages, keep_recent=keep_recent)
-        return
-
-    # Replace the old exchanges with a pair of messages that preserve the
-    # user/assistant turn structure the API requires.
-    messages[2:first_kept] = [
-        {
-            "role": "user",
-            "content": f"## Earlier context (auto-compacted)\n{summary}",
-        },
-        {
-            "role": "assistant",
-            "content": "Understood — I have the compacted context.",
-        },
-    ]
 
 
 def _sync_hot_loaded_tools(deps: Any, agent_name: str, tool_map: dict[str, Tool]) -> None:

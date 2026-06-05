@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +31,6 @@ class LLMAgent(Agent):
 
     def _prompts_dir(self) -> Path:
         """Resolve the agent's `prompts/` folder relative to its module file."""
-        import sys
-
         module = sys.modules[self.__class__.__module__]
         if module.__file__ is None:
             raise AgentConfigError(

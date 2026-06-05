@@ -203,12 +203,12 @@ async def test_tester_fix_cycle_terminates_with_pass(tmp_path: Path) -> None:
     #   [2] outer tester call 2 → final summary after delegation returns
     router = ChainRouter({
         "tester": [
-            _delegate("coder", f"QA failed. Fix.", "d1"),
+            _delegate("coder", "QA failed. Fix.", "d1"),
             _msg("PASS — sub-run all tests pass."),
             _msg("PASS — all tests pass after fix."),
         ],
         "coder": [
-            _delegate("tester", f"Fixed. Re-run.", "d2"),
+            _delegate("tester", "Fixed. Re-run.", "d2"),
             _msg("coder done."),
         ],
     })

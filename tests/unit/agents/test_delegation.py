@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from agents.agentic_llm_agent import _MAX_DELEGATION_DEPTH, AgenticLLMAgent
+from agents.agentic_llm_agent import AgenticLLMAgent
+from agents.constants import MAX_DELEGATION_DEPTH as _MAX_DELEGATION_DEPTH
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context import FileContextStore
 from tests.conftest import MockInferenceRouter

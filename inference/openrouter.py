@@ -14,12 +14,11 @@ import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 import httpx
 
 from config.strategy import NorthSettings, StrategyMode
 from inference.base import InferenceRouter
+from inference.constants import DEFAULT_EMBED_MODEL, DEFAULT_TIMEOUT_SECONDS, OPENROUTER_BASE_URL
 from inference.exceptions import (
     AllModelsRateLimitedError,
     InferenceError,
@@ -42,11 +41,9 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from inference.pool_builder import bucket_models, dedup, models_asc_from_pools
 
-_DEFAULT_EMBED_MODEL = "openai/text-embedding-3-small"
-
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_TIMEOUT_SECONDS = 60.0
+logger = logging.getLogger(__name__)
 
 
 class OpenRouterInferenceRouter(InferenceRouter):
@@ -87,12 +84,12 @@ class OpenRouterInferenceRouter(InferenceRouter):
             try:
                 raw = json.loads(self._cache_path.read_text(encoding="utf-8"))
                 self._pools = {name: ModelPool(**pool) for name, pool in raw.items()}
-                self._all_models_asc = _models_asc_from_pools(self._pools)
+                self._all_models_asc = models_asc_from_pools(self._pools)
                 return
             except (OSError, ValueError):
                 pass
         self._pools = dict(FALLBACK_POOLS)
-        self._all_models_asc = _models_asc_from_pools(self._pools)
+        self._all_models_asc = models_asc_from_pools(self._pools)
 
     def current_pools(self) -> dict[str, ModelPool]:
         return dict(self._pools)
@@ -123,7 +120,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
         except ValueError as e:
             raise PoolRefreshError("OpenRouter response was not JSON") from e
 
-        self._pools, self._all_models_asc = _bucket_models(models)
+        self._pools, self._all_models_asc = bucket_models(models)
         try:
             self._cache_path.parent.mkdir(parents=True, exist_ok=True)
             self._cache_path.write_text(
@@ -166,11 +163,11 @@ class OpenRouterInferenceRouter(InferenceRouter):
 
         if strategy == StrategyMode.ECO:
             # Cheapest first across all priced models, free at tail
-            return _dedup(self._all_models_asc + free)
+            return dedup(self._all_models_asc + free)
 
         if strategy == StrategyMode.SPORT:
             # Most capable first, free at tail
-            return _dedup(list(reversed(self._all_models_asc)) + free)
+            return dedup(list(reversed(self._all_models_asc)) + free)
 
         # CRUISE: role-aware starting pool, fall through remaining tiers, free last
         pool_order: list[str]
@@ -189,7 +186,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
             pool = self._pools.get(pool_name)
             if pool:
                 chain.extend(pool.models)
-        return _dedup(chain + free)
+        return dedup(chain + free)
 
     async def _call_completion(
         self, model: str, request: CompletionRequest
@@ -409,7 +406,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
     # ---- embeddings ----
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
-        body = {"model": _DEFAULT_EMBED_MODEL, "input": request.texts}
+        body = {"model": DEFAULT_EMBED_MODEL, "input": request.texts}
         try:
             resp = await self._client.post("/embeddings", json=body)
         except httpx.RequestError as e:
@@ -430,7 +427,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
         cost = float(usage.get("cost", 0.0))
         return EmbedResponse(
             embeddings=embeddings,
-            model_used=payload.get("model", _DEFAULT_EMBED_MODEL),
+            model_used=payload.get("model", DEFAULT_EMBED_MODEL),
             cost_usd=cost,
         )
 
@@ -445,88 +442,6 @@ class _RateLimited(Exception):
     def __init__(self, model: str) -> None:
         super().__init__(f"Rate limited: {model}")
         self.model = model
-
-
-def _dedup(models: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for m in models:
-        if m not in seen:
-            seen.add(m)
-            out.append(m)
-    return out
-
-
-def _models_asc_from_pools(pools: dict[str, ModelPool]) -> list[str]:
-    """Build cheapest-first ordered list from pool structure (fallback case)."""
-    # high_volume = cheapest tier, fast_cheap = mid, reasoning = most expensive
-    asc: list[str] = []
-    for name in ("high_volume", "fast_cheap", "reasoning"):
-        pool = pools.get(name)
-        if pool:
-            asc.extend(pool.models)
-    return _dedup(asc)
-
-
-def _bucket_models(models: list[dict]) -> tuple[dict[str, ModelPool], list[str]]:
-    """Bucket OpenRouter's `/models` response into pools by output cost.
-
-    Returns (pools, all_priced_asc) where all_priced_asc is every priced model
-    sorted cheapest-first — used by eco/sport strategy chains.
-    """
-    priced: list[tuple[str, float]] = []
-    free_ids: list[str] = []
-
-    for m in models:
-        model_id = m.get("id")
-        if not isinstance(model_id, str):
-            continue
-        completion_price = _output_price(m)
-        if completion_price <= 0:
-            if model_id.endswith(":free"):
-                free_ids.append(model_id)
-        else:
-            priced.append((model_id, completion_price))
-
-    # Prefer the static free list as a known-good baseline; extend with live ones.
-    static_free = list(FALLBACK_POOLS["free_fallback"].models)
-    merged_free = static_free + [m for m in free_ids if m not in static_free]
-
-    if not priced:
-        pools = dict(FALLBACK_POOLS)
-        return pools, _models_asc_from_pools(pools)
-
-    # Sort descending for pool bucketing (most expensive = reasoning)
-    priced.sort(key=lambda pair: pair[1], reverse=True)
-    n = len(priced)
-    third = max(1, n // 3)
-
-    reasoning_ids = [mid for mid, _ in priced[:third]]
-    fast_cheap_ids = [mid for mid, _ in priced[third : 2 * third]] or reasoning_ids
-    high_volume_ids = [mid for mid, _ in priced[-third:]]
-
-    # Cheapest-first list for eco/sport: reverse of the descending-sorted priced list
-    all_priced_asc = [mid for mid, _ in reversed(priced)]
-
-    pools = {
-        "reasoning": ModelPool(name="reasoning", models=reasoning_ids),
-        "fast_cheap": ModelPool(name="fast_cheap", models=fast_cheap_ids),
-        "high_volume": ModelPool(name="high_volume", models=high_volume_ids),
-        "free_fallback": ModelPool(name="free_fallback", models=merged_free),
-    }
-    return pools, all_priced_asc
-
-
-def _output_price(model: dict) -> float:
-    """Return the per-token completion price as a float, or 0 if unparseable."""
-    pricing = model.get("pricing")
-    if not isinstance(pricing, dict):
-        return 0.0
-    raw = pricing.get("completion", 0)
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 # Silence unused-import warnings: POOL_NAMES is re-exported via the package.

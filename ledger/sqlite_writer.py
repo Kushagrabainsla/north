@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sqlite3
 from datetime import datetime
@@ -66,10 +67,8 @@ class SQLiteLedgerWriter(LedgerWriter):
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
             for migration in _MIGRATIONS:
-                try:
+                with contextlib.suppress(sqlite3.OperationalError):
                     conn.execute(migration)
-                except sqlite3.OperationalError:
-                    pass  # column already exists — safe to ignore
 
     async def write(self, entry: LedgerEntry) -> str:
         try:

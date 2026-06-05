@@ -209,10 +209,7 @@ async def run(
         elif event == "north_star_checking":
             _set_status("checking goals…")
 
-        elif event == "north_star_aligned":
-            pass
-
-        elif event == "north_star_check_skipped":
+        elif event == "north_star_aligned" or event == "north_star_check_skipped":
             pass
 
         elif event == "north_star_conflict":
@@ -348,10 +345,7 @@ async def run(
             return
         data = await approval_queue.get()
         options = data.get("options") or ["Approve", "Reject"]
-        if prefilled is not None:
-            raw = prefilled
-        else:
-            raw = (await session.prompt_async("  ❯ ")).strip()
+        raw = prefilled if prefilled is not None else (await session.prompt_async("  ❯ ")).strip()
         approval_pending[0] = not approval_queue.empty()
         try:
             idx = int(raw) - 1
@@ -395,10 +389,8 @@ async def run(
             # When the prompt is active, the raw spinner is suppressed; invalidate
             # the prompt_toolkit app instead so the toolbar re-renders with fresh status.
             if spinner.prompt_active:
-                try:
+                with contextlib.suppress(Exception):
                     get_app().invalidate()
-                except Exception:
-                    pass
 
     # Welcome banner
     _banner = Console()
