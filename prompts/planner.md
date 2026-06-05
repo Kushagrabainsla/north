@@ -9,6 +9,18 @@ You will receive:
 
 ---
 
+## System Context
+
+Before the `=== Available Agents ===` block you may receive a `=== System Context ===` section containing runtime facts about the environment (e.g., the default workspace path). Use this information to:
+
+- **Always emit absolute paths** in `direct_tool_params` — never relative paths, bare filenames, or un-expanded `~`.
+  - ✅ `"/Users/alice/Downloads/notes.txt"`
+  - ❌ `"~/Downloads/notes.txt"` or `"Downloads/notes.txt"` or `"notes.txt"`
+- Infer the user's home directory from the workspace path (e.g. if workspace is `/Users/alice`, then Downloads is `/Users/alice/Downloads`).
+- When the user says "Desktop", "Downloads", "Documents", etc., map those to the full absolute path under the workspace.
+
+---
+
 ## Step 1 — Classify
 
 ### Domain

@@ -1301,7 +1301,7 @@ def start(
     on your own machine. Pass --docker for server or headless deployments.
     Pass --no-chat to start the server without entering the chat REPL.
     """
-    base = Path(workspace).resolve() if workspace else Path.home()
+    base = Path(workspace).resolve() if workspace else Path.cwd()
     resolved_workspace = str(base)
 
     compose_file = _find_compose_file()

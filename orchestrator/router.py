@@ -34,10 +34,12 @@ class ExecutionPlanner:
         agent_registry: AgentRegistry,
         inference_router: InferenceRouter,
         tool_registry: ToolRegistry | None = None,
+        workspace: str = "",
     ) -> None:
         self._agent_registry = agent_registry
         self._inference_router = inference_router
         self._tool_registry = tool_registry
+        self._workspace = workspace
 
     async def plan_all(
         self, prompt: str, task_id: str
@@ -61,8 +63,22 @@ class ExecutionPlanner:
         except Exception as e:
             raise RoutingError(f"Failed to load planner prompt: {e}") from e
 
+        system_context_lines = []
+        if self._workspace:
+            system_context_lines.append(f"- workspace (default cwd for shell/file tools): {self._workspace}")
+            system_context_lines.append(
+                "- When constructing filesystem paths, always prefer absolute paths derived from the "
+                "workspace above. Never emit bare filenames or paths starting with '~' — expand them."
+            )
+        system_context_block = (
+            f"=== System Context ===\n" + "\n".join(system_context_lines) + "\n\n"
+            if system_context_lines
+            else ""
+        )
+
         full_prompt = (
             f"{system_prompt}\n\n"
+            f"{system_context_block}"
             f"=== Available Agents ===\n{json.dumps(agents_info, indent=2)}\n\n"
             f"=== Available Tools ===\n{json.dumps(tools_info, indent=2)}\n\n"
             f"=== User Task ===\n{prompt}"

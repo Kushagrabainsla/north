@@ -583,6 +583,8 @@ class Orchestrator:
             params = {**plan.direct_tool_params}
             if workspace and "workspace" not in params:
                 params["workspace"] = workspace
+            if task_id and "task_id" not in params:
+                params["task_id"] = task_id
             result = await tool.run(ToolInput(params=params))
             success = result.success
             output = (

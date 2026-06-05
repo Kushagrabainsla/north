@@ -170,6 +170,7 @@ def _build_orchestrator(
             agent_registry=agent_registry,
             inference_router=deps.cost_tracker,
             tool_registry=tool_registry,
+            workspace=settings.north_workspace,
         ),
         task_context_store=deps.task_context_store,
         failure_handler=FailureHandler(

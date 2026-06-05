@@ -545,3 +545,49 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
     await store.record("new-task", "general", "new summary")
 
     assert await asyncio.to_thread(_count, "old-ep") == 0
+
+
+# ---------------------------------------------------------------------------
+# Direct/Single Tool execution
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_execute_single_tool_passes_task_id(tmp_path):
+    """_execute_single_tool must pass task_id to the tool params."""
+    import unittest.mock as mock
+    from orchestrator.models import ExecutionMode, ExecutionPlan
+
+    orch, _, _ = _make_orchestrator(tmp_path)
+
+    # Set up a dummy tool registry with a mock tool
+    mock_tool = mock.MagicMock()
+    mock_tool.name = "test_tool"
+    mock_tool.run = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
+    mock_tool.format_output = mock.MagicMock(return_value="success")
+
+    orch._tool_registry = mock.MagicMock()
+    orch._tool_registry.get.return_value = mock_tool
+
+    plan = ExecutionPlan(
+        task_id="t1",
+        agents=[],
+        parallel_groups=[],
+        dependencies={},
+        mode=ExecutionMode.SINGLE_TOOL,
+        direct_tool="test_tool",
+        direct_tool_params={"arg1": "val1"},
+    )
+
+    await orch._execute_single_tool(
+        task_id="t1",
+        prompt="run test_tool",
+        plan=plan,
+        workspace=str(tmp_path),
+    )
+
+    mock_tool.run.assert_called_once()
+    tool_input = mock_tool.run.call_args[0][0]
+    assert tool_input.params["task_id"] == "t1"
+    assert tool_input.params["workspace"] == str(tmp_path)
+    assert tool_input.params["arg1"] == "val1"
+
