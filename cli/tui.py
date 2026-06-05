@@ -48,9 +48,7 @@ def _term_width() -> int:
 
 
 def _prompt_tokens() -> FormattedText:
-    sep = "─" * _term_width()
     return FormattedText([
-        ("fg:ansibrightblack", sep + "\n"),
         ("", "  "),
         ("bold", "❯ "),
     ])
