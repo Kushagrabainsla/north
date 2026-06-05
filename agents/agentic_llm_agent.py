@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
@@ -111,6 +114,13 @@ class AgenticLLMAgent(LLMAgent):
             )
             self._background_tasks.add(t)
             t.add_done_callback(self._background_tasks.discard)
+            t.add_done_callback(
+                lambda _t: logger.warning(
+                    "Background confidence recording failed for %s/%s: %s",
+                    self.name, tool_name, _t.exception(),
+                )
+                if not _t.cancelled() and _t.exception() is not None else None
+            )
 
     def _append_tool_call_exchange(
         self, messages: list[dict], results: list[tuple[ToolCall, str, bool]]
@@ -386,6 +396,9 @@ class AgenticLLMAgent(LLMAgent):
             result = await agent.run(sub_payload)
             return json.dumps({"success": True, "output": result.output, "summary": result.summary})
         except Exception as exc:
+            logger.warning(
+                "Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True
+            )
             return json.dumps({"success": False, "error": str(exc)})
 
     async def _request_approval(
@@ -451,6 +464,7 @@ class AgenticLLMAgent(LLMAgent):
             result = await tool_map[tool_name].run(ToolInput(params=params))
             data = result.model_dump()
         except Exception as exc:
+            logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
             return json.dumps({"success": False, "error": str(exc)})
         raw = json.dumps(data)
         # Cap the result so a single large tool response can't exhaust the
@@ -689,7 +703,7 @@ async def _compact_if_needed(
         )
         summary = resp.text.strip()
     except Exception:
-        # Summarisation failed — fall back to the character-truncation path.
+        logger.warning("Context compaction summarization failed for %s — falling back to truncation", component, exc_info=True)
         _compact_history(messages, keep_recent=keep_recent)
         return
 

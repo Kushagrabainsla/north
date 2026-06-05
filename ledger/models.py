@@ -60,3 +60,5 @@ class LedgerEntry(BaseModel):
     tokens_out: int | None = None
     cost_usd: float | None = None
     status: LedgerStatus | None = None
+    duration_ms: int | None = None
+    error_type: str | None = None

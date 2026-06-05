@@ -30,15 +30,25 @@ CREATE TABLE IF NOT EXISTS ledger (
     tokens_out      INTEGER,
     cost_usd        REAL,
     status          TEXT,
+    duration_ms     INTEGER,
+    error_type      TEXT,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 """
 
+# Columns added after the initial schema release; applied as migrations to
+# existing databases so the writer works against both old and new files.
+_MIGRATIONS = [
+    "ALTER TABLE ledger ADD COLUMN duration_ms INTEGER",
+    "ALTER TABLE ledger ADD COLUMN error_type TEXT",
+]
+
 _INSERT_COLUMNS = (
     "id, timestamp, source, task_id, agent, input, action, output, "
-    "agent_output, tools_used, model_used, tokens_in, tokens_out, cost_usd, status"
+    "agent_output, tools_used, model_used, tokens_in, tokens_out, cost_usd, status, "
+    "duration_ms, error_type"
 )
-_INSERT_PLACEHOLDERS = ", ".join(["?"] * 15)
+_INSERT_PLACEHOLDERS = ", ".join(["?"] * 17)
 
 
 class SQLiteLedgerWriter(LedgerWriter):
@@ -55,6 +65,11 @@ class SQLiteLedgerWriter(LedgerWriter):
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
+            for migration in _MIGRATIONS:
+                try:
+                    conn.execute(migration)
+                except sqlite3.OperationalError:
+                    pass  # column already exists — safe to ignore
 
     async def write(self, entry: LedgerEntry) -> str:
         try:
@@ -83,6 +98,8 @@ class SQLiteLedgerWriter(LedgerWriter):
                     entry.tokens_out,
                     entry.cost_usd,
                     entry.status.value if entry.status is not None else None,
+                    entry.duration_ms,
+                    entry.error_type,
                 ),
             )
 
@@ -149,4 +166,6 @@ class SQLiteLedgerWriter(LedgerWriter):
             tokens_out=row["tokens_out"],
             cost_usd=row["cost_usd"],
             status=LedgerStatus(row["status"]) if row["status"] else None,
+            duration_ms=row["duration_ms"],
+            error_type=row["error_type"],
         )

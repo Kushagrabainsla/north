@@ -19,6 +19,42 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def classify_error(exc: Exception) -> str:
+    """Return a stable error-type tag for a failed agent exception.
+
+    Tags are used in LedgerEntry.error_type and the agent_failed SSE event so
+    operators can filter and alert on specific failure categories without parsing
+    free-form error strings.
+
+    Categories (mutually exclusive, checked in priority order):
+      rate_limit      — provider returned HTTP 429 or equivalent
+      context_overflow — model context window exceeded
+      timeout         — network or asyncio timeout
+      network         — connection-level failure
+      parse_error     — agent returned malformed / non-JSON output
+      config_error    — misconfigured agent (missing prompt, bad pool name)
+      logic_error     — everything else (programming error, assertion, etc.)
+    """
+    msg = str(exc).lower()
+    name = type(exc).__name__
+
+    if "429" in msg or "rate limit" in msg or "ratelimit" in msg or "rate_limit" in name.lower():
+        return "rate_limit"
+    if "context" in msg and ("length" in msg or "window" in msg or "exceed" in msg):
+        return "context_overflow"
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or "timeout" in msg:
+        return "timeout"
+    if isinstance(exc, (ConnectionError, OSError)) or any(
+        kw in msg for kw in ("connection", "network", "unreachable", "refused", "socket")
+    ):
+        return "network"
+    if "agentoutputparseerror" in name.lower() or "parse" in name.lower() or "json" in msg:
+        return "parse_error"
+    if "agentconfigerror" in name.lower() or "config" in name.lower():
+        return "config_error"
+    return "logic_error"
+
+
 class FailureHandler:
     """Manages agent retries, back-off cooldowns, and task context reconstruction."""
 
@@ -66,6 +102,8 @@ class FailureHandler:
         # Increment first so the count reflects attempts already made (1-indexed).
         attempt = self.increment_retry_count(task_id, agent_name)
 
+        error_type = classify_error(exception)
+
         # Emit failure event
         if self._stream_manager:
             await self._stream_manager.emit(
@@ -74,6 +112,7 @@ class FailureHandler:
                 data={
                     "agent": agent_name,
                     "error": str(exception),
+                    "error_type": error_type,
                     "retry_attempt": attempt,
                     "max_retries": self.max_retries,
                     "will_retry": attempt < self.max_retries,
@@ -83,19 +122,30 @@ class FailureHandler:
         if attempt >= self.max_retries:
             await self._task_context_store.update_agent_status(task_id, agent_name, "failed")
             logger.error(
-                "Agent '%s' failed in task '%s' and exceeded max retries (%d).",
+                "Agent '%s' failed in task '%s' — error_type=%s, retries exhausted (%d/%d): %s",
                 agent_name,
                 task_id,
+                error_type,
+                attempt,
                 self.max_retries,
+                exception,
+                exc_info=True,
             )
             self.clear_retry_count(task_id, agent_name)
             return False
 
         # Calculate exponential back-off cooldown
         cooldown = self.base_cooldown_seconds * (2 ** (attempt - 1))
-        logger.info(
-            f"Agent '{agent_name}' failed (attempt {attempt}/{self.max_retries}). "
-            f"Retrying in {cooldown:.2f} seconds..."
+        logger.warning(
+            "Agent '%s' failed in task '%s' — error_type=%s, attempt %d/%d, "
+            "retrying in %.2fs: %s",
+            agent_name,
+            task_id,
+            error_type,
+            attempt,
+            self.max_retries,
+            cooldown,
+            exception,
         )
 
         if self._stream_manager:

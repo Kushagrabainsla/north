@@ -19,7 +19,7 @@ from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError
-from orchestrator.failure_handler import FailureHandler
+from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.models import (
     ExecutionMode,
     ExecutionPlan,
@@ -302,7 +302,9 @@ class Orchestrator:
 
     async def _process_task(self, task_id: str, request: TaskRequest) -> None:
         """Full pipeline: classify → north-star → route → execute."""
+        import time
         bind_task_id(task_id)  # attach correlation ID to every log line in this context
+        task_start = time.monotonic()
         try:
             # Strategy command shortcut — handle before full pipeline
             if await self._handle_strategy_command(task_id, request.prompt):
@@ -322,6 +324,7 @@ class Orchestrator:
             # cancel_task() already wrote the ledger entry and emitted events.
             raise
         except NorthStarConflictError as e:
+            duration_ms = int((time.monotonic() - task_start) * 1000)
             await self._write_ledger(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
@@ -330,11 +333,17 @@ class Orchestrator:
                 action="task_cancelled",
                 output=str(e),
                 status=LedgerStatus.CANCELLED,
+                duration_ms=duration_ms,
             ))
             await self._stream_manager.emit(task_id, "task_cancelled", {"reason": str(e)})
             await self._stream_manager.emit_done(task_id)
         except Exception as e:
-            logger.exception("Unhandled error processing task %s: %s", task_id, e)
+            duration_ms = int((time.monotonic() - task_start) * 1000)
+            error_type = classify_error(e)
+            logger.exception(
+                "Unhandled error processing task %s — error_type=%s duration_ms=%d: %s",
+                task_id, error_type, duration_ms, e,
+            )
             await self._write_ledger(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
@@ -343,8 +352,12 @@ class Orchestrator:
                 action="task_failed",
                 output=str(e),
                 status=LedgerStatus.FAILED,
+                duration_ms=duration_ms,
+                error_type=error_type,
             ))
-            await self._stream_manager.emit(task_id, "task_failed", {"error": str(e)})
+            await self._stream_manager.emit(
+                task_id, "task_failed", {"error": str(e), "error_type": error_type}
+            )
             await self._stream_manager.emit_done(task_id)
 
     async def _stage_plan(
@@ -605,6 +618,7 @@ class Orchestrator:
             await self._finish_task(task_id)
             return
         except Exception as exc:
+            logger.warning("Direct tool execution error in task %s: %s", task_id, exc, exc_info=True)
             output = f"Tool execution error: {exc}"
             success = False
 
@@ -672,7 +686,7 @@ class Orchestrator:
                 task_id=task_id, domain=domain, summary=summary
             )
         except Exception:
-            logger.debug("Episodic record failed for task %s", task_id)
+            logger.warning("Episodic record failed for task %s", task_id, exc_info=True)
 
     async def _summarize_episode(
         self, task_id: str, prompt: str, output: str
@@ -701,6 +715,7 @@ class Orchestrator:
             )
             return response.text.strip() or fallback
         except Exception:
+            logger.warning("Episode summarization failed for task %s", task_id, exc_info=True)
             return fallback
 
     async def _maybe_synthesize(
@@ -754,7 +769,12 @@ class Orchestrator:
                 # so the outer _process_task handler can write the ledger entry.
                 raise result
             if isinstance(result, Exception):
-                logger.error("Agent '%s' failed: %s", agent.name, result)
+                error_type = classify_error(result)
+                logger.error(
+                    "Agent '%s' failed in task '%s' — error_type=%s: %s",
+                    agent.name, task_id, error_type, result,
+                    exc_info=result,
+                )
                 failed.append(agent.name)
                 await self._write_ledger(LedgerEntry(
                     id=generate_id(),
@@ -765,6 +785,7 @@ class Orchestrator:
                     action="agent_execution_failed",
                     output=str(result),
                     status=LedgerStatus.FAILED,
+                    error_type=error_type,
                 ))
             else:
                 await self._handle_agent_result(task_id, agent, result)
@@ -774,19 +795,22 @@ class Orchestrator:
         self, agent: Agent, payload: AgentPayload
     ) -> AgentResult:
         """Run an agent, retrying on failure up to the handler's max_retries."""
+        import time
         task_id = payload.task_id
         await self._stream_manager.emit(task_id, "agent_started", {"agent": agent.name})
 
         while True:
+            t0 = time.monotonic()
             try:
                 result = await agent.run(payload)
+                result.duration_ms = int((time.monotonic() - t0) * 1000)
                 self._failure_handler.clear_retry_count(task_id, agent.name)
                 await self._task_context_store.update_agent_status(
                     task_id, agent.name, "completed"
                 )
                 await self._stream_manager.emit(
                     task_id, "agent_completed",
-                    {"agent": agent.name, "summary": result.summary},
+                    {"agent": agent.name, "summary": result.summary, "duration_ms": result.duration_ms},
                 )
                 return result
             except Exception as exc:
@@ -825,6 +849,7 @@ class Orchestrator:
             output=result.output,
             agent_output=result.data,
             status=LedgerStatus.COMPLETED,
+            duration_ms=result.duration_ms,
         ))
 
         if result.requires_approval or result.has_question:

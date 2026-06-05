@@ -46,6 +46,7 @@ class AgentResult(BaseModel):
     question: str | None = None
     question_options: list[str] = Field(default_factory=list)
     cost_usd: float = 0.0
+    duration_ms: int | None = None
 
 
 class AgentConfig(BaseModel):
