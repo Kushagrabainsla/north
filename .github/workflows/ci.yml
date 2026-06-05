@@ -6,10 +6,19 @@ on:
   push:
     branches: [main]
 
+# Cancel an in-progress run on the same ref when a newer commit is pushed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  lint-and-test:
-    name: ruff + pytest
+  lint:
+    name: Lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
@@ -19,20 +28,41 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install uv
-        run: pip install --quiet uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
 
-      - name: Install dependencies (including dev extras)
-        run: uv pip install --system --no-cache -e . pytest pytest-asyncio ruff
+      - name: Install ruff
+        run: uv pip install --system ruff
 
-      - name: Lint with ruff
+      - name: Lint
         run: ruff check .
+
+  test:
+    name: Test (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv pip install --system -e . pytest pytest-asyncio
 
       - name: Run tests
         env:
-          # Point north_home at a temp dir so tests don't touch the runner's home.
           NORTH_HOME: /tmp/north-ci
           NORTH_ENV: test
-          # A dummy key satisfies the non-empty check without making real calls.
           NORTH_OPENROUTER_API_KEY: ci-dummy-key
         run: python -m pytest -x -q --tb=short -m "not integration"

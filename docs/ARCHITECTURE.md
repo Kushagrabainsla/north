@@ -23,9 +23,13 @@
 15. [Open Questions](#15-open-questions)
 16. [Tech Stack](#16-tech-stack)
 
+> **See also:** [docs/TECHNICAL_FEATURES.md](TECHNICAL_FEATURES.md) — deep-dives on the twelve most interesting engineering decisions (ReAct loop, dynamic pool tiering, EMA scoring, context compaction, SLSA attestation, etc.)
+
 > **What changed in 1.3:** asyncio.Event-based approval waiting (§9), JSON mode for all structured-output callers (§8.2), native function calling + token streaming in the ReAct loop (§7.6, §8.7), EMA confidence scoring (§7.5), semantic context search via OpenRouter embeddings (§5.7), episodic memory layer (§5.8), webhook event ingestion (§4.3, §6.8, §11.5), and two new SQLite stores (`embeddings.db`, `episodic.db`, §12.1).
 >
 > **What changed since 1.3:** curl installer (`scripts/install.sh`), GHCR image publishing via GitHub Actions, bundled `cli/docker-compose.yml` so install works without cloning the repo, `$HOME` workspace mount in Docker, workspace auto-detection from CWD in `north task` / `north chat`, `~/.north/.env` as the canonical config location, and fixed `north tasks` returning stale historical entries (§6).
+>
+> **What changed (modular refactor + inference hardening):** extracted `agents/constants.py`, `agents/schemas.py`, `agents/context_compaction.py`, `inference/constants.py`, `inference/pool_builder.py`, and `orchestrator/constants.py` — no module-level code lives inline in its parent module anymore; improved fallback chain so `InferenceError` (400/other) advances the chain identically to `_RateLimited` (§8.5); pool refresh background loop fires immediately on startup then every 6 h (§8.2); error-triggered pool refresh with 60 s cooldown fires in the background whenever any model in the chain fails (§8.2); `duration_ms` and `error_type` columns added to `LedgerEntry` with idempotent SQLite migration (§4.2); `classify_error()` in `failure_handler.py` maps any exception to a stable string tag written to `error_type` (§6.7); CI split into parallel `lint` and `test` jobs with `astral-sh/setup-uv` caching and per-job `timeout-minutes`; Docker workflow updated to multi-platform (`linux/amd64`, `linux/arm64`), GHA layer cache, BuildKit SBOM + provenance, and SLSA attestation via `actions/attest@v4`.
 
 ---
 
@@ -165,6 +169,8 @@ CREATE TABLE ledger (
   tokens_in       INTEGER,
   tokens_out      INTEGER,
   cost_usd        REAL,
+  duration_ms     INTEGER,           -- wall-clock duration of the event in milliseconds
+  error_type      TEXT,              -- stable tag from classify_error(): rate_limit | context_overflow | timeout | network | parse_error | config_error | logic_error
   status          TEXT,              -- completed | pending | failed | approved | rejected | cancelled
   created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 )
@@ -566,7 +572,16 @@ Ledger entries for all tasks are retained permanently regardless of Task Context
 
 ### 6.7 Failure Handling
 
-When an agent fails, the Orchestrator classifies the failure before taking any action:
+`classify_error(exc)` in `failure_handler.py` maps any exception to a stable string tag before any retry or notification logic runs. The tag is written to `LedgerEntry.error_type` so failure patterns are queryable from the Ledger.
+
+```python
+classify_error(RateLimitError())       # -> "rate_limit"
+classify_error(asyncio.TimeoutError()) # -> "timeout"
+classify_error(httpx.RequestError())   # -> "network"
+classify_error(json.JSONDecodeError()) # -> "parse_error"
+```
+
+When an agent fails, the Orchestrator uses the classified error type to determine the appropriate response:
 
 ```
 rate_limit    -> auto-queue with cooldown. no notification yet.
@@ -892,6 +907,10 @@ Pools refresh automatically. When a new model releases or pricing changes, it en
 
 **Pool refresh failure handling:** if the OpenRouter refresh call fails, the router falls back to `~/.north/inference_cache.json` (last successful snapshot), then to the hardcoded pools in `inference/fallback_pools.py`. The Orchestrator continues accepting tasks in all cases.
 
+**Background refresh loop:** the pool refresh loop uses a loop-first pattern — the initial sleep is at the bottom of the loop, not the top — so it fires immediately on Orchestrator startup, then repeats every 6 hours. This guarantees that fresh model IDs are in place before the first real inference call, without a separate startup refresh step.
+
+**Error-triggered refresh:** when any model in the fallback chain fails, `_maybe_refresh_pools_background()` in `orchestrator.py` schedules a background refresh subject to a 60-second cooldown (`POOL_REFRESH_COOLDOWN` in `orchestrator/constants.py`). A 404 from a retired model ID triggers a live pool update so the next attempt uses current IDs, without hammering the OpenRouter `/models` endpoint on every failure.
+
 ### 8.3 Inference Strategy
 
 The active strategy controls how models are ordered in the fallback chain for every call. Set via natural language ("switch to eco mode") or `POST /orchestrator/settings`. Persisted to `~/.north/settings.json`. Default: **cruise**.
@@ -929,7 +948,12 @@ classifier                -> LOW (simple binary classification)
 
 ### 8.5 Automatic Fallback Chain
 
-Every `complete()` call walks an ordered model list until one succeeds. HTTP 429 (rate limit), 402 (payment required), 404 (model retired), and 503 (unavailable) all skip to the next model. For `complete_with_tools()`, HTTP 400 is also skipped to handle models that do not support tool calling. The chain always ends with free models so there is always a last resort.
+Every `complete()` and `complete_with_tools()` call walks an ordered model list until one succeeds. Two internal exception classes advance the chain:
+
+- `_RateLimited` — raised on HTTP 429 (rate limit), 402 (insufficient credits), 404 (model retired or not found), and 503 (unavailable). Silently moves to the next model with no log noise.
+- `InferenceError` — raised on HTTP 400 (unsupported parameters, bad model ID) and other provider errors. Logged at `WARNING` level then moves to the next model.
+
+The chain is exhausted only when every model has been tried. Only then is `AllModelsRateLimitedError` raised to the caller. The chain always ends with free (`:free`) models as a guaranteed last resort.
 
 ```
 sport strategy, any priority:
@@ -1442,20 +1466,25 @@ north/
     app.py              <- FastAPI app, lifespan (DB init, background tasks), Uvicorn entry point
     api_router.py       <- all REST endpoints (tasks, ledger, context, jobs, inference, agents)
     orchestrator.py     <- core orchestration logic (classify → north star → route → execute)
+    constants.py        <- MAX_CONCURRENT_TASKS, NORTH_STAR_CONFIDENCE_THRESHOLD, POOL_REFRESH_COOLDOWN, STRATEGY_CMD_RE
     classifier.py       <- trivial vs consequential classification
     north_star.py       <- north star alignment check
     router.py           <- agent routing and parallel execution planning
     task_context.py     <- Task Context Object management (SQLite per task)
-    failure_handler.py  <- failure classification and retry logic
+    failure_handler.py  <- classify_error() + failure classification and retry logic
     stream.py           <- SSE event stream for Web UI real-time updates
     models.py           <- request/response Pydantic models
     exceptions.py
 
   agents/
-    base.py             <- Agent (ABC)
-    llm_agent.py        <- LLM-backed agent base class
-    registry.py         <- agent discovery and registration
-    models.py           <- AgentResult, AgentStatus
+    base.py                 <- Agent (ABC)
+    llm_agent.py            <- LLM-backed agent base class
+    agentic_llm_agent.py    <- AgenticLLMAgent: ReAct loop with native function calling
+    registry.py             <- agent discovery and registration
+    constants.py            <- MAX_DELEGATION_DEPTH, ENGINEERING_AGENTS, MAX_TOOL_RESULT_CHARS
+    schemas.py              <- DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA (JSON Schema dicts)
+    context_compaction.py   <- compact_history(), compact_if_needed(), context_window_for()
+    models.py               <- AgentResult, AgentStatus, AgentDependencies
     exceptions.py
     health/
       agent.py
@@ -1492,6 +1521,8 @@ north/
     openrouter.py       <- OpenRouterInferenceRouter (dynamic pools, streaming, function calling)
     cost_tracker.py     <- CostTracker: InferenceRouter decorator, accumulates cost per task_id
     fallback_pools.py   <- hardcoded minimal pools if OpenRouter is unreachable on startup
+    constants.py        <- OPENROUTER_BASE_URL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_EMBED_MODEL
+    pool_builder.py     <- dedup(), models_asc_from_pools(), output_price(), bucket_models()
     models.py           <- PoolPriority, ModelPool, ToolCallRequest/Response, EmbedRequest/Response
     exceptions.py
 
