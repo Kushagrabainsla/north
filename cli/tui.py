@@ -17,7 +17,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.panel import Panel
+from rich.padding import Padding
 from rich.rule import Rule
 from rich.text import Text
 
@@ -50,7 +50,7 @@ def _term_width() -> int:
 def _prompt_tokens() -> FormattedText:
     return FormattedText([
         ("", "  "),
-        ("bold", "❯ "),
+        ("fg:ansicyan bold", "❯ "),
     ])
 
 
@@ -95,6 +95,7 @@ class _Spinner:
         self._width = len(line)
 
     def start(self, text: str) -> None:
+        self._raw("\n")  # advance past the committed prompt line before drawing
         self._erase()
         self._text = text
         self._active = True
@@ -208,14 +209,8 @@ async def run(
             tension = (data.get("tension") or "")[:200]
             spinner.stop()
             toolbar_status[0] = ""
-            console.print(
-                Panel(
-                    Text(tension, style="white"),
-                    title="[yellow]goal conflict[/yellow]",
-                    border_style="yellow",
-                    padding=(0, 2),
-                )
-            )
+            console.print("  [yellow]goal conflict[/yellow]")
+            console.print(Padding(Text(tension, style="white"), (0, 0, 0, 2)))
 
         elif event == "executing":
             agents = data.get("agents") or []
@@ -272,14 +267,8 @@ async def run(
             toolbar_status[0] = ""
             user_task_ids.discard(task_id)
             if output:
-                console.print(
-                    Panel(
-                        Markdown(output),
-                        title="[dim]north[/dim]",
-                        border_style="bright_black",
-                        padding=(0, 2),
-                    )
-                )
+                console.print("  [bright_black]north[/bright_black]")
+                console.print(Padding(Markdown(output), (0, 0, 0, 2)))
             console.print(Rule(style="bright_black"))
 
         elif event == "task_failed":
@@ -290,14 +279,8 @@ async def run(
             spinner.stop()
             toolbar_status[0] = ""
             user_task_ids.discard(task_id)
-            console.print(
-                Panel(
-                    Text(error, style="red"),
-                    title="[dim]north — error[/dim]",
-                    border_style="bright_black",
-                    padding=(0, 2),
-                )
-            )
+            console.print("  [bright_black]north — error[/bright_black]")
+            console.print(Padding(Text(error, style="red"), (0, 0, 0, 2)))
             console.print(Rule(style="bright_black"))
 
         elif event == "task_cancelled":
@@ -313,14 +296,8 @@ async def run(
             approval_pending[0] = True
             spinner.stop()
             toolbar_status[0] = ""
-            console.print(
-                Panel(
-                    Text(data.get("message", ""), style="white"),
-                    title="[yellow]approval required[/yellow]",
-                    border_style="yellow",
-                    padding=(0, 2),
-                )
-            )
+            console.print("  [yellow]approval required[/yellow]")
+            console.print(Padding(Text(data.get("message", ""), style="white"), (0, 0, 0, 2)))
             options = data.get("options") or ["Approve", "Reject"]
             for i, opt in enumerate(options, 1):
                 console.print(f"  [bright_black][{i}][/bright_black]  {opt}")
