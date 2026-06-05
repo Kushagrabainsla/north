@@ -63,7 +63,15 @@ class LLMAgent(Agent):
             f"- {t.name} (reliability {score:.0%}): {t.description}"
             for t, score in scored_tools
         )
+        system_context = ""
+        if payload.workspace:
+            system_context = (
+                f"## System Context\n"
+                f"- workspace: {payload.workspace}\n"
+                f"- When calling filesystem/shell tools, always use absolute paths derived from the workspace above. Never use generic placeholders like '/home/user' or relative paths.\n\n"
+            )
         return (
+            f"{system_context}"
             f"## Task\n{payload.prompt}\n\n"
             f"## Context\n{context or '(none)'}\n\n"
             f"## Tools available\n{tool_lines or '(none)'}\n"
