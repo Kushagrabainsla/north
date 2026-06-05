@@ -82,7 +82,8 @@ class _Spinner:
 
     def _erase(self) -> None:
         if self._width:
-            self._raw(f"\r{' ' * self._width}\r")
+            if not self.prompt_active:
+                self._raw(f"\r{' ' * self._width}\r")
             self._width = 0
 
     def _draw(self) -> None:
@@ -122,6 +123,15 @@ class _Spinner:
     def stop(self) -> None:
         self._erase()
         self._active = False
+
+    def begin_prompt(self) -> None:
+        """Erase the spinner line in-place and hand the cursor to prompt_toolkit."""
+        if self._active and self._width:
+            # Clear the spinner text without advancing: cursor ends at col 0 of
+            # the same line so prompt_async() renders right there on a clean line.
+            self._raw(f"\r{' ' * self._width}\r")
+        self._width = 0
+        self.prompt_active = True
 
 
 async def run(
@@ -409,7 +419,7 @@ async def run(
                 await _handle_pending_approval()
                 continue
 
-            spinner.prompt_active = True
+            spinner.begin_prompt()
             try:
                 text = await session.prompt_async(_prompt_tokens)
             except KeyboardInterrupt:
