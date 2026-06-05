@@ -30,7 +30,7 @@ _STRATEGY_COLORS = {
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 _PROMPT_STYLE = Style.from_dict({
-    "bottom-toolbar": "bg:default fg:ansibrightblack",
+    "bottom-toolbar": "noreverse bg:default fg:ansibrightblack",
 })
 
 
@@ -267,6 +267,7 @@ async def run(
                         padding=(1, 2),
                     )
                 )
+            console.print(Rule(style="bright_black"))
 
         elif event == "task_failed":
             sys.stdout.write("\a")
@@ -284,12 +285,14 @@ async def run(
                     padding=(1, 2),
                 )
             )
+            console.print(Rule(style="bright_black"))
 
         elif event == "task_cancelled":
             token_buffer.pop(task_id, None)
             spinner.stop()
             user_task_ids.discard(task_id)
             console.print("\n  [dim]cancelled[/dim]")
+            console.print(Rule(style="bright_black"))
 
         elif event == "approval_required":
             await approval_queue.put(data)
@@ -392,9 +395,9 @@ async def run(
     _banner = Console()
     _banner.print()
     _banner.print("  [bold white]north[/bold white]  [bright_black]personal operating system[/bright_black]")
-    _banner.print(Rule(style="bright_black"))
     _banner.print(f"  [dim]strategy: {_get_strategy()}[/dim]")
     _banner.print()
+    _banner.print(Rule(style="bright_black"))
 
     listener = asyncio.create_task(_listen())
 
