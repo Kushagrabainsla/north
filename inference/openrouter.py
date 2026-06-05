@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import httpx
 
@@ -146,6 +149,10 @@ class OpenRouterInferenceRouter(InferenceRouter):
             try:
                 return await self._call_completion(model, request)
             except _RateLimited as e:
+                last_error = e
+                continue
+            except InferenceError as e:
+                logger.warning("Model '%s' failed, trying next in chain: %s", model, e)
                 last_error = e
                 continue
 
@@ -286,6 +293,10 @@ class OpenRouterInferenceRouter(InferenceRouter):
             try:
                 return await self._call_tools_streaming(model, request, token_callback)
             except _RateLimited as e:
+                last_error = e
+                continue
+            except InferenceError as e:
+                logger.warning("Model '%s' failed, trying next in chain: %s", model, e)
                 last_error = e
                 continue
         raise AllModelsRateLimitedError(
