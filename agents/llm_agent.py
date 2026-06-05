@@ -68,7 +68,8 @@ class LLMAgent(Agent):
             system_context = (
                 f"## System Context\n"
                 f"- workspace: {payload.workspace}\n"
-                f"- When calling filesystem/shell tools, always use absolute paths derived from the workspace above. Never use generic placeholders like '/home/user' or relative paths.\n\n"
+                f"- Before creating or interacting with directories (like Desktop, Downloads, Documents, etc.), always list the workspace contents (using `list_dir` or standard commands) to inspect the system, locate the actual target directories, and check if they are already present—exactly like a human engineer would. Never guess paths or run creation commands blindly.\n"
+                f"- When calling filesystem/shell tools, always use absolute paths derived from your workspace inspection above. Never use generic placeholders like '/home/user', unexpanded '~', or relative paths.\n\n"
             )
         return (
             f"{system_context}"
