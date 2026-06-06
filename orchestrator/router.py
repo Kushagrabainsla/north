@@ -5,9 +5,11 @@ See docs/CODING_STYLE.md Sections 5.3, 6.5, 9.7, 13.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from agents import AgentRegistry
@@ -15,6 +17,17 @@ from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
 from utils.prompts import load_prompt
+
+_PLAN_CACHE_TTL_SECONDS: int = 3600  # 1 hour
+_PLAN_CACHE_MAX_SIZE: int = 256
+_NORMALIZE_RE = re.compile(r"[^a-z0-9 ]")
+
+
+def _plan_cache_key(prompt: str) -> str:
+    """Stable hash of a normalized prompt for routing cache lookups."""
+    normalized = _NORMALIZE_RE.sub("", prompt.lower().strip())
+    normalized = " ".join(normalized.split())  # collapse whitespace
+    return hashlib.md5(normalized.encode()).hexdigest()
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +53,8 @@ class ExecutionPlanner:
         self._inference_router = inference_router
         self._tool_registry = tool_registry
         self._workspace = workspace
+        # Cache: normalized_hash → (insert_ts, classification, plan)
+        self._plan_cache: dict[str, tuple[float, IntentClassification, ExecutionPlan]] = {}
 
     async def plan_all(
         self, prompt: str, task_id: str
@@ -51,6 +66,15 @@ class ExecutionPlanner:
         all_agents = self._agent_registry.all()
         if not all_agents:
             raise RoutingError("No agents are registered.")
+
+        cache_key = _plan_cache_key(prompt)
+        cached = self._plan_cache.get(cache_key)
+        if cached is not None:
+            insert_ts, cached_cls, cached_plan = cached
+            if (time.monotonic() - insert_ts) < _PLAN_CACHE_TTL_SECONDS:
+                logger.debug("Planner cache hit for key %s", cache_key[:8])
+                # Return a fresh plan with the new task_id so task tracking is correct.
+                return cached_cls, cached_plan.with_task_id(task_id)
 
         agents_info = [
             {"name": a.name, "domain": a.domain, "accepts": a.config.accepts}
@@ -71,7 +95,7 @@ class ExecutionPlanner:
                 "workspace above. Never emit bare filenames or paths starting with '~' — expand them."
             )
         system_context_block = (
-            f"=== System Context ===\n" + "\n".join(system_context_lines) + "\n\n"
+            "=== System Context ===\n" + "\n".join(system_context_lines) + "\n\n"
             if system_context_lines
             else ""
         )
@@ -92,6 +116,7 @@ class ExecutionPlanner:
                     component="planner",
                     task_id=task_id,
                     json_mode=True,
+                    temperature=0.0,
                 )
             )
         except Exception as exc:
@@ -125,6 +150,13 @@ class ExecutionPlanner:
             confidence=confidence,
         )
         plan = self._build_plan_from_response(data, classification.domain, task_id)
+
+        # Evict oldest entries when cache is full, then store.
+        if len(self._plan_cache) >= _PLAN_CACHE_MAX_SIZE:
+            oldest = min(self._plan_cache, key=lambda k: self._plan_cache[k][0])
+            del self._plan_cache[oldest]
+        self._plan_cache[cache_key] = (time.monotonic(), classification, plan)
+
         return classification, plan
 
     # ------------------------------------------------------------------

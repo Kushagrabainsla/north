@@ -43,7 +43,8 @@ The user has provided this content:
 
 Decide which document this belongs to and write a concise delta to append (1–3 sentences maximum).
 The delta should capture only the essential new facts — do not copy the original content verbatim.
-Preserve key specifics: names, numbers, dates, deadlines, and thresholds. A vague summary is less useful than a precise one.
+Preserve key specifics: names, numbers, dates, deadlines, and thresholds.
+A vague summary is less useful than a precise one.
 Reply with JSON only:
 {{"document": "<public|private|privacy_rules|judgement_rules|north_stars>", "delta": "<1-3 sentences>"}}
 """

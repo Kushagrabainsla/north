@@ -19,7 +19,12 @@ import httpx
 
 from config.strategy import NorthSettings, StrategyMode
 from inference.base import InferenceRouter
-from inference.constants import DEFAULT_EMBED_MODEL, DEFAULT_TIMEOUT_SECONDS, OPENROUTER_BASE_URL, SSE_CHUNK_TIMEOUT_SECONDS
+from inference.constants import (
+    DEFAULT_EMBED_MODEL,
+    DEFAULT_TIMEOUT_SECONDS,
+    OPENROUTER_BASE_URL,
+    SSE_CHUNK_TIMEOUT_SECONDS,
+)
 from inference.exceptions import (
     AllModelsRateLimitedError,
     InferenceError,

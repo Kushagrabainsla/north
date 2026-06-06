@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     agent_max_iterations: int = 40
     agent_history_keep_recent: int = 10
 
+    # Extraction pipeline tuning
+    extraction_poll_interval_seconds: int = 120
+    extraction_max_daily_cost_usd: float = 0.10
+    extraction_min_output_chars: int = 100
+    extraction_max_concurrent: int = 5
+
     @property
     def secret(self) -> str:
         """Return the shared secret: env var takes priority over the key file.

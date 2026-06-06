@@ -6,10 +6,11 @@ See docs/CODING_STYLE.md Sections 5.3, 6.5, 9.7, 13.
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
-from orchestrator.router import ExecutionPlanner
 from inference import CompletionResponse
+from orchestrator.router import ExecutionPlanner
 
 
 @pytest.mark.asyncio
@@ -28,17 +29,11 @@ async def test_execution_planner_workspace_context_in_prompt() -> None:
     mock_agent_registry.names.return_value = ["general"]
 
     mock_inference = MagicMock()
-    # Mock return value of complete
-    response_data = {
-        "confidence": 0.9,
-        "is_consequential": False,
-        "domain": "general",
-        "reasoning": "test",
-        "mode": "single_agent",
-        "agents": ["general"],
-    }
     mock_response = MagicMock(spec=CompletionResponse)
-    mock_response.text = '{"confidence": 0.9, "is_consequential": false, "domain": "general", "reasoning": "test", "mode": "single_agent", "agents": ["general"]}'
+    mock_response.text = (
+        '{"confidence": 0.9, "is_consequential": false, "domain": "general",'
+        ' "reasoning": "test", "mode": "single_agent", "agents": ["general"]}'
+    )
     mock_inference.complete = AsyncMock(return_value=mock_response)
 
     planner = ExecutionPlanner(

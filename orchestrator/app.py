@@ -27,7 +27,6 @@ from config.dependencies import build_production_dependencies
 from config.settings import settings
 from context.embedding_index import EmbeddingIndex
 from context.extraction import ExtractionPipeline
-from context.file_store import FileContextStore
 from context.injection import ContextInjector
 from jobs.models import Job
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler
@@ -44,6 +43,7 @@ from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
 from tools.registry import ToolRegistry
 from tools.specialized.bash import BashTool
+from tools.tool_index import ToolIndex
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
@@ -122,6 +122,21 @@ def _build_tool_registry(deps, tool_graph) -> ToolRegistry:
     return tool_registry
 
 
+def _build_tool_index(deps) -> ToolIndex | None:
+    if deps.embed_fn is None:
+        return None
+    return ToolIndex(
+        db_path=settings.north_home / "tool_index.db",
+        embed_fn=deps.embed_fn,
+    )
+
+
+async def _populate_tool_index(tool_index: ToolIndex, tool_registry: ToolRegistry) -> None:
+    """Embed every registered tool description so agents can do semantic selection."""
+    for tool in tool_registry.all_tools():
+        await tool_index.update_tool(tool.name, tool.description)
+
+
 def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
     return AgentDependencies(
         context_store=deps.context_store,
@@ -131,6 +146,7 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
         stream_manager=deps.stream_manager,
         episodic_store=deps.episodic_store,
         approval_store=deps.approval_store,
+        fact_store=deps.fact_store,
         agent_max_iterations=settings.agent_max_iterations,
         agent_history_keep_recent=settings.agent_history_keep_recent,
         approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
@@ -151,6 +167,11 @@ def _build_extraction_pipeline(deps) -> ExtractionPipeline:
         context_store=deps.context_store,
         inference_router=deps.cost_tracker,
         north_home=settings.north_home,
+        poll_interval_seconds=settings.extraction_poll_interval_seconds,
+        max_daily_cost_usd=settings.extraction_max_daily_cost_usd,
+        min_output_chars=settings.extraction_min_output_chars,
+        max_concurrent=settings.extraction_max_concurrent,
+        fact_store=deps.fact_store,
     )
 
 
@@ -387,8 +408,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("seeding confidence defaults")
     await deps.confidence_tracker.seed_defaults(tool_graph, _RELIABLE_TOOLS)
 
+    _step("building tool index")
+    tool_index = _build_tool_index(deps)
+    if tool_index is not None:
+        await _populate_tool_index(tool_index, tool_registry)
+
     _step("scanning agent registry")
     agent_deps = _build_agent_deps(deps, tool_registry)
+    agent_deps.tool_index = tool_index
     agent_registry = _build_agent_registry(agent_deps)
     _step(f"registered agents: {agent_registry.names()}")
     _warn_unknown_cron_agents(agent_registry)

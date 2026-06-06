@@ -24,17 +24,13 @@ Before the `=== Available Agents ===` block you may receive a `=== System Contex
 ## Step 1 — Classify
 
 ### Domain
-Choose the most specific domain that fits. Use `general` for anything conversational, cross-domain, open-ended, or that doesn't clearly belong to a specialist.
+Look at the `=== Available Agents ===` block. Each agent entry has a `domain` and an `accepts` keyword list. Pick the `domain` whose agent's `accepts` list best matches the task. Use `general` if no specialist agent fits or the task is conversational, cross-domain, or open-ended.
 
-| Domain | Fits when the task is about |
-|---|---|
-| `health` | fitness, nutrition, sleep, medical, wellness |
-| `university` | coursework, assignments, exams, academic planning |
-| `job` | job search, interviews, career, professional outreach |
-| `finance` | money, budgeting, investments, expenses, savings |
-| `home` | smart home, lights, bulbs, lamps, Kasa devices, home automation — simple single-device commands → `single_tool` with `kasa`; multi-step, scheduling, or unfamiliar platforms → `single_agent` with `home` agent |
-| `engineering` | implement a feature, build a system, write code, fix a non-trivial bug, design architecture, research a technical topic — tasks involving code, specs, or technical investigation |
-| `general` | everything else |
+Valid `domain` values are exactly the `domain` fields in the Available Agents block — do not invent new ones.
+
+**Special cases:**
+- `home`: simple single-device commands → `single_tool` with `kasa`; multi-step, scheduling, or unfamiliar platforms → `single_agent` with `home` agent
+- `engineering`: see entry-point rules below
 
 #### Engineering entry point
 When `domain = engineering`, always use `single_agent` mode. The chain unfolds inside agents via `delegate_task` — the planner only picks the entry point. **Never use `hierarchical` mode for engineering tasks.**

@@ -9,6 +9,7 @@ from typing import Any
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context.models import ContextDocument
 from tools.base import Tool
+from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class Agent(ABC):
     async def run(self, payload: AgentPayload) -> AgentResult:
         """Template method. Do not override. Implement `_execute()` instead."""
         context = await self._load_context(payload)
-        scored_tools = await self._load_tools()
+        scored_tools = await self._load_tools(payload.prompt)
         raw = await self._execute(payload, context, scored_tools)
         return self._format_result(raw)
 
@@ -60,35 +61,52 @@ class Agent(ABC):
         """Domain-specific logic. Returns a dict that maps onto `AgentResult` fields."""
 
     async def _load_context(self, payload: AgentPayload) -> str:
-        """Load permitted context documents + relevant past episodes.
+        """Load context for this agent.
 
-        Reads privacy_rules.md to determine which documents this agent is
-        allowed to access before injecting anything into the prompt.  Each
-        document is capped at _MAX_CONTEXT_CHARS.
+        Preference order:
+        1. payload.context (pre-loaded by orchestrator for delegated tasks)
+        2. FactStore semantic search (when available and populated)
+        3. Full markdown document load (legacy fallback)
+
+        Episodic search runs in all paths and is appended at the end.
         """
         if payload.context:
             return payload.context
-        store = self._deps.context_store
 
-        allowed_docs = await self._allowed_documents()
-        raw_parts = [await store.read(doc) for doc in allowed_docs]
+        parts: list[str] = []
 
-        parts = []
-        for text in raw_parts:
-            if len(text) > _MAX_CONTEXT_CHARS:
-                omitted = len(text) - _MAX_CONTEXT_CHARS
-                text = text[:_MAX_CONTEXT_CHARS] + f"\n\n[…{omitted} chars omitted — document too large]"
-            parts.append(text)
+        fact_store = self._deps.fact_store
+        if fact_store is not None:
+            try:
+                if await fact_store.count() > 0:
+                    facts = await fact_store.search(payload.prompt, max_results=15)
+                    if facts:
+                        parts.append(
+                            "## Personal Context\n"
+                            + "\n".join(f"- {f}" for f in facts)
+                        )
+            except Exception as exc:
+                logger.warning("FactStore search failed for task %s: %s", payload.task_id, exc)
+
+        if not parts:
+            store = self._deps.context_store
+            allowed_docs = await self._allowed_documents()
+            raw_parts = [await store.read(doc) for doc in allowed_docs]
+            for text in raw_parts:
+                if len(text) > _MAX_CONTEXT_CHARS:
+                    omitted = len(text) - _MAX_CONTEXT_CHARS
+                    text = text[:_MAX_CONTEXT_CHARS] + f"\n\n[…{omitted} chars omitted — document too large]"
+                parts.append(text)
 
         episodic = self._deps.episodic_store
         if episodic is not None:
             try:
                 episodes = await episodic.search(payload.prompt, max_results=3)
                 if episodes:
-                    block = "## Relevant past context\n" + "\n".join(
-                        f"- {e}" for e in episodes
+                    parts.append(
+                        "## Relevant past context\n"
+                        + "\n".join(f"- {e}" for e in episodes)
                     )
-                    parts.append(block)
             except Exception as exc:
                 logger.warning("Episodic context search failed for task %s: %s", payload.task_id, exc)
         return "\n\n".join(p for p in parts if p)
@@ -136,15 +154,33 @@ class Agent(ABC):
             return docs if docs else _DEFAULT
         return _DEFAULT
 
-    async def _load_tools(self) -> list[tuple[Tool, float]]:
-        """Return (tool, confidence_score) pairs, sorted by score descending.
+    async def _load_tools(self, task_prompt: str = "") -> list[tuple[Tool, float]]:
+        """Return (tool, confidence_score) pairs for this agent, sorted by score descending.
 
-        Scores are fetched once here and threaded through to `_execute` so no
-        subclass needs a second async call to look them up.
+        When a ToolIndex is available and the tool count exceeds SEMANTIC_FILTER_MIN,
+        only the top SEMANTIC_TOP_K semantically relevant tools are returned.
+        Falls back silently to full injection when the index is unavailable or
+        returns no results (e.g. cold start before embeddings are built).
         """
         registry_tools = self._deps.tool_registry.tools_for_agent(self.name)
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
-        scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
+
+        tool_index = self._deps.tool_index
+        if (
+            task_prompt
+            and tool_index is not None
+            and len(registry_tools) > SEMANTIC_FILTER_MIN
+        ):
+            top_names = set(await tool_index.search_tools(task_prompt, top_k=SEMANTIC_TOP_K))
+            if top_names:
+                scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools if t.name in top_names]
+                if not scored:
+                    scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
+            else:
+                scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
+        else:
+            scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
+
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return scored
 

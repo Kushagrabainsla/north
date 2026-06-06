@@ -26,6 +26,7 @@ from ledger import LedgerWriter, SQLiteLedgerWriter
 
 if TYPE_CHECKING:
     from context.episodic import EpisodicStore
+    from context.fact_store import FactStore
     from inference.cost_tracker import CostTracker
     from jobs.cron_store import UserCronStore
     from orchestrator.stream import EventStreamManager
@@ -57,14 +58,16 @@ class Dependencies:
     episodic_store: EpisodicStore
     task_context_store: TaskContextStore
     north_settings: NorthSettings
-    # Shared async callable used by both EpisodicStore and EmbeddingIndex so
-    # they are guaranteed to use the same embedding model and billing surface.
+    # Shared async callable used by EpisodicStore, EmbeddingIndex, ToolIndex,
+    # and FactStore — guarantees a single embedding model and billing surface.
     embed_fn: EmbedFn | None = field(default=None)
+    fact_store: FactStore | None = field(default=None)
 
 
 def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
     """Build and wire all synchronously-constructable production dependencies."""
     from context.episodic import EpisodicStore
+    from context.fact_store import FactStore
     from inference.cost_tracker import CostTracker
     from inference.models import EmbedRequest
     from jobs.cron_store import UserCronStore
@@ -106,4 +109,8 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         task_context_store=TaskContextStore(),
         north_settings=north_settings,
         embed_fn=_embed_fn,
+        fact_store=FactStore(
+            db_path=settings.north_home / "facts.db",
+            embed_fn=_embed_fn,
+        ),
     )

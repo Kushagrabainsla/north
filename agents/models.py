@@ -17,6 +17,8 @@ from tools.registry import ToolRegistry
 if TYPE_CHECKING:
     from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
+    from context.fact_store import FactStore
+    from tools.tool_index import ToolIndex
 
 
 @runtime_checkable
@@ -33,7 +35,8 @@ class AgentPayload(BaseModel):
     prompt: str
     context: str = ""  # optional pre-loaded context summary
     workspace: str = ""  # root directory for filesystem/shell tools
-    delegation_depth: int = 0  # incremented on each delegate_task call; capped at _MAX_DELEGATION_DEPTH
+    delegation_depth: int = 0  # incremented on each delegate_task call; capped at MAX_DELEGATION_DEPTH
+    delegation_chain: list[str] = Field(default_factory=list)  # ordered agent names in this call chain
 
 
 class AgentResult(BaseModel):
@@ -48,6 +51,7 @@ class AgentResult(BaseModel):
     question_options: list[str] = Field(default_factory=list)
     cost_usd: float = 0.0
     duration_ms: int | None = None
+    tools_used: list[str] = Field(default_factory=list)  # deduplicated, ordered by first call
 
 
 class AgentConfig(BaseModel):
@@ -105,6 +109,12 @@ class AgentDependencies:
     # Injected after construction (same pattern as agent_registry) to avoid
     # building it twice.
     judgement_filter: JudgementFilter | None = field(default=None)
+    # Semantic tool selection: top-K relevant tools injected per task instead
+    # of the full registry list.  None → fall back to full injection.
+    tool_index: ToolIndex | None = field(default=None)
+    # Semantic context retrieval: per-fact embeddings instead of full doc load.
+    # None → fall back to full markdown document load.
+    fact_store: FactStore | None = field(default=None)
     # Iteration caps injected from Settings so agents never read config globals.
     agent_max_iterations: int = 40
     agent_history_keep_recent: int = 10

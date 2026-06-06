@@ -873,6 +873,7 @@ class Orchestrator:
             action="agent_completed",
             output=result.output,
             agent_output=result.data,
+            tools_used=result.tools_used,
             status=LedgerStatus.COMPLETED,
             duration_ms=result.duration_ms,
         ))

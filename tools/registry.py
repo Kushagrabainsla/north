@@ -158,6 +158,10 @@ class ToolRegistry:
             raise ToolNotFoundError(f"No tool registered with name: {name}")
         return self._tools[name]
 
+    def all_tools(self) -> list[Tool]:
+        """Return every registered tool (universal + specialized)."""
+        return list(self._tools.values())
+
     def tools_for_agent(self, agent: str, *, auto_reload: bool = True) -> list[Tool]:
         """Return universal tools + any specialized tools the agent declared.
 

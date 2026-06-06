@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 import re
@@ -210,6 +211,14 @@ class CreateToolTool(Tool):
                 notes=notes,
             )
 
+        safe, reason = _check_code_safety(content)
+        if not safe:
+            return ToolOutput(
+                success=False,
+                error=f"Tool code rejected by static safety check: {reason}. "
+                      "Remove the flagged pattern and try again.",
+            )
+
         file_path.write_text(content, encoding="utf-8")
 
         hot_loaded = self._hot_load(file_path, tool_type, make_universal=(tool_type == "universal"))
@@ -255,6 +264,14 @@ class CreateToolTool(Tool):
             return ToolOutput(
                 success=False,
                 error=f"Updated content must keep 'name = \"{tool_name}\"' — tool name cannot change.",
+            )
+
+        safe, reason = _check_code_safety(content)
+        if not safe:
+            return ToolOutput(
+                success=False,
+                error=f"Tool code rejected by static safety check: {reason}. "
+                      "Remove the flagged pattern and try again.",
             )
 
         tool_type = "universal" if (path.parent.name == "universal") else "specialized"
@@ -309,6 +326,52 @@ class CreateToolTool(Tool):
                     continue
 
         return False
+
+
+# ── Code safety ──────────────────────────────────────────────────────────────
+
+_FORBIDDEN_IMPORTS: frozenset[str] = frozenset({
+    "subprocess", "ctypes", "socket", "os.system", "pty",
+    "multiprocessing", "signal", "threading",
+})
+_FORBIDDEN_CALLS: frozenset[str] = frozenset({"exec", "eval", "compile", "__import__"})
+
+
+def _check_code_safety(code: str) -> tuple[bool, str]:
+    """Parse `code` with the AST and reject obviously dangerous patterns.
+
+    Returns (safe, reason). `reason` is empty when safe.
+    Does NOT sandbox execution — this is a static best-effort check, not a
+    security boundary. The real boundary is the user approval gate.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return False, f"Syntax error: {exc}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else ([node.module] if node.module else [])
+            )
+            for name in names:
+                if name in _FORBIDDEN_IMPORTS or any(
+                    name.startswith(f"{m}.") for m in _FORBIDDEN_IMPORTS
+                ):
+                    return False, f"Forbidden import: '{name}'"
+        if isinstance(node, ast.Call):
+            func = node.func
+            func_name = (
+                func.id if isinstance(func, ast.Name)
+                else func.attr if isinstance(func, ast.Attribute)
+                else None
+            )
+            if func_name in _FORBIDDEN_CALLS:
+                return False, f"Forbidden call: '{func_name}'"
+
+    return True, ""
 
 
 # ── Standalone helpers ────────────────────────────────────────────────────────

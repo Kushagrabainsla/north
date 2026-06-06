@@ -57,3 +57,7 @@ class ExecutionPlan(BaseModel):
     mode: ExecutionMode = ExecutionMode.SINGLE_AGENT
     direct_tool: str | None = None
     direct_tool_params: dict[str, Any] = Field(default_factory=dict)
+
+    def with_task_id(self, new_task_id: str) -> ExecutionPlan:
+        """Return a copy of this plan with task_id replaced."""
+        return self.model_copy(update={"task_id": new_task_id})

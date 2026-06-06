@@ -144,6 +144,8 @@ class AgenticLLMAgent(LLMAgent):
         total_cost_usd: float = 0.0
         last_tokens_in: int = 0
         last_model_used: str = ""
+        _seen_tools: set[str] = set()
+        tools_used: list[str] = []
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
@@ -192,18 +194,23 @@ class AgenticLLMAgent(LLMAgent):
             if response.type == "message":
                 # Final answer — tokens were already streamed via token_cb.
                 content = response.content or ""
-                return _final_answer(content, content[:120], total_cost_usd)
+                return _final_answer(content, content[:120], total_cost_usd, tools_used)
 
             # Tool calls branch — execute all calls in parallel.
             if not response.calls:
                 break
 
+            for call in response.calls:
+                if call.name not in _seen_tools:
+                    _seen_tools.add(call.name)
+                    tools_used.append(call.name)
             await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
 
         return _final_answer(
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
             total_cost_usd,
+            tools_used,
         )
 
     # ------------------------------------------------------------------
@@ -294,13 +301,23 @@ class AgenticLLMAgent(LLMAgent):
                 ),
             })
 
+        agent_name = str(params.get("agent", "general"))
+        if agent_name in payload.delegation_chain:
+            return json.dumps({
+                "success": False,
+                "error": (
+                    f"Delegation cycle detected — '{agent_name}' is already in the "
+                    f"current chain {payload.delegation_chain}. "
+                    "Summarise what you have and return your best result instead of delegating again."
+                ),
+            })
+
         registry = self._deps.agent_registry
         if registry is None:
             return json.dumps(
                 {"success": False, "error": "Agent registry not available for delegation."}
             )
 
-        agent_name = str(params.get("agent", "general"))
         task = str(params.get("task", ""))
         if not task:
             return json.dumps(
@@ -334,6 +351,7 @@ class AgenticLLMAgent(LLMAgent):
             prompt=task,
             workspace=payload.workspace,
             delegation_depth=payload.delegation_depth + 1,
+            delegation_chain=payload.delegation_chain + [self.name],
         )
         try:
             result = await agent.run(sub_payload)
@@ -456,7 +474,12 @@ def _sync_hot_loaded_tools(deps: Any, agent_name: str, tool_map: dict[str, Tool]
             tool_map[tool.name] = tool
 
 
-def _final_answer(output: str, summary: str, cost_usd: float = 0.0) -> dict[str, Any]:
+def _final_answer(
+    output: str,
+    summary: str,
+    cost_usd: float = 0.0,
+    tools_used: list[str] | None = None,
+) -> dict[str, Any]:
     return {
         "output": output,
         "summary": summary,
@@ -466,4 +489,5 @@ def _final_answer(output: str, summary: str, cost_usd: float = 0.0) -> dict[str,
         "question": None,
         "question_options": [],
         "cost_usd": cost_usd,
+        "tools_used": tools_used or [],
     }

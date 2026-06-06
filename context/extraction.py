@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from context.base import ContextStore
 from context.models import ContextDocument
@@ -21,6 +22,9 @@ from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from utils.ids import generate_id
 from utils.time import utcnow
+
+if TYPE_CHECKING:
+    from context.fact_store import FactStore
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +129,10 @@ class ExtractionPipeline:
         inference_router: InferenceRouter,
         north_home: Path,
         poll_interval_seconds: int = _POLL_INTERVAL_SECONDS,
+        max_daily_cost_usd: float = 0.10,
+        min_output_chars: int = 100,
+        max_concurrent: int = _MAX_CONCURRENT_EXTRACTIONS,
+        fact_store: FactStore | None = None,
     ) -> None:
         self._ledger = ledger
         self._context_store = context_store
@@ -133,6 +141,10 @@ class ExtractionPipeline:
         self._archive_dir = north_home / "context_archive"
         self._backup_dir = north_home / "context_backup"
         self._poll_interval = poll_interval_seconds
+        self._max_daily_cost = max_daily_cost_usd
+        self._min_output_chars = min_output_chars
+        self._max_concurrent = max_concurrent
+        self._fact_store = fact_store
         # Prevents concurrent _process_batch calls (background loop + per-task
         # trigger) from reading the same watermark and double-processing entries.
         self._lock = asyncio.Lock()
@@ -157,10 +169,16 @@ class ExtractionPipeline:
     # ------------------------------------------------------------------ #
 
     def _filter_valid_entries(self, entries: list[LedgerEntry]) -> list[LedgerEntry]:
-        """Skip internal/failed entries, saving watermarks for them, return valid ones."""
+        """Skip internal/failed/low-signal entries; advance watermark past skipped ones."""
         valid: list[LedgerEntry] = []
         for entry in entries:
-            if entry.source in _SKIPPED_SOURCES or entry.status in _SKIPPED_STATUSES:
+            skip = (
+                entry.source in _SKIPPED_SOURCES
+                or entry.status in _SKIPPED_STATUSES
+                or not entry.output
+                or len(entry.output) < self._min_output_chars
+            )
+            if skip:
                 self._save_watermark(entry.timestamp)
             else:
                 valid.append(entry)
@@ -170,7 +188,7 @@ class ExtractionPipeline:
         self, entries: list[LedgerEntry]
     ) -> list[bool | Exception]:
         """Perform concurrent extraction checks with a semaphore rate-limit cap."""
-        sem = asyncio.Semaphore(_MAX_CONCURRENT_EXTRACTIONS)
+        sem = asyncio.Semaphore(self._max_concurrent)
         results: list[bool | Exception] = [False] * len(entries)
 
         async def _bounded(idx: int, entry: LedgerEntry) -> None:
@@ -211,6 +229,18 @@ class ExtractionPipeline:
     async def _process_batch_locked(
         self, since_override: datetime.datetime | None = None
     ) -> int:
+        try:
+            metrics = await self._ledger.get_metrics(days=1)
+            daily_cost = metrics.get("totals", {}).get("cost_usd", 0.0)
+            if daily_cost >= self._max_daily_cost:
+                logger.info(
+                    "ExtractionPipeline: daily cost cap $%.2f reached (used $%.4f), skipping",
+                    self._max_daily_cost, daily_cost,
+                )
+                return 0
+        except Exception:
+            pass  # don't block extraction if metrics query fails
+
         await self._maybe_backup()
         since = since_override or self._load_watermark()
         entries = await self._ledger.query(
@@ -267,6 +297,12 @@ class ExtractionPipeline:
             return False
 
         await self._context_store.append(doc, delta)
+
+        if self._fact_store is not None:
+            try:
+                await self._fact_store.add_fact(delta, doc_key)
+            except Exception:
+                logger.warning("FactStore: failed to persist fact '%s'", delta[:80])
 
         # Trim document if it has grown too large.
         await self._maybe_trim(doc, entry.task_id)

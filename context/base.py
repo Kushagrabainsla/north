@@ -34,7 +34,7 @@ class ContextStore(ABC):
         """Append `delta` to `document`, separated from existing content by a
         single newline. If the document does not exist, create it."""
 
-    def attach_embedding_index(self, index: EmbeddingIndex) -> None:  # noqa: ARG002
+    def attach_embedding_index(self, index: EmbeddingIndex) -> None:  # noqa: ARG002, B027
         """Attach a semantic embedding index for use in search().
 
         Called after construction when the embed function is available.

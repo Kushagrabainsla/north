@@ -2,6 +2,30 @@
 
 All notable changes to north are documented here.
 
+## [1.3.2] - 2026-06-06
+### Added
+- **Semantic tool selection** (`tools/tool_index.py`): tool descriptions are embedded at registration time; at task start, only the top-15 semantically relevant tools are injected into the agent context instead of the full registry, reducing token bloat at scale
+- **Atomic fact store** (`context/fact_store.py`): extracted facts are stored as individual SQLite rows with per-entry embeddings; `_load_context()` retrieves the top-15 semantically relevant facts via cosine search instead of loading entire markdown documents
+- **Metrics queries** (`tools/universal/query_metrics.py`, `GET /orchestrator/metrics`, `north metrics`, `/ui/metrics`): per-agent task counts, success rates, costs, p50/p95 durations, model cost breakdown, and top errors — visible via CLI, web UI, and chat
+- **Delegation cycle detection**: `delegation_chain: list[str]` added to `AgentPayload`; `_delegate_task()` short-circuits with an error if the target agent is already in the chain
+- **AST safety check on `create_tool`**: agent-written code is scanned for forbidden imports (`subprocess`, `socket`, `ctypes`, …) and calls (`exec`, `eval`, `compile`) before being written or hot-loaded
+- **`tools_used` tracking**: every tool call in a ReAct loop is accumulated and written to `LedgerEntry.tools_used` for auditing
+- **SQLite WAL mode**: `PRAGMA journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=5000` applied to both the ledger and confidence databases at init
+- **Adaptive EMA confidence**: consecutive failures scale the EMA alpha (0.1 → 0.2 → 0.4) for faster tool degradation detection; warning logged when confidence drops below 0.25; `consecutive_failures` column auto-migrated
+- **Deterministic planner routing**: planner LLM call uses `temperature=0.0`; an in-process LRU routing cache (256 entries, 1-hour TTL) keyed on normalised prompt hash returns identical plans for recurring tasks at near-zero cost
+
+### Changed
+- `ExtractionPipeline` is now configurable: `extraction_poll_interval_seconds`, `extraction_max_daily_cost_usd`, `extraction_min_output_chars`, `extraction_max_concurrent` all settable via env vars; daily cost cap uses the new metrics endpoint; low-signal entries (short output) are skipped before the LLM call
+- `Agent._load_context()` uses `FactStore` semantic search when populated, falls back to full markdown load — no change to callers
+- `Agent._load_tools()` accepts `task_prompt` and applies semantic filter when `ToolIndex` is available and tool count exceeds threshold
+- Dynamic planner domain routing: static routing table removed; domain values derived purely from the `=== Available Agents ===` runtime block
+- `ToolRegistry.all_tools()` added for bulk enumeration at startup
+- `ExecutionPlan.with_task_id()` added for safe cache replay with a new task id
+
+## [1.3.1] - 2026-06-06
+### Changed
+- Resolved all ruff lint errors across modified files
+
 ## [1.2.6] - 2026-06-01
 ### Changed
 - Resolved all 25 ruff lint errors: fixed B904 (`raise … from None`) in three API router exception handlers, suppressed B008 for `typer.Option`/`typer.Argument` via `extend-immutable-calls`, and wrapped long lines (E501) across `agents/`, `cli/`, `jobs/`, `orchestrator/`, and `tools/`

@@ -173,8 +173,8 @@ async def test_concurrent_task_cap_raises(tmp_path):
     """submit_task() must raise OrchestratorError when the concurrent cap is hit."""
     import unittest.mock as mock
 
-    from orchestrator.exceptions import OrchestratorError
     from orchestrator.constants import MAX_CONCURRENT_TASKS as _MAX_CONCURRENT_TASKS
+    from orchestrator.exceptions import OrchestratorError
 
     orch, _, _ = _make_orchestrator(tmp_path)
 
@@ -210,8 +210,8 @@ async def test_north_star_skipped_on_low_confidence(tmp_path):
     """When the planner returns confidence < 0.7, north star check must be skipped."""
     import unittest.mock as mock
 
-    from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
     from orchestrator.constants import NORTH_STAR_CONFIDENCE_THRESHOLD as _NORTH_STAR_CONFIDENCE_THRESHOLD
+    from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
 
     orch, ledger, _ = _make_orchestrator(tmp_path)
 
@@ -555,6 +555,7 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
 async def test_execute_single_tool_passes_task_id(tmp_path):
     """_execute_single_tool must pass task_id to the tool params."""
     import unittest.mock as mock
+
     from orchestrator.models import ExecutionMode, ExecutionPlan
 
     orch, _, _ = _make_orchestrator(tmp_path)
