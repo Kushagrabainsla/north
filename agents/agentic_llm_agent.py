@@ -367,6 +367,22 @@ class AgenticLLMAgent(LLMAgent):
             message=message,
             options=options,
         )
+
+        # Check learned judgement rules before surfacing to the user.
+        # If a rule fires with high confidence, return the auto-decision
+        # immediately without creating a pending card or emitting any SSE.
+        if self._deps.judgement_filter is not None:
+            try:
+                auto_decision, _ = await self._deps.judgement_filter.check(card)
+                if auto_decision is not None:
+                    logger.debug(
+                        "JudgementFilter auto-%s for agent %s: %r",
+                        auto_decision, self.name, message[:80],
+                    )
+                    return auto_decision
+            except Exception:
+                logger.debug("JudgementFilter check failed for agent %s — surfacing card", self.name)
+
         store.add(card)
 
         if self._deps.stream_manager and payload.task_id:

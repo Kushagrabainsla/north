@@ -10,6 +10,22 @@ accepts:
   - "spend"
   - "price"
   - "money"
+  - "invest"
+  - "investment"
+  - "saving"
+  - "savings"
+  - "debt"
+  - "loan"
+  - "tax"
+  - "income"
+  - "salary"
+  - "crypto"
+  - "portfolio"
+  - "financial"
+  - "finance"
+  - "cost"
+  - "afford"
+  - "insurance"
 output_format: structured_json
 version: 1.0.0
 class_name: FinanceAgent

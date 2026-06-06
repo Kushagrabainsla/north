@@ -9,6 +9,20 @@ accepts:
   - "professor"
   - "study"
   - "course"
+  - "exam"
+  - "test"
+  - "grade"
+  - "deadline"
+  - "syllabus"
+  - "lecture"
+  - "thesis"
+  - "paper"
+  - "tutor"
+  - "academic"
+  - "university"
+  - "college"
+  - "semester"
+  - "gpa"
 output_format: structured_json
 version: 1.0.0
 class_name: UniversityAgent

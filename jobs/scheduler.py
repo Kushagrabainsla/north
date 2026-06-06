@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from jobs.base import JobProcessor
-from jobs.models import Job, JobPriority, JobType
+from jobs.models import Job, JobPriority, JobStatus, JobType
 from utils.ids import generate_id
 
 if TYPE_CHECKING:
@@ -137,12 +137,28 @@ class CronScheduler:
             return now - timedelta(minutes=self._STARTUP_CATCHUP_MINUTES)
         return now
 
+    async def _is_already_running(self, entry: CronEntry) -> bool:
+        """Return True if a prior firing of this entry is still pending or running."""
+        try:
+            for status in (JobStatus.PENDING, JobStatus.RUNNING):
+                jobs = await self._processor.list_jobs(status=status, limit=50)
+                if any(j.agent == entry.agent and j.task == entry.task for j in jobs):
+                    return True
+        except Exception:
+            logger.warning("CronScheduler: could not check for running jobs, proceeding")
+        return False
+
     async def _execute_due_entry(self, due: tuple[CronEntry, datetime], now: datetime) -> None:
         entry, firing = due
         delay = max(0.0, (firing - now).total_seconds())
         await asyncio.sleep(min(delay, 60.0))
         now_after_sleep = self._clock()
         if firing <= now_after_sleep:
+            if await self._is_already_running(entry):
+                logger.info(
+                    "CronScheduler: skipping %s — prior run still active", entry.name
+                )
+                return
             await self._processor.enqueue(self.build_job(entry, firing))
 
     async def run(self) -> None:

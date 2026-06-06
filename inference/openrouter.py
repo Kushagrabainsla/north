@@ -8,6 +8,7 @@ limit, the router walks down the pool to the next available model.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -18,7 +19,7 @@ import httpx
 
 from config.strategy import NorthSettings, StrategyMode
 from inference.base import InferenceRouter
-from inference.constants import DEFAULT_EMBED_MODEL, DEFAULT_TIMEOUT_SECONDS, OPENROUTER_BASE_URL
+from inference.constants import DEFAULT_EMBED_MODEL, DEFAULT_TIMEOUT_SECONDS, OPENROUTER_BASE_URL, SSE_CHUNK_TIMEOUT_SECONDS
 from inference.exceptions import (
     AllModelsRateLimitedError,
     InferenceError,
@@ -45,6 +46,20 @@ from inference.models import (
 from inference.pool_builder import bucket_models, dedup, models_asc_from_pools
 
 logger = logging.getLogger(__name__)
+
+
+async def _aiter_with_chunk_timeout(aiter, timeout: float):
+    """Yield items from an async iterator, raising InferenceError if any single
+    item takes longer than `timeout` seconds to arrive."""
+    while True:
+        try:
+            yield await asyncio.wait_for(aiter.__anext__(), timeout=timeout)
+        except StopAsyncIteration:
+            return
+        except TimeoutError as exc:
+            raise InferenceError(
+                f"SSE stream stalled for {timeout:.0f}s — model stopped generating"
+            ) from exc
 
 
 class OpenRouterInferenceRouter(InferenceRouter):
@@ -346,7 +361,7 @@ class OpenRouterInferenceRouter(InferenceRouter):
                     raise InferenceError(
                         f"OpenRouter returned {resp.status_code} for {model}: {body_text}"
                     )
-                async for raw_line in resp.aiter_lines():
+                async for raw_line in _aiter_with_chunk_timeout(resp.aiter_lines(), SSE_CHUNK_TIMEOUT_SECONDS):
                     if not raw_line.startswith("data: "):
                         continue
                     data = raw_line[6:]

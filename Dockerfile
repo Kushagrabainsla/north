@@ -15,7 +15,9 @@ RUN uv pip install --system --no-cache -e .
 # Copy source
 COPY . .
 
-# Data directory — override with NORTH_HOME env var or mount a volume at /data
+# Running as root is intentional: docker-compose mounts ${HOME}:${HOME} so the
+# container must share the host user's UID to write to those files. If you do
+# NOT use the home-directory mount, add --user $(id -u):$(id -g) at runtime.
 ENV NORTH_HOME=/data
 EXPOSE 8000
 

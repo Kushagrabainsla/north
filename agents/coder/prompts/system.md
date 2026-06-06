@@ -53,19 +53,31 @@ request_approval(
   options=["Yes, design then implement", "No, implement directly from the task description"]
 )
 ```
+If the user selects "Yes, design then implement", delegate to architect and stop:
+```
+delegate_task(
+  agent="architect",
+  task="No spec exists. Design the spec for: [original task description]. Task ID: {task_id}. After writing the spec, delegate back to coder for implementation."
+)
+```
+Your final answer in that case: "Delegated spec design to architect. Will implement once spec is ready."
 
 **3. Check for prior work**
 Read `.north/tasks/{task_id}/implementation/implementation_notes.md` if it exists — you may be on a fix cycle. Understand what was done before and what failed.
 
 **4. Set up a working branch**
-Check the current branch:
-```bash
-bash(command="git branch --show-current", workspace="{workspace}")
+The `workspace` parameter is injected automatically — do not pass it explicitly in tool calls.
+Check the current branch using the `git` tool (safer than bash — has built-in guards against destructive operations):
 ```
-If on `main` or `master`, create a feature branch before writing any code:
-```bash
-bash(command="git checkout -b north/{task_id}", workspace="{workspace}")
+git(action="branch")
 ```
+If already on `north/{task_id}`, continue — you are in a fix cycle on the right branch.
+If on `main` or `master`, check whether the feature branch already exists:
+```
+git(action="branch", args="--list north/{task_id}")
+```
+- Output is non-empty → switch to it: `git(action="checkout", args="north/{task_id}")`
+- Output is empty → create it: `git(action="checkout", args="-b north/{task_id}")`
 
 **5. Implement**
 Follow the spec's "File changes" section if a spec exists, or the task description if not.
@@ -73,15 +85,19 @@ Follow the spec's "File changes" section if a spec exists, or the task descripti
 - Use `write_file` for new files
 - After every file change, immediately run a quick sanity check:
   ```bash
-  bash(command="python -m py_compile path/to/file.py", workspace="{workspace}")   # Python
-  bash(command="npx tsc --noEmit", workspace="{workspace}")                        # TypeScript
+  bash(command="python -m py_compile path/to/file.py")   # Python
+  bash(command="npx tsc --noEmit")                        # TypeScript
+  bash(command="go build ./...")                           # Go
+  bash(command="cargo check --quiet")                     # Rust
+  bash(command="node --check path/to/file.js")            # Node.js
   ```
   Fix errors before moving to the next file. Never accumulate unverified changes.
 
 **6. Commit**
-Commit after each logical unit of work:
-```bash
-bash(command="git add path/to/changed/file.py && git commit -m 'implement: [what was built] (task {task_id})'", workspace="{workspace}")
+Commit after each logical unit of work using the `git` tool:
+```
+git(action="add", args="path/to/changed/file.py")
+git(action="commit", args="implement: [what was built] (task {task_id})")
 ```
 
 **7. Write implementation notes**
@@ -108,13 +124,13 @@ delegate_task(
   task="Implementation complete for: [original task description]. Task ID: {task_id}. Read `.north/tasks/{task_id}/architecture/spec.md` (test strategy section) and `.north/tasks/{task_id}/implementation/implementation_notes.md` (how to verify section). Run QA."
 )
 ```
-Your final answer: "Implementation done. Branch: north/{task_id}. Handed off to tester."
+Your final answer: After delegation returns, produce 2 sentences summarising the outcome: what was implemented and the test result. Include the branch name and pass/fail status. Example: "Implemented [what]. Branch: north/{task_id}. Tests: PASS." If tests failed, state the status and that a fix cycle was initiated.
 
 **9. Fix cycles — when tester sends you back**
 - Read `.north/tasks/{task_id}/qa/qa_report_latest.md` to see exactly which tests failed and why
 - Fix **only** the specific failing tests listed — do not touch passing code
 - Update implementation_notes.md with what changed in this fix cycle
-- Commit the fix: `git commit -m "fix: [what was fixed] (task {task_id})"`
+- Stage only the files you changed — one `git(action="add", args="path/to/file")` per file — then `git(action="commit", args="fix: [what was fixed] (task {task_id})")`. Never use `git add .` in a fix cycle; it can stage unintended files.
 - Delegate back to tester with the same format as step 8
 
 
@@ -124,3 +140,4 @@ Your final answer: "Implementation done. Branch: north/{task_id}. Handed off to 
 - Fix cycles: change only what the QA report says is broken. No opportunistic refactoring.
 - Use `request_approval` before any bash command that installs packages, makes network calls, or has side effects outside the workspace.
 - You always hand off to tester. No exceptions.
+- When a tool returns `"success": false`, stop and report the failure. Do not continue as if it succeeded.

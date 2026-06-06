@@ -10,6 +10,7 @@ import datetime
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 
 from context.base import ContextStore
@@ -64,8 +65,9 @@ Document rules:
 - "north_stars": goals with time horizons — career, projects, personal growth, this week's focus.
 
 Fact format:
-- One sentence, present tense, third-person neutral ("User prefers X", "User works at Y").
-- Include specifics: names, numbers, dates when available.
+- One sentence, third-person neutral. Include specifics: names, numbers, dates when available.
+- For "public" and "judgement_rules": present tense ("User prefers X", "User works at Y").
+- For "north_stars": goal-oriented phrasing ("User wants to X by [date/horizon]", "User is working toward Y").
 - Never extract: error messages, transient state, system internals, one-off tasks with no lasting signal.
 
 Be conservative — extract only when clearly useful for future tasks.
@@ -88,11 +90,14 @@ Reply with JSON only: {{"duplicate": true}} or {{"duplicate": false}}
 
 _MAX_DOCUMENT_CHARS = 8_000   # trim when a context doc exceeds this
 _TRIM_TARGET_CHARS  = 5_000   # target size after trimming
+_BACKUP_INTERVAL_HOURS = 24   # minimum hours between full context backups
 
 _TRIM_PROMPT = """\
-The following personal context document has grown too long. Condense it by:
+The following personal context document ({doc_type}) has grown too long. Condense it by:
 1. Merging duplicate or near-duplicate facts into one line.
-2. Removing facts that are clearly outdated or no longer relevant.
+2. Removing facts that are clearly outdated or no longer relevant — apply this aggressively for \
+"north_stars" (goals with past deadlines), conservatively for "public" (stable identity facts) \
+and "judgement_rules" (learned preferences that rarely expire).
 3. Keeping every distinct fact that is still likely to be useful.
 
 Return ONLY the condensed document text, no explanation.
@@ -125,6 +130,8 @@ class ExtractionPipeline:
         self._context_store = context_store
         self._inference_router = inference_router
         self._watermark_path = north_home / _WATERMARK_FILENAME
+        self._archive_dir = north_home / "context_archive"
+        self._backup_dir = north_home / "context_backup"
         self._poll_interval = poll_interval_seconds
         # Prevents concurrent _process_batch calls (background loop + per-task
         # trigger) from reading the same watermark and double-processing entries.
@@ -204,6 +211,7 @@ class ExtractionPipeline:
     async def _process_batch_locked(
         self, since_override: datetime.datetime | None = None
     ) -> int:
+        await self._maybe_backup()
         since = since_override or self._load_watermark()
         entries = await self._ledger.query(
             LedgerFilters(since=since, limit=_BATCH_SIZE)
@@ -285,11 +293,15 @@ class ExtractionPipeline:
         if not existing or len(existing) < 20:
             return False
 
-        # Fast path: literal substring match (case-insensitive key phrase).
+        # Fast path: if fewer than 3 meaningful words overlap, it can't be a
+        # duplicate — skip the LLM call entirely.
         key_words = {w.lower() for w in delta.split() if len(w) > 4}
         existing_lower = existing.lower()
-        if sum(1 for w in key_words if w in existing_lower) >= max(2, len(key_words) // 2):
-            # Enough overlap — ask the LLM to confirm.
+        overlap = sum(1 for w in key_words if w in existing_lower)
+        # Require at least 3 overlapping words AND at least 2/3 of key words —
+        # a higher bar than the old max(2, 1/2) so the LLM is only called for
+        # genuinely ambiguous near-duplicates.
+        if key_words and overlap >= max(3, len(key_words) * 2 // 3):
             prompt = _DEDUP_PROMPT.format(existing=existing[-2000:], delta=delta)
             try:
                 resp = await self._inference_router.complete(
@@ -316,7 +328,14 @@ class ExtractionPipeline:
         if not existing or len(existing) <= _MAX_DOCUMENT_CHARS:
             return
 
-        prompt = _TRIM_PROMPT.format(content=existing)
+        # Archive the pre-trim snapshot so condensation is always reversible.
+        try:
+            ts = utcnow().strftime("%Y%m%dT%H%M%S")
+            await asyncio.to_thread(self._write_archive, doc, existing, ts)
+        except Exception:
+            logger.warning("ExtractionPipeline: failed to archive %s before trim", doc.value)
+
+        prompt = _TRIM_PROMPT.format(content=existing, doc_type=doc.value)
         try:
             resp = await self._inference_router.complete(
                 CompletionRequest(
@@ -336,6 +355,37 @@ class ExtractionPipeline:
                 )
         except Exception:
             logger.warning("ExtractionPipeline: trim failed for %s", doc.value)
+
+    def _write_archive(self, doc: ContextDocument, content: str, ts: str) -> None:
+        self._archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = self._archive_dir / f"{doc.value}.{ts}.bak"
+        archive_path.write_text(content, encoding="utf-8")
+
+    async def _maybe_backup(self) -> None:
+        """Copy all context documents to a backup directory once per day."""
+        stamp_path = self._backup_dir / ".last_backup"
+        try:
+            if stamp_path.exists():
+                last = datetime.datetime.fromisoformat(
+                    stamp_path.read_text(encoding="utf-8").strip()
+                )
+                if (utcnow() - last).total_seconds() < _BACKUP_INTERVAL_HOURS * 3600:
+                    return
+        except Exception:
+            pass
+        try:
+            await asyncio.to_thread(self._write_backup)
+        except Exception:
+            logger.warning("ExtractionPipeline: context backup failed", exc_info=True)
+
+    def _write_backup(self) -> None:
+        self._backup_dir.mkdir(parents=True, exist_ok=True)
+        context_dir = self._watermark_path.parent
+        for path in context_dir.glob("*.md"):
+            dest = self._backup_dir / path.name
+            shutil.copy2(path, dest)
+        stamp_path = self._backup_dir / ".last_backup"
+        stamp_path.write_text(utcnow().isoformat(), encoding="utf-8")
 
     def _load_watermark(self) -> datetime.datetime | None:
         if not self._watermark_path.exists():

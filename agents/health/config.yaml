@@ -6,6 +6,21 @@ accepts:
   - "nutrition"
   - "fitness"
   - "diet"
+  - "health"
+  - "exercise"
+  - "meal"
+  - "calories"
+  - "calorie"
+  - "weight"
+  - "sleep"
+  - "wellness"
+  - "macro"
+  - "macros"
+  - "supplement"
+  - "protein"
+  - "muscle"
+  - "cardio"
+  - "gym"
 output_format: structured_json
 version: 1.0.0
 class_name: HealthAgent

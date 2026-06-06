@@ -15,6 +15,7 @@ from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
 
 
@@ -99,6 +100,11 @@ class AgentDependencies:
     # Required for the request_approval tool.  Must be the same ApprovalStore
     # instance used by the Orchestrator so waits and resolutions are consistent.
     approval_store: ApprovalStore | None = field(default=None)
+    # Optional — when set, request_approval checks learned judgement rules first
+    # and skips the user prompt when a rule fires at high confidence.
+    # Injected after construction (same pattern as agent_registry) to avoid
+    # building it twice.
+    judgement_filter: JudgementFilter | None = field(default=None)
     # Iteration caps injected from Settings so agents never read config globals.
     agent_max_iterations: int = 40
     agent_history_keep_recent: int = 10

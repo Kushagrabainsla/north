@@ -59,9 +59,14 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
                 try:
                     instance = obj()
                     tools[instance.name] = instance
-                except Exception as exc:
+                except TypeError:
                     logger.debug(
-                        "tool discovery: %s skipped (needs manual registration): %s",
+                        "tool discovery: %s skipped (needs manual registration)",
+                        obj.__name__,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "tool discovery: %s failed to instantiate: %s",
                         obj.__name__, exc,
                     )
     return tools

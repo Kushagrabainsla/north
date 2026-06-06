@@ -9,6 +9,17 @@ accepts:
   - "internship"
   - "career"
   - "application"
+  - "cover"
+  - "networking"
+  - "salary"
+  - "negotiation"
+  - "recruiter"
+  - "hiring"
+  - "cv"
+  - "work"
+  - "offer"
+  - "apply"
+  - "employment"
 output_format: structured_json
 version: 1.0.0
 class_name: JobAgent

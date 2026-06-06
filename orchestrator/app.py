@@ -6,6 +6,7 @@ See docs/CODING_STYLE.md Sections 10.4, 12, 17.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import os
 import sys
@@ -44,6 +45,7 @@ from orchestrator.synthesizer import ResultSynthesizer
 from tools.registry import ToolRegistry
 from tools.specialized.bash import BashTool
 from tools.universal.create_tool import CreateToolTool
+from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from utils.ids import generate_id
 from utils.logging import configure_structured_logging
@@ -97,10 +99,7 @@ def _attach_embedding_index(deps) -> None:
         db_path=settings.north_home / "embeddings.db",
         embed_fn=deps.embed_fn,
     )
-    # Direct assignment because FileContextStore exposes no setter — write/append
-    # calls trigger re-indexing once the index is attached.
-    if isinstance(deps.context_store, FileContextStore):
-        deps.context_store._embedding_index = embedding_index
+    deps.context_store.attach_embedding_index(embedding_index)
 
 
 def _build_tool_registry(deps, tool_graph) -> ToolRegistry:
@@ -110,6 +109,8 @@ def _build_tool_registry(deps, tool_graph) -> ToolRegistry:
     )
     tool_registry.make_universal("schedule_task")
     tool_registry.register(CreateToolTool(tool_registry=tool_registry))
+    tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
+    tool_registry.make_universal("query_metrics")
     # BashTool gates every command behind user approval and cannot be auto-discovered.
     tool_registry.register(
         BashTool(
@@ -298,11 +299,18 @@ def _launch_background_tasks(
             n = await deps.task_context_store.cleanup_stale_tasks(
                 active_task_ids=frozenset(orchestrator._active_tasks),
             )
+            now = utcnow()
+            completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)
+            failed_before = now - datetime.timedelta(days=settings.task_cleanup_failed_days)
+            pruned = await deps.ledger.prune(completed_before, failed_before)
             await deps.ledger.write(LedgerEntry(
                 id=generate_id(),
                 timestamp=utcnow(),
                 source=LedgerSource.SYSTEM,
-                action=f"task_context_cleanup: removed {n} stale rows",
+                action=(
+                    f"task_context_cleanup: removed {n} stale rows, "
+                    f"pruned {pruned} ledger entries"
+                ),
                 status=LedgerStatus.COMPLETED,
             ))
             return
@@ -342,6 +350,17 @@ async def _shutdown(deps, callback_server: uvicorn.Server, background_tasks: lis
     await deps.cost_tracker.aclose()
 
 
+def _warn_unknown_cron_agents(agent_registry: AgentRegistry) -> None:
+    known = set(agent_registry.names())
+    for entry in V1_CRON_ENTRIES:
+        if entry.agent not in known and entry.agent != "system":
+            logger.warning(
+                "V1 cron entry %r references unknown agent %r — job will fail at dispatch",
+                entry.name,
+                entry.agent,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -372,9 +391,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     agent_deps = _build_agent_deps(deps, tool_registry)
     agent_registry = _build_agent_registry(agent_deps)
     _step(f"registered agents: {agent_registry.names()}")
+    _warn_unknown_cron_agents(agent_registry)
 
     extraction_pipeline = _build_extraction_pipeline(deps)
     orchestrator = _build_orchestrator(deps, agent_registry, tool_registry, extraction_pipeline)
+    # Share the orchestrator's JudgementFilter with agents so request_approval
+    # calls skip the user prompt when a learned rule already covers the situation.
+    agent_deps.judgement_filter = orchestrator._judgement_filter
     context_injector = _build_context_injector(deps)
 
     _step("running startup reconciliation sweep")

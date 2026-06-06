@@ -6,6 +6,7 @@ See README Section 6.8 and docs/CODING_STYLE.md Sections 12.1-12.4.
 from __future__ import annotations
 
 import datetime
+import secrets
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -249,6 +250,19 @@ async def stream_global_events() -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Metrics endpoint ──────────────────────────────────────────────────────────
+
+@router.get("/metrics")
+async def get_metrics(days: int = 7) -> dict:
+    """Return aggregated system performance metrics.
+
+    Query params:
+        days: look-back window in days (default 7; max 365)
+    """
+    days = max(1, min(days, 365))
+    return await _ldgr().get_metrics(days=days)
 
 
 # ── Ledger endpoints ──────────────────────────────────────────────────────────
@@ -699,7 +713,7 @@ async def receive_webhook(source: str, request: Request) -> dict:
     the rest of the API.
     """
     secret = load_secret()
-    if request.headers.get("X-Webhook-Secret", "") != secret:
+    if not secrets.compare_digest(request.headers.get("X-Webhook-Secret", ""), secret):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Webhook-Secret header.")
 
     try:

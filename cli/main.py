@@ -942,6 +942,57 @@ def inference_models() -> None:
         _console.print()
 
 
+# ── metrics ──────────────────────────────────────────────────────────────────
+
+@app.command("metrics")
+def metrics(
+    period: int = typer.Option(7, "--period", "-p", help="Look-back window in days (default 7)."),
+) -> None:
+    """Show system performance metrics from the ledger."""
+    response = _api("GET", "/orchestrator/metrics", params={"days": period})
+    data = response.json()
+
+    _console.print()
+    _console.print(f"  [bold white]metrics[/bold white]  [dim]last {data['period_days']} days[/dim]")
+    _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
+    _console.print(f"  [dim]tasks      [/dim]  {data['total_tasks']}")
+    _console.print(f"  [dim]cost       [/dim]  ${data['total_cost_usd']:.6f}")
+    _console.print(f"  [dim]tokens in  [/dim]  {data['total_tokens_in']:,}")
+    _console.print(f"  [dim]tokens out [/dim]  {data['total_tokens_out']:,}")
+
+    if data.get("by_agent"):
+        _console.print()
+        t = Table(box=None, padding=(0, 2), show_header=True, header_style="dim")
+        t.add_column("agent", style="bold white")
+        t.add_column("tasks", justify="right")
+        t.add_column("success", justify="right")
+        t.add_column("cost $", justify="right")
+        t.add_column("p50 ms", justify="right")
+        t.add_column("p95 ms", justify="right")
+        for a in data["by_agent"]:
+            t.add_row(
+                a["agent"],
+                str(a["tasks"]),
+                f"{a['success_rate'] * 100:.0f}%",
+                f"{a['cost_usd']:.6f}",
+                str(a["p50_ms"]) if a["p50_ms"] is not None else "—",
+                str(a["p95_ms"]) if a["p95_ms"] is not None else "—",
+            )
+        _console.print(t)
+
+    if data.get("by_model"):
+        _console.print("\n  [dim]cost by model[/dim]")
+        for model, cost in sorted(data["by_model"].items(), key=lambda x: -x[1]):
+            _console.print(f"    [dim]{model:<44}[/dim]  ${cost:.6f}")
+
+    if data.get("top_errors"):
+        _console.print("\n  [dim]top errors[/dim]")
+        for err, count in data["top_errors"].items():
+            _console.print(f"    [dim]{err:<30}[/dim]  {count}")
+
+    _console.print()
+
+
 # ── dictate ───────────────────────────────────────────────────────────────────
 
 @app.command("dictate")

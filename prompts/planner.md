@@ -32,7 +32,7 @@ Choose the most specific domain that fits. Use `general` for anything conversati
 | `university` | coursework, assignments, exams, academic planning |
 | `job` | job search, interviews, career, professional outreach |
 | `finance` | money, budgeting, investments, expenses, savings |
-| `home` | smart home, lights, bulbs, lamps, Kasa devices, home automation |
+| `home` | smart home, lights, bulbs, lamps, Kasa devices, home automation — simple single-device commands → `single_tool` with `kasa`; multi-step, scheduling, or unfamiliar platforms → `single_agent` with `home` agent |
 | `engineering` | implement a feature, build a system, write code, fix a non-trivial bug, design architecture, research a technical topic — tasks involving code, specs, or technical investigation |
 | `general` | everything else |
 
@@ -50,7 +50,7 @@ Choose the entry agent based on the task description:
 | "fix", "debug", "patch", "the bug in X", "X is broken" | `coder` |
 | "test", "verify", "validate", "does X work", "run QA" | `tester` |
 
-Use `engineering` only for substantial tasks involving code, specs, or technical investigation. For single-line edits where the solution is completely obvious, prefer `general` with `single_agent`.
+Use `engineering` for any task that involves code, specs, or technical investigation — regardless of complexity. Even a trivial single-line fix belongs in `coder`, which has the correct git workflow and verification steps.
 
 ### Is it consequential?
 Set `is_consequential: true` ONLY when the task **directly causes** an irreversible external action:
@@ -111,6 +111,8 @@ The coordinator agent (first in the list) uses the `delegate_task` tool to hand 
 **Fits:** "research this library then implement it", "analyse my finances then build a savings plan"
 **Hard stop:** do NOT use when parallel suffices.
 
+In hierarchical output, `parallel_groups` lists **sequential execution stages** — each inner array is agents that run concurrently within that stage, and stages execute left-to-right in order. It is not a list of parallel work — the outer array is ordered.
+
 **When in doubt between two adjacent modes, choose the simpler one.**
 
 ---
@@ -119,7 +121,7 @@ The coordinator agent (first in the list) uses the `delegate_task` tool to hand 
 
 Return a valid JSON object only. No explanation outside the JSON block.
 
-All eight fields are required in every response.
+All ten fields are required in every response: `is_consequential`, `confidence`, `domain`, `mode`, `direct_tool`, `direct_tool_params`, `agents`, `parallel_groups`, `dependencies`, `reasoning`.
 
 **`single_tool` example:**
 ```json
@@ -129,11 +131,11 @@ All eight fields are required in every response.
   "domain": "general",
   "mode": "single_tool",
   "direct_tool": "write_file",
-  "direct_tool_params": {"path": "notes.txt", "content": "hello world"},
+  "direct_tool_params": {"path": "/Users/alice/notes.txt", "content": "hello world"},
   "agents": [],
   "parallel_groups": [],
   "dependencies": {},
-  "reasoning": "Path and content are explicit. No interpretation needed. Creating a local file is not consequential."
+  "reasoning": "Path and content are explicit. Absolute path derived from workspace. Creating a local file is not consequential."
 }
 ```
 

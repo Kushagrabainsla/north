@@ -43,6 +43,9 @@ class FileContextStore(ContextStore):
         # are not garbage-collected before they complete.
         self._embedding_tasks: set[asyncio.Task] = set()
 
+    def attach_embedding_index(self, index: EmbeddingIndex) -> None:
+        self._embedding_index = index
+
     def _path(self, document: ContextDocument) -> Path:
         return self._base_path / document.value
 

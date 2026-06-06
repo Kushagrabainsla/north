@@ -336,6 +336,23 @@ async def cron_delete(request: Request, name: str) -> RedirectResponse:
 
 # ── Inference ─────────────────────────────────────────────────────────────────
 
+@router.get("/metrics", response_class=HTMLResponse, include_in_schema=False)
+async def metrics_view(request: Request, days: int = 7) -> HTMLResponse:
+    metrics: dict = {}
+    if _ledger is not None:
+        try:
+            days = max(1, min(days, 365))
+            metrics = await _ledger.get_metrics(days=days)
+        except Exception:
+            metrics = {}
+
+    return templates.TemplateResponse(
+        request,
+        "metrics.html",
+        {"metrics": metrics, "days": days},
+    )
+
+
 @router.get("/inference", response_class=HTMLResponse, include_in_schema=False)
 async def inference_view(request: Request) -> HTMLResponse:
     costs: dict = {}

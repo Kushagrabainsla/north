@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import sqlite3
-from datetime import datetime
+from collections import defaultdict
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ledger.base import LedgerFilters, LedgerWriter
@@ -148,6 +150,123 @@ class SQLiteLedgerWriter(LedgerWriter):
 
         with open_db_connection(self._db_path) as conn:
             return list(conn.execute(sql, params).fetchall())
+
+    async def get_metrics(self, days: int = 7) -> dict:
+        return await asyncio.to_thread(self._get_metrics_sync, days)
+
+    def _get_metrics_sync(self, days: int) -> dict:
+        since = datetime.now(UTC) - timedelta(days=days)
+        since_iso = since.isoformat()
+
+        with open_db_connection(self._db_path) as conn:
+            totals = conn.execute(
+                """SELECT COUNT(DISTINCT task_id) as total_tasks,
+                          COALESCE(SUM(cost_usd), 0.0) as total_cost,
+                          COALESCE(SUM(tokens_in), 0) as total_tokens_in,
+                          COALESCE(SUM(tokens_out), 0) as total_tokens_out
+                   FROM ledger WHERE timestamp >= ? AND task_id IS NOT NULL""",
+                (since_iso,),
+            ).fetchone()
+
+            agent_rows = conn.execute(
+                """SELECT agent,
+                          COUNT(DISTINCT task_id) as tasks,
+                          COALESCE(SUM(cost_usd), 0.0) as cost_usd
+                   FROM ledger
+                   WHERE timestamp >= ? AND agent IS NOT NULL AND task_id IS NOT NULL
+                   GROUP BY agent ORDER BY cost_usd DESC""",
+                (since_iso,),
+            ).fetchall()
+
+            dur_rows = conn.execute(
+                """SELECT agent, duration_ms FROM ledger
+                   WHERE timestamp >= ? AND agent IS NOT NULL AND duration_ms IS NOT NULL
+                   ORDER BY agent, duration_ms""",
+                (since_iso,),
+            ).fetchall()
+
+            error_rows = conn.execute(
+                """SELECT agent,
+                          COUNT(DISTINCT task_id) as failed_tasks
+                   FROM ledger
+                   WHERE timestamp >= ? AND agent IS NOT NULL
+                         AND task_id IS NOT NULL AND status = 'failed'
+                   GROUP BY agent""",
+                (since_iso,),
+            ).fetchall()
+
+            model_rows = conn.execute(
+                """SELECT model_used, COALESCE(SUM(cost_usd), 0.0) as cost
+                   FROM ledger
+                   WHERE timestamp >= ? AND model_used IS NOT NULL
+                   GROUP BY model_used ORDER BY cost DESC LIMIT 10""",
+                (since_iso,),
+            ).fetchall()
+
+            top_error_rows = conn.execute(
+                """SELECT error_type, COUNT(*) as cnt
+                   FROM ledger
+                   WHERE timestamp >= ? AND error_type IS NOT NULL
+                   GROUP BY error_type ORDER BY cnt DESC LIMIT 10""",
+                (since_iso,),
+            ).fetchall()
+
+        agent_durations: dict[str, list[int]] = defaultdict(list)
+        for r in dur_rows:
+            if r["agent"] and r["duration_ms"]:
+                agent_durations[r["agent"]].append(r["duration_ms"])
+
+        failed_by_agent: dict[str, int] = {r["agent"]: r["failed_tasks"] for r in error_rows}
+
+        def _pct(vals: list[int], p: int) -> int | None:
+            if not vals:
+                return None
+            idx = max(0, math.ceil(len(vals) * p / 100) - 1)
+            return vals[idx]
+
+        by_agent = []
+        for r in agent_rows:
+            agent = r["agent"]
+            tasks = r["tasks"] or 0
+            failed = failed_by_agent.get(agent, 0)
+            durs = agent_durations.get(agent, [])
+            by_agent.append({
+                "agent": agent,
+                "tasks": tasks,
+                "success_rate": round((tasks - failed) / tasks, 3) if tasks > 0 else 0.0,
+                "cost_usd": round(r["cost_usd"] or 0.0, 6),
+                "p50_ms": _pct(durs, 50),
+                "p95_ms": _pct(durs, 95),
+            })
+
+        return {
+            "period_days": days,
+            "total_tasks": totals["total_tasks"] or 0,
+            "total_cost_usd": round(totals["total_cost"] or 0.0, 6),
+            "total_tokens_in": totals["total_tokens_in"] or 0,
+            "total_tokens_out": totals["total_tokens_out"] or 0,
+            "by_agent": by_agent,
+            "by_model": {r["model_used"]: round(r["cost"] or 0.0, 6) for r in model_rows},
+            "top_errors": {r["error_type"]: r["cnt"] for r in top_error_rows},
+        }
+
+    async def prune(self, completed_before: datetime, failed_before: datetime) -> int:
+        try:
+            return await asyncio.to_thread(self._prune_sync, completed_before, failed_before)
+        except sqlite3.Error as e:
+            raise LedgerWriteError(f"Failed to prune ledger: {e}") from e
+
+    def _prune_sync(self, completed_before: datetime, failed_before: datetime) -> int:
+        with open_db_connection(self._db_path) as conn:
+            cur = conn.execute(
+                "DELETE FROM ledger WHERE "
+                "(status = ? AND timestamp < ?) OR (status = ? AND timestamp < ?)",
+                (
+                    LedgerStatus.COMPLETED.value, completed_before.isoformat(),
+                    LedgerStatus.FAILED.value, failed_before.isoformat(),
+                ),
+            )
+            return cur.rowcount
 
     @staticmethod
     def _row_to_entry(row: sqlite3.Row) -> LedgerEntry:

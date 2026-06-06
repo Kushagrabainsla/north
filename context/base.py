@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from context.models import ContextDocument
+
+if TYPE_CHECKING:
+    from context.embedding_index import EmbeddingIndex
 
 
 class ContextStore(ABC):
@@ -29,6 +33,13 @@ class ContextStore(ABC):
     async def append(self, document: ContextDocument, delta: str) -> None:
         """Append `delta` to `document`, separated from existing content by a
         single newline. If the document does not exist, create it."""
+
+    def attach_embedding_index(self, index: EmbeddingIndex) -> None:  # noqa: ARG002
+        """Attach a semantic embedding index for use in search().
+
+        Called after construction when the embed function is available.
+        Subclasses that support embedding override this method.
+        """
 
     async def search(self, query: str, max_results: int = 5) -> str:
         """Keyword search across all context documents.

@@ -6,6 +6,8 @@ See docs/CODING_STYLE.md Section 17.
 from __future__ import annotations
 
 import os
+import stat as _stat
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -64,6 +66,13 @@ class Settings(BaseSettings):
         secret_file = self.north_home / "secret.key"
         if not secret_file.exists():
             return ""
+        mode = secret_file.stat().st_mode
+        if mode & (_stat.S_IRGRP | _stat.S_IROTH):
+            warnings.warn(
+                f"{secret_file} is world/group-readable (mode {oct(mode & 0o777)}). "
+                "Run: chmod 600 ~/.north/secret.key",
+                stacklevel=2,
+            )
         value = secret_file.read_text(encoding="utf-8").strip()
         self._secret_cache = value
         return value

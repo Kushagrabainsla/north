@@ -53,3 +53,29 @@ class LedgerWriter(ABC):
         Raises:
             LedgerReadError: if the underlying store fails.
         """
+
+    async def prune(self, completed_before: datetime, failed_before: datetime) -> int:
+        """Delete old terminal entries to keep the ledger bounded.
+
+        Returns the number of rows deleted. Default implementation is a no-op
+        so in-memory or read-only stores don't need to override it.
+        """
+        return 0
+
+    async def get_metrics(self, days: int = 7) -> dict:
+        """Return aggregated system metrics for the last `days` days.
+
+        Returns a dict with keys: period_days, total_tasks, total_cost_usd,
+        total_tokens_in, total_tokens_out, by_agent (list), by_model (dict),
+        top_errors (dict). Default no-op returns empty structure.
+        """
+        return {
+            "period_days": days,
+            "total_tasks": 0,
+            "total_cost_usd": 0.0,
+            "total_tokens_in": 0,
+            "total_tokens_out": 0,
+            "by_agent": [],
+            "by_model": {},
+            "top_errors": {},
+        }

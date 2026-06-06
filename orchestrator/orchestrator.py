@@ -48,6 +48,13 @@ from utils.time import format_timestamp, utcnow
 logger = logging.getLogger(__name__)
 
 
+def _on_extraction_done(t: asyncio.Task) -> None:
+    if t.cancelled():
+        logger.warning("post-task extraction cancelled (shutdown during extraction?)")
+    elif t.exception() is not None:
+        logger.warning("post-task extraction failed: %s", t.exception())
+
+
 class Orchestrator:
     """Coordinates the full task lifecycle across all four stages.
 
@@ -179,6 +186,15 @@ class Orchestrator:
         status = (
             LedgerStatus.APPROVED if decision == "approved" else LedgerStatus.REJECTED
         )
+        # Include the card message so the extraction pipeline can learn a
+        # meaningful preference fact (e.g. "User always approves X from agent Y").
+        # Without this, the input would just be an opaque card_id.
+        card = self._approval_store.get(card_id)
+        ledger_input = (
+            f"question: {card.message}\noptions: {', '.join(card.options)}"
+            if card and card.message
+            else f"card_id={card_id}"
+        )
         await self._write_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
@@ -186,8 +202,8 @@ class Orchestrator:
             task_id=task_id,
             agent=agent,
             action=f"approval_responded: {decision}",
-            input=f"card_id={card_id}",
-            output=f"chosen_option={chosen_option}",
+            input=ledger_input,
+            output=f"chosen_option={chosen_option or decision}",
             status=status,
         ))
         self._approval_store.resolve(card_id, decision, chosen_option=chosen_option)
@@ -652,10 +668,7 @@ class Orchestrator:
         # they produce no signal worth extracting.
         if self._extraction_pipeline is not None and not skip_extraction:
             t = asyncio.create_task(self._extraction_pipeline.run_once())
-            t.add_done_callback(
-                lambda t: logger.warning("post-task extraction failed: %s", t.exception())
-                if not t.cancelled() and t.exception() is not None else None
-            )
+            t.add_done_callback(_on_extraction_done)
 
     async def _record_episode(
         self, task_id: str, prompt: str, agents: list[str], domain: str
@@ -821,6 +834,9 @@ class Orchestrator:
                     {"agent": agent.name, "summary": result.summary, "duration_ms": result.duration_ms},
                 )
                 return result
+            except asyncio.CancelledError:
+                self._failure_handler.clear_retry_count(task_id, agent.name)
+                raise
             except Exception as exc:
                 should_retry = await self._failure_handler.handle_failure(
                     task_id, agent.name, exc
