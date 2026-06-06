@@ -7,6 +7,7 @@ from inference.base import InferenceRouter
 from inference.exceptions import (
     AllModelsRateLimitedError,
     InferenceError,
+    PaymentRequiredError,
     PoolRefreshError,
     TranscriptionError,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "POOL_NAMES",
     "POOL_TO_PRIORITY",
     "PRIORITY_TO_POOL",
+    "PaymentRequiredError",
     "PoolPriority",
     "PoolRefreshError",
     "ToolCall",

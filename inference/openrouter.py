@@ -22,6 +22,7 @@ from inference.constants import DEFAULT_EMBED_MODEL, DEFAULT_TIMEOUT_SECONDS, OP
 from inference.exceptions import (
     AllModelsRateLimitedError,
     InferenceError,
+    PaymentRequiredError,
     PoolRefreshError,
     TranscriptionError,
 )
@@ -145,6 +146,8 @@ class OpenRouterInferenceRouter(InferenceRouter):
         for model in chain:
             try:
                 return await self._call_completion(model, request)
+            except PaymentRequiredError:
+                raise  # fatal billing error — no point retrying other models
             except _RateLimited as e:
                 last_error = e
                 continue
@@ -208,7 +211,12 @@ class OpenRouterInferenceRouter(InferenceRouter):
         except httpx.RequestError as e:
             raise InferenceError(f"Request to OpenRouter failed: {e}") from e
 
-        if response.status_code in (429, 402, 404, 503):
+        if response.status_code == 402:
+            raise PaymentRequiredError(
+                "OpenRouter returned 402 Payment Required. "
+                "Your account has insufficient credits — top up at https://openrouter.ai/credits"
+            )
+        if response.status_code in (429, 404, 503):
             raise _RateLimited(model)
         if response.status_code >= 400:
             raise InferenceError(
@@ -289,6 +297,8 @@ class OpenRouterInferenceRouter(InferenceRouter):
         for model in chain:
             try:
                 return await self._call_tools_streaming(model, request, token_callback)
+            except PaymentRequiredError:
+                raise  # fatal billing error — no point retrying other models
             except _RateLimited as e:
                 last_error = e
                 continue
@@ -322,7 +332,13 @@ class OpenRouterInferenceRouter(InferenceRouter):
 
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as resp:
-                if resp.status_code in (429, 402, 404, 503):
+                if resp.status_code == 402:
+                    await resp.aread()
+                    raise PaymentRequiredError(
+                        "OpenRouter returned 402 Payment Required. "
+                        "Your account has insufficient credits — top up at https://openrouter.ai/credits"
+                    )
+                if resp.status_code in (429, 404, 503):
                     await resp.aread()
                     raise _RateLimited(model)
                 if resp.status_code >= 400:
