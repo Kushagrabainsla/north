@@ -53,7 +53,7 @@ class GroqRouter(OpenAICompatibleProvider):
                 continue
             caps = capabilities_from_model_id(model_id)
             # Transcription models are not token-based; context_window is not meaningful.
-            ctx = 0 if ModelCapability.TRANSCRIPTION in caps else int(m["context_window"])
+            ctx = 0 if ModelCapability.TRANSCRIPTION in caps else int(m.get("context_window") or 131_072)
             live[model_id] = ModelInfo(
                 model_id=model_id,
                 provider_name="groq",

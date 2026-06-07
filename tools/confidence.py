@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS tool_confidence (
 )
 """
 
+_MODEL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS model_confidence (
+    model_id     TEXT NOT NULL,
+    provider     TEXT NOT NULL,
+    confidence   REAL NOT NULL DEFAULT 0.5,
+    uses_total   INTEGER NOT NULL DEFAULT 0,
+    last_updated DATETIME NOT NULL,
+    PRIMARY KEY (model_id, provider)
+)
+"""
+
 _MIGRATION_ADD_CONSECUTIVE_FAILURES = (
     "ALTER TABLE tool_confidence ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0"
 )
@@ -59,6 +70,7 @@ class ConfidenceTracker:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_SCHEMA)
+            conn.execute(_MODEL_SCHEMA)
             import contextlib
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(_MIGRATION_ADD_CONSECUTIVE_FAILURES)
@@ -170,6 +182,35 @@ class ConfidenceTracker:
                         "VALUES (?, ?, ?, 0, 0, 0, ?)",
                         (agent, tool, score, now),
                     )
+
+    def load_model_scores_sync(self) -> dict[tuple[str, str], tuple[float, int]]:
+        """Return all persisted model scores as {(model_id, provider): (score, uses)}.
+
+        Synchronous so ModelDispatcher can call it from __init__ at startup.
+        """
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT model_id, provider, confidence, uses_total FROM model_confidence"
+            ).fetchall()
+        return {(r["model_id"], r["provider"]): (r["confidence"], r["uses_total"]) for r in rows}
+
+    async def save_model_score(
+        self, model_id: str, provider: str, score: float, uses: int
+    ) -> None:
+        """Upsert one model's EMA score. Called fire-and-forget after each dispatch outcome."""
+        await asyncio.to_thread(self._save_model_score_sync, model_id, provider, score, uses)
+
+    def _save_model_score_sync(
+        self, model_id: str, provider: str, score: float, uses: int
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO model_confidence "
+                "(model_id, provider, confidence, uses_total, last_updated) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (model_id, provider, score, uses, now),
+            )
 
     async def inherit_from(self, new_agent: str, source_agent: str) -> None:
         """Copy `source_agent`'s tool rows to `new_agent` as a starting prior.

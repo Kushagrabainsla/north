@@ -2,6 +2,19 @@
 
 All notable changes to north are documented here.
 
+## [Unreleased]
+### Added
+- **Model confidence tracking** (`inference/dispatcher.py`): `ModelDispatcher` now tracks per-model call success rates as an in-memory EMA (`_model_confidence`); `_effective_quality()` blends the price-based `base_quality` with the EMA score (up to 30% weight after 20 uses) when ranking candidates in all three priority modes.
+
+### Fixed
+- `AgenticLLMAgent._execute()` now catches `ContextTooLargeError` raised by `complete_with_tools`, compacts the history to `keep_recent=1`, and retries once before returning a graceful error message.
+- **`InferenceError` fallback** (`inference/dispatcher.py`): provider-level errors (e.g. HTTP 400 — unsupported parameters) now advance the fallback chain to the next candidate instead of re-raising immediately. The EMA failure is recorded and a `WARNING` is logged before continuing; only unexpected non-inference exceptions still re-raise.
+
+### Docs
+- `docs/ARCHITECTURE.md`: updated §8.1 (multi-provider table replacing "all inference through OpenRouter"), §8.2 (continuous `quality_from_cost()` scoring replacing old thirds-bucketing description), §8.5 (correct exception class names `ModelRateLimitedError`/`PaymentRequiredError`/`InferenceError` and accurate fallback semantics), §7.5 (added `consecutive_failures` column to schema), §10.2 (removed stale `north chat`, corrected `context show` command, added `north metrics`, added TUI invocation), §16.3 (seven databases, not six — added `tool_index.db` and `facts.db`), §16.11 (added `NORTH_GROQ_API_KEY`, `NORTH_GEMINI_API_KEY`, and tuning env vars).
+- `docs/TECHNICAL_FEATURES.md`: §2 replaced stale `bucket_models()` pseudocode with actual `quality_from_cost()` + threshold-bin pattern; §4 corrected pool refresh description (startup explicit call + sleep-first background loop).
+- `README.md`: added optional provider keys section, updated usage to include TUI invocation, `north metrics`, `north stream`, and corrected `north stop` flag.
+
 ## [1.3.3] - 2026-06-06
 ### Added
 - **Multi-provider inference** (`inference/dispatcher.py`): `ModelDispatcher` implements `InferenceRouter` across an ordered list of providers; routes each call to the best available model regardless of which provider hosts it

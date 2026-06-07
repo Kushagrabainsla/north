@@ -34,7 +34,7 @@ from ledger import SQLiteLedgerWriter
 
 
 class MockInferenceRouter(InferenceRouter):
-    """Deterministic stand-in for OpenRouterInferenceRouter in tests.
+    """Deterministic stand-in for InferenceRouter in tests.
 
     Returns fixed canned responses so tests don't make real network calls.
     The default complete() response is ``{"extract": false}`` (valid JSON that

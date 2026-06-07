@@ -29,7 +29,9 @@
 >
 > **What changed since 1.3:** curl installer (`scripts/install.sh`), GHCR image publishing via GitHub Actions, bundled `cli/docker-compose.yml` so install works without cloning the repo, `$HOME` workspace mount in Docker, workspace auto-detection from CWD in `north task` / `north chat`, `~/.north/.env` as the canonical config location, and fixed `north tasks` returning stale historical entries (§6).
 >
-> **What changed (modular refactor + inference hardening):** extracted `agents/constants.py`, `agents/schemas.py`, `agents/context_compaction.py`, `inference/constants.py`, `inference/pool_builder.py`, and `orchestrator/constants.py` — no module-level code lives inline in its parent module anymore; improved fallback chain so `InferenceError` (400/other) advances the chain identically to `_RateLimited` (§8.5); pool refresh background loop fires immediately on startup then every 6 h (§8.2); error-triggered pool refresh with 60 s cooldown fires in the background whenever any model in the chain fails (§8.2); `duration_ms` and `error_type` columns added to `LedgerEntry` with idempotent SQLite migration (§4.2); `classify_error()` in `failure_handler.py` maps any exception to a stable string tag written to `error_type` (§6.7); CI split into parallel `lint` and `test` jobs with `astral-sh/setup-uv` caching and per-job `timeout-minutes`; Docker workflow updated to multi-platform (`linux/amd64`, `linux/arm64`), GHA layer cache, BuildKit SBOM + provenance, and SLSA attestation via `actions/attest@v4`.
+> **What changed (modular refactor + inference hardening):** extracted `agents/constants.py`, `agents/schemas.py`, `agents/context_compaction.py`, `inference/constants.py`, and `orchestrator/constants.py` — no module-level code lives inline in its parent module anymore; `duration_ms` and `error_type` columns added to `LedgerEntry` with idempotent SQLite migration (§4.2); `classify_error()` in `failure_handler.py` maps any exception to a stable string tag written to `error_type` (§6.7); CI split into parallel `lint` and `test` jobs with `astral-sh/setup-uv` caching and per-job `timeout-minutes`; Docker workflow updated to multi-platform (`linux/amd64`, `linux/arm64`), GHA layer cache, BuildKit SBOM + provenance, and SLSA attestation via `actions/attest@v4`.
+>
+> **What changed (1.3.3 — multi-provider inference):** replaced `OpenRouterInferenceRouter` with `ModelDispatcher` (multi-provider), added `GroqRouter` and `GeminiRouter`, introduced `ModelCapability`/`ModelInfo`/`Provider` protocol, per-model EMA confidence tracking (`inference/dispatcher.py`), `ContextTooLargeError` caught and compacted in `AgenticLLMAgent`.
 
 ---
 
@@ -115,7 +117,7 @@ A configurable push-to-talk hotkey triggers audio capture. The user speaks, rele
 - Transcribed text is treated identically to keyboard input downstream
 - The capture hotkey is configurable and intentionally **not** `Fn`, which is reserved for macOS's built-in Dictation. Default: `Right Option + Space` (configurable in `~/.north/settings.toml`).
 
-The trade-off is explicit: audio leaves the machine in exchange for sub-second transcription latency and a single-provider operational story. The `Notifier`-style pattern (`docs/CODING_STYLE.md` Section 6.1) keeps a future local fallback (e.g. `mlx-whisper`) cheap to add if local-first ever becomes a requirement again.
+The trade-off is explicit: audio leaves the machine in exchange for sub-second transcription latency. The `Notifier`-style pattern (`docs/CODING_STYLE.md` Section 6.1) keeps a future local fallback (e.g. `mlx-whisper`) cheap to add if local-first ever becomes a requirement again.
 
 ### 3.2 Text Input: Keyboard Prompt
 
@@ -817,15 +819,18 @@ The EMA means recent behavior dominates: a tool that failed early but now succee
 
 ```sql
 CREATE TABLE tool_confidence (
-  agent           TEXT NOT NULL,
-  tool            TEXT NOT NULL,
-  confidence      REAL NOT NULL DEFAULT 0.5,
-  uses_total      INTEGER DEFAULT 0,
-  uses_helpful    INTEGER DEFAULT 0,
-  last_updated    DATETIME,
+  agent                TEXT NOT NULL,
+  tool                 TEXT NOT NULL,
+  confidence           REAL NOT NULL DEFAULT 0.5,
+  uses_total           INTEGER NOT NULL DEFAULT 0,
+  uses_helpful         INTEGER NOT NULL DEFAULT 0,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  last_updated         DATETIME NOT NULL,
   PRIMARY KEY (agent, tool)
 )
 ```
+
+`consecutive_failures` is used to scale the EMA alpha on repeated failures (α doubles per consecutive failure, capped at 0.5), so a tool that keeps failing loses confidence much faster than one that occasionally fails.
 
 On Orchestrator startup, all confidence scores are loaded from `tools.db` into memory. Every tool use updates the in-memory score and writes the delta to `tools.db`. Every confidence update is also logged to the Ledger with `source: system`.
 
@@ -882,30 +887,34 @@ When an agent raises a question, it sets `status: awaiting_input` in its Task Co
 
 The Inference Router selects the appropriate LLM for every inference call in the system. Fully dynamic: no hardcoded model names in application code, no static config file for model assignments. Model selection is driven by task priority and the active inference strategy.
 
-### 8.1 OpenRouter
+### 8.1 Providers
 
-All inference goes through OpenRouter (openrouter.ai). Single API endpoint, single API key, access to all major models across all providers. OpenRouter handles availability routing and returns per-call cost data in the response.
+Inference is served by a `ModelDispatcher` that fans out across multiple providers.  OpenRouter is always included for broad model coverage; direct providers (Groq, Gemini) are prepended when their API keys are present so they are preferred for their own models.  Each provider has its own `NORTH_*_API_KEY` environment variable; only `NORTH_OPENROUTER_API_KEY` is required.
+
+| Provider | Key | Notes |
+|---|---|---|
+| OpenRouter | `NORTH_OPENROUTER_API_KEY` | Required. Broadest model catalogue; embeddings; fallback for all tiers. |
+| Groq | `NORTH_GROQ_API_KEY` | Optional. Free-tier fast completions; Whisper transcription. |
+| Gemini | `NORTH_GEMINI_API_KEY` | Optional. Free-tier completions; embeddings. |
+
+All providers share the same `Provider` protocol (`inference/provider.py`) and are registered into a single `ModelDispatcher` at startup via `inference/factory.py:build_router()`.
 
 ### 8.2 Dynamic Model Pools
 
-The router pulls the live model list from OpenRouter every 6 hours and automatically groups models into three tiers based on current pricing.
+Each provider exposes a `refresh()` method that fetches its live model list from the provider's API.  `ModelDispatcher.refresh_pools()` calls every registered provider in sequence and rebuilds its internal registry.  Pools refresh every 6 hours via a background task and once at startup.
+
+Models are assigned a continuous `base_quality` score (0–1) derived from their output price via `quality_from_cost()` in `inference/capability.py` — log-scale normalisation over the ~$0.000001–$0.015/token pricing range.  `current_pools()` then bins by threshold for the CLI display:
 
 ```
-reasoning pool:    top third by price (most capable)
-                   typical members: claude-opus, gpt-4o, deepseek-r1
-
-fast_cheap pool:   middle third
-                   typical members: claude-sonnet, gpt-4o-mini, gemini-flash
-
-high_volume pool:  bottom third (cheapest)
-                   typical members: claude-haiku, gemini-flash, mistral-7b
-
-free_fallback:     all :free models — always appended as the last resort
+reasoning pool:    base_quality ≥ 0.70  (most capable; frontier models)
+fast_cheap pool:   base_quality ≥ 0.40  (mid-tier)
+high_volume pool:  base_quality < 0.40  (cheapest)
+free_fallback:     cost_per_token == 0  (free models, any quality)
 ```
 
-Pools refresh automatically. When a new model releases or pricing changes, it enters the correct pool without any manual action.
+A model can appear in both `free_fallback` and a quality tier.  Actual ranking within each pool blends `base_quality` with a live per-model EMA success rate (`_effective_quality()`).  When a new model releases or pricing changes, it enters the correct tier automatically without any manual action.
 
-**Pool refresh failure handling:** if the OpenRouter refresh call fails, the router falls back to `~/.north/inference_cache.json` (last successful snapshot), then to the hardcoded pools in `inference/fallback_pools.py`. The Orchestrator continues accepting tasks in all cases.
+**Pool refresh failure handling:** if a provider's refresh call fails, `ModelDispatcher.refresh_pools()` logs a warning and retains the previously-loaded model registry for that provider. The Orchestrator continues accepting tasks in all cases.
 
 **Background refresh loop:** the pool refresh loop uses a loop-first pattern — the initial sleep is at the bottom of the loop, not the top — so it fires immediately on Orchestrator startup, then repeats every 6 hours. This guarantees that fresh model IDs are in place before the first real inference call, without a separate startup refresh step.
 
@@ -948,12 +957,15 @@ classifier                -> LOW (simple binary classification)
 
 ### 8.5 Automatic Fallback Chain
 
-Every `complete()` and `complete_with_tools()` call walks an ordered model list until one succeeds. Two internal exception classes advance the chain:
+Every `complete()` and `complete_with_tools()` call walks the ordered candidate list produced by `ModelDispatcher._candidates()` until one succeeds. Three exception classes handle failures in the chain:
 
-- `_RateLimited` — raised on HTTP 429 (rate limit), 402 (insufficient credits), 404 (model retired or not found), and 503 (unavailable). Silently moves to the next model with no log noise.
-- `InferenceError` — raised on HTTP 400 (unsupported parameters, bad model ID) and other provider errors. Logged at `WARNING` level then moves to the next model.
+- `ModelRateLimitedError` — raised on HTTP 429, 404 (retired model), and 503. Applies a 60-second cooldown to the `(model_id, provider)` pair and silently advances to the next candidate.
+- `PaymentRequiredError` — raised on HTTP 402. Applies a 24-hour cooldown and advances.
+- `InferenceError` — raised on HTTP 400 (unsupported parameters, bad model ID) and other provider errors. Records a failure in the EMA, logs at `WARNING`, and advances to the next candidate.
 
-The chain is exhausted only when every model has been tried. Only then is `AllModelsRateLimitedError` raised to the caller. The chain always ends with free (`:free`) models as a guaranteed last resort.
+Any other exception (network failures, unexpected errors) records a failure in the EMA and re-raises immediately to the caller.
+
+The chain is exhausted only when every candidate has been tried or cooled down. Only then is `AllModelsRateLimitedError` raised to the caller.
 
 ```
 sport strategy, any priority:
@@ -1166,10 +1178,12 @@ Direct terminal access to the Orchestrator. Every command maps to a REST API cal
 
 ```bash
 # Lifecycle
-north start                              # start (Docker or local uvicorn)
-north start --local                      # force local uvicorn (no Docker)
+north                                    # open TUI (auto-starts server if not running)
+north start                              # start server + TUI (local uvicorn by default)
 north start --reload                     # local with auto-reload on file changes
-north stop                               # stop (docker compose down or kills port 8000)
+north start --no-chat                    # start server only, skip TUI
+north start --docker                     # start via Docker Compose (server/headless deployments)
+north stop                               # stop (kills the server process or docker compose down)
 
 # Task management
 north task "Plan my week"
@@ -1177,23 +1191,19 @@ north task "What assignments are due this week?"
 north tasks                              # list active tasks
 north task cancel {id}
 
-# Interactive chat REPL (with conversation history)
-north chat                               # general-purpose REPL
-north chat --workspace /path/to/project  # attach engineering agents to a workspace
-
 # Voice input (push-to-talk)
 north dictate                            # hold hotkey, speak, release to submit
 
 # Context management
-north context view public
-north context view north_stars
+north context show public
+north context show north_stars
 north context edit judgement_rules       # opens in $EDITOR
 north context add --file resume.pdf
 north context add --text "I prefer mornings for deep work"
 north context add --url "https://example.com/article"
 
 # Agent management
-north agent list
+north agents
 north agent create
 north agent run health --task "meal plan for today"
 
@@ -1202,7 +1212,6 @@ north ledger                             # recent entries
 north ledger --task {id}
 north ledger --agent finance
 north ledger --source manual_injection
-north ledger reprocess --from 2026-05-01 # rerun extraction pipeline from date
 
 # Job queue
 north jobs                               # list all jobs
@@ -1212,14 +1221,13 @@ north job cancel {id}
 # Inference
 north inference costs --period week
 north inference costs --agent finance
-north inference models
+north inference models                   # current model pool state + active providers
+
+# Metrics
+north metrics                            # per-agent task counts, success rates, costs, p50/p95 durations
 
 # Tools
 north tools confidence --agent health
-
-# Config
-north config set ledger.retention_days 90
-north config set jobs.poll_interval_seconds 5
 
 # Debug
 north stream {task_id}                   # stream raw SSE events for a task
@@ -1357,7 +1365,8 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
   tools.db               <- tool confidence scores per agent (EMA-updated)
   embeddings.db          <- paragraph embedding vectors for the five context documents
   episodic.db            <- per-task summaries with embeddings for episodic retrieval
-  inference_cache.json   <- last known OpenRouter model pool (fallback if refresh fails)
+  tool_index.db          <- per-tool embedding vectors for semantic tool selection
+  facts.db               <- per-fact embedding vectors for semantic context retrieval
   settings.json          <- user settings (inference strategy, etc.)
   secret.key             <- shared secret for notification callbacks and REST API auth
   tasks/
@@ -1518,13 +1527,19 @@ north/
   inference/
     __init__.py
     base.py             <- InferenceRouter (ABC): complete, complete_with_tools, embed, transcribe
-    openrouter.py       <- OpenRouterInferenceRouter (dynamic pools, streaming, function calling)
+    dispatcher.py       <- ModelDispatcher: multi-provider router with per-model cooldowns and EMA
+    factory.py          <- build_router(): assembles ModelDispatcher from available provider keys
+    capability.py       <- ModelCapability, ModelInfo, quality_from_cost
+    provider.py         <- Provider (Protocol): contract each inference provider must satisfy
     cost_tracker.py     <- CostTracker: InferenceRouter decorator, accumulates cost per task_id
-    fallback_pools.py   <- hardcoded minimal pools if OpenRouter is unreachable on startup
-    constants.py        <- OPENROUTER_BASE_URL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_EMBED_MODEL
-    pool_builder.py     <- dedup(), models_asc_from_pools(), output_price(), bucket_models()
+    constants.py        <- base URLs, timeout, quality normalisation constants
     models.py           <- PoolPriority, ModelPool, ToolCallRequest/Response, EmbedRequest/Response
-    exceptions.py
+    exceptions.py       <- AllModelsRateLimitedError, ContextTooLargeError, PoolRefreshError, …
+    providers/
+      openai_compat.py  <- OpenAICompatibleProvider: shared HTTP base for OpenAI-format APIs
+      openrouter.py     <- OpenRouterRouter: dynamic catalogue, embeddings, transcription
+      groq.py           <- GroqRouter: free-tier completions and Whisper transcription
+      gemini.py         <- GeminiRouter: free-tier completions and embeddings
 
   approval/
     __init__.py
@@ -1716,13 +1731,15 @@ conn.execute("PRAGMA journal_mode=WAL")
 conn.execute("PRAGMA synchronous=NORMAL")
 ```
 
-Six SQLite databases:
+Seven SQLite databases:
 ```
 ~/.north/ledger.db       <- ledger entries (append-only)
 ~/.north/jobs.db         <- job queue + user cron entries
-~/.north/tools.db        <- tool confidence scores (EMA-updated)
+~/.north/tools.db        <- tool confidence scores (EMA-updated, consecutive_failures)
 ~/.north/embeddings.db   <- paragraph embedding vectors for context documents
 ~/.north/episodic.db     <- per-task episode summaries with embeddings
+~/.north/tool_index.db   <- per-tool embedding vectors for semantic tool selection
+~/.north/facts.db        <- per-fact embedding vectors for semantic context retrieval
 ~/.north/tasks/          <- one .db file per task (Task Context Object)
 ```
 
@@ -1832,7 +1849,12 @@ To enable, swap `TerminalNotifier()` → `MacOSNotifier(settings.secret)` in `co
 **Environment variables** for secrets and configuration that cannot be in the repo:
 
 ```bash
-NORTH_OPENROUTER_API_KEY=sk-or-...          # required
+# Inference providers — set in ~/.north/.env
+NORTH_OPENROUTER_API_KEY=sk-or-...          # required — broadest model catalogue
+NORTH_GROQ_API_KEY=gsk_...                  # optional — fast free-tier completions + Whisper transcription
+NORTH_GEMINI_API_KEY=AIza...                # optional — Gemini free-tier completions + embeddings
+
+# System
 NORTH_HOME=~/.north                         # optional, override data directory (e.g. /data in Docker)
 NORTH_SECRET=your-secret                    # optional, override secret.key file (preferred in Docker)
 NORTH_NORTH_ENV=development                 # development | production | test
@@ -1842,6 +1864,10 @@ NORTH_JOB_POLL_INTERVAL_SECONDS=5          # how often the job processor wakes
 NORTH_AGENT_READ_TIMEOUT_SECONDS=30        # timeout waiting for a key in Task Context Object
 NORTH_TASK_CLEANUP_COMPLETED_DAYS=7        # retain completed task DBs for N days
 NORTH_TASK_CLEANUP_FAILED_DAYS=30          # retain failed task DBs for N days
+NORTH_INFERENCE_POOL_REFRESH_INTERVAL_HOURS=6  # how often the model registry is refreshed
+NORTH_AGENT_MAX_ITERATIONS=40              # ReAct loop iteration cap per agent
+NORTH_EXTRACTION_POLL_INTERVAL_SECONDS=120 # extraction pipeline check frequency
+NORTH_EXTRACTION_MAX_DAILY_COST_USD=0.10   # daily spend cap for the extraction pipeline
 ```
 
 `NORTH_HOME` and `NORTH_SECRET` are read directly from the environment (no doubled `NORTH_` prefix). All other tuning variables follow pydantic-settings' `NORTH_` prefix convention.

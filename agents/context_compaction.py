@@ -22,6 +22,10 @@ COMPACTION_THRESHOLD = 0.75
 HEAVY_OUTPUT_TOOLS: frozenset[str] = frozenset({"bash", "git", "patch_file"})
 COMPACT_TOKENS_DEFAULT = 512   # ~350 words — general agents
 COMPACT_TOKENS_HEAVY   = 1000  # ~700 words — agents with bash/git/patch_file
+# keep_recent used when context overflows every available model's window.
+COMPACT_KEEP_RECENT_OVERFLOW: int = 1
+# Max chars per field/line kept when rendering history for summarisation.
+_RENDER_PREVIEW_CHARS: int = 200
 
 # Ordered from most-specific to least-specific so the first match wins.
 # Covers provider-prefixed IDs (e.g. "anthropic/claude-3-haiku") as well as
@@ -86,9 +90,9 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
                 name = fn.get("name", "?")
                 try:
                     args = json.loads(fn.get("arguments", "{}"))
-                    args_str = json.dumps(args)[:200]
+                    args_str = json.dumps(args)[: _RENDER_PREVIEW_CHARS]
                 except Exception:
-                    args_str = str(fn.get("arguments", ""))[:200]
+                    args_str = str(fn.get("arguments", ""))[: _RENDER_PREVIEW_CHARS]
                 lines.append(f"→ tool call: {name}({args_str})")
         elif role == "tool":
             content = msg.get("content", "")
@@ -101,9 +105,9 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
                         result_parts.append(f"{k}={str(v)[:80]}")
                 lines.append(f"  ← result: {', '.join(result_parts[:5])}")
             except Exception:
-                lines.append(f"  ← result: {str(content)[:200]}")
+                lines.append(f"  ← result: {str(content)[: _RENDER_PREVIEW_CHARS]}")
         elif role == "user":
-            lines.append(f"[user context: {str(msg.get('content', ''))[:200]}]")
+            lines.append(f"[user context: {str(msg.get('content', ''))[: _RENDER_PREVIEW_CHARS]}]")
     return "\n".join(lines)
 
 
@@ -158,7 +162,7 @@ def compact_history(messages: list[dict], keep_recent: int = 4) -> None:
                 for tc in ast_msg.get("tool_calls") or []:
                     fn = tc.get("function", {})
                     args = fn.get("arguments", "")
-                    if isinstance(args, str) and len(args) > 200:
+                    if isinstance(args, str) and len(args) > _RENDER_PREVIEW_CHARS:
                         fn["arguments"] = "{}"
                 compacted_assistant.add(ast_idx)
 

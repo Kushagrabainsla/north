@@ -9,8 +9,12 @@ DEFAULT_TIMEOUT_SECONDS = 60.0
 # Max seconds to wait between consecutive SSE chunks before declaring a stall.
 SSE_CHUNK_TIMEOUT_SECONDS = 30.0
 
-# Quality scoring constants (Phase 1: price-based proxy).
-# Phase 2: replace with hybrid price + confidence tracker score.
+# Price-based quality normalisation constants for base_quality.
+# ModelDispatcher blends this with a live success-rate EMA (_effective_quality).
 _QUALITY_LOG_MIN = -6.0   # log10 of ~$0.000001/token floor
 _QUALITY_LOG_MAX = -1.82  # log10 of ~$0.015/token ceiling (frontier model)
 _FREE_MODEL_QUALITY = 0.35  # floor for free-tier models (cost_per_token == 0)
+
+# Effective-quality thresholds for pool tier classification in current_pools().
+_QUALITY_TIER_HIGH: float = 0.70
+_QUALITY_TIER_MEDIUM: float = 0.40

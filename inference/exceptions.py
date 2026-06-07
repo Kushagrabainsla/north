@@ -37,9 +37,7 @@ class ContextTooLargeError(InferenceError):
     """Input exceeds every available model's context window.
 
     Raised by ModelDispatcher when no candidate survives the context filter.
-    The agent layer should compact the conversation and retry.
-
-    TODO Phase 2: catch in agents/agentic_llm_agent.py and call compact_context().
+    AgenticLLMAgent catches this, compacts history to keep_recent=1, and retries.
     """
 
     def __init__(self, estimated_tokens: int, largest_context: int) -> None:

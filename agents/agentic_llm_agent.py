@@ -15,8 +15,15 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from agents.constants import ENGINEERING_AGENTS, MAX_DELEGATION_DEPTH, MAX_TOOL_RESULT_CHARS
+from agents.constants import (
+    _CREATE_TOOL_PREVIEW_CHARS,
+    _TOOL_RESULT_MIN_FIELD_CHARS,
+    ENGINEERING_AGENTS,
+    MAX_DELEGATION_DEPTH,
+    MAX_TOOL_RESULT_CHARS,
+)
 from agents.context_compaction import (
+    COMPACT_KEEP_RECENT_OVERFLOW,
     COMPACT_TOKENS_DEFAULT,
     COMPACT_TOKENS_HEAVY,
     HEAVY_OUTPUT_TOOLS,
@@ -27,6 +34,7 @@ from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.schemas import DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
 from approval.models import Card, CardType
+from inference.exceptions import ContextTooLargeError
 from inference.models import ToolCall, ToolCallRequest
 from tools.base import Tool
 from tools.models import ToolInput
@@ -177,16 +185,37 @@ class AgenticLLMAgent(LLMAgent):
 
             token_cb = self._make_token_callback(payload.task_id)
 
-            response = await self._deps.inference_router.complete_with_tools(
-                ToolCallRequest(
-                    messages=messages,
-                    tools=tools,
-                    priority=self._resolve_priority(),
-                    component=self.name,
-                    task_id=payload.task_id,
-                ),
-                token_callback=token_cb,
-            )
+            try:
+                response = await self._deps.inference_router.complete_with_tools(
+                    ToolCallRequest(
+                        messages=messages,
+                        tools=tools,
+                        priority=self._resolve_priority(),
+                        component=self.name,
+                        task_id=payload.task_id,
+                    ),
+                    token_callback=token_cb,
+                )
+            except ContextTooLargeError:
+                compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
+                try:
+                    response = await self._deps.inference_router.complete_with_tools(
+                        ToolCallRequest(
+                            messages=messages,
+                            tools=tools,
+                            priority=self._resolve_priority(),
+                            component=self.name,
+                            task_id=payload.task_id,
+                        ),
+                        token_callback=token_cb,
+                    )
+                except ContextTooLargeError:
+                    return _final_answer(
+                        "Context window exceeded — the conversation is too long to continue.",
+                        "Context overflow",
+                        total_cost_usd,
+                        tools_used,
+                    )
             total_cost_usd += response.cost_usd
             last_tokens_in = response.tokens_in
             last_model_used = response.model_used
@@ -237,7 +266,11 @@ class AgenticLLMAgent(LLMAgent):
             action = params.get("action", "create")
             tool_type = params.get("tool_type", "specialized")
             content = params.get("content", "").strip()
-            preview = (content[:1500] + "\n…") if len(content) > 1500 else content
+            preview = (
+                (content[:_CREATE_TOOL_PREVIEW_CHARS] + "\n…")
+                if len(content) > _CREATE_TOOL_PREVIEW_CHARS
+                else content
+            )
             msg = (
                 f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n"
                 + (f"```python\n{preview}\n```" if preview else "(stub — no implementation provided)")
@@ -447,7 +480,10 @@ class AgenticLLMAgent(LLMAgent):
         if len(raw) > MAX_TOOL_RESULT_CHARS:
             omitted = len(raw) - MAX_TOOL_RESULT_CHARS
             inner = data.get("data", {})
-            per_field = max(200, (MAX_TOOL_RESULT_CHARS - 200) // max(len(inner), 1))
+            per_field = max(
+                _TOOL_RESULT_MIN_FIELD_CHARS,
+                (MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS) // max(len(inner), 1),
+            )
             data["data"] = {
                 k: (v[:per_field] + "…[truncated]" if isinstance(v, str) and len(v) > per_field else v)
                 for k, v in inner.items()

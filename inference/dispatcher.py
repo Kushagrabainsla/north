@@ -5,30 +5,34 @@ Routing logic:
   1. Collect all models from all providers that satisfy the requested capability.
   2. Filter models whose context window is too small for the input.
   3. Exclude models on cooldown (rate limited or payment exhausted).
-  4. Rank by priority: HIGH → quality desc, LOW → cost asc, MEDIUM → free first.
+  4. Rank by priority: HIGH → effective_quality desc, LOW → cost asc, MEDIUM → free first.
   5. Try each in order, applying cooldowns on failure, raising
      AllModelsRateLimitedError when every candidate is exhausted.
 
 Context overflow: raises ContextTooLargeError so the agent layer can compact
 the conversation and retry. See agents/context_compaction.py.
 
-Phase 2 TODOs:
-  - Track per-model task success rate and tool reliability in confidence tracker.
-  - Augment base_quality with north's experience score.
-  - Catch ContextTooLargeError in agents/agentic_llm_agent.py.
+Phase 2 (done):
+  - Per-model success rate tracked as an in-memory EMA in _model_confidence.
+  - base_quality blended with the EMA score via _effective_quality() for ranking.
+  - ContextTooLargeError caught and compacted in agents/agentic_llm_agent.py.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from config.strategy import NorthSettings, StrategyMode
 from inference.base import InferenceRouter
 from inference.capability import ModelCapability, ModelInfo
+from inference.constants import _QUALITY_TIER_HIGH, _QUALITY_TIER_MEDIUM
 from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
+    InferenceError,
     ModelRateLimitedError,
     PaymentRequiredError,
 )
@@ -46,9 +50,17 @@ from inference.models import (
 )
 from inference.provider import Provider
 
+if TYPE_CHECKING:
+    from tools.confidence import ConfidenceTracker
+
 logger = logging.getLogger(__name__)
 
 _CooldownKey = tuple[str, str]  # (model_id, provider_name)
+
+_DEFAULT_MODEL_CONFIDENCE: float = 0.5
+_MODEL_CONFIDENCE_ALPHA: float = 0.15
+_MODEL_CONFIDENCE_MAX_WEIGHT: float = 0.30
+_MODEL_CONFIDENCE_FULL_USES: int = 20
 
 
 class ModelDispatcher(InferenceRouter):
@@ -61,12 +73,19 @@ class ModelDispatcher(InferenceRouter):
         self,
         providers: list[Provider],
         north_settings: NorthSettings | None = None,
+        confidence_tracker: ConfidenceTracker | None = None,
     ) -> None:
         self._providers = providers
         self._north_settings = north_settings
+        self._confidence_tracker = confidence_tracker
         # (provider_name, model_id) → (ModelInfo, Provider)
         self._registry: dict[tuple[str, str], tuple[ModelInfo, Provider]] = {}
         self._cooldowns: dict[_CooldownKey, float] = {}
+        # (model_id, provider_name) → (ema_score, uses_count); seeded from DB at startup.
+        self._model_confidence: dict[_CooldownKey, tuple[float, int]] = (
+            confidence_tracker.load_model_scores_sync() if confidence_tracker is not None else {}
+        )
+        self._background_tasks: set[asyncio.Task] = set()
         self._build_registry()
 
     def _build_registry(self) -> None:
@@ -178,9 +197,9 @@ class ModelDispatcher(InferenceRouter):
                 continue
             if info.is_free:
                 free.append(info)
-            if info.base_quality >= 0.70:
+            if info.base_quality >= _QUALITY_TIER_HIGH:
                 high.append(info)
-            elif info.base_quality >= 0.40:
+            elif info.base_quality >= _QUALITY_TIER_MEDIUM:
                 medium.append(info)
             else:
                 low.append(info)
@@ -201,6 +220,32 @@ class ModelDispatcher(InferenceRouter):
         }
 
     # ---- Internal routing ----
+
+    def _record_model_outcome(self, key: _CooldownKey, success: bool) -> None:
+        prev_score, prev_uses = self._model_confidence.get(key, (_DEFAULT_MODEL_CONFIDENCE, 0))
+        outcome = 1.0 if success else 0.0
+        new_score = max(
+            0.0,
+            min(1.0, _MODEL_CONFIDENCE_ALPHA * outcome + (1 - _MODEL_CONFIDENCE_ALPHA) * prev_score),
+        )
+        self._model_confidence[key] = (new_score, prev_uses + 1)
+
+    def _persist_model_score(self, key: _CooldownKey) -> None:
+        if self._confidence_tracker is None:
+            return
+        score, uses = self._model_confidence[key]
+        t = asyncio.create_task(
+            self._confidence_tracker.save_model_score(key[0], key[1], score, uses)
+        )
+        self._background_tasks.add(t)
+        t.add_done_callback(self._background_tasks.discard)
+
+    def _effective_quality(self, info: ModelInfo) -> float:
+        """Blend price-based base_quality with live call success rate."""
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        score, uses = self._model_confidence.get(key, (_DEFAULT_MODEL_CONFIDENCE, 0))
+        w = min(uses / _MODEL_CONFIDENCE_FULL_USES, 1.0) * _MODEL_CONFIDENCE_MAX_WEIGHT
+        return info.base_quality * (1 - w) + score * w
 
     def _candidates(
         self,
@@ -241,8 +286,8 @@ class ModelDispatcher(InferenceRouter):
         ]
 
         if priority == PoolPriority.HIGH:
-            # Best quality first, regardless of cost.
-            available.sort(key=lambda x: x[0].base_quality, reverse=True)
+            # Best effective quality first (blends price tier with live success rate).
+            available.sort(key=lambda x: self._effective_quality(x[0]), reverse=True)
         elif priority == PoolPriority.LOW:
             # Minimise resource use: free first, then smallest context window
             # (proxy for lighter/faster models), then cost ascending.
@@ -251,11 +296,11 @@ class ModelDispatcher(InferenceRouter):
                 key=lambda x: (
                     x[0].cost_per_token,
                     x[0].context_window if x[0].context_window > 0 else float("inf"),
-                    -x[0].base_quality,
+                    -self._effective_quality(x[0]),
                 )
             )
-        else:  # MEDIUM: free models first, then by quality
-            available.sort(key=lambda x: (not x[0].is_free, -x[0].base_quality))
+        else:  # MEDIUM: free models first, then by effective quality
+            available.sort(key=lambda x: (not x[0].is_free, -self._effective_quality(x[0])))
 
         return available
 
@@ -273,7 +318,10 @@ class ModelDispatcher(InferenceRouter):
             if self._cooldowns.get(key, 0.0) > now:
                 continue
             try:
-                return await call_fn(provider, info.model_id)
+                result = await call_fn(provider, info.model_id)
+                self._record_model_outcome(key, True)
+                self._persist_model_score(key)
+                return result
             except ModelRateLimitedError:
                 self._cooldowns[key] = (
                     time.monotonic() + self._RATE_LIMIT_COOLDOWN_SECS
@@ -293,6 +341,21 @@ class ModelDispatcher(InferenceRouter):
                     info.provider_name,
                     info.model_id,
                 )
+            except InferenceError:
+                # Provider-level errors (e.g. HTTP 400, unsupported parameters) are
+                # model-specific — record the failure and try the next candidate.
+                self._record_model_outcome(key, False)
+                self._persist_model_score(key)
+                logger.warning(
+                    "Inference error on %s/%s — trying next candidate",
+                    info.provider_name,
+                    info.model_id,
+                    exc_info=True,
+                )
+            except Exception:
+                self._record_model_outcome(key, False)
+                self._persist_model_score(key)
+                raise
 
         raise AllModelsRateLimitedError(
             f"All {len(candidates)} candidate(s) exhausted — every model is "

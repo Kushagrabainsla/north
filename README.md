@@ -23,7 +23,22 @@ curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/
 north start
 ```
 
-The install script installs the `north` CLI via `uv` and prompts for your [OpenRouter](https://openrouter.ai/keys) API key. That's it.
+The install script installs the `north` CLI via `uv` and prompts for your [OpenRouter](https://openrouter.ai/keys) API key. That's the only required key — OpenRouter covers all model tiers.
+
+`north start` boots the server and drops into the interactive TUI. The Web UI is also available at `http://127.0.0.1:8000/ui/`.
+
+### Optional: additional inference providers
+
+Add either key to `~/.north/.env` to activate that provider. Direct providers are preferred over OpenRouter for their own models, giving you lower latency and separate rate-limit buckets.
+
+```bash
+# ~/.north/.env
+NORTH_OPENROUTER_API_KEY=sk-or-...   # required
+NORTH_GROQ_API_KEY=gsk_...           # optional — fast free-tier completions + Whisper
+NORTH_GEMINI_API_KEY=AIza...         # optional — Gemini free-tier completions + embeddings
+```
+
+No code changes needed — adding a key activates the provider automatically on next start.
 
 ### Manual install (alternative)
 
@@ -40,11 +55,11 @@ north start
 Running north on a remote server or home server? Use the Docker Compose mode:
 
 ```bash
-north start --docker   # start
-north stop --docker    # stop
+north start --docker     # start via Docker Compose
+north stop               # stop
 ```
 
-This requires Docker and a `docker-compose.yml` in the current directory or `~/.north/`.
+Requires Docker with the Compose plugin and a `docker-compose.yml` in the current directory or `~/.north/`.
 Note: Docker mode isolates north from your local network, so LAN device control (e.g. smart home) won't work in this mode.
 
 When ready:
@@ -55,35 +70,49 @@ When ready:
          API docs     → http://127.0.0.1:8000/docs
 ```
 
-Open the Web UI and submit a task to confirm everything works.
+Submit a task from the TUI or Web UI to confirm everything works.
 
 ---
 
 ## Usage
 
 ```bash
-# Submit a task
+north                 # open interactive TUI (auto-starts server if needed)
+north start           # start server + TUI
+north start --no-chat # start server only (headless)
+north stop            # stop the server
+
+# Submit tasks
 north task "Help me prep for my first week at LinkedIn"
 north task "What assignments are due this week?"
 
 # View activity
 north tasks           # active tasks
 north ledger          # full event log
+north stream <id>     # raw SSE stream for a task (debug)
 
 # Context
 north context show north_stars
+north context edit judgement_rules   # opens in $EDITOR
 north context add --text "I prefer mornings for deep work"
 north context add --file resume.pdf
+north context add --url "https://example.com/article"
 
 # Agents
-north agent list
+north agents
+north agent run health --task "meal plan for today"
 north agent create    # scaffold a new agent interactively
 
-# Costs
+# Costs and inference
 north inference costs --period week
+north inference models
+north metrics         # per-agent task counts, success rates, p50/p95 durations
+
+# Tools
+north tools confidence --agent health
 ```
 
-The Web UI at `localhost:8000/ui` gives a live activity feed, approval surface, and full context editor — intended to run on a second monitor.
+Running `north` with no subcommand opens the full TUI — chat, live tool activity, and inline approvals in one terminal. The Web UI at `localhost:8000/ui` gives the same view on a second monitor with a richer layout.
 
 ---
 
@@ -138,7 +167,7 @@ uv run pytest
 
 ## Tech stack
 
-Python 3.12+ · FastAPI · SQLite · HTMX · OpenRouter · uv
+Python 3.12+ · FastAPI · SQLite · HTMX · OpenRouter / Groq / Gemini · uv
 
 ---
 

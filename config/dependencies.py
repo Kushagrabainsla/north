@@ -81,11 +81,13 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
 
     context_store = FileContextStore(settings.north_home / "context")
     ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
+    confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
     base_router = build_router(
         openrouter_api_key=settings.openrouter_api_key,
         north_settings=north_settings,
         groq_api_key=settings.groq_api_key,
         gemini_api_key=settings.gemini_api_key,
+        confidence_tracker=confidence_tracker,
     )
     cost_tracker = CostTracker(base_router)
 
@@ -103,7 +105,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         stream_manager=EventStreamManager(),
         approval_store=ApprovalStore(),
         cron_store=UserCronStore(settings.north_home / "jobs.db"),
-        confidence_tracker=ConfidenceTracker(db_path=settings.north_home / "tools.db"),
+        confidence_tracker=confidence_tracker,
         episodic_store=EpisodicStore(
             db_path=settings.north_home / "episodic.db",
             embed_fn=_embed_fn,

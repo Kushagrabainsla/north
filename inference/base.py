@@ -20,13 +20,14 @@ from inference.models import (
 
 
 class InferenceRouter(ABC):
-    """Routes all LLM and audio calls through one provider.
+    """Routes all LLM and audio calls across one or more providers.
 
     The router selects a model based on a priority signal (HIGH→reasoning,
-    MEDIUM→fast_cheap, LOW→high_volume), retries on rate-limit by walking
-    down the same pool, and refreshes pool membership periodically. It
-    owns both chat completion and audio transcription (Decision 3) so the
-    rest of the system stays single-provider.
+    MEDIUM→fast_cheap, LOW→high_volume), applies per-model cooldowns on
+    rate-limit or payment errors, and rebuilds the model registry on refresh.
+    The concrete implementation (ModelDispatcher) fans out across multiple
+    providers; callers see a single interface regardless of which provider
+    handles each call.
     """
 
     @abstractmethod

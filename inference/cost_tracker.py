@@ -36,10 +36,10 @@ from inference.models import (
 class CostTracker(InferenceRouter):
     """InferenceRouter decorator that accumulates cost_usd per task_id.
 
-    All methods except complete() delegate directly to the wrapped router.
-    complete() delegates, then adds response.cost_usd to the running total
-    for request.task_id (if present). pop_task_cost() returns and clears
-    the total so the Orchestrator can emit it in task_completed.
+    complete(), complete_with_tools(), embed(), and transcribe() delegate to
+    the wrapped router then add response.cost_usd to the running total for
+    request.task_id (if present). pop_task_cost() returns and clears the total
+    so the Orchestrator can emit it in task_completed.
     """
 
     def __init__(self, inner: InferenceRouter) -> None:

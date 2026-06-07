@@ -37,29 +37,34 @@ All tool calls within one iteration execute in parallel. The `request_approval` 
 
 ## 2. Dynamic Model Pool Tiering
 
-**What:** `inference/pool_builder.py:bucket_models()` takes OpenRouter's live `/models` response and automatically assigns models to three tiers based on their output price.
+**What:** `inference/dispatcher.py` collects all models from all configured providers and assigns each a continuous `base_quality` score derived from its output price via `quality_from_cost()` in `inference/capability.py`.
 
-**Why:** hardcoding model names creates maintenance overhead and breaks silently when models are renamed or retired. Dynamic bucketing means the system always uses the best currently-available models in the correct tier without any manual action.
+**Why:** hardcoding model names creates maintenance overhead and breaks silently when models are renamed or retired. Dynamic scoring means the system always uses the best currently-available models without any manual action.
 
 **How:**
 
 ```python
-def bucket_models(models: list[dict]) -> tuple[dict[str, ModelPool], list[str]]:
-    priced = [(id, output_price(m)) for m in models if output_price(m) > 0]
-    priced.sort(key=lambda p: p[1], reverse=True)   # most expensive first
-
-    n = len(priced)
-    third = max(1, n // 3)
-
-    reasoning   = priced[:third]            # top third by price = most capable
-    fast_cheap  = priced[third:2*third]     # middle third
-    high_volume = priced[-third:]           # bottom third = cheapest
-    free        = [id for id in models if id.endswith(":free")]
-
-    # free_fallback = static known-good list + any live :free models not in it
+# inference/capability.py
+def quality_from_cost(cost_per_token: float) -> float:
+    """Log-scale normalisation over the ~$0.000001–$0.015/token pricing range."""
+    if cost_per_token <= 0:
+        return _FREE_MODEL_QUALITY   # 0.35 floor for free models
+    log_cost = math.log10(cost_per_token)
+    normalised = (log_cost - _QUALITY_LOG_MIN) / (_QUALITY_LOG_MAX - _QUALITY_LOG_MIN)
+    return max(0.0, min(normalised, 1.0))
 ```
 
-`all_priced_asc` (cheapest-first) is also returned for the eco/sport strategies that need a global cost ordering rather than per-tier groups.
+`current_pools()` bins models into named tiers for CLI display using fixed thresholds:
+
+```python
+# _QUALITY_TIER_HIGH = 0.70, _QUALITY_TIER_MEDIUM = 0.40  (inference/constants.py)
+if info.base_quality >= _QUALITY_TIER_HIGH:   # → "reasoning"
+elif info.base_quality >= _QUALITY_TIER_MEDIUM: # → "fast_cheap"
+else:                                           # → "high_volume"
+if info.is_free:                               # also → "free_fallback"
+```
+
+Actual candidate ranking within each strategy blends `base_quality` with a live per-model EMA success rate via `_effective_quality()`, so a historically reliable cheap model can rank above an expensive one that has been failing.
 
 ---
 
@@ -97,13 +102,18 @@ reasoning pool → fast_cheap pool → high_volume pool → free_fallback
 
 **Why:** a 404 from a retired model ID is a signal that the local pool cache is stale. Refreshing immediately means the next call uses current model IDs rather than continuing to hammer dead endpoints. The cooldown prevents a storm of refresh calls if many models fail in quick succession.
 
-**Pool refresh loop** uses a loop-first pattern so it fires immediately on startup (no separate startup call), then every 6 hours:
+**Pool refresh on startup + loop:** `orchestrator/app.py` calls `refresh_pools()` once explicitly during the lifespan startup before yielding to the server.  A background loop then sleeps for `inference_pool_refresh_interval_hours` (default 6 h) between subsequent refreshes:
 
 ```python
-async def _pool_refresh_loop(router: InferenceRouter) -> None:
+# lifespan startup (orchestrator/app.py)
+await deps.inference_router.refresh_pools()   # immediate, before first request
+
+# background loop (_pool_refresh_loop)
+async def _pool_refresh_loop(deps) -> None:
+    interval = settings.inference_pool_refresh_interval_hours * 3600
     while True:
-        await router.refresh_pools()          # fires immediately on first iteration
-        await asyncio.sleep(6 * 3600)         # then every 6 hours
+        await asyncio.sleep(interval)         # sleep first, then refresh
+        await deps.inference_router.refresh_pools()
 ```
 
 **Error-triggered refresh** (with cooldown):
@@ -172,7 +182,7 @@ The summary call uses `PoolPriority.LOW` so it doesn't compete with the main age
 
 **Why:** without streaming, the Web UI shows nothing until the full response is assembled server-side. Streaming gives the user progressive rendering — the response appears word by word as the model generates it, just like a native chat interface.
 
-**Implementation:** `OpenRouterInferenceRouter._call_tools_streaming()` uses `httpx.AsyncClient.stream()` and processes each `data: {...}` SSE chunk from OpenRouter. Text token deltas go to `token_callback` immediately. Tool call argument chunks are accumulated in a dict until `finish_reason: tool_calls`.
+**Implementation:** `OpenAICompatibleProvider.complete_with_tools()` uses `httpx.AsyncClient.stream()` and processes each `data: {...}` SSE chunk. Text token deltas go to `token_callback` immediately. Tool call argument chunks are accumulated in a dict until `[DONE]`.
 
 ```python
 async with self._client.stream("POST", "/chat/completions", json=body) as resp:

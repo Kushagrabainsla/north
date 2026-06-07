@@ -9,13 +9,12 @@ from inference.constants import _FREE_MODEL_QUALITY, _QUALITY_LOG_MAX, _QUALITY_
 
 
 def quality_from_cost(cost_per_token: float) -> float:
-    """Derive a 0–1 quality score from output token price.
+    """Derive a 0–1 base_quality score from output token price.
 
     Log-scale normalisation spreads scores across the wide pricing range of
     available models (~$0.000001–$0.015/token).  Free models receive a fixed
-    floor of _FREE_MODEL_QUALITY.
-
-    Phase 2: replace with hybrid (price + north confidence tracker) score.
+    floor of _FREE_MODEL_QUALITY.  ModelDispatcher blends this score with a
+    live per-model success-rate EMA when ranking candidates.
     """
     if cost_per_token <= 0:
         return _FREE_MODEL_QUALITY
@@ -49,9 +48,9 @@ def capabilities_from_model_id(model_id: str) -> frozenset[ModelCapability]:
 class ModelInfo:
     """Immutable descriptor for one model on one provider.
 
-    base_quality is a 0–1 score used to rank models within a capability.
-    Phase 1: derived from provider pricing (higher cost ≈ higher quality).
-    Phase 2: augmented by north's confidence tracker per task type.
+    base_quality is a 0–1 price-derived score.  ModelDispatcher blends it
+    with a live in-memory success-rate EMA to produce effective_quality for
+    candidate ranking.
     """
 
     model_id: str

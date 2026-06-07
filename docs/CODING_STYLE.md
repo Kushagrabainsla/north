@@ -230,7 +230,7 @@ These abstract base classes must exist. Every concrete implementation fulfills e
 ```
 context/base.py        ContextStore      <- FileContextStore (v1), DBContextStore (future)
 ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
-inference/base.py      InferenceRouter   <- OpenRouterInferenceRouter
+inference/base.py      InferenceRouter   <- ModelDispatcher (multi-provider)
 approval/base.py       Notifier          <- MacOSNotifier, TerminalNotifier (dev/test)
 tools/base.py          Tool              <- WebSearchTool, CalendarTool, GmailTool, etc.
 agents/base.py         Agent             <- HealthAgent, JobAgent, UniversityAgent, FinanceAgent
@@ -259,8 +259,8 @@ def build_production_dependencies() -> Dependencies:
     return Dependencies(
         context_store=FileContextStore(settings.north_home / "context"),
         ledger=SQLiteLedgerWriter(settings.north_home / "ledger.db"),
-        inference_router=OpenRouterInferenceRouter(settings.openrouter_api_key),
-        notifier=AlerterNotifier(settings.secret),
+        inference_router=build_router(openrouter_api_key=settings.openrouter_api_key),
+        notifier=TerminalNotifier(),
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
     )
 
@@ -366,8 +366,17 @@ inference/
   __init__.py
   base.py            <- InferenceRouter (ABC)
   models.py          <- ModelPool, PoolPriority, InferenceRecord, CostSummary
-  exceptions.py      <- AllModelsRateLimitedError, PoolRefreshError
-  openrouter.py      <- OpenRouterInferenceRouter
+  exceptions.py      <- AllModelsRateLimitedError, ContextTooLargeError, PoolRefreshError
+  capability.py      <- ModelCapability, ModelInfo, quality_from_cost
+  provider.py        <- Provider (Protocol)
+  dispatcher.py      <- ModelDispatcher (multi-provider router)
+  factory.py         <- build_router()
+  cost_tracker.py    <- CostTracker (InferenceRouter decorator)
+  providers/
+    openai_compat.py <- OpenAICompatibleProvider (base class for OpenAI-format providers)
+    openrouter.py    <- OpenRouterRouter
+    groq.py          <- GroqRouter
+    gemini.py        <- GeminiRouter
 
 approval/
   __init__.py
@@ -1162,7 +1171,7 @@ north_settings.set_strategy(StrategyMode.ECO)
 
 ### 17.3 Inference Strategy
 
-Every `CompletionRequest` carries a `PoolPriority` signal. The `OpenRouterInferenceRouter` reads `NorthSettings.strategy` at call time to determine the model ordering:
+Every `CompletionRequest` carries a `PoolPriority` signal. `ModelDispatcher` reads `NorthSettings.strategy` at call time to determine the model ordering:
 
 - `eco` — cheapest priced model first, free models at tail
 - `cruise` — tier matching `PoolPriority`, cross-tier fallback, free at tail (default)
@@ -1294,10 +1303,7 @@ class MockHttpClient:
 
 @pytest.mark.asyncio
 async def test_router_selects_reasoning_pool_for_high_priority():
-    router = OpenRouterInferenceRouter(
-        api_key="test",
-        http_client=MockHttpClient(),
-    )
+    router = build_router(openrouter_api_key="test")
     await router.refresh_pools()
     model = await router.get_model(PoolPriority.HIGH)
     assert model in EXPECTED_REASONING_MODELS
@@ -1397,7 +1403,7 @@ Examples:
 ledger: add agent_output field to LedgerEntry for failure recovery
 orchestrator: implement north star alignment check
 agents/job: add linkedin_api tool edge with initial confidence 0.5
-inference: fall back to inference_cache.json when OpenRouter is unreachable
+inference: apply 60s cooldown to rate-limited models instead of failing immediately
 tools: add ConfidenceTracker with SQLite persistence
 config: add build_test_dependencies factory for isolated test setup
 ```

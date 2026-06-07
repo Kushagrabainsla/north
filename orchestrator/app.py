@@ -304,12 +304,12 @@ async def _guarded(coro, name: str) -> None:
 async def _pool_refresh_loop(deps) -> None:
     interval = settings.inference_pool_refresh_interval_hours * 3600
     while True:
+        await asyncio.sleep(interval)
         try:
             await deps.inference_router.refresh_pools()
             logger.info("Inference pool refreshed successfully")
         except Exception:
             logger.warning("Inference pool refresh failed", exc_info=True)
-        await asyncio.sleep(interval)
 
 
 def _launch_background_tasks(
