@@ -1568,5 +1568,212 @@ def reset(
     typer.secho("✓ Data wiped. API key kept. Run north start to begin fresh.", fg=typer.colors.GREEN)
 
 
+@app.command("update")
+def update(
+    port: int = typer.Option(8000, "--port", "-p", help="Port the server is running on."),
+    docker: bool = typer.Option(False, "--docker", help="Update a Docker Compose deployment."),
+    restart: bool = typer.Option(True, "--restart/--no-restart", help="Restart the server after updating."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Pull the latest north code and update dependencies.
+
+    Stops the server, pulls from git, syncs Python dependencies with uv
+    (falls back to pip), then restarts. Pass --docker to update a
+    Docker Compose deployment instead.
+    """
+    project_root = _find_project_root()
+
+    if project_root is None:
+        typer.secho(
+            "ERROR: Could not locate the north project root (no pyproject.toml found).\n"
+            "Run north update from inside the north source directory.",
+            fg=typer.colors.RED, err=True,
+        )
+        raise typer.Exit(1) from None
+
+    if not (project_root / ".git").exists():
+        typer.secho(
+            "ERROR: north was not installed from a git repository.\n"
+            "Pull manually and run: uv sync",
+            fg=typer.colors.YELLOW, err=True,
+        )
+        raise typer.Exit(1) from None
+
+    _console.print()
+    _console.print("  [bold white]north update[/bold white]")
+    _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
+    _console.print(f"  [dim]project    [/dim]  {project_root}")
+
+    head = _git_describe(project_root)
+    if head:
+        _console.print(f"  [dim]current    [/dim]  {head}")
+    _console.print()
+
+    if not yes:
+        typer.confirm("Proceed with update?", default=True, abort=True)
+
+    # ── Docker path ───────────────────────────────────────────────────────
+    if docker:
+        compose_file = _find_compose_file()
+        if not _docker_available() or compose_file is None:
+            typer.secho("Docker or docker-compose.yml not found.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from None
+        _console.print("  [dim]→[/dim]  git pull…")
+        if not _run_command(["git", "pull"], cwd=project_root):
+            typer.secho("git pull failed — aborting.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from None
+        _console.print("  [dim]→[/dim]  docker compose build…")
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
+            cwd=project_root,
+        )
+        if result.returncode != 0:
+            typer.secho("Docker Compose rebuild failed.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from None
+        _wait_for_server("127.0.0.1", port)
+        _console.print()
+        typer.secho("✓ north updated and restarted via Docker.", fg=typer.colors.GREEN)
+        return
+
+    # ── Local path ────────────────────────────────────────────────────────
+
+    was_running = _port_in_use("127.0.0.1", port) and _is_north_server("127.0.0.1", port)
+    if was_running:
+        _console.print("  [dim]→[/dim]  stopping server…")
+        _stop_server(port)
+
+    _console.print("  [dim]→[/dim]  git pull…")
+    pull_result = subprocess.run(
+        ["git", "pull"], cwd=project_root, capture_output=True, text=True
+    )
+    if pull_result.returncode != 0:
+        typer.secho(
+            f"git pull failed:\n{pull_result.stderr.strip()}",
+            fg=typer.colors.RED, err=True,
+        )
+        raise typer.Exit(1) from None
+
+    if "Already up to date" in pull_result.stdout:
+        _console.print("  [dim green]✓[/dim green]  already up to date")
+    else:
+        log = _git_log_since_pull(project_root)
+        if log:
+            _console.print()
+            for line in log[:8]:
+                _console.print(f"  [dim]  {line}[/dim]")
+            _console.print()
+
+    _console.print("  [dim]→[/dim]  syncing dependencies…")
+    if not _sync_dependencies(project_root):
+        typer.secho(
+            "Dependency sync failed — run 'uv sync' manually to see the full error.",
+            fg=typer.colors.YELLOW, err=True,
+        )
+
+    new_head = _git_describe(project_root)
+    if new_head and new_head != head:
+        _console.print(f"  [dim]updated to [/dim]  {new_head}")
+    _console.print()
+
+    if restart and (was_running or typer.confirm("Start north now?", default=True)):
+        _console.print("  [dim]→[/dim]  restarting…")
+        proc = _start_server_process(port, project_root=project_root)
+        _wait_for_server("127.0.0.1", port)
+        typer.secho(f"✓ north updated and restarted (pid {proc.pid}).", fg=typer.colors.GREEN)
+    else:
+        typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
+
+
+def _find_project_root() -> Path | None:
+    """Walk up from the cli/ directory to find the root with pyproject.toml."""
+    candidate = Path(__file__).parent.parent.resolve()
+    if (candidate / "pyproject.toml").exists():
+        return candidate
+    for p in [Path.cwd(), *Path.cwd().parents]:
+        if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
+            return p
+    return None
+
+
+def _stop_server(port: int) -> None:
+    """Stop a locally-running north server. Mirrors the logic in the stop command."""
+    import signal
+
+    from config.settings import settings
+
+    pid_path = settings.north_home / "north.pid"
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+            os.kill(pid, signal.SIGTERM)
+            pid_path.unlink(missing_ok=True)
+            time.sleep(1)
+        except ProcessLookupError:
+            pid_path.unlink(missing_ok=True)
+        except Exception as exc:
+            typer.secho(f"  Warning: could not stop via PID: {exc}", fg=typer.colors.YELLOW)
+    if _port_in_use("127.0.0.1", port):
+        _kill_port("127.0.0.1", port)
+        time.sleep(1)
+
+
+def _start_server_process(port: int, project_root: Path) -> subprocess.Popen:
+    """Spawn uvicorn and record the PID. Mirrors the logic in the start command."""
+    from config.settings import settings
+
+    log_path = settings.north_home / "north.log"
+    pid_path = settings.north_home / "north.pid"
+    cmd = [
+        sys.executable, "-m", "uvicorn", "orchestrator.app:app",
+        "--host", "127.0.0.1", "--port", str(port), "--log-level", "info",
+    ]
+    log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
+    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=os.environ)
+    pid_path.write_text(str(proc.pid), encoding="utf-8")
+    return proc
+
+
+def _sync_dependencies(project_root: Path) -> bool:
+    """Run uv sync, falling back to pip install -e . Returns True on success."""
+    if shutil.which("uv"):
+        if _run_command(["uv", "sync"], cwd=project_root):
+            return True
+    return _run_command(
+        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=project_root
+    )
+
+
+def _run_command(cmd: list[str], *, cwd: Path) -> bool:
+    """Run a subprocess, printing its output only on failure. Returns True on success."""
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0 and (result.stdout or result.stderr):
+        output = (result.stdout + result.stderr).strip()
+        _console.print(f"  [dim red]{output}[/dim red]")
+    return result.returncode == 0
+
+
+def _git_describe(root: Path) -> str | None:
+    try:
+        r = subprocess.run(
+            ["git", "log", "-1", "--pretty=format:%h %s"],
+            capture_output=True, text=True, cwd=root, timeout=5,
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _git_log_since_pull(root: Path) -> list[str]:
+    """Return the subject lines of commits pulled in the last git pull."""
+    try:
+        r = subprocess.run(
+            ["git", "log", "HEAD@{1}..HEAD", "--pretty=format:%h %s"],
+            capture_output=True, text=True, cwd=root, timeout=5,
+        )
+        return [l for l in r.stdout.strip().splitlines() if l] if r.returncode == 0 else []
+    except Exception:
+        return []
+
+
 if __name__ == "__main__":
     app()
