@@ -59,24 +59,26 @@ class LLMAgent(Agent):
         context: str,
         scored_tools: list[tuple[Tool, float]],
     ) -> str:
+        from datetime import datetime, timezone
         tool_lines = "\n".join(
             f"- {t.name} (reliability {score:.0%}): {t.description}"
             for t, score in scored_tools
         )
-        system_context = ""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        system_lines = [f"- current date/time: {now}"]
         if payload.workspace:
-            system_context = (
-                f"## System Context\n"
-                f"- workspace: {payload.workspace}\n"
+            system_lines += [
+                f"- workspace: {payload.workspace}",
                 "- Before creating or interacting with directories (like Desktop, Downloads, Documents, etc.),"
                 " always list the workspace contents (using `list_dir` or standard commands) to inspect"
                 " the system, locate the actual target directories, and check if they are already"
                 " present—exactly like a human engineer would. Never guess paths or run creation"
-                " commands blindly.\n"
+                " commands blindly.",
                 "- When calling filesystem/shell tools, always use absolute paths derived from your"
                 " workspace inspection above. Never use generic placeholders like '/home/user',"
-                " unexpanded '~', or relative paths.\n\n"
-            )
+                " unexpanded '~', or relative paths.",
+            ]
+        system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n"
         return (
             f"{system_context}"
             f"## Task\n{payload.prompt}\n\n"

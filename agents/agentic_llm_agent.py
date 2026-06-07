@@ -295,11 +295,18 @@ class AgenticLLMAgent(LLMAgent):
         scored_tools: list[tuple[Tool, float]],
     ) -> str:
         """User message without the tool list (tools are passed as function defs)."""
+        from datetime import datetime, timezone
         reliability_lines = "\n".join(
             f"- {t.name} reliability: {score:.0%}"
             for t, score in scored_tools
         )
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        system_lines = [f"- current date/time: {now}"]
+        if payload.workspace:
+            system_lines.append(f"- workspace: {payload.workspace}")
+        system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n"
         return (
+            f"{system_context}"
             f"## Task\n{payload.prompt}\n\n"
             f"## Task ID\n{payload.task_id}\n\n"
             f"## Context\n{context or '(none)'}\n\n"
