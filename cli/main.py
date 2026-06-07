@@ -1777,6 +1777,7 @@ def _start_server_process(port: int, project_root: Path | None = None) -> subpro
         "--host", "127.0.0.1", "--port", str(port), "--log-level", "info",
     ]
     server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": workspace}
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
     proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
     pid_path.write_text(str(proc.pid), encoding="utf-8")
