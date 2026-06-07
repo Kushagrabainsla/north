@@ -155,5 +155,5 @@ Follow this strict priority order — only escalate when the step above cannot s
    with a complete working implementation in the `content` parameter so the tool is immediately usable.
 
 Never create or update a tool for something an existing tool already handles.
-Never create a tool when `bash` or `write_file` can do the job directly.
+Never create a tool when `write_file` can do the job directly, or when composing existing available tools is sufficient.
 After creating or updating a tool, you can use it immediately in the next step of this task."""
