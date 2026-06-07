@@ -63,19 +63,19 @@ class Agent(ABC):
     async def _load_context(self, payload: AgentPayload) -> str:
         """Load context for this agent.
 
-        Preference order:
-        1. payload.context (pre-loaded by orchestrator for delegated tasks)
+        Assembly order (all sections merged):
+        1. payload.context — conversation history or webhook data injected by the caller
         2. FactStore semantic search (when available and populated)
-        3. Full markdown document load (legacy fallback)
-
-        Episodic search runs in all paths and is appended at the end.
+        3. Full markdown document load (legacy fallback when FactStore is empty)
+        4. Episodic search — always appended last
         """
-        if payload.context:
-            return payload.context
-
         parts: list[str] = []
 
+        if payload.context:
+            parts.append(payload.context)
+
         fact_store = self._deps.fact_store
+        facts_found = False
         if fact_store is not None:
             try:
                 if await fact_store.count() > 0:
@@ -85,10 +85,11 @@ class Agent(ABC):
                             "## Personal Context\n"
                             + "\n".join(f"- {f}" for f in facts)
                         )
+                        facts_found = True
             except Exception as exc:
                 logger.warning("FactStore search failed for task %s: %s", payload.task_id, exc)
 
-        if not parts:
+        if not facts_found:
             store = self._deps.context_store
             allowed_docs = await self._allowed_documents()
             raw_parts = [await store.read(doc) for doc in allowed_docs]

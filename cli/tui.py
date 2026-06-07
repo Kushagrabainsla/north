@@ -7,6 +7,7 @@ import contextlib
 import json
 import shutil
 import sys
+from collections import deque
 from pathlib import Path
 
 import httpx
@@ -173,6 +174,8 @@ async def run(
     token_buffer: dict[str, str] = {}
     approval_queue: asyncio.Queue[dict] = asyncio.Queue()
     user_task_ids: set[str] = set()
+    conversation_history: deque[dict] = deque(maxlen=5)
+    pending_user_messages: dict[str, str] = {}
 
     spinner = _Spinner()
     console: Console = Console()
@@ -273,6 +276,10 @@ async def run(
             spinner.stop()
             toolbar_status[0] = ""
             user_task_ids.discard(task_id)
+            user_msg = pending_user_messages.pop(task_id, "")
+            if user_msg and output:
+                short = output[:600] + ("…" if len(output) > 600 else "")
+                conversation_history.append({"user": user_msg, "north": short})
             if output:
                 console.print("  [bright_black]north[/bright_black]")
                 console.print(Padding(Markdown(output), (0, 0, 0, 2)))
@@ -441,6 +448,12 @@ async def run(
             body: dict = {"prompt": text}
             if workspace:
                 body["workspace"] = workspace
+            if conversation_history:
+                lines: list[str] = []
+                for turn in conversation_history:
+                    lines.append(f"User: {turn['user']}")
+                    lines.append(f"north: {turn['north']}")
+                body["context"] = "## Recent conversation\n" + "\n\n".join(lines)
             try:
                 async with httpx.AsyncClient() as c:
                     resp = await c.post(
@@ -453,6 +466,7 @@ async def run(
                     task_id = resp.json().get("task_id", "")
                     if task_id:
                         user_task_ids.add(task_id)
+                        pending_user_messages[task_id] = text
             except httpx.ConnectError:
                 spinner.stop()
                 toolbar_status[0] = ""
