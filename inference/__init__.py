@@ -1,17 +1,23 @@
-"""Inference Router for north — chat completion and audio transcription via OpenRouter.
+"""Inference layer for north — multi-provider chat completion, embeddings, and transcription.
 
 See README Section 8 and `docs/CODING_STYLE.md` Section 6.1.
 """
 
 from inference.base import InferenceRouter
+from inference.capability import ModelCapability, ModelInfo, capabilities_from_model_id, quality_from_cost
+from inference.dispatcher import ModelDispatcher
 from inference.exceptions import (
     AllModelsRateLimitedError,
+    ContextTooLargeError,
     InferenceError,
+    ModelRateLimitedError,
     PaymentRequiredError,
     PoolRefreshError,
     TranscriptionError,
 )
-from inference.fallback_pools import DEFAULT_TRANSCRIPTION_MODEL, FALLBACK_POOLS
+from inference.factory import build_router
+from inference.providers.gemini import GeminiRouter
+from inference.providers.groq import GroqRouter
 from inference.models import (
     POOL_NAMES,
     POOL_TO_PRIORITY,
@@ -30,28 +36,38 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
-from inference.openrouter import OpenRouterInferenceRouter
+from inference.providers.openrouter import OpenRouterRouter
+from inference.provider import Provider
 
 __all__ = [
     "AllModelsRateLimitedError",
+    "build_router",
+    "capabilities_from_model_id",
     "CompletionRequest",
     "CompletionResponse",
+    "ContextTooLargeError",
     "CostSummary",
-    "DEFAULT_TRANSCRIPTION_MODEL",
     "EmbedRequest",
     "EmbedResponse",
-    "FALLBACK_POOLS",
+    "GeminiRouter",
+    "GroqRouter",
     "InferenceError",
     "InferenceRecord",
     "InferenceRouter",
+    "ModelCapability",
+    "quality_from_cost",
+    "ModelDispatcher",
+    "ModelInfo",
     "ModelPool",
-    "OpenRouterInferenceRouter",
+    "ModelRateLimitedError",
+    "OpenRouterRouter",
     "POOL_NAMES",
     "POOL_TO_PRIORITY",
     "PRIORITY_TO_POOL",
     "PaymentRequiredError",
     "PoolPriority",
     "PoolRefreshError",
+    "Provider",
     "ToolCall",
     "ToolCallRequest",
     "ToolCallResponse",

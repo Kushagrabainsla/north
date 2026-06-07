@@ -440,6 +440,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("scheduling background tasks")
     background_tasks = _launch_background_tasks(deps, orchestrator, extraction_pipeline, callback_server)
 
+    _step("refreshing inference pools")
+    await deps.inference_router.refresh_pools()
+
     _step("startup complete — yielding to server")
     try:
         yield

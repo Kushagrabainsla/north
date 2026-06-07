@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # Required for production; empty default allows import/initialization without crash
     openrouter_api_key: str = ""
 
+    # Optional direct-provider keys — enables dedicated rate-limit buckets and
+    # lower latency for those providers' models. Empty = provider not used.
+    groq_api_key: str = ""
+    gemini_api_key: str = ""
+
     # Paths — NORTH_HOME env var is the canonical override (used in Docker)
     north_home: Path = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
 

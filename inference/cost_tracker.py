@@ -7,7 +7,7 @@ same wrapped instance, the total reflects every LLM call for a task —
 not just agent calls.
 
 Usage:
-    tracker = CostTracker(OpenRouterInferenceRouter(...))
+    tracker = CostTracker(build_router(...))
     # pass `tracker` wherever InferenceRouter is expected
     cost = tracker.pop_task_cost(task_id)   # after task completes
 

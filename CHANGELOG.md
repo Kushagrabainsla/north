@@ -2,6 +2,27 @@
 
 All notable changes to north are documented here.
 
+## [1.3.3] - 2026-06-06
+### Added
+- **Multi-provider inference** (`inference/dispatcher.py`): `ModelDispatcher` implements `InferenceRouter` across an ordered list of providers; routes each call to the best available model regardless of which provider hosts it
+- **GroqRouter** (`inference/groq.py`): free-tier completions and tool calls via `llama-3.3-70b-versatile`, `mixtral-8x7b-32768`, `llama-3.1-8b-instant`; Whisper transcription via multipart upload
+- **GeminiRouter** (`inference/gemini.py`): free-tier completions via `gemini-2.0-flash`, `gemini-1.5-pro`, `gemini-1.5-flash`; embeddings via `text-embedding-004`
+- **`OpenAICompatibleProvider`** (`inference/openai_compat.py`): shared HTTP base class for all OpenAI-format providers; adding a new provider requires only a subclass with `name`, `base_url`, and optional `embed`/`transcribe` overrides
+- **`ModelCapability` / `ModelInfo`** (`inference/capability.py`): typed capability flags (`COMPLETION`, `TOOL_CALLS`, `EMBEDDING`, `TRANSCRIPTION`) and an immutable per-model descriptor with `context_window`, `cost_per_token`, and `base_quality`
+- **`Provider` protocol** (`inference/provider.py`): runtime-checkable interface all routers satisfy; the dispatcher only talks to this — never to concrete router classes
+- **Per-model cooldowns**: dispatcher tracks `(model_id, provider_name) → skip_until` timestamp; rate-limited models cool for 60 s, payment-required models cool for 24 h
+- **Context window filter + `ContextTooLargeError`**: dispatcher estimates input tokens (`chars / 4`), filters models that are too small, and raises `ContextTooLargeError` when no candidate fits — signals the agent layer to compact and retry
+- **Priority ranking**: `HIGH` → quality descending (best model first); `MEDIUM` → free models first then quality; `LOW` → cost ascending then quality
+- **`NORTH_GROQ_API_KEY` / `NORTH_GEMINI_API_KEY`** settings: adding either key to `~/.north/.env` activates that provider with no code changes
+
+### Changed
+- `OpenRouterInferenceRouter` renamed to `OpenRouterRouter`; now extends `OpenAICompatibleProvider` instead of `InferenceRouter` directly; pool-walking retry logic removed (dispatcher owns all routing)
+- `factory.py` builds a `ModelDispatcher` from available provider keys; OpenRouter is always the last provider in the chain as the broadest fallback
+- `inference/__init__.py` updated to export all new public types
+
+### Fixed
+- `402 Payment Required` from OpenRouter no longer crashes north; the dispatcher applies a 24 h cooldown to the (model, provider) pair and falls through to the next candidate automatically
+
 ## [1.3.2] - 2026-06-06
 ### Added
 - **Semantic tool selection** (`tools/tool_index.py`): tool descriptions are embedded at registration time; at task start, only the top-15 semantically relevant tools are injected into the agent context instead of the full registry, reducing token bloat at scale

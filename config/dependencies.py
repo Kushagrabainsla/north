@@ -20,7 +20,8 @@ from approval.store import ApprovalStore
 from config.settings import settings
 from config.strategy import NorthSettings
 from context import ContextStore, FileContextStore
-from inference import InferenceRouter, OpenRouterInferenceRouter
+from inference import InferenceRouter
+from inference.factory import build_router
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
 
@@ -80,10 +81,11 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
 
     context_store = FileContextStore(settings.north_home / "context")
     ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
-    base_router = OpenRouterInferenceRouter(
-        settings.openrouter_api_key,
-        settings.north_home / "inference_cache.json",
+    base_router = build_router(
+        openrouter_api_key=settings.openrouter_api_key,
         north_settings=north_settings,
+        groq_api_key=settings.groq_api_key,
+        gemini_api_key=settings.gemini_api_key,
     )
     cost_tracker = CostTracker(base_router)
 
