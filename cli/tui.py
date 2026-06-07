@@ -449,11 +449,10 @@ async def run(
             if workspace:
                 body["workspace"] = workspace
             if conversation_history:
-                lines: list[str] = []
+                turns: list[str] = []
                 for turn in conversation_history:
-                    lines.append(f"User: {turn['user']}")
-                    lines.append(f"north: {turn['north']}")
-                body["context"] = "## Recent conversation\n" + "\n\n".join(lines)
+                    turns.append(f"User: {turn['user']}\nnorth: {turn['north']}")
+                body["context"] = "## Recent conversation\n" + "\n\n".join(turns)
             try:
                 async with httpx.AsyncClient() as c:
                     resp = await c.post(

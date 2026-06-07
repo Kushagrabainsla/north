@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
@@ -317,8 +318,10 @@ class AgenticLLMAgent(LLMAgent):
         recent_conv = ""
         background = ""
         if context:
-            parts = context.split("\n\n", 1)
-            if parts[0].startswith("## Recent conversation"):
+            if context.startswith("## Recent conversation"):
+                # Split only at a \n\n## boundary so multi-line conversation
+                # content (which may itself contain blank lines) isn't truncated.
+                parts = re.split(r"\n\n(?=##)", context, maxsplit=1)
                 recent_conv = parts[0] + "\n\n"
                 background = parts[1] if len(parts) > 1 else ""
             else:

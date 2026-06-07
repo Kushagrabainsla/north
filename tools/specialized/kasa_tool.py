@@ -154,20 +154,21 @@ class KasaTool(Tool):
         devices = data.get("devices", [])
         if not devices:
             return data.get("message", "No Kasa devices found on the network.")
-        lines = []
+        blocks = []
         for d in devices:
-            parts = [f"  {d['alias']} ({d['host']})"]
-            parts.append("on" if d.get("is_on") else "off")
+            status = "on" if d.get("is_on") else "off"
+            header = f"**{d['alias']}** ({d['host']}) — {status}"
+            attrs = []
             if d.get("brightness") is not None:
-                parts.append(f"brightness={d['brightness']}%")
+                attrs.append(f"- Brightness: {d['brightness']}%")
             if d.get("color_temp"):
-                parts.append(f"color_temp={d['color_temp']}K")
+                attrs.append(f"- Color temp: {d['color_temp']}K")
             if d.get("hue") is not None:
-                parts.append(f"hue={d['hue']} sat={d.get('saturation')}%")
-            lines.append(" — ".join(parts))
+                attrs.append(f"- Hue: {d['hue']}  Saturation: {d.get('saturation')}%")
+            blocks.append(header + ("\n" + "\n".join(attrs) if attrs else ""))
         if msg := data.get("message"):
-            lines.insert(0, msg)
-        return "\n".join(lines)
+            blocks.insert(0, msg)
+        return "\n\n".join(blocks)
 
     async def run(self, input: ToolInput) -> ToolOutput:
         action = input.params.get("action")
