@@ -20,9 +20,11 @@ Phase 2 (done):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from config.strategy import NorthSettings, StrategyMode
@@ -74,10 +76,12 @@ class ModelDispatcher(InferenceRouter):
         providers: list[Provider],
         north_settings: NorthSettings | None = None,
         confidence_tracker: ConfidenceTracker | None = None,
+        cooldowns_path: Path | None = None,
     ) -> None:
         self._providers = providers
         self._north_settings = north_settings
         self._confidence_tracker = confidence_tracker
+        self._cooldowns_path = cooldowns_path
         # (provider_name, model_id) → (ModelInfo, Provider)
         self._registry: dict[tuple[str, str], tuple[ModelInfo, Provider]] = {}
         self._cooldowns: dict[_CooldownKey, float] = {}
@@ -87,6 +91,7 @@ class ModelDispatcher(InferenceRouter):
         )
         self._background_tasks: set[asyncio.Task] = set()
         self._build_registry()
+        self._load_cooldowns()
 
     def _build_registry(self) -> None:
         """Merge models from all providers. Each entry is keyed by (provider_name, model_id)."""
@@ -96,6 +101,41 @@ class ModelDispatcher(InferenceRouter):
                 key = (info.provider_name, model_id)
                 if key not in self._registry:
                     self._registry[key] = (info, provider)
+
+    def _load_cooldowns(self) -> None:
+        if self._cooldowns_path is None or not self._cooldowns_path.exists():
+            return
+        try:
+            data: dict[str, float] = json.loads(self._cooldowns_path.read_text())
+            now_wall = time.time()
+            now_mono = time.monotonic()
+            for raw_key, wall_expiry in data.items():
+                remaining = wall_expiry - now_wall
+                if remaining <= 0:
+                    continue  # already expired
+                model_id, _, provider_name = raw_key.partition("::")
+                self._cooldowns[(model_id, provider_name)] = now_mono + remaining
+            if self._cooldowns:
+                logger.info("Loaded %d persisted payment cooldown(s) from disk", len(self._cooldowns))
+        except Exception:
+            logger.warning("Failed to load cooldowns file — starting fresh", exc_info=True)
+
+    def _save_payment_cooldown(self, key: _CooldownKey, mono_expiry: float) -> None:
+        if self._cooldowns_path is None:
+            return
+        try:
+            wall_expiry = time.time() + max(0.0, mono_expiry - time.monotonic())
+            data: dict[str, float] = {}
+            if self._cooldowns_path.exists():
+                try:
+                    data = json.loads(self._cooldowns_path.read_text())
+                except Exception:
+                    pass
+            model_id, provider_name = key
+            data[f"{model_id}::{provider_name}"] = wall_expiry
+            self._cooldowns_path.write_text(json.dumps(data, indent=2))
+        except Exception:
+            logger.warning("Failed to persist payment cooldown for %s/%s", key[1], key[0], exc_info=True)
 
     def _effective_priority(self, requested: PoolPriority) -> PoolPriority:
         """Apply the user's strategy setting to the requested priority.
@@ -339,9 +379,9 @@ class ModelDispatcher(InferenceRouter):
                     int(self._RATE_LIMIT_COOLDOWN_SECS),
                 )
             except PaymentRequiredError:
-                self._cooldowns[key] = (
-                    time.monotonic() + self._PAYMENT_COOLDOWN_SECS
-                )
+                mono_expiry = time.monotonic() + self._PAYMENT_COOLDOWN_SECS
+                self._cooldowns[key] = mono_expiry
+                self._save_payment_cooldown(key, mono_expiry)
                 logger.warning(
                     "Payment required: %s/%s — skipping for 24 h",
                     info.provider_name,

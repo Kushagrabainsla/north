@@ -6,6 +6,7 @@ coverage as the final fallback.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from config.strategy import NorthSettings
@@ -24,6 +25,7 @@ def build_router(
     groq_api_key: str = "",
     gemini_api_key: str = "",
     confidence_tracker: ConfidenceTracker | None = None,
+    cooldowns_path: Path | None = None,
 ) -> InferenceRouter:
     """Assemble a ModelDispatcher from available provider keys.
 
@@ -44,4 +46,4 @@ def build_router(
     from inference.providers.openrouter import OpenRouterRouter
     providers.append(OpenRouterRouter(openrouter_api_key))
 
-    return ModelDispatcher(providers, north_settings, confidence_tracker)
+    return ModelDispatcher(providers, north_settings, confidence_tracker, cooldowns_path)
