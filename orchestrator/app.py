@@ -44,6 +44,7 @@ from orchestrator.synthesizer import ResultSynthesizer
 from tools.registry import ToolRegistry
 from tools.specialized.bash import BashTool
 from tools.tool_index import ToolIndex
+from tools.universal.create_agent import CreateAgentTool
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
@@ -102,13 +103,16 @@ def _attach_embedding_index(deps) -> None:
     deps.context_store.attach_embedding_index(embedding_index)
 
 
-def _build_tool_registry(deps, tool_graph) -> ToolRegistry:
+def _build_tool_registry(deps, tool_graph) -> tuple[ToolRegistry, CreateAgentTool]:
     tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
     tool_registry.register(
         ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store)
     )
     tool_registry.make_universal("schedule_task")
     tool_registry.register(CreateToolTool(tool_registry=tool_registry))
+    create_agent_tool = CreateAgentTool(cron_store=deps.cron_store)
+    tool_registry.register(create_agent_tool)
+    tool_registry.make_universal("create_agent")
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
     tool_registry.make_universal("query_metrics")
     # BashTool gates every command behind user approval and cannot be auto-discovered.
@@ -119,7 +123,7 @@ def _build_tool_registry(deps, tool_graph) -> ToolRegistry:
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
         )
     )
-    return tool_registry
+    return tool_registry, create_agent_tool
 
 
 def _build_tool_index(deps) -> ToolIndex | None:
@@ -403,7 +407,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _step("building tool registry")
     tool_graph = AgentRegistry.build_tool_graph(_AGENTS_DIR)
-    tool_registry = _build_tool_registry(deps, tool_graph)
+    tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph)
 
     _step("seeding confidence defaults")
     await deps.confidence_tracker.seed_defaults(tool_graph, _RELIABLE_TOOLS)
@@ -417,6 +421,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     agent_deps = _build_agent_deps(deps, tool_registry)
     agent_deps.tool_index = tool_index
     agent_registry = _build_agent_registry(agent_deps)
+    create_agent_tool._agent_registry = agent_registry  # late-wire after registry is built
     _step(f"registered agents: {agent_registry.names()}")
     _warn_unknown_cron_agents(agent_registry)
 

@@ -500,9 +500,10 @@ class Orchestrator:
     ) -> list[str]:
         """Execute agents in hierarchical mode, passing results from earlier steps."""
         all_failures: list[str] = []
-        prior_context = ""
+        accumulated_snippets: list[str] = []
         for group in plan.parallel_groups:
             agents = [self._agent_registry.get(name) for name in group]
+            prior_context = "\n\n".join(accumulated_snippets)
             effective_prompt = (
                 f"{prompt}\n\n## Results from earlier steps\n{prior_context}"
                 if prior_context else prompt
@@ -511,14 +512,14 @@ class Orchestrator:
                 task_id, effective_prompt, agents, workspace, context=context
             )
             all_failures.extend(failed)
-            
+
             all_data = await self._task_context_store.get_all(task_id)
-            snippets = [
+            new_snippets = [
                 f"[{name}]: {(all_data.get(name) or {}).get('output', '')}"
                 for name in group
                 if (all_data.get(name) or {}).get("output")
             ]
-            prior_context = "\n\n".join(snippets)
+            accumulated_snippets.extend(new_snippets)
         return all_failures
 
     async def _execute_parallel_groups(
@@ -713,7 +714,7 @@ class Orchestrator:
                     ),
                     priority=PoolPriority.LOW,
                     component="episodic_summary",
-                    task_id=task_id,
+                    task_id=None,  # task already completed; task_id cost was already popped
                 )
             )
             return response.text.strip() or fallback

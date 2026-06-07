@@ -191,6 +191,9 @@ class CronScheduler:
 # V1 schedule — see README Section 11.3.
 # weekday: 0=Mon … 6=Sun, None = daily.
 V1_CRON_ENTRIES: list[CronEntry] = [
+    CronEntry(name="news_daily_briefing", agent="news_briefing",
+              task="Compile the daily news briefing across Tech & AI, world events, science & health, and business & markets",
+              hour=8, minute=0),
     CronEntry(name="health_daily_meal_plan", agent="health",
               task="Generate today's meal plan", hour=7, minute=0),
     CronEntry(name="university_canvas_check", agent="university",

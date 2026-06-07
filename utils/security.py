@@ -29,6 +29,7 @@ def load_secret() -> str:
         # Exclusive create — raises FileExistsError if another process won the race.
         with secret_file.open("x") as f:
             f.write(secret)
+        secret_file.chmod(0o600)
     except FileExistsError:
         return secret_file.read_text(encoding="utf-8").strip()
     return secret

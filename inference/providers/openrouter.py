@@ -7,7 +7,6 @@ before the server accepts requests.
 """
 from __future__ import annotations
 
-import base64
 import logging
 
 import httpx
@@ -16,6 +15,7 @@ from inference.capability import ModelCapability, ModelInfo, capabilities_from_m
 from inference.constants import OPENROUTER_BASE_URL
 from inference.exceptions import (
     InferenceError,
+    ModelRateLimitedError,
     PoolRefreshError,
     TranscriptionError,
 )
@@ -116,10 +116,7 @@ class OpenRouterRouter(OpenAICompatibleProvider):
             resp = await self._client.post("/embeddings", json=body)
         except httpx.RequestError as e:
             raise InferenceError(f"Embedding request to openrouter failed: {e}") from e
-        if resp.status_code >= 400:
-            raise InferenceError(
-                f"OpenRouter /embeddings returned {resp.status_code}: {resp.text[:200]}"
-            )
+        self._raise_for_status(resp, model_id)
         try:
             payload = resp.json()
         except ValueError as e:
@@ -139,16 +136,18 @@ class OpenRouterRouter(OpenAICompatibleProvider):
     async def transcribe(
         self, model_id: str, request: TranscriptionRequest
     ) -> TranscriptionResponse:
-        body = {
-            "model": model_id,
-            "audio": base64.b64encode(request.audio).decode("ascii"),
-        }
+        files = {"file": ("audio.wav", request.audio, "audio/wav")}
+        data = {"model": model_id}
         try:
-            response = await self._client.post("/audio/transcriptions", json=body)
+            response = await self._client.post(
+                "/audio/transcriptions", files=files, data=data
+            )
         except httpx.RequestError as e:
             raise TranscriptionError(
                 f"Transcription request to openrouter failed: {e}"
             ) from e
+        if response.status_code in (429, 503):
+            raise ModelRateLimitedError(model_id, self.name)
         if response.status_code >= 400:
             raise TranscriptionError(
                 f"OpenRouter returned {response.status_code}: {response.text[:200]}"

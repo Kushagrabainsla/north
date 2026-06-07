@@ -67,9 +67,6 @@ class SQLiteLedgerWriter(LedgerWriter):
 
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_SCHEMA)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_task_id ON ledger (task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_timestamp ON ledger (timestamp DESC)")

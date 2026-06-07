@@ -194,7 +194,8 @@ class SQLiteJobProcessor(JobProcessor):
             )
 
     def _set_terminal_sync(self, job_id: str, status: JobStatus) -> None:
-        assert status in _TERMINAL_STATUSES
+        if status not in _TERMINAL_STATUSES:
+            raise ValueError(f"{status!r} is not a terminal status; expected one of {_TERMINAL_STATUSES}")
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",

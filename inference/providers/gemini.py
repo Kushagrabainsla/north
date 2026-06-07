@@ -74,10 +74,7 @@ class GeminiRouter(OpenAICompatibleProvider):
             resp = await self._client.post("/embeddings", json=body)
         except httpx.RequestError as e:
             raise InferenceError(f"Embedding request to Gemini failed: {e}") from e
-        if resp.status_code >= 400:
-            raise InferenceError(
-                f"Gemini /embeddings returned {resp.status_code}: {resp.text[:200]}"
-            )
+        self._raise_for_status(resp, model_id)
         try:
             payload = resp.json()
         except ValueError as e:

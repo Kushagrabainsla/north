@@ -66,9 +66,6 @@ class ConfidenceTracker:
 
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_SCHEMA)
             conn.execute(_MODEL_SCHEMA)
             import contextlib

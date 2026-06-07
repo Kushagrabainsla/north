@@ -95,6 +95,10 @@ class OpenAICompatibleProvider:
                 f"{self.name} returned {resp.status_code} for {model_id}: {body}"
             )
 
+    async def aclose(self) -> None:
+        """Close the underlying HTTPX client."""
+        await self._client.aclose()
+
     def _extra_body_fields(self) -> dict:
         """Provider-specific fields to merge into every request body.
 

@@ -75,7 +75,7 @@ class AgentConfig(BaseModel):
     def resolved_class_name(self) -> str:
         if self.class_name is not None:
             return self.class_name
-        return f"{self.agent.capitalize()}Agent"
+        return "".join(word.capitalize() for word in self.agent.split("_")) + "Agent"
 
     @classmethod
     def from_yaml(cls, path: Path) -> AgentConfig:

@@ -1,0 +1,24 @@
+agent: news_briefing
+domain: general
+model_pool: fast_cheap
+accepts:
+  - "news"
+  - "briefing"
+  - "digest"
+  - "headlines"
+  - "current events"
+  - "what's happening"
+  - "world events"
+  - "tech news"
+  - "AI news"
+  - "science news"
+  - "health news"
+  - "business news"
+  - "markets"
+  - "update me"
+  - "catch me up"
+produces:
+  - "~/.north/news/{date}.md"
+output_format: structured_json
+version: 1.0.0
+class_name: NewsBriefingAgent

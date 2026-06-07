@@ -171,6 +171,12 @@ class ModelDispatcher(InferenceRouter):
             raise AllModelsRateLimitedError("No completion models are available")
         return candidates[0][0].model_id
 
+    async def aclose(self) -> None:
+        """Close all provider HTTPX clients. Call on application shutdown."""
+        for provider in self._providers:
+            if hasattr(provider, "aclose"):
+                await provider.aclose()
+
     async def refresh_pools(self) -> None:
         for provider in self._providers:
             try:

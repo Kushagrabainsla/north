@@ -29,6 +29,17 @@ class LLMAgent(Agent):
     serialization. Override `_execute()` directly for radical custom logic.
     """
 
+    def __init__(self, config: Any, deps: Any) -> None:
+        super().__init__(config, deps)
+        # Load the system prompt at construction time (sync, startup context) so
+        # the first call to _execute() never blocks the running event loop.
+        path = self._prompts_dir() / "system.md"
+        if not path.exists():
+            raise AgentConfigError(
+                f"Missing system prompt at {path}. Every LLMAgent needs one."
+            )
+        self._system_prompt_cache: str = path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY
+
     def _prompts_dir(self) -> Path:
         """Resolve the agent's `prompts/` folder relative to its module file."""
         module = sys.modules[self.__class__.__module__]
@@ -40,17 +51,6 @@ class LLMAgent(Agent):
         return Path(module.__file__).parent / "prompts"
 
     def _load_system_prompt(self) -> str:
-        # Cached on first call — prompts are static at runtime and reading from
-        # disk on every agent invocation would block the event loop.
-        if not hasattr(self, "_system_prompt_cache"):
-            path = self._prompts_dir() / "system.md"
-            if not path.exists():
-                raise AgentConfigError(
-                    f"Missing system prompt at {path}. Every LLMAgent needs one."
-                )
-            self._system_prompt_cache: str = (
-                path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY
-            )
         return self._system_prompt_cache
 
     def _build_user_message(
