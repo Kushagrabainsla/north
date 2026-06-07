@@ -306,11 +306,26 @@ class AgenticLLMAgent(LLMAgent):
         if payload.workspace:
             system_lines.append(f"- workspace: {payload.workspace}")
         system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n"
+
+        # Split context: recent conversation goes before the task so the model
+        # has conversational frame before it reads the current prompt. Personal
+        # facts and episodic memory go after.
+        recent_conv = ""
+        background = ""
+        if context:
+            parts = context.split("\n\n", 1)
+            if parts[0].startswith("## Recent conversation"):
+                recent_conv = parts[0] + "\n\n"
+                background = parts[1] if len(parts) > 1 else ""
+            else:
+                background = context
+
         return (
             f"{system_context}"
+            f"{recent_conv}"
             f"## Task\n{payload.prompt}\n\n"
             f"## Task ID\n{payload.task_id}\n\n"
-            f"## Context\n{context or '(none)'}\n\n"
+            f"## Context\n{background or '(none)'}\n\n"
             f"## Tool reliability hints\n{reliability_lines or '(none)'}\n"
         )
 
