@@ -281,7 +281,7 @@ class AgenticLLMAgent(LLMAgent):
             })
             if decision.lower() in ("reject", "rejected", "timeout_rejected"):
                 return call, json.dumps({"success": False, "error": "User rejected tool creation."}), False
-        if payload.workspace and "workspace" not in params:
+        if payload.workspace:
             params["workspace"] = payload.workspace
         if payload.task_id and "task_id" not in params:
             params["task_id"] = payload.task_id

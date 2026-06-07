@@ -1450,6 +1450,9 @@ def start(
         "NORTH_NORTH_WORKSPACE": resolved_workspace,
     }
 
+    workspace_path = settings.north_home / "workspace.txt"
+    workspace_path.write_text(resolved_workspace, encoding="utf-8")
+
     log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
     proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
     pid_path.write_text(str(proc.pid), encoding="utf-8")
@@ -1751,12 +1754,19 @@ def _start_server_process(port: int, project_root: Path | None = None) -> subpro
 
     log_path = settings.north_home / "north.log"
     pid_path = settings.north_home / "north.pid"
+    workspace_path = settings.north_home / "workspace.txt"
+    workspace = (
+        workspace_path.read_text(encoding="utf-8").strip()
+        if workspace_path.exists()
+        else str(Path.home())
+    )
     cmd = [
         sys.executable, "-m", "uvicorn", "orchestrator.app:app",
         "--host", "127.0.0.1", "--port", str(port), "--log-level", "info",
     ]
+    server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": workspace}
     log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
-    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=os.environ)
+    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
     pid_path.write_text(str(proc.pid), encoding="utf-8")
     return proc
 
