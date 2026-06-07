@@ -1685,10 +1685,15 @@ def update(
 
 
 def _find_project_root() -> Path | None:
-    """Walk up from the cli/ directory to find the root with pyproject.toml."""
-    candidate = Path(__file__).parent.parent.resolve()
-    if (candidate / "pyproject.toml").exists():
-        return candidate
+    """Find the north project root (directory containing pyproject.toml + agents/).
+
+    Walks up from __file__ first so it works whether north is installed as an
+    editable or non-editable package (the latter places cli/main.py deep inside
+    .venv/lib/python3.x/site-packages/). Falls back to walking up from CWD.
+    """
+    for p in Path(__file__).resolve().parents:
+        if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
+            return p
     for p in [Path.cwd(), *Path.cwd().parents]:
         if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
             return p
