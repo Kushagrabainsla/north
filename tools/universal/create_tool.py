@@ -331,7 +331,7 @@ class CreateToolTool(Tool):
 # ── Code safety ──────────────────────────────────────────────────────────────
 
 _FORBIDDEN_IMPORTS: frozenset[str] = frozenset({
-    "subprocess", "ctypes", "socket", "os.system", "pty",
+    "subprocess", "ctypes", "socket", "os", "pty",
     "multiprocessing", "signal", "threading",
 })
 _FORBIDDEN_CALLS: frozenset[str] = frozenset({"exec", "eval", "compile", "__import__"})

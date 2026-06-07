@@ -13,16 +13,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from config.dependencies import EmbedFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
+from utils.math import cosine_similarity
 
 logger = logging.getLogger(__name__)
-
-EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS context_facts (
@@ -37,15 +36,6 @@ CREATE TABLE IF NOT EXISTS context_facts (
 _MAX_FACTS_RETURNED: int = 15
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    import numpy as np
-    va = np.array(a, dtype=float)
-    vb = np.array(b, dtype=float)
-    na = float(np.linalg.norm(va))
-    nb = float(np.linalg.norm(vb))
-    if na == 0 or nb == 0:
-        return 0.0
-    return float(np.dot(va, vb) / (na * nb))
 
 
 class FactStore:
@@ -102,7 +92,7 @@ class FactStore:
             return []
 
         scored = [
-            (content, _cosine(qvec, emb))
+            (content, cosine_similarity(qvec, emb))
             for _, content, emb in self._cache
             if emb
         ]

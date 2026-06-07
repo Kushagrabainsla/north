@@ -7,9 +7,10 @@ specific task (e.g. ``_process_task``).
 
 Usage::
 
-    from utils.logging import bind_task_id, get_logger
+    from utils.logging import bind_task_id
+    import logging
 
-    log = get_logger(__name__)
+    log = logging.getLogger(__name__)
 
     async def _process_task(task_id, ...):
         bind_task_id(task_id)
@@ -108,7 +109,3 @@ def configure_structured_logging(level: int = logging.INFO) -> None:
     root.addHandler(handler)
 
 
-def get_logger(name: str) -> logging.Logger:
-    """Return a standard ``logging.Logger`` whose records are enriched with
-    the context-var ``task_id`` automatically via ``_JSONFormatter``."""
-    return logging.getLogger(name)

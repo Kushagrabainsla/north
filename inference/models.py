@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -81,7 +82,7 @@ class ToolCall(BaseModel):
 
     name: str
     call_id: str
-    params: dict = {}
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolCallResponse(BaseModel):

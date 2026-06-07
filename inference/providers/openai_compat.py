@@ -267,7 +267,3 @@ class OpenAICompatibleProvider:
     ) -> TranscriptionResponse:
         raise TranscriptionError(f"{self.name} does not support transcription")
 
-    # ---- lifecycle ----
-
-    async def aclose(self) -> None:
-        await self._client.aclose()

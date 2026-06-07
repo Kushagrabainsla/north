@@ -97,55 +97,55 @@ def configure(
     _north_settings = north_settings
 
 
-def _orch() -> Orchestrator:
+def _get_orchestrator() -> Orchestrator:
     if _orchestrator is None:
         raise RuntimeError("Orchestrator not configured")
     return _orchestrator
 
 
-def _streams() -> EventStreamManager:
+def _get_stream_manager() -> EventStreamManager:
     if _stream_manager is None:
         raise RuntimeError("EventStreamManager not configured")
     return _stream_manager
 
 
-def _ldgr() -> LedgerWriter:
+def _get_ledger() -> LedgerWriter:
     if _ledger is None:
         raise RuntimeError("LedgerWriter not configured")
     return _ledger
 
 
-def _agents() -> AgentRegistry:
+def _get_agent_registry() -> AgentRegistry:
     if _agent_registry is None:
         raise RuntimeError("AgentRegistry not configured")
     return _agent_registry
 
 
-def _ctx() -> ContextStore:
+def _get_context_store() -> ContextStore:
     if _context_store is None:
         raise RuntimeError("ContextStore not configured")
     return _context_store
 
 
-def _injector() -> ContextInjector:
+def _get_context_injector() -> ContextInjector:
     if _context_injector is None:
         raise RuntimeError("ContextInjector not configured")
     return _context_injector
 
 
-def _jobs() -> JobProcessor:
+def _get_job_processor() -> JobProcessor:
     if _job_processor is None:
         raise RuntimeError("JobProcessor not configured")
     return _job_processor
 
 
-def _inference() -> InferenceRouter:
+def _get_inference_router() -> InferenceRouter:
     if _inference_router is None:
         raise RuntimeError("InferenceRouter not configured")
     return _inference_router
 
 
-def _confidence() -> ConfidenceTracker:
+def _get_confidence_tracker() -> ConfidenceTracker:
     if _confidence_tracker is None:
         raise RuntimeError("ConfidenceTracker not configured")
     return _confidence_tracker
@@ -170,7 +170,7 @@ async def transcribe_audio(request: Request) -> TranscriptionOut:
     if not audio_bytes:
         raise HTTPException(status_code=422, detail="Empty audio body.")
 
-    result = await _inference().transcribe(
+    result = await _get_inference_router().transcribe(
         TranscriptionRequest(audio=audio_bytes, component="perception")
     )
     return TranscriptionOut(
@@ -192,19 +192,19 @@ async def submit_task(request: Request) -> TaskResponse:
     else:
         body = await request.json()
         task_req = TaskRequest(**body)
-    return await _orch().submit_task(task_req)
+    return await _get_orchestrator().submit_task(task_req)
 
 
 @router.get("/tasks", response_model=list[TaskResponse])
 async def list_tasks() -> list[TaskResponse]:
     """List all currently pending tasks."""
-    return await _orch().list_active_tasks()
+    return await _get_orchestrator().list_active_tasks()
 
 
 @router.get("/task/{task_id}", response_model=TaskResponse)
 async def get_task(task_id: str) -> TaskResponse:
     """Get the status and most recent output for a specific task."""
-    result = await _orch().get_task(task_id)
+    result = await _get_orchestrator().get_task(task_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
     return result
@@ -213,7 +213,7 @@ async def get_task(task_id: str) -> TaskResponse:
 @router.delete("/task/{task_id}", status_code=204)
 async def cancel_task(task_id: str) -> None:
     """Cancel a pending task."""
-    await _orch().cancel_task(task_id)
+    await _get_orchestrator().cancel_task(task_id)
 
 
 # ── SSE stream ────────────────────────────────────────────────────────────────
@@ -223,7 +223,7 @@ async def stream_task_events(task_id: str) -> StreamingResponse:
     """Server-Sent Events stream for real-time task progress."""
 
     async def _event_generator() -> AsyncIterator[str]:
-        async for chunk in _streams().subscribe(task_id):
+        async for chunk in _get_stream_manager().subscribe(task_id):
             yield chunk
 
     return StreamingResponse(
@@ -242,7 +242,7 @@ async def stream_global_events() -> StreamingResponse:
     """
 
     async def _global_generator() -> AsyncIterator[str]:
-        async for chunk in _streams().subscribe_global():
+        async for chunk in _get_stream_manager().subscribe_global():
             yield chunk
 
     return StreamingResponse(
@@ -262,7 +262,7 @@ async def get_metrics(days: int = 7) -> dict:
         days: look-back window in days (default 7; max 365)
     """
     days = max(1, min(days, 365))
-    return await _ldgr().get_metrics(days=days)
+    return await _get_ledger().get_metrics(days=days)
 
 
 # ── Ledger endpoints ──────────────────────────────────────────────────────────
@@ -287,7 +287,7 @@ async def query_ledger(
                 status_code=422,
                 detail=f"Unknown source {source!r}. Valid: {[s.value for s in LedgerSource]}",
             ) from None
-    return await _ldgr().query(
+    return await _get_ledger().query(
         LedgerFilters(task_id=task_id, agent=agent, source=src, limit=limit)
     )
 
@@ -317,14 +317,14 @@ async def list_agents() -> list[AgentInfo]:
             model_pool=a.config.model_pool,
             accepts=a.config.accepts,
         )
-        for a in _agents().all()
+        for a in _get_agent_registry().all()
     ]
 
 
 @router.post("/agent/run", response_model=TaskResponse, status_code=202)
 async def run_agent(request: AgentRunRequest) -> TaskResponse:
     """Manually trigger a specific agent by submitting a targeted task."""
-    return await _orch().submit_task(
+    return await _get_orchestrator().submit_task(
         TaskRequest(prompt=f"[{request.agent}] {request.task}")
     )
 
@@ -357,7 +357,7 @@ class ContextWriteRequest(BaseModel):
 async def read_context(doc: str) -> ContextDocOut:
     """Read a context document."""
     document = _resolve_doc(doc)
-    content = await _ctx().read(document)
+    content = await _get_context_store().read(document)
     return ContextDocOut(document=document.value, content=content)
 
 
@@ -365,7 +365,7 @@ async def read_context(doc: str) -> ContextDocOut:
 async def write_context(doc: str, body: ContextWriteRequest) -> None:
     """Overwrite a context document entirely."""
     document = _resolve_doc(doc)
-    await _ctx().write(document, body.content)
+    await _get_context_store().write(document, body.content)
 
 
 @router.post("/context/add", status_code=202)
@@ -375,7 +375,7 @@ async def add_context(
     file: UploadFile | None = None,
 ) -> dict[str, str]:
     """Manual context injection: accepts text, URL, or file upload (multipart form)."""
-    injector = _injector()
+    injector = _get_context_injector()
     if file is not None:
         content = await file.read()
         doc = await injector.inject_file(file.filename or "upload", content)
@@ -438,7 +438,7 @@ async def list_jobs(
                 status_code=422,
                 detail=f"Unknown status {status!r}. Valid: {[s.value for s in JobStatus]}",
             ) from None
-    jobs = await _jobs().list_jobs(status=js, limit=limit)
+    jobs = await _get_job_processor().list_jobs(status=js, limit=limit)
     return [_job_to_out(j) for j in jobs]
 
 
@@ -459,14 +459,14 @@ async def create_job(body: JobCreateRequest) -> JobOut:
         priority=JobPriority(body.priority),
         scheduled_at=scheduled,
     )
-    await _jobs().enqueue(job)
+    await _get_job_processor().enqueue(job)
     return _job_to_out(job)
 
 
 @router.delete("/jobs/{job_id}", status_code=204)
 async def cancel_job(job_id: str) -> None:
     """Cancel a pending or running job."""
-    await _jobs().cancel(job_id)
+    await _get_job_processor().cancel(job_id)
 
 
 # ── Cron endpoints ────────────────────────────────────────────────────────────
@@ -540,7 +540,7 @@ async def inference_costs(
     days = {"day": 1, "week": 7, "month": 30}.get(period, 7)
     since = now - datetime.timedelta(days=days)
 
-    entries = await _ldgr().query(
+    entries = await _get_ledger().query(
         LedgerFilters(
             source=LedgerSource.INFERENCE_ROUTER,
             agent=agent,
@@ -577,7 +577,7 @@ class ModelPoolOut(BaseModel):
 @router.get("/inference/models", response_model=dict[str, ModelPoolOut])
 async def inference_models() -> dict[str, ModelPoolOut]:
     """Current model pool state."""
-    pools = _inference().current_pools()
+    pools = _get_inference_router().current_pools()
     return {name: ModelPoolOut(name=pool.name, models=pool.models) for name, pool in pools.items()}
 
 
@@ -592,13 +592,13 @@ class ToolConfidenceOut(BaseModel):
 @router.get("/tools/confidence", response_model=list[ToolConfidenceOut])
 async def tool_confidence(agent: str | None = None) -> list[ToolConfidenceOut]:
     """Tool confidence scores, optionally filtered by agent."""
-    tracker = _confidence()
+    tracker = _get_confidence_tracker()
     if agent is not None:
         scores = await tracker.scores_for_agent(agent)
         return [ToolConfidenceOut(agent=agent, tool=t, confidence=c) for t, c in scores]
 
     results: list[ToolConfidenceOut] = []
-    for a in _agents().names():
+    for a in _get_agent_registry().names():
         scores = await tracker.scores_for_agent(a)
         results.extend(ToolConfidenceOut(agent=a, tool=t, confidence=c) for t, c in scores)
     return results
@@ -626,7 +626,7 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
 
     The caller (CLI) is responsible for writing the files to disk.
     """
-    router_obj = _inference()
+    router_obj = _get_inference_router()
     prompt = (
         f"You are writing the system prompt for a new north AI agent.\n\n"
         f"Agent name: {body.name}\n"
@@ -730,7 +730,7 @@ async def receive_webhook(source: str, request: Request) -> dict:
         context=context,
     )
 
-    orch = _orch()
+    orch = _get_orchestrator()
     result = await orch.submit_task(task_req)
     return {"task_id": result.task_id, "status": result.status, "source": source}
 
@@ -748,7 +748,7 @@ class ApprovalResponse(BaseModel):
 @router.post("/approval/respond", status_code=204)
 async def respond_approval(body: ApprovalResponse) -> None:
     """Receive an approval decision from the notification callback server or Web UI."""
-    await _orch().respond_approval(
+    await _get_orchestrator().respond_approval(
         card_id=body.card_id,
         task_id=body.task_id,
         agent=body.agent,

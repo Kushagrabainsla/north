@@ -26,6 +26,9 @@ COMPACT_TOKENS_HEAVY   = 1000  # ~700 words — agents with bash/git/patch_file
 COMPACT_KEEP_RECENT_OVERFLOW: int = 1
 # Max chars per field/line kept when rendering history for summarisation.
 _RENDER_PREVIEW_CHARS: int = 200
+# Thresholds for truncating large tool outputs during history compaction.
+_COMPACT_TRUNCATE_THRESHOLD: int = 500   # skip outputs shorter than this
+_COMPACT_TRUNCATE_KEEP: int = 300        # chars kept from oversized outputs
 
 # Ordered from most-specific to least-specific so the first match wins.
 # Covers provider-prefixed IDs (e.g. "anthropic/claude-3-haiku") as well as
@@ -111,12 +114,13 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def compact_history(messages: list[dict], keep_recent: int = 4) -> None:
+def compact_history(messages: list[dict], keep_recent: int = 4) -> list[dict]:
     """Compact the history by truncating older tool responses to save context.
 
-    Also truncates the arguments on the paired assistant tool_call so both
-    halves of the exchange shrink together — preventing context bloat from
-    large input payloads that were already executed.
+    Mutates and returns the same list so callers can chain. Also truncates the
+    arguments on the paired assistant tool_call so both halves of the exchange
+    shrink together — preventing context bloat from large input payloads that
+    were already executed.
     """
     tool_indices = [i for i, msg in enumerate(messages) if msg.get("role") == "tool"]
     if len(tool_indices) <= keep_recent:
@@ -136,7 +140,7 @@ def compact_history(messages: list[dict], keep_recent: int = 4) -> None:
     for idx in to_compact:
         msg = messages[idx]
         content = msg.get("content")
-        if isinstance(content, str) and len(content) > 500:
+        if isinstance(content, str) and len(content) > _COMPACT_TRUNCATE_THRESHOLD:
             truncated = True
             try:
                 data = json.loads(content)
@@ -152,7 +156,7 @@ def compact_history(messages: list[dict], keep_recent: int = 4) -> None:
             except Exception:
                 pass
             if truncated:
-                msg["content"] = content[:300] + "... [Large tool output truncated to save context]"
+                msg["content"] = content[:_COMPACT_TRUNCATE_KEEP] + "... [Large tool output truncated to save context]"
 
         call_id = msg.get("tool_call_id")
         if call_id and call_id in call_id_to_assistant:
@@ -165,6 +169,7 @@ def compact_history(messages: list[dict], keep_recent: int = 4) -> None:
                     if isinstance(args, str) and len(args) > _RENDER_PREVIEW_CHARS:
                         fn["arguments"] = "{}"
                 compacted_assistant.add(ast_idx)
+    return messages
 
 
 async def compact_if_needed(

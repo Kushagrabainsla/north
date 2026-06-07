@@ -188,28 +188,14 @@ class AgenticLLMAgent(LLMAgent):
             token_cb = self._make_token_callback(payload.task_id)
 
             try:
-                response = await self._deps.inference_router.complete_with_tools(
-                    ToolCallRequest(
-                        messages=messages,
-                        tools=tools,
-                        priority=self._resolve_priority(),
-                        component=self.name,
-                        task_id=payload.task_id,
-                    ),
-                    token_callback=token_cb,
+                response = await self._complete_with_tools(
+                    messages, tools, payload.task_id, token_cb
                 )
             except ContextTooLargeError:
                 compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
                 try:
-                    response = await self._deps.inference_router.complete_with_tools(
-                        ToolCallRequest(
-                            messages=messages,
-                            tools=tools,
-                            priority=self._resolve_priority(),
-                            component=self.name,
-                            task_id=payload.task_id,
-                        ),
-                        token_callback=token_cb,
+                    response = await self._complete_with_tools(
+                        messages, tools, payload.task_id, token_cb
                     )
                 except ContextTooLargeError:
                     return _final_answer(
@@ -245,6 +231,24 @@ class AgenticLLMAgent(LLMAgent):
         )
 
     # ------------------------------------------------------------------
+
+    async def _complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        task_id: str,
+        token_callback: Callable[[str], Awaitable[None]] | None,
+    ) -> Any:
+        return await self._deps.inference_router.complete_with_tools(
+            ToolCallRequest(
+                messages=messages,
+                tools=tools,
+                priority=self._resolve_priority(),
+                component=self.name,
+                task_id=task_id,
+            ),
+            token_callback=token_callback,
+        )
 
     async def _execute_call(
         self,

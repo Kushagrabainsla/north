@@ -10,17 +10,10 @@ from typing import TYPE_CHECKING
 from context.base import ContextStore
 from context.exceptions import ContextReadError, ContextWriteError
 from context.models import ContextDocument
+from utils.text import STOPWORDS
 
 if TYPE_CHECKING:
     from context.embedding_index import EmbeddingIndex
-
-_STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "shall", "can", "to", "of", "in", "for",
-    "on", "with", "at", "by", "from", "and", "or", "but", "not", "i",
-    "my", "me", "we", "our", "you", "your", "it", "its",
-})
 
 
 class FileContextStore(ContextStore):
@@ -140,7 +133,7 @@ class FileContextStore(ContextStore):
 def _tokenize(text: str) -> frozenset[str]:
     """Lowercase words, strip punctuation, drop stopwords."""
     words = re.findall(r"[a-z0-9]+", text.lower())
-    return frozenset(w for w in words if w not in _STOPWORDS)
+    return frozenset(w for w in words if w not in STOPWORDS)
 
 
 def _split_paragraphs(text: str) -> list[str]:

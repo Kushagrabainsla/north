@@ -12,6 +12,7 @@ import asyncio
 import httpx
 
 from tools.base import Tool
+from utils.text import strip_html
 from tools.models import ToolInput, ToolOutput
 
 _MAX_CHARS = 30_000
@@ -58,7 +59,7 @@ def _fetch_sync(url: str) -> ToolOutput:
         return ToolOutput(success=False, error=f"Request failed: {e}")
 
     content_type = resp.headers.get("content-type", "")
-    text = _strip_html(resp.text) if "html" in content_type else resp.text
+    text = strip_html(resp.text) if "html" in content_type else resp.text
 
     if len(text) > _MAX_CHARS:
         omitted = len(text) - _MAX_CHARS
@@ -73,12 +74,3 @@ def _fetch_sync(url: str) -> ToolOutput:
             "chars": len(text),
         },
     )
-
-
-def _strip_html(html: str) -> str:
-    from bs4 import BeautifulSoup  # already in project deps
-
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
-        tag.decompose()
-    return " ".join(soup.get_text(separator="\n").split())

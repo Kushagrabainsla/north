@@ -13,6 +13,7 @@ from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from utils.ids import generate_id
+from utils.text import strip_html
 from utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -102,7 +103,7 @@ class ContextInjector:
             response = await client.get(url)
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
-            text = _strip_html(response.text) if "html" in content_type else response.text
+            text = strip_html(response.text) if "html" in content_type else response.text
 
         return await self._ingest(text, source_hint=f"url:{url}", task_id=task_id)
 
@@ -111,7 +112,7 @@ class ContextInjector:
     async def _ingest(
         self, text: str, source_hint: str, task_id: str | None
     ) -> ContextDocument:
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        self._fire_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.MANUAL_INJECTION,
@@ -119,12 +120,12 @@ class ContextInjector:
             action="context_injection_started",
             input=source_hint,
             status=LedgerStatus.PENDING,
-        )))
+        ))
 
         doc, delta = await self._route(text)
         await self._context_store.append(doc, delta)
 
-        asyncio.create_task(self._ledger.write(LedgerEntry(
+        self._fire_ledger(LedgerEntry(
             id=generate_id(),
             timestamp=utcnow(),
             source=LedgerSource.MANUAL_INJECTION,
@@ -133,8 +134,16 @@ class ContextInjector:
             input=source_hint,
             output=delta,
             status=LedgerStatus.COMPLETED,
-        )))
+        ))
         return doc
+
+    def _fire_ledger(self, entry: LedgerEntry) -> None:
+        """Schedule a ledger write as a background task, logging failures."""
+        task = asyncio.create_task(self._ledger.write(entry))
+        task.add_done_callback(
+            lambda t: logger.warning("Ledger write failed: %s", t.exception())
+            if not t.cancelled() and t.exception() is not None else None
+        )
 
     async def _route(self, text: str) -> tuple[ContextDocument, str]:
         """Ask the LLM which document this text belongs to and extract a delta."""
@@ -154,16 +163,6 @@ class ContextInjector:
             return doc, delta
         except (json.JSONDecodeError, KeyError, ValueError):
             return ContextDocument.PUBLIC, text[:_MAX_CONTENT_CHARS]
-
-
-def _strip_html(html: str) -> str:
-    """Extract readable text from HTML using BeautifulSoup."""
-    from bs4 import BeautifulSoup  # type: ignore[import-untyped]
-
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header"]):
-        tag.decompose()
-    return " ".join(soup.get_text(separator=" ").split())
 
 
 def _extract_pdf(content: bytes) -> str:

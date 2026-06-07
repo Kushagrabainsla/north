@@ -10,7 +10,7 @@ from typing import Any
 
 from agents.base import Agent
 from agents.exceptions import AgentConfigError, AgentOutputParseError
-from agents.models import AgentPayload
+from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from inference.models import (
     POOL_TO_PRIORITY,
     CompletionRequest,
@@ -30,7 +30,7 @@ class LLMAgent(Agent):
     serialization. Override `_execute()` directly for radical custom logic.
     """
 
-    def __init__(self, config: Any, deps: Any) -> None:
+    def __init__(self, config: AgentConfig, deps: AgentDependencies) -> None:
         super().__init__(config, deps)
         # Load the system prompt at construction time (sync, startup context) so
         # the first call to _execute() never blocks the running event loop.

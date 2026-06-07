@@ -11,14 +11,13 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from config.dependencies import EmbedFn
 from utils.db import open_db_connection
+from utils.math import cosine_similarity
 
 logger = logging.getLogger(__name__)
-
-EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tool_embeddings (
@@ -33,15 +32,6 @@ SEMANTIC_TOP_K: int = 15      # max tools to inject per task
 SEMANTIC_FILTER_MIN: int = 8  # only activate semantic filter when more tools exist than this
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    import numpy as np
-    va = np.array(a, dtype=float)
-    vb = np.array(b, dtype=float)
-    na = float(np.linalg.norm(va))
-    nb = float(np.linalg.norm(vb))
-    if na == 0 or nb == 0:
-        return 0.0
-    return float(np.dot(va, vb) / (na * nb))
 
 
 class ToolIndex:
@@ -100,7 +90,7 @@ class ToolIndex:
                     parsed.append((name, json.loads(emb_json)))
             self._cache = parsed
 
-        scored = [(name, _cosine(qvec, emb)) for name, emb in self._cache]
+        scored = [(name, cosine_similarity(qvec, emb)) for name, emb in self._cache]
         scored.sort(key=lambda x: x[1], reverse=True)
         return [name for name, _ in scored[:top_k]]
 

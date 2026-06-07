@@ -15,12 +15,14 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from config.dependencies import EmbedFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
+from utils.math import cosine_similarity
+from utils.text import STOPWORDS
 
 logger = logging.getLogger(__name__)
 
@@ -40,31 +42,11 @@ CREATE TABLE IF NOT EXISTS episodes (
 
 _SCHEMA_INDEX = "CREATE INDEX IF NOT EXISTS idx_episodes_domain ON episodes (domain)"
 
-_STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "have",
-    "has", "had", "do", "does", "did", "to", "of", "in", "for", "on",
-    "with", "at", "by", "from", "and", "or", "but", "not", "i", "my",
-    "me", "we", "our", "you", "your", "it", "its",
-})
-
-EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
-
-
-def _cosine(a: list[float], b: list[float]) -> float:
-    import numpy as np
-
-    va = np.array(a, dtype=float)
-    vb = np.array(b, dtype=float)
-    na = float(np.linalg.norm(va))
-    nb = float(np.linalg.norm(vb))
-    if na == 0 or nb == 0:
-        return 0.0
-    return float(np.dot(va, vb) / (na * nb))
 
 
 def _keyword_score(text: str, query_words: frozenset[str]) -> int:
     words = frozenset(
-        w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOPWORDS
+        w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in STOPWORDS
     )
     return len(query_words & words)
 
@@ -119,7 +101,7 @@ class EpisodicStore:
                             emb = json.loads(emb_json)
                         except json.JSONDecodeError:
                             continue
-                        scored.append((_cosine(qvec, emb), summary))
+                        scored.append((cosine_similarity(qvec, emb), summary))
                     scored.sort(key=lambda x: x[0], reverse=True)
                     results = [s for _, s in scored[:max_results] if _ > 0.3]
                     if results:
@@ -129,7 +111,7 @@ class EpisodicStore:
 
         # Keyword fallback
         query_words = frozenset(
-            w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in _STOPWORDS
+            w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in STOPWORDS
         )
         kw_scored = sorted(
             rows,
@@ -176,6 +158,6 @@ class EpisodicStore:
     def _load_all_sync(self) -> list[tuple[str, str, str | None]]:
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT id, summary, embedding FROM episodes ORDER BY timestamp DESC LIMIT 500"
+                f"SELECT id, summary, embedding FROM episodes ORDER BY timestamp DESC LIMIT {_MAX_EPISODES}"
             ).fetchall()
         return [(r["id"], r["summary"], r["embedding"]) for r in rows]
