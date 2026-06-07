@@ -121,10 +121,19 @@ class AgenticLLMAgent(LLMAgent):
             *[self._execute_call(call, payload, tool_map) for call in calls]
         )
 
-        for call, _, success in results:
+        for call, result_str, success in results:
             if self._deps.stream_manager and payload.task_id:
+                event_data: dict[str, Any] = {"tool": call.name, "success": success}
+                try:
+                    parsed = json.loads(result_str)
+                    if formatted := parsed.get("formatted"):
+                        event_data["formatted"] = formatted
+                    if not success and (err := parsed.get("error")):
+                        event_data["error"] = err
+                except (json.JSONDecodeError, AttributeError):
+                    pass
                 await self._deps.stream_manager.emit(
-                    payload.task_id, "tool_result", {"tool": call.name, "success": success}
+                    payload.task_id, "tool_result", event_data
                 )
             await self._record_tool_call_confidence(call.name, success)
 

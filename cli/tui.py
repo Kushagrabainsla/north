@@ -176,6 +176,9 @@ async def run(
     user_task_ids: set[str] = set()
     conversation_history: deque[dict] = deque(maxlen=5)
     pending_user_messages: dict[str, str] = {}
+    # Accumulates tool call activity per task_id so it can be stored alongside
+    # the conversation turn — gives the model context on what actions were taken.
+    task_tool_activity: dict[str, list[str]] = {}
 
     spinner = _Spinner()
     console: Console = Console()
@@ -237,14 +240,29 @@ async def run(
             suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
             _print(f"  [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
             _set_status(f"{tool}…")
+            if task_id:
+                call_summary = f"{tool}({params_str})" if params_str else tool
+                task_tool_activity.setdefault(task_id, []).append(call_summary)
 
         elif event == "tool_result":
             tool = data.get("tool", "")
             success = data.get("success", True)
+            formatted = data.get("formatted", "")
             if success:
                 _print(f"  [dim green]✓  {tool}[/dim green]")
+                if task_id and formatted:
+                    activity = task_tool_activity.setdefault(task_id, [])
+                    # Replace the last entry (the call) with call+result
+                    if activity and activity[-1].startswith(tool):
+                        result_preview = formatted[:200].replace("\n", " ")
+                        activity[-1] = activity[-1] + f" → {result_preview}"
             else:
                 _print(f"  [dim red]✗  {tool}[/dim red]")
+                if task_id:
+                    activity = task_tool_activity.setdefault(task_id, [])
+                    error = (data.get("error") or "failed")[:100]
+                    if activity and activity[-1].startswith(tool):
+                        activity[-1] = activity[-1] + f" → failed: {error}"
             _set_status("thinking…")
 
         elif event == "token":
@@ -277,9 +295,14 @@ async def run(
             toolbar_status[0] = ""
             user_task_ids.discard(task_id)
             user_msg = pending_user_messages.pop(task_id, "")
+            tools_used = task_tool_activity.pop(task_id, [])
             if user_msg and output:
                 short = output[:600] + ("…" if len(output) > 600 else "")
-                conversation_history.append({"user": user_msg, "north": short})
+                conversation_history.append({
+                    "user": user_msg,
+                    "tools": tools_used,
+                    "north": short,
+                })
             if output:
                 console.print("  [bright_black]north[/bright_black]")
                 console.print(Padding(Markdown(output), (0, 0, 0, 2)))
@@ -289,6 +312,7 @@ async def run(
             sys.stdout.write("\a")
             sys.stdout.flush()
             token_buffer.pop(task_id, None)
+            task_tool_activity.pop(task_id, None)
             error = data.get("error", "Task failed.")
             spinner.stop()
             toolbar_status[0] = ""
@@ -299,6 +323,7 @@ async def run(
 
         elif event == "task_cancelled":
             token_buffer.pop(task_id, None)
+            task_tool_activity.pop(task_id, None)
             spinner.stop()
             toolbar_status[0] = ""
             user_task_ids.discard(task_id)
@@ -451,7 +476,11 @@ async def run(
             if conversation_history:
                 turns: list[str] = []
                 for turn in conversation_history:
-                    turns.append(f"User: {turn['user']}\nnorth: {turn['north']}")
+                    parts = [f"User: {turn['user']}"]
+                    if turn.get("tools"):
+                        parts.append("[actions: " + "; ".join(turn["tools"]) + "]")
+                    parts.append(f"north: {turn['north']}")
+                    turns.append("\n".join(parts))
                 body["context"] = "## Recent conversation\n" + "\n\n".join(turns)
             try:
                 async with httpx.AsyncClient() as c:
