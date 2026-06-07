@@ -1738,11 +1738,23 @@ def _stop_server(port: int) -> None:
             pid = int(pid_path.read_text(encoding="utf-8").strip())
             os.kill(pid, signal.SIGTERM)
             pid_path.unlink(missing_ok=True)
-            time.sleep(1)
+            # Give up to 3 seconds for graceful shutdown, then SIGKILL.
+            for _ in range(3):
+                time.sleep(1)
+                try:
+                    os.kill(pid, 0)  # check if still alive
+                except ProcessLookupError:
+                    break
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         except ProcessLookupError:
             pid_path.unlink(missing_ok=True)
         except Exception as exc:
             typer.secho(f"  Warning: could not stop via PID: {exc}", fg=typer.colors.YELLOW)
+    # Kill any remaining process still bound to the port (covers stale pid files).
     if _port_in_use("127.0.0.1", port):
         _kill_port("127.0.0.1", port)
         time.sleep(1)
