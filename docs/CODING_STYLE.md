@@ -1100,6 +1100,30 @@ class ConfidenceTracker:
         ...
 ```
 
+### 16.3 Semantic Code Tools
+
+Agents explore code via semantic tools instead of spawning shell commands. These are faster and more reliable.
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `read_file(path, start_line?, end_line?)` | Read file ranges with line numbers | `read_file("agents/base.py", 1, 50)` |
+| `list_dir(path)` | Explore directory structure | `list_dir("tools/")` |
+| `search_symbols(path, type?)` | Find function/class definitions via Python AST | `search_symbols("tools/base.py", "class")` |
+| `find_references(symbol, path)` | Locate all uses of a symbol | `find_references("execute_call", "agents/")` |
+| `check_types(path)` | Run language-specific type checkers | `check_types("agents/base.py")` |
+
+**When to use instead of bash:**
+- `read_file` instead of `cat` / `head` / `tail`
+- `list_dir` instead of `ls` / `find`
+- `search_symbols` instead of `grep "^def \|^class "` (Python)
+- `find_references` instead of `grep -r` (when looking for symbol usage)
+- `check_types` instead of `python -m py_compile` / `tsc --noEmit` / `go vet`
+
+**When to still use bash:**
+- `bash` is appropriate for test runs (`pytest`, `npm test`, etc.)
+- `bash` is appropriate for git operations (use the `git` tool instead; safer)
+- `bash` is appropriate for environment inspection or one-off commands
+
 ---
 
 ## 17. Configuration

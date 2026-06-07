@@ -1,4 +1,5 @@
 """Tool JSON schemas injected into every AgenticLLMAgent call."""
+
 from __future__ import annotations
 
 DELEGATE_TASK_SCHEMA: dict = {
@@ -10,7 +11,8 @@ DELEGATE_TASK_SCHEMA: dict = {
             "Use when a sub-problem clearly belongs to a different domain specialist "
             "(e.g. code, finance, health). The specialist runs its own ReAct loop and "
             "returns a result. Only use when the sub-task genuinely requires domain expertise "
-            "you don't have — don't delegate work you can do yourself."
+            "you don't have — don't delegate work you can do yourself. "
+            "Context is automatically carried forward; you only need to pass task description and optional metadata."
         ),
         "parameters": {
             "type": "object",
@@ -26,6 +28,15 @@ DELEGATE_TASK_SCHEMA: dict = {
                 "task": {
                     "type": "string",
                     "description": "The full sub-task prompt for the specialist. Be specific.",
+                },
+                "context": {
+                    "type": "object",
+                    "description": (
+                        "Optional metadata to pass to the specialist. "
+                        "Include failed_attempts, known_failures, relevant_files, etc. "
+                        "Helps specialist avoid redundant work."
+                    ),
+                    "additionalProperties": True,
                 },
             },
             "required": ["agent", "task"],

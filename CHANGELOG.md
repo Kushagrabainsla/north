@@ -4,7 +4,40 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
-- **Model confidence tracking** (`inference/dispatcher.py`): `ModelDispatcher` now tracks per-model call success rates as an in-memory EMA (`_model_confidence`); `_effective_quality()` blends the price-based `base_quality` with the EMA score (up to 30% weight after 20 uses) when ranking candidates in all three priority modes.
+- **Semantic code tools** (`tools/semantic/`): Four new AST-aware and grep-based tools for agents:
+  - `read_file(path, start_line?, end_line?)` — read file ranges with line numbers (faster than bash)
+  - `list_dir(path)` — explore directory structure without spawning shell
+  - `search_symbols(path, type?)` — find function/class definitions via Python AST (Python files only)
+  - `find_references(symbol, path)` — locate all uses of a symbol via regex search
+  - Agents use these instead of bash for faster, more reliable code exploration
+- **Type awareness tool** (`tools/analysis/check_types.py`): Run language-specific type checkers immediately after code changes:
+  - Python: `mypy --no-error-summary`
+  - TypeScript: `npx tsc --noEmit`
+  - Go: `go vet ./...`
+  - Coder agent calls this after every file edit; prevents type errors from propagating
+- **Task context snapshots** (`context/task_snapshot.py`): Persistent, versioned task state for cross-agent continuity:
+  - Stored at `.north/tasks/{task_id}/context_snapshot.json`
+  - Tracks: task ID, original request, branch name, stage, prior agent visits, failure count, test status
+  - Agents load snapshot at startup; enables loop detection and smart escalation without re-reading artifacts
+  - `TaskContextSnapshot` dataclass + `TaskContextSnapshotStore` for read/write
+- **Enhanced delegation protocol** (`agents/schemas.py`): `delegate_task` schema extended with optional context field:
+  - Agents pass metadata (failed_attempts, known_failures, relevant_files) when delegating
+  - Receiving agent unpacks context and avoids redundant work
+  - Enables tester to avoid re-running failed tests; architect to escalate early on loops
+- **Coder agent system prompt** updated (`agents/coder/prompts/system.md`):
+  - Added workflow step 1: load task context snapshot at startup
+  - Step 5 now instructs use of `read_file`, `search_symbols`, `find_references` before modifying code
+  - Step 5 calls `check_types` after every file edit instead of manual compile checks
+  - Step 8 (handoff to tester) now passes context with failure_count for loop detection
+- **Tester agent system prompt** updated (`agents/tester/prompts/system.md`):
+  - Added workflow step 1: load task context snapshot to understand prior attempts
+  - Step 3 loop detection now references snapshot failure_count; escalates to architect if >= 3
+
+### Changed
+- Coder workflow simplified: `check_types` replaces language-specific bash compile checks; fewer shell commands
+
+### Docs
+- `docs/CODING_STYLE.md` §16 (Tools): new section describes semantic tools (read_file, list_dir, search_symbols, find_references, check_types) and when to use them instead of bash.
 
 ### Fixed
 - `AgenticLLMAgent._execute()` now catches `ContextTooLargeError` raised by `complete_with_tools`, compacts the history to `keep_recent=1`, and retries once before returning a graceful error message.

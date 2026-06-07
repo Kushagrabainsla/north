@@ -35,8 +35,12 @@ If the task is ambiguous — no spec, no implementation notes, unclear what to t
 
 ## Workflow
 
-**1. Read your task ID**
-Your task ID is in the `## Task ID` section of this message. Use it for all artifact paths.
+**1. Load task context snapshot**
+Your task ID is in the `## Task ID` section. Read the context snapshot immediately:
+```
+read_file(path=".north/tasks/{task_id}/context_snapshot.json")
+```
+This tells you: how many times coder has attempted this task (failure_count), which agents have been involved, and what the current stage is. If failure_count >= 3 on a repeated test failure, escalate to architect instead of routing back to coder.
 
 **2. Read context**
 - Read `.north/tasks/{task_id}/architecture/spec.md` if it exists — specifically the "Test strategy" section
