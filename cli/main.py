@@ -1577,36 +1577,18 @@ def update(
 ) -> None:
     """Pull the latest north code and update dependencies.
 
-    Stops the server, pulls from git, syncs Python dependencies with uv
-    (falls back to pip), then restarts. Pass --docker to update a
-    Docker Compose deployment instead.
+    Works from any directory. Detects how north was installed and updates
+    accordingly: uv tool installs are upgraded via uv; local git clones
+    are updated with git pull + uv sync. Pass --docker to update a Docker
+    Compose deployment instead.
     """
-    project_root = _find_project_root()
-
-    if project_root is None:
-        typer.secho(
-            "ERROR: Could not locate the north project root (no pyproject.toml found).\n"
-            "Run north update from inside the north source directory.",
-            fg=typer.colors.RED, err=True,
-        )
-        raise typer.Exit(1) from None
-
-    if not (project_root / ".git").exists():
-        typer.secho(
-            "ERROR: north was not installed from a git repository.\n"
-            "Pull manually and run: uv sync",
-            fg=typer.colors.YELLOW, err=True,
-        )
-        raise typer.Exit(1) from None
-
     _console.print()
     _console.print("  [bold white]north update[/bold white]")
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
-    _console.print(f"  [dim]project    [/dim]  {project_root}")
 
-    head = _git_describe(project_root)
-    if head:
-        _console.print(f"  [dim]current    [/dim]  {head}")
+    install_url, is_git_url = _get_install_url()
+    if install_url:
+        _console.print(f"  [dim]source     [/dim]  {install_url}")
     _console.print()
 
     if not yes:
@@ -1614,18 +1596,18 @@ def update(
 
     # ── Docker path ───────────────────────────────────────────────────────
     if docker:
+        project_root = _find_project_root()
         compose_file = _find_compose_file()
         if not _docker_available() or compose_file is None:
             typer.secho("Docker or docker-compose.yml not found.", fg=typer.colors.RED, err=True)
             raise typer.Exit(1) from None
-        _console.print("  [dim]→[/dim]  git pull…")
-        if not _run_command(["git", "pull"], cwd=project_root):
-            typer.secho("git pull failed — aborting.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from None
+        if project_root:
+            _console.print("  [dim]→[/dim]  git pull…")
+            _run_command(["git", "pull"], cwd=project_root)
         _console.print("  [dim]→[/dim]  docker compose build…")
         result = subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
-            cwd=project_root,
+            cwd=project_root or Path.cwd(),
         )
         if result.returncode != 0:
             typer.secho("Docker Compose rebuild failed.", fg=typer.colors.RED, err=True)
@@ -1635,53 +1617,94 @@ def update(
         typer.secho("✓ north updated and restarted via Docker.", fg=typer.colors.GREEN)
         return
 
-    # ── Local path ────────────────────────────────────────────────────────
-
     was_running = _port_in_use("127.0.0.1", port) and _is_north_server("127.0.0.1", port)
     if was_running:
         _console.print("  [dim]→[/dim]  stopping server…")
         _stop_server(port)
 
-    _console.print("  [dim]→[/dim]  git pull…")
-    pull_result = subprocess.run(
-        ["git", "pull"], cwd=project_root, capture_output=True, text=True
-    )
-    if pull_result.returncode != 0:
-        typer.secho(
-            f"git pull failed:\n{pull_result.stderr.strip()}",
-            fg=typer.colors.RED, err=True,
+    # ── uv tool install from git URL ──────────────────────────────────────
+    if is_git_url:
+        if not shutil.which("uv"):
+            typer.secho("ERROR: uv not found — cannot upgrade. Install uv or run: pip install --upgrade git+<url>", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from None
+        _console.print("  [dim]→[/dim]  upgrading via uv…")
+        result = subprocess.run(
+            ["uv", "tool", "upgrade", "north"],
+            capture_output=True, text=True,
         )
-        raise typer.Exit(1) from None
+        if result.returncode != 0:
+            typer.secho(
+                f"uv tool upgrade failed:\n{(result.stdout + result.stderr).strip()}",
+                fg=typer.colors.RED, err=True,
+            )
+            raise typer.Exit(1) from None
+        _console.print("  [dim green]✓[/dim green]  upgraded")
 
-    if "Already up to date" in pull_result.stdout:
-        _console.print("  [dim green]✓[/dim green]  already up to date")
+    # ── local git clone ───────────────────────────────────────────────────
     else:
-        log = _git_log_since_pull(project_root)
-        if log:
-            _console.print()
+        project_root = _find_project_root()
+        if project_root is None:
+            typer.secho(
+                "ERROR: Could not locate the north project root.\n"
+                "Install north with: uv tool install git+<your-repo-url>",
+                fg=typer.colors.RED, err=True,
+            )
+            raise typer.Exit(1) from None
+        if not (project_root / ".git").exists():
+            typer.secho(
+                "ERROR: Project directory has no .git — cannot pull.\n"
+                "Run: uv sync",
+                fg=typer.colors.YELLOW, err=True,
+            )
+            raise typer.Exit(1) from None
+
+        _console.print("  [dim]→[/dim]  git pull…")
+        pull_result = subprocess.run(
+            ["git", "pull"], cwd=project_root, capture_output=True, text=True
+        )
+        if pull_result.returncode != 0:
+            typer.secho(f"git pull failed:\n{pull_result.stderr.strip()}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from None
+        if "Already up to date" in pull_result.stdout:
+            _console.print("  [dim green]✓[/dim green]  already up to date")
+        else:
+            log = _git_log_since_pull(project_root)
             for line in log[:8]:
                 _console.print(f"  [dim]  {line}[/dim]")
-            _console.print()
 
-    _console.print("  [dim]→[/dim]  syncing dependencies…")
-    if not _sync_dependencies(project_root):
-        typer.secho(
-            "Dependency sync failed — run 'uv sync' manually to see the full error.",
-            fg=typer.colors.YELLOW, err=True,
-        )
+        _console.print("  [dim]→[/dim]  syncing dependencies…")
+        if not _sync_dependencies(project_root):
+            typer.secho("Dependency sync failed — run 'uv sync' manually.", fg=typer.colors.YELLOW, err=True)
 
-    new_head = _git_describe(project_root)
-    if new_head and new_head != head:
-        _console.print(f"  [dim]updated to [/dim]  {new_head}")
     _console.print()
-
     if restart and (was_running or typer.confirm("Start north now?", default=True)):
         _console.print("  [dim]→[/dim]  restarting…")
-        proc = _start_server_process(port, project_root=project_root)
+        proc = _start_server_process(port)
         _wait_for_server("127.0.0.1", port)
         typer.secho(f"✓ north updated and restarted (pid {proc.pid}).", fg=typer.colors.GREEN)
     else:
         typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
+
+
+def _get_install_url() -> tuple[str | None, bool]:
+    """Return (url, is_git_url) describing how north was installed.
+
+    Reads the PEP 610 direct_url.json from the installed dist-info.
+    is_git_url is True when north was installed with `uv tool install git+<url>`,
+    meaning `uv tool upgrade north` is the right update path.
+    """
+    try:
+        import json as _json
+        from importlib.metadata import Distribution
+        du = Distribution.from_name("north").read_text("direct_url.json")
+        if du:
+            data = _json.loads(du)
+            url = data.get("url", "")
+            is_git = "vcs_info" in data and not url.startswith("file://")
+            return url, is_git
+    except Exception:
+        pass
+    return None, False
 
 
 def _find_project_root() -> Path | None:
@@ -1722,7 +1745,7 @@ def _stop_server(port: int) -> None:
         time.sleep(1)
 
 
-def _start_server_process(port: int, project_root: Path) -> subprocess.Popen:
+def _start_server_process(port: int, project_root: Path | None = None) -> subprocess.Popen:
     """Spawn uvicorn and record the PID. Mirrors the logic in the start command."""
     from config.settings import settings
 
