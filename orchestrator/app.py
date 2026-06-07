@@ -79,10 +79,14 @@ def _step(msg: str) -> None:
 
 
 def _validate_config() -> None:
-    if not settings.openrouter_api_key:
+    if not any([
+        settings.openrouter_api_key,
+        settings.groq_api_key,
+        settings.gemini_api_key,
+    ]):
         raise RuntimeError(
-            "NORTH_OPENROUTER_API_KEY is not set. "
-            "Get a key at https://openrouter.ai/keys and add it to your .env file."
+            "No inference provider API key is set. "
+            "Run `north start` to configure one."
         )
 
 

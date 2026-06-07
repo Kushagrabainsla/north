@@ -35,6 +35,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TypedDict
 
 import httpx
 import typer
@@ -50,40 +51,129 @@ from utils.security import load_secret
 _console = Console(force_terminal=sys.stdout.isatty())
 
 
-def _ensure_api_key() -> None:
-    """Prompt for the OpenRouter API key if it is not already set.
+class _Provider(TypedDict):
+    name: str
+    env_key: str
+    description: str
+    url: str
 
-    Checks env var first, then ~/.north/.env. If neither has the key,
-    prompts interactively and writes it to ~/.north/.env so subsequent
-    starts work without prompting again.
+
+_PROVIDERS: list[_Provider] = [
+    {
+        "name": "OpenRouter",
+        "env_key": "NORTH_OPENROUTER_API_KEY",
+        "description": "All models — Claude, GPT-4, Gemini, Llama, and more (recommended)",
+        "url": "https://openrouter.ai/keys",
+    },
+    {
+        "name": "Groq",
+        "env_key": "NORTH_GROQ_API_KEY",
+        "description": "Ultra-fast open-source models — Llama, Mixtral",
+        "url": "https://console.groq.com/keys",
+    },
+    {
+        "name": "Gemini",
+        "env_key": "NORTH_GEMINI_API_KEY",
+        "description": "Google Gemini 1.5 Pro and Flash",
+        "url": "https://aistudio.google.com/apikey",
+    },
+]
+
+
+def _provider_is_configured(provider: _Provider, env_file: Path) -> bool:
+    if os.environ.get(provider["env_key"], "").strip():
+        return True
+    if not env_file.exists():
+        return False
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        if line.startswith(f"{provider['env_key']}=") and line.split("=", 1)[1].strip():
+            return True
+    return False
+
+
+def _any_provider_configured(env_file: Path) -> bool:
+    return any(_provider_is_configured(p, env_file) for p in _PROVIDERS)
+
+
+def _parse_provider_selection(raw: str) -> list[_Provider]:
+    """Parse a comma-separated string of 1-based indices into provider entries."""
+    seen: set[int] = set()
+    selected: list[_Provider] = []
+    for part in raw.replace(" ", "").split(","):
+        try:
+            idx = int(part) - 1
+        except ValueError:
+            continue
+        if 0 <= idx < len(_PROVIDERS) and idx not in seen:
+            selected.append(_PROVIDERS[idx])
+            seen.add(idx)
+    return selected
+
+
+def _save_provider_key(env_file: Path, env_key: str, api_key: str) -> None:
+    """Write or update the key in ~/.north/.env and export it to the running environment."""
+    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
+    prefix = f"{env_key}="
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[i] = f"{env_key}={api_key}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{env_key}={api_key}")
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[env_key] = api_key
+
+
+def _prompt_provider_keys(env_file: Path, providers: list[_Provider]) -> bool:
+    """Prompt the user for each provider's API key. Returns True if at least one was saved."""
+    any_saved = False
+    for p in providers:
+        typer.echo(f"\n  {p['name']}  —  get a key at {p['url']}")
+        api_key = typer.prompt(f"  Enter your {p['name']} API key").strip()
+        if not api_key:
+            typer.secho(f"  Skipping {p['name']} (no key entered).", fg=typer.colors.YELLOW)
+            continue
+        _save_provider_key(env_file, p["env_key"], api_key)
+        typer.secho(f"  ✓ {p['name']} key saved.", fg=typer.colors.GREEN)
+        any_saved = True
+    return any_saved
+
+
+def _render_provider_menu() -> None:
+    """Display available inference providers to choose from."""
+    typer.echo("")
+    typer.secho("No inference provider is configured.", fg=typer.colors.YELLOW)
+    typer.echo("Choose which provider(s) you want to set up:\n")
+    for i, p in enumerate(_PROVIDERS, 1):
+        typer.echo(f"  [{i}] {p['name']:12}  {p['description']}")
+    typer.echo("")
+
+
+def _ensure_api_keys() -> None:
+    """Ensure at least one inference provider API key is configured.
+
+    Checks env vars and ~/.north/.env first. If none are set, presents
+    the available providers and lets the user choose which to configure.
     """
     from config.settings import settings
 
-    if os.environ.get("NORTH_OPENROUTER_API_KEY", "").strip():
+    env_file = settings.north_home / ".env"
+    if _any_provider_configured(env_file):
         return
 
-    env_file = settings.north_home / ".env"
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("NORTH_OPENROUTER_API_KEY=") and line.split("=", 1)[1].strip():
-                return
-
-    typer.echo("")
-    typer.secho("No OpenRouter API key found.", fg=typer.colors.YELLOW)
-    typer.echo("Get one at https://openrouter.ai/keys")
-    api_key = typer.prompt("Enter your OpenRouter API key").strip()
-    if not api_key:
-        typer.secho("No API key provided — north cannot start.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from None
+    _render_provider_menu()
+    raw = typer.prompt("Enter number(s) separated by commas (e.g. 1 or 1,3)").strip()
+    chosen = _parse_provider_selection(raw)
+    if not chosen:
+        typer.secho("No valid selection — north cannot start.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
 
     settings.north_home.mkdir(parents=True, exist_ok=True)
-    existing = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
-    if "NORTH_OPENROUTER_API_KEY" not in existing:
-        with env_file.open("a", encoding="utf-8") as f:
-            f.write(f"NORTH_OPENROUTER_API_KEY={api_key}\n")
-
-    os.environ["NORTH_OPENROUTER_API_KEY"] = api_key
-    typer.secho("✓ API key saved to ~/.north/.env", fg=typer.colors.GREEN)
+    if not _prompt_provider_keys(env_file, chosen):
+        typer.secho("No API keys saved — north cannot start.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
 
 app = typer.Typer(
     name="north",
@@ -1400,7 +1490,7 @@ def start(
     settings.north_home.mkdir(parents=True, exist_ok=True)
     (settings.north_home / "tasks").mkdir(parents=True, exist_ok=True)
     (settings.north_home / "context").mkdir(parents=True, exist_ok=True)
-    _ensure_api_key()
+    _ensure_api_keys()
     load_secret()
 
     log_path = settings.north_home / "north.log"

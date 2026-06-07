@@ -43,7 +43,8 @@ def build_router(
         from inference.providers.gemini import GeminiRouter
         providers.append(GeminiRouter(gemini_api_key))
 
-    from inference.providers.openrouter import OpenRouterRouter
-    providers.append(OpenRouterRouter(openrouter_api_key))
+    if openrouter_api_key:
+        from inference.providers.openrouter import OpenRouterRouter
+        providers.append(OpenRouterRouter(openrouter_api_key))
 
     return ModelDispatcher(providers, north_settings, confidence_tracker, cooldowns_path)

@@ -176,9 +176,10 @@ async def run(
     user_task_ids: set[str] = set()
     conversation_history: deque[dict] = deque(maxlen=5)
     pending_user_messages: dict[str, str] = {}
-    # Accumulates tool call activity per task_id so it can be stored alongside
-    # the conversation turn — gives the model context on what actions were taken.
-    task_tool_activity: dict[str, list[str]] = {}
+    # Accumulates structured tool call activity per task_id.
+    # Each entry: {"tool": name, "params": str, "result": str | None}
+    # Stored with the conversation turn so the model knows what actions were taken.
+    task_tool_activity: dict[str, list[dict]] = {}
 
     spinner = _Spinner()
     console: Console = Console()
@@ -241,28 +242,29 @@ async def run(
             _print(f"  [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
             _set_status(f"{tool}…")
             if task_id:
-                call_summary = f"{tool}({params_str})" if params_str else tool
-                task_tool_activity.setdefault(task_id, []).append(call_summary)
+                task_tool_activity.setdefault(task_id, []).append(
+                    {"tool": tool, "params": params_str, "result": None}
+                )
 
         elif event == "tool_result":
             tool = data.get("tool", "")
             success = data.get("success", True)
-            formatted = data.get("formatted", "")
             if success:
                 _print(f"  [dim green]✓  {tool}[/dim green]")
-                if task_id and formatted:
-                    activity = task_tool_activity.setdefault(task_id, [])
-                    # Replace the last entry (the call) with call+result
-                    if activity and activity[-1].startswith(tool):
-                        result_preview = formatted[:200].replace("\n", " ")
-                        activity[-1] = activity[-1] + f" → {result_preview}"
             else:
                 _print(f"  [dim red]✗  {tool}[/dim red]")
-                if task_id:
-                    activity = task_tool_activity.setdefault(task_id, [])
-                    error = (data.get("error") or "failed")[:100]
-                    if activity and activity[-1].startswith(tool):
-                        activity[-1] = activity[-1] + f" → failed: {error}"
+            if task_id:
+                formatted = data.get("formatted", "")
+                error = data.get("error", "")
+                result = (
+                    formatted[:200].replace("\n", " ") if formatted
+                    else f"failed: {error[:100]}" if error
+                    else ("ok" if success else "failed")
+                )
+                for entry in task_tool_activity.get(task_id, []):
+                    if entry["tool"] == tool and entry["result"] is None:
+                        entry["result"] = result
+                        break
             _set_status("thinking…")
 
         elif event == "token":
@@ -478,7 +480,14 @@ async def run(
                 for turn in conversation_history:
                     parts = [f"User: {turn['user']}"]
                     if turn.get("tools"):
-                        parts.append("[actions: " + "; ".join(turn["tools"]) + "]")
+                        summaries = [
+                            f"{e['tool']}({e['params']}) → {e['result']}"
+                            if e.get("params") else
+                            f"{e['tool']} → {e['result']}"
+                            for e in turn["tools"] if e.get("result")
+                        ]
+                        if summaries:
+                            parts.append("[actions: " + "; ".join(summaries) + "]")
                     parts.append(f"north: {turn['north']}")
                     turns.append("\n".join(parts))
                 body["context"] = "## Recent conversation\n" + "\n\n".join(turns)
