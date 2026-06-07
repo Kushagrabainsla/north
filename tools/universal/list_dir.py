@@ -38,7 +38,7 @@ class ListDirTool(Tool):
         if not entries:
             return "(empty directory)"
         lines = [
-            f"{'[dir] ' if e.get('type') == 'dir' else '      '}{e['name']}"
+            f"- **{e['name']}/**" if e.get("type") == "dir" else f"- {e['name']}"
             for e in entries
         ]
         return "\n".join(lines)
