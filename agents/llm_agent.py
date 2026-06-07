@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -59,12 +60,11 @@ class LLMAgent(Agent):
         context: str,
         scored_tools: list[tuple[Tool, float]],
     ) -> str:
-        from datetime import datetime, timezone
         tool_lines = "\n".join(
             f"- {t.name} (reliability {score:.0%}): {t.description}"
             for t, score in scored_tools
         )
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
         system_lines = [f"- current date/time: {now}"]
         if payload.workspace:
             system_lines += [
