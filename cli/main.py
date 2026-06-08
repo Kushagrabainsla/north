@@ -1056,9 +1056,10 @@ def inference_models() -> None:
     pools = response.json()
     _console.print()
     for pool_name, pool_data in pools.items():
-        _console.print(f"  [bold white]{pool_name}[/bold white]")
-        for model in pool_data.get("models", []):
-            _console.print(f"    [dim]{model}[/dim]")
+        models = pool_data.get("models", [])
+        _console.print(f"  [bold white]{pool_name}[/bold white]  [bright_black]{len(models)} models[/bright_black]")
+        for entry in models:
+            _console.print(f"    [dim]{entry['id']}[/dim]  [bright_black]({entry['provider']})[/bright_black]")
         _console.print()
 
 

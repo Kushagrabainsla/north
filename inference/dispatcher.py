@@ -6,25 +6,18 @@ Routing logic:
   2. Filter models whose context window is too small for the input.
   3. Exclude models on cooldown (rate limited or payment exhausted).
   4. Rank by priority: HIGH → effective_quality desc, LOW → cost asc, MEDIUM → free first.
-  5. Try each in order, applying cooldowns on failure, raising
+  5. Within each quality tier, candidates are shuffled randomly for uniform load distribution.
+  6. Try each in order, applying cooldowns on failure, raising
      AllModelsRateLimitedError when every candidate is exhausted.
 
 Context overflow: raises ContextTooLargeError so the agent layer can compact
 the conversation and retry. See agents/context_compaction.py.
-
-Phase 2 (done):
-  - Per-model success rate tracked as an in-memory EMA in _model_confidence.
-  - base_quality blended with the EMA score via _effective_quality() for ranking.
-  - ContextTooLargeError caught and compacted in agents/agentic_llm_agent.py.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import json
 import logging
-import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,7 +25,15 @@ from typing import TYPE_CHECKING
 from config.strategy import NorthSettings, StrategyMode
 from inference.base import InferenceRouter
 from inference.capability import ModelCapability, ModelInfo
-from inference.constants import _QUALITY_TIER_HIGH, _QUALITY_TIER_MEDIUM
+from inference.constants import (
+    _DEFAULT_MODEL_CONFIDENCE,
+    _MODEL_CONFIDENCE_ALPHA,
+    _MODEL_CONFIDENCE_FULL_USES,
+    _MODEL_CONFIDENCE_MAX_WEIGHT,
+    _QUALITY_TIER_HIGH,
+    _QUALITY_TIER_MEDIUM,
+)
+from inference.cooldowns import CooldownStore, _CooldownKey
 from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
@@ -45,6 +46,7 @@ from inference.models import (
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
+    ModelEntry,
     ModelPool,
     PoolPriority,
     ToolCallRequest,
@@ -53,25 +55,16 @@ from inference.models import (
     TranscriptionResponse,
 )
 from inference.provider import Provider
+from inference.routing import _Candidate, shuffle_groups
 
 if TYPE_CHECKING:
     from tools.confidence import ConfidenceTracker
 
 logger = logging.getLogger(__name__)
 
-_CooldownKey = tuple[str, str]  # (model_id, provider_name)
-
-_DEFAULT_MODEL_CONFIDENCE: float = 0.5
-_MODEL_CONFIDENCE_ALPHA: float = 0.15
-_MODEL_CONFIDENCE_MAX_WEIGHT: float = 0.30
-_MODEL_CONFIDENCE_FULL_USES: int = 20
-
 
 class ModelDispatcher(InferenceRouter):
     """Routes inference calls across multiple providers with per-model cooldowns."""
-
-    _RATE_LIMIT_COOLDOWN_SECS: float = 60.0
-    _PAYMENT_COOLDOWN_SECS: float = 86_400.0  # 24 h
 
     def __init__(
         self,
@@ -83,17 +76,16 @@ class ModelDispatcher(InferenceRouter):
         self._providers = providers
         self._north_settings = north_settings
         self._confidence_tracker = confidence_tracker
-        self._cooldowns_path = cooldowns_path
         # (provider_name, model_id) → (ModelInfo, Provider)
         self._registry: dict[tuple[str, str], tuple[ModelInfo, Provider]] = {}
-        self._cooldowns: dict[_CooldownKey, float] = {}
+        self._cooldowns = CooldownStore(cooldowns_path)
         # (model_id, provider_name) → (ema_score, uses_count); seeded from DB at startup.
         self._model_confidence: dict[_CooldownKey, tuple[float, int]] = (
             confidence_tracker.load_model_scores_sync() if confidence_tracker is not None else {}
         )
         self._background_tasks: set[asyncio.Task] = set()
         self._build_registry()
-        self._load_cooldowns()
+        self._cooldowns.load()
 
     def _build_registry(self) -> None:
         """Merge models from all providers. Each entry is keyed by (provider_name, model_id)."""
@@ -103,39 +95,6 @@ class ModelDispatcher(InferenceRouter):
                 key = (info.provider_name, model_id)
                 if key not in self._registry:
                     self._registry[key] = (info, provider)
-
-    def _load_cooldowns(self) -> None:
-        if self._cooldowns_path is None or not self._cooldowns_path.exists():
-            return
-        try:
-            data: dict[str, float] = json.loads(self._cooldowns_path.read_text())
-            now_wall = time.time()
-            now_mono = time.monotonic()
-            for raw_key, wall_expiry in data.items():
-                remaining = wall_expiry - now_wall
-                if remaining <= 0:
-                    continue  # already expired
-                model_id, _, provider_name = raw_key.partition("::")
-                self._cooldowns[(model_id, provider_name)] = now_mono + remaining
-            if self._cooldowns:
-                logger.info("Loaded %d persisted payment cooldown(s) from disk", len(self._cooldowns))
-        except Exception:
-            logger.warning("Failed to load cooldowns file — starting fresh", exc_info=True)
-
-    def _save_payment_cooldown(self, key: _CooldownKey, mono_expiry: float) -> None:
-        if self._cooldowns_path is None:
-            return
-        try:
-            wall_expiry = time.time() + max(0.0, mono_expiry - time.monotonic())
-            data: dict[str, float] = {}
-            if self._cooldowns_path.exists():
-                with contextlib.suppress(Exception):
-                    data = json.loads(self._cooldowns_path.read_text())
-            model_id, provider_name = key
-            data[f"{model_id}::{provider_name}"] = wall_expiry
-            self._cooldowns_path.write_text(json.dumps(data, indent=2))
-        except Exception:
-            logger.warning("Failed to persist payment cooldown for %s/%s", key[1], key[0], exc_info=True)
 
     def _effective_priority(self, requested: PoolPriority) -> PoolPriority:
         """Apply the user's strategy setting to the requested priority.
@@ -220,11 +179,7 @@ class ModelDispatcher(InferenceRouter):
         self._build_registry()
 
     def current_pools(self) -> dict[str, ModelPool]:
-        """Build a pool snapshot from the dispatcher's own registry for CLI display.
-
-        Maps quality tiers to the legacy pool names so the `north inference models`
-        command keeps working without any knowledge of provider internals.
-        """
+        """Build a pool snapshot from the dispatcher's own registry for CLI display."""
         high: list[ModelInfo] = []
         medium: list[ModelInfo] = []
         low: list[ModelInfo] = []
@@ -242,17 +197,20 @@ class ModelDispatcher(InferenceRouter):
             else:
                 low.append(info)
 
-        def _ids(infos: list[ModelInfo], limit: int = 10) -> list[str]:
-            return [i.model_id for i in sorted(infos, key=lambda i: i.base_quality, reverse=True)[:limit]]
+        def _entries(infos: list[ModelInfo]) -> list[ModelEntry]:
+            return [
+                ModelEntry(id=i.model_id, provider=i.provider_name)
+                for i in sorted(infos, key=lambda i: i.base_quality, reverse=True)
+            ]
 
         return {
-            "reasoning": ModelPool(name="reasoning", models=_ids(high)),
-            "fast_cheap": ModelPool(name="fast_cheap", models=_ids(medium)),
-            "high_volume": ModelPool(name="high_volume", models=_ids(low)),
-            "free_fallback": ModelPool(name="free_fallback", models=_ids(free)),
+            "reasoning": ModelPool(name="reasoning", models=_entries(high)),
+            "fast_cheap": ModelPool(name="fast_cheap", models=_entries(medium)),
+            "high_volume": ModelPool(name="high_volume", models=_entries(low)),
+            "free_fallback": ModelPool(name="free_fallback", models=_entries(free)),
         }
 
-    # ---- Internal routing ----
+    # ---- EMA confidence tracking ----
 
     def _record_model_outcome(self, key: _CooldownKey, success: bool) -> None:
         prev_score, prev_uses = self._model_confidence.get(key, (_DEFAULT_MODEL_CONFIDENCE, 0))
@@ -278,15 +236,15 @@ class ModelDispatcher(InferenceRouter):
         w = min(uses / _MODEL_CONFIDENCE_FULL_USES, 1.0) * _MODEL_CONFIDENCE_MAX_WEIGHT
         return info.base_quality * (1 - w) + score * w
 
+    # ---- Candidate selection ----
+
     def _candidates(
         self,
         capability: ModelCapability,
         priority: PoolPriority,
         estimated_tokens: int,
-    ) -> list[tuple[ModelInfo, Provider]]:
-        now = time.monotonic()
-
-        capable = [(info, provider) for (info, provider) in self._registry.values() if info.supports(capability)]
+    ) -> list[_Candidate]:
+        capable = [pair for pair in self._registry.values() if pair[0].supports(capability)]
         if not capable:
             return []
 
@@ -306,43 +264,60 @@ class ModelDispatcher(InferenceRouter):
         else:
             fitting = capable
 
-        available = [
+        available: list[_Candidate] = [
             (info, provider)
             for info, provider in fitting
-            if self._cooldowns.get((info.model_id, info.provider_name), 0.0) <= now
+            if not self._cooldowns.is_active((info.model_id, info.provider_name))
         ]
 
+        # Precompute quality scores once to avoid repeated EMA calculations during sort/shuffle.
+        quality: dict[_CooldownKey, float] = {
+            (info.model_id, info.provider_name): self._effective_quality(info)
+            for info, _ in available
+        }
+
         if priority == PoolPriority.HIGH:
-            # Best effective quality first (blends price tier with live success rate).
-            available.sort(key=lambda x: self._effective_quality(x[0]), reverse=True)
+            available.sort(key=lambda x: quality[(x[0].model_id, x[0].provider_name)], reverse=True)
+            available = shuffle_groups(
+                available, key=lambda x: round(quality[(x[0].model_id, x[0].provider_name)], 6)
+            )
         elif priority == PoolPriority.LOW:
-            # Minimise resource use: free first, then smallest context window
-            # (proxy for lighter/faster models), then cost ascending.
-            # This stays distinct from MEDIUM even when all models are free.
             available.sort(
                 key=lambda x: (
                     x[0].cost_per_token,
                     x[0].context_window if x[0].context_window > 0 else float("inf"),
-                    -self._effective_quality(x[0]),
+                    -quality[(x[0].model_id, x[0].provider_name)],
                 )
             )
-        else:  # MEDIUM: free models first, then by effective quality
-            available.sort(key=lambda x: (not x[0].is_free, -self._effective_quality(x[0])))
+            available = shuffle_groups(
+                available,
+                key=lambda x: (
+                    x[0].cost_per_token,
+                    x[0].context_window if x[0].context_window > 0 else float("inf"),
+                ),
+            )
+        else:  # MEDIUM: free models first, shuffle within each free/paid tier.
+            available.sort(key=lambda x: (not x[0].is_free, -quality[(x[0].model_id, x[0].provider_name)]))
+            available = shuffle_groups(
+                available,
+                key=lambda x: (not x[0].is_free, round(quality[(x[0].model_id, x[0].provider_name)], 6)),
+            )
 
         return available
 
+    # ---- Dispatch ----
+
     async def _dispatch(
         self,
-        candidates: list[tuple[ModelInfo, Provider]],
+        candidates: list[_Candidate],
         call_fn: Callable[[Provider, str], Awaitable],
     ):
         if not candidates:
             raise AllModelsRateLimitedError("No models available for this request")
 
-        now = time.monotonic()
         for info, provider in candidates:
             key: _CooldownKey = (info.model_id, info.provider_name)
-            if self._cooldowns.get(key, 0.0) > now:
+            if self._cooldowns.is_active(key):
                 continue
             try:
                 result = await call_fn(provider, info.model_id)
@@ -350,25 +325,20 @@ class ModelDispatcher(InferenceRouter):
                 self._persist_model_score(key)
                 return result
             except ModelRateLimitedError:
-                self._cooldowns[key] = time.monotonic() + self._RATE_LIMIT_COOLDOWN_SECS
+                self._cooldowns.set_rate_limit(key)
                 logger.info(
-                    "Rate limited: %s/%s — skipping for %ds",
+                    "Rate limited: %s/%s — skipping for 60 s",
                     info.provider_name,
                     info.model_id,
-                    int(self._RATE_LIMIT_COOLDOWN_SECS),
                 )
             except PaymentRequiredError:
-                mono_expiry = time.monotonic() + self._PAYMENT_COOLDOWN_SECS
-                self._cooldowns[key] = mono_expiry
-                self._save_payment_cooldown(key, mono_expiry)
+                self._cooldowns.set_payment_exhausted(key)
                 logger.warning(
                     "Payment required: %s/%s — skipping for 24 h",
                     info.provider_name,
                     info.model_id,
                 )
             except InferenceError:
-                # Provider-level errors (e.g. HTTP 400, unsupported parameters) are
-                # model-specific — record the failure and try the next candidate.
                 self._record_model_outcome(key, False)
                 self._persist_model_score(key)
                 logger.warning(

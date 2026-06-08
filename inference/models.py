@@ -32,11 +32,18 @@ PRIORITY_TO_POOL: dict[PoolPriority, str] = {
 POOL_TO_PRIORITY: dict[str, PoolPriority] = {v: k for k, v in PRIORITY_TO_POOL.items()}
 
 
+class ModelEntry(BaseModel):
+    """One model entry in a pool, carrying its router/provider alongside the model ID."""
+
+    id: str
+    provider: str
+
+
 class ModelPool(BaseModel):
-    """One pool of models, ordered such that `models[0]` is the primary choice."""
+    """One pool of models. During routing the dispatcher picks randomly within each quality tier."""
 
     name: str
-    models: list[str]
+    models: list[ModelEntry]
 
 
 class CompletionRequest(BaseModel):

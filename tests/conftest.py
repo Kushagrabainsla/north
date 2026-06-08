@@ -22,6 +22,7 @@ from inference.models import (
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
+    ModelEntry,
     ModelPool,
     PoolPriority,
     ToolCallRequest,
@@ -66,10 +67,10 @@ class MockInferenceRouter(InferenceRouter):
 
     def current_pools(self) -> dict[str, ModelPool]:
         return {
-            "reasoning": ModelPool(name="reasoning", models=["mock-reasoning"]),
-            "fast_cheap": ModelPool(name="fast_cheap", models=["mock-fast_cheap"]),
-            "high_volume": ModelPool(name="high_volume", models=["mock-high_volume"]),
-            "free_fallback": ModelPool(name="free_fallback", models=["mock-free"]),
+            "reasoning": ModelPool(name="reasoning", models=[ModelEntry(id="mock-reasoning", provider="mock")]),
+            "fast_cheap": ModelPool(name="fast_cheap", models=[ModelEntry(id="mock-fast_cheap", provider="mock")]),
+            "high_volume": ModelPool(name="high_volume", models=[ModelEntry(id="mock-high_volume", provider="mock")]),
+            "free_fallback": ModelPool(name="free_fallback", models=[ModelEntry(id="mock-free", provider="mock")]),
         }
 
     async def complete_with_tools(
