@@ -19,6 +19,8 @@ from pathlib import Path
 
 import httpx
 from rich.markdown import Markdown as RichMarkdown
+from rich.padding import Padding as RichPadding
+from rich.rule import Rule as RichRule
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -55,41 +57,51 @@ class NorthApp(App[None]):
     CSS = """
     Screen {
         layout: vertical;
+        background: $background;
     }
 
     #log {
         height: 1fr;
         border: none;
-        padding: 0 1;
+        padding: 0 0;
+        scrollbar-size: 1 1;
+        scrollbar-color: $primary-darken-3;
+        scrollbar-color-hover: $primary-darken-1;
     }
 
     #streaming {
         height: auto;
-        max-height: 60%;
+        max-height: 50%;
         display: none;
-        border-top: solid $primary-darken-2;
-        padding: 0 2;
+        padding: 0 0 1 2;
+        background: $background;
+        color: $text;
     }
 
     #separator {
         height: 1;
+        color: $text-muted;
         padding: 0 0;
     }
 
     #status {
         height: 1;
+        color: $text-muted;
         padding: 0 0;
     }
 
     #prompt {
         height: 3;
         border: none;
-        padding: 0 1;
+        padding: 0 0;
         background: $background;
     }
 
     Input {
         border: none;
+        padding: 1 2;
+        background: $background;
+        color: $text;
     }
 
     Input:focus {
@@ -151,6 +163,7 @@ class NorthApp(App[None]):
         log.write(f"  [dim]strategy: {_get_strategy()}[/dim]")
         log.write("")
         self._write_rule()
+        self._redraw_separator()
         self._set_status("")
 
         self.set_interval(0.08, self._tick)
@@ -158,16 +171,17 @@ class NorthApp(App[None]):
         self.query_one("#prompt", Input).focus()
 
     def on_resize(self) -> None:
+        self._redraw_separator()
+
+    # ── rendering helpers ────────────────────────────────────────────────────
+
+    def _redraw_separator(self) -> None:
         self.query_one("#separator", Static).update(
             "[bright_black]" + "─" * self.size.width + "[/bright_black]"
         )
 
-    # ── rendering helpers ────────────────────────────────────────────────────
-
     def _write_rule(self) -> None:
-        self.query_one("#log", RichLog).write(
-            "[bright_black]" + "─" * self.size.width + "[/bright_black]"
-        )
+        self.query_one("#log", RichLog).write(RichRule(style="bright_black"))
 
     def _tick(self) -> None:
         self._spin_frame += 1
@@ -179,9 +193,7 @@ class NorthApp(App[None]):
 
     def _set_status(self, text: str) -> None:
         self._status_text = text
-        self.query_one("#separator", Static).update(
-            "[bright_black]" + "─" * self.size.width + "[/bright_black]"
-        )
+        self._redraw_separator()
         if not text:
             strategy = _get_strategy()
             self.query_one("#status", Static).update(
@@ -216,7 +228,7 @@ class NorthApp(App[None]):
         md.display = False
         md.update("")
         if final_output:
-            self._log_rich(RichMarkdown(final_output))
+            self._log_rich(RichPadding(RichMarkdown(final_output), (0, 0, 0, 2)))
 
     # ── SSE event handler ────────────────────────────────────────────────────
 
@@ -336,7 +348,7 @@ class NorthApp(App[None]):
                 self._finish_streaming(task_id, output)
             elif output:
                 self._log("  [bright_black]north[/bright_black]")
-                self._log_rich(RichMarkdown(output))
+                self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 2)))
 
             self._set_status("")
             self._user_task_ids.discard(task_id)
