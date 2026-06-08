@@ -69,6 +69,7 @@ class ConfidenceTracker:
             conn.execute(_SCHEMA)
             conn.execute(_MODEL_SCHEMA)
             import contextlib
+
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(_MIGRATION_ADD_CONSECUTIVE_FAILURES)
 
@@ -85,9 +86,7 @@ class ConfidenceTracker:
 
     async def record_use(self, agent: str, tool: str, was_helpful: bool) -> float:
         """Update the (agent, tool) score and return the new value."""
-        return await asyncio.to_thread(
-            self._record_use_sync, agent, tool, was_helpful
-        )
+        return await asyncio.to_thread(self._record_use_sync, agent, tool, was_helpful)
 
     def _record_use_sync(self, agent: str, tool: str, was_helpful: bool) -> float:
         now = datetime.now(UTC).isoformat()
@@ -135,7 +134,10 @@ class ConfidenceTracker:
             if new_score < _WARN_THRESHOLD:
                 logger.warning(
                     "tool degradation: %s/%s confidence=%.2f consecutive_failures=%d",
-                    agent, tool, new_score, new_consecutive,
+                    agent,
+                    tool,
+                    new_score,
+                    new_consecutive,
                 )
             return new_score
 
@@ -148,8 +150,7 @@ class ConfidenceTracker:
         with open_db_connection(self._db_path) as conn:
             return list(
                 conn.execute(
-                    "SELECT tool, confidence FROM tool_confidence "
-                    "WHERE agent = ? ORDER BY confidence DESC, tool ASC",
+                    "SELECT tool, confidence FROM tool_confidence WHERE agent = ? ORDER BY confidence DESC, tool ASC",
                     (agent,),
                 ).fetchall()
             )
@@ -186,20 +187,14 @@ class ConfidenceTracker:
         Synchronous so ModelDispatcher can call it from __init__ at startup.
         """
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute(
-                "SELECT model_id, provider, confidence, uses_total FROM model_confidence"
-            ).fetchall()
+            rows = conn.execute("SELECT model_id, provider, confidence, uses_total FROM model_confidence").fetchall()
         return {(r["model_id"], r["provider"]): (r["confidence"], r["uses_total"]) for r in rows}
 
-    async def save_model_score(
-        self, model_id: str, provider: str, score: float, uses: int
-    ) -> None:
+    async def save_model_score(self, model_id: str, provider: str, score: float, uses: int) -> None:
         """Upsert one model's EMA score. Called fire-and-forget after each dispatch outcome."""
         await asyncio.to_thread(self._save_model_score_sync, model_id, provider, score, uses)
 
-    def _save_model_score_sync(
-        self, model_id: str, provider: str, score: float, uses: int
-    ) -> None:
+    def _save_model_score_sync(self, model_id: str, provider: str, score: float, uses: int) -> None:
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
             conn.execute(

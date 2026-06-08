@@ -4,6 +4,7 @@ Responsible for keeping the conversation history within the model's context
 window by summarising old tool-call exchanges via the LLM or falling back to
 simple truncation when summarisation is unavailable.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,34 +21,34 @@ COMPACTION_THRESHOLD = 0.75
 # Agents with these tools produce larger, denser outputs (file contents, diffs,
 # bash stdout). Their summaries need more room to preserve file paths and errors.
 HEAVY_OUTPUT_TOOLS: frozenset[str] = frozenset({"bash", "git", "patch_file"})
-COMPACT_TOKENS_DEFAULT = 512   # ~350 words — general agents
-COMPACT_TOKENS_HEAVY   = 1000  # ~700 words — agents with bash/git/patch_file
+COMPACT_TOKENS_DEFAULT = 512  # ~350 words — general agents
+COMPACT_TOKENS_HEAVY = 1000  # ~700 words — agents with bash/git/patch_file
 # keep_recent used when context overflows every available model's window.
 COMPACT_KEEP_RECENT_OVERFLOW: int = 1
 # Max chars per field/line kept when rendering history for summarisation.
 _RENDER_PREVIEW_CHARS: int = 200
 # Thresholds for truncating large tool outputs during history compaction.
-_COMPACT_TRUNCATE_THRESHOLD: int = 500   # skip outputs shorter than this
-_COMPACT_TRUNCATE_KEEP: int = 300        # chars kept from oversized outputs
+_COMPACT_TRUNCATE_THRESHOLD: int = 500  # skip outputs shorter than this
+_COMPACT_TRUNCATE_KEEP: int = 300  # chars kept from oversized outputs
 
 # Ordered from most-specific to least-specific so the first match wins.
 # Covers provider-prefixed IDs (e.g. "anthropic/claude-3-haiku") as well as
 # bare names.
 _CONTEXT_WINDOW_TABLE: tuple[tuple[str, int], ...] = (
-    ("gemini-2",      1_000_000),
-    ("gemini-1.5",    1_000_000),
-    ("gemini",          128_000),
-    ("claude",          200_000),
-    ("o1",              200_000),
-    ("o3",              200_000),
-    ("gpt-4o",          128_000),
-    ("gpt-4-turbo",     128_000),
-    ("gpt-4.1",         128_000),
-    ("llama",           128_000),
-    ("qwen",            128_000),
-    ("mistral",         128_000),
-    ("deepseek",        128_000),
-    ("phi",              16_000),
+    ("gemini-2", 1_000_000),
+    ("gemini-1.5", 1_000_000),
+    ("gemini", 128_000),
+    ("claude", 200_000),
+    ("o1", 200_000),
+    ("o3", 200_000),
+    ("gpt-4o", 128_000),
+    ("gpt-4-turbo", 128_000),
+    ("gpt-4.1", 128_000),
+    ("llama", 128_000),
+    ("qwen", 128_000),
+    ("mistral", 128_000),
+    ("deepseek", 128_000),
+    ("phi", 16_000),
 )
 _DEFAULT_CONTEXT_WINDOW = 128_000
 
@@ -93,9 +94,9 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
                 name = fn.get("name", "?")
                 try:
                     args = json.loads(fn.get("arguments", "{}"))
-                    args_str = json.dumps(args)[: _RENDER_PREVIEW_CHARS]
+                    args_str = json.dumps(args)[:_RENDER_PREVIEW_CHARS]
                 except Exception:
-                    args_str = str(fn.get("arguments", ""))[: _RENDER_PREVIEW_CHARS]
+                    args_str = str(fn.get("arguments", ""))[:_RENDER_PREVIEW_CHARS]
                 lines.append(f"→ tool call: {name}({args_str})")
         elif role == "tool":
             content = msg.get("content", "")
@@ -108,9 +109,9 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
                         result_parts.append(f"{k}={str(v)[:80]}")
                 lines.append(f"  ← result: {', '.join(result_parts[:5])}")
             except Exception:
-                lines.append(f"  ← result: {str(content)[: _RENDER_PREVIEW_CHARS]}")
+                lines.append(f"  ← result: {str(content)[:_RENDER_PREVIEW_CHARS]}")
         elif role == "user":
-            lines.append(f"[user context: {str(msg.get('content', ''))[: _RENDER_PREVIEW_CHARS]}]")
+            lines.append(f"[user context: {str(msg.get('content', ''))[:_RENDER_PREVIEW_CHARS]}]")
     return "\n".join(lines)
 
 
@@ -230,7 +231,8 @@ async def compact_if_needed(
     except Exception:
         logger.warning(
             "Context compaction summarization failed for %s — falling back to truncation",
-            component, exc_info=True,
+            component,
+            exc_info=True,
         )
         compact_history(messages, keep_recent=keep_recent)
         return

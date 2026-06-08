@@ -26,8 +26,8 @@ from utils.text import STOPWORDS
 
 logger = logging.getLogger(__name__)
 
-_MAX_EPISODES = 500    # hard cap on rows kept in the database
-_RETENTION_DAYS = 90   # episodes older than this are eligible for deletion
+_MAX_EPISODES = 500  # hard cap on rows kept in the database
+_RETENTION_DAYS = 90  # episodes older than this are eligible for deletion
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -43,11 +43,8 @@ CREATE TABLE IF NOT EXISTS episodes (
 _SCHEMA_INDEX = "CREATE INDEX IF NOT EXISTS idx_episodes_domain ON episodes (domain)"
 
 
-
 def _keyword_score(text: str, query_words: frozenset[str]) -> int:
-    words = frozenset(
-        w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in STOPWORDS
-    )
+    words = frozenset(w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in STOPWORDS)
     return len(query_words & words)
 
 
@@ -75,7 +72,12 @@ class EpisodicStore:
         emb_json = json.dumps(embedding) if embedding is not None else None
         await asyncio.to_thread(
             self._insert_and_prune_sync,
-            generate_id(), task_id, domain, summary, emb_json, now,
+            generate_id(),
+            task_id,
+            domain,
+            summary,
+            emb_json,
+            now,
         )
 
     async def search(self, query: str, max_results: int = 3) -> list[str]:
@@ -110,9 +112,7 @@ class EpisodicStore:
                 pass
 
         # Keyword fallback
-        query_words = frozenset(
-            w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in STOPWORDS
-        )
+        query_words = frozenset(w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in STOPWORDS)
         kw_scored = sorted(
             rows,
             key=lambda r: _keyword_score(r[1], query_words),
@@ -134,23 +134,20 @@ class EpisodicStore:
         """Insert the new episode then remove stale rows in the same transaction."""
         with open_db_connection(self._db_path) as conn:
             conn.execute(
-                "INSERT INTO episodes (id, task_id, domain, summary, embedding, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO episodes (id, task_id, domain, summary, embedding, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                 (ep_id, task_id, domain, summary, emb_json, now),
             )
             # Delete episodes older than the retention window.
             from datetime import timedelta
-            cutoff = (
-                datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)
-            ).isoformat()
+
+            cutoff = (datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)).isoformat()
             conn.execute("DELETE FROM episodes WHERE timestamp < ?", (cutoff,))
             # If we're still above the hard cap, trim the oldest rows.
             count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
             if count > _MAX_EPISODES:
                 excess = count - _MAX_EPISODES
                 conn.execute(
-                    "DELETE FROM episodes WHERE id IN "
-                    "(SELECT id FROM episodes ORDER BY timestamp ASC LIMIT ?)",
+                    "DELETE FROM episodes WHERE id IN (SELECT id FROM episodes ORDER BY timestamp ASC LIMIT ?)",
                     (excess,),
                 )
             conn.commit()

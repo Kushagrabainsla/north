@@ -17,9 +17,11 @@ Phase 2 (done):
   - base_quality blended with the EMA score via _effective_quality() for ranking.
   - ContextTooLargeError caught and compacted in agents/agentic_llm_agent.py.
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -127,10 +129,8 @@ class ModelDispatcher(InferenceRouter):
             wall_expiry = time.time() + max(0.0, mono_expiry - time.monotonic())
             data: dict[str, float] = {}
             if self._cooldowns_path.exists():
-                try:
+                with contextlib.suppress(Exception):
                     data = json.loads(self._cooldowns_path.read_text())
-                except Exception:
-                    pass
             model_id, provider_name = key
             data[f"{model_id}::{provider_name}"] = wall_expiry
             self._cooldowns_path.write_text(json.dumps(data, indent=2))
@@ -157,9 +157,7 @@ class ModelDispatcher(InferenceRouter):
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         estimated = len(request.prompt) // 4
-        candidates = self._candidates(
-            ModelCapability.COMPLETION, self._effective_priority(request.priority), estimated
-        )
+        candidates = self._candidates(ModelCapability.COMPLETION, self._effective_priority(request.priority), estimated)
 
         async def _call(provider: Provider, model_id: str) -> CompletionResponse:
             return await provider.complete(model_id, request)
@@ -173,9 +171,7 @@ class ModelDispatcher(InferenceRouter):
     ) -> ToolCallResponse:
         text = " ".join(str(m.get("content") or "") for m in request.messages)
         estimated = len(text) // 4
-        candidates = self._candidates(
-            ModelCapability.TOOL_CALLS, self._effective_priority(request.priority), estimated
-        )
+        candidates = self._candidates(ModelCapability.TOOL_CALLS, self._effective_priority(request.priority), estimated)
 
         async def _call(provider: Provider, model_id: str) -> ToolCallResponse:
             return await provider.complete_with_tools(model_id, request, token_callback)
@@ -196,9 +192,7 @@ class ModelDispatcher(InferenceRouter):
                 if mid == request.model and info.supports(ModelCapability.TRANSCRIPTION):
                     return await provider.transcribe(mid, request)
 
-        candidates = self._candidates(
-            ModelCapability.TRANSCRIPTION, PoolPriority.MEDIUM, 0
-        )
+        candidates = self._candidates(ModelCapability.TRANSCRIPTION, PoolPriority.MEDIUM, 0)
 
         async def _call(provider: Provider, model_id: str) -> TranscriptionResponse:
             return await provider.transcribe(model_id, request)
@@ -222,9 +216,7 @@ class ModelDispatcher(InferenceRouter):
             try:
                 await provider.refresh()
             except Exception:
-                logger.warning(
-                    "Pool refresh failed for provider %s", provider.name, exc_info=True
-                )
+                logger.warning("Pool refresh failed for provider %s", provider.name, exc_info=True)
         self._build_registry()
 
     def current_pools(self) -> dict[str, ModelPool]:
@@ -251,12 +243,7 @@ class ModelDispatcher(InferenceRouter):
                 low.append(info)
 
         def _ids(infos: list[ModelInfo], limit: int = 10) -> list[str]:
-            return [
-                i.model_id
-                for i in sorted(infos, key=lambda i: i.base_quality, reverse=True)[
-                    :limit
-                ]
-            ]
+            return [i.model_id for i in sorted(infos, key=lambda i: i.base_quality, reverse=True)[:limit]]
 
         return {
             "reasoning": ModelPool(name="reasoning", models=_ids(high)),
@@ -280,9 +267,7 @@ class ModelDispatcher(InferenceRouter):
         if self._confidence_tracker is None:
             return
         score, uses = self._model_confidence[key]
-        t = asyncio.create_task(
-            self._confidence_tracker.save_model_score(key[0], key[1], score, uses)
-        )
+        t = asyncio.create_task(self._confidence_tracker.save_model_score(key[0], key[1], score, uses))
         self._background_tasks.add(t)
         t.add_done_callback(self._background_tasks.discard)
 
@@ -301,11 +286,7 @@ class ModelDispatcher(InferenceRouter):
     ) -> list[tuple[ModelInfo, Provider]]:
         now = time.monotonic()
 
-        capable = [
-            (info, provider)
-            for (info, provider) in self._registry.values()
-            if info.supports(capability)
-        ]
+        capable = [(info, provider) for (info, provider) in self._registry.values() if info.supports(capability)]
         if not capable:
             return []
 
@@ -369,9 +350,7 @@ class ModelDispatcher(InferenceRouter):
                 self._persist_model_score(key)
                 return result
             except ModelRateLimitedError:
-                self._cooldowns[key] = (
-                    time.monotonic() + self._RATE_LIMIT_COOLDOWN_SECS
-                )
+                self._cooldowns[key] = time.monotonic() + self._RATE_LIMIT_COOLDOWN_SECS
                 logger.info(
                     "Rate limited: %s/%s — skipping for %ds",
                     info.provider_name,
@@ -404,6 +383,5 @@ class ModelDispatcher(InferenceRouter):
                 raise
 
         raise AllModelsRateLimitedError(
-            f"All {len(candidates)} candidate(s) exhausted — every model is "
-            "rate-limited or has insufficient credits"
+            f"All {len(candidates)} candidate(s) exhausted — every model is rate-limited or has insufficient credits"
         )

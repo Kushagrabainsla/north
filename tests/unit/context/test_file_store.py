@@ -36,19 +36,14 @@ async def test_append_separates_entries_with_single_newline(
     await store.write(ContextDocument.JUDGEMENT_RULES, "Rule 1")
     await store.append(ContextDocument.JUDGEMENT_RULES, "Rule 2")
     await store.append(ContextDocument.JUDGEMENT_RULES, "Rule 3")
-    assert (
-        await store.read(ContextDocument.JUDGEMENT_RULES)
-        == "Rule 1\nRule 2\nRule 3"
-    )
+    assert await store.read(ContextDocument.JUDGEMENT_RULES) == "Rule 1\nRule 2\nRule 3"
 
 
 async def test_append_to_missing_document_creates_it_without_leading_newline(
     store: FileContextStore,
 ) -> None:
     await store.append(ContextDocument.NORTH_STARS, "Become a great engineer")
-    assert (
-        await store.read(ContextDocument.NORTH_STARS) == "Become a great engineer"
-    )
+    assert await store.read(ContextDocument.NORTH_STARS) == "Become a great engineer"
 
 
 async def test_documents_are_stored_independently(store: FileContextStore) -> None:

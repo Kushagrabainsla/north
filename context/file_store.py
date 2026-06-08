@@ -64,9 +64,7 @@ class FileContextStore(ContextStore):
             # background update completes will reload from DB rather than
             # serving the pre-write cache.
             self._embedding_index.invalidate_cache()
-            t = asyncio.create_task(
-                self._embedding_index.update_document(document.value, content)
-            )
+            t = asyncio.create_task(self._embedding_index.update_document(document.value, content))
             self._embedding_tasks.add(t)
             t.add_done_callback(self._embedding_tasks.discard)
 
@@ -82,9 +80,7 @@ class FileContextStore(ContextStore):
                 raise ContextWriteError(f"Failed to append to {document.value}: {e}") from e
             if self._embedding_index is not None:
                 new_content = await self.read(document)
-                t = asyncio.create_task(
-                    self._embedding_index.update_document(document.value, new_content)
-                )
+                t = asyncio.create_task(self._embedding_index.update_document(document.value, new_content))
                 self._embedding_tasks.add(t)
                 t.add_done_callback(self._embedding_tasks.discard)
 

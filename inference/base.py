@@ -36,9 +36,7 @@ class InferenceRouter(ABC):
         rate limit; raises `AllModelsRateLimitedError` if every model is throttled."""
 
     @abstractmethod
-    async def transcribe(
-        self, request: TranscriptionRequest
-    ) -> TranscriptionResponse:
+    async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         """Run one audio-transcription call via the same provider."""
 
     @abstractmethod

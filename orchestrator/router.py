@@ -29,6 +29,7 @@ def _plan_cache_key(prompt: str) -> str:
     normalized = " ".join(normalized.split())  # collapse whitespace
     return hashlib.md5(normalized.encode()).hexdigest()
 
+
 logger = logging.getLogger(__name__)
 
 _FALLBACK_CLASSIFICATION = IntentClassification(
@@ -56,9 +57,7 @@ class ExecutionPlanner:
         # Cache: normalized_hash → (insert_ts, classification, plan)
         self._plan_cache: dict[str, tuple[float, IntentClassification, ExecutionPlan]] = {}
 
-    async def plan_all(
-        self, prompt: str, task_id: str
-    ) -> tuple[IntentClassification, ExecutionPlan]:
+    async def plan_all(self, prompt: str, task_id: str) -> tuple[IntentClassification, ExecutionPlan]:
         """Single LLM call that classifies the task AND builds the execution plan.
 
         Replaces the separate classify → route two-call pipeline.
@@ -76,10 +75,7 @@ class ExecutionPlanner:
                 # Return a fresh plan with the new task_id so task tracking is correct.
                 return cached_cls, cached_plan.with_task_id(task_id)
 
-        agents_info = [
-            {"name": a.name, "domain": a.domain, "accepts": a.config.accepts}
-            for a in all_agents
-        ]
+        agents_info = [{"name": a.name, "domain": a.domain, "accepts": a.config.accepts} for a in all_agents]
         tools_info = self._summarise_tools()
 
         try:
@@ -95,9 +91,7 @@ class ExecutionPlanner:
                 "workspace above. Never emit bare filenames or paths starting with '~' — expand them."
             )
         system_context_block = (
-            "=== System Context ===\n" + "\n".join(system_context_lines) + "\n\n"
-            if system_context_lines
-            else ""
+            "=== System Context ===\n" + "\n".join(system_context_lines) + "\n\n" if system_context_lines else ""
         )
 
         full_prompt = (
@@ -182,9 +176,7 @@ class ExecutionPlanner:
                 continue
         return summaries
 
-    def _build_plan_from_response(
-        self, data: dict[str, Any], domain: str, task_id: str
-    ) -> ExecutionPlan:
+    def _build_plan_from_response(self, data: dict[str, Any], domain: str, task_id: str) -> ExecutionPlan:
         """Parse the router LLM response into an ExecutionPlan."""
         raw_mode = data.get("mode", "single_agent")
         try:
@@ -254,10 +246,7 @@ class ExecutionPlanner:
         """Simple fallback: single agent matching the classified domain."""
         matching = self._agent_registry.for_domain(domain)
         if not matching:
-            matching = (
-                self._agent_registry.for_domain("general")
-                or [self._agent_registry.all()[0]]
-            )
+            matching = self._agent_registry.for_domain("general") or [self._agent_registry.all()[0]]
         name = matching[0].name
         return ExecutionPlan(
             task_id=task_id,
@@ -282,9 +271,7 @@ class ExecutionPlanner:
         return set(flat) == set(agents)
 
     @staticmethod
-    def _compute_parallel_groups(
-        agents: list[str], dependencies: dict[str, list[str]]
-    ) -> list[list[str]]:
+    def _compute_parallel_groups(agents: list[str], dependencies: dict[str, list[str]]) -> list[list[str]]:
         """Layer-based topological sort to compute parallel execution groups.
 
         Raises RoutingError if a dependency cycle is detected so callers can
@@ -297,9 +284,7 @@ class ExecutionPlanner:
         while remaining:
             layer = [a for a in sorted(remaining) if not (deps[a] & remaining)]
             if not layer:
-                raise RoutingError(
-                    f"Dependency cycle detected among agents: {sorted(remaining)}"
-                )
+                raise RoutingError(f"Dependency cycle detected among agents: {sorted(remaining)}")
             groups.append(layer)
             remaining -= set(layer)
         return groups

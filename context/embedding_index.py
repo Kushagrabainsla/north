@@ -131,8 +131,7 @@ class EmbeddingIndex:
         with open_db_connection(self._db_path) as conn:
             conn.execute("DELETE FROM context_embeddings WHERE doc = ?", (doc_name,))
             conn.executemany(
-                "INSERT INTO context_embeddings (doc, chunk_idx, chunk_text, embedding) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO context_embeddings (doc, chunk_idx, chunk_text, embedding) VALUES (?, ?, ?, ?)",
                 [
                     (doc_name, idx, chunk, json.dumps(emb))
                     for idx, (chunk, emb) in enumerate(zip(chunks, embeddings, strict=False))
@@ -141,7 +140,5 @@ class EmbeddingIndex:
 
     def _load_all_sync(self) -> list[tuple[str, str, str]]:
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute(
-                "SELECT doc, chunk_text, embedding FROM context_embeddings"
-            ).fetchall()
+            rows = conn.execute("SELECT doc, chunk_text, embedding FROM context_embeddings").fetchall()
         return [(r["doc"], r["chunk_text"], r["embedding"]) for r in rows]

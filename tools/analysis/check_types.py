@@ -216,6 +216,7 @@ def _check_go(path: Path) -> ToolOutput:
 
 def _parse_error_line(line: str, lang: str) -> dict | None:
     import re
+
     line = line.strip()
     if not line:
         return None

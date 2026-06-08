@@ -14,9 +14,9 @@ class PoolPriority(StrEnum):
     See README 8.3 for the mapping rules (consequential→HIGH, background→LOW).
     """
 
-    HIGH = "high"        # reasoning pool
-    MEDIUM = "medium"    # fast_cheap pool
-    LOW = "low"          # high_volume pool
+    HIGH = "high"  # reasoning pool
+    MEDIUM = "medium"  # fast_cheap pool
+    LOW = "low"  # high_volume pool
 
 
 # Canonical pool names. PoolPriority maps onto these one-to-one.
@@ -135,7 +135,7 @@ class InferenceRecord(BaseModel):
     """One inference call. Written to the Ledger with source=inference_router."""
 
     component: str
-    priority: PoolPriority | None = None      # None for transcription
+    priority: PoolPriority | None = None  # None for transcription
     model_used: str
     tokens_in: int = 0
     tokens_out: int = 0

@@ -16,6 +16,5 @@ def test_pytest_harness_collects_and_runs() -> None:
 
 def test_python_version_meets_requirement() -> None:
     assert sys.version_info >= (3, 12), (
-        "north requires Python 3.12+ (see README.md Section 16.1 and "
-        "pyproject.toml requires-python)."
+        "north requires Python 3.12+ (see README.md Section 16.1 and pyproject.toml requires-python)."
     )

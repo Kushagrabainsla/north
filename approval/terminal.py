@@ -17,6 +17,7 @@ class TerminalNotifier(Notifier):
     async def notify(self, card: Card) -> None:
         """Draw a box around the card details and write it to the log or stdout."""
         import os
+
         header = f"=== NORTH {card.type.value.upper()} CARD ({card.id}) ==="
         border = "=" * len(header)
 
@@ -34,10 +35,12 @@ class TerminalNotifier(Notifier):
             for i, opt in enumerate(card.options, 1):
                 lines.append(f"  [{i}] {opt}")
 
-        lines.extend([
-            f"Status:  {card.status}",
-            border,
-        ])
+        lines.extend(
+            [
+                f"Status:  {card.status}",
+                border,
+            ]
+        )
 
         output = "\n".join(lines) + "\n"
         log_file = os.environ.get("NORTH_LOG_FILE", "").strip()

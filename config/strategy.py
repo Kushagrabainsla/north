@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 class StrategyMode(StrEnum):
-    ECO = "eco"        # cheapest model first — maximise cost savings
+    ECO = "eco"  # cheapest model first — maximise cost savings
     CRUISE = "cruise"  # role-aware best fit (default)
-    SPORT = "sport"    # most capable model first — maximise quality
+    SPORT = "sport"  # most capable model first — maximise quality
 
 
 _DESCRIPTIONS = {
@@ -45,9 +45,7 @@ class NorthSettings:
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             self._strategy = StrategyMode(data.get("strategy", self._DEFAULT_STRATEGY.value))
-            self._approval_timeout_seconds = float(
-                data.get("approval_timeout_seconds", self._DEFAULT_APPROVAL_TIMEOUT)
-            )
+            self._approval_timeout_seconds = float(data.get("approval_timeout_seconds", self._DEFAULT_APPROVAL_TIMEOUT))
         except Exception as exc:
             logger.warning(
                 "settings.json is unreadable — resetting to defaults (%s): %s",
@@ -75,10 +73,13 @@ class NorthSettings:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._path.write_text(
-                json.dumps({
-                    "strategy": self._strategy.value,
-                    "approval_timeout_seconds": self._approval_timeout_seconds,
-                }, indent=2),
+                json.dumps(
+                    {
+                        "strategy": self._strategy.value,
+                        "approval_timeout_seconds": self._approval_timeout_seconds,
+                    },
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
         except OSError:

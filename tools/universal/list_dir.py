@@ -37,10 +37,7 @@ class ListDirTool(Tool):
         entries = data.get("entries", [])
         if not entries:
             return "(empty directory)"
-        lines = [
-            f"- **{e['name']}/**" if e.get("type") == "dir" else f"- {e['name']}"
-            for e in entries
-        ]
+        lines = [f"- **{e['name']}/**" if e.get("type") == "dir" else f"- {e['name']}" for e in entries]
         return "\n".join(lines)
 
     async def run(self, input: ToolInput) -> ToolOutput:
@@ -60,8 +57,7 @@ def _list_sync(path: Path) -> ToolOutput:
         dirs = sorted([e for e in all_entries if e.is_dir()], key=lambda e: e.name)
         files = sorted([e for e in all_entries if e.is_file()], key=lambda e: e.name)
         entries = [
-            {"name": e.name, "type": "dir" if e.is_dir() else "file",
-             "size": e.stat().st_size if e.is_file() else 0}
+            {"name": e.name, "type": "dir" if e.is_dir() else "file", "size": e.stat().st_size if e.is_file() else 0}
             for e in (dirs + files)[:_MAX_ENTRIES]
         ]
         return ToolOutput(success=True, data={"entries": entries})

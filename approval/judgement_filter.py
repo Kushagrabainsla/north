@@ -122,6 +122,9 @@ class JudgementFilter:
 
         logger.info(
             "JudgementFilter: auto-%s card %s (confidence=%.2f, rule=%r)",
-            decision, card.id, confidence, rule,
+            decision,
+            card.id,
+            confidence,
+            rule,
         )
         return decision, chosen_option

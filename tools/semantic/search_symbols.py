@@ -140,39 +140,40 @@ def _search_js_ts_symbols(path: Path, search_type: str) -> ToolOutput:
     for idx, line in enumerate(lines, 1):
         # Class check
         if search_type in ("class", "all") and (m := class_pattern.search(line)):
-            symbols.append({
-                "name": m.group(1),
-                "type": "class",
-                "line": idx,
-                "signature": f"class {m.group(1)}"
-            })
+            symbols.append({"name": m.group(1), "type": "class", "line": idx, "signature": f"class {m.group(1)}"})
             continue
 
         # Function check
         if search_type in ("function", "all"):
             if m := func_pattern1.search(line):
-                symbols.append({
-                    "name": m.group(1),
-                    "type": "function",
-                    "line": idx,
-                    "signature": f"function {m.group(1)}({m.group(2) or ''})"
-                })
+                symbols.append(
+                    {
+                        "name": m.group(1),
+                        "type": "function",
+                        "line": idx,
+                        "signature": f"function {m.group(1)}({m.group(2) or ''})",
+                    }
+                )
             elif m := func_pattern2.search(line):
                 args = m.group(2) or m.group(3) or ""
-                symbols.append({
-                    "name": m.group(1),
-                    "type": "function",
-                    "line": idx,
-                    "signature": f"const {m.group(1)} = ({args}) =>"
-                })
+                symbols.append(
+                    {
+                        "name": m.group(1),
+                        "type": "function",
+                        "line": idx,
+                        "signature": f"const {m.group(1)} = ({args}) =>",
+                    }
+                )
             elif m := method_pattern.search(line):
                 # Class method heuristic (must start with leading whitespace)
-                symbols.append({
-                    "name": m.group(1),
-                    "type": "function",
-                    "line": idx,
-                    "signature": f"method {m.group(1)}({m.group(2) or ''})"
-                })
+                symbols.append(
+                    {
+                        "name": m.group(1),
+                        "type": "function",
+                        "line": idx,
+                        "signature": f"method {m.group(1)}({m.group(2) or ''})",
+                    }
+                )
 
     symbols.sort(key=lambda s: s["line"])
     return ToolOutput(success=True, data={"path": str(path), "symbols": symbols})
@@ -194,22 +195,21 @@ def _search_go_symbols(path: Path, search_type: str) -> ToolOutput:
 
     for idx, line in enumerate(lines, 1):
         if search_type in ("class", "all") and (m := type_pattern.search(line)):
-            symbols.append({
-                "name": m.group(1),
-                "type": "class",
-                "line": idx,
-                "signature": f"type {m.group(1)} {m.group(2)}"
-            })
+            symbols.append(
+                {"name": m.group(1), "type": "class", "line": idx, "signature": f"type {m.group(1)} {m.group(2)}"}
+            )
             continue
 
         if search_type in ("function", "all") and (m := func_pattern.search(line)):
             recv = f"({m.group(1)}) " if m.group(1) else ""
-            symbols.append({
-                "name": m.group(2),
-                "type": "function",
-                "line": idx,
-                "signature": f"func {recv}{m.group(2)}({m.group(3) or ''})"
-            })
+            symbols.append(
+                {
+                    "name": m.group(2),
+                    "type": "function",
+                    "line": idx,
+                    "signature": f"func {recv}{m.group(2)}({m.group(3) or ''})",
+                }
+            )
 
     symbols.sort(key=lambda s: s["line"])
     return ToolOutput(success=True, data={"path": str(path), "symbols": symbols})

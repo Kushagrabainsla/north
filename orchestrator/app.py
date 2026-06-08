@@ -59,15 +59,26 @@ logger = logging.getLogger(__name__)
 
 _AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
-_RELIABLE_TOOLS = frozenset({
-    "read_file", "write_file", "list_dir", "search_files", "bash",
-    "web_search", "schedule_task", "fetch_url", "git", "patch_file",
-})
+_RELIABLE_TOOLS = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "list_dir",
+        "search_files",
+        "bash",
+        "web_search",
+        "schedule_task",
+        "fetch_url",
+        "git",
+        "patch_file",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Startup helpers
 # ---------------------------------------------------------------------------
+
 
 def _step(msg: str) -> None:
     log_file = os.environ.get("NORTH_LOG_FILE", "").strip()
@@ -79,15 +90,14 @@ def _step(msg: str) -> None:
 
 
 def _validate_config() -> None:
-    if not any([
-        settings.openrouter_api_key,
-        settings.groq_api_key,
-        settings.gemini_api_key,
-    ]):
-        raise RuntimeError(
-            "No inference provider API key is set. "
-            "Run `north start` to configure one."
-        )
+    if not any(
+        [
+            settings.openrouter_api_key,
+            settings.groq_api_key,
+            settings.gemini_api_key,
+        ]
+    ):
+        raise RuntimeError("No inference provider API key is set. Run `north start` to configure one.")
 
 
 def _attach_tui_notifier(deps) -> None:
@@ -111,9 +121,7 @@ def _build_tool_registry(
     deps, tool_graph, judgement_filter: JudgementFilter | None = None
 ) -> tuple[ToolRegistry, CreateAgentTool]:
     tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
-    tool_registry.register(
-        ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store)
-    )
+    tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     tool_registry.make_universal("schedule_task")
     tool_registry.register(CreateToolTool(tool_registry=tool_registry))
     create_agent_tool = CreateAgentTool(cron_store=deps.cron_store)
@@ -236,25 +244,26 @@ def _build_context_injector(deps) -> ContextInjector:
 
 async def _reconcile_pending_tasks(deps, orchestrator: Orchestrator) -> None:
     try:
-        pending_entries = await deps.ledger.query(
-            LedgerFilters(status=LedgerStatus.PENDING, limit=500)
-        )
+        pending_entries = await deps.ledger.query(LedgerFilters(status=LedgerStatus.PENDING, limit=500))
         pending_task_ids = {e.task_id for e in pending_entries if e.task_id}
         orphaned = pending_task_ids - set(orchestrator._active_tasks)
         for orphaned_id in orphaned:
-            await deps.ledger.write(LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
-                source=LedgerSource.SYSTEM,
-                task_id=orphaned_id,
-                action="task_failed",
-                output="Server restarted while task was pending — marked as failed.",
-                status=LedgerStatus.FAILED,
-            ))
+            await deps.ledger.write(
+                LedgerEntry(
+                    id=generate_id(),
+                    timestamp=utcnow(),
+                    source=LedgerSource.SYSTEM,
+                    task_id=orphaned_id,
+                    action="task_failed",
+                    output="Server restarted while task was pending — marked as failed.",
+                    status=LedgerStatus.FAILED,
+                )
+            )
         if orphaned:
             logger.warning(
                 "Reconciliation: marked %d orphaned PENDING task(s) as FAILED: %s",
-                len(orphaned), list(orphaned),
+                len(orphaned),
+                list(orphaned),
             )
         else:
             logger.info("Reconciliation: no orphaned PENDING tasks found.")
@@ -301,6 +310,7 @@ def _build_callback_server() -> uvicorn.Server:
 # Background tasks
 # ---------------------------------------------------------------------------
 
+
 async def _guarded(coro, name: str) -> None:
     try:
         await coro
@@ -333,20 +343,17 @@ def _launch_background_tasks(
             completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)
             failed_before = now - datetime.timedelta(days=settings.task_cleanup_failed_days)
             pruned = await deps.ledger.prune(completed_before, failed_before)
-            await deps.ledger.write(LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
-                source=LedgerSource.SYSTEM,
-                action=(
-                    f"task_context_cleanup: removed {n} stale rows, "
-                    f"pruned {pruned} ledger entries"
-                ),
-                status=LedgerStatus.COMPLETED,
-            ))
+            await deps.ledger.write(
+                LedgerEntry(
+                    id=generate_id(),
+                    timestamp=utcnow(),
+                    source=LedgerSource.SYSTEM,
+                    action=(f"task_context_cleanup: removed {n} stale rows, pruned {pruned} ledger entries"),
+                    status=LedgerStatus.COMPLETED,
+                )
+            )
             return
-        await orchestrator.submit_task(
-            TaskRequest(prompt=f"[scheduled] {job.task}", source=LedgerSource.CRON)
-        )
+        await orchestrator.submit_task(TaskRequest(prompt=f"[scheduled] {job.task}", source=LedgerSource.CRON))
 
     cron_scheduler = CronScheduler(
         processor=deps.job_processor,
@@ -394,6 +401,7 @@ def _warn_unknown_cron_agents(agent_registry: AgentRegistry) -> None:
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:

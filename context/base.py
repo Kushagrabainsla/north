@@ -48,6 +48,4 @@ class ContextStore(ABC):
         each labelled with its source document. Returns an empty string when
         nothing matches.
         """
-        raise NotImplementedError(
-            "search() must be implemented by a concrete ContextStore subclass."
-        )
+        raise NotImplementedError("search() must be implemented by a concrete ContextStore subclass.")

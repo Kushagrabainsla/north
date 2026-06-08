@@ -144,8 +144,15 @@ class CreateAgentTool(Tool):
             return "\n".join(lines)
 
         if action == "read":
-            out = [f"=== {data['name']} ===", "", "--- config.yaml ---", data.get("config", ""), "",
-                   "--- prompts/system.md ---", data.get("system_prompt", "")]
+            out = [
+                f"=== {data['name']} ===",
+                "",
+                "--- config.yaml ---",
+                data.get("config", ""),
+                "",
+                "--- prompts/system.md ---",
+                data.get("system_prompt", ""),
+            ]
             return "\n".join(out)
 
         if action == "create":
@@ -188,9 +195,15 @@ class CreateAgentTool(Tool):
         if not description:
             return ToolOutput(success=False, error="'description' is required for action=create.")
         if not accepts:
-            return ToolOutput(success=False, error="'accepts' (list of routing keywords) is required for action=create.")
+            return ToolOutput(
+                success=False,
+                error="'accepts' (list of routing keywords) is required for action=create.",
+            )
         if not system_prompt:
-            return ToolOutput(success=False, error="'system_prompt' (prompts/system.md content) is required for action=create.")
+            return ToolOutput(
+                success=False,
+                error="'system_prompt' (prompts/system.md content) is required for action=create.",
+            )
         if model_pool not in ("fast_cheap", "reasoning", "high_volume"):
             model_pool = "fast_cheap"
 
@@ -198,10 +211,7 @@ class CreateAgentTool(Tool):
         if agent_dir.exists():
             return ToolOutput(
                 success=False,
-                error=(
-                    f"Agent '{name}' already exists at agents/{name}/. "
-                    "Use action='read' to inspect it."
-                ),
+                error=(f"Agent '{name}' already exists at agents/{name}/. Use action='read' to inspect it."),
             )
 
         class_name = _to_class_name(name)
@@ -263,6 +273,7 @@ class CreateAgentTool(Tool):
 
 # ── Standalone helpers ────────────────────────────────────────────────────────
 
+
 def _list_agents() -> ToolOutput:
     rows: list[dict] = []
     if not _AGENTS_ROOT.exists():
@@ -275,14 +286,24 @@ def _list_agents() -> ToolOutput:
             continue
         try:
             import yaml
+
             data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-            rows.append({
-                "name": data.get("agent", entry.name),
-                "domain": data.get("domain", "general"),
-                "description": (entry / "prompts" / "system.md").read_text(encoding="utf-8")[:120].split("\n")[0].lstrip("# ").strip()
-                if (entry / "prompts" / "system.md").exists() else "",
-                "accepts": data.get("accepts") or [],
-            })
+            rows.append(
+                {
+                    "name": data.get("agent", entry.name),
+                    "domain": data.get("domain", "general"),
+                    "description": (
+                        (entry / "prompts" / "system.md")
+                        .read_text(encoding="utf-8")[:120]
+                        .split("\n")[0]
+                        .lstrip("# ")
+                        .strip()
+                        if (entry / "prompts" / "system.md").exists()
+                        else ""
+                    ),
+                    "accepts": data.get("accepts") or [],
+                }
+            )
         except Exception:
             continue
     return ToolOutput(success=True, data={"action": "list", "agents": rows})
@@ -294,8 +315,14 @@ def _read_agent(name: str) -> ToolOutput:
     agent_dir = _AGENTS_ROOT / name.strip()
     if not agent_dir.exists():
         return ToolOutput(success=False, error=f"Agent '{name}' not found at agents/{name}/.")
-    config_text = (agent_dir / "config.yaml").read_text(encoding="utf-8") if (agent_dir / "config.yaml").exists() else ""
-    prompt_text = (agent_dir / "prompts" / "system.md").read_text(encoding="utf-8") if (agent_dir / "prompts" / "system.md").exists() else ""
+    config_text = (
+        (agent_dir / "config.yaml").read_text(encoding="utf-8") if (agent_dir / "config.yaml").exists() else ""
+    )
+    prompt_text = (
+        (agent_dir / "prompts" / "system.md").read_text(encoding="utf-8")
+        if (agent_dir / "prompts" / "system.md").exists()
+        else ""
+    )
     return ToolOutput(
         success=True,
         data={

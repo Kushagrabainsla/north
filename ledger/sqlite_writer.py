@@ -230,14 +230,16 @@ class SQLiteLedgerWriter(LedgerWriter):
             tasks = r["tasks"] or 0
             failed = failed_by_agent.get(agent, 0)
             durs = agent_durations.get(agent, [])
-            by_agent.append({
-                "agent": agent,
-                "tasks": tasks,
-                "success_rate": round((tasks - failed) / tasks, 3) if tasks > 0 else 0.0,
-                "cost_usd": round(r["cost_usd"] or 0.0, 6),
-                "p50_ms": _pct(durs, 50),
-                "p95_ms": _pct(durs, 95),
-            })
+            by_agent.append(
+                {
+                    "agent": agent,
+                    "tasks": tasks,
+                    "success_rate": round((tasks - failed) / tasks, 3) if tasks > 0 else 0.0,
+                    "cost_usd": round(r["cost_usd"] or 0.0, 6),
+                    "p50_ms": _pct(durs, 50),
+                    "p95_ms": _pct(durs, 95),
+                }
+            )
 
         return {
             "period_days": days,
@@ -259,11 +261,12 @@ class SQLiteLedgerWriter(LedgerWriter):
     def _prune_sync(self, completed_before: datetime, failed_before: datetime) -> int:
         with open_db_connection(self._db_path) as conn:
             cur = conn.execute(
-                "DELETE FROM ledger WHERE "
-                "(status = ? AND timestamp < ?) OR (status = ? AND timestamp < ?)",
+                "DELETE FROM ledger WHERE (status = ? AND timestamp < ?) OR (status = ? AND timestamp < ?)",
                 (
-                    LedgerStatus.COMPLETED.value, completed_before.isoformat(),
-                    LedgerStatus.FAILED.value, failed_before.isoformat(),
+                    LedgerStatus.COMPLETED.value,
+                    completed_before.isoformat(),
+                    LedgerStatus.FAILED.value,
+                    failed_before.isoformat(),
                 ),
             )
             return cur.rowcount

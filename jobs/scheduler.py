@@ -51,9 +51,7 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
     same answer, which makes the scheduler testable without mocking the clock
     in the surrounding async code.
     """
-    candidate = after.replace(
-        hour=entry.hour, minute=entry.minute, second=0, microsecond=0
-    )
+    candidate = after.replace(hour=entry.hour, minute=entry.minute, second=0, microsecond=0)
     if candidate <= after:
         candidate = candidate + timedelta(days=1)
     if entry.weekday is None:
@@ -62,9 +60,7 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
     return candidate + timedelta(days=days_ahead)
 
 
-def next_due_entry(
-    entries: list[CronEntry], after: datetime
-) -> tuple[CronEntry, datetime] | None:
+def next_due_entry(entries: list[CronEntry], after: datetime) -> tuple[CronEntry, datetime] | None:
     """Return the earliest-firing entry across `entries`, or None if empty."""
     if not entries:
         return None
@@ -155,9 +151,7 @@ class CronScheduler:
         now_after_sleep = self._clock()
         if firing <= now_after_sleep:
             if await self._is_already_running(entry):
-                logger.info(
-                    "CronScheduler: skipping %s — prior run still active", entry.name
-                )
+                logger.info("CronScheduler: skipping %s — prior run still active", entry.name)
                 return
             await self._processor.enqueue(self.build_job(entry, firing))
 
@@ -191,21 +185,46 @@ class CronScheduler:
 # V1 schedule — see README Section 11.3.
 # weekday: 0=Mon … 6=Sun, None = daily.
 V1_CRON_ENTRIES: list[CronEntry] = [
-    CronEntry(name="news_daily_briefing", agent="news_briefing",
-              task="Compile the daily news briefing across Tech & AI, world events, science & health, and business & markets",
-              hour=8, minute=0),
-    CronEntry(name="health_daily_meal_plan", agent="health",
-              task="Generate today's meal plan", hour=7, minute=0),
-    CronEntry(name="university_canvas_check", agent="university",
-              task="Check Canvas for new assignments and deadlines", hour=8, minute=0),
-    CronEntry(name="job_internship_update", agent="job",
-              task="Review internship prep progress and next steps", hour=9, minute=0),
-    CronEntry(name="finance_expense_summary", agent="finance",
-              task="Summarise today's expenses", hour=22, minute=0),
-    CronEntry(name="university_weekly_summary", agent="university",
-              task="Weekly academic summary and upcoming deadlines", hour=8, minute=0, weekday=0),
-    CronEntry(name="finance_weekly_budget", agent="finance",
-              task="Weekly budget check and savings progress", hour=18, minute=0, weekday=6),
-    CronEntry(name="task_context_cleanup", agent="system",
-              task="task_context_cleanup", hour=3, minute=0),
+    CronEntry(
+        name="news_daily_briefing",
+        agent="news_briefing",
+        task=(
+            "Compile the daily news briefing across Tech & AI, world events, science & health, and business & markets"
+        ),
+        hour=8,
+        minute=0,
+    ),
+    CronEntry(name="health_daily_meal_plan", agent="health", task="Generate today's meal plan", hour=7, minute=0),
+    CronEntry(
+        name="university_canvas_check",
+        agent="university",
+        task="Check Canvas for new assignments and deadlines",
+        hour=8,
+        minute=0,
+    ),
+    CronEntry(
+        name="job_internship_update",
+        agent="job",
+        task="Review internship prep progress and next steps",
+        hour=9,
+        minute=0,
+    ),
+    CronEntry(name="finance_expense_summary", agent="finance", task="Summarise today's expenses", hour=22, minute=0),
+    CronEntry(
+        name="university_weekly_summary",
+        agent="university",
+        task="Weekly academic summary and upcoming deadlines",
+        hour=8,
+        minute=0,
+        weekday=0,
+    ),
+    CronEntry(
+        name="finance_weekly_budget",
+        agent="finance",
+        task="Weekly budget check and savings progress",
+        hour=18,
+        minute=0,
+        weekday=6,
+    ),
+    CronEntry(name="task_context_cleanup", agent="system", task="task_context_cleanup", hour=3, minute=0),
 ]

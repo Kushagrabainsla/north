@@ -4,6 +4,7 @@ Add new provider branches here when a new provider key is introduced.
 OpenRouter is always the last provider in the chain — broadest model
 coverage as the final fallback.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -37,14 +38,17 @@ def build_router(
 
     if groq_api_key:
         from inference.providers.groq import GroqRouter
+
         providers.append(GroqRouter(groq_api_key))
 
     if gemini_api_key:
         from inference.providers.gemini import GeminiRouter
+
         providers.append(GeminiRouter(gemini_api_key))
 
     if openrouter_api_key:
         from inference.providers.openrouter import OpenRouterRouter
+
         providers.append(OpenRouterRouter(openrouter_api_key))
 
     return ModelDispatcher(providers, north_settings, confidence_tracker, cooldowns_path)

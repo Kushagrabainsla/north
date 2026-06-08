@@ -23,22 +23,25 @@ from rich.rule import Rule
 from rich.text import Text
 
 _STRATEGY_COLORS = {
-    "eco":    "ansigreen",
+    "eco": "ansigreen",
     "cruise": "ansicyan",
-    "sport":  "ansiyellow",
+    "sport": "ansiyellow",
 }
 
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-_PROMPT_STYLE = Style.from_dict({
-    "bottom-toolbar": "noreverse bg:default fg:ansibrightblack",
-})
+_PROMPT_STYLE = Style.from_dict(
+    {
+        "bottom-toolbar": "noreverse bg:default fg:ansibrightblack",
+    }
+)
 
 
 def _get_strategy() -> str:
     try:
         from config.settings import settings as _s
         from config.strategy import NorthSettings as _NS
+
         return _NS(_s.north_home / "settings.json").strategy.value
     except Exception:
         return "cruise"
@@ -49,10 +52,12 @@ def _term_width() -> int:
 
 
 def _prompt_tokens() -> FormattedText:
-    return FormattedText([
-        ("", "  "),
-        ("fg:ansicyan bold", "❯ "),
-    ])
+    return FormattedText(
+        [
+            ("", "  "),
+            ("fg:ansicyan bold", "❯ "),
+        ]
+    )
 
 
 def _fmt_params(params: dict) -> str:
@@ -145,8 +150,8 @@ async def run(
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     approval_pending: list[bool] = [False]
-    toolbar_status: list[str] = [""]   # current processing status for toolbar
-    spin_frame: list[int] = [0]        # shared frame counter for toolbar animation
+    toolbar_status: list[str] = [""]  # current processing status for toolbar
+    spin_frame: list[int] = [0]  # shared frame counter for toolbar animation
 
     def _toolbar() -> FormattedText:
         mode = _get_strategy()
@@ -158,10 +163,12 @@ async def run(
             hint = f"  {f}  {toolbar_status[0]}"
         else:
             hint = f"  strategy: {mode}  ·  ↑↓ history  ·  exit to quit"
-        return FormattedText([
-            ("fg:ansibrightblack", sep + "\n"),
-            ("fg:ansibrightblack", hint),
-        ])
+        return FormattedText(
+            [
+                ("fg:ansibrightblack", sep + "\n"),
+                ("fg:ansibrightblack", hint),
+            ]
+        )
 
     session = PromptSession(
         history=FileHistory(str(history_file)),
@@ -242,9 +249,7 @@ async def run(
             _print(f"  [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
             _set_status(f"{tool}…")
             if task_id:
-                task_tool_activity.setdefault(task_id, []).append(
-                    {"tool": tool, "params": params_str, "result": None}
-                )
+                task_tool_activity.setdefault(task_id, []).append({"tool": tool, "params": params_str, "result": None})
 
         elif event == "tool_result":
             tool = data.get("tool", "")
@@ -257,8 +262,10 @@ async def run(
                 formatted = data.get("formatted", "")
                 error = data.get("error", "")
                 result = (
-                    formatted[:200].replace("\n", " ") if formatted
-                    else f"failed: {error[:100]}" if error
+                    formatted[:200].replace("\n", " ")
+                    if formatted
+                    else f"failed: {error[:100]}"
+                    if error
                     else ("ok" if success else "failed")
                 )
                 for entry in task_tool_activity.get(task_id, []):
@@ -288,8 +295,7 @@ async def run(
                         )
                         entries = r.json()
                         output = "\n\n".join(
-                            e["output"] for e in entries
-                            if e.get("action") == "agent_completed" and e.get("output")
+                            e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output")
                         )
                 except Exception:
                     pass
@@ -300,11 +306,13 @@ async def run(
             tools_used = task_tool_activity.pop(task_id, [])
             if user_msg and output:
                 short = output[:600] + ("…" if len(output) > 600 else "")
-                conversation_history.append({
-                    "user": user_msg,
-                    "tools": tools_used,
-                    "north": short,
-                })
+                conversation_history.append(
+                    {
+                        "user": user_msg,
+                        "tools": tools_used,
+                        "north": short,
+                    }
+                )
             if output:
                 console.print("  [bright_black]north[/bright_black]")
                 console.print(Padding(Markdown(output), (0, 0, 0, 2)))
@@ -346,12 +354,15 @@ async def run(
     async def _listen() -> None:
         while True:
             try:
-                async with httpx.AsyncClient() as client, client.stream(
-                    "GET",
-                    f"{base_url}/orchestrator/stream",
-                    headers=headers,
-                    timeout=None,
-                ) as resp:
+                async with (
+                    httpx.AsyncClient() as client,
+                    client.stream(
+                        "GET",
+                        f"{base_url}/orchestrator/stream",
+                        headers=headers,
+                        timeout=None,
+                    ) as resp,
+                ):
                     if resp.status_code != 200:
                         await resp.aread()
                         await asyncio.sleep(2)
@@ -393,9 +404,11 @@ async def run(
             else:
                 chosen = raw or options[0]
         decision = (
-            "approved" if chosen == options[0] else
-            "rejected" if len(options) > 1 and chosen == options[1] else
-            "answered"
+            "approved"
+            if chosen == options[0]
+            else "rejected"
+            if len(options) > 1 and chosen == options[1]
+            else "answered"
         )
         try:
             async with httpx.AsyncClient() as c:
@@ -416,6 +429,7 @@ async def run(
 
     async def _spin_loop() -> None:
         from prompt_toolkit.application.current import get_app
+
         while True:
             await asyncio.sleep(0.08)
             spin_frame[0] += 1
@@ -482,9 +496,10 @@ async def run(
                     if turn.get("tools"):
                         summaries = [
                             f"{e['tool']}({e['params']}) → {e['result']}"
-                            if e.get("params") else
-                            f"{e['tool']} → {e['result']}"
-                            for e in turn["tools"] if e.get("result")
+                            if e.get("params")
+                            else f"{e['tool']} → {e['result']}"
+                            for e in turn["tools"]
+                            if e.get("result")
                         ]
                         if summaries:
                             parts.append("[actions: " + "; ".join(summaries) + "]")

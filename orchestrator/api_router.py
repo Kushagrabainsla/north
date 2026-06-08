@@ -53,6 +53,7 @@ async def health_check() -> dict:
     """
     return {"status": "ok"}
 
+
 # Module-level singletons injected by app.py at startup
 _orchestrator: Orchestrator | None = None
 _stream_manager: EventStreamManager | None = None
@@ -153,6 +154,7 @@ def _get_confidence_tracker() -> ConfidenceTracker:
 
 # ── Transcription endpoint ────────────────────────────────────────────────────
 
+
 class TranscriptionOut(BaseModel):
     text: str
     model_used: str
@@ -170,9 +172,7 @@ async def transcribe_audio(request: Request) -> TranscriptionOut:
     if not audio_bytes:
         raise HTTPException(status_code=422, detail="Empty audio body.")
 
-    result = await _get_inference_router().transcribe(
-        TranscriptionRequest(audio=audio_bytes, component="perception")
-    )
+    result = await _get_inference_router().transcribe(TranscriptionRequest(audio=audio_bytes, component="perception"))
     return TranscriptionOut(
         text=result.text,
         model_used=result.model_used,
@@ -181,6 +181,7 @@ async def transcribe_audio(request: Request) -> TranscriptionOut:
 
 
 # ── Task endpoints ────────────────────────────────────────────────────────────
+
 
 @router.post("/task", response_model=TaskResponse, status_code=202)
 async def submit_task(request: Request) -> TaskResponse:
@@ -218,6 +219,7 @@ async def cancel_task(task_id: str) -> None:
 
 # ── SSE stream ────────────────────────────────────────────────────────────────
 
+
 @router.get("/stream/{task_id}")
 async def stream_task_events(task_id: str) -> StreamingResponse:
     """Server-Sent Events stream for real-time task progress."""
@@ -254,6 +256,7 @@ async def stream_global_events() -> StreamingResponse:
 
 # ── Metrics endpoint ──────────────────────────────────────────────────────────
 
+
 @router.get("/metrics")
 async def get_metrics(days: int = 7) -> dict:
     """Return aggregated system performance metrics.
@@ -287,12 +290,11 @@ async def query_ledger(
                 status_code=422,
                 detail=f"Unknown source {source!r}. Valid: {[s.value for s in LedgerSource]}",
             ) from None
-    return await _get_ledger().query(
-        LedgerFilters(task_id=task_id, agent=agent, source=src, limit=limit)
-    )
+    return await _get_ledger().query(LedgerFilters(task_id=task_id, agent=agent, source=src, limit=limit))
 
 
 # ── Agent endpoints ───────────────────────────────────────────────────────────
+
 
 class AgentInfo(BaseModel):
     name: str
@@ -324,9 +326,7 @@ async def list_agents() -> list[AgentInfo]:
 @router.post("/agent/run", response_model=TaskResponse, status_code=202)
 async def run_agent(request: AgentRunRequest) -> TaskResponse:
     """Manually trigger a specific agent by submitting a targeted task."""
-    return await _get_orchestrator().submit_task(
-        TaskRequest(prompt=f"[{request.agent}] {request.task}")
-    )
+    return await _get_orchestrator().submit_task(TaskRequest(prompt=f"[{request.agent}] {request.task}"))
 
 
 # ── Context endpoints ─────────────────────────────────────────────────────────
@@ -391,6 +391,7 @@ async def add_context(
 
 # ── Job endpoints ─────────────────────────────────────────────────────────────
 
+
 class JobOut(BaseModel):
     job_id: str
     type: str
@@ -445,11 +446,7 @@ async def list_jobs(
 @router.post("/jobs", response_model=JobOut, status_code=201)
 async def create_job(body: JobCreateRequest) -> JobOut:
     """Create and enqueue a new job."""
-    scheduled = (
-        datetime.datetime.fromisoformat(body.scheduled_at)
-        if body.scheduled_at
-        else utcnow()
-    )
+    scheduled = datetime.datetime.fromisoformat(body.scheduled_at) if body.scheduled_at else utcnow()
     job = Job(
         job_id=generate_id(),
         type=JobType.ASYNC,
@@ -470,6 +467,7 @@ async def cancel_job(job_id: str) -> None:
 
 
 # ── Cron endpoints ────────────────────────────────────────────────────────────
+
 
 def _get_cron_store() -> UserCronStore:
     if _cron_store is None:
@@ -530,6 +528,7 @@ async def delete_cron_entry(name: str) -> None:
 
 # ── Inference endpoints ───────────────────────────────────────────────────────
 
+
 @router.get("/inference/costs", response_model=CostSummary)
 async def inference_costs(
     period: str = "week",
@@ -583,6 +582,7 @@ async def inference_models() -> dict[str, ModelPoolOut]:
 
 # ── Tools confidence endpoint ─────────────────────────────────────────────────
 
+
 class ToolConfidenceOut(BaseModel):
     agent: str
     tool: str
@@ -605,6 +605,7 @@ async def tool_confidence(agent: str | None = None) -> list[ToolConfidenceOut]:
 
 
 # ── Agent create endpoint ─────────────────────────────────────────────────────
+
 
 class AgentCreateRequest(BaseModel):
     name: str
@@ -654,6 +655,7 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
 
 
 # ── Settings endpoint ────────────────────────────────────────────────────────
+
 
 class SettingsOut(BaseModel):
     strategy: str
@@ -736,6 +738,7 @@ async def receive_webhook(source: str, request: Request) -> dict:
 
 
 # ── Approval endpoint ─────────────────────────────────────────────────────────
+
 
 class ApprovalResponse(BaseModel):
     card_id: str

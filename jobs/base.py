@@ -45,9 +45,7 @@ class JobProcessor(ABC):
         """Transition `job_id` to `completed` with `completed_at` set."""
 
     @abstractmethod
-    async def mark_failed(
-        self, job_id: str, retry_after: datetime | None = None
-    ) -> None:
+    async def mark_failed(self, job_id: str, retry_after: datetime | None = None) -> None:
         """Transition `job_id` to `failed`. If `retry_after` is set, the job
         remains in the queue and becomes re-eligible at that time."""
 
@@ -56,9 +54,7 @@ class JobProcessor(ABC):
         """Transition `job_id` to `cancelled`. No-op if already terminal."""
 
     @abstractmethod
-    async def list_jobs(
-        self, status: JobStatus | None = None, limit: int = 100
-    ) -> list[Job]:
+    async def list_jobs(self, status: JobStatus | None = None, limit: int = 100) -> list[Job]:
         """List jobs, optionally filtered by status, ordered by scheduled_at desc."""
 
     @abstractmethod

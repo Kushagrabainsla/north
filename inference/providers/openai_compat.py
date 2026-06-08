@@ -4,6 +4,7 @@ Subclasses set self.name, call super().__init__(), then optionally override
 embed() or transcribe() for providers that support those capabilities.
 All methods accept an explicit model_id — model selection belongs to ModelDispatcher.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,9 +44,7 @@ async def _aiter_with_chunk_timeout(aiter, timeout: float):
         except StopAsyncIteration:
             return
         except TimeoutError as exc:
-            raise InferenceError(
-                f"SSE stream stalled for {timeout:.0f}s — model stopped generating"
-            ) from exc
+            raise InferenceError(f"SSE stream stalled for {timeout:.0f}s — model stopped generating") from exc
 
 
 class OpenAICompatibleProvider:
@@ -67,33 +66,22 @@ class OpenAICompatibleProvider:
 
     def _raise_for_status(self, response: httpx.Response, model_id: str) -> None:
         if response.status_code == 402:
-            raise PaymentRequiredError(
-                f"{self.name} returned 402 — insufficient credits"
-            )
+            raise PaymentRequiredError(f"{self.name} returned 402 — insufficient credits")
         if response.status_code in (429, 404, 503):
             raise ModelRateLimitedError(model_id, self.name)
         if response.status_code >= 400:
-            raise InferenceError(
-                f"{self.name} returned {response.status_code} for {model_id}: "
-                f"{response.text[:200]}"
-            )
+            raise InferenceError(f"{self.name} returned {response.status_code} for {model_id}: {response.text[:200]}")
 
-    async def _raise_for_stream_status(
-        self, resp: httpx.Response, model_id: str
-    ) -> None:
+    async def _raise_for_stream_status(self, resp: httpx.Response, model_id: str) -> None:
         if resp.status_code == 402:
             await resp.aread()
-            raise PaymentRequiredError(
-                f"{self.name} returned 402 — insufficient credits"
-            )
+            raise PaymentRequiredError(f"{self.name} returned 402 — insufficient credits")
         if resp.status_code in (429, 404, 503):
             await resp.aread()
             raise ModelRateLimitedError(model_id, self.name)
         if resp.status_code >= 400:
             body = (await resp.aread()).decode("utf-8", errors="replace")[:200]
-            raise InferenceError(
-                f"{self.name} returned {resp.status_code} for {model_id}: {body}"
-            )
+            raise InferenceError(f"{self.name} returned {resp.status_code} for {model_id}: {body}")
 
     async def aclose(self) -> None:
         """Close the underlying HTTPX client."""
@@ -109,9 +97,7 @@ class OpenAICompatibleProvider:
 
     # ---- completion ----
 
-    async def complete(
-        self, model_id: str, request: CompletionRequest
-    ) -> CompletionResponse:
+    async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
         body: dict = {
             "model": model_id,
             "messages": [{"role": "user", "content": request.prompt}],
@@ -138,9 +124,7 @@ class OpenAICompatibleProvider:
 
         choices = payload.get("choices") or []
         if not choices:
-            raise InferenceError(
-                f"{self.name} returned empty choices for {model_id}: {payload}"
-            )
+            raise InferenceError(f"{self.name} returned empty choices for {model_id}: {payload}")
         content = choices[0].get("message", {}).get("content") or ""
         usage = payload.get("usage", {})
         return CompletionResponse(
@@ -173,13 +157,9 @@ class OpenAICompatibleProvider:
         cost_usd = 0.0
 
         try:
-            async with self._client.stream(
-                "POST", "/chat/completions", json=body
-            ) as resp:
+            async with self._client.stream("POST", "/chat/completions", json=body) as resp:
                 await self._raise_for_stream_status(resp, model_id)
-                async for raw_line in _aiter_with_chunk_timeout(
-                    resp.aiter_lines(), SSE_CHUNK_TIMEOUT_SECONDS
-                ):
+                async for raw_line in _aiter_with_chunk_timeout(resp.aiter_lines(), SSE_CHUNK_TIMEOUT_SECONDS):
                     if not raw_line.startswith("data: "):
                         continue
                     data = raw_line[6:]
@@ -206,9 +186,7 @@ class OpenAICompatibleProvider:
                     for tc in delta.get("tool_calls", []):
                         idx = tc.get("index", 0)
                         if idx not in tool_calls_acc:
-                            tool_calls_acc[idx] = {
-                                "id": "", "name": "", "arguments": ""
-                            }
+                            tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
                         if tc.get("id"):
                             tool_calls_acc[idx]["id"] = tc["id"]
                         fn = tc.get("function", {})
@@ -262,8 +240,5 @@ class OpenAICompatibleProvider:
 
     # ---- transcription (override in providers that support it) ----
 
-    async def transcribe(
-        self, model_id: str, request: TranscriptionRequest
-    ) -> TranscriptionResponse:
+    async def transcribe(self, model_id: str, request: TranscriptionRequest) -> TranscriptionResponse:
         raise TranscriptionError(f"{self.name} does not support transcription")
-

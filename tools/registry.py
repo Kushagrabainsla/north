@@ -50,12 +50,7 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
             logger.warning("tool discovery: failed to import %s: %s", module_name, exc)
             continue
         for obj in vars(module).values():
-            if (
-                isinstance(obj, type)
-                and issubclass(obj, Tool)
-                and obj is not Tool
-                and not inspect.isabstract(obj)
-            ):
+            if isinstance(obj, type) and issubclass(obj, Tool) and obj is not Tool and not inspect.isabstract(obj):
                 try:
                     instance = obj()
                     tools[instance.name] = instance
@@ -67,7 +62,8 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
                 except Exception as exc:
                     logger.warning(
                         "tool discovery: %s failed to instantiate: %s",
-                        obj.__name__, exc,
+                        obj.__name__,
+                        exc,
                     )
     return tools
 

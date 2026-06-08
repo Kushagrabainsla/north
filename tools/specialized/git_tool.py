@@ -20,15 +20,17 @@ from tools.models import ToolInput, ToolOutput
 _TIMEOUT = 30
 
 # Operations blocked outright — too destructive even with approval.
-_ALWAYS_BLOCKED: frozenset[str] = frozenset({
-    "push --force",
-    "push -f",
-    "push --force-with-lease",
-    "reset --hard",
-    "clean -f",
-    "clean -fd",
-    "clean -fdx",
-})
+_ALWAYS_BLOCKED: frozenset[str] = frozenset(
+    {
+        "push --force",
+        "push -f",
+        "push --force-with-lease",
+        "reset --hard",
+        "clean -f",
+        "clean -fd",
+        "clean -fdx",
+    }
+)
 
 
 class GitTool(Tool):
@@ -47,9 +49,18 @@ class GitTool(Tool):
             "action": {
                 "type": "string",
                 "enum": [
-                    "status", "diff", "log", "branch", "show",
-                    "add", "commit", "push", "pull",
-                    "checkout", "stash", "merge",
+                    "status",
+                    "diff",
+                    "log",
+                    "branch",
+                    "show",
+                    "add",
+                    "commit",
+                    "push",
+                    "pull",
+                    "checkout",
+                    "stash",
+                    "merge",
                 ],
                 "description": "Git action to perform",
             },
@@ -104,7 +115,7 @@ class GitTool(Tool):
             return ToolOutput(
                 success=False,
                 error=f"Unknown git action: {action!r}. "
-                      f"Valid: status, diff, log, branch, show, add, commit, push, pull, checkout, stash, merge.",
+                f"Valid: status, diff, log, branch, show, add, commit, push, pull, checkout, stash, merge.",
             )
 
         # Block permanently dangerous operations.
@@ -114,8 +125,7 @@ class GitTool(Tool):
                 return ToolOutput(
                     success=False,
                     error=(
-                        f"'{cmd_str}' is permanently blocked — too destructive. "
-                        "Use a targeted reset or revert instead."
+                        f"'{cmd_str}' is permanently blocked — too destructive. Use a targeted reset or revert instead."
                     ),
                 )
 

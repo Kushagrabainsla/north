@@ -5,6 +5,7 @@ broadest fallback provider. get_models() returns an empty dict until the
 first refresh() completes — the startup lifespan guarantees that happens
 before the server accepts requests.
 """
+
 from __future__ import annotations
 
 import logging
@@ -91,9 +92,7 @@ class OpenRouterRouter(OpenAICompatibleProvider):
         except httpx.RequestError as e:
             raise PoolRefreshError(f"OpenRouter request failed: {e}") from e
         except httpx.HTTPStatusError as e:
-            raise PoolRefreshError(
-                f"OpenRouter returned {e.response.status_code}"
-            ) from e
+            raise PoolRefreshError(f"OpenRouter returned {e.response.status_code}") from e
 
         try:
             payload = response.json()
@@ -133,31 +132,21 @@ class OpenRouterRouter(OpenAICompatibleProvider):
 
     # ---- Transcription ----
 
-    async def transcribe(
-        self, model_id: str, request: TranscriptionRequest
-    ) -> TranscriptionResponse:
+    async def transcribe(self, model_id: str, request: TranscriptionRequest) -> TranscriptionResponse:
         files = {"file": ("audio.wav", request.audio, "audio/wav")}
         data = {"model": model_id}
         try:
-            response = await self._client.post(
-                "/audio/transcriptions", files=files, data=data
-            )
+            response = await self._client.post("/audio/transcriptions", files=files, data=data)
         except httpx.RequestError as e:
-            raise TranscriptionError(
-                f"Transcription request to openrouter failed: {e}"
-            ) from e
+            raise TranscriptionError(f"Transcription request to openrouter failed: {e}") from e
         if response.status_code in (429, 503):
             raise ModelRateLimitedError(model_id, self.name)
         if response.status_code >= 400:
-            raise TranscriptionError(
-                f"OpenRouter returned {response.status_code}: {response.text[:200]}"
-            )
+            raise TranscriptionError(f"OpenRouter returned {response.status_code}: {response.text[:200]}")
         try:
             payload = response.json()
         except ValueError as e:
-            raise TranscriptionError(
-                "OpenRouter transcription response was not JSON"
-            ) from e
+            raise TranscriptionError("OpenRouter transcription response was not JSON") from e
 
         usage = payload.get("usage", {})
         return TranscriptionResponse(

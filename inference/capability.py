@@ -1,4 +1,5 @@
 """Model capability taxonomy and per-model metadata used by ModelDispatcher."""
+
 from __future__ import annotations
 
 import math
@@ -56,9 +57,9 @@ class ModelInfo:
     model_id: str
     provider_name: str
     capabilities: frozenset[ModelCapability]
-    context_window: int       # max tokens (input + output combined)
-    cost_per_token: float     # USD per output token; 0.0 for free models
-    base_quality: float       # 0.0–1.0 quality estimate
+    context_window: int  # max tokens (input + output combined)
+    cost_per_token: float  # USD per output token; 0.0 for free models
+    base_quality: float  # 0.0–1.0 quality estimate
 
     @property
     def is_free(self) -> bool:

@@ -110,9 +110,7 @@ async def test_claim_next_skips_future_scheduled_jobs(
 
 async def test_claim_next_respects_retry_after(processor: SQLiteJobProcessor) -> None:
     await processor.enqueue(_job("j1"))
-    await processor.mark_failed(
-        "j1", retry_after=datetime.now(UTC) + timedelta(hours=1)
-    )
+    await processor.mark_failed("j1", retry_after=datetime.now(UTC) + timedelta(hours=1))
 
     assert await processor.claim_next() is None
 

@@ -15,10 +15,11 @@ from ledger.models import LedgerSource
 
 class ExecutionMode(StrEnum):
     """Execution structure chosen by the router for a given task."""
-    SINGLE_TOOL = "single_tool"      # one deterministic tool call, no agent
-    SINGLE_AGENT = "single_agent"    # one agent's ReAct loop
-    PARALLEL = "parallel"            # independent agents fan out simultaneously
-    HIERARCHICAL = "hierarchical"    # agents run in dependency order
+
+    SINGLE_TOOL = "single_tool"  # one deterministic tool call, no agent
+    SINGLE_AGENT = "single_agent"  # one agent's ReAct loop
+    PARALLEL = "parallel"  # independent agents fan out simultaneously
+    HIERARCHICAL = "hierarchical"  # agents run in dependency order
 
 
 class TaskRequest(BaseModel):
@@ -27,7 +28,7 @@ class TaskRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=32_768)
     source: LedgerSource = LedgerSource.PROMPT
     workspace: str = ""  # optional root directory for filesystem/shell tools
-    context: str = ""    # optional pre-loaded context summary to inject into the agent's prompt
+    context: str = ""  # optional pre-loaded context summary to inject into the agent's prompt
 
 
 class TaskResponse(BaseModel):

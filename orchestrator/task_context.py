@@ -31,13 +31,12 @@ CREATE TABLE IF NOT EXISTS task_state (
     PRIMARY KEY (task_id, agent, key)
 )
 """
-_SCHEMA_INDEX = (
-    "CREATE INDEX IF NOT EXISTS idx_task_state_task_id ON task_state (task_id)"
-)
+_SCHEMA_INDEX = "CREATE INDEX IF NOT EXISTS idx_task_state_task_id ON task_state (task_id)"
 
 
 def _default_db_path() -> Path:
     from config.settings import settings  # deferred to avoid import cycle at module load
+
     tasks_dir = settings.north_home / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
     return tasks_dir / "tasks.db"
@@ -67,6 +66,7 @@ class TaskContextStore:
 
     async def initialize_task(self, task_id: str, agents: list[str]) -> None:
         """Insert pending status rows for every agent in this task."""
+
         def _run() -> None:
             now_str = format_timestamp(utcnow())
             with open_db_connection(self._db_path) as conn:
@@ -104,12 +104,12 @@ class TaskContextStore:
         condition = self._get_condition(task_id)
 
         while True:
+
             def _check() -> sqlite3.Row | None:
                 with open_db_connection(self._db_path) as conn:
                     try:
                         return conn.execute(
-                            "SELECT value, status FROM task_state "
-                            "WHERE task_id = ? AND agent = ? AND key = ?",
+                            "SELECT value, status FROM task_state WHERE task_id = ? AND agent = ? AND key = ?",
                             (task_id, source_agent, actual_key),
                         ).fetchone()
                     except sqlite3.OperationalError:
@@ -127,18 +127,16 @@ class TaskContextStore:
                     except json.JSONDecodeError:
                         return None
                 elif status == "failed":
-                    raise OrchestratorError(
-                        f"Source agent '{source_agent}' failed. Cannot read '{key}'."
-                    )
+                    raise OrchestratorError(f"Source agent '{source_agent}' failed. Cannot read '{key}'.")
 
             elapsed = loop.time() - start_time
             if elapsed >= timeout:
+
                 def _check_agent_status() -> str:
                     with open_db_connection(self._db_path) as conn:
                         try:
                             r = conn.execute(
-                                "SELECT status FROM task_state "
-                                "WHERE task_id = ? AND agent = ? AND key = ?",
+                                "SELECT status FROM task_state WHERE task_id = ? AND agent = ? AND key = ?",
                                 (task_id, source_agent, "_status"),
                             ).fetchone()
                             return r["status"] if r else "unknown"
@@ -153,22 +151,16 @@ class TaskContextStore:
                         )
                     return None
                 elif agent_status == "failed":
-                    raise OrchestratorError(
-                        f"Agent '{source_agent}' failed. Key '{key}' is unavailable."
-                    )
+                    raise OrchestratorError(f"Agent '{source_agent}' failed. Key '{key}' is unavailable.")
                 else:
                     if required:
-                        raise OrchestratorError(
-                            f"Timeout: key '{key}' is missing (agent status: {agent_status})."
-                        )
+                        raise OrchestratorError(f"Timeout: key '{key}' is missing (agent status: {agent_status}).")
                     return None
 
             remaining = timeout - elapsed
             try:
                 async with condition:
-                    await asyncio.wait_for(
-                        condition.wait(), timeout=min(remaining, poll_interval)
-                    )
+                    await asyncio.wait_for(condition.wait(), timeout=min(remaining, poll_interval))
             except TimeoutError:
                 pass
 
@@ -207,6 +199,7 @@ class TaskContextStore:
 
     async def get_all(self, task_id: str) -> dict[str, dict[str, Any]]:
         """Return all completed key-value pairs (excluding _status) grouped by agent."""
+
         def _run() -> dict[str, dict[str, Any]]:
             with open_db_connection(self._db_path) as conn:
                 try:
@@ -240,10 +233,12 @@ class TaskContextStore:
 
     async def delete_task(self, task_id: str) -> None:
         """Delete all rows belonging to a task_id."""
+
         def _run() -> None:
             with open_db_connection(self._db_path) as conn:
                 conn.execute("DELETE FROM task_state WHERE task_id = ?", (task_id,))
                 conn.commit()
+
         await asyncio.to_thread(_run)
         self._conditions.pop(task_id, None)
 

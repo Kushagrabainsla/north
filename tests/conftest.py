@@ -121,6 +121,7 @@ def build_test_dependencies(tmp_path: Path):
 # Pytest fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_inference() -> MockInferenceRouter:
     return MockInferenceRouter()

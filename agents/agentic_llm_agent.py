@@ -62,44 +62,49 @@ class AgenticLLMAgent(LLMAgent):
     async def _record_tool_call_confidence(self, tool_name: str, success: bool) -> None:
         """Record tool execution confidence if not a special internal tool."""
         if tool_name not in ("request_approval", "delegate_task"):
-            t = asyncio.create_task(
-                self._deps.confidence_tracker.record_use(self.name, tool_name, success)
-            )
+            t = asyncio.create_task(self._deps.confidence_tracker.record_use(self.name, tool_name, success))
             self._background_tasks.add(t)
             t.add_done_callback(self._background_tasks.discard)
             t.add_done_callback(
-                lambda _t: logger.warning(
-                    "Background confidence recording failed for %s/%s: %s",
-                    self.name, tool_name, _t.exception(),
+                lambda _t: (
+                    logger.warning(
+                        "Background confidence recording failed for %s/%s: %s",
+                        self.name,
+                        tool_name,
+                        _t.exception(),
+                    )
+                    if not _t.cancelled() and _t.exception() is not None
+                    else None
                 )
-                if not _t.cancelled() and _t.exception() is not None else None
             )
 
-    def _append_tool_call_exchange(
-        self, messages: list[dict], results: list[tuple[ToolCall, str, bool]]
-    ) -> None:
+    def _append_tool_call_exchange(self, messages: list[dict], results: list[tuple[ToolCall, str, bool]]) -> None:
         """Format and append assistant tool_calls message and the respective tool outputs."""
-        messages.append({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": call.call_id,
-                    "type": "function",
-                    "function": {
-                        "name": call.name,
-                        "arguments": json.dumps(call.params),
-                    },
-                }
-                for call, _, _ in results
-            ],
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call.call_id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": json.dumps(call.params),
+                        },
+                    }
+                    for call, _, _ in results
+                ],
+            }
+        )
         for call, result_str, _ in results:
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call.call_id,
-                "content": result_str,
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.call_id,
+                    "content": result_str,
+                }
+            )
 
     async def _handle_tool_calls_response(
         self,
@@ -132,9 +137,7 @@ class AgenticLLMAgent(LLMAgent):
                         event_data["error"] = err
                 except (json.JSONDecodeError, AttributeError):
                     pass
-                await self._deps.stream_manager.emit(
-                    payload.task_id, "tool_result", event_data
-                )
+                await self._deps.stream_manager.emit(payload.task_id, "tool_result", event_data)
             await self._record_tool_call_confidence(call.name, success)
 
         self._append_tool_call_exchange(messages, results)
@@ -157,10 +160,7 @@ class AgenticLLMAgent(LLMAgent):
         tool_map = {t.name: t for t, _ in scored_tools}
         # Agents with bash/git/patch_file produce larger tool outputs; give their
         # compaction summaries more room to preserve file paths and error messages.
-        compact_tokens = (
-            COMPACT_TOKENS_HEAVY if tool_map.keys() & HEAVY_OUTPUT_TOOLS
-            else COMPACT_TOKENS_DEFAULT
-        )
+        compact_tokens = COMPACT_TOKENS_HEAVY if tool_map.keys() & HEAVY_OUTPUT_TOOLS else COMPACT_TOKENS_DEFAULT
         total_cost_usd: float = 0.0
         last_tokens_in: int = 0
         last_model_used: str = ""
@@ -190,23 +190,16 @@ class AgenticLLMAgent(LLMAgent):
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
             _sync_hot_loaded_tools(self._deps, self.name, tool_map)
-            tools = (
-                [t.schema() for t in tool_map.values()]
-                + [DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA]
-            )
+            tools = [t.schema() for t in tool_map.values()] + [DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA]
 
             token_cb = self._make_token_callback(payload.task_id)
 
             try:
-                response = await self._complete_with_tools(
-                    messages, tools, payload.task_id, token_cb
-                )
+                response = await self._complete_with_tools(messages, tools, payload.task_id, token_cb)
             except ContextTooLargeError:
                 compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
                 try:
-                    response = await self._complete_with_tools(
-                        messages, tools, payload.task_id, token_cb
-                    )
+                    response = await self._complete_with_tools(messages, tools, payload.task_id, token_cb)
                 except ContextTooLargeError:
                     return _final_answer(
                         "Context window exceeded — the conversation is too long to continue.",
@@ -283,18 +276,18 @@ class AgenticLLMAgent(LLMAgent):
             tool_type = params.get("tool_type", "specialized")
             content = params.get("content", "").strip()
             preview = (
-                (content[:_CREATE_TOOL_PREVIEW_CHARS] + "\n…")
-                if len(content) > _CREATE_TOOL_PREVIEW_CHARS
-                else content
+                (content[:_CREATE_TOOL_PREVIEW_CHARS] + "\n…") if len(content) > _CREATE_TOOL_PREVIEW_CHARS else content
             )
-            msg = (
-                f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n"
-                + (f"```python\n{preview}\n```" if preview else "(stub — no implementation provided)")
+            msg = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
+                f"```python\n{preview}\n```" if preview else "(stub — no implementation provided)"
             )
-            decision = await self._request_approval(payload, {
-                "message": msg,
-                "options": ["Approve", "Reject"],
-            })
+            decision = await self._request_approval(
+                payload,
+                {
+                    "message": msg,
+                    "options": ["Approve", "Reject"],
+                },
+            )
             if decision.lower() in ("reject", "rejected", "timeout_rejected"):
                 return call, json.dumps({"success": False, "error": "User rejected tool creation."}), False
         if payload.workspace:
@@ -311,10 +304,7 @@ class AgenticLLMAgent(LLMAgent):
         scored_tools: list[tuple[Tool, float]],
     ) -> str:
         """User message without the tool list (tools are passed as function defs)."""
-        reliability_lines = "\n".join(
-            f"- {t.name} reliability: {score:.0%}"
-            for t, score in scored_tools
-        )
+        reliability_lines = "\n".join(f"- {t.name} reliability: {score:.0%}" for t, score in scored_tools)
         now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
         system_lines = [f"- current date/time: {now}"]
         if payload.workspace:
@@ -345,9 +335,7 @@ class AgenticLLMAgent(LLMAgent):
             f"## Tool reliability hints\n{reliability_lines or '(none)'}\n"
         )
 
-    def _make_token_callback(
-        self, task_id: str
-    ) -> Callable[[str], Awaitable[None]] | None:
+    def _make_token_callback(self, task_id: str) -> Callable[[str], Awaitable[None]] | None:
         if self._deps.stream_manager is None or not task_id:
             return None
         stream_mgr = self._deps.stream_manager
@@ -358,56 +346,56 @@ class AgenticLLMAgent(LLMAgent):
 
         return _cb
 
-    async def _delegate_task(
-        self, payload: AgentPayload, params: dict[str, Any]
-    ) -> str:
+    async def _delegate_task(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Run a specialist sub-agent and return its output as a tool result."""
         if payload.delegation_depth >= MAX_DELEGATION_DEPTH:
-            return json.dumps({
-                "success": False,
-                "error": (
-                    f"Delegation depth limit ({MAX_DELEGATION_DEPTH}) reached — "
-                    "you cannot delegate further. Write a final summary of what was "
-                    "accomplished, what was attempted, and what remains unresolved, "
-                    "then return that as your answer."
-                ),
-            })
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        f"Delegation depth limit ({MAX_DELEGATION_DEPTH}) reached — "
+                        "you cannot delegate further. Write a final summary of what was "
+                        "accomplished, what was attempted, and what remains unresolved, "
+                        "then return that as your answer."
+                    ),
+                }
+            )
 
         agent_name = str(params.get("agent", "general"))
         if agent_name in payload.delegation_chain:
-            return json.dumps({
-                "success": False,
-                "error": (
-                    f"Delegation cycle detected — '{agent_name}' is already in the "
-                    f"current chain {payload.delegation_chain}. "
-                    "Summarise what you have and return your best result instead of delegating again."
-                ),
-            })
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        f"Delegation cycle detected — '{agent_name}' is already in the "
+                        f"current chain {payload.delegation_chain}. "
+                        "Summarise what you have and return your best result instead of delegating again."
+                    ),
+                }
+            )
 
         registry = self._deps.agent_registry
         if registry is None:
-            return json.dumps(
-                {"success": False, "error": "Agent registry not available for delegation."}
-            )
+            return json.dumps({"success": False, "error": "Agent registry not available for delegation."})
 
         task = str(params.get("task", ""))
         if not task:
-            return json.dumps(
-                {"success": False, "error": "delegate_task requires a non-empty 'task' parameter."}
-            )
+            return json.dumps({"success": False, "error": "delegate_task requires a non-empty 'task' parameter."})
 
         try:
             agent = registry.get(agent_name)
         except Exception:
             if agent_name in ENGINEERING_AGENTS:
-                return json.dumps({
-                    "success": False,
-                    "error": (
-                        f"Engineering agent '{agent_name}' not found. "
-                        "Cannot fall back to general for engineering tasks. "
-                        "Ensure the agent is registered and retry."
-                    ),
-                })
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            f"Engineering agent '{agent_name}' not found. "
+                            "Cannot fall back to general for engineering tasks. "
+                            "Ensure the agent is registered and retry."
+                        ),
+                    }
+                )
             try:
                 agent = registry.get("general")
             except Exception:
@@ -429,14 +417,10 @@ class AgenticLLMAgent(LLMAgent):
             result = await agent.run(sub_payload)
             return json.dumps({"success": True, "output": result.output, "summary": result.summary})
         except Exception as exc:
-            logger.warning(
-                "Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True
-            )
+            logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
             return json.dumps({"success": False, "error": str(exc)})
 
-    async def _request_approval(
-        self, payload: AgentPayload, params: dict[str, Any]
-    ) -> str:
+    async def _request_approval(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         store = self._deps.approval_store
         if store is None:
             raise RuntimeError(
@@ -467,7 +451,9 @@ class AgenticLLMAgent(LLMAgent):
                 if auto_decision is not None:
                     logger.debug(
                         "JudgementFilter auto-%s for agent %s: %r",
-                        auto_decision, self.name, message[:80],
+                        auto_decision,
+                        self.name,
+                        message[:80],
                     )
                     return auto_decision
             except Exception:
@@ -502,10 +488,12 @@ class AgenticLLMAgent(LLMAgent):
         params: dict[str, Any],
     ) -> str:
         if tool_name not in tool_map:
-            return json.dumps({
-                "success": False,
-                "error": f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}",
-            })
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}",
+                }
+            )
         try:
             result = await tool_map[tool_name].run(ToolInput(params=params))
             data = result.model_dump()

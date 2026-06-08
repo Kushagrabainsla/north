@@ -99,15 +99,12 @@ class AgentRegistry:
         try:
             module = importlib.import_module(module_path)
         except ImportError as e:
-            raise AgentConfigError(
-                f"Failed to import {module_path} for agent '{config.agent}': {e}"
-            ) from e
+            raise AgentConfigError(f"Failed to import {module_path} for agent '{config.agent}': {e}") from e
 
         class_name = config.resolved_class_name
         if not hasattr(module, class_name):
             raise AgentConfigError(
-                f"{module_path} is missing class '{class_name}' "
-                f"declared in {agent_dir / 'config.yaml'}"
+                f"{module_path} is missing class '{class_name}' declared in {agent_dir / 'config.yaml'}"
             )
         agent_class = getattr(module, class_name)
         return agent_class(config=config, deps=self._deps)
@@ -142,9 +139,7 @@ class AgentRegistry:
                     tool_names = self._load_tool_names(entry)
                     tool_registry.update_graph(agent.name, tool_names)
             except Exception as exc:
-                logger.warning(
-                    "AgentRegistry.reload: failed to load %s: %s", entry.name, exc
-                )
+                logger.warning("AgentRegistry.reload: failed to load %s: %s", entry.name, exc)
         return new_names
 
     def get(self, name: str) -> Agent:

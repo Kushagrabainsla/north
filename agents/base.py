@@ -81,10 +81,7 @@ class Agent(ABC):
                 if await fact_store.count() > 0:
                     facts = await fact_store.search(payload.prompt, max_results=15)
                     if facts:
-                        parts.append(
-                            "## Personal Context\n"
-                            + "\n".join(f"- {f}" for f in facts)
-                        )
+                        parts.append("## Personal Context\n" + "\n".join(f"- {f}" for f in facts))
                         facts_found = True
             except Exception as exc:
                 logger.warning("FactStore search failed for task %s: %s", payload.task_id, exc)
@@ -104,10 +101,7 @@ class Agent(ABC):
             try:
                 episodes = await episodic.search(payload.prompt, max_results=3)
                 if episodes:
-                    parts.append(
-                        "## Relevant past context\n"
-                        + "\n".join(f"- {e}" for e in episodes)
-                    )
+                    parts.append("## Relevant past context\n" + "\n".join(f"- {e}" for e in episodes))
             except Exception as exc:
                 logger.warning("Episodic context search failed for task %s: %s", payload.task_id, exc)
         return "\n\n".join(p for p in parts if p)
@@ -167,11 +161,7 @@ class Agent(ABC):
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
 
         tool_index = self._deps.tool_index
-        if (
-            task_prompt
-            and tool_index is not None
-            and len(registry_tools) > SEMANTIC_FILTER_MIN
-        ):
+        if task_prompt and tool_index is not None and len(registry_tools) > SEMANTIC_FILTER_MIN:
             top_names = set(await tool_index.search_tools(task_prompt, top_k=SEMANTIC_TOP_K))
             if top_names:
                 scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools if t.name in top_names]

@@ -10,4 +10,3 @@ from agents.agentic_llm_agent import AgenticLLMAgent
 
 class HealthAgent(AgenticLLMAgent):
     """Domain specialist for workout plans, calorie/meal tracking, and general fitness."""
-

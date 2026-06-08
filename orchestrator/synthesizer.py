@@ -41,18 +41,11 @@ class ResultSynthesizer:
             Synthesized markdown string, or None when fewer than two agents
             produced non-empty output (no merging required).
         """
-        non_empty = {
-            agent: output
-            for agent, output in agent_outputs.items()
-            if output and output.strip()
-        }
+        non_empty = {agent: output for agent, output in agent_outputs.items() if output and output.strip()}
         if len(non_empty) < 2:
             return None
 
-        sections = "\n\n".join(
-            f"## {agent.capitalize()} Agent\n{output}"
-            for agent, output in non_empty.items()
-        )
+        sections = "\n\n".join(f"## {agent.capitalize()} Agent\n{output}" for agent, output in non_empty.items())
 
         try:
             system_prompt = load_prompt("prompts/synthesizer.md")
@@ -72,9 +65,7 @@ class ResultSynthesizer:
                 )
             )
         except Exception:
-            logger.warning(
-                "ResultSynthesizer: inference call failed for task %s; returning None", task_id
-            )
+            logger.warning("ResultSynthesizer: inference call failed for task %s; returning None", task_id)
             return None
 
         return response.text.strip() or None

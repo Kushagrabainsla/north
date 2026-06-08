@@ -163,9 +163,7 @@ class BashTool(Tool):
                 },
             )
 
-        resolved = await self._approval_store.wait_for_decision(
-            card_id, timeout=self._approval_timeout_seconds
-        )
+        resolved = await self._approval_store.wait_for_decision(card_id, timeout=self._approval_timeout_seconds)
         if resolved is None:
             self._approval_store.resolve(card_id, "rejected")
             return False

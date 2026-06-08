@@ -36,8 +36,6 @@ CREATE TABLE IF NOT EXISTS context_facts (
 _MAX_FACTS_RETURNED: int = 15
 
 
-
-
 class FactStore:
     """Per-fact storage with per-entry embeddings for semantic context injection.
 
@@ -91,11 +89,7 @@ class FactStore:
         if not self._cache:
             return []
 
-        scored = [
-            (content, cosine_similarity(qvec, emb))
-            for _, content, emb in self._cache
-            if emb
-        ]
+        scored = [(content, cosine_similarity(qvec, emb)) for _, content, emb in self._cache if emb]
         scored.sort(key=lambda x: x[1], reverse=True)
         return [content for content, _ in scored[:max_results]]
 
@@ -126,16 +120,13 @@ class FactStore:
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
             conn.execute(
-                "INSERT INTO context_facts (id, content, category, embedding, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO context_facts (id, content, category, embedding, updated_at) VALUES (?, ?, ?, ?, ?)",
                 (generate_id(), content, category, emb_json, now),
             )
 
     def _load_all_sync(self) -> list[tuple[str, str, str]]:
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute(
-                "SELECT id, content, embedding FROM context_facts"
-            ).fetchall()
+            rows = conn.execute("SELECT id, content, embedding FROM context_facts").fetchall()
         return [(r["id"], r["content"], r["embedding"] or "") for r in rows]
 
     def _recent_facts_sync(self, limit: int) -> list[str]:
@@ -160,7 +151,6 @@ class FactStore:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, content, category, updated_at FROM context_facts "
-                    "ORDER BY updated_at DESC"
+                    "SELECT id, content, category, updated_at FROM context_facts ORDER BY updated_at DESC"
                 ).fetchall()
         return [dict(r) for r in rows]

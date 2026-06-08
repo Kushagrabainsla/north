@@ -10,10 +10,21 @@ from pathlib import Path
 
 # Well-known sensitive system directories blocked when no workspace is set.
 _BLOCKED_PREFIXES: tuple[str, ...] = (
-    "/etc", "/proc", "/sys", "/dev", "/boot",
-    "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/var/run",
-    "/private/etc",   # macOS
-    "~/.ssh", "~/.aws", "~/.gnupg", "~/.config",
+    "/etc",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/boot",
+    "/bin",
+    "/sbin",
+    "/usr/bin",
+    "/usr/sbin",
+    "/var/run",
+    "/private/etc",  # macOS
+    "~/.ssh",
+    "~/.aws",
+    "~/.gnupg",
+    "~/.config",
 )
 
 

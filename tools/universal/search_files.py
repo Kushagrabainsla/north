@@ -37,9 +37,7 @@ class SearchFilesTool(Tool):
         matches = data.get("matches", [])
         if not matches:
             return "No matches found."
-        return "\n".join(
-            f"{m['file']}:{m['line']}: {m['text']}" for m in matches
-        )
+        return "\n".join(f"{m['file']}:{m['line']}: {m['text']}" for m in matches)
 
     async def run(self, input: ToolInput) -> ToolOutput:
         pattern = input.params.get("pattern")

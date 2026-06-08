@@ -53,9 +53,7 @@ class CostTracker(InferenceRouter):
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         response = await self._inner.complete(request)
         if request.task_id:
-            self._task_costs[request.task_id] = (
-                self._task_costs.get(request.task_id, 0.0) + response.cost_usd
-            )
+            self._task_costs[request.task_id] = self._task_costs.get(request.task_id, 0.0) + response.cost_usd
         return response
 
     async def complete_with_tools(
@@ -65,25 +63,19 @@ class CostTracker(InferenceRouter):
     ) -> ToolCallResponse:
         response = await self._inner.complete_with_tools(request, token_callback)
         if request.task_id:
-            self._task_costs[request.task_id] = (
-                self._task_costs.get(request.task_id, 0.0) + response.cost_usd
-            )
+            self._task_costs[request.task_id] = self._task_costs.get(request.task_id, 0.0) + response.cost_usd
         return response
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         response = await self._inner.embed(request)
         if request.task_id and response.cost_usd:
-            self._task_costs[request.task_id] = (
-                self._task_costs.get(request.task_id, 0.0) + response.cost_usd
-            )
+            self._task_costs[request.task_id] = self._task_costs.get(request.task_id, 0.0) + response.cost_usd
         return response
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         response = await self._inner.transcribe(request)
         if request.task_id and response.cost_usd:
-            self._task_costs[request.task_id] = (
-                self._task_costs.get(request.task_id, 0.0) + response.cost_usd
-            )
+            self._task_costs[request.task_id] = self._task_costs.get(request.task_id, 0.0) + response.cost_usd
         return response
 
     async def get_model(self, priority: PoolPriority) -> str:

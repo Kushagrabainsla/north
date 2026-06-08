@@ -175,6 +175,7 @@ def _ensure_api_keys() -> None:
         typer.secho("No API keys saved — north cannot start.", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
+
 app = typer.Typer(
     name="north",
     help="north — Personal Life Operating System CLI",
@@ -218,8 +219,16 @@ def _launch_tui(
         resolved_workspace = workspace or str(Path.home())
 
         cmd = [
-            sys.executable, "-m", "uvicorn", "orchestrator.app:app",
-            "--host", host, "--port", str(port), "--log-level", "info",
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "orchestrator.app:app",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--log-level",
+            "info",
         ]
         server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
         log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
@@ -235,6 +244,7 @@ def _launch_tui(
     import asyncio
 
     from cli.tui import run as _tui_run
+
     asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace))
 
 
@@ -251,8 +261,7 @@ def _api(method: str, path: str, **kwargs: object) -> httpx.Response:
         return response
     except httpx.ConnectError:
         typer.secho(
-            "ERROR: Cannot reach the north server. Is it running?\n"
-            "  uvicorn orchestrator.app:app --port 8000",
+            "ERROR: Cannot reach the north server. Is it running?\n  uvicorn orchestrator.app:app --port 8000",
             fg=typer.colors.RED,
             err=True,
         )
@@ -277,7 +286,9 @@ def task_default(
     ctx: typer.Context,
     prompt: str | None = typer.Argument(None, help="Prompt to submit as a new task."),
     workspace: str | None = typer.Option(
-        None, "--workspace", "-w",
+        None,
+        "--workspace",
+        "-w",
         help="Root directory agents can read/write. Defaults to git root of current directory.",
     ),
 ) -> None:
@@ -302,6 +313,7 @@ def cancel_task(
 
 # ── tasks ─────────────────────────────────────────────────────────────────────
 
+
 @app.command("tasks")
 def list_tasks() -> None:
     """List all currently pending tasks."""
@@ -325,31 +337,31 @@ def list_tasks() -> None:
 # ── shared task runner ────────────────────────────────────────────────────────
 
 _STEP_ICONS: dict[str, str] = {
-    "classifying":           "→",
-    "classified":            "✓",
+    "classifying": "→",
+    "classified": "✓",
     "classified_as_trivial": "✓",
-    "north_star_checking":   "→",
-    "north_star_aligned":    "✓",
-    "north_star_conflict":   "◆",
-    "routing":               "→",
-    "routed":                "✓",
-    "executing":             "→",
-    "agent_started":         "→",
-    "agent_completed":       "✓",
-    "tool_called":           "→",
-    "tool_result":           "✓",
+    "north_star_checking": "→",
+    "north_star_aligned": "✓",
+    "north_star_conflict": "◆",
+    "routing": "→",
+    "routed": "✓",
+    "executing": "→",
+    "agent_started": "→",
+    "agent_completed": "✓",
+    "tool_called": "→",
+    "tool_result": "✓",
 }
 
 _STEP_LABELS: dict[str, str] = {
-    "classifying":           "classifying…",
-    "classified":            "classified",
+    "classifying": "classifying…",
+    "classified": "classified",
     "classified_as_trivial": "quick task",
-    "north_star_checking":   "checking goals…",
-    "north_star_aligned":    "goals aligned",
-    "north_star_conflict":   "goal conflict",
-    "routing":               "planning…",
-    "routed":                "plan ready",
-    "executing":             "running agents…",
+    "north_star_checking": "checking goals…",
+    "north_star_aligned": "goals aligned",
+    "north_star_conflict": "goal conflict",
+    "routing": "planning…",
+    "routed": "plan ready",
+    "executing": "running agents…",
 }
 
 
@@ -402,107 +414,117 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
             Live(_make_renderable(), console=_console, refresh_per_second=8) as live,
             httpx.stream("GET", url, headers=_headers(), timeout=None) as stream,
         ):
-                current_event = ""
-                for line in stream.iter_lines():
-                    if line.startswith("event:"):
-                        current_event = line[6:].strip()
-                    elif line.startswith("data:"):
-                        try:
-                            data = json.loads(line[5:].strip())
-                        except json.JSONDecodeError:
-                            continue
+            current_event = ""
+            for line in stream.iter_lines():
+                if line.startswith("event:"):
+                    current_event = line[6:].strip()
+                elif line.startswith("data:"):
+                    try:
+                        data = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
 
-                        event = current_event or data.get("event", "")
+                    event = current_event or data.get("event", "")
 
-                        # Mark previous active step done
-                        if steps:
-                            icon, label, _ = steps[-1]
-                            steps[-1] = (icon, label, False)
+                    # Mark previous active step done
+                    if steps:
+                        icon, label, _ = steps[-1]
+                        steps[-1] = (icon, label, False)
 
-                        if event == "agent_started":
-                            agent = data.get("agent", "agent")
-                            steps.append(("◎", f"{agent} agent running…", True))
-                        elif event == "agent_completed":
-                            agent = data.get("agent", "agent")
-                            summary = data.get("summary", "")
-                            label = f"{agent}: {summary}" if summary else f"{agent} agent done"
-                            steps.append(("✓", label, True))
-                        elif event == "tool_called":
-                            tool = data.get("tool", "tool")
-                            steps.append(("→", f"  {tool}…", True))
-                        elif event == "tool_result":
-                            tool = data.get("tool", "tool")
-                            success = data.get("success", True)
-                            steps.append(("✓" if success else "✗", f"  {tool}", True))
-                        elif event == "approval_required":
-                            steps.append(("?", "Approval required", False))
-                            live.update(_make_renderable())
-                            live.stop()
-                            _console.print()
-                            _console.print(Panel(
+                    if event == "agent_started":
+                        agent = data.get("agent", "agent")
+                        steps.append(("◎", f"{agent} agent running…", True))
+                    elif event == "agent_completed":
+                        agent = data.get("agent", "agent")
+                        summary = data.get("summary", "")
+                        label = f"{agent}: {summary}" if summary else f"{agent} agent done"
+                        steps.append(("✓", label, True))
+                    elif event == "tool_called":
+                        tool = data.get("tool", "tool")
+                        steps.append(("→", f"  {tool}…", True))
+                    elif event == "tool_result":
+                        tool = data.get("tool", "tool")
+                        success = data.get("success", True)
+                        steps.append(("✓" if success else "✗", f"  {tool}", True))
+                    elif event == "approval_required":
+                        steps.append(("?", "Approval required", False))
+                        live.update(_make_renderable())
+                        live.stop()
+                        _console.print()
+                        _console.print(
+                            Panel(
                                 Text(data.get("message", ""), style="white"),
                                 title="[yellow]approval required[/yellow]",
                                 border_style="yellow",
                                 padding=(1, 2),
-                            ))
-                            options = data.get("options", ["Approve", "Reject"])
-                            for i, opt in enumerate(options, 1):
-                                _console.print(f"  [bright_black][{i}][/bright_black]  {opt}")
-                            _console.print()
-                            raw_choice = input("  ❯ ").strip()
-                            try:
-                                idx = int(raw_choice) - 1
-                                chosen = options[idx] if 0 <= idx < len(options) else raw_choice
-                            except ValueError:
-                                chosen = raw_choice or options[0]
-                            decision = "approved" if chosen.lower() in ("approve", "approved", "yes") else \
-                                       "rejected" if chosen.lower() in ("reject", "rejected", "no") else \
-                                       "answered"
-                            with contextlib.suppress(SystemExit):
-                                _api("POST", "/orchestrator/approval/respond", json={
+                            )
+                        )
+                        options = data.get("options", ["Approve", "Reject"])
+                        for i, opt in enumerate(options, 1):
+                            _console.print(f"  [bright_black][{i}][/bright_black]  {opt}")
+                        _console.print()
+                        raw_choice = input("  ❯ ").strip()
+                        try:
+                            idx = int(raw_choice) - 1
+                            chosen = options[idx] if 0 <= idx < len(options) else raw_choice
+                        except ValueError:
+                            chosen = raw_choice or options[0]
+                        decision = (
+                            "approved"
+                            if chosen.lower() in ("approve", "approved", "yes")
+                            else "rejected"
+                            if chosen.lower() in ("reject", "rejected", "no")
+                            else "answered"
+                        )
+                        with contextlib.suppress(SystemExit):
+                            _api(
+                                "POST",
+                                "/orchestrator/approval/respond",
+                                json={
                                     "card_id": data.get("card_id", ""),
                                     "task_id": task_id,
                                     "agent": data.get("agent", ""),
                                     "decision": decision,
                                     "chosen_option": chosen,
-                                })
-                            steps[-1] = ("✓" if decision != "rejected" else "✗", f"Approval: {chosen}", False)
-                            # Do NOT restart Live — cursor is now past the approval panel.
-                            # Subsequent live.update() calls on a stopped Live are no-ops;
-                            # task_completed / task_cancelled will break the loop.
-                            current_event = ""
-                            continue
-                        elif event == "token":
-                            token_buffer += data.get("text", "")
-                            # Don't add a step pill per token — just accumulate silently.
-                            current_event = ""
-                            continue
-                        elif event in _STEP_LABELS:
-                            steps.append((_STEP_ICONS.get(event, "·"), _STEP_LABELS[event], True))
-
-                        live.update(_make_renderable())
-
-                        if event == "task_completed":
-                            if steps:
-                                icon, label, _ = steps[-1]
-                                steps[-1] = (icon, label, False)
-                            live.update(_make_renderable())
-                            break
-                        if event == "task_failed":
-                            failed_msg = data.get("error", "Task failed.")
-                            if steps:
-                                icon, label, _ = steps[-1]
-                                steps[-1] = ("✗", label, False)
-                            live.update(_make_renderable())
-                            break
-                        if event == "task_cancelled":
-                            if steps:
-                                icon, label, _ = steps[-1]
-                                steps[-1] = (icon, label, False)
-                            live.update(_make_renderable())
-                            _console.print("[dim]Task cancelled.[/dim]")
-                            break
+                                },
+                            )
+                        steps[-1] = ("✓" if decision != "rejected" else "✗", f"Approval: {chosen}", False)
+                        # Do NOT restart Live — cursor is now past the approval panel.
+                        # Subsequent live.update() calls on a stopped Live are no-ops;
+                        # task_completed / task_cancelled will break the loop.
                         current_event = ""
+                        continue
+                    elif event == "token":
+                        token_buffer += data.get("text", "")
+                        # Don't add a step pill per token — just accumulate silently.
+                        current_event = ""
+                        continue
+                    elif event in _STEP_LABELS:
+                        steps.append((_STEP_ICONS.get(event, "·"), _STEP_LABELS[event], True))
+
+                    live.update(_make_renderable())
+
+                    if event == "task_completed":
+                        if steps:
+                            icon, label, _ = steps[-1]
+                            steps[-1] = (icon, label, False)
+                        live.update(_make_renderable())
+                        break
+                    if event == "task_failed":
+                        failed_msg = data.get("error", "Task failed.")
+                        if steps:
+                            icon, label, _ = steps[-1]
+                            steps[-1] = ("✗", label, False)
+                        live.update(_make_renderable())
+                        break
+                    if event == "task_cancelled":
+                        if steps:
+                            icon, label, _ = steps[-1]
+                            steps[-1] = (icon, label, False)
+                        live.update(_make_renderable())
+                        _console.print("[dim]Task cancelled.[/dim]")
+                        break
+                    current_event = ""
 
     except KeyboardInterrupt:
         _console.print("[dim]Interrupted.[/dim]")
@@ -510,12 +532,14 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
 
     if failed_msg:
         _console.print()
-        _console.print(Panel(
-            Text(failed_msg, style="red"),
-            title="[dim]north — error[/dim]",
-            border_style="bright_black",
-            padding=(1, 2),
-        ))
+        _console.print(
+            Panel(
+                Text(failed_msg, style="red"),
+                title="[dim]north — error[/dim]",
+                border_style="bright_black",
+                padding=(1, 2),
+            )
+        )
         return ""
 
     if token_buffer:
@@ -526,25 +550,25 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
         try:
             ledger_resp = _api("GET", f"/orchestrator/ledger?task_id={task_id}&limit=20")
             entries = ledger_resp.json()
-            outputs = [
-                e["output"] for e in entries
-                if e.get("action") == "agent_completed" and e.get("output")
-            ]
+            outputs = [e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output")]
             output_text = "\n\n".join(outputs) if outputs else "Task completed."
         except Exception:
             output_text = "Task completed."
 
     _console.print()
-    _console.print(Panel(
-        Markdown(output_text),
-        title="[dim]north[/dim]",
-        border_style="bright_black",
-        padding=(1, 2),
-    ))
+    _console.print(
+        Panel(
+            Markdown(output_text),
+            title="[dim]north[/dim]",
+            border_style="bright_black",
+            padding=(1, 2),
+        )
+    )
     return output_text
 
 
 # ── stream (raw) ──────────────────────────────────────────────────────────────
+
 
 @app.command("stream")
 def stream_task(
@@ -636,6 +660,7 @@ def context_add(
 
 # ── ledger ───────────────────────────────────────────────────────────────────
 
+
 @app.command("ledger")
 def show_ledger(
     limit: int = typer.Option(20, "--limit", "-n", help="Number of entries to show."),
@@ -668,9 +693,11 @@ def show_ledger(
         ts = entry["timestamp"][:19].replace("T", " ")
         status = entry.get("status") or ""
         status_fmt = (
-            f"[green]{status}[/green]" if status == "completed" else
-            f"[red]{status}[/red]" if status == "failed" else
-            f"[dim]{status}[/dim]"
+            f"[green]{status}[/green]"
+            if status == "completed"
+            else f"[red]{status}[/red]"
+            if status == "failed"
+            else f"[dim]{status}[/dim]"
         )
         table.add_row(
             ts,
@@ -685,6 +712,7 @@ def show_ledger(
 
 
 # ── jobs ──────────────────────────────────────────────────────────────────────
+
 
 @app.command("jobs")
 def show_jobs(
@@ -706,10 +734,13 @@ def show_jobs(
     for job in jobs:
         status = job["status"]
         status_style = (
-            "green" if status == "completed" else
-            "yellow" if status == "pending" else
-            "red" if status == "failed" else
-            "dim"
+            "green"
+            if status == "completed"
+            else "yellow"
+            if status == "pending"
+            else "red"
+            if status == "failed"
+            else "dim"
         )
         _console.print(
             f"  [bright_black]{job['job_id']}[/bright_black]  "
@@ -851,9 +882,7 @@ def create_agent(
     class_name = "".join(word.title() for word in name.split("_")) + "Agent"
 
     base_import = (
-        "from agents.agentic_llm_agent import AgenticLLMAgent"
-        if agentic else
-        "from agents.llm_agent import LLMAgent"
+        "from agents.agentic_llm_agent import AgenticLLMAgent" if agentic else "from agents.llm_agent import LLMAgent"
     )
     base_class = "AgenticLLMAgent" if agentic else "LLMAgent"
 
@@ -867,22 +896,28 @@ def create_agent(
     )
 
     import yaml  # type: ignore[import-untyped]
+
     (agent_dir / "config.yaml").write_text(
-        yaml.dump({
-            "agent": name,
-            "domain": domain,
-            "model_pool": model_pool,
-            "accepts": accepts,
-            "output_format": "structured_json",
-            "version": "1.0.0",
-            "class_name": class_name,
-        }, default_flow_style=False, sort_keys=False),
+        yaml.dump(
+            {
+                "agent": name,
+                "domain": domain,
+                "model_pool": model_pool,
+                "accepts": accepts,
+                "output_format": "structured_json",
+                "version": "1.0.0",
+                "class_name": class_name,
+            },
+            default_flow_style=False,
+            sort_keys=False,
+        ),
         encoding="utf-8",
     )
 
     # Discover universal tool names by scanning the installed package.
     try:
         import importlib.util as _ilu
+
         _spec = _ilu.find_spec("tools.universal")
         if _spec and _spec.submodule_search_locations:
             _udir = Path(list(_spec.submodule_search_locations)[0])
@@ -905,10 +940,7 @@ def create_agent(
         "# Specialized tools for this agent. Universal tools are\n"
         "# automatically available to all agents and do not need to be listed here.\n"
     )
-    _tools_body = (
-        "tools:\n" + "".join(f"  - {t}\n" for t in specialized_tools)
-        if specialized_tools else "tools: []\n"
-    )
+    _tools_body = "tools:\n" + "".join(f"  - {t}\n" for t in specialized_tools) if specialized_tools else "tools: []\n"
     (agent_dir / "tools.yaml").write_text(_tools_comment + _tools_body, encoding="utf-8")
 
     (agent_dir / "prompts" / "system.md").write_text(system_prompt, encoding="utf-8")
@@ -975,9 +1007,7 @@ def run_agent(
     task: str = typer.Argument(..., help="Task description for the agent."),
 ) -> None:
     """Manually trigger a specific agent."""
-    response = _api(
-        "POST", "/orchestrator/agent/run", json={"agent": name, "task": task}
-    )
+    response = _api("POST", "/orchestrator/agent/run", json={"agent": name, "task": task})
     data = response.json()
     typer.secho(f"✓ Task submitted: {data['task_id']}", fg=typer.colors.GREEN)
     typer.echo(f"  Stream with:  north stream {data['task_id']}")
@@ -1034,6 +1064,7 @@ def inference_models() -> None:
 
 # ── metrics ──────────────────────────────────────────────────────────────────
 
+
 @app.command("metrics")
 def metrics(
     period: int = typer.Option(7, "--period", "-p", help="Look-back window in days (default 7)."),
@@ -1085,6 +1116,7 @@ def metrics(
 
 # ── dictate ───────────────────────────────────────────────────────────────────
 
+
 @app.command("dictate")
 def dictate(
     hotkey: str = typer.Option(
@@ -1106,7 +1138,8 @@ def dictate(
     except ImportError as exc:
         typer.secho(
             f"ERROR: Missing dependency: {exc}. Install with: uv add sounddevice pynput",
-            fg=typer.colors.RED, err=True,
+            fg=typer.colors.RED,
+            err=True,
         )
         raise typer.Exit(1) from None
 
@@ -1124,7 +1157,8 @@ def dictate(
 
     typer.secho(
         f"★ north dictate  (hold {hotkey} to record, Ctrl+C to quit)",
-        fg=typer.colors.BRIGHT_WHITE, bold=True,
+        fg=typer.colors.BRIGHT_WHITE,
+        bold=True,
     )
 
     def _audio_callback(indata, frame_count, time_info, status):  # type: ignore[no-untyped-def]
@@ -1164,6 +1198,7 @@ def dictate(
         # Encode as 16-bit PCM WAV in memory
         import io  # noqa: E401
         import wave
+
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(1)
@@ -1244,11 +1279,7 @@ def tools_confidence(
         bar_len = int(conf * 20)
         bar = "█" * bar_len + "░" * (20 - bar_len)
         bar_color = "green" if conf >= 0.7 else "yellow" if conf >= 0.4 else "red"
-        _console.print(
-            f"    [dim]{row['tool']:<24}[/dim]  "
-            f"[{bar_color}]{bar}[/{bar_color}]  "
-            f"[dim]{conf:.2f}[/dim]"
-        )
+        _console.print(f"    [dim]{row['tool']:<24}[/dim]  [{bar_color}]{bar}[/{bar_color}]  [dim]{conf:.2f}[/dim]")
     _console.print()
 
 
@@ -1276,7 +1307,8 @@ def config_set(
     if key not in _CONFIG_KEYS:
         typer.secho(
             f"Unknown key {key!r}. Valid keys: {', '.join(_CONFIG_KEYS)}",
-            fg=typer.colors.RED, err=True,
+            fg=typer.colors.RED,
+            err=True,
         )
         raise typer.Exit(1) from None
 
@@ -1286,7 +1318,8 @@ def config_set(
     except ValueError:
         typer.secho(
             f"Invalid value {value!r} for {key}: expected {cast.__name__}",
-            fg=typer.colors.RED, err=True,
+            fg=typer.colors.RED,
+            err=True,
         )
         raise typer.Exit(1) from None
 
@@ -1310,6 +1343,7 @@ def config_set(
 
 
 # ── port helpers ──────────────────────────────────────────────────────────────
+
 
 def _port_in_use(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -1341,9 +1375,10 @@ def _sync_docker_secret(compose_file: Path) -> None:
     """Read the north secret from the running Docker container and cache it locally."""
     try:
         result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "exec", "-T", "north",
-             "cat", "/data/secret.key"],
-            capture_output=True, text=True, timeout=10,
+            ["docker", "compose", "-f", str(compose_file), "exec", "-T", "north", "cat", "/data/secret.key"],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode == 0 and result.stdout.strip():
             secret_path = Path.home() / ".north" / "secret.key"
@@ -1356,6 +1391,7 @@ def _sync_docker_secret(compose_file: Path) -> None:
 def _kill_port(host: str, port: int) -> bool:
     try:
         import psutil
+
         killed = False
         for conn in psutil.net_connections(kind="inet"):
             if conn.laddr.port == port and conn.status == "LISTEN":
@@ -1370,7 +1406,8 @@ def _kill_port(host: str, port: int) -> bool:
         try:
             result = subprocess.run(
                 ["lsof", "-ti", f":{port}"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             pids = result.stdout.strip().split()
             if not pids:
@@ -1384,6 +1421,7 @@ def _kill_port(host: str, port: int) -> bool:
 
 
 # ── start ─────────────────────────────────────────────────────────────────────
+
 
 def _find_compose_file() -> Path | None:
     """Return the compose file to use.
@@ -1432,7 +1470,9 @@ def start(
     docker: bool = typer.Option(False, "--docker", help="Run via Docker Compose (for server/headless deployments)."),
     no_chat: bool = typer.Option(False, "--no-chat", help="Start server only; skip interactive chat."),
     workspace: str | None = typer.Option(
-        None, "--workspace", "-w",
+        None,
+        "--workspace",
+        "-w",
         help="Root directory agents can read/write. Defaults to current directory.",
     ),
 ) -> None:
@@ -1454,7 +1494,8 @@ def start(
     if docker and compose_file is None:
         typer.secho(
             "No docker-compose.yml found. Run from the project root or omit --docker.",
-            fg=typer.colors.RED, err=True,
+            fg=typer.colors.RED,
+            err=True,
         )
         raise typer.Exit(1) from None
 
@@ -1511,7 +1552,8 @@ def start(
         if not _kill_port(host, port):
             typer.secho(
                 f"Could not stop the existing process. Try killing port {port} manually.",
-                fg=typer.colors.RED, err=True,
+                fg=typer.colors.RED,
+                err=True,
             )
             raise typer.Exit(1) from None
         time.sleep(1)
@@ -1529,8 +1571,16 @@ def start(
     # redirected to the log file at the OS level — no monkey-patching needed.
     # Every print(), logging call, traceback, and uvicorn line goes to the file.
     cmd = [
-        sys.executable, "-m", "uvicorn", "orchestrator.app:app",
-        "--host", host, "--port", str(port), "--log-level", "info",
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "orchestrator.app:app",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--log-level",
+        "info",
     ]
     if reload:
         cmd.append("--reload")
@@ -1577,6 +1627,7 @@ def stop(
         return
 
     from config.settings import settings
+
     pid_path = settings.north_home / "north.pid"
 
     if pid_path.exists():
@@ -1632,6 +1683,7 @@ def reset(
 
     # Stop the server first
     import signal
+
     pid_path = north_home / "north.pid"
     if pid_path.exists():
         try:
@@ -1718,17 +1770,23 @@ def update(
     # ── uv tool install from git URL ──────────────────────────────────────
     if is_git_url:
         if not shutil.which("uv"):
-            typer.secho("ERROR: uv not found — cannot upgrade. Install uv or run: pip install --upgrade git+<url>", fg=typer.colors.RED, err=True)
+            typer.secho(
+                "ERROR: uv not found — cannot upgrade. Install uv or run: pip install --upgrade git+<url>",
+                fg=typer.colors.RED,
+                err=True,
+            )
             raise typer.Exit(1) from None
         _console.print("  [dim]→[/dim]  upgrading via uv…")
         result = subprocess.run(
             ["uv", "tool", "upgrade", "north"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             typer.secho(
                 f"uv tool upgrade failed:\n{(result.stdout + result.stderr).strip()}",
-                fg=typer.colors.RED, err=True,
+                fg=typer.colors.RED,
+                err=True,
             )
             raise typer.Exit(1) from None
         _console.print("  [dim green]✓[/dim green]  upgraded")
@@ -1740,21 +1798,20 @@ def update(
             typer.secho(
                 "ERROR: Could not locate the north project root.\n"
                 "Install north with: uv tool install git+<your-repo-url>",
-                fg=typer.colors.RED, err=True,
+                fg=typer.colors.RED,
+                err=True,
             )
             raise typer.Exit(1) from None
         if not (project_root / ".git").exists():
             typer.secho(
-                "ERROR: Project directory has no .git — cannot pull.\n"
-                "Run: uv sync",
-                fg=typer.colors.YELLOW, err=True,
+                "ERROR: Project directory has no .git — cannot pull.\nRun: uv sync",
+                fg=typer.colors.YELLOW,
+                err=True,
             )
             raise typer.Exit(1) from None
 
         _console.print("  [dim]→[/dim]  git pull…")
-        pull_result = subprocess.run(
-            ["git", "pull"], cwd=project_root, capture_output=True, text=True
-        )
+        pull_result = subprocess.run(["git", "pull"], cwd=project_root, capture_output=True, text=True)
         if pull_result.returncode != 0:
             typer.secho(f"git pull failed:\n{pull_result.stderr.strip()}", fg=typer.colors.RED, err=True)
             raise typer.Exit(1) from None
@@ -1789,6 +1846,7 @@ def _get_install_url() -> tuple[str | None, bool]:
     try:
         import json as _json
         from importlib.metadata import Distribution
+
         du = Distribution.from_name("north").read_text("direct_url.json")
         if du:
             data = _json.loads(du)
@@ -1836,10 +1894,8 @@ def _stop_server(port: int) -> None:
                 except ProcessLookupError:
                     break
             else:
-                try:
+                with contextlib.suppress(ProcessLookupError):
                     os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
         except ProcessLookupError:
             pid_path.unlink(missing_ok=True)
         except Exception as exc:
@@ -1857,14 +1913,18 @@ def _start_server_process(port: int, project_root: Path | None = None) -> subpro
     log_path = settings.north_home / "north.log"
     pid_path = settings.north_home / "north.pid"
     workspace_path = settings.north_home / "workspace.txt"
-    workspace = (
-        workspace_path.read_text(encoding="utf-8").strip()
-        if workspace_path.exists()
-        else str(Path.home())
-    )
+    workspace = workspace_path.read_text(encoding="utf-8").strip() if workspace_path.exists() else str(Path.home())
     cmd = [
-        sys.executable, "-m", "uvicorn", "orchestrator.app:app",
-        "--host", "127.0.0.1", "--port", str(port), "--log-level", "info",
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "orchestrator.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--log-level",
+        "info",
     ]
     server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": workspace}
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1876,12 +1936,9 @@ def _start_server_process(port: int, project_root: Path | None = None) -> subpro
 
 def _sync_dependencies(project_root: Path) -> bool:
     """Run uv sync, falling back to pip install -e . Returns True on success."""
-    if shutil.which("uv"):
-        if _run_command(["uv", "sync"], cwd=project_root):
-            return True
-    return _run_command(
-        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=project_root
-    )
+    if shutil.which("uv") and _run_command(["uv", "sync"], cwd=project_root):
+        return True
+    return _run_command([sys.executable, "-m", "pip", "install", "-e", "."], cwd=project_root)
 
 
 def _run_command(cmd: list[str], *, cwd: Path) -> bool:
@@ -1897,7 +1954,10 @@ def _git_describe(root: Path) -> str | None:
     try:
         r = subprocess.run(
             ["git", "log", "-1", "--pretty=format:%h %s"],
-            capture_output=True, text=True, cwd=root, timeout=5,
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=5,
         )
         return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
@@ -1909,9 +1969,12 @@ def _git_log_since_pull(root: Path) -> list[str]:
     try:
         r = subprocess.run(
             ["git", "log", "HEAD@{1}..HEAD", "--pretty=format:%h %s"],
-            capture_output=True, text=True, cwd=root, timeout=5,
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=5,
         )
-        return [l for l in r.stdout.strip().splitlines() if l] if r.returncode == 0 else []
+        return [line for line in r.stdout.strip().splitlines() if line] if r.returncode == 0 else []
     except Exception:
         return []
 

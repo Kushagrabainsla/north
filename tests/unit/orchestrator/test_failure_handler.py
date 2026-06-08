@@ -31,6 +31,7 @@ from utils.ids import generate_id
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_ledger_entry(
     *,
     task_id: str,
@@ -78,8 +79,7 @@ def _read_agent_status(db_path: Path, task_id: str, agent: str) -> str:
     """Read the _status row value for an agent directly from SQLite."""
     with open_db_connection(db_path) as conn:
         row = conn.execute(
-            "SELECT status FROM task_state "
-            "WHERE task_id=? AND agent=? AND key='_status'",
+            "SELECT status FROM task_state WHERE task_id=? AND agent=? AND key='_status'",
             (task_id, agent),
         ).fetchone()
     return row["status"] if row else "missing"
@@ -88,6 +88,7 @@ def _read_agent_status(db_path: Path, task_id: str, agent: str) -> str:
 # ---------------------------------------------------------------------------
 # Bug 1: reconstruct_context key alignment
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_reconstruct_context_writes_result_and_output_keys(tmp_path: Path) -> None:
@@ -103,14 +104,16 @@ async def test_reconstruct_context_writes_result_and_output_keys(tmp_path: Path)
     structured_data = {"budget": 1000, "currency": "USD"}
     human_output = "Budget is $1,000 USD."
 
-    mock_ledger.query = AsyncMock(return_value=[
-        _make_ledger_entry(
-            task_id="t1",
-            agent="finance",
-            agent_output=structured_data,
-            output=human_output,
-        )
-    ])
+    mock_ledger.query = AsyncMock(
+        return_value=[
+            _make_ledger_entry(
+                task_id="t1",
+                agent="finance",
+                agent_output=structured_data,
+                output=human_output,
+            )
+        ]
+    )
 
     await handler.reconstruct_context("t1", ["finance"])
 
@@ -129,14 +132,16 @@ async def test_reconstruct_context_handles_none_agent_output(tmp_path: Path) -> 
     """reconstruct_context must not crash when agent_output is None."""
     handler, store, mock_ledger = _make_handler(tmp_path)
 
-    mock_ledger.query = AsyncMock(return_value=[
-        _make_ledger_entry(
-            task_id="t1",
-            agent="general",
-            agent_output=None,
-            output="Some text",
-        )
-    ])
+    mock_ledger.query = AsyncMock(
+        return_value=[
+            _make_ledger_entry(
+                task_id="t1",
+                agent="general",
+                agent_output=None,
+                output="Some text",
+            )
+        ]
+    )
 
     await handler.reconstruct_context("t1", ["general"])
 
@@ -150,14 +155,16 @@ async def test_reconstruct_context_handles_none_output(tmp_path: Path) -> None:
     """reconstruct_context must not crash when output is None."""
     handler, store, mock_ledger = _make_handler(tmp_path)
 
-    mock_ledger.query = AsyncMock(return_value=[
-        _make_ledger_entry(
-            task_id="t1",
-            agent="health",
-            agent_output={"calories": 2000},
-            output=None,
-        )
-    ])
+    mock_ledger.query = AsyncMock(
+        return_value=[
+            _make_ledger_entry(
+                task_id="t1",
+                agent="health",
+                agent_output={"calories": 2000},
+                output=None,
+            )
+        ]
+    )
 
     await handler.reconstruct_context("t1", ["health"])
 
@@ -171,15 +178,17 @@ async def test_reconstruct_context_skips_non_completed_entries(tmp_path: Path) -
     """reconstruct_context must skip entries that are not COMPLETED."""
     handler, store, mock_ledger = _make_handler(tmp_path)
 
-    mock_ledger.query = AsyncMock(return_value=[
-        _make_ledger_entry(
-            task_id="t1",
-            agent="finance",
-            agent_output={"data": True},
-            output="Done",
-            status=LedgerStatus.FAILED,  # should be skipped
-        )
-    ])
+    mock_ledger.query = AsyncMock(
+        return_value=[
+            _make_ledger_entry(
+                task_id="t1",
+                agent="finance",
+                agent_output={"data": True},
+                output="Done",
+                status=LedgerStatus.FAILED,  # should be skipped
+            )
+        ]
+    )
 
     await handler.reconstruct_context("t1", ["finance"])
 
@@ -191,6 +200,7 @@ async def test_reconstruct_context_skips_non_completed_entries(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 # Bug 2: handle_failure status update timing
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_handle_failure_does_not_mark_failed_on_retriable_attempt(
@@ -211,8 +221,7 @@ async def test_handle_failure_does_not_mark_failed_on_retriable_attempt(
 
     status = await asyncio.to_thread(_read_agent_status, tmp_path / "tasks.db", "t1", "finance")
     assert status == "pending", (
-        f"Agent status was '{status}' after retriable failure — "
-        "should remain 'pending' until max_retries is exhausted"
+        f"Agent status was '{status}' after retriable failure — should remain 'pending' until max_retries is exhausted"
     )
 
 
@@ -233,9 +242,7 @@ async def test_handle_failure_marks_failed_only_on_terminal_attempt(
     assert r2 is False
 
     status = await asyncio.to_thread(_read_agent_status, tmp_path / "tasks.db", "t1", "finance")
-    assert status == "failed", (
-        f"Agent status was '{status}' after terminal failure — expected 'failed'"
-    )
+    assert status == "failed", f"Agent status was '{status}' after terminal failure — expected 'failed'"
 
 
 @pytest.mark.asyncio
@@ -256,6 +263,7 @@ async def test_handle_failure_returns_true_before_max_retries(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 # Bug 3: retry counter memory leak
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_retry_count_cleared_after_terminal_failure(tmp_path: Path) -> None:
@@ -283,9 +291,7 @@ async def test_retry_count_preserved_between_retriable_failures(tmp_path: Path) 
 
     await handler.handle_failure("t1", "finance", RuntimeError("attempt 1"))
 
-    assert ("t1", "finance") in handler._retry_counts, (
-        "Retry count was prematurely cleared on a retriable failure"
-    )
+    assert ("t1", "finance") in handler._retry_counts, "Retry count was prematurely cleared on a retriable failure"
     assert handler._retry_counts[("t1", "finance")] == 1
 
 
@@ -298,8 +304,7 @@ async def test_retry_count_increments_per_failure(tmp_path: Path) -> None:
     for expected in range(1, 4):
         await handler.handle_failure("t1", "search", RuntimeError("err"))
         assert handler._retry_counts[("t1", "search")] == expected, (
-            f"Expected retry count={expected}, "
-            f"got {handler._retry_counts[('t1', 'search')]}"
+            f"Expected retry count={expected}, got {handler._retry_counts[('t1', 'search')]}"
         )
 
 

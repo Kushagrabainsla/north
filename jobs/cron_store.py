@@ -66,8 +66,4 @@ class UserCronStore:
 
     def _list_sync(self) -> list[sqlite3.Row]:
         with open_db_connection(self._db_path) as conn:
-            return list(
-                conn.execute(
-                    "SELECT * FROM user_cron_entries ORDER BY created_at"
-                ).fetchall()
-            )
+            return list(conn.execute("SELECT * FROM user_cron_entries ORDER BY created_at").fetchall())

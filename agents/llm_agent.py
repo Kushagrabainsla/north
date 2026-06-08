@@ -36,19 +36,14 @@ class LLMAgent(Agent):
         # the first call to _execute() never blocks the running event loop.
         path = self._prompts_dir() / "system.md"
         if not path.exists():
-            raise AgentConfigError(
-                f"Missing system prompt at {path}. Every LLMAgent needs one."
-            )
+            raise AgentConfigError(f"Missing system prompt at {path}. Every LLMAgent needs one.")
         self._system_prompt_cache: str = path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY
 
     def _prompts_dir(self) -> Path:
         """Resolve the agent's `prompts/` folder relative to its module file."""
         module = sys.modules[self.__class__.__module__]
         if module.__file__ is None:
-            raise AgentConfigError(
-                f"Cannot resolve prompts dir for {self.__class__.__name__}: "
-                "module has no __file__"
-            )
+            raise AgentConfigError(f"Cannot resolve prompts dir for {self.__class__.__name__}: module has no __file__")
         return Path(module.__file__).parent / "prompts"
 
     def _load_system_prompt(self) -> str:
@@ -60,10 +55,7 @@ class LLMAgent(Agent):
         context: str,
         scored_tools: list[tuple[Tool, float]],
     ) -> str:
-        tool_lines = "\n".join(
-            f"- {t.name} (reliability {score:.0%}): {t.description}"
-            for t, score in scored_tools
-        )
+        tool_lines = "\n".join(f"- {t.name} (reliability {score:.0%}): {t.description}" for t, score in scored_tools)
         now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
         system_lines = [f"- current date/time: {now}"]
         if payload.workspace:
@@ -131,14 +123,10 @@ class LLMAgent(Agent):
         try:
             parsed = json.loads(cleaned)
         except json.JSONDecodeError as e:
-            raise AgentOutputParseError(
-                f"{self.name} returned non-JSON output: {text[:200]}"
-            ) from e
+            raise AgentOutputParseError(f"{self.name} returned non-JSON output: {text[:200]}") from e
 
         if not isinstance(parsed, dict):
-            raise AgentOutputParseError(
-                f"{self.name} returned non-object JSON: {type(parsed).__name__}"
-            )
+            raise AgentOutputParseError(f"{self.name} returned non-object JSON: {type(parsed).__name__}")
         return parsed
 
 

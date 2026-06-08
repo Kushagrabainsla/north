@@ -21,9 +21,7 @@ class NorthStarChecker:
         self._context_store = context_store
         self._inference_router = inference_router
 
-    async def check_alignment(
-        self, prompt: str, task_id: str | None = None
-    ) -> tuple[bool, str | None, str]:
+    async def check_alignment(self, prompt: str, task_id: str | None = None) -> tuple[bool, str | None, str]:
         """Evaluates whether the prompt aligns with the goals in `north_stars.md`.
 
         Args:
@@ -49,9 +47,7 @@ class NorthStarChecker:
             raise OrchestratorError(f"Failed to load North Star prompt template: {e}") from e
 
         full_prompt = (
-            f"{system_prompt}\n\n"
-            f"=== Active Goals (north_stars.md) ===\n{goals}\n\n"
-            f"=== Task Request ===\n{prompt}"
+            f"{system_prompt}\n\n=== Active Goals (north_stars.md) ===\n{goals}\n\n=== Task Request ===\n{prompt}"
         )
 
         try:
@@ -76,15 +72,11 @@ class NorthStarChecker:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
-            raise OrchestratorError(
-                f"Failed to parse North Star checker output as JSON: {text}. Error: {e}"
-            ) from e
+            raise OrchestratorError(f"Failed to parse North Star checker output as JSON: {text}. Error: {e}") from e
 
         for field in ("aligned", "reasoning"):
             if field not in data:
-                raise OrchestratorError(
-                    f"North Star check response is missing required field '{field}': {data}"
-                )
+                raise OrchestratorError(f"North Star check response is missing required field '{field}': {data}")
 
         aligned = bool(data["aligned"])
         tension = data.get("tension")

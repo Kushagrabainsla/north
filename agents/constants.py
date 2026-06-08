@@ -1,4 +1,5 @@
 """Agent module constants."""
+
 from __future__ import annotations
 
 # Supports full researcher→architect→coder↔tester chains with multiple fix cycles.

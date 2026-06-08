@@ -28,10 +28,8 @@ CREATE TABLE IF NOT EXISTS tool_embeddings (
 )
 """
 
-SEMANTIC_TOP_K: int = 15      # max tools to inject per task
+SEMANTIC_TOP_K: int = 15  # max tools to inject per task
 SEMANTIC_FILTER_MIN: int = 8  # only activate semantic filter when more tools exist than this
-
-
 
 
 class ToolIndex:
@@ -99,6 +97,7 @@ class ToolIndex:
 
     def _upsert_sync(self, name: str, description: str, emb_json: str) -> None:
         from utils.time import utcnow
+
         now = utcnow().isoformat()
         with open_db_connection(self._db_path) as conn:
             conn.execute(
@@ -117,7 +116,5 @@ class ToolIndex:
 
     def _load_all_sync(self) -> list[tuple[str, str]]:
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute(
-                "SELECT name, embedding FROM tool_embeddings"
-            ).fetchall()
+            rows = conn.execute("SELECT name, embedding FROM tool_embeddings").fetchall()
         return [(r["name"], r["embedding"]) for r in rows]

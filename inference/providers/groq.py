@@ -6,6 +6,7 @@ GET /openai/v1/models on each refresh(); capabilities are inferred from
 model ID naming conventions. get_models() returns an empty dict until the
 first refresh() completes.
 """
+
 from __future__ import annotations
 
 import logging
@@ -66,31 +67,21 @@ class GroqRouter(OpenAICompatibleProvider):
         if live:
             self._models = live
 
-    async def transcribe(
-        self, model_id: str, request: TranscriptionRequest
-    ) -> TranscriptionResponse:
+    async def transcribe(self, model_id: str, request: TranscriptionRequest) -> TranscriptionResponse:
         files = {"file": ("audio.wav", request.audio, "audio/wav")}
         data = {"model": model_id}
         try:
-            resp = await self._client.post(
-                "/audio/transcriptions", files=files, data=data
-            )
+            resp = await self._client.post("/audio/transcriptions", files=files, data=data)
         except httpx.RequestError as e:
-            raise TranscriptionError(
-                f"Transcription request to Groq failed: {e}"
-            ) from e
+            raise TranscriptionError(f"Transcription request to Groq failed: {e}") from e
         if resp.status_code in (429, 503):
             raise ModelRateLimitedError(model_id, self.name)
         if resp.status_code >= 400:
-            raise TranscriptionError(
-                f"Groq returned {resp.status_code}: {resp.text[:200]}"
-            )
+            raise TranscriptionError(f"Groq returned {resp.status_code}: {resp.text[:200]}")
         try:
             payload = resp.json()
         except ValueError as e:
-            raise TranscriptionError(
-                "Groq transcription response was not JSON"
-            ) from e
+            raise TranscriptionError("Groq transcription response was not JSON") from e
         return TranscriptionResponse(
             text=payload.get("text", ""),
             model_used=payload.get("model", model_id),

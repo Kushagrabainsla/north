@@ -96,9 +96,7 @@ class SQLiteJobProcessor(JobProcessor):
 
     def _get_sync(self, job_id: str) -> sqlite3.Row | None:
         with open_db_connection(self._db_path) as conn:
-            return conn.execute(
-                "SELECT * FROM job_queue WHERE job_id = ?", (job_id,)
-            ).fetchone()
+            return conn.execute("SELECT * FROM job_queue WHERE job_id = ?", (job_id,)).fetchone()
 
     async def claim_next(self) -> Job | None:
         row = await asyncio.to_thread(self._claim_next_sync)
@@ -127,9 +125,7 @@ class SQLiteJobProcessor(JobProcessor):
                     "UPDATE job_queue SET status = ?, started_at = ? WHERE job_id = ?",
                     (JobStatus.RUNNING.value, now, row["job_id"]),
                 )
-                updated = conn.execute(
-                    "SELECT * FROM job_queue WHERE job_id = ?", (row["job_id"],)
-                ).fetchone()
+                updated = conn.execute("SELECT * FROM job_queue WHERE job_id = ?", (row["job_id"],)).fetchone()
                 conn.execute("COMMIT")
                 return updated
             except Exception:
@@ -139,12 +135,8 @@ class SQLiteJobProcessor(JobProcessor):
     async def mark_completed(self, job_id: str) -> None:
         await asyncio.to_thread(self._set_terminal_sync, job_id, JobStatus.COMPLETED)
 
-    async def mark_failed(
-        self, job_id: str, retry_after: datetime | None = None
-    ) -> None:
-        await asyncio.to_thread(
-            self._mark_failed_sync, job_id, retry_after
-        )
+    async def mark_failed(self, job_id: str, retry_after: datetime | None = None) -> None:
+        await asyncio.to_thread(self._mark_failed_sync, job_id, retry_after)
 
     def _mark_failed_sync(self, job_id: str, retry_after: datetime | None) -> None:
         if retry_after is not None:
@@ -202,9 +194,7 @@ class SQLiteJobProcessor(JobProcessor):
                 (status.value, datetime.now(UTC).isoformat(), job_id),
             )
 
-    async def list_jobs(
-        self, status: JobStatus | None = None, limit: int = 100
-    ) -> list[Job]:
+    async def list_jobs(self, status: JobStatus | None = None, limit: int = 100) -> list[Job]:
         rows = await asyncio.to_thread(self._list_sync, status, limit)
         return [self._row_to_job(r) for r in rows]
 
@@ -231,9 +221,7 @@ class SQLiteJobProcessor(JobProcessor):
                 logger.exception("JobProcessor: error in poll loop")
             await asyncio.sleep(poll_interval_seconds)
 
-    async def _run_job(
-        self, job: Job, on_job: Callable[[Job], Awaitable[Any]]
-    ) -> None:
+    async def _run_job(self, job: Job, on_job: Callable[[Job], Awaitable[Any]]) -> None:
         """Execute one job; mark completed or failed based on outcome."""
         try:
             await on_job(job)
@@ -244,17 +232,12 @@ class SQLiteJobProcessor(JobProcessor):
             logger.exception("JobProcessor: job %s failed", job.job_id)
             await self.mark_failed(job.job_id)
 
-    def _list_sync(
-        self, status: JobStatus | None, limit: int
-    ) -> list[sqlite3.Row]:
+    def _list_sync(self, status: JobStatus | None, limit: int) -> list[sqlite3.Row]:
         with open_db_connection(self._db_path) as conn:
             if status is None:
                 sql = "SELECT * FROM job_queue ORDER BY scheduled_at DESC LIMIT ?"
                 return list(conn.execute(sql, (limit,)).fetchall())
-            sql = (
-                "SELECT * FROM job_queue WHERE status = ? "
-                "ORDER BY scheduled_at DESC LIMIT ?"
-            )
+            sql = "SELECT * FROM job_queue WHERE status = ? ORDER BY scheduled_at DESC LIMIT ?"
             return list(conn.execute(sql, (status.value, limit)).fetchall())
 
     @staticmethod
@@ -268,26 +251,10 @@ class SQLiteJobProcessor(JobProcessor):
             status=JobStatus(row["status"]),
             priority=JobPriority(row["priority"]),
             scheduled_at=datetime.fromisoformat(row["scheduled_at"]),
-            started_at=(
-                datetime.fromisoformat(row["started_at"])
-                if row["started_at"]
-                else None
-            ),
-            completed_at=(
-                datetime.fromisoformat(row["completed_at"])
-                if row["completed_at"]
-                else None
-            ),
+            started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
+            completed_at=(datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None),
             retry_count=row["retry_count"],
             max_retries=row["max_retries"],
-            retry_after=(
-                datetime.fromisoformat(row["retry_after"])
-                if row["retry_after"]
-                else None
-            ),
-            created_at=(
-                datetime.fromisoformat(row["created_at"])
-                if row["created_at"]
-                else None
-            ),
+            retry_after=(datetime.fromisoformat(row["retry_after"]) if row["retry_after"] else None),
+            created_at=(datetime.fromisoformat(row["created_at"]) if row["created_at"] else None),
         )

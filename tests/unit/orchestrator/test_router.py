@@ -51,7 +51,7 @@ async def test_execution_planner_workspace_context_in_prompt() -> None:
     # Verify that mock_inference.complete was called
     mock_inference.complete.assert_called_once()
     call_arg = mock_inference.complete.call_args[0][0]
-    
+
     # Verify the workspace instruction was injected in the prompt
     assert "=== System Context ===" in call_arg.prompt
     assert "- workspace (default cwd for shell/file tools): /path/to/my/workspace" in call_arg.prompt

@@ -69,7 +69,12 @@ def test_next_firing_weekly_advances_to_correct_weekday() -> None:
 def test_next_firing_weekly_same_weekday_later_today() -> None:
     after = datetime(2026, 5, 21, 6, 0, tzinfo=UTC)  # Thursday
     entry = CronEntry(
-        name="x", agent="a", task="t", hour=8, minute=0, weekday=3  # Thursday
+        name="x",
+        agent="a",
+        task="t",
+        hour=8,
+        minute=0,
+        weekday=3,  # Thursday
     )
     assert next_firing(entry, after) == datetime(2026, 5, 21, 8, 0, tzinfo=UTC)
 
@@ -77,7 +82,12 @@ def test_next_firing_weekly_same_weekday_later_today() -> None:
 def test_next_firing_weekly_same_weekday_already_passed_today_goes_next_week() -> None:
     after = datetime(2026, 5, 21, 9, 0, tzinfo=UTC)  # Thursday 9am
     entry = CronEntry(
-        name="x", agent="a", task="t", hour=8, minute=0, weekday=3  # Thursday 8am
+        name="x",
+        agent="a",
+        task="t",
+        hour=8,
+        minute=0,
+        weekday=3,  # Thursday 8am
     )
     assert next_firing(entry, after) == datetime(2026, 5, 28, 8, 0, tzinfo=UTC)
 
@@ -93,9 +103,7 @@ def test_next_due_entry_picks_earliest_firing() -> None:
     after = datetime(2026, 5, 21, 6, 0, tzinfo=UTC)
     early = CronEntry(name="early", agent="a", task="t", hour=7, minute=0)
     late = CronEntry(name="late", agent="a", task="t", hour=22, minute=0)
-    weekly = CronEntry(
-        name="weekly", agent="a", task="t", hour=5, minute=0, weekday=0
-    )
+    weekly = CronEntry(name="weekly", agent="a", task="t", hour=5, minute=0, weekday=0)
 
     entry, firing = next_due_entry([late, early, weekly], after)
     assert entry.name == "early"

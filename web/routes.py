@@ -72,6 +72,7 @@ def _get_ledger() -> LedgerWriter:
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
+
 @router.get("/auth", include_in_schema=False)
 async def auth(request: Request, next: str = "/ui/") -> Response:
     """Set the shared secret as an HttpOnly session cookie then redirect.
@@ -93,6 +94,7 @@ async def auth(request: Request, next: str = "/ui/") -> Response:
 
 # ── Core pages ───────────────────────────────────────────────────────────────
 
+
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard(request: Request) -> HTMLResponse:
     ledger = _get_ledger()
@@ -104,10 +106,7 @@ async def dashboard(request: Request) -> HTMLResponse:
         if e.task_id is not None and e.task_id not in task_latest_entries:
             task_latest_entries[e.task_id] = e
 
-    active_tasks = [
-        entry for entry in task_latest_entries.values()
-        if entry.status == LedgerStatus.PENDING
-    ]
+    active_tasks = [entry for entry in task_latest_entries.values() if entry.status == LedgerStatus.PENDING]
     recent_entries = entries[:20]
     pending_approvals = _approval_store.pending() if _approval_store else []
 
@@ -139,6 +138,7 @@ async def ledger_view(request: Request, limit: int = 50) -> HTMLResponse:
 
 # ── Approvals ────────────────────────────────────────────────────────────────
 
+
 @router.get("/approvals", response_class=HTMLResponse, include_in_schema=False)
 async def approvals_view(request: Request) -> HTMLResponse:
     cards = _approval_store.all(limit=50) if _approval_store else []
@@ -167,6 +167,7 @@ async def approvals_respond(request: Request) -> RedirectResponse:
 
 
 # ── Context documents ─────────────────────────────────────────────────────────
+
 
 @router.get("/context", response_class=HTMLResponse, include_in_schema=False)
 async def context_index(request: Request) -> HTMLResponse:
@@ -213,6 +214,7 @@ async def context_doc_save(request: Request, doc_name: str) -> RedirectResponse:
 
 # ── Agents ────────────────────────────────────────────────────────────────────
 
+
 @router.get("/agents", response_class=HTMLResponse, include_in_schema=False)
 async def agents_view(request: Request) -> HTMLResponse:
     agents = _agent_registry.all() if _agent_registry else []
@@ -224,6 +226,7 @@ async def agents_view(request: Request) -> HTMLResponse:
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
+
 
 @router.get("/jobs", response_class=HTMLResponse, include_in_schema=False)
 async def jobs_view(request: Request, status: str = "") -> HTMLResponse:
@@ -335,6 +338,7 @@ async def cron_delete(request: Request, name: str) -> RedirectResponse:
 
 
 # ── Inference ─────────────────────────────────────────────────────────────────
+
 
 @router.get("/metrics", response_class=HTMLResponse, include_in_schema=False)
 async def metrics_view(request: Request, days: int = 7) -> HTMLResponse:

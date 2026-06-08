@@ -10,4 +10,3 @@ from agents.agentic_llm_agent import AgenticLLMAgent
 
 class JobAgent(AgenticLLMAgent):
     """Domain specialist for career management, resumes, applications, and networking drafts."""
-

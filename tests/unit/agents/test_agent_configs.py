@@ -20,6 +20,7 @@ ENGINEERING_AGENTS = ["architect", "coder", "researcher", "tester"]
 # config.yaml
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("name", ENGINEERING_AGENTS)
 def test_config_loads(name: str) -> None:
     """config.yaml must parse without error for every engineering agent."""
@@ -94,6 +95,7 @@ def test_tester_class_name() -> None:
 # Agent instantiation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("name", ENGINEERING_AGENTS)
 def test_agent_instantiates(name: str, tmp_path: Path) -> None:
     """Every engineering agent must instantiate without error."""
@@ -113,6 +115,7 @@ def test_agent_instantiates(name: str, tmp_path: Path) -> None:
 
     # Import the agent class dynamically
     import importlib
+
     mod = importlib.import_module(f"agents.{name}.agent")
     cls = getattr(mod, config.resolved_class_name)
     agent = cls(config, deps)
@@ -124,6 +127,7 @@ def test_agent_instantiates(name: str, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # System prompts
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("name", ENGINEERING_AGENTS)
 def test_system_prompt_exists(name: str) -> None:
@@ -211,6 +215,7 @@ def test_tester_prompt_routes_spec_gaps_to_architect() -> None:
 # ---------------------------------------------------------------------------
 # tools.yaml
 # ---------------------------------------------------------------------------
+
 
 def test_coder_has_bash_git_patch_file() -> None:
     tools_path = AGENTS_DIR / "coder" / "tools.yaml"

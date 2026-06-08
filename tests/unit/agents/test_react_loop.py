@@ -28,6 +28,7 @@ AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_deps(
     tmp_path: Path,
     router: MockInferenceRouter | None = None,
@@ -54,6 +55,7 @@ def _load_agent(name: str, tmp_path: Path, router: MockInferenceRouter | None = 
 # ---------------------------------------------------------------------------
 # Final answer path — all 4 agents complete successfully
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("name", ["architect", "coder", "researcher", "tester"])
 async def test_agent_run_returns_valid_result(name: str, tmp_path: Path) -> None:
@@ -97,6 +99,7 @@ async def test_final_answer_content_is_preserved(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Tool call path — loop continues after a tool call
 # ---------------------------------------------------------------------------
+
 
 async def test_tool_call_then_final_answer_takes_two_iterations(tmp_path: Path) -> None:
     """Agent must execute one tool call then return the final answer from the next iteration."""
@@ -154,8 +157,12 @@ async def test_tool_result_injected_into_next_request(tmp_path: Path) -> None:
             if token_callback:
                 await token_callback(text)
             return ToolCallResponse(
-                type="message", content=text, calls=[],
-                model_used="mock", tokens_in=10, tokens_out=5,
+                type="message",
+                content=text,
+                calls=[],
+                model_used="mock",
+                tokens_in=10,
+                tokens_out=5,
             )
 
     agent = _load_agent("tester", tmp_path, InspectingRouter())
@@ -165,6 +172,7 @@ async def test_tool_result_injected_into_next_request(tmp_path: Path) -> None:
     assert len(tool_messages) >= 1, "Tool result must be injected into conversation history"
     # The tool result must contain an error about the missing tool
     import json
+
     result_data = json.loads(tool_messages[0]["content"])
     assert result_data["success"] is False
     assert "missing_tool" in result_data["error"]
@@ -173,6 +181,7 @@ async def test_tool_result_injected_into_next_request(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Cost accumulation
 # ---------------------------------------------------------------------------
+
 
 async def test_cost_accumulates_across_iterations(tmp_path: Path) -> None:
     """total cost_usd must be the sum of all individual iteration costs."""
@@ -187,15 +196,20 @@ async def test_cost_accumulates_across_iterations(tmp_path: Path) -> None:
                     type="tool_calls",
                     calls=[ToolCall(name="bad_tool", call_id=f"c{call_count}", params={})],
                     model_used="mock",
-                    tokens_in=10, tokens_out=5,
+                    tokens_in=10,
+                    tokens_out=5,
                     cost_usd=0.01,
                 )
             text = "Final."
             if token_callback:
                 await token_callback(text)
             return ToolCallResponse(
-                type="message", content=text, calls=[],
-                model_used="mock", tokens_in=10, tokens_out=5,
+                type="message",
+                content=text,
+                calls=[],
+                model_used="mock",
+                tokens_in=10,
+                tokens_out=5,
                 cost_usd=0.01,
             )
 
@@ -209,6 +223,7 @@ async def test_cost_accumulates_across_iterations(tmp_path: Path) -> None:
 # Iteration cap
 # ---------------------------------------------------------------------------
 
+
 async def test_max_iterations_returns_graceful_fallback(tmp_path: Path) -> None:
     """Agent must stop at the iteration cap and return a descriptive fallback message."""
     iterations_called = 0
@@ -221,7 +236,8 @@ async def test_max_iterations_returns_graceful_fallback(tmp_path: Path) -> None:
                 type="tool_calls",
                 calls=[ToolCall(name="bad_tool", call_id=f"c{iterations_called}", params={})],
                 model_used="mock",
-                tokens_in=10, tokens_out=5,
+                tokens_in=10,
+                tokens_out=5,
             )
 
     agent = _load_agent("architect", tmp_path, NeverFinishesRouter())
@@ -235,6 +251,7 @@ async def test_max_iterations_returns_graceful_fallback(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Unknown tool resilience
 # ---------------------------------------------------------------------------
+
 
 async def test_unknown_tool_call_returns_error_and_loop_continues(tmp_path: Path) -> None:
     """An unknown tool name must produce an error JSON result and not crash the loop."""
@@ -251,15 +268,21 @@ async def test_unknown_tool_call_returns_error_and_loop_continues(tmp_path: Path
                 return ToolCallResponse(
                     type="tool_calls",
                     calls=[ToolCall(name="does_not_exist", call_id="c1", params={})],
-                    model_used="mock", tokens_in=10, tokens_out=5,
+                    model_used="mock",
+                    tokens_in=10,
+                    tokens_out=5,
                 )
             second_request_messages.extend(request.messages)
             text = "Recovered after error."
             if token_callback:
                 await token_callback(text)
             return ToolCallResponse(
-                type="message", content=text, calls=[],
-                model_used="mock", tokens_in=10, tokens_out=5,
+                type="message",
+                content=text,
+                calls=[],
+                model_used="mock",
+                tokens_in=10,
+                tokens_out=5,
             )
 
     agent = _load_agent("tester", tmp_path, UnknownToolRouter())
@@ -282,7 +305,9 @@ async def test_empty_tool_calls_list_breaks_loop(tmp_path: Path) -> None:
             return ToolCallResponse(
                 type="tool_calls",
                 calls=[],
-                model_used="mock", tokens_in=10, tokens_out=5,
+                model_used="mock",
+                tokens_in=10,
+                tokens_out=5,
             )
 
     agent = _load_agent("researcher", tmp_path, EmptyCallsRouter())
@@ -294,6 +319,7 @@ async def test_empty_tool_calls_list_breaks_loop(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Priority resolution
 # ---------------------------------------------------------------------------
+
 
 def test_architect_resolves_high_priority(tmp_path: Path) -> None:
     from inference.models import PoolPriority
@@ -314,6 +340,7 @@ def test_non_architect_resolves_medium_priority(name: str, tmp_path: Path) -> No
 # System prompt caching
 # ---------------------------------------------------------------------------
 
+
 def test_system_prompt_cached_on_first_access(tmp_path: Path) -> None:
     """System prompt must be the same object on repeated calls (cached, no repeated disk reads)."""
     agent = _load_agent("researcher", tmp_path)
@@ -333,6 +360,7 @@ def test_system_prompt_includes_tool_creation_policy(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Context loading
 # ---------------------------------------------------------------------------
+
 
 async def test_engineering_agents_include_north_stars_in_context(tmp_path: Path) -> None:
     """All engineering agents must include NORTH_STARS in their default allowed documents."""
@@ -364,6 +392,7 @@ async def test_empty_context_store_produces_empty_context(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 # Task message structure
 # ---------------------------------------------------------------------------
+
 
 def test_task_message_includes_task_id(tmp_path: Path) -> None:
     """The user message built by the agent must include the task ID."""

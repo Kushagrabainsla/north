@@ -5,6 +5,7 @@ endpoint. The model list is populated exclusively from GET /models on each
 refresh(); capabilities are inferred from model ID naming conventions.
 get_models() returns an empty dict until the first refresh() completes.
 """
+
 from __future__ import annotations
 
 import logging
@@ -55,7 +56,9 @@ class GeminiRouter(OpenAICompatibleProvider):
             if not isinstance(model_id, str):
                 continue
             caps = capabilities_from_model_id(model_id)
-            ctx = 0 if ModelCapability.TRANSCRIPTION in caps else int(m.get("context_window") or _DEFAULT_CONTEXT_WINDOW)
+            ctx = (
+                0 if ModelCapability.TRANSCRIPTION in caps else int(m.get("context_window") or _DEFAULT_CONTEXT_WINDOW)
+            )
             live[model_id] = ModelInfo(
                 model_id=model_id,
                 provider_name="gemini",

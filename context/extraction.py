@@ -92,9 +92,9 @@ Is the core information in the new fact ALREADY present in the document (even if
 Reply with JSON only: {{"duplicate": true}} or {{"duplicate": false}}
 """
 
-_MAX_DOCUMENT_CHARS = 8_000   # trim when a context doc exceeds this
-_TRIM_TARGET_CHARS  = 5_000   # target size after trimming
-_BACKUP_INTERVAL_HOURS = 24   # minimum hours between full context backups
+_MAX_DOCUMENT_CHARS = 8_000  # trim when a context doc exceeds this
+_TRIM_TARGET_CHARS = 5_000  # target size after trimming
+_BACKUP_INTERVAL_HOURS = 24  # minimum hours between full context backups
 
 _TRIM_PROMPT = """\
 The following personal context document ({doc_type}) has grown too long. Condense it by:
@@ -160,9 +160,7 @@ class ExtractionPipeline:
                 logger.exception("ExtractionPipeline: error in batch, continuing")
             await asyncio.sleep(self._poll_interval)
 
-    async def run_once(
-        self, since: datetime.datetime | None = None
-    ) -> int:
+    async def run_once(self, since: datetime.datetime | None = None) -> int:
         """Process one batch and return the count of extractions made."""
         return await self._process_batch(since_override=since)
 
@@ -184,9 +182,7 @@ class ExtractionPipeline:
                 valid.append(entry)
         return valid
 
-    async def _run_extractions_concurrently(
-        self, entries: list[LedgerEntry]
-    ) -> list[bool | Exception]:
+    async def _run_extractions_concurrently(self, entries: list[LedgerEntry]) -> list[bool | Exception]:
         """Perform concurrent extraction checks with a semaphore rate-limit cap."""
         sem = asyncio.Semaphore(self._max_concurrent)
         results: list[bool | Exception] = [False] * len(entries)
@@ -201,16 +197,13 @@ class ExtractionPipeline:
         await asyncio.gather(*[_bounded(i, e) for i, e in enumerate(entries)])
         return results
 
-    def _process_extraction_results(
-        self, entries: list[LedgerEntry], results: list[bool | Exception]
-    ) -> int:
+    def _process_extraction_results(self, entries: list[LedgerEntry], results: list[bool | Exception]) -> int:
         """Process extraction output, saving watermarks sequentially until any error."""
         extractions = 0
         for entry, result in zip(entries, results, strict=True):
             if isinstance(result, Exception):
                 logger.exception(
-                    "ExtractionPipeline: failed on entry %s — watermark NOT advanced past this "
-                    "point, will retry",
+                    "ExtractionPipeline: failed on entry %s — watermark NOT advanced past this point, will retry",
                     entry.id,
                 )
                 break
@@ -220,22 +213,19 @@ class ExtractionPipeline:
 
         return extractions
 
-    async def _process_batch(
-        self, since_override: datetime.datetime | None = None
-    ) -> int:
+    async def _process_batch(self, since_override: datetime.datetime | None = None) -> int:
         async with self._lock:
             return await self._process_batch_locked(since_override)
 
-    async def _process_batch_locked(
-        self, since_override: datetime.datetime | None = None
-    ) -> int:
+    async def _process_batch_locked(self, since_override: datetime.datetime | None = None) -> int:
         try:
             metrics = await self._ledger.get_metrics(days=1)
             daily_cost = metrics.get("totals", {}).get("cost_usd", 0.0)
             if daily_cost >= self._max_daily_cost:
                 logger.info(
                     "ExtractionPipeline: daily cost cap $%.2f reached (used $%.4f), skipping",
-                    self._max_daily_cost, daily_cost,
+                    self._max_daily_cost,
+                    daily_cost,
                 )
                 return 0
         except Exception:
@@ -243,9 +233,7 @@ class ExtractionPipeline:
 
         await self._maybe_backup()
         since = since_override or self._load_watermark()
-        entries = await self._ledger.query(
-            LedgerFilters(since=since, limit=_BATCH_SIZE)
-        )
+        entries = await self._ledger.query(LedgerFilters(since=since, limit=_BATCH_SIZE))
         # query returns DESC; process oldest first so watermark advances correctly
         entries = list(reversed(entries))
         if not entries:
@@ -307,20 +295,20 @@ class ExtractionPipeline:
         # Trim document if it has grown too large.
         await self._maybe_trim(doc, entry.task_id)
 
-        await self._ledger.write(LedgerEntry(
-            id=generate_id(),
-            timestamp=utcnow(),
-            source=LedgerSource.SYSTEM,
-            task_id=entry.task_id,
-            action=f"extraction: {doc.value} updated",
-            output=delta,
-            status=LedgerStatus.COMPLETED,
-        ))
+        await self._ledger.write(
+            LedgerEntry(
+                id=generate_id(),
+                timestamp=utcnow(),
+                source=LedgerSource.SYSTEM,
+                task_id=entry.task_id,
+                action=f"extraction: {doc.value} updated",
+                output=delta,
+                status=LedgerStatus.COMPLETED,
+            )
+        )
         return True
 
-    async def _is_duplicate(
-        self, doc: ContextDocument, delta: str, task_id: str | None
-    ) -> bool:
+    async def _is_duplicate(self, doc: ContextDocument, delta: str, task_id: str | None) -> bool:
         """Return True if delta is already captured in the document."""
         try:
             existing = await self._context_store.read(doc)
@@ -387,7 +375,9 @@ class ExtractionPipeline:
                 await self._context_store.write(doc, trimmed)
                 logger.info(
                     "ExtractionPipeline: trimmed %s from %d → %d chars",
-                    doc.value, len(existing), len(trimmed),
+                    doc.value,
+                    len(existing),
+                    len(trimmed),
                 )
         except Exception:
             logger.warning("ExtractionPipeline: trim failed for %s", doc.value)
@@ -402,9 +392,7 @@ class ExtractionPipeline:
         stamp_path = self._backup_dir / ".last_backup"
         try:
             if stamp_path.exists():
-                last = datetime.datetime.fromisoformat(
-                    stamp_path.read_text(encoding="utf-8").strip()
-                )
+                last = datetime.datetime.fromisoformat(stamp_path.read_text(encoding="utf-8").strip())
                 if (utcnow() - last).total_seconds() < _BACKUP_INTERVAL_HOURS * 3600:
                     return
         except Exception:

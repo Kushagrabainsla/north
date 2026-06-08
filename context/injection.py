@@ -69,9 +69,7 @@ class ContextInjector:
         self._inference_router = inference_router
         self._ledger = ledger
 
-    async def inject_text(
-        self, text: str, task_id: str | None = None
-    ) -> ContextDocument:
+    async def inject_text(self, text: str, task_id: str | None = None) -> ContextDocument:
         """Ingest raw text into the appropriate context document."""
         return await self._ingest(text, source_hint="text", task_id=task_id)
 
@@ -89,13 +87,9 @@ class ContextInjector:
             text = await asyncio.to_thread(_extract_docx, content)
         else:
             text = content.decode("utf-8", errors="replace")
-        return await self._ingest(
-            text, source_hint=f"file:{filename}", task_id=task_id
-        )
+        return await self._ingest(text, source_hint=f"file:{filename}", task_id=task_id)
 
-    async def inject_url(
-        self, url: str, task_id: str | None = None
-    ) -> ContextDocument:
+    async def inject_url(self, url: str, task_id: str | None = None) -> ContextDocument:
         """Fetch a URL and ingest its text content."""
         import httpx
 
@@ -109,40 +103,45 @@ class ContextInjector:
 
     # ------------------------------------------------------------------ #
 
-    async def _ingest(
-        self, text: str, source_hint: str, task_id: str | None
-    ) -> ContextDocument:
-        self._fire_ledger(LedgerEntry(
-            id=generate_id(),
-            timestamp=utcnow(),
-            source=LedgerSource.MANUAL_INJECTION,
-            task_id=task_id,
-            action="context_injection_started",
-            input=source_hint,
-            status=LedgerStatus.PENDING,
-        ))
+    async def _ingest(self, text: str, source_hint: str, task_id: str | None) -> ContextDocument:
+        self._fire_ledger(
+            LedgerEntry(
+                id=generate_id(),
+                timestamp=utcnow(),
+                source=LedgerSource.MANUAL_INJECTION,
+                task_id=task_id,
+                action="context_injection_started",
+                input=source_hint,
+                status=LedgerStatus.PENDING,
+            )
+        )
 
         doc, delta = await self._route(text)
         await self._context_store.append(doc, delta)
 
-        self._fire_ledger(LedgerEntry(
-            id=generate_id(),
-            timestamp=utcnow(),
-            source=LedgerSource.MANUAL_INJECTION,
-            task_id=task_id,
-            action=f"context_injection_completed: {doc.value}",
-            input=source_hint,
-            output=delta,
-            status=LedgerStatus.COMPLETED,
-        ))
+        self._fire_ledger(
+            LedgerEntry(
+                id=generate_id(),
+                timestamp=utcnow(),
+                source=LedgerSource.MANUAL_INJECTION,
+                task_id=task_id,
+                action=f"context_injection_completed: {doc.value}",
+                input=source_hint,
+                output=delta,
+                status=LedgerStatus.COMPLETED,
+            )
+        )
         return doc
 
     def _fire_ledger(self, entry: LedgerEntry) -> None:
         """Schedule a ledger write as a background task, logging failures."""
         task = asyncio.create_task(self._ledger.write(entry))
         task.add_done_callback(
-            lambda t: logger.warning("Ledger write failed: %s", t.exception())
-            if not t.cancelled() and t.exception() is not None else None
+            lambda t: (
+                logger.warning("Ledger write failed: %s", t.exception())
+                if not t.cancelled() and t.exception() is not None
+                else None
+            )
         )
 
     async def _route(self, text: str) -> tuple[ContextDocument, str]:

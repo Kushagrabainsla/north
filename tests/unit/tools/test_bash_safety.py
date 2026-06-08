@@ -72,9 +72,7 @@ class TestCommandSafetyInspector:
 class TestBashToolApprovalBypass:
     """Verifies that _request_approval short-circuits correctly."""
 
-    def _make_tool(
-        self, *, judgement_filter: MagicMock | None = None
-    ) -> BashTool:
+    def _make_tool(self, *, judgement_filter: MagicMock | None = None) -> BashTool:
         return BashTool(
             approval_store=MagicMock(),
             stream_manager=None,

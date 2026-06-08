@@ -82,12 +82,9 @@ def _patch_sync(path: Path, old_string: str | None, new_string: str) -> ToolOutp
         return ToolOutput(success=False, error=f"Binary file cannot be patched: {path}")
 
     import re
+
     # Check if new_string contains SEARCH/REPLACE blocks
-    blocks = re.findall(
-        r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE",
-        new_string,
-        re.DOTALL
-    )
+    blocks = re.findall(r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE", new_string, re.DOTALL)
 
     if blocks:
         # Check all blocks first

@@ -10,4 +10,3 @@ from agents.agentic_llm_agent import AgenticLLMAgent
 
 class FinanceAgent(AgenticLLMAgent):
     """Domain specialist for budget planning, expenditures logging, and market data insights."""
-

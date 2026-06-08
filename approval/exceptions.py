@@ -10,5 +10,3 @@ from exceptions import NorthError
 
 class ApprovalError(NorthError):
     """Base class for all approval and notification errors."""
-
-

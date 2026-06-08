@@ -10,4 +10,3 @@ from agents.agentic_llm_agent import AgenticLLMAgent
 
 class UniversityAgent(AgenticLLMAgent):
     """Domain specialist for academic duties, courses, assignments, and study plans."""
-

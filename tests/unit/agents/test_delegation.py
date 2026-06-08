@@ -16,6 +16,7 @@ import pytest
 
 from agents.agentic_llm_agent import AgenticLLMAgent
 from agents.constants import MAX_DELEGATION_DEPTH as _MAX_DELEGATION_DEPTH
+from agents.general.agent import GeneralAgent
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context import FileContextStore
 from tests.conftest import MockInferenceRouter
@@ -28,6 +29,7 @@ AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_deps(tmp_path: Path, **overrides) -> AgentDependencies:
     base = AgentDependencies(
@@ -42,8 +44,8 @@ def _make_deps(tmp_path: Path, **overrides) -> AgentDependencies:
 
 
 def _make_agent(tmp_path: Path, **dep_overrides) -> AgenticLLMAgent:
-    config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-    return AgenticLLMAgent(config, _make_deps(tmp_path, **dep_overrides))
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+    return GeneralAgent(config, _make_deps(tmp_path, **dep_overrides))
 
 
 def _payload(depth: int = 0) -> AgentPayload:
@@ -53,6 +55,7 @@ def _payload(depth: int = 0) -> AgentPayload:
 # ---------------------------------------------------------------------------
 # Delegation depth guard
 # ---------------------------------------------------------------------------
+
 
 async def test_depth_limit_blocks_delegation(tmp_path: Path) -> None:
     """_delegate_task must return failure JSON when delegation_depth >= limit."""
@@ -72,8 +75,8 @@ async def test_one_below_depth_limit_succeeds(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path)
     deps.agent_registry = AgentRegistry(agents_dir=AGENTS_DIR, deps=deps)
-    config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-    agent = AgenticLLMAgent(config, deps)
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+    agent = GeneralAgent(config, deps)
 
     result_str = await agent._delegate_task(
         _payload(depth=_MAX_DELEGATION_DEPTH - 1),
@@ -86,6 +89,7 @@ async def test_one_below_depth_limit_succeeds(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Missing registry
 # ---------------------------------------------------------------------------
+
 
 async def test_delegation_without_registry_returns_failure(tmp_path: Path) -> None:
     """_delegate_task must fail gracefully when no agent_registry is wired."""
@@ -105,14 +109,15 @@ async def test_delegation_without_registry_returns_failure(tmp_path: Path) -> No
 # Empty task parameter
 # ---------------------------------------------------------------------------
 
+
 async def test_empty_task_param_returns_failure(tmp_path: Path) -> None:
     """delegate_task with an empty 'task' string must return a descriptive failure."""
     from agents.registry import AgentRegistry
 
     deps = _make_deps(tmp_path)
     deps.agent_registry = AgentRegistry(agents_dir=AGENTS_DIR, deps=deps)
-    config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-    agent = AgenticLLMAgent(config, deps)
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+    agent = GeneralAgent(config, deps)
 
     result_str = await agent._delegate_task(
         _payload(),
@@ -126,6 +131,7 @@ async def test_empty_task_param_returns_failure(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Engineering agent fallback prevention
 # ---------------------------------------------------------------------------
+
 
 async def test_missing_engineering_agent_does_not_fall_back_to_general(
     tmp_path: Path,
@@ -146,8 +152,8 @@ async def test_missing_engineering_agent_does_not_fall_back_to_general(
 
     with mock.patch.object(registry, "get", side_effect=_patched_get):
         deps.agent_registry = registry
-        config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-        agent = AgenticLLMAgent(config, deps)
+        config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+        agent = GeneralAgent(config, deps)
 
         result_str = await agent._delegate_task(
             _payload(),
@@ -165,6 +171,7 @@ async def test_missing_engineering_agent_does_not_fall_back_to_general(
 # Sub-payload correctness: depth and workspace propagation
 # ---------------------------------------------------------------------------
 
+
 async def test_delegation_increments_depth(tmp_path: Path) -> None:
     """The sub-payload must have delegation_depth == parent_depth + 1."""
     captured: list[AgentPayload] = []
@@ -180,8 +187,8 @@ async def test_delegation_increments_depth(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path)
     deps.agent_registry = CapturingRegistry()
-    config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-    agent = AgenticLLMAgent(config, deps)
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+    agent = GeneralAgent(config, deps)
 
     parent_depth = 3
     await agent._delegate_task(
@@ -207,8 +214,8 @@ async def test_delegation_propagates_workspace(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path)
     deps.agent_registry = CapturingRegistry()
-    config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-    agent = AgenticLLMAgent(config, deps)
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+    agent = GeneralAgent(config, deps)
 
     workspace = "/home/user/project"
     await agent._delegate_task(
@@ -233,8 +240,8 @@ async def test_delegation_propagates_task_id(tmp_path: Path) -> None:
 
     deps = _make_deps(tmp_path)
     deps.agent_registry = CapturingRegistry()
-    config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-    agent = AgenticLLMAgent(config, deps)
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+    agent = GeneralAgent(config, deps)
 
     await agent._delegate_task(
         AgentPayload(task_id="task-xyz-789", prompt="x"),
@@ -259,8 +266,8 @@ async def test_delegation_success_returns_sub_agent_output(tmp_path: Path) -> No
 
     deps = _make_deps(tmp_path)
     deps.agent_registry = FixedOutputRegistry()
-    config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-    agent = AgenticLLMAgent(config, deps)
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+    agent = GeneralAgent(config, deps)
 
     result_str = await agent._delegate_task(
         _payload(),
@@ -275,6 +282,7 @@ async def test_delegation_success_returns_sub_agent_output(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 # Approval flow
 # ---------------------------------------------------------------------------
+
 
 async def test_request_approval_without_store_raises(tmp_path: Path) -> None:
     """request_approval must raise RuntimeError when approval_store is not injected."""
@@ -347,6 +355,7 @@ async def test_request_approval_resolved_reject_returns_status(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 # Tool execution routing
 # ---------------------------------------------------------------------------
+
 
 async def test_unknown_tool_returns_error_json(tmp_path: Path) -> None:
     """_call_tool must return structured error JSON for a tool not in tool_map."""

@@ -20,26 +20,26 @@ from tools.models import ToolInput, ToolOutput
 
 # Named colours → (hue 0-360, saturation 0-100)
 _COLOR_NAMES: dict[str, tuple[int, int]] = {
-    "red":       (0,   100),
-    "orange":    (30,  100),
-    "yellow":    (60,  100),
-    "green":     (120, 100),
-    "cyan":      (180, 100),
-    "blue":      (240, 100),
-    "purple":    (270, 100),
-    "violet":    (270, 100),
-    "pink":      (300, 100),
-    "magenta":   (300, 100),
+    "red": (0, 100),
+    "orange": (30, 100),
+    "yellow": (60, 100),
+    "green": (120, 100),
+    "cyan": (180, 100),
+    "blue": (240, 100),
+    "purple": (270, 100),
+    "violet": (270, 100),
+    "pink": (300, 100),
+    "magenta": (300, 100),
 }
 
 # Named colour temperatures → Kelvin
 _COLOR_TEMPS: dict[str, int] = {
     "candlelight": 2500,
-    "warm":        2700,
-    "soft":        3000,
-    "neutral":     4000,
-    "cool":        5000,
-    "daylight":    6500,
+    "warm": 2700,
+    "soft": 3000,
+    "neutral": 4000,
+    "cool": 5000,
+    "daylight": 6500,
 }
 
 
@@ -49,13 +49,17 @@ def _run_kasa_discover() -> list[tuple[str, str]]:
     try:
         result = subprocess.run(
             [kasa_bin, "discover"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         output = result.stdout
     except FileNotFoundError:
         result = subprocess.run(
             [sys.executable, "-m", "kasa", "discover"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         output = result.stdout
     except subprocess.TimeoutExpired:
@@ -107,10 +111,7 @@ class KasaTool(Tool):
             },
             "device": {
                 "type": "string",
-                "description": (
-                    "Device alias (e.g. 'Desk lamp') or IP address. "
-                    "Omit to target all discovered bulbs."
-                ),
+                "description": ("Device alias (e.g. 'Desk lamp') or IP address. Omit to target all discovered bulbs."),
             },
             "brightness": {
                 "type": "integer",
@@ -210,7 +211,8 @@ class KasaTool(Tool):
 
         if target_hint:
             matched = {
-                ip: dev for ip, dev in found.items()
+                ip: dev
+                for ip, dev in found.items()
                 if target_hint in ip.lower()
                 or target_hint in (dev.alias or "").lower()
                 or target_hint in alias_map.get(ip, "").lower()
@@ -235,7 +237,7 @@ class KasaTool(Tool):
                 }
                 if (br := getattr(dev, "brightness", None)) is not None:
                     entry["brightness"] = br
-                if (ct := getattr(dev, "color_temp", None)):
+                if ct := getattr(dev, "color_temp", None):
                     entry["color_temp"] = ct
                 hsv = getattr(dev, "hsv", None)
                 if hsv:
@@ -315,7 +317,7 @@ class KasaTool(Tool):
                 entry: dict[str, Any] = {"alias": alias, "host": ip, "is_on": dev.is_on}
                 if (br := getattr(dev, "brightness", None)) is not None:
                     entry["brightness"] = br
-                if (ct := getattr(dev, "color_temp", None)):
+                if ct := getattr(dev, "color_temp", None):
                     entry["color_temp"] = ct
                 hsv = getattr(dev, "hsv", None)
                 if hsv and action == "color":
@@ -329,7 +331,9 @@ class KasaTool(Tool):
             return ToolOutput(success=False, error="; ".join(errors))
 
         _VERBS = {
-            "on": "Turned on", "off": "Turned off", "toggle": "Toggled",
+            "on": "Turned on",
+            "off": "Turned off",
+            "toggle": "Toggled",
             "brightness": f"Set brightness to {brightness_val}%",
             "color": f"Set colour (hue={hue}, sat={saturation}%)",
             "color_temp": f"Set colour temperature to {kelvin}K",

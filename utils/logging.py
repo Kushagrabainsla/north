@@ -67,10 +67,27 @@ class _JSONFormatter(logging.Formatter):
 
         # Merge any extra fields passed via logging.info(..., extra={...})
         _SKIP = logging.LogRecord.__dict__.keys() | {
-            "message", "asctime", "args", "msg", "levelno", "pathname",
-            "filename", "module", "exc_info", "exc_text", "stack_info",
-            "lineno", "funcName", "created", "msecs", "relativeCreated",
-            "thread", "threadName", "processName", "process", "taskName",
+            "message",
+            "asctime",
+            "args",
+            "msg",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "lineno",
+            "funcName",
+            "created",
+            "msecs",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "processName",
+            "process",
+            "taskName",
         }
         for key, val in record.__dict__.items():
             if key not in _SKIP:
@@ -107,5 +124,3 @@ def configure_structured_logging(level: int = logging.INFO) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_JSONFormatter())
     root.addHandler(handler)
-
-

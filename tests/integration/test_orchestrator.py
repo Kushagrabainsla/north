@@ -40,6 +40,7 @@ from utils.time import utcnow
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _wait_for_ledger_action(
     ledger: SQLiteLedgerWriter,
     task_id: str,
@@ -57,9 +58,7 @@ async def _wait_for_ledger_action(
         if any(e.action == action for e in entries):
             return
         await asyncio.sleep(0.05)
-    raise TimeoutError(
-        f"Ledger action '{action}' never appeared for task '{task_id}' within {timeout}s"
-    )
+    raise TimeoutError(f"Ledger action '{action}' never appeared for task '{task_id}' within {timeout}s")
 
 
 def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter, ApprovalStore]:
@@ -117,13 +116,12 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
 # Orchestrator pipeline tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_submit_task_returns_task_id(tmp_path):
     """submit_task() must return a non-empty task_id immediately."""
     orch, _, _ = _make_orchestrator(tmp_path)
-    response = await orch.submit_task(
-        TaskRequest(prompt="What is 2 + 2?", source=LedgerSource.PROMPT)
-    )
+    response = await orch.submit_task(TaskRequest(prompt="What is 2 + 2?", source=LedgerSource.PROMPT))
     assert response.task_id
     assert response.status == LedgerStatus.PENDING.value
 
@@ -132,9 +130,7 @@ async def test_submit_task_returns_task_id(tmp_path):
 async def test_submit_task_writes_pending_ledger_entry(tmp_path):
     """The initial ledger write must happen synchronously before the background task runs."""
     orch, ledger, _ = _make_orchestrator(tmp_path)
-    response = await orch.submit_task(
-        TaskRequest(prompt="Hello", source=LedgerSource.PROMPT)
-    )
+    response = await orch.submit_task(TaskRequest(prompt="Hello", source=LedgerSource.PROMPT))
     entries = await ledger.query(LedgerFilters(task_id=response.task_id))
     assert len(entries) >= 1
     assert entries[0].action == "task_received"
@@ -144,9 +140,7 @@ async def test_submit_task_writes_pending_ledger_entry(tmp_path):
 async def test_task_pipeline_completes(tmp_path):
     """After the background coroutine runs, the ledger must contain a completed entry."""
     orch, ledger, _ = _make_orchestrator(tmp_path)
-    response = await orch.submit_task(
-        TaskRequest(prompt="List something", source=LedgerSource.PROMPT)
-    )
+    response = await orch.submit_task(TaskRequest(prompt="List something", source=LedgerSource.PROMPT))
     await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
 
     entries = await ledger.query(LedgerFilters(task_id=response.task_id))
@@ -158,9 +152,7 @@ async def test_task_pipeline_completes(tmp_path):
 async def test_cancel_task_writes_cancelled_entry(tmp_path):
     """cancel_task() must write a task_cancelled ledger entry."""
     orch, ledger, _ = _make_orchestrator(tmp_path)
-    response = await orch.submit_task(
-        TaskRequest(prompt="Long running task", source=LedgerSource.PROMPT)
-    )
+    response = await orch.submit_task(TaskRequest(prompt="Long running task", source=LedgerSource.PROMPT))
     await orch.cancel_task(response.task_id)
 
     entries = await ledger.query(LedgerFilters(task_id=response.task_id))
@@ -190,9 +182,7 @@ async def test_concurrent_task_cap_raises(tmp_path):
 async def test_strategy_command_completes_without_agent(tmp_path):
     """'switch to eco mode' must short-circuit before routing to any agent."""
     orch, ledger, _ = _make_orchestrator(tmp_path)
-    response = await orch.submit_task(
-        TaskRequest(prompt="switch to eco mode", source=LedgerSource.PROMPT)
-    )
+    response = await orch.submit_task(TaskRequest(prompt="switch to eco mode", source=LedgerSource.PROMPT))
     await _wait_for_ledger_action(ledger, response.task_id, "agent_completed")
 
     entries = await ledger.query(LedgerFilters(task_id=response.task_id))
@@ -204,6 +194,7 @@ async def test_strategy_command_completes_without_agent(tmp_path):
 # ---------------------------------------------------------------------------
 # North star: low-confidence skip
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_north_star_skipped_on_low_confidence(tmp_path):
@@ -230,12 +221,11 @@ async def test_north_star_skipped_on_low_confidence(tmp_path):
     )
 
     # Patch plan_all to return our low-confidence classification
-    with mock.patch.object(
-        orch._execution_planner, "plan_all", return_value=(low_conf, dummy_plan)
-    ), mock.patch.object(orch._north_star_checker, "check_alignment") as mock_check:
-        response = await orch.submit_task(
-            TaskRequest(prompt="send an email", source=LedgerSource.PROMPT)
-        )
+    with (
+        mock.patch.object(orch._execution_planner, "plan_all", return_value=(low_conf, dummy_plan)),
+        mock.patch.object(orch._north_star_checker, "check_alignment") as mock_check,
+    ):
+        response = await orch.submit_task(TaskRequest(prompt="send an email", source=LedgerSource.PROMPT))
         await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
         # check_alignment must NOT have been called
         mock_check.assert_not_called()
@@ -244,6 +234,7 @@ async def test_north_star_skipped_on_low_confidence(tmp_path):
 # ---------------------------------------------------------------------------
 # Task context store
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_task_context_write_and_read(tmp_path):
@@ -259,19 +250,23 @@ async def test_task_context_write_and_read(tmp_path):
 async def test_task_context_cleanup_removes_old_rows(tmp_path):
     """cleanup_stale_tasks() must delete rows older than the retention window."""
     import datetime
+
     store = TaskContextStore(db_path=tmp_path / "tasks.db")
 
     # Write a row with an artificially old timestamp
     from utils.db import open_db_connection
+
     db = tmp_path / "tasks.db"
     await store.initialize_task("old_task", ["agent_x"])
 
     # Back-date the written_at to 10 days ago
     old_ts = (utcnow() - datetime.timedelta(days=10)).isoformat()
+
     def _backdate():
         with open_db_connection(db) as conn:
             conn.execute("UPDATE task_state SET written_at = ? WHERE task_id = ?", (old_ts, "old_task"))
             conn.commit()
+
     await asyncio.to_thread(_backdate)
 
     removed = await store.cleanup_stale_tasks(active_task_ids=frozenset(), completed_retention_days=7)
@@ -280,9 +275,8 @@ async def test_task_context_cleanup_removes_old_rows(tmp_path):
     # Verify rows are gone
     def _count():
         with open_db_connection(db) as conn:
-            return conn.execute(
-                "SELECT COUNT(*) FROM task_state WHERE task_id = 'old_task'"
-            ).fetchone()[0]
+            return conn.execute("SELECT COUNT(*) FROM task_state WHERE task_id = 'old_task'").fetchone()[0]
+
     count = await asyncio.to_thread(_count)
     assert count == 0
 
@@ -291,26 +285,28 @@ async def test_task_context_cleanup_removes_old_rows(tmp_path):
 async def test_task_context_cleanup_skips_active(tmp_path):
     """cleanup_stale_tasks() must not delete rows for active task_ids."""
     import datetime
+
     store = TaskContextStore(db_path=tmp_path / "tasks.db")
     await store.initialize_task("active_task", ["agent_y"])
 
     db = tmp_path / "tasks.db"
     old_ts = (utcnow() - datetime.timedelta(days=10)).isoformat()
+
     def _backdate():
         with open_db_connection(db) as conn:
             conn.execute("UPDATE task_state SET written_at = ? WHERE task_id = ?", (old_ts, "active_task"))
             conn.commit()
+
     await asyncio.to_thread(_backdate)
 
-    removed = await store.cleanup_stale_tasks(
-        active_task_ids=frozenset(["active_task"]), completed_retention_days=7
-    )
+    removed = await store.cleanup_stale_tasks(active_task_ids=frozenset(["active_task"]), completed_retention_days=7)
     assert removed == 0
 
 
 # ---------------------------------------------------------------------------
 # Extraction pipeline
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_extraction_pipeline_runs_without_error(tmp_path):
@@ -338,13 +334,15 @@ async def test_extraction_pipeline_skips_system_source(tmp_path):
     context_store = FileContextStore(tmp_path / "context")
     inference = MockInferenceRouter()
 
-    await ledger.write(LedgerEntry(
-        id=generate_id(),
-        timestamp=utcnow(),
-        source=LedgerSource.SYSTEM,
-        action="startup",
-        status=LedgerStatus.COMPLETED,
-    ))
+    await ledger.write(
+        LedgerEntry(
+            id=generate_id(),
+            timestamp=utcnow(),
+            source=LedgerSource.SYSTEM,
+            action="startup",
+            status=LedgerStatus.COMPLETED,
+        )
+    )
 
     pipeline = ExtractionPipeline(
         ledger=ledger,
@@ -366,14 +364,16 @@ async def test_extraction_pipeline_advances_watermark(tmp_path):
     context_store = FileContextStore(tmp_path / "context")
     inference = MockInferenceRouter()
 
-    await ledger.write(LedgerEntry(
-        id=generate_id(),
-        timestamp=utcnow(),
-        source=LedgerSource.PROMPT,
-        input="I prefer window seats",
-        action="task_received",
-        status=LedgerStatus.COMPLETED,
-    ))
+    await ledger.write(
+        LedgerEntry(
+            id=generate_id(),
+            timestamp=utcnow(),
+            source=LedgerSource.PROMPT,
+            input="I prefer window seats",
+            action="task_received",
+            status=LedgerStatus.COMPLETED,
+        )
+    )
 
     pipeline = ExtractionPipeline(
         ledger=ledger,
@@ -391,6 +391,7 @@ async def test_extraction_pipeline_advances_watermark(tmp_path):
 # ---------------------------------------------------------------------------
 # Privacy enforcement
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_allowed_documents_defaults_without_rules(tmp_path):
@@ -414,8 +415,16 @@ async def test_allowed_documents_defaults_without_rules(tmp_path):
     # Concrete subclass just enough to test _allowed_documents
     class _TestAgent(Agent):
         async def _execute(self, payload, context, scored_tools):
-            return {"output": "", "summary": "", "data": {}, "requires_approval": False,
-                    "has_question": False, "question": None, "question_options": [], "cost_usd": 0.0}
+            return {
+                "output": "",
+                "summary": "",
+                "data": {},
+                "requires_approval": False,
+                "has_question": False,
+                "question": None,
+                "question_options": [],
+                "cost_usd": 0.0,
+            }
 
     config = AgentConfig(agent="health", domain="health", model_pool="fast_cheap")
     agent = _TestAgent(config, agent_deps)
@@ -451,8 +460,16 @@ async def test_allowed_documents_respects_rules(tmp_path):
 
     class _TestAgent(Agent):
         async def _execute(self, payload, context, scored_tools):
-            return {"output": "", "summary": "", "data": {}, "requires_approval": False,
-                    "has_question": False, "question": None, "question_options": [], "cost_usd": 0.0}
+            return {
+                "output": "",
+                "summary": "",
+                "data": {},
+                "requires_approval": False,
+                "has_question": False,
+                "question": None,
+                "question_options": [],
+                "cost_usd": 0.0,
+            }
 
     config = AgentConfig(agent="coder", domain="engineering", model_pool="fast_cheap")
     agent = _TestAgent(config, agent_deps)
@@ -466,15 +483,17 @@ async def test_allowed_documents_respects_rules(tmp_path):
 # Delegation depth guard
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_delegate_task_blocked_at_depth_limit(tmp_path):
     """_delegate_task() must return a failure JSON when delegation_depth >= limit."""
     import json
 
-    from agents.agentic_llm_agent import AgenticLLMAgent
     from agents.constants import MAX_DELEGATION_DEPTH as _MAX_DELEGATION_DEPTH
+    from agents.general.agent import GeneralAgent
     from agents.models import AgentConfig
 
+    _AGENTS_DIR = Path(__file__).parent.parent.parent / "agents"
     context_store = FileContextStore(tmp_path / "context")
     inference = MockInferenceRouter()
     tool_registry = ToolRegistry(graph={}, auto_register=False)
@@ -487,8 +506,8 @@ async def test_delegate_task_blocked_at_depth_limit(tmp_path):
         confidence_tracker=confidence_tracker,
     )
 
-    config = AgentConfig(agent="general", domain="general", model_pool="fast_cheap")
-    agent = AgenticLLMAgent(config, agent_deps)
+    config = AgentConfig.from_yaml(_AGENTS_DIR / "general" / "config.yaml")
+    agent = GeneralAgent(config, agent_deps)
 
     deep_payload = AgentPayload(
         task_id="t1",
@@ -506,6 +525,7 @@ async def test_delegate_task_blocked_at_depth_limit(tmp_path):
 # Episodic store pruning
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_episodic_store_prunes_old_entries(tmp_path):
     """record() must remove episodes beyond the retention window."""
@@ -518,14 +538,13 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
 
     # Insert a row with an old timestamp directly (bypassing record() to avoid
     # the prune running before we verify it works)
-    old_ts = (datetime.datetime.utcnow() - datetime.timedelta(days=_RETENTION_DAYS + 1)).isoformat()
+    old_ts = (utcnow() - datetime.timedelta(days=_RETENTION_DAYS + 1)).isoformat()
     db = tmp_path / "episodic.db"
 
     def _insert_old():
         with open_db_connection(db) as conn:
             conn.execute(
-                "INSERT INTO episodes (id, task_id, domain, summary, embedding, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO episodes (id, task_id, domain, summary, embedding, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                 ("old-ep", "old-task", "general", "old summary", None, old_ts),
             )
             conn.commit()
@@ -535,9 +554,7 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
     # Verify old entry exists before record()
     def _count(ep_id):
         with open_db_connection(db) as conn:
-            return conn.execute(
-                "SELECT COUNT(*) FROM episodes WHERE id = ?", (ep_id,)
-            ).fetchone()[0]
+            return conn.execute("SELECT COUNT(*) FROM episodes WHERE id = ?", (ep_id,)).fetchone()[0]
 
     assert await asyncio.to_thread(_count, "old-ep") == 1
 
@@ -550,6 +567,7 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
 # ---------------------------------------------------------------------------
 # Direct/Single Tool execution
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_execute_single_tool_passes_task_id(tmp_path):
@@ -591,4 +609,3 @@ async def test_execute_single_tool_passes_task_id(tmp_path):
     assert tool_input.params["task_id"] == "t1"
     assert tool_input.params["workspace"] == str(tmp_path)
     assert tool_input.params["arg1"] == "val1"
-

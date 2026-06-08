@@ -69,9 +69,7 @@ class EventStreamManager:
             try:
                 q.put_nowait(message)
             except asyncio.QueueFull:
-                logger.warning(
-                    "SSE queue full for task %s — dropping event '%s'.", task_id, event
-                )
+                logger.warning("SSE queue full for task %s — dropping event '%s'.", task_id, event)
 
         # Mirror every event to the global stream (TUI / watch clients).
         for q in self._global_subs:
@@ -98,14 +96,10 @@ class EventStreamManager:
                         q.get_nowait()
                     except asyncio.QueueEmpty:
                         break
-                logger.warning(
-                    "SSE queue was full for task %s; drained to deliver done sentinel.", task_id
-                )
+                logger.warning("SSE queue was full for task %s; drained to deliver done sentinel.", task_id)
                 q.put_nowait(None)
 
-    async def subscribe(
-        self, task_id: str, max_queue_size: int = 256
-    ) -> AsyncIterator[str]:
+    async def subscribe(self, task_id: str, max_queue_size: int = 256) -> AsyncIterator[str]:
         """Async generator that yields raw SSE-formatted text for task_id.
 
         Yields until a None sentinel is received (task done) or the caller

@@ -181,7 +181,7 @@ class CreateToolTool(Tool):
 
         if not tool_name:
             return ToolOutput(success=False, error="Parameter 'name' is required for action=create.")
-        if not re.match(r'^[a-z][a-z0-9_]*$', tool_name):
+        if not re.match(r"^[a-z][a-z0-9_]*$", tool_name):
             return ToolOutput(success=False, error="Tool name must be snake_case (lowercase, digits, underscores).")
         if not content and not description:
             return ToolOutput(success=False, error="Either 'content' or 'description' is required for action=create.")
@@ -215,8 +215,7 @@ class CreateToolTool(Tool):
         if not safe:
             return ToolOutput(
                 success=False,
-                error=f"Tool code rejected by static safety check: {reason}. "
-                      "Remove the flagged pattern and try again.",
+                error=f"Tool code rejected by static safety check: {reason}. Remove the flagged pattern and try again.",
             )
 
         file_path.write_text(content, encoding="utf-8")
@@ -270,8 +269,7 @@ class CreateToolTool(Tool):
         if not safe:
             return ToolOutput(
                 success=False,
-                error=f"Tool code rejected by static safety check: {reason}. "
-                      "Remove the flagged pattern and try again.",
+                error=f"Tool code rejected by static safety check: {reason}. Remove the flagged pattern and try again.",
             )
 
         tool_type = "universal" if (path.parent.name == "universal") else "specialized"
@@ -310,12 +308,7 @@ class CreateToolTool(Tool):
             return False
 
         for obj in vars(module).values():
-            if (
-                isinstance(obj, type)
-                and issubclass(obj, Tool)
-                and obj is not Tool
-                and not inspect.isabstract(obj)
-            ):
+            if isinstance(obj, type) and issubclass(obj, Tool) and obj is not Tool and not inspect.isabstract(obj):
                 try:
                     instance = obj()
                     self._registry.register(instance)
@@ -330,10 +323,18 @@ class CreateToolTool(Tool):
 
 # ── Code safety ──────────────────────────────────────────────────────────────
 
-_FORBIDDEN_IMPORTS: frozenset[str] = frozenset({
-    "subprocess", "ctypes", "socket", "os", "pty",
-    "multiprocessing", "signal", "threading",
-})
+_FORBIDDEN_IMPORTS: frozenset[str] = frozenset(
+    {
+        "subprocess",
+        "ctypes",
+        "socket",
+        "os",
+        "pty",
+        "multiprocessing",
+        "signal",
+        "threading",
+    }
+)
 _FORBIDDEN_CALLS: frozenset[str] = frozenset({"exec", "eval", "compile", "__import__"})
 
 
@@ -357,16 +358,12 @@ def _check_code_safety(code: str) -> tuple[bool, str]:
                 else ([node.module] if node.module else [])
             )
             for name in names:
-                if name in _FORBIDDEN_IMPORTS or any(
-                    name.startswith(f"{m}.") for m in _FORBIDDEN_IMPORTS
-                ):
+                if name in _FORBIDDEN_IMPORTS or any(name.startswith(f"{m}.") for m in _FORBIDDEN_IMPORTS):
                     return False, f"Forbidden import: '{name}'"
         if isinstance(node, ast.Call):
             func = node.func
             func_name = (
-                func.id if isinstance(func, ast.Name)
-                else func.attr if isinstance(func, ast.Attribute)
-                else None
+                func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
             )
             if func_name in _FORBIDDEN_CALLS:
                 return False, f"Forbidden call: '{func_name}'"
@@ -375,6 +372,7 @@ def _check_code_safety(code: str) -> tuple[bool, str]:
 
 
 # ── Standalone helpers ────────────────────────────────────────────────────────
+
 
 def _list_tools() -> ToolOutput:
     rows = []
@@ -388,12 +386,14 @@ def _list_tools() -> ToolOutput:
             source = path.read_text(encoding="utf-8")
             name_m = _NAME_RE.search(source)
             desc_m = _DESC_RE.search(source)
-            rows.append({
-                "name": name_m.group(1) if name_m else path.stem,
-                "type": kind,
-                "description": desc_m.group(1) if desc_m else "(no description)",
-                "path": str(path.relative_to(_TOOLS_ROOT.parent)),
-            })
+            rows.append(
+                {
+                    "name": name_m.group(1) if name_m else path.stem,
+                    "type": kind,
+                    "description": desc_m.group(1) if desc_m else "(no description)",
+                    "path": str(path.relative_to(_TOOLS_ROOT.parent)),
+                }
+            )
     return ToolOutput(success=True, data={"action": "list", "tools": rows})
 
 
@@ -440,14 +440,7 @@ def _render_schema(parameters: list[dict]) -> str:
 
     props = "\n".join(prop_lines)
     suffix = f'        "required": {repr(required_names)},\n    }}' if required_names else "    }"
-    return (
-        "{\n"
-        '        "type": "object",\n'
-        '        "properties": {\n'
-        f"{props}\n"
-        "        },\n"
-        f"{suffix}"
-    )
+    return f'{{\n        "type": "object",\n        "properties": {{\n{props}\n        }},\n{suffix}'
 
 
 def _render_param_extraction(parameters: list[dict]) -> str:
@@ -459,7 +452,7 @@ def _render_param_extraction(parameters: list[dict]) -> str:
         lines.append(f'        {name} = input.params.get("{name}")')
         if p.get("required", True):
             lines.append(f"        if {name} is None:")
-            lines.append(f'            return ToolOutput(success=False, error="Parameter \'{name}\' is required.")')
+            lines.append(f"            return ToolOutput(success=False, error=\"Parameter '{name}' is required.\")")
     return "\n".join(lines)
 
 
@@ -497,6 +490,7 @@ def _wire_agent(agent_name: str, tool_name: str) -> bool:
         return False
     try:
         import yaml
+
         data = yaml.safe_load(tools_yaml.read_text(encoding="utf-8")) or {}
         tools_list: list = data.get("tools") or []
         existing = {t if isinstance(t, str) else t.get("name") for t in tools_list}

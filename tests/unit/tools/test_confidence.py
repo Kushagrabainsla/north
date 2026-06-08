@@ -124,9 +124,7 @@ async def test_inherit_from_is_idempotent_and_preserves_existing_rows(
 
     await tracker.inherit_from("wellness", "health")
 
-    assert (
-        await tracker.get_score("wellness", "web_search") == pytest.approx(expected_wellness)
-    )
+    assert await tracker.get_score("wellness", "web_search") == pytest.approx(expected_wellness)
 
 
 async def test_persistence_across_tracker_instances(tmp_path: Path) -> None:
@@ -137,6 +135,4 @@ async def test_persistence_across_tracker_instances(tmp_path: Path) -> None:
     await t1.record_use("health", "web_search", was_helpful=True)
 
     t2 = ConfidenceTracker(db)
-    assert (
-        await t2.get_score("health", "web_search") == pytest.approx(expected)
-    )
+    assert await t2.get_score("health", "web_search") == pytest.approx(expected)

@@ -88,9 +88,7 @@ class FailureHandler:
         """Remove the retry counter for a completed agent to prevent memory leaks."""
         self._retry_counts.pop((task_id, agent_name), None)
 
-    async def handle_failure(
-        self, task_id: str, agent_name: str, exception: Exception
-    ) -> bool:
+    async def handle_failure(self, task_id: str, agent_name: str, exception: Exception) -> bool:
         """Processes an agent failure.
 
         Updates the agent's task context status to failed, decides if a retry
@@ -137,8 +135,7 @@ class FailureHandler:
         # Calculate exponential back-off cooldown
         cooldown = self.base_cooldown_seconds * (2 ** (attempt - 1))
         logger.warning(
-            "Agent '%s' failed in task '%s' — error_type=%s, attempt %d/%d, "
-            "retrying in %.2fs: %s",
+            "Agent '%s' failed in task '%s' — error_type=%s, attempt %d/%d, retrying in %.2fs: %s",
             agent_name,
             task_id,
             error_type,
@@ -176,11 +173,7 @@ class FailureHandler:
         # Apply completed runs chronologically
         entries.sort(key=lambda e: e.timestamp)
         for entry in entries:
-            if (
-                entry.source == LedgerSource.AGENT
-                and entry.status == LedgerStatus.COMPLETED
-                and entry.agent
-            ):
+            if entry.source == LedgerSource.AGENT and entry.status == LedgerStatus.COMPLETED and entry.agent:
                 # Mark agent status as completed in context
                 await self._task_context_store.update_agent_status(task_id, entry.agent, "completed")
                 # Write back all output keys the agent completed

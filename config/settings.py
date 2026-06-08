@@ -80,8 +80,7 @@ class Settings(BaseSettings):
         mode = secret_file.stat().st_mode
         if mode & (_stat.S_IRGRP | _stat.S_IROTH):
             warnings.warn(
-                f"{secret_file} is world/group-readable (mode {oct(mode & 0o777)}). "
-                "Run: chmod 600 ~/.north/secret.key",
+                f"{secret_file} is world/group-readable (mode {oct(mode & 0o777)}). Run: chmod 600 ~/.north/secret.key",
                 stacklevel=2,
             )
         value = secret_file.read_text(encoding="utf-8").strip()
