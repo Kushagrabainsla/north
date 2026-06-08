@@ -55,6 +55,15 @@ def _fmt_params(params: dict) -> str:
 class NorthApp(App[None]):
     """Textual chat UI for north."""
 
+    # Layout (top → bottom):
+    #   #log           — scrollable chat history            (1fr)
+    #   #streaming     — live markdown during token stream  (auto, hidden)
+    #   #status        — spinner / hint line                (1 row)
+    #   #sep-top       — ─── top border of input box        (1 row)
+    #   #input-row     — [❯] [                           ]  (1 row)
+    #   #sep-bot       — ─── bottom border of input box     (1 row)
+    #   #pad-bot       — one blank line below               (1 row)
+
     CSS = """
     Screen {
         layout: vertical;
@@ -62,6 +71,10 @@ class NorthApp(App[None]):
     }
 
     /* ── chat log ─────────────────────────────────────────── */
+
+    RichLog {
+        background: $background;
+    }
 
     #log {
         height: 1fr;
@@ -72,7 +85,7 @@ class NorthApp(App[None]):
         scrollbar-color-hover: $primary;
     }
 
-    /* ── live streaming area (hidden until tokens arrive) ─── */
+    /* ── live streaming area ──────────────────────────────── */
 
     #streaming {
         height: auto;
@@ -83,19 +96,20 @@ class NorthApp(App[None]):
         color: $text;
     }
 
-    /* ── footer: separator + status + input row ─────────────── */
+    /* ── footer: status · top-sep · input · bot-sep · pad ── */
 
-    #footer-sep {
+    #status {
         height: 1;
+        background: $background;
         color: $text-muted;
+        padding: 0 0;
     }
 
-    #footer-status {
+    #sep-top {
         height: 1;
+        background: $background;
         color: $text-muted;
     }
-
-    /* The input row is a single terminal line: [  ❯  ][input] */
 
     #input-row {
         height: 1;
@@ -105,8 +119,9 @@ class NorthApp(App[None]):
     #prompt-prefix {
         width: auto;
         height: 1;
-        color: cyan;
         padding: 0 1 0 2;
+        background: $background;
+        color: cyan;
     }
 
     #prompt {
@@ -120,10 +135,24 @@ class NorthApp(App[None]):
 
     Input {
         border: none;
+        background: $background;
+        padding: 0 0;
     }
 
     Input:focus {
         border: none;
+        background: $background;
+    }
+
+    #sep-bot {
+        height: 1;
+        background: $background;
+        color: $text-muted;
+    }
+
+    #pad-bot {
+        height: 1;
+        background: $background;
     }
     """
 
@@ -161,11 +190,13 @@ class NorthApp(App[None]):
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
         yield Markdown("", id="streaming")
-        yield Static("", id="footer-sep")
-        yield Static("", id="footer-status")
+        yield Static("", id="status")
+        yield Static("", id="sep-top")
         with Horizontal(id="input-row"):
             yield Static("❯", id="prompt-prefix")
             yield Input(id="prompt")
+        yield Static("", id="sep-bot")
+        yield Static("", id="pad-bot")
 
     def on_mount(self) -> None:
         history_file = Path.home() / ".north" / "tui_history"
@@ -187,7 +218,7 @@ class NorthApp(App[None]):
         log.write("")
         self._write_rule()
 
-        self._draw_separator()
+        self._redraw_seps()
         self._set_status("")
 
         self.set_interval(0.08, self._tick)
@@ -195,25 +226,23 @@ class NorthApp(App[None]):
         self.query_one("#prompt", Input).focus()
 
     def on_resize(self) -> None:
-        self._draw_separator()
+        self._redraw_seps()
 
     # ── rendering helpers ────────────────────────────────────────────────────
 
-    def _draw_separator(self) -> None:
-        """Redraw the fixed separator line above the footer. Only on mount/resize."""
-        self.query_one("#footer-sep", Static).update(
-            "[bright_black]" + "─" * self.size.width + "[/bright_black]"
-        )
+    def _redraw_seps(self) -> None:
+        line = "[bright_black]" + "─" * self.size.width + "[/bright_black]"
+        self.query_one("#sep-top", Static).update(line)
+        self.query_one("#sep-bot", Static).update(line)
 
     def _write_rule(self) -> None:
-        """Write a full-width rule into the chat log between turns."""
         self.query_one("#log", RichLog).write(RichRule(style="bright_black"))
 
     def _tick(self) -> None:
         self._spin_frame += 1
         if self._status_text:
             f = _SPIN[self._spin_frame % len(_SPIN)]
-            self.query_one("#footer-status", Static).update(
+            self.query_one("#status", Static).update(
                 f"[bright_black]  {f}  {self._status_text}[/bright_black]"
             )
 
@@ -221,13 +250,13 @@ class NorthApp(App[None]):
         self._status_text = text
         if not text:
             strategy = _get_strategy()
-            self.query_one("#footer-status", Static).update(
+            self.query_one("#status", Static).update(
                 f"[bright_black]  strategy: {strategy}"
                 f"  ·  ↑↓ history  ·  ctrl+c to quit[/bright_black]"
             )
         else:
             f = _SPIN[self._spin_frame % len(_SPIN)]
-            self.query_one("#footer-status", Static).update(
+            self.query_one("#status", Static).update(
                 f"[bright_black]  {f}  {text}[/bright_black]"
             )
 
