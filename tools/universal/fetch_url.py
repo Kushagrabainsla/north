@@ -12,8 +12,8 @@ import asyncio
 import httpx
 
 from tools.base import Tool
-from utils.text import strip_html
 from tools.models import ToolInput, ToolOutput
+from utils.text import strip_html
 
 _MAX_CHARS = 30_000
 _TIMEOUT = 20.0

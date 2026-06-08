@@ -107,7 +107,9 @@ def _attach_embedding_index(deps) -> None:
     deps.context_store.attach_embedding_index(embedding_index)
 
 
-def _build_tool_registry(deps, tool_graph, judgement_filter: JudgementFilter | None = None) -> tuple[ToolRegistry, CreateAgentTool]:
+def _build_tool_registry(
+    deps, tool_graph, judgement_filter: JudgementFilter | None = None
+) -> tuple[ToolRegistry, CreateAgentTool]:
     tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
     tool_registry.register(
         ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store)

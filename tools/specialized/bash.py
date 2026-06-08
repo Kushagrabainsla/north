@@ -17,9 +17,9 @@ from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
+    from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
-    from approval.judgement_filter import JudgementFilter
 
 _TIMEOUT = 30
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from tools.models import ToolInput
 from tools.specialized.bash import BashTool, CommandSafetyInspector
-
 
 # ---------------------------------------------------------------------------
 # CommandSafetyInspector

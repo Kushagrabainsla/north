@@ -16,8 +16,6 @@ from inference.exceptions import (
     TranscriptionError,
 )
 from inference.factory import build_router
-from inference.providers.gemini import GeminiRouter
-from inference.providers.groq import GroqRouter
 from inference.models import (
     POOL_NAMES,
     POOL_TO_PRIORITY,
@@ -36,8 +34,10 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
-from inference.providers.openrouter import OpenRouterRouter
 from inference.provider import Provider
+from inference.providers.gemini import GeminiRouter
+from inference.providers.groq import GroqRouter
+from inference.providers.openrouter import OpenRouterRouter
 
 __all__ = [
     "AllModelsRateLimitedError",

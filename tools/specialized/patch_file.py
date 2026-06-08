@@ -36,7 +36,10 @@ class PatchFileTool(Tool):
             "path": {"type": "string", "description": "Path to the file to edit"},
             "old_string": {
                 "type": "string",
-                "description": "Exact text to find — must appear exactly once in the file. Optional if using SEARCH/REPLACE blocks in new_string.",
+                "description": (
+                    "Exact text to find — must appear exactly once in the file."
+                    " Optional if using SEARCH/REPLACE blocks in new_string."
+                ),
             },
             "new_string": {
                 "type": "string",
