@@ -24,6 +24,7 @@ dependencies = [
     "psutil>=5.9.0",
     "rich>=13.0.0",
     "prompt-toolkit>=3.0.0",
+    "textual>=0.80.0",
     "ddgs>=1.0.0",
     "python-kasa>=0.7.0",
 ]

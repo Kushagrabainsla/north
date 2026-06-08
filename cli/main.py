@@ -45,6 +45,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from cli.tui_v2 import run as _tui_run
 
 from utils.security import load_secret
 
@@ -243,7 +244,6 @@ def _launch_tui(
 
     import asyncio
 
-    from cli.tui import run as _tui_run
 
     asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace))
 

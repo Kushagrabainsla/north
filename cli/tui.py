@@ -1,4 +1,13 @@
-"""North TUI — single-terminal chat + live task activity + inline approvals."""
+"""North TUI v1 — DEPRECATED, kept for reference only.
+
+This implementation used prompt_toolkit (input) + Rich (output) as two
+independent libraries. Rich.Live used raw ANSI cursor-up sequences to render
+streaming output in-place, which conflicted with prompt_toolkit's cursor
+tracking and caused the cursor to appear inside the rendered output instead of
+the input box.
+
+Active implementation: cli/tui_v2.py (Textual-based).
+"""
 
 from __future__ import annotations
 
@@ -17,7 +26,6 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from rich.console import Console
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.rule import Rule
@@ -180,8 +188,7 @@ async def run(
     )
 
     token_buffer: dict[str, str] = {}
-    streaming_active: set[str] = set()  # task_ids whose tokens are being rendered live
-    live_displays: dict[str, Live] = {}  # task_id -> active Live display
+    streaming_active: set[str] = set()
     approval_queue: asyncio.Queue[dict] = asyncio.Queue()
     user_task_ids: set[str] = set()
     conversation_history: deque[dict] = deque(maxlen=5)
@@ -285,20 +292,7 @@ async def run(
             if task_id not in streaming_active:
                 streaming_active.add(task_id)
                 spinner.stop()
-                toolbar_status[0] = ""
-                console.print("  [bright_black]north[/bright_black]")
-                live = Live(
-                    Padding(Markdown(token_buffer[task_id]), (0, 0, 0, 2)),
-                    console=console,
-                    auto_refresh=True,
-                    refresh_per_second=8,
-                )
-                live.start(refresh=True)
-                live_displays[task_id] = live
-            else:
-                live = live_displays.get(task_id)
-                if live is not None:
-                    live.update(Padding(Markdown(token_buffer[task_id]), (0, 0, 0, 2)))
+                toolbar_status[0] = "streaming…"
 
         elif event == "task_synthesis":
             _set_status("synthesising…")
@@ -307,9 +301,7 @@ async def run(
             sys.stdout.write("\a")
             sys.stdout.flush()
             output = token_buffer.pop(task_id, "")
-            was_streaming = task_id in streaming_active
             streaming_active.discard(task_id)
-            live = live_displays.pop(task_id, None)
             if not output:
                 try:
                     async with httpx.AsyncClient() as c:
@@ -325,10 +317,6 @@ async def run(
                         )
                 except Exception:
                     pass
-            if live is not None:
-                if output:
-                    live.update(Padding(Markdown(output), (0, 0, 0, 2)))
-                live.stop()
             spinner.stop()
             toolbar_status[0] = ""
             user_task_ids.discard(task_id)
@@ -343,7 +331,7 @@ async def run(
                         "north": short,
                     }
                 )
-            if output and not was_streaming:
+            if output:
                 console.print("  [bright_black]north[/bright_black]")
                 console.print(Padding(Markdown(output), (0, 0, 0, 2)))
             console.print(Rule(style="bright_black"))
@@ -351,9 +339,6 @@ async def run(
         elif event == "task_failed":
             sys.stdout.write("\a")
             sys.stdout.flush()
-            live = live_displays.pop(task_id, None)
-            if live is not None:
-                live.stop()
             streaming_active.discard(task_id)
             token_buffer.pop(task_id, None)
             task_tool_activity.pop(task_id, None)
@@ -366,9 +351,6 @@ async def run(
             console.print(Rule(style="bright_black"))
 
         elif event == "task_cancelled":
-            live = live_displays.pop(task_id, None)
-            if live is not None:
-                live.stop()
             streaming_active.discard(task_id)
             token_buffer.pop(task_id, None)
             task_tool_activity.pop(task_id, None)
