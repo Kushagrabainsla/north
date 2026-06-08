@@ -20,7 +20,7 @@ from context.base import ContextStore
 from context.injection import ContextInjector
 from context.models import ContextDocument
 from inference.base import InferenceRouter
-from inference.models import CompletionRequest, CostSummary, PoolPriority, TranscriptionRequest
+from inference.models import CompletionRequest, CostSummary, ModelEntry, PoolPriority, TranscriptionRequest
 from jobs.base import JobProcessor
 from jobs.cron_store import UserCronStore
 from jobs.models import Job, JobPriority, JobStatus, JobType
@@ -570,7 +570,7 @@ async def inference_costs(
 
 class ModelPoolOut(BaseModel):
     name: str
-    models: list[str]
+    models: list[ModelEntry]
 
 
 @router.get("/inference/models", response_model=dict[str, ModelPoolOut])
