@@ -429,6 +429,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("seeding confidence defaults")
     await deps.confidence_tracker.seed_defaults(tool_graph, _RELIABLE_TOOLS)
 
+    _step("refreshing inference pools")
+    await deps.inference_router.refresh_pools()
+
     _step("building tool index")
     tool_index = _build_tool_index(deps)
     if tool_index is not None:
@@ -461,9 +464,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _step("scheduling background tasks")
     background_tasks = _launch_background_tasks(deps, orchestrator, extraction_pipeline, callback_server)
-
-    _step("refreshing inference pools")
-    await deps.inference_router.refresh_pools()
 
     _step("startup complete — yielding to server")
     try:

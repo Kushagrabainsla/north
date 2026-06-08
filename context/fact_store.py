@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS context_facts (
 """
 
 _MAX_FACTS_RETURNED: int = 15
+_DEDUP_SIMILARITY_THRESHOLD: float = 0.85
 
 
 class FactStore:
@@ -57,17 +58,31 @@ class FactStore:
         self._cache: list[tuple[str, str, list[float]]] | None = None
 
     async def add_fact(self, content: str, category: str = "public") -> None:
-        """Embed and persist one fact. Silently skips empty content or embed failure."""
+        """Embed and persist one fact. Silently skips empty content or embed failure.
+
+        If a nearly-identical fact already exists in the same category (cosine
+        similarity >= _DEDUP_SIMILARITY_THRESHOLD), the existing row is updated
+        in-place rather than a duplicate being inserted.
+        """
         content = content.strip()
         if not content:
             return
+        new_emb: list[float] = []
         try:
             embeddings = await self._embed_fn([content])
-            emb_json = json.dumps(embeddings[0]) if embeddings else json.dumps([])
+            new_emb = embeddings[0] if embeddings else []
+            emb_json = json.dumps(new_emb) if new_emb else json.dumps([])
         except Exception:
             logger.warning("FactStore: embed failed — storing fact without embedding")
             emb_json = json.dumps([])
-        await asyncio.to_thread(self._insert_sync, content, category, emb_json)
+
+        replace_id: str | None = None
+        if new_emb:
+            replace_id = await asyncio.to_thread(
+                self._find_similar_sync, category, new_emb, _DEDUP_SIMILARITY_THRESHOLD
+            )
+
+        await asyncio.to_thread(self._insert_or_replace_sync, content, category, emb_json, replace_id)
         self._cache = None
 
     async def search(self, query: str, max_results: int = _MAX_FACTS_RETURNED) -> list[str]:
@@ -116,13 +131,39 @@ class FactStore:
                     pass
         self._cache = parsed
 
-    def _insert_sync(self, content: str, category: str, emb_json: str) -> None:
+    def _find_similar_sync(self, category: str, emb: list[float], threshold: float) -> str | None:
+        """Return the id of an existing fact in *category* with similarity >= threshold, or None."""
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, embedding FROM context_facts WHERE category = ?",
+                (category,),
+            ).fetchall()
+        for row in rows:
+            if not row["embedding"]:
+                continue
+            try:
+                existing_emb = json.loads(row["embedding"])
+                if existing_emb and cosine_similarity(emb, existing_emb) >= threshold:
+                    return row["id"]
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return None
+
+    def _insert_or_replace_sync(
+        self, content: str, category: str, emb_json: str, replace_id: str | None
+    ) -> None:
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
-            conn.execute(
-                "INSERT INTO context_facts (id, content, category, embedding, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (generate_id(), content, category, emb_json, now),
-            )
+            if replace_id:
+                conn.execute(
+                    "UPDATE context_facts SET content = ?, embedding = ?, updated_at = ? WHERE id = ?",
+                    (content, emb_json, now, replace_id),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO context_facts (id, content, category, embedding, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (generate_id(), content, category, emb_json, now),
+                )
 
     def _load_all_sync(self) -> list[tuple[str, str, str]]:
         with open_db_connection(self._db_path) as conn:

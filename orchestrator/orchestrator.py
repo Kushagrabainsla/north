@@ -717,7 +717,20 @@ class Orchestrator:
                     task_id=None,  # task already completed; task_id cost was already popped
                 )
             )
-            return response.text.strip() or fallback
+            text = response.text.strip()
+            # Guard/classifier models sometimes return a bare float score instead
+            # of prose. Detect and discard those so episodic memory stays readable.
+            try:
+                float(text)
+                logger.warning(
+                    "Episode summarization returned a numeric score for task %s (model=%s) — using fallback",
+                    task_id,
+                    response.model_used,
+                )
+                return fallback
+            except ValueError:
+                pass
+            return text or fallback
         except Exception:
             logger.warning("Episode summarization failed for task %s", task_id, exc_info=True)
             return fallback

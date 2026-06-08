@@ -42,6 +42,12 @@ def capabilities_from_model_id(model_id: str) -> frozenset[ModelCapability]:
         return frozenset({ModelCapability.TRANSCRIPTION})
     if "embed" in lower:
         return frozenset({ModelCapability.EMBEDDING})
+    # Guard/safety classifiers and TTS models use the chat completions wire format
+    # but return classification scores or audio, not chat text. Exclude them from
+    # COMPLETION so they are never tried as general-purpose chat candidates.
+    _NON_CHAT_PATTERNS = ("prompt-guard", "llama-guard", "orpheus", "-guard-")
+    if any(kw in lower for kw in _NON_CHAT_PATTERNS):
+        return frozenset()
     return frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS})
 
 
