@@ -24,6 +24,7 @@ from rich.rule import Rule as RichRule
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.widgets import Input, Markdown, RichLog, Static
 
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -60,48 +61,65 @@ class NorthApp(App[None]):
         background: $background;
     }
 
+    /* ── chat log ─────────────────────────────────────────── */
+
     #log {
         height: 1fr;
         border: none;
         padding: 0 0;
         scrollbar-size: 1 1;
         scrollbar-color: $primary-darken-3;
-        scrollbar-color-hover: $primary-darken-1;
+        scrollbar-color-hover: $primary;
     }
+
+    /* ── live streaming area (hidden until tokens arrive) ─── */
 
     #streaming {
         height: auto;
         max-height: 50%;
         display: none;
-        padding: 0 0 1 2;
+        padding: 0 0 0 2;
         background: $background;
         color: $text;
     }
 
-    #separator {
+    /* ── footer: separator + status + input row ─────────────── */
+
+    #footer-sep {
         height: 1;
         color: $text-muted;
-        padding: 0 0;
     }
 
-    #status {
+    #footer-status {
         height: 1;
         color: $text-muted;
-        padding: 0 0;
+    }
+
+    /* The input row is a single terminal line: [  ❯  ][input] */
+
+    #input-row {
+        height: 1;
+        background: $background;
+    }
+
+    #prompt-prefix {
+        width: auto;
+        height: 1;
+        color: cyan;
+        padding: 0 1 0 2;
     }
 
     #prompt {
-        height: 3;
+        width: 1fr;
+        height: 1;
         border: none;
         padding: 0 0;
         background: $background;
+        color: $text;
     }
 
     Input {
         border: none;
-        padding: 1 2;
-        background: $background;
-        color: $text;
     }
 
     Input:focus {
@@ -143,9 +161,11 @@ class NorthApp(App[None]):
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
         yield Markdown("", id="streaming")
-        yield Static("", id="separator")
-        yield Static("", id="status")
-        yield Input(placeholder="  ❯ ", id="prompt")
+        yield Static("", id="footer-sep")
+        yield Static("", id="footer-status")
+        with Horizontal(id="input-row"):
+            yield Static("❯", id="prompt-prefix")
+            yield Input(id="prompt")
 
     def on_mount(self) -> None:
         history_file = Path.home() / ".north" / "tui_history"
@@ -159,11 +179,15 @@ class NorthApp(App[None]):
 
         log = self.query_one("#log", RichLog)
         log.write("")
-        log.write("  [bold white]north[/bold white]  [bright_black]personal operating system[/bright_black]")
+        log.write(
+            "  [bold white]north[/bold white]  "
+            "[bright_black]personal operating system[/bright_black]"
+        )
         log.write(f"  [dim]strategy: {_get_strategy()}[/dim]")
         log.write("")
         self._write_rule()
-        self._redraw_separator()
+
+        self._draw_separator()
         self._set_status("")
 
         self.set_interval(0.08, self._tick)
@@ -171,37 +195,39 @@ class NorthApp(App[None]):
         self.query_one("#prompt", Input).focus()
 
     def on_resize(self) -> None:
-        self._redraw_separator()
+        self._draw_separator()
 
     # ── rendering helpers ────────────────────────────────────────────────────
 
-    def _redraw_separator(self) -> None:
-        self.query_one("#separator", Static).update(
+    def _draw_separator(self) -> None:
+        """Redraw the fixed separator line above the footer. Only on mount/resize."""
+        self.query_one("#footer-sep", Static).update(
             "[bright_black]" + "─" * self.size.width + "[/bright_black]"
         )
 
     def _write_rule(self) -> None:
+        """Write a full-width rule into the chat log between turns."""
         self.query_one("#log", RichLog).write(RichRule(style="bright_black"))
 
     def _tick(self) -> None:
         self._spin_frame += 1
         if self._status_text:
             f = _SPIN[self._spin_frame % len(_SPIN)]
-            self.query_one("#status", Static).update(
+            self.query_one("#footer-status", Static).update(
                 f"[bright_black]  {f}  {self._status_text}[/bright_black]"
             )
 
     def _set_status(self, text: str) -> None:
         self._status_text = text
-        self._redraw_separator()
         if not text:
             strategy = _get_strategy()
-            self.query_one("#status", Static).update(
-                f"[bright_black]  strategy: {strategy}  ·  ↑↓ history  ·  ctrl+c to quit[/bright_black]"
+            self.query_one("#footer-status", Static).update(
+                f"[bright_black]  strategy: {strategy}"
+                f"  ·  ↑↓ history  ·  ctrl+c to quit[/bright_black]"
             )
         else:
             f = _SPIN[self._spin_frame % len(_SPIN)]
-            self.query_one("#status", Static).update(
+            self.query_one("#footer-status", Static).update(
                 f"[bright_black]  {f}  {text}[/bright_black]"
             )
 
