@@ -109,11 +109,16 @@ def _check_python(path: Path) -> ToolOutput:
 
     errors = []
     warnings = []
+    parsed_errors = []
     for line in result.stdout.splitlines():
         if "error:" in line:
             errors.append(line)
+            if parsed := _parse_error_line(line, "python"):
+                parsed_errors.append(parsed)
         elif "warning:" in line or "note:" in line:
             warnings.append(line)
+            if parsed := _parse_error_line(line, "python"):
+                parsed_errors.append(parsed)
 
     return ToolOutput(
         success=len(errors) == 0,
@@ -121,6 +126,7 @@ def _check_python(path: Path) -> ToolOutput:
             "file": str(path),
             "errors": errors,
             "warnings": warnings,
+            "parsed_errors": parsed_errors,
             "raw_output": result.stdout,
         },
     )
@@ -146,11 +152,16 @@ def _check_typescript(path: Path) -> ToolOutput:
 
     errors = []
     warnings = []
+    parsed_errors = []
     for line in result.stdout.splitlines():
         if "error TS" in line:
             errors.append(line)
+            if parsed := _parse_error_line(line, "typescript"):
+                parsed_errors.append(parsed)
         elif "warning" in line.lower():
             warnings.append(line)
+            if parsed := _parse_error_line(line, "typescript"):
+                parsed_errors.append(parsed)
 
     return ToolOutput(
         success=len(errors) == 0,
@@ -158,6 +169,7 @@ def _check_typescript(path: Path) -> ToolOutput:
             "file": str(path),
             "errors": errors,
             "warnings": warnings,
+            "parsed_errors": parsed_errors,
             "raw_output": result.stdout,
         },
     )
@@ -183,9 +195,12 @@ def _check_go(path: Path) -> ToolOutput:
 
     errors = []
     warnings = []
+    parsed_errors = []
     for line in result.stdout.splitlines():
         if line.strip():
             errors.append(line)
+            if parsed := _parse_error_line(line, "go"):
+                parsed_errors.append(parsed)
 
     return ToolOutput(
         success=len(errors) == 0,
@@ -193,6 +208,55 @@ def _check_go(path: Path) -> ToolOutput:
             "file": str(path),
             "errors": errors,
             "warnings": warnings,
+            "parsed_errors": parsed_errors,
             "raw_output": result.stdout,
         },
     )
+
+
+def _parse_error_line(line: str, lang: str) -> dict | None:
+    import re
+    line = line.strip()
+    if not line:
+        return None
+
+    if lang == "python":
+        m = re.match(r"^([^:]+):(\d+):(?:(\d+):)?\s*(error|warning|note):\s*(.*)$", line)
+        if m:
+            return {
+                "file": m.group(1),
+                "line": int(m.group(2)),
+                "column": int(m.group(3)) if m.group(3) else None,
+                "severity": m.group(4),
+                "message": m.group(5),
+            }
+    elif lang == "typescript":
+        m1 = re.match(r"^([^\(\s]+)\((\d+),(\d+)\):\s*(error|warning|note)?\s*(?:TS\d+)?:\s*(.*)$", line, re.IGNORECASE)
+        if m1:
+            return {
+                "file": m1.group(1),
+                "line": int(m1.group(2)),
+                "column": int(m1.group(3)),
+                "severity": m1.group(4) or "error",
+                "message": m1.group(5),
+            }
+        m2 = re.match(r"^([^:\s]+):(\d+):(\d+)\s+-\s*(error|warning|note)?\s*(?:TS\d+)?:\s*(.*)$", line, re.IGNORECASE)
+        if m2:
+            return {
+                "file": m2.group(1),
+                "line": int(m2.group(2)),
+                "column": int(m2.group(3)),
+                "severity": m2.group(4) or "error",
+                "message": m2.group(5),
+            }
+    elif lang == "go":
+        m = re.match(r"^([^:]+):(\d+):(?:(\d+):)?\s*(.*)$", line)
+        if m:
+            return {
+                "file": m.group(1),
+                "line": int(m.group(2)),
+                "column": int(m.group(3)) if m.group(3) else None,
+                "severity": "error",
+                "message": m.group(4),
+            }
+    return None

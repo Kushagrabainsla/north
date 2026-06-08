@@ -19,6 +19,7 @@ from tools.models import ToolInput, ToolOutput
 if TYPE_CHECKING:
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
+    from approval.judgement_filter import JudgementFilter
 
 _TIMEOUT = 30
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the
@@ -44,6 +45,29 @@ def _cap(text: str) -> str:
     kept = text[:_MAX_OUTPUT_CHARS]
     omitted = len(text) - _MAX_OUTPUT_CHARS
     return kept + f"\n[…{omitted} chars truncated]"
+
+
+class CommandSafetyInspector:
+    """Inspector responsible for checking if a command is instantly safe/read-only."""
+
+    def __init__(self) -> None:
+        self.instant_safe_prefixes = [
+            "git status",
+            "git diff",
+            "git log",
+            "git show",
+            "git branch",
+            "cat ",
+            "grep ",
+            "find ",
+            "ls ",
+            "pwd",
+            "whoami",
+        ]
+
+    def is_instantly_safe(self, command: str) -> bool:
+        cleaned = command.strip().lower()
+        return any(cleaned.startswith(prefix) for prefix in self.instant_safe_prefixes)
 
 
 class BashTool(Tool):
@@ -83,16 +107,22 @@ class BashTool(Tool):
         approval_store: ApprovalStore,
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
+        judgement_filter: JudgementFilter | None = None,
     ) -> None:
         self._approval_store = approval_store
         self._stream_manager = stream_manager
         self._approval_timeout_seconds = approval_timeout_seconds
+        self._judgement_filter = judgement_filter
+        self._safety_inspector = CommandSafetyInspector()
 
     def format_output(self, data: dict[str, Any]) -> str:
         return str(data.get("stdout", data.get("output", ""))).strip()
 
     async def _request_approval(self, task_id: str | None, command: str) -> bool:
         """Emit an approval card for the command. Returns True if the user approves."""
+        if self._safety_inspector.is_instantly_safe(command):
+            return True
+
         from approval.models import Card, CardType
         from utils.ids import generate_id
 
@@ -106,6 +136,17 @@ class BashTool(Tool):
             message=f"```\n{command}\n```",
             options=["Run", "Cancel"],
         )
+
+        if self._judgement_filter is not None:
+            try:
+                auto_decision, _ = await self._judgement_filter.check(card)
+                if auto_decision == "approved":
+                    return True
+                elif auto_decision == "rejected":
+                    return False
+            except Exception:
+                pass
+
         self._approval_store.add(card)
 
         if self._stream_manager and task_id:

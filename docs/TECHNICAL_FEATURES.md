@@ -317,3 +317,46 @@ card = await approval_store.wait_for_decision(card_id, timeout=300.0)
   ```
 - **Concurrency:** `cancel-in-progress: false` — a publish in flight on a tag is never interrupted.
 - **Tagging:** branch name, `{{version}}`, `{{major}}.{{minor}}`, and `latest` (on default branch only) are all produced in a single metadata step.
+
+---
+
+## 13. Three-Layer BashTool Command Safety
+
+**What:** `BashTool._request_approval()` evaluates every shell command through three progressively heavier gates before execution. If an earlier gate produces a decision, later gates are skipped entirely.
+
+**Why:** Without any bypass, every `git status` or `cat README.md` blocks on a manual approval card — adding 5–30 s of human latency to pure read-only operations. The three-layer design keeps developers in flow for safe commands while still gating anything risky.
+
+**Layers (evaluated in order):**
+
+| Layer | Class | Cost | Decision |
+|---|---|---|---|
+| 1. Local inspection | `CommandSafetyInspector` | Zero — pure prefix match | Auto-approve read-only commands (`git status`, `cat`, `ls`, `grep`, etc.) |
+| 2. Learned rules | `JudgementFilter` | One LLM call against `judgement_rules.md` | Auto-approve/reject based on patterns the user has established through prior approvals |
+| 3. Manual approval | `ApprovalStore` card | Human decision | Fallback for unknown or mutating commands |
+
+**Layer 1 — `CommandSafetyInspector`:**
+
+```python
+class CommandSafetyInspector:
+    instant_safe_prefixes = [
+        "git status", "git diff", "git log", "git show", "git branch",
+        "cat ", "grep ", "find ", "ls ", "pwd", "whoami",
+    ]
+
+    def is_instantly_safe(self, command: str) -> bool:
+        cleaned = command.strip().lower()
+        return any(cleaned.startswith(p) for p in self.instant_safe_prefixes)
+```
+
+This is **not a security boundary** — it's a developer-velocity optimisation. The list intentionally covers only commands that cannot mutate the filesystem, push to remotes, or spawn network requests.
+
+**Layer 2 — `JudgementFilter` (existing system):**
+
+If the command is not instantly safe, `BashTool` forwards an approval card to `JudgementFilter.check()`. The filter compares the card against learned rules from `judgement_rules.md` (populated by the extraction pipeline from prior user approvals). If a matching rule exists, the command is auto-approved or auto-rejected with no human prompt.
+
+**Layer 3 — Manual approval card:**
+
+If both Layer 1 and Layer 2 are inconclusive, a standard approval card is emitted and the coroutine suspends on `ApprovalStore.wait_for_decision()` until the user responds (see §11).
+
+**Dependency injection:** `JudgementFilter` is instantiated once during server startup in `orchestrator/app.py` and shared between the `Orchestrator` (for general approvals) and `BashTool` (for command-specific approvals). `CommandSafetyInspector` is a zero-dependency value object created internally by `BashTool.__init__()`.
+

@@ -107,7 +107,7 @@ def _attach_embedding_index(deps) -> None:
     deps.context_store.attach_embedding_index(embedding_index)
 
 
-def _build_tool_registry(deps, tool_graph) -> tuple[ToolRegistry, CreateAgentTool]:
+def _build_tool_registry(deps, tool_graph, judgement_filter: JudgementFilter | None = None) -> tuple[ToolRegistry, CreateAgentTool]:
     tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
     tool_registry.register(
         ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store)
@@ -125,6 +125,7 @@ def _build_tool_registry(deps, tool_graph) -> tuple[ToolRegistry, CreateAgentToo
             approval_store=deps.approval_store,
             stream_manager=deps.stream_manager,
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+            judgement_filter=judgement_filter,
         )
     )
     return tool_registry, create_agent_tool
@@ -188,6 +189,7 @@ def _build_orchestrator(
     agent_registry: AgentRegistry,
     tool_registry: ToolRegistry,
     extraction_pipeline: ExtractionPipeline,
+    judgement_filter: JudgementFilter,
 ) -> Orchestrator:
     return Orchestrator(
         ledger=deps.ledger,
@@ -211,10 +213,7 @@ def _build_orchestrator(
         notifier=deps.notifier,
         stream_manager=deps.stream_manager,
         approval_store=deps.approval_store,
-        judgement_filter=JudgementFilter(
-            context_store=deps.context_store,
-            inference_router=deps.cost_tracker,
-        ),
+        judgement_filter=judgement_filter,
         north_settings=deps.north_settings,
         synthesizer=ResultSynthesizer(inference_router=deps.cost_tracker),
         tracked_router=deps.cost_tracker,
@@ -411,7 +410,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _step("building tool registry")
     tool_graph = AgentRegistry.build_tool_graph(_AGENTS_DIR)
-    tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph)
+    judgement_filter = JudgementFilter(
+        context_store=deps.context_store,
+        inference_router=deps.cost_tracker,
+    )
+    tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, judgement_filter)
 
     _step("seeding confidence defaults")
     await deps.confidence_tracker.seed_defaults(tool_graph, _RELIABLE_TOOLS)
@@ -430,7 +433,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _warn_unknown_cron_agents(agent_registry)
 
     extraction_pipeline = _build_extraction_pipeline(deps)
-    orchestrator = _build_orchestrator(deps, agent_registry, tool_registry, extraction_pipeline)
+    orchestrator = _build_orchestrator(deps, agent_registry, tool_registry, extraction_pipeline, judgement_filter)
     # Share the orchestrator's JudgementFilter with agents so request_approval
     # calls skip the user prompt when a learned rule already covers the situation.
     agent_deps.judgement_filter = orchestrator._judgement_filter

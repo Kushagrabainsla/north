@@ -71,6 +71,23 @@ class GitTool(Tool):
         "required": ["action"],
     }
 
+    def format_output(self, data: dict[str, Any]) -> str:
+        stdout = str(data.get("stdout", "")).strip()
+        command = str(data.get("command", ""))
+        if "diff" in command:
+            if not stdout:
+                return "No changes (empty diff)."
+            lines = stdout.splitlines()
+            files_changed = []
+            for line in lines:
+                if line.startswith("+++ b/"):
+                    files_changed.append(line[6:])
+            summary = ""
+            if files_changed:
+                summary = "### Files Modified:\n" + "\n".join(f"- `{f}`" for f in files_changed) + "\n\n"
+            return f"{summary}### Diff:\n```diff\n{stdout}\n```"
+        return stdout
+
     async def run(self, input: ToolInput) -> ToolOutput:
         action = str(input.params.get("action", "")).strip()
         args = str(input.params.get("args", "")).strip()

@@ -1420,17 +1420,23 @@ agents/finance/README.md
 
 ### 20.1 Commit Message Format
 
+Every commit message follows the `Release x.y.z: description` format — a single line, no body required.
+
 ```
-{module}: {what changed in plain english}
+Release {version}: {what changed in plain english}
 
 Examples:
-ledger: add agent_output field to LedgerEntry for failure recovery
-orchestrator: implement north star alignment check
-agents/job: add linkedin_api tool edge with initial confidence 0.5
-inference: apply 60s cooldown to rate-limited models instead of failing immediately
-tools: add ConfidenceTracker with SQLite persistence
-config: add build_test_dependencies factory for isolated test setup
+Release 1.3.5: coding enhancements + three-layer BashTool safety + pre-commit checklist
+Release 1.3.4: fix JudgementFilter duplicate construction at startup
+Release 1.3.3: multi-provider inference with Groq and Gemini routers
+Release 1.3.2: semantic tool selection and atomic fact store
 ```
+
+**Rules:**
+- Version must match `pyproject.toml` exactly at the time of commit.
+- Description is plain English — no angle brackets, no conventional-commit prefixes.
+- One line only. The "why" lives in `CHANGELOG.md`, not in the commit body.
+
 
 ### 20.2 One Concern Per Commit
 
@@ -1610,3 +1616,45 @@ A change that touches code without updating the changelog is incomplete.
 ### 23.6 New Standards Land in This File
 
 When the user states a rule of practice — "always X", "never Y", "from now on Z" — capture it here in the most relevant existing section before acting on it. Keep entries terse: state the rule, give a one-line **Why**, give a one-line **How to apply**. Skip worked examples unless the rule cannot be understood without one. Adding to this file is not a license to expand it.
+
+### 23.7 Pre-Commit Checklist
+
+Every commit is incomplete until all four obligations below are satisfied. Check them in order before writing the commit message.
+
+**Why:** Code that ships without a changelog entry, stale docs, or a mismatched version tag creates invisible technical debt — future contributors (and you, six months later) cannot tell what changed or why.
+
+**Checklist:**
+
+| # | Obligation | Files to update | Done when… |
+|---|---|---|---|
+| 1 | **Changelog** | `CHANGELOG.md` | The change has a one-line entry under `[Unreleased] > Added / Changed / Fixed / …` (§23.5) |
+| 2 | **Version** | `pyproject.toml`, `uv.lock` (`uv lock`) | `pyproject.toml` version matches the semver rule (§21.5); `uv.lock` re-generated so it reflects the same version |
+| 3 | **Docs** | `docs/TECHNICAL_FEATURES.md` or `docs/ARCHITECTURE.md` | Any new architectural pattern, design decision, or non-obvious behaviour is documented in the right doc file |
+| 4 | **Commit message** | — | Follows the format in §20.1 and names the module(s) touched |
+
+**How to apply:**
+
+- Run through the checklist top-to-bottom, not bottom-to-top.
+- A change that adds no new behaviour (pure typo fix, import sort) may skip obligations 2 and 3 but never obligation 1.
+- If a doc section for the new behaviour does not exist yet, create it — do not append to an ill-fitting section.
+- `uv lock` is the only acceptable way to update `uv.lock`; never hand-edit it.
+
+**What "complete" looks like for a typical feature commit:**
+
+```
+# 1. CHANGELOG.md — entry added under [Unreleased]
+## [Unreleased]
+### Added
+- BashTool three-layer command safety: instant bypass for read-only commands, …
+
+# 2. pyproject.toml version bumped; uv lock re-run
+version = "1.3.5"   # was 1.3.4
+$ uv lock           # regenerates uv.lock
+
+# 3. docs/TECHNICAL_FEATURES.md updated
+## 13. Three-Layer BashTool Command Safety
+…
+
+# 4. Commit message
+Release 1.3.5: coding enhancements + three-layer BashTool safety + pre-commit checklist
+```

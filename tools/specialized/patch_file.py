@@ -21,9 +21,14 @@ class PatchFileTool(Tool):
 
     name = "patch_file"
     description = (
-        "Replace an exact string in a file with a new string. "
-        "Fails if old_string is not found or appears more than once, "
-        "so always use enough context to make old_string unique."
+        "Replace an exact string or one or more SEARCH/REPLACE blocks in a file. "
+        "For simple replacements, provide path, old_string, and new_string. "
+        "For SEARCH/REPLACE blocks, omit old_string and format new_string as:\n"
+        "<<<<<<< SEARCH\n"
+        "<exact code to find>\n"
+        "=======\n"
+        "<replacement code>\n"
+        ">>>>>>> REPLACE"
     )
     parameters_schema = {
         "type": "object",
@@ -31,19 +36,19 @@ class PatchFileTool(Tool):
             "path": {"type": "string", "description": "Path to the file to edit"},
             "old_string": {
                 "type": "string",
-                "description": "Exact text to find — must appear exactly once in the file",
+                "description": "Exact text to find — must appear exactly once in the file. Optional if using SEARCH/REPLACE blocks in new_string.",
             },
             "new_string": {
                 "type": "string",
-                "description": "Replacement text",
+                "description": "Replacement text or SEARCH/REPLACE blocks",
             },
             "workspace": {"type": "string", "description": "Workspace root (optional)"},
         },
-        "required": ["path", "old_string", "new_string"],
+        "required": ["path", "new_string"],
     }
 
     def format_output(self, data: dict[str, Any]) -> str:
-        return f"Patched `{data.get('path', '?')}`."
+        return f"Patched `{data.get('path', '?')}` successfully."
 
     async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")
@@ -52,8 +57,6 @@ class PatchFileTool(Tool):
 
         if not path_str:
             return ToolOutput(success=False, error="Parameter 'path' is required.")
-        if old_string is None:
-            return ToolOutput(success=False, error="Parameter 'old_string' is required.")
         if new_string is None:
             return ToolOutput(success=False, error="Parameter 'new_string' is required.")
 
@@ -64,7 +67,7 @@ class PatchFileTool(Tool):
         return await asyncio.to_thread(_patch_sync, resolved, old_string, new_string)
 
 
-def _patch_sync(path: Path, old_string: str, new_string: str) -> ToolOutput:
+def _patch_sync(path: Path, old_string: str | None, new_string: str) -> ToolOutput:
     if not path.exists():
         return ToolOutput(success=False, error=f"File not found: {path}")
     if not path.is_file():
@@ -74,6 +77,53 @@ def _patch_sync(path: Path, old_string: str, new_string: str) -> ToolOutput:
         content = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return ToolOutput(success=False, error=f"Binary file cannot be patched: {path}")
+
+    import re
+    # Check if new_string contains SEARCH/REPLACE blocks
+    blocks = re.findall(
+        r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE",
+        new_string,
+        re.DOTALL
+    )
+
+    if blocks:
+        # Check all blocks first
+        new_content = content
+        for search_val, replace_val in blocks:
+            count = new_content.count(search_val)
+            if count == 0:
+                return ToolOutput(
+                    success=False,
+                    error=f"SEARCH block not found in file:\n{search_val}\nCheck for exact spacing/newlines.",
+                )
+            if count > 1:
+                return ToolOutput(
+                    success=False,
+                    error=f"SEARCH block is not unique, appears {count} times:\n{search_val}",
+                )
+            new_content = new_content.replace(search_val, replace_val, 1)
+
+        try:
+            path.write_text(new_content, encoding="utf-8")
+        except OSError as exc:
+            return ToolOutput(success=False, error=str(exc))
+
+        return ToolOutput(
+            success=True,
+            data={
+                "path": str(path),
+                "bytes_before": len(content.encode("utf-8")),
+                "bytes_after": len(new_content.encode("utf-8")),
+                "blocks_applied": len(blocks),
+            },
+        )
+
+    # Legacy fallback: simple string replacement
+    if old_string is None:
+        return ToolOutput(
+            success=False,
+            error="Either old_string must be provided, or new_string must contain SEARCH/REPLACE blocks.",
+        )
 
     count = content.count(old_string)
     if count == 0:
@@ -102,5 +152,6 @@ def _patch_sync(path: Path, old_string: str, new_string: str) -> ToolOutput:
             "path": str(path),
             "bytes_before": len(content.encode("utf-8")),
             "bytes_after": len(new_content.encode("utf-8")),
+            "blocks_applied": 1,
         },
     )

@@ -2,8 +2,16 @@
 
 All notable changes to north are documented here.
 
-## [Unreleased]
+## [1.3.5] - 2026-06-08
 ### Added
+- **Three-layer BashTool command safety** (`tools/specialized/bash.py`):
+  - Layer 1 — `CommandSafetyInspector`: instant prefix-match bypass for read-only commands (`git status`, `cat`, `ls`, `grep`, `find`, `pwd`, `whoami`) — zero LLM cost, zero latency
+  - Layer 2 — `JudgementFilter` integration: auto-approve/reject based on learned user rules from `judgement_rules.md`, reducing repeat approval prompts over time
+  - Layer 3 — Manual approval card: unchanged fallback for unknown or mutating commands
+  - Each layer short-circuits: if Layer 1 approves, Layers 2–3 never run
+- **SEARCH/REPLACE diff blocks** (`tools/specialized/patch_file.py`): `PatchFileTool` now accepts `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE` blocks in `new_string`, enabling multi-hunk edits in a single tool call
+- **Multi-language symbol search** (`tools/semantic/search_symbols.py`): `SearchSymbolsTool` now finds classes and functions in TypeScript/JavaScript (`.ts`, `.js`, `.tsx`, `.jsx`) and Go (`.go`) files via regex, in addition to existing Python AST parsing
+- **Structured compiler diagnostics** (`tools/analysis/check_types.py`): `_parse_error_line()` extracts `{file, line, column, severity, message}` dicts from mypy, tsc, and `go vet` output — agents get structured data instead of raw text
 - **Semantic code tools** (`tools/semantic/`): Four new AST-aware and grep-based tools for agents:
   - `read_file(path, start_line?, end_line?)` — read file ranges with line numbers (faster than bash)
   - `list_dir(path)` — explore directory structure without spawning shell
@@ -34,19 +42,22 @@ All notable changes to north are documented here.
   - Step 3 loop detection now references snapshot failure_count; escalates to architect if >= 3
 
 ### Changed
+- `JudgementFilter` instantiated once at startup and shared between `Orchestrator` and `BashTool` — eliminates duplicate construction
+- `_build_tool_registry()` and `_build_orchestrator()` accept `judgement_filter` as a parameter instead of creating their own
+- `git diff` output formatting improved for cleaner agent context
 - Coder workflow simplified: `check_types` replaces language-specific bash compile checks; fewer shell commands
 
 ### Docs
+- `docs/TECHNICAL_FEATURES.md` §13: new section documents the three-layer BashTool command safety architecture
+- `docs/CODING_STYLE.md` §23.7: new pre-commit checklist rule — every commit must update changelog, version (`pyproject.toml` + `uv lock`), docs, and commit message before it is complete
 - `docs/CODING_STYLE.md` §16 (Tools): new section describes semantic tools (read_file, list_dir, search_symbols, find_references, check_types) and when to use them instead of bash.
+- `docs/ARCHITECTURE.md`: updated §8.1 (multi-provider table replacing "all inference through OpenRouter"), §8.2 (continuous `quality_from_cost()` scoring replacing old thirds-bucketing description), §8.5 (correct exception class names `ModelRateLimitedError`/`PaymentRequiredError`/`InferenceError` and accurate fallback semantics), §7.5 (added `consecutive_failures` column to schema), §10.2 (removed stale `north chat`, corrected `context show` command, added `north metrics`, added TUI invocation), §16.3 (seven databases, not six — added `tool_index.db` and `facts.db`), §16.11 (added `NORTH_GROQ_API_KEY`, `NORTH_GEMINI_API_KEY`, and tuning env vars).
+- `docs/TECHNICAL_FEATURES.md`: §2 replaced stale `bucket_models()` pseudocode with actual `quality_from_cost()` + threshold-bin pattern; §4 corrected pool refresh description (startup explicit call + sleep-first background loop).
+- `README.md`: added optional provider keys section, updated usage to include TUI invocation, `north metrics`, `north stream`, and corrected `north stop` flag.
 
 ### Fixed
 - `AgenticLLMAgent._execute()` now catches `ContextTooLargeError` raised by `complete_with_tools`, compacts the history to `keep_recent=1`, and retries once before returning a graceful error message.
 - **`InferenceError` fallback** (`inference/dispatcher.py`): provider-level errors (e.g. HTTP 400 — unsupported parameters) now advance the fallback chain to the next candidate instead of re-raising immediately. The EMA failure is recorded and a `WARNING` is logged before continuing; only unexpected non-inference exceptions still re-raise.
-
-### Docs
-- `docs/ARCHITECTURE.md`: updated §8.1 (multi-provider table replacing "all inference through OpenRouter"), §8.2 (continuous `quality_from_cost()` scoring replacing old thirds-bucketing description), §8.5 (correct exception class names `ModelRateLimitedError`/`PaymentRequiredError`/`InferenceError` and accurate fallback semantics), §7.5 (added `consecutive_failures` column to schema), §10.2 (removed stale `north chat`, corrected `context show` command, added `north metrics`, added TUI invocation), §16.3 (seven databases, not six — added `tool_index.db` and `facts.db`), §16.11 (added `NORTH_GROQ_API_KEY`, `NORTH_GEMINI_API_KEY`, and tuning env vars).
-- `docs/TECHNICAL_FEATURES.md`: §2 replaced stale `bucket_models()` pseudocode with actual `quality_from_cost()` + threshold-bin pattern; §4 corrected pool refresh description (startup explicit call + sleep-first background loop).
-- `README.md`: added optional provider keys section, updated usage to include TUI invocation, `north metrics`, `north stream`, and corrected `north stop` flag.
 
 ## [1.3.3] - 2026-06-06
 ### Added
