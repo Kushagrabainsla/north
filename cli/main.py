@@ -1721,10 +1721,10 @@ def update(
     restart: bool = typer.Option(True, "--restart/--no-restart", help="Restart the server after updating."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
 ) -> None:
-    """Pull the latest north code and update dependencies.
+    """Update north to the latest version.
 
-    Requires north to be installed via uv tool install git+<url>.
-    Pass --docker to update a Docker Compose deployment instead.
+    Mirrors the install script: pulls the latest code from GitHub and
+    reinstalls. Pass --docker to update a Docker Compose deployment instead.
     """
     _console.print()
     _console.print("  [bold white]north update[/bold white]")
@@ -1755,22 +1755,22 @@ def update(
         typer.secho("✓ north updated and restarted via Docker.", fg=typer.colors.GREEN)
         return
 
-    was_running = _port_in_use("127.0.0.1", port) and _is_north_server("127.0.0.1", port)
-    if was_running:
-        _console.print("  [dim]→[/dim]  stopping server…")
-        _stop_server(port)
-
     # ── uv tool upgrade from git URL ──────────────────────────────────────
     if not is_git_url:
         typer.secho(
-            "ERROR: north is not installed from a git URL.\n"
-            "Reinstall with: uv tool install git+<your-repo-url>",
+            "ERROR: north is not installed via the install script.\n"
+            "Run: curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(1) from None
 
     _console.print(f"  [dim]source     [/dim]  {install_url}")
+
+    was_running = _port_in_use("127.0.0.1", port) and _is_north_server("127.0.0.1", port)
+    if was_running:
+        _console.print("  [dim]→[/dim]  stopping server…")
+        _stop_server(port)
     _console.print()
 
     if not yes:
@@ -1778,22 +1778,27 @@ def update(
 
     if not shutil.which("uv"):
         typer.secho(
-            "ERROR: uv not found. Install uv or run: pip install --upgrade git+<url>",
+            "ERROR: uv not found. Re-run the install script:\n"
+            "  curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(1) from None
 
-    _console.print("  [dim]→[/dim]  upgrading via uv…")
-    result = subprocess.run(["uv", "tool", "upgrade", "north"], capture_output=True, text=True)
+    _console.print("  [dim]→[/dim]  reinstalling from git…")
+    result = subprocess.run(
+        ["uv", "tool", "install", f"git+{install_url}", "--force-reinstall", "-q"],
+        capture_output=True,
+        text=True,
+    )
     if result.returncode != 0:
         typer.secho(
-            f"uv tool upgrade failed:\n{(result.stdout + result.stderr).strip()}",
+            f"Install failed:\n{(result.stdout + result.stderr).strip()}",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(1) from None
-    _console.print("  [dim green]✓[/dim green]  upgraded")
+    _console.print("  [dim green]✓[/dim green]  updated")
 
     _console.print()
     if restart and (was_running or typer.confirm("Start north now?", default=True)):
