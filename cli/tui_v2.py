@@ -20,7 +20,6 @@ from pathlib import Path
 import httpx
 from rich.markdown import Markdown as RichMarkdown
 from rich.padding import Padding as RichPadding
-from rich.rule import Rule as RichRule
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -72,14 +71,12 @@ class NorthApp(App[None]):
 
     /* ── chat log ─────────────────────────────────────────── */
 
-    RichLog {
-        background: $background;
-    }
-
     #log {
+        width: 100%;
         height: 1fr;
         border: none;
         padding: 0 0;
+        background: $background;
         scrollbar-size: 1 1;
         scrollbar-color: $primary-darken-3;
         scrollbar-color-hover: $primary;
@@ -88,6 +85,7 @@ class NorthApp(App[None]):
     /* ── live streaming area ──────────────────────────────── */
 
     #streaming {
+        width: 100%;
         height: auto;
         max-height: 50%;
         display: none;
@@ -99,6 +97,7 @@ class NorthApp(App[None]):
     /* ── footer: status · top-sep · input · bot-sep · pad ── */
 
     #status {
+        width: 100%;
         height: 1;
         background: $background;
         color: $text-muted;
@@ -106,12 +105,14 @@ class NorthApp(App[None]):
     }
 
     #sep-top {
+        width: 100%;
         height: 1;
         background: $background;
         color: $text-muted;
     }
 
     #input-row {
+        width: 100%;
         height: 1;
         background: $background;
     }
@@ -145,12 +146,14 @@ class NorthApp(App[None]):
     }
 
     #sep-bot {
+        width: 100%;
         height: 1;
         background: $background;
         color: $text-muted;
     }
 
     #pad-bot {
+        width: 100%;
         height: 1;
         background: $background;
     }
@@ -210,11 +213,7 @@ class NorthApp(App[None]):
 
         log = self.query_one("#log", RichLog)
         log.write("")
-        log.write(
-            "  [bold white]north[/bold white]  "
-            "[bright_black]personal operating system[/bright_black]"
-        )
-        log.write(f"  [dim]strategy: {_get_strategy()}[/dim]")
+        log.write("  [bold white]north[/bold white]")
         log.write("")
         self._write_rule()
 
@@ -236,7 +235,12 @@ class NorthApp(App[None]):
         self.query_one("#sep-bot", Static).update(line)
 
     def _write_rule(self) -> None:
-        self.query_one("#log", RichLog).write(RichRule(style="bright_black"))
+        # Write dashes as plain markup so width matches the screen, not
+        # the RichLog's internal Rich console (which defaults to ~80 chars).
+        width = self.size.width or 80
+        self.query_one("#log", RichLog).write(
+            "[bright_black]" + "─" * width + "[/bright_black]"
+        )
 
     def _tick(self) -> None:
         self._spin_frame += 1
