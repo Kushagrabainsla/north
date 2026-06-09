@@ -68,10 +68,9 @@ class NorthApp(App[None]):
         padding: 0;
         background: $background;
         scrollbar-size: 1 1;
-        /* track colour matches bg so the gutter is invisible when not scrolling */
         scrollbar-background: $background;
         scrollbar-background-hover: $background;
-        scrollbar-color: $primary-darken-3;
+        scrollbar-color: $background;
         scrollbar-color-hover: $primary;
     }
 
