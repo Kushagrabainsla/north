@@ -65,9 +65,12 @@ class NorthApp(App[None]):
         width: 100%;
         height: 1fr;
         border: none;
-        padding: 0 0;
+        padding: 0;
         background: $background;
         scrollbar-size: 1 1;
+        /* track colour matches bg so the gutter is invisible when not scrolling */
+        scrollbar-background: $background;
+        scrollbar-background-hover: $background;
         scrollbar-color: $primary-darken-3;
         scrollbar-color-hover: $primary;
     }
@@ -84,6 +87,26 @@ class NorthApp(App[None]):
         color: $text;
     }
 
+    /* Markdown renders paragraph / fence / list block sub-widgets with
+       $panel by default — flatten them all to $background so there is
+       no lighter-shade box inside the streaming area. */
+    #streaming MarkdownBlock,
+    #streaming MarkdownParagraph,
+    #streaming MarkdownH1,
+    #streaming MarkdownH2,
+    #streaming MarkdownH3,
+    #streaming MarkdownH4,
+    #streaming MarkdownFence,
+    #streaming MarkdownBulletList,
+    #streaming MarkdownBulletListItem,
+    #streaming MarkdownOrderedList,
+    #streaming MarkdownOrderedListItem {
+        background: $background;
+        border: none;
+        padding: 0;
+        margin: 0;
+    }
+
     /* ── footer: status · top-sep · input · bot-sep · pad ── */
 
     #status {
@@ -91,7 +114,7 @@ class NorthApp(App[None]):
         height: 1;
         background: $background;
         color: $text-muted;
-        padding: 0 0;
+        padding: 0;
     }
 
     #sep-top {
@@ -119,18 +142,24 @@ class NorthApp(App[None]):
         width: 1fr;
         height: 1;
         border: none;
-        padding: 0 0;
+        padding: 0;
         background: $background;
         color: $text;
     }
 
+    /* Belt-and-suspenders: override Input defaults for both states */
     Input {
         border: none;
         background: $background;
-        padding: 0 0;
+        padding: 0;
     }
 
     Input:focus {
+        border: none;
+        background: $background;
+    }
+
+    Input.-invalid {
         border: none;
         background: $background;
     }
@@ -201,19 +230,28 @@ class NorthApp(App[None]):
             except Exception:
                 pass
 
-        log = self.query_one("#log", RichLog)
-        log.write("")
-        log.write("  [bold white]north[/bold white]")
-        log.write("")
-        self._write_rule()
-        log.scroll_end(animate=False)
-
         self._redraw_seps()
         self._set_status("")
 
         self.set_interval(0.08, self._tick)
         self.run_worker(self._listen(), exclusive=False)
         self.query_one("#prompt", Input).focus()
+        # Defer banner so content_region.height is populated after first layout
+        self.call_after_refresh(self._draw_banner)
+
+    def _draw_banner(self) -> None:
+        log = self.query_one("#log", RichLog)
+        # Pre-fill with blank lines so the banner sits at the bottom of the log.
+        # Blank lines scroll off as conversation grows — standard terminal chat trick.
+        banner_lines = 4  # blank + "north" + blank + rule
+        pad = max(0, log.content_region.height - banner_lines)
+        for _ in range(pad):
+            log.write("")
+        log.write("")
+        log.write("  [bold white]north[/bold white]")
+        log.write("")
+        self._write_rule()
+        log.scroll_end(animate=False)
 
     def on_resize(self) -> None:
         self._redraw_seps()
