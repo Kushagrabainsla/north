@@ -146,19 +146,41 @@ class NorthApp(App[None]):
         color: $text;
     }
 
-    /* Belt-and-suspenders: override Input defaults for both states */
     Input {
         border: none;
         background: $background;
         padding: 0;
     }
 
-    Input:focus {
-        border: none;
-        background: $background;
-    }
+    /* ── kill all focus / hover / active tints on every widget ── */
+    /* Textual's DEFAULT_CSS applies accent borders and background   */
+    /* tints on focus — override every state to stay flat.          */
 
-    Input.-invalid {
+    Screen:focus-within,
+    #log:focus,
+    #log:focus-within,
+    #log:hover,
+    #streaming:focus,
+    #streaming:focus-within,
+    #status:focus,
+    #status:hover,
+    #sep-top:focus,
+    #sep-top:hover,
+    #sep-bot:focus,
+    #sep-bot:hover,
+    #pad-bot:focus,
+    #pad-bot:hover,
+    #input-row:focus,
+    #input-row:focus-within,
+    #input-row:hover,
+    #prompt-prefix:focus,
+    #prompt-prefix:hover,
+    #prompt:focus,
+    #prompt:hover,
+    Input:focus,
+    Input:hover,
+    Input.-invalid,
+    Input.-invalid:focus {
         border: none;
         background: $background;
     }
