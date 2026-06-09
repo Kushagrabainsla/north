@@ -1723,10 +1723,8 @@ def update(
 ) -> None:
     """Pull the latest north code and update dependencies.
 
-    Works from any directory. Detects how north was installed and updates
-    accordingly: uv tool installs are upgraded via uv; local git clones
-    are updated with git pull + uv sync. Pass --docker to update a Docker
-    Compose deployment instead.
+    Requires north to be installed via uv tool install git+<url>.
+    Pass --docker to update a Docker Compose deployment instead.
     """
     _console.print()
     _console.print("  [bold white]north update[/bold white]")
@@ -1768,64 +1766,34 @@ def update(
         _console.print("  [dim]→[/dim]  stopping server…")
         _stop_server(port)
 
-    # ── uv tool install from git URL ──────────────────────────────────────
-    if is_git_url:
-        if not shutil.which("uv"):
-            typer.secho(
-                "ERROR: uv not found — cannot upgrade. Install uv or run: pip install --upgrade git+<url>",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1) from None
-        _console.print("  [dim]→[/dim]  upgrading via uv…")
-        result = subprocess.run(
-            ["uv", "tool", "upgrade", "north"],
-            capture_output=True,
-            text=True,
+    # ── uv tool upgrade from git URL ──────────────────────────────────────
+    if not is_git_url:
+        typer.secho(
+            "ERROR: north is not installed from a git URL.\n"
+            "Reinstall with: uv tool install git+<your-repo-url>",
+            fg=typer.colors.RED,
+            err=True,
         )
-        if result.returncode != 0:
-            typer.secho(
-                f"uv tool upgrade failed:\n{(result.stdout + result.stderr).strip()}",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1) from None
-        _console.print("  [dim green]✓[/dim green]  upgraded")
+        raise typer.Exit(1) from None
 
-    # ── local git clone ───────────────────────────────────────────────────
-    else:
-        project_root = _find_project_root()
-        if project_root is None:
-            typer.secho(
-                "ERROR: Could not locate the north project root.\n"
-                "Install north with: uv tool install git+<your-repo-url>",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1) from None
-        if not (project_root / ".git").exists():
-            typer.secho(
-                "ERROR: Project directory has no .git — cannot pull.\nRun: uv sync",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
-            raise typer.Exit(1) from None
+    if not shutil.which("uv"):
+        typer.secho(
+            "ERROR: uv not found. Install uv or run: pip install --upgrade git+<url>",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
 
-        _console.print("  [dim]→[/dim]  git pull…")
-        pull_result = subprocess.run(["git", "pull"], cwd=project_root, capture_output=True, text=True)
-        if pull_result.returncode != 0:
-            typer.secho(f"git pull failed:\n{pull_result.stderr.strip()}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from None
-        if "Already up to date" in pull_result.stdout:
-            _console.print("  [dim green]✓[/dim green]  already up to date")
-        else:
-            log = _git_log_since_pull(project_root)
-            for line in log[:8]:
-                _console.print(f"  [dim]  {line}[/dim]")
-
-        _console.print("  [dim]→[/dim]  syncing dependencies…")
-        if not _sync_dependencies(project_root):
-            typer.secho("Dependency sync failed — run 'uv sync' manually.", fg=typer.colors.YELLOW, err=True)
+    _console.print("  [dim]→[/dim]  upgrading via uv…")
+    result = subprocess.run(["uv", "tool", "upgrade", "north"], capture_output=True, text=True)
+    if result.returncode != 0:
+        typer.secho(
+            f"uv tool upgrade failed:\n{(result.stdout + result.stderr).strip()}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    _console.print("  [dim green]✓[/dim green]  upgraded")
 
     _console.print()
     if restart and (was_running or typer.confirm("Start north now?", default=True)):
@@ -1862,37 +1830,15 @@ def _get_install_url() -> tuple[str | None, bool]:
 def _find_project_root() -> Path | None:
     """Find the north project root (directory containing pyproject.toml + agents/).
 
-    Tries in order:
-    1. direct_url.json (PEP 610) — works for `uv tool install .` / file:// installs.
-    2. Walk up from __file__ — works for editable installs where main.py lives in the repo.
-    3. Walk up from CWD — last resort.
+    Walks up from __file__ first (editable installs where main.py lives in the
+    repo), then falls back to CWD (running directly from the checkout).
     """
-    # 1. direct_url.json for file:// tool installs
-    try:
-        import json as _json
-        from importlib.metadata import Distribution
-        from urllib.parse import urlparse
-
-        du = Distribution.from_name("north").read_text("direct_url.json")
-        if du:
-            url = _json.loads(du).get("url", "")
-            if url.startswith("file://"):
-                candidate = Path(urlparse(url).path)
-                if (candidate / "pyproject.toml").exists() and (candidate / "agents").is_dir():
-                    return candidate
-    except Exception:
-        pass
-
-    # 2. Walk up from __file__
     for p in Path(__file__).resolve().parents:
         if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
             return p
-
-    # 3. Walk up from CWD
     for p in [Path.cwd(), *Path.cwd().parents]:
         if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
             return p
-
     return None
 
 
@@ -1956,13 +1902,6 @@ def _start_server_process(port: int, project_root: Path | None = None) -> subpro
     return proc
 
 
-def _sync_dependencies(project_root: Path) -> bool:
-    """Run uv sync, falling back to pip install -e . Returns True on success."""
-    if shutil.which("uv") and _run_command(["uv", "sync"], cwd=project_root):
-        return True
-    return _run_command([sys.executable, "-m", "pip", "install", "-e", "."], cwd=project_root)
-
-
 def _run_command(cmd: list[str], *, cwd: Path) -> bool:
     """Run a subprocess, printing its output only on failure. Returns True on success."""
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
@@ -1984,21 +1923,6 @@ def _git_describe(root: Path) -> str | None:
         return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
         return None
-
-
-def _git_log_since_pull(root: Path) -> list[str]:
-    """Return the subject lines of commits pulled in the last git pull."""
-    try:
-        r = subprocess.run(
-            ["git", "log", "HEAD@{1}..HEAD", "--pretty=format:%h %s"],
-            capture_output=True,
-            text=True,
-            cwd=root,
-            timeout=5,
-        )
-        return [line for line in r.stdout.strip().splitlines() if line] if r.returncode == 0 else []
-    except Exception:
-        return []
 
 
 if __name__ == "__main__":
