@@ -1731,12 +1731,6 @@ def update(
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
 
     install_url, is_git_url = _get_install_url()
-    if install_url:
-        _console.print(f"  [dim]source     [/dim]  {install_url}")
-    _console.print()
-
-    if not yes:
-        typer.confirm("Proceed with update?", default=True, abort=True)
 
     # ── Docker path ───────────────────────────────────────────────────────
     if docker:
@@ -1775,6 +1769,12 @@ def update(
             err=True,
         )
         raise typer.Exit(1) from None
+
+    _console.print(f"  [dim]source     [/dim]  {install_url}")
+    _console.print()
+
+    if not yes:
+        typer.confirm("Proceed with update?", default=True, abort=True)
 
     if not shutil.which("uv"):
         typer.secho(
