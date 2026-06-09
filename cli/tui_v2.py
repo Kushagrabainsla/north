@@ -29,16 +29,6 @@ from textual.widgets import Input, Markdown, RichLog, Static
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
-def _get_strategy() -> str:
-    try:
-        from config.settings import settings as _s
-        from config.strategy import NorthSettings as _NS
-
-        return _NS(_s.north_home / "settings.json").strategy.value
-    except Exception:
-        return "cruise"
-
-
 def _fmt_params(params: dict) -> str:
     parts = []
     for k, v in params.items():
@@ -216,6 +206,7 @@ class NorthApp(App[None]):
         log.write("  [bold white]north[/bold white]")
         log.write("")
         self._write_rule()
+        log.scroll_end(animate=False)
 
         self._redraw_seps()
         self._set_status("")
@@ -235,12 +226,12 @@ class NorthApp(App[None]):
         self.query_one("#sep-bot", Static).update(line)
 
     def _write_rule(self) -> None:
-        # Write dashes as plain markup so width matches the screen, not
-        # the RichLog's internal Rich console (which defaults to ~80 chars).
-        width = self.size.width or 80
-        self.query_one("#log", RichLog).write(
-            "[bright_black]" + "─" * width + "[/bright_black]"
-        )
+        log = self.query_one("#log", RichLog)
+        # Use the log's scrollable content region — 1 col narrower than the
+        # screen when the scrollbar gutter is reserved.
+        width = log.scrollable_content_region.width or (self.size.width - 1) or 80
+        log.write("[bright_black]" + "─" * width + "[/bright_black]")
+        log.scroll_end(animate=False)
 
     def _tick(self) -> None:
         self._spin_frame += 1
@@ -253,10 +244,8 @@ class NorthApp(App[None]):
     def _set_status(self, text: str) -> None:
         self._status_text = text
         if not text:
-            strategy = _get_strategy()
             self.query_one("#status", Static).update(
-                f"[bright_black]  strategy: {strategy}"
-                f"  ·  ↑↓ history  ·  ctrl+c to quit[/bright_black]"
+                "[bright_black]  ↑↓ history  ·  ctrl+c to quit[/bright_black]"
             )
         else:
             f = _SPIN[self._spin_frame % len(_SPIN)]
@@ -265,10 +254,14 @@ class NorthApp(App[None]):
             )
 
     def _log(self, markup: str) -> None:
-        self.query_one("#log", RichLog).write(markup)
+        log = self.query_one("#log", RichLog)
+        log.write(markup)
+        log.scroll_end(animate=False)
 
     def _log_rich(self, renderable: object) -> None:
-        self.query_one("#log", RichLog).write(renderable)  # type: ignore[arg-type]
+        log = self.query_one("#log", RichLog)
+        log.write(renderable)  # type: ignore[arg-type]
+        log.scroll_end(animate=False)
 
     # ── streaming widget ─────────────────────────────────────────────────────
 
