@@ -1862,16 +1862,37 @@ def _get_install_url() -> tuple[str | None, bool]:
 def _find_project_root() -> Path | None:
     """Find the north project root (directory containing pyproject.toml + agents/).
 
-    Walks up from __file__ first so it works whether north is installed as an
-    editable or non-editable package (the latter places cli/main.py deep inside
-    .venv/lib/python3.x/site-packages/). Falls back to walking up from CWD.
+    Tries in order:
+    1. direct_url.json (PEP 610) — works for `uv tool install .` / file:// installs.
+    2. Walk up from __file__ — works for editable installs where main.py lives in the repo.
+    3. Walk up from CWD — last resort.
     """
+    # 1. direct_url.json for file:// tool installs
+    try:
+        import json as _json
+        from importlib.metadata import Distribution
+        from urllib.parse import urlparse
+
+        du = Distribution.from_name("north").read_text("direct_url.json")
+        if du:
+            url = _json.loads(du).get("url", "")
+            if url.startswith("file://"):
+                candidate = Path(urlparse(url).path)
+                if (candidate / "pyproject.toml").exists() and (candidate / "agents").is_dir():
+                    return candidate
+    except Exception:
+        pass
+
+    # 2. Walk up from __file__
     for p in Path(__file__).resolve().parents:
         if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
             return p
+
+    # 3. Walk up from CWD
     for p in [Path.cwd(), *Path.cwd().parents]:
         if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
             return p
+
     return None
 
 
