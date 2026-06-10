@@ -13,17 +13,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 import sys
+import time
 from collections import deque
 from pathlib import Path
 
 import httpx
-from rich.markdown import Markdown as RichMarkdown
 from rich.padding import Padding as RichPadding
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.suggester import Suggester
 from textual.widgets import Input, Markdown, RichLog, Static
 
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -50,6 +53,111 @@ def _short_model(model: str) -> str:
     compact label for the info bar."""
     name = model.rsplit("/", 1)[-1].removesuffix(":free")
     return name if len(name) <= 28 else name[:27] + "…"
+
+
+# Fill-bar colour thresholds: (max_fill_fraction, hex_colour). The first row
+# whose fraction the fill is below wins, so order matters (low → high).
+_FILL_COLOURS = (
+    (0.50, "#3fb950"),  # green
+    (0.75, "#d29922"),  # yellow
+    (0.90, "#db6d28"),  # orange
+    (1.01, "#f85149"),  # red
+)
+_FILL_CHARS = "▁▂▃▄▅▆▇█"
+
+
+# Slash commands handled locally by the TUI (never sent to the orchestrator).
+_SLASH_COMMANDS: dict[str, str] = {
+    "/help": "show available commands",
+    "/clear": "clear the conversation log",
+    "/cost": "show session tokens and cost",
+    "/agents": "list registered agents",
+    "/strategy": "show the current strategy",
+    "/quit": "exit north",
+}
+
+
+def _compute_suggestion(value: str, history: list[str]) -> str | None:
+    """Ghost-text completion for the prompt: slash commands when the line starts
+    with '/', otherwise the most recent matching history entry."""
+    if not value:
+        return None
+    if value.startswith("/"):
+        for cmd in _SLASH_COMMANDS:
+            if cmd.startswith(value) and cmd != value:
+                return cmd
+        return None
+    for past in reversed(history):
+        if past.startswith(value) and past != value:
+            return past
+    return None
+
+
+class _NorthSuggester(Suggester):
+    """Drives the Input's dim ghost-text using slash commands + input history."""
+
+    def __init__(self, history_getter) -> None:
+        super().__init__(use_cache=False, case_sensitive=True)
+        self._history_getter = history_getter
+
+    async def get_suggestion(self, value: str) -> str | None:
+        return _compute_suggestion(value, self._history_getter())
+
+
+_MARKUP_RE = re.compile(r"\[/?[^\[\]]*\]")
+
+
+def _strip_markup(s: str) -> str:
+    """Remove Textual console-markup tags so a segment's display width can be
+    measured. Only well-formed [tag] / [/tag] spans are removed."""
+    return _MARKUP_RE.sub("", s)
+
+
+def _to_prose(md: str) -> str:
+    """Flatten markdown to clean terminal prose: drop ``` fences, heading hashes,
+    and bold/italic/inline-code markers, while preserving code-block *content*
+    and list structure verbatim."""
+    out: list[str] = []
+    in_code = False
+    for line in md.split("\n"):
+        if line.lstrip().startswith("```"):
+            in_code = not in_code  # drop the fence marker line itself
+            continue
+        if in_code:
+            out.append(line)  # preserve code lines exactly
+            continue
+        line = re.sub(r"^\s*#{1,6}\s*", "", line)  # heading hashes
+        line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)  # **bold**
+        line = re.sub(r"__(.+?)__", r"\1", line)  # __bold__
+        line = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\1", line)  # *italic*
+        line = re.sub(r"`([^`]+)`", r"\1", line)  # `inline code`
+        out.append(line)
+    return "\n".join(out)
+
+
+def _fmt_tokens(n: int) -> str:
+    """Compact token count: 940 → '940', 12_400 → '12.4K', 200_000 → '200K'."""
+    if n < 1000:
+        return str(n)
+    k = n / 1000
+    return f"{k:.0f}K" if k >= 100 or k == int(k) else f"{k:.1f}K"
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    """Elapsed session time: '0:42', '12:05', '1:03:20'."""
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def _fill_bar(fraction: float, width: int = 10) -> str:
+    """Block-character fill bar coloured green→yellow→orange→red by fraction."""
+    fraction = max(0.0, min(1.0, fraction))
+    colour = next(c for limit, c in _FILL_COLOURS if fraction < limit)
+    filled = int(round(fraction * width))
+    bar = "█" * filled + "░" * (width - filled)
+    return f"[{colour}]{bar}[/{colour}]"
 
 
 def _read_strategy(settings_path: Path) -> str:
@@ -153,6 +261,15 @@ class NorthApp(App[None]):
         padding: 0 0 0 2;
     }
 
+    /* persistent live status bar, just above the input box */
+    #statusbar {
+        width: 100%;
+        height: 1;
+        background: $background;
+        color: $text-muted;
+        padding: 0 1 0 2;
+    }
+
     /* rounded input box (╭─╮ │ ╰─╯), accent border when focused */
     #input-row {
         width: 100%;
@@ -226,7 +343,8 @@ class NorthApp(App[None]):
     """
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit", priority=True),
+        Binding("ctrl+c", "interrupt", "Interrupt", priority=True),
+        Binding("ctrl+g", "edit_in_editor", "Editor", show=False),
         Binding("up", "history_prev", "Previous", show=False),
         Binding("down", "history_next", "Next", show=False),
     ]
@@ -236,11 +354,13 @@ class NorthApp(App[None]):
         base_url: str,
         headers: dict,
         workspace: str | None = None,
+        yolo: bool = False,
     ) -> None:
         super().__init__()
         self.base_url = base_url
         self.headers = headers
         self.workspace = workspace
+        self.yolo = yolo
 
         self._token_buffer: dict[str, str] = {}
         self._streaming_active: set[str] = set()
@@ -259,13 +379,28 @@ class NorthApp(App[None]):
         self._model: str = ""
         self._settings_path = Path.home() / ".north" / "settings.json"
 
+        # ── session metrics (drive the live status bar) ──────────────────────
+        self._session_tokens: int = 0  # cumulative estimate (chars/4)
+        self._session_cost: float = 0.0  # summed task_completed.cost_usd
+        self._compactions: int = 0  # count of 'compaction' SSE events
+        self._start_time: float = time.monotonic()
+        # Double-Ctrl+C-to-exit: monotonic timestamp of the last single Ctrl+C.
+        self._last_interrupt: float = 0.0
+        # Paste-preview: large pastes are stashed here and shown as a placeholder
+        # until the user presses Enter, keeping the scrollback clean.
+        self._pending_paste: str | None = None
+
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
         yield Markdown("", id="streaming")
         yield Static("", id="status")
+        yield Static("", id="statusbar")
         with Horizontal(id="input-row"):
             yield Static(">", id="prompt-prefix")
-            yield Input(id="prompt")
+            yield Input(
+                id="prompt",
+                suggester=_NorthSuggester(lambda: self._input_history),
+            )
         yield Static("", id="hint")
 
     def on_mount(self) -> None:
@@ -280,6 +415,7 @@ class NorthApp(App[None]):
 
         self._strategy = _read_strategy(self._settings_path)
         self._refresh_hint()
+        self._render_status_bar()
         self._set_status("")
 
         self.set_interval(0.08, self._tick)
@@ -290,20 +426,102 @@ class NorthApp(App[None]):
 
     def _draw_banner(self) -> None:
         # Top-anchored: the banner is the first thing in the log; chat flows
-        # downward beneath it and the input stays pinned at the bottom.
+        # downward beneath it and the input stays pinned at the bottom. Agent
+        # discovery is async, so the banner is composed in a worker.
+        self.run_worker(self._draw_banner_async(), exclusive=False)
+
+    async def _draw_banner_async(self) -> None:
         log = self.query_one("#log", RichLog)
+        backend = f"textual · {os.environ.get('TERM', 'unknown')}"
+        cwd = self.workspace or os.getcwd()
+        home = str(Path.home())
+        if cwd.startswith(home):
+            cwd = "~" + cwd[len(home):]
+
+        toolsets = await self._fetch_agents()
+
         log.write("")
-        log.write("  [bold white]north[/bold white]")
+        log.write("  [bold white]north[/bold white]  [bright_black]personal operating system[/bright_black]")
+        log.write("")
+        log.write(f"  [bright_black]model[/bright_black]     {_short_model(self._model) if self._model else 'auto'}")
+        log.write(f"  [bright_black]backend[/bright_black]   {backend}")
+        log.write(f"  [bright_black]cwd[/bright_black]       {cwd}")
+        log.write(f"  [bright_black]strategy[/bright_black]  {self._strategy}")
+        if toolsets:
+            shown = ", ".join(toolsets[:10]) + ("…" if len(toolsets) > 10 else "")
+            log.write(f"  [bright_black]toolsets[/bright_black]  {shown}")
+        if self.yolo:
+            log.write("  [#f85149]⚠ YOLO[/#f85149]     [bright_black]auto-approve enabled[/bright_black]")
         log.write("")
         self._write_rule()
+
+    async def _fetch_agents(self) -> list[str]:
+        """Best-effort list of registered agent names, shown as 'toolsets' in the
+        banner. Returns an empty list if the server is unreachable."""
+        try:
+            async with httpx.AsyncClient() as c:
+                r = await c.get(
+                    f"{self.base_url}/orchestrator/agents",
+                    headers=self.headers,
+                    timeout=5.0,
+                )
+                data = r.json()
+                names = [a.get("name", "") for a in data if a.get("name")]
+                return sorted(n for n in names if n)
+        except Exception:
+            return []
 
     # ── rendering helpers ────────────────────────────────────────────────────
 
     def _refresh_hint(self) -> None:
-        model_part = f"  ·  {_short_model(self._model)}" if self._model else ""
-        self.query_one("#hint", Static).update(
-            f"[bright_black]  {self._strategy}{model_part}  ·  ↑↓ history  ·  ctrl+c quit[/bright_black]"
-        )
+        hint = f"  {self._strategy}  ·  ↑↓ history  ·  /commands  ·  ctrl+g editor  ·  ctrl+c interrupt"
+        self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
+
+    def _render_status_bar(self) -> None:
+        """Compose the live status bar, dropping low-priority segments as the
+        terminal narrows so the bar never wraps or truncates mid-segment."""
+        from agents.context_compaction import context_window_for
+
+        width = self.size.width or 80
+
+        ctx_max = context_window_for(self._model) if self._model else 0
+        fraction = (self._session_tokens / ctx_max) if ctx_max else 0.0
+
+        model = _short_model(self._model) if self._model else "—"
+        tokens = f"{_fmt_tokens(self._session_tokens)}/{_fmt_tokens(ctx_max)}" if ctx_max else ""
+        bar = _fill_bar(fraction) if ctx_max else ""
+        cost = f"${self._session_cost:.4f}"
+        compactions = f"⊕{self._compactions}" if self._compactions else ""
+        active = sum(1 for _ in self._user_task_ids)
+        tasks = f"⚙{active}" if active else ""
+        elapsed = _fmt_elapsed(time.monotonic() - self._start_time)
+        yolo = "[#f85149]⚠ YOLO[/#f85149]" if self.yolo else ""
+
+        # (text, priority) — higher priority survives longer as width shrinks.
+        segments: list[tuple[str, int]] = [
+            (f"[#6cb6ff]{model}[/#6cb6ff]", 5),
+            (f"{tokens} {bar}".strip(), 4),
+            (cost, 3),
+            (tasks, 3),
+            (compactions, 1),
+            (elapsed, 1),
+            (yolo, 5),
+        ]
+        segments = [(t, p) for t, p in segments if t]
+
+        sep = "  ·  "
+        chosen = list(segments)
+        # Drop the lowest-priority segments until the bar fits the terminal width.
+        while chosen:
+            plain = sep.join(_strip_markup(t) for t, _ in chosen)
+            if len(plain) + 4 <= width:
+                break
+            lowest = min(p for _, p in chosen)
+            idx = next(i for i, (_, p) in enumerate(chosen) if p == lowest)
+            chosen.pop(idx)
+
+        line = sep.join(t for t, _ in chosen)
+        self.query_one("#statusbar", Static).update(f"[bright_black]{line}[/bright_black]")
 
     def _write_rule(self) -> None:
         log = self.query_one("#log", RichLog)
@@ -318,6 +536,10 @@ class NorthApp(App[None]):
             self.query_one("#status", Static).update(
                 f"[bright_black]  {f}  {self._status_text}[/bright_black]"
             )
+        # Refresh the bar roughly once a second so elapsed time ticks live
+        # without redrawing on every 80ms animation frame.
+        if self._spin_frame % 12 == 0:
+            self._render_status_bar()
 
     def _set_status(self, text: str) -> None:
         self._status_text = text
@@ -356,7 +578,7 @@ class NorthApp(App[None]):
         md.display = False
         md.update("")
         if final_output:
-            self._log_rich(RichPadding(RichMarkdown(final_output), (0, 0, 0, 4)))
+            self._log_rich(RichPadding(RichText(_to_prose(final_output)), (0, 0, 0, 4)))
 
     # ── SSE event handler ────────────────────────────────────────────────────
 
@@ -393,6 +615,11 @@ class NorthApp(App[None]):
         elif event == "model":
             self._model = data.get("model", "")
             self._refresh_hint()
+            self._render_status_bar()
+
+        elif event == "compaction":
+            self._compactions += 1
+            self._render_status_bar()
 
         elif event in ("executing", "agent_started"):
             agent = data.get("agent", "")
@@ -449,6 +676,8 @@ class NorthApp(App[None]):
             if not text:
                 return
             self._token_buffer[task_id] = self._token_buffer.get(task_id, "") + text
+            # Rough running token estimate (≈4 chars/token) for the status bar.
+            self._session_tokens += max(1, len(text) // 4)
             if task_id not in self._streaming_active:
                 self._streaming_active.add(task_id)
                 self._set_status("")
@@ -462,6 +691,7 @@ class NorthApp(App[None]):
         elif event == "task_completed":
             sys.stdout.write("\a")
             sys.stdout.flush()
+            self._session_cost += float(data.get("cost_usd", 0.0) or 0.0)
             output = self._token_buffer.pop(task_id, "")
             was_streaming = task_id in self._streaming_active
             self._streaming_active.discard(task_id)
@@ -488,7 +718,7 @@ class NorthApp(App[None]):
                 self._finish_streaming(task_id, output)
             elif output:
                 self._log("  [cyan]◆[/cyan]  [white]north[/white]")
-                self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
+                self._log_rich(RichPadding(RichText(_to_prose(output)), (0, 0, 0, 4)))
 
             # Refresh strategy in case the user issued a strategy command.
             self._strategy = _read_strategy(self._settings_path)
@@ -502,6 +732,7 @@ class NorthApp(App[None]):
                 self._conversation_history.append(
                     {"user": user_msg, "tools": tools_used, "north": short}
                 )
+            self._render_status_bar()
             self._write_rule()
 
         elif event == "task_failed":
@@ -517,6 +748,7 @@ class NorthApp(App[None]):
             self._user_task_ids.discard(task_id)
             self._log("  [red]◆[/red]  [red]error[/red]")
             self._log_rich(RichText("    " + error, style="red"))
+            self._render_status_bar()
             self._write_rule()
 
         elif event == "task_cancelled":
@@ -528,11 +760,18 @@ class NorthApp(App[None]):
             self._set_status("")
             self._user_task_ids.discard(task_id)
             self._log("  [dim]cancelled[/dim]")
+            self._render_status_bar()
             self._write_rule()
 
         elif event == "approval_required":
             self._approval_pending = data
             self._set_status("")
+            if self.yolo:
+                # Auto-approve mode: take the first option without prompting.
+                options = data.get("options") or ["Approve", "Reject"]
+                self._log(f"  [#f85149]⚠[/#f85149]  [bright_black]auto-approved: {options[0]}[/bright_black]")
+                await self._submit_approval("1")
+                return
             self._log("  [yellow]◆[/yellow]  [yellow]approval required[/yellow]")
             self._log_rich(RichText("    " + data.get("message", ""), style="white"))
             options = data.get("options") or ["Approve", "Reject"]
@@ -625,10 +864,47 @@ class NorthApp(App[None]):
 
     # ── input ─────────────────────────────────────────────────────────────────
 
+    def on_key(self, event) -> None:
+        """Tab accepts the ghost-text suggestion when the prompt is focused and a
+        completion is available; otherwise Tab falls through to focus movement."""
+        if event.key != "tab":
+            return
+        prompt = self.query_one("#prompt", Input)
+        if not prompt.has_focus or not prompt.value:
+            return
+        suggestion = _compute_suggestion(prompt.value, self._input_history)
+        if suggestion:
+            prompt.value = suggestion
+            prompt.cursor_position = len(suggestion)
+            event.prevent_default()
+            event.stop()
+
+    def on_paste(self, event) -> None:
+        """Large multi-line pastes are previewed as a compact placeholder instead
+        of flooding the input line; the real text is sent on Enter."""
+        text = getattr(event, "text", "")
+        n_lines = text.count("\n") + 1
+        if n_lines < 3 and len(text) <= 200:
+            return  # small paste — let the Input insert it normally
+        self._pending_paste = text
+        prompt = self.query_one("#prompt", Input)
+        prompt.value = f"[pasted: {n_lines} lines, {len(text)} chars — press Enter to send]"
+        prompt.cursor_position = len(prompt.value)
+        event.prevent_default()
+        event.stop()
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.clear()
+        # A pending paste replaces the placeholder text with the real content.
+        if self._pending_paste is not None:
+            text = self._pending_paste.strip()
+            self._pending_paste = None
         if not text:
+            return
+
+        if text.startswith("/") and not self._approval_pending:
+            await self._handle_slash(text)
             return
 
         if text.lower() in ("exit", "quit", "bye"):
@@ -688,12 +964,43 @@ class NorthApp(App[None]):
                 if task_id:
                     self._user_task_ids.add(task_id)
                     self._pending_user_messages[task_id] = text
+                    self._session_tokens += max(1, len(text) // 4)
+                    self._render_status_bar()
         except httpx.ConnectError:
             self._set_status("")
             self._log("  [red]◆[/red]  [red]cannot reach north server[/red]")
         except Exception as exc:
             self._set_status("")
             self._log(f"  [red]◆[/red]  [red]error: {exc}[/red]")
+
+    # ── slash commands ────────────────────────────────────────────────────────
+
+    async def _handle_slash(self, text: str) -> None:
+        cmd = text.split()[0].lower()
+        if cmd in ("/quit", "/exit"):
+            self._log("  [dim]goodbye[/dim]")
+            self.exit()
+        elif cmd == "/clear":
+            self.query_one("#log", RichLog).clear()
+            self._draw_banner()
+        elif cmd == "/cost":
+            self._log(
+                f"  [bright_black]tokens[/bright_black] {_fmt_tokens(self._session_tokens)}  ·  "
+                f"[bright_black]cost[/bright_black] ${self._session_cost:.4f}  ·  "
+                f"[bright_black]compactions[/bright_black] {self._compactions}"
+            )
+        elif cmd == "/strategy":
+            self._strategy = _read_strategy(self._settings_path)
+            self._log(f"  [bright_black]strategy[/bright_black] {self._strategy}")
+            self._render_status_bar()
+        elif cmd == "/agents":
+            agents = await self._fetch_agents()
+            self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))
+        elif cmd == "/help":
+            for name, desc in _SLASH_COMMANDS.items():
+                self._log(f"  [cyan]{name}[/cyan]  [bright_black]{desc}[/bright_black]")
+        else:
+            self._log(f"  [bright_black]unknown command: {cmd} — try /help[/bright_black]")
 
     # ── history navigation ────────────────────────────────────────────────────
 
@@ -721,8 +1028,71 @@ class NorthApp(App[None]):
             prompt.value = self._current_input
         prompt.cursor_position = len(prompt.value)
 
+    # ── interrupt / exit ──────────────────────────────────────────────────────
 
-async def run(base_url: str, headers: dict, workspace: str | None = None) -> None:
+    def action_interrupt(self) -> None:
+        """Single Ctrl+C cancels in-flight work (and lets the user redirect);
+        a second Ctrl+C within 2s force-exits."""
+        now = time.monotonic()
+        if now - self._last_interrupt < 2.0:
+            self.exit()
+            return
+        self._last_interrupt = now
+        if self._user_task_ids:
+            self.run_worker(self._cancel_active(), exclusive=False)
+            self._log("  [dim]interrupted — press ctrl+c again to exit[/dim]")
+        else:
+            self._log("  [dim]press ctrl+c again to exit[/dim]")
+
+    async def _cancel_active(self) -> None:
+        """Ask the server to cancel every task this session started."""
+        for task_id in list(self._user_task_ids):
+            try:
+                async with httpx.AsyncClient() as c:
+                    await c.delete(
+                        f"{self.base_url}/orchestrator/task/{task_id}",
+                        headers=self.headers,
+                        timeout=10.0,
+                    )
+            except Exception:
+                pass
+
+    # ── external editor (Ctrl+G) ──────────────────────────────────────────────
+
+    def action_edit_in_editor(self) -> None:
+        """Open the current prompt buffer in $EDITOR; the saved text replaces it."""
+        prompt = self.query_one("#prompt", Input)
+        edited = self._run_external_editor(prompt.value)
+        if edited is not None:
+            prompt.value = edited.replace("\n", " ").strip()
+            prompt.cursor_position = len(prompt.value)
+
+    def _run_external_editor(self, initial: str) -> str | None:
+        import subprocess
+        import tempfile
+
+        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", prefix="north-", delete=False, encoding="utf-8"
+            ) as tf:
+                tf.write(initial)
+                path = tf.name
+            with self.suspend():
+                subprocess.run([*editor.split(), path], check=False)
+            text = Path(path).read_text(encoding="utf-8")
+            Path(path).unlink(missing_ok=True)
+            return text
+        except Exception:
+            return None
+
+
+async def run(
+    base_url: str,
+    headers: dict,
+    workspace: str | None = None,
+    yolo: bool = False,
+) -> None:
     """Launch the TUI. Blocks until the user exits."""
-    app = NorthApp(base_url=base_url, headers=headers, workspace=workspace)
+    app = NorthApp(base_url=base_url, headers=headers, workspace=workspace, yolo=yolo)
     await app.run_async()

@@ -225,6 +225,7 @@ class AgenticLLMAgent(LLMAgent):
             # model's context window (75% threshold). Runs before the next API
             # call so the compacted messages are what gets sent.
             if last_tokens_in > 0:
+                _msgs_before = len(messages)
                 await compact_if_needed(
                     messages,
                     tokens_in=last_tokens_in,
@@ -235,6 +236,10 @@ class AgenticLLMAgent(LLMAgent):
                     keep_recent=self._deps.agent_history_keep_recent,
                     max_summary_tokens=compact_tokens,
                 )
+                # Notify the UI when history was actually compacted (message count
+                # dropped) so the status bar's compression counter stays truthful.
+                if len(messages) < _msgs_before and self._deps.stream_manager and payload.task_id:
+                    await self._deps.stream_manager.emit(payload.task_id, "compaction", {})
             else:
                 # First iteration: apply the lightweight truncation as a baseline.
                 compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)

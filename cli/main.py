@@ -46,8 +46,8 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from cli.tui_v2 import run as _tui_run
 
+from cli.tui_v2 import run as _tui_run
 from utils.security import load_secret
 
 _console = Console(force_terminal=sys.stdout.isatty())
@@ -191,20 +191,26 @@ _TIMEOUT = 30.0
 
 
 @app.callback()
-def _root(ctx: typer.Context) -> None:
+def _root(
+    ctx: typer.Context,
+    yolo: bool = typer.Option(
+        False, "--yolo", help="Auto-approve every approval prompt (shows a ⚠ YOLO badge)."
+    ),
+) -> None:
     """north — Personal Life Operating System.
 
     Run without a subcommand to open the interactive TUI.
     """
     if ctx.invoked_subcommand is None:
         # No subcommand — boot the server if needed, then open the TUI.
-        _launch_tui()
+        _launch_tui(yolo=yolo)
 
 
 def _launch_tui(
     host: str = "127.0.0.1",
     port: int = 8000,
     workspace: str | None = None,
+    yolo: bool = False,
 ) -> None:
     """Auto-start the server if not running, then launch the TUI."""
     if not _port_in_use(host, port) or not _is_north_server(host, port):
@@ -246,7 +252,7 @@ def _launch_tui(
     import asyncio
 
 
-    asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace))
+    asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace, yolo=yolo))
 
 
 def _headers() -> dict[str, str]:
