@@ -215,6 +215,7 @@ class AgenticLLMAgent(LLMAgent):
         total_cost_usd: float = 0.0
         last_tokens_in: int = 0
         last_model_used: str = ""
+        emitted_model: str = ""
         _seen_tools: set[str] = set()
         tools_used: list[str] = []
 
@@ -261,6 +262,19 @@ class AgenticLLMAgent(LLMAgent):
             total_cost_usd += response.cost_usd
             last_tokens_in = response.tokens_in
             last_model_used = response.model_used
+
+            # Surface which model answered so the UI can display it. Emitted only
+            # when it changes (the router may pick a different model per call).
+            if (
+                response.model_used
+                and response.model_used != emitted_model
+                and self._deps.stream_manager
+                and payload.task_id
+            ):
+                emitted_model = response.model_used
+                await self._deps.stream_manager.emit(
+                    payload.task_id, "model", {"model": response.model_used}
+                )
 
             if response.type == "message":
                 # Final answer — tokens were already streamed via token_cb.

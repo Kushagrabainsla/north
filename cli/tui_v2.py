@@ -45,6 +45,13 @@ def _fmt_params(params: dict) -> str:
     return ", ".join(parts[:4])
 
 
+def _short_model(model: str) -> str:
+    """Trim a router model id (e.g. 'meta-llama/llama-4-scout-17b:free') to a
+    compact label for the info bar."""
+    name = model.rsplit("/", 1)[-1].removesuffix(":free")
+    return name if len(name) <= 28 else name[:27] + "…"
+
+
 def _read_strategy(settings_path: Path) -> str:
     """Read the current strategy from the north settings file.
 
@@ -235,6 +242,7 @@ class NorthApp(App[None]):
         self._spin_frame: int = 0
         self._status_text: str = ""
         self._strategy: str = "cruise"
+        self._model: str = ""
         self._settings_path = Path.home() / ".north" / "settings.json"
 
     def compose(self) -> ComposeResult:
@@ -278,8 +286,9 @@ class NorthApp(App[None]):
     # ── rendering helpers ────────────────────────────────────────────────────
 
     def _refresh_hint(self) -> None:
+        model_part = f"  ·  {_short_model(self._model)}" if self._model else ""
         self.query_one("#hint", Static).update(
-            f"[bright_black]  {self._strategy}  ·  ↑↓ history  ·  ctrl+c quit[/bright_black]"
+            f"[bright_black]  {self._strategy}{model_part}  ·  ↑↓ history  ·  ctrl+c quit[/bright_black]"
         )
 
     def _write_rule(self) -> None:
@@ -367,19 +376,22 @@ class NorthApp(App[None]):
             self._log("  [yellow]◆[/yellow]  [yellow]goal conflict[/yellow]")
             self._log_rich(RichText("    " + tension, style="white"))
 
+        elif event == "model":
+            self._model = data.get("model", "")
+            self._refresh_hint()
+
         elif event in ("executing", "agent_started"):
             agent = data.get("agent", "")
             agents = data.get("agents") or []
             label = ", ".join(agents) if agents else agent or "general"
             self._set_status(f"running {label}…")
-            # Write an agent header line to the chat log so the user can see
-            # which agent is working and on what task.
-            if agent:
+            # Write an agent header for specialist agents so the user can see who
+            # is working. The default 'general' agent is suppressed — its header
+            # would just echo the user's prompt (already shown) and the answer is
+            # labelled '◆ north' below.
+            if agent and agent != "general":
                 task_desc = (data.get("task") or "").strip()
-                if task_desc:
-                    desc_part = f"  [bright_black]{task_desc[:80]}[/bright_black]"
-                else:
-                    desc_part = ""
+                desc_part = f"  [bright_black]{task_desc[:80]}[/bright_black]" if task_desc else ""
                 self._log(f"  [cyan]◆[/cyan]  [white]{agent}[/white]{desc_part}")
 
         elif event == "tool_called":
