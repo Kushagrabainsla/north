@@ -20,6 +20,7 @@ All notable changes to north are documented here.
 - **`ApprovalDecision.TIMEOUT_REJECTED`** (`approval/models.py`): approval decisions are now an enum throughout instead of bare `"rejected"`/`"timeout_rejected"` string literals (§5.5).
 
 ### Fixed
+- **TUI wasted vertical space and footer clutter** (`cli/tui_v2.py`): the chat is now top-anchored instead of bottom-padded with blank lines (which left a large void above the banner on short conversations and desynced on resize), and the input footer is tightened to `status → single rule → input` (removed the `#sep-bot`/`#pad-bot` widgets).
 - **Tool-loop crash on exception** (`agents/agentic_llm_agent.py`): the parallel tool-call `gather` ran without `return_exceptions=True` (violating §10.5); a raise in `_request_approval` could crash the whole agent run and cancel sibling calls. Each call is now wrapped so a failure becomes a failed tool result.
 - **Persistent-shell output loss** (`tools/specialized/shell_tool.py`): `_reap_exited` drained an exited session's buffer via `read_new()`, silently destroying unread output when `list`/`start` ran. It now uses a non-destructive `has_pending_output()` check.
 - **`ApprovalStore` unbounded growth** (`approval/store.py`): resolved cards accumulated forever; the registry now evicts the oldest resolved cards past a cap (pending cards are never evicted). Docstring corrected from "thread-safe" to "coroutine-safe".

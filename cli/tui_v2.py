@@ -62,13 +62,11 @@ class NorthApp(App[None]):
     """Textual chat UI for north."""
 
     # Layout (top → bottom):
-    #   #log           — scrollable chat history            (1fr)
-    #   #streaming     — live markdown during token stream  (auto, hidden)
-    #   #status        — spinner / info line                (1 row)
-    #   #sep-top       — ─── top border of input box        (1 row)
-    #   #input-row     — >  [                           ]   (1 row)
-    #   #sep-bot       — ─── bottom border of input box     (1 row)
-    #   #pad-bot       — one blank line below               (1 row)
+    #   #log           — scrollable chat history (top-anchored)  (1fr)
+    #   #streaming     — live markdown during token stream       (auto, hidden)
+    #   #status        — spinner / info line                     (1 row)
+    #   #sep           — ─── single rule above the input         (1 row)
+    #   #input-row     — >  [                           ]        (1 row)
 
     CSS = """
     Screen {
@@ -133,7 +131,7 @@ class NorthApp(App[None]):
         padding: 0;
     }
 
-    #sep-top {
+    #sep {
         width: 100%;
         height: 1;
         background: $background;
@@ -181,12 +179,8 @@ class NorthApp(App[None]):
     #streaming:focus-within,
     #status:focus,
     #status:hover,
-    #sep-top:focus,
-    #sep-top:hover,
-    #sep-bot:focus,
-    #sep-bot:hover,
-    #pad-bot:focus,
-    #pad-bot:hover,
+    #sep:focus,
+    #sep:hover,
     #input-row:focus,
     #input-row:focus-within,
     #input-row:hover,
@@ -202,18 +196,6 @@ class NorthApp(App[None]):
         background: $background;
     }
 
-    #sep-bot {
-        width: 100%;
-        height: 1;
-        background: $background;
-        color: $text-muted;
-    }
-
-    #pad-bot {
-        width: 100%;
-        height: 1;
-        background: $background;
-    }
     """
 
     BINDINGS = [
@@ -253,12 +235,10 @@ class NorthApp(App[None]):
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
         yield Markdown("", id="streaming")
         yield Static("", id="status")
-        yield Static("", id="sep-top")
+        yield Static("", id="sep")
         with Horizontal(id="input-row"):
             yield Static(">", id="prompt-prefix")
             yield Input(id="prompt")
-        yield Static("", id="sep-bot")
-        yield Static("", id="pad-bot")
 
     def on_mount(self) -> None:
         history_file = Path.home() / ".north" / "tui_history"
@@ -277,20 +257,17 @@ class NorthApp(App[None]):
         self.set_interval(0.08, self._tick)
         self.run_worker(self._listen(), exclusive=False)
         self.query_one("#prompt", Input).focus()
-        # Defer banner so content_region.height is populated after first layout
+        # Defer so the log's width is known before drawing the banner rule.
         self.call_after_refresh(self._draw_banner)
 
     def _draw_banner(self) -> None:
+        # Top-anchored: the banner is the first thing in the log; chat flows
+        # downward beneath it and the input stays pinned at the bottom.
         log = self.query_one("#log", RichLog)
-        banner_lines = 4  # blank + "north" + blank + rule
-        pad = max(0, log.content_region.height - banner_lines)
-        for _ in range(pad):
-            log.write("")
         log.write("")
         log.write("  [bold white]north[/bold white]")
         log.write("")
         self._write_rule()
-        log.scroll_end(animate=False)
 
     def on_resize(self) -> None:
         self._redraw_seps()
@@ -299,8 +276,7 @@ class NorthApp(App[None]):
 
     def _redraw_seps(self) -> None:
         line = "[bright_black]" + "─" * self.size.width + "[/bright_black]"
-        self.query_one("#sep-top", Static).update(line)
-        self.query_one("#sep-bot", Static).update(line)
+        self.query_one("#sep", Static).update(line)
 
     def _write_rule(self) -> None:
         log = self.query_one("#log", RichLog)
