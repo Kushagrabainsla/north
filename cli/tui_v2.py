@@ -64,9 +64,9 @@ class NorthApp(App[None]):
     # Layout (top → bottom):
     #   #log           — scrollable chat history (top-anchored)  (1fr)
     #   #streaming     — live markdown during token stream       (auto, hidden)
-    #   #status        — spinner / info line                     (1 row)
-    #   #sep           — ─── single rule above the input         (1 row)
-    #   #input-row     — >  [                           ]        (1 row)
+    #   #status        — working spinner (empty when idle)        (1 row)
+    #   #input-row     — ╭ >  [                       ] ╮ box     (3 rows)
+    #   #hint          — dim shortcuts (strategy · history · …)   (1 row)
 
     CSS = """
     Screen {
@@ -123,31 +123,32 @@ class NorthApp(App[None]):
 
     /* ── footer: status · top-sep · input · bot-sep · pad ── */
 
+    /* working-spinner line, just above the input box (empty when idle) */
     #status {
         width: 100%;
         height: 1;
         background: $background;
         color: $text-muted;
-        padding: 0;
+        padding: 0 0 0 2;
     }
 
-    #sep {
-        width: 100%;
-        height: 1;
-        background: $background;
-        color: $text-muted;
-    }
-
+    /* rounded input box (╭─╮ │ ╰─╯), accent border when focused */
     #input-row {
         width: 100%;
-        height: 1;
+        height: 3;
         background: $background;
+        border: round #444444;
+        padding: 0 1;
+    }
+
+    #input-row:focus-within {
+        border: round #6cb6ff;
     }
 
     #prompt-prefix {
         width: auto;
         height: 1;
-        padding: 0 1 0 2;
+        padding: 0 1 0 0;
         background: $background;
         color: $text-muted;
     }
@@ -161,15 +162,23 @@ class NorthApp(App[None]):
         color: $text;
     }
 
+    /* dim shortcut hint, just below the input box */
+    #hint {
+        width: 100%;
+        height: 1;
+        background: $background;
+        color: $text-muted;
+        padding: 0 0 0 2;
+    }
+
     Input {
         border: none;
         background: $background;
         padding: 0;
     }
 
-    /* ── kill all focus / hover / active tints on every widget ── */
-    /* Textual's DEFAULT_CSS applies accent borders and background   */
-    /* tints on focus — override every state to stay flat.          */
+    /* ── keep widgets flat on focus / hover; the input box keeps its    */
+    /* rounded border (accent on focus-within, handled above).          */
 
     Screen:focus-within,
     #log:focus,
@@ -179,11 +188,8 @@ class NorthApp(App[None]):
     #streaming:focus-within,
     #status:focus,
     #status:hover,
-    #sep:focus,
-    #sep:hover,
-    #input-row:focus,
-    #input-row:focus-within,
-    #input-row:hover,
+    #hint:focus,
+    #hint:hover,
     #prompt-prefix:focus,
     #prompt-prefix:hover,
     #prompt:focus,
@@ -235,10 +241,10 @@ class NorthApp(App[None]):
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
         yield Markdown("", id="streaming")
         yield Static("", id="status")
-        yield Static("", id="sep")
         with Horizontal(id="input-row"):
             yield Static(">", id="prompt-prefix")
             yield Input(id="prompt")
+        yield Static("", id="hint")
 
     def on_mount(self) -> None:
         history_file = Path.home() / ".north" / "tui_history"
@@ -251,7 +257,7 @@ class NorthApp(App[None]):
                 pass
 
         self._strategy = _read_strategy(self._settings_path)
-        self._redraw_seps()
+        self._refresh_hint()
         self._set_status("")
 
         self.set_interval(0.08, self._tick)
@@ -269,14 +275,12 @@ class NorthApp(App[None]):
         log.write("")
         self._write_rule()
 
-    def on_resize(self) -> None:
-        self._redraw_seps()
-
     # ── rendering helpers ────────────────────────────────────────────────────
 
-    def _redraw_seps(self) -> None:
-        line = "[bright_black]" + "─" * self.size.width + "[/bright_black]"
-        self.query_one("#sep", Static).update(line)
+    def _refresh_hint(self) -> None:
+        self.query_one("#hint", Static).update(
+            f"[bright_black]  {self._strategy}  ·  ↑↓ history  ·  ctrl+c quit[/bright_black]"
+        )
 
     def _write_rule(self) -> None:
         log = self.query_one("#log", RichLog)
@@ -292,13 +296,10 @@ class NorthApp(App[None]):
                 f"[bright_black]  {f}  {self._status_text}[/bright_black]"
             )
 
-    def _idle_status(self) -> str:
-        return f"[bright_black]  {self._strategy}  ·  ↑↓ history  ·  ctrl+c quit[/bright_black]"
-
     def _set_status(self, text: str) -> None:
         self._status_text = text
         if not text:
-            self.query_one("#status", Static).update(self._idle_status())
+            self.query_one("#status", Static).update("")
         else:
             f = _SPIN[self._spin_frame % len(_SPIN)]
             self.query_one("#status", Static).update(
@@ -465,6 +466,7 @@ class NorthApp(App[None]):
 
             # Refresh strategy in case the user issued a strategy command.
             self._strategy = _read_strategy(self._settings_path)
+            self._refresh_hint()
             self._set_status("")
             self._user_task_ids.discard(task_id)
             user_msg = self._pending_user_messages.pop(task_id, "")
