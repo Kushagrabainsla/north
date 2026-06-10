@@ -46,12 +46,15 @@ _MIGRATIONS = [
     "ALTER TABLE ledger ADD COLUMN error_type TEXT",
 ]
 
-_INSERT_COLUMNS = (
-    "id, timestamp, source, task_id, agent, input, action, output, "
-    "agent_output, tools_used, model_used, tokens_in, tokens_out, cost_usd, status, "
-    "duration_ms, error_type"
+# Column order for INSERTs. Placeholders are derived from this tuple so the two
+# can never drift (CODING_STYLE §9.6 — no magic count).
+_INSERT_COLUMN_NAMES = (
+    "id", "timestamp", "source", "task_id", "agent", "input", "action", "output",
+    "agent_output", "tools_used", "model_used", "tokens_in", "tokens_out", "cost_usd",
+    "status", "duration_ms", "error_type",
 )
-_INSERT_PLACEHOLDERS = ", ".join(["?"] * 17)
+_INSERT_COLUMNS = ", ".join(_INSERT_COLUMN_NAMES)
+_INSERT_PLACEHOLDERS = ", ".join(["?"] * len(_INSERT_COLUMN_NAMES))
 
 
 class SQLiteLedgerWriter(LedgerWriter):

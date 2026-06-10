@@ -64,6 +64,7 @@ class CreateAgentTool(Tool):
     """
 
     name = "create_agent"
+    is_mutating = True
     description = (
         "Creates a new north agent from a natural-language description. "
         "action='list': show all registered agents. "

@@ -43,6 +43,8 @@ from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
 from tools.registry import ToolRegistry
 from tools.specialized.bash import BashTool
+from tools.specialized.patch_file import PatchFileTool
+from tools.specialized.shell_tool import ShellTool
 from tools.tool_index import ToolIndex
 from tools.universal.create_agent import CreateAgentTool
 from tools.universal.create_tool import CreateToolTool
@@ -129,9 +131,28 @@ def _build_tool_registry(
     tool_registry.make_universal("create_agent")
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
     tool_registry.make_universal("query_metrics")
-    # BashTool gates every command behind user approval and cannot be auto-discovered.
+    # BashTool and ShellTool gate every command behind user approval and cannot
+    # be auto-discovered (they need the ApprovalStore injected at startup).
     tool_registry.register(
         BashTool(
+            approval_store=deps.approval_store,
+            stream_manager=deps.stream_manager,
+            approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+            judgement_filter=judgement_filter,
+        )
+    )
+    tool_registry.register(
+        ShellTool(
+            approval_store=deps.approval_store,
+            stream_manager=deps.stream_manager,
+            approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+            judgement_filter=judgement_filter,
+        )
+    )
+    # Override the auto-discovered (immediate) PatchFileTool with one that previews
+    # a unified diff in an approval card before writing.
+    tool_registry.register(
+        PatchFileTool(
             approval_store=deps.approval_store,
             stream_manager=deps.stream_manager,
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,

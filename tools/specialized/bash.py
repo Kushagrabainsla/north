@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.specialized._approval import request_approval_decision
 
 if TYPE_CHECKING:
     from approval.judgement_filter import JudgementFilter
@@ -78,6 +79,7 @@ class BashTool(Tool):
     """
 
     name = "bash"
+    is_mutating = True
     description = (
         "Run a shell command and return stdout/stderr/returncode."
         " Default timeout 30 s, pass timeout= (max 300) for longer commands."
@@ -123,51 +125,16 @@ class BashTool(Tool):
         if self._safety_inspector.is_instantly_safe(command):
             return True
 
-        from approval.models import Card, CardType
-        from utils.ids import generate_id
-
-        card_id = generate_id()
-        card = Card(
-            id=card_id,
-            type=CardType.APPROVAL,
-            task_id=task_id or "",
+        return await request_approval_decision(
+            self._approval_store,
+            task_id=task_id,
             agent="bash",
             title="Shell Command — Approval Required",
             message=f"```\n{command}\n```",
-            options=["Run", "Cancel"],
+            stream_manager=self._stream_manager,
+            judgement_filter=self._judgement_filter,
+            timeout=self._approval_timeout_seconds,
         )
-
-        if self._judgement_filter is not None:
-            try:
-                auto_decision, _ = await self._judgement_filter.check(card)
-                if auto_decision == "approved":
-                    return True
-                elif auto_decision == "rejected":
-                    return False
-            except Exception:
-                pass
-
-        self._approval_store.add(card)
-
-        if self._stream_manager and task_id:
-            await self._stream_manager.emit(
-                task_id,
-                "approval_required",
-                {
-                    "card_id": card_id,
-                    "task_id": task_id,
-                    "agent": "bash",
-                    "title": card.title,
-                    "message": card.message,
-                    "options": card.options,
-                },
-            )
-
-        resolved = await self._approval_store.wait_for_decision(card_id, timeout=self._approval_timeout_seconds)
-        if resolved is None:
-            self._approval_store.resolve(card_id, "rejected")
-            return False
-        return resolved.chosen_option.lower() == card.options[0].lower()
 
     async def run(self, input: ToolInput) -> ToolOutput:
         command = input.params.get("command")

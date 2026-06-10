@@ -2,6 +2,32 @@
 
 All notable changes to north are documented here.
 
+## [1.3.6] - 2026-06-09
+### Added
+- **`shell` tool — long-lived PTY sessions** (`tools/specialized/shell_tool.py`): start/read/write/stop/list actions keep a process alive across tool calls behind a pseudo-terminal (stdlib `pty`, no new dependency) for dev servers, `--watch` builds, REPLs, and debuggers. `start` and `write` are approval-gated like `bash`; output streams into a per-session ring buffer. Wired into coder + tester.
+- **Diff preview before write** (`tools/specialized/patch_file.py`): when an `ApprovalStore` is injected, `patch_file` computes the change, shows a unified diff in an approval card, and writes only on confirm — rejection leaves the file untouched. Falls back to immediate apply when no store is present.
+- **`gh` tool** (`tools/specialized/gh_tool.py`): GitHub CLI wrapper for the PR/issue workflow — `pr_view`, `pr_diff`, `pr_checks`, `pr_comment`, `pr_review`, `issue_view`, etc. Read-only actions run immediately; mutating ones follow the GitTool pattern (model calls `request_approval` first). Auth delegated to `gh`. Wired into the coder agent's `tools.yaml`.
+- **Repository convention auto-discovery** (`context/repo_instructions.py`): when a task carries a `workspace`, agents auto-load `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, and `.cursorrules` from the workspace root and enclosing git root, injected as a "Repository conventions" context section via `Agent._load_context`.
+- **`glob` tool** (`tools/universal/glob.py`): name-based file lookup by glob pattern (`**/*Test*.ts`), results sorted newest-first, noise dirs (`.git`, `node_modules`, …) pruned. Universal — every agent gets it.
+- **`read_file` line ranges** (`tools/universal/read_file.py`): `start_line` / `end_line` params read a slice of a large file instead of the whole thing; output is now line-numbered (`cat -n` style). Closes the drift where this signature was documented but unimplemented.
+- **`search_files` output modes** (`tools/universal/search_files.py`): `output_mode` (`content` / `files_with_matches` / `count`), `context` lines around each hit, `file_type` language shorthand (`py`, `ts`, `go`, …) and `head_limit` — grep parity without an external ripgrep binary. Now also searches a single-file path, not just directories.
+- **`patch_file` ordered edits** (`tools/specialized/patch_file.py`): `edits` param applies a list of `{old_string, new_string}` replacements in one call, each required to be unique when applied; the file is written only if every edit succeeds (atomic).
+
+### Changed
+- **Shared tool approval flow** (`tools/specialized/_approval.py`): `BashTool`, `ShellTool`, and `PatchFileTool` now route their JudgementFilter→card→wait approval through one helper (`request_approval_decision`) instead of three copies (DRY, §5).
+- **Serialized mutating tool calls** (`agents/agentic_llm_agent.py`): tools declare `is_mutating` (`tools/base.py`); the ReAct loop runs read-only calls concurrently but mutating ones (file writes, shell, git, gh, delegate) sequentially, so two edits to the same file in one turn can no longer race and lose an update.
+- **Shared subprocess runner** (`tools/specialized/_subprocess.py`): `GitTool` and `GhTool` share one `run_capture()` (timeout, output cap, structured result) instead of duplicated `_run_sync` bodies (DRY, §5).
+- **`ApprovalDecision.TIMEOUT_REJECTED`** (`approval/models.py`): approval decisions are now an enum throughout instead of bare `"rejected"`/`"timeout_rejected"` string literals (§5.5).
+
+### Fixed
+- **Tool-loop crash on exception** (`agents/agentic_llm_agent.py`): the parallel tool-call `gather` ran without `return_exceptions=True` (violating §10.5); a raise in `_request_approval` could crash the whole agent run and cancel sibling calls. Each call is now wrapped so a failure becomes a failed tool result.
+- **Persistent-shell output loss** (`tools/specialized/shell_tool.py`): `_reap_exited` drained an exited session's buffer via `read_new()`, silently destroying unread output when `list`/`start` ran. It now uses a non-destructive `has_pending_output()` check.
+- **`ApprovalStore` unbounded growth** (`approval/store.py`): resolved cards accumulated forever; the registry now evicts the oldest resolved cards past a cap (pending cards are never evicted). Docstring corrected from "thread-safe" to "coroutine-safe".
+- **`search_files` duplicate context lines** (`tools/universal/search_files.py`): overlapping `context` windows around adjacent matches no longer emit the same line multiple times.
+- **Tool-result truncation overflow** (`agents/agentic_llm_agent.py`): large non-string fields bypassed the per-field cap; a bounded valid-JSON fallback now guarantees the result stays under the limit.
+- **Misleading terminal message** (`agents/agentic_llm_agent.py`): an empty `tool_calls` response no longer reports "reached the maximum number of reasoning steps".
+- **Ledger insert column drift** (`ledger/sqlite_writer.py`): INSERT placeholders are derived from the column tuple instead of a hand-synced `"?" * 17` (§9.6).
+
 ## [1.3.5] - 2026-06-08
 ### Added
 - **Three-layer BashTool command safety** (`tools/specialized/bash.py`):

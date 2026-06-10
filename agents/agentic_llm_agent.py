@@ -34,7 +34,7 @@ from agents.context_compaction import (
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.schemas import DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
-from approval.models import Card, CardType
+from approval.models import ApprovalDecision, Card, CardType
 from inference.exceptions import ContextTooLargeError
 from inference.models import ToolCall, ToolCallRequest
 from tools.base import Tool
@@ -113,7 +113,11 @@ class AgenticLLMAgent(LLMAgent):
         tool_map: dict[str, Tool],
         messages: list[dict],
     ) -> None:
-        """Execute multiple tool calls in parallel and update logging/history."""
+        """Execute the requested tool calls and update logging/history.
+
+        Read-only calls run concurrently; mutating calls run sequentially so two
+        edits to the same file cannot race. Results are returned in call order.
+        """
         # Announce every call *before* execution so the UI shows live in-progress
         # state rather than a retrospective log after the tool has already finished.
         if self._deps.stream_manager and payload.task_id:
@@ -122,9 +126,7 @@ class AgenticLLMAgent(LLMAgent):
                     payload.task_id, "tool_called", {"tool": call.name, "params": call.params}
                 )
 
-        results: list[tuple[ToolCall, str, bool]] = await asyncio.gather(
-            *[self._execute_call(call, payload, tool_map) for call in calls]
-        )
+        results = await self._execute_calls_ordered(calls, payload, tool_map)
 
         for call, result_str, success in results:
             if self._deps.stream_manager and payload.task_id:
@@ -141,6 +143,55 @@ class AgenticLLMAgent(LLMAgent):
             await self._record_tool_call_confidence(call.name, success)
 
         self._append_tool_call_exchange(messages, results)
+
+    async def _execute_calls_ordered(
+        self,
+        calls: list[ToolCall],
+        payload: AgentPayload,
+        tool_map: dict[str, Tool],
+    ) -> list[tuple[ToolCall, str, bool]]:
+        """Run read-only calls concurrently and mutating calls sequentially.
+
+        Mutating tools (file writes, shell, git) are serialized so concurrent
+        edits to the same file cannot lose an update. Every call is wrapped so a
+        raised exception becomes a failed tool result rather than cancelling its
+        siblings (CODING_STYLE §10.5). Results preserve the original call order.
+        """
+        results: dict[int, tuple[ToolCall, str, bool]] = {}
+
+        concurrent = [(i, c) for i, c in enumerate(calls) if not self._is_mutating_call(c, tool_map)]
+        if concurrent:
+            gathered = await asyncio.gather(
+                *[self._safe_execute_call(c, payload, tool_map) for _, c in concurrent],
+                return_exceptions=True,
+            )
+            for (index, call), outcome in zip(concurrent, gathered, strict=True):
+                results[index] = outcome if not isinstance(outcome, BaseException) else _failed_call(call, outcome)
+
+        for index, call in enumerate(calls):
+            if index not in results:
+                results[index] = await self._safe_execute_call(call, payload, tool_map)
+
+        return [results[index] for index in range(len(calls))]
+
+    async def _safe_execute_call(
+        self,
+        call: ToolCall,
+        payload: AgentPayload,
+        tool_map: dict[str, Tool],
+    ) -> tuple[ToolCall, str, bool]:
+        """Execute one call, turning any unexpected exception into a failed result."""
+        try:
+            return await self._execute_call(call, payload, tool_map)
+        except Exception as exc:
+            logger.warning("Tool call '%s' raised: %s", call.name, exc, exc_info=True)
+            return _failed_call(call, exc)
+
+    def _is_mutating_call(self, call: ToolCall, tool_map: dict[str, Tool]) -> bool:
+        if call.name == "delegate_task":
+            return True  # a sub-agent may mutate shared files or state
+        tool = tool_map.get(call.name)
+        return bool(tool and tool.is_mutating)
 
     async def _execute(
         self,
@@ -216,9 +267,14 @@ class AgenticLLMAgent(LLMAgent):
                 content = response.content or ""
                 return _final_answer(content, content[:120], total_cost_usd, tools_used)
 
-            # Tool calls branch — execute all calls in parallel.
+            # Tool calls branch — execute the requested calls.
             if not response.calls:
-                break
+                return _final_answer(
+                    response.content or "The model returned no tool calls and no message.",
+                    "No actionable response",
+                    total_cost_usd,
+                    tools_used,
+                )
 
             for call in response.calls:
                 if call.name not in _seen_tools:
@@ -268,8 +324,7 @@ class AgenticLLMAgent(LLMAgent):
         if call.name == "request_approval":
             decision = await self._request_approval(payload, params)
             result_str = json.dumps({"decision": decision})
-            success = decision.lower() not in ("reject", "rejected", "timeout_rejected")
-            return call, result_str, success
+            return call, result_str, not _is_rejection(decision)
         if call.name == "create_tool" and params.get("action") in ("create", "update"):
             name = params.get("name", "unknown")
             action = params.get("action", "create")
@@ -288,7 +343,7 @@ class AgenticLLMAgent(LLMAgent):
                     "options": ["Approve", "Reject"],
                 },
             )
-            if decision.lower() in ("reject", "rejected", "timeout_rejected"):
+            if _is_rejection(decision):
                 return call, json.dumps({"success": False, "error": "User rejected tool creation."}), False
         if payload.workspace:
             params["workspace"] = payload.workspace
@@ -477,8 +532,8 @@ class AgenticLLMAgent(LLMAgent):
 
         current = await store.wait_for_decision(card_id, timeout=self._deps.approval_timeout_seconds)
         if current is None:
-            store.resolve(card_id, "rejected")
-            return "timeout_rejected"
+            store.resolve(card_id, ApprovalDecision.REJECTED)
+            return ApprovalDecision.TIMEOUT_REJECTED
         return current.status
 
     async def _call_tool(
@@ -519,6 +574,12 @@ class AgenticLLMAgent(LLMAgent):
             }
             data["_note"] = f"{omitted} chars omitted from original output."
             raw = json.dumps(data)
+            # Non-string fields (large lists/dicts) bypass the per-field cap above;
+            # fall back to a bounded, still-valid-JSON summary of the data block.
+            if len(raw) > MAX_TOOL_RESULT_CHARS:
+                summary = json.dumps(data["data"])[: MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS]
+                data["data"] = {"_truncated": summary + "…"}
+                raw = json.dumps(data)
         return raw
 
 
@@ -527,6 +588,22 @@ def _extract_success(tool_result_str: str) -> bool:
         return bool(json.loads(tool_result_str).get("success", False))
     except (json.JSONDecodeError, AttributeError):
         return False
+
+
+def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool]:
+    """Build a failed tool-call result from an exception raised during execution."""
+    return call, json.dumps({"success": False, "error": str(exc)}), False
+
+
+# Decisions that mean the action was not approved (a user reject, a model "reject",
+# or a timeout treated as rejection).
+_REJECTION_DECISIONS = frozenset(
+    {"reject", ApprovalDecision.REJECTED.value, ApprovalDecision.TIMEOUT_REJECTED.value}
+)
+
+
+def _is_rejection(decision: str) -> bool:
+    return decision.lower() in _REJECTION_DECISIONS
 
 
 def _sync_hot_loaded_tools(deps: Any, agent_name: str, tool_map: dict[str, Tool]) -> None:

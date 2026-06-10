@@ -1,4 +1,6 @@
 tools:
   - bash
+  - shell
   - git
+  - gh
   - patch_file

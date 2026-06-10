@@ -24,6 +24,7 @@ class ApprovalDecision(StrEnum):
 
     APPROVED = "approved"
     REJECTED = "rejected"
+    TIMEOUT_REJECTED = "timeout_rejected"
 
 
 class Card(BaseModel):

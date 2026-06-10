@@ -13,13 +13,22 @@ import asyncio
 
 from approval.models import Card
 
+# Bound the in-memory registry so a long-running server does not accumulate
+# resolved cards forever. Pending cards are never evicted; only the oldest
+# already-resolved cards are dropped once the cap is exceeded.
+_MAX_CARDS = 500
+
 
 class ApprovalStore:
-    """Thread-safe in-memory registry of Card objects.
+    """Coroutine-safe in-memory registry of Card objects.
 
     Each card gets a paired ``asyncio.Event`` on ``add()``.  Callers waiting
     for a decision use ``wait_for_decision()`` instead of polling; ``resolve()``
     sets the event so waiters wake immediately.
+
+    Safe for concurrent coroutines on a single event loop — not thread-safe
+    (``asyncio.Event`` must be set from the loop thread). All current callers
+    run on the event loop.
     """
 
     def __init__(self) -> None:
@@ -29,6 +38,20 @@ class ApprovalStore:
     def add(self, card: Card) -> None:
         self._cards[card.id] = card
         self._events[card.id] = asyncio.Event()
+        self._evict_resolved()
+
+    def _evict_resolved(self) -> None:
+        """Drop the oldest resolved cards once the registry exceeds its cap."""
+        overflow = len(self._cards) - _MAX_CARDS
+        if overflow <= 0:
+            return
+        resolved = sorted(
+            (c for c in self._cards.values() if c.status != "pending"),
+            key=lambda c: c.created_at,
+        )
+        for card in resolved[:overflow]:
+            self._cards.pop(card.id, None)
+            self._events.pop(card.id, None)
 
     def resolve(self, card_id: str, status: str, chosen_option: str = "") -> None:
         """Update the status of a card and wake any waiting coroutines."""

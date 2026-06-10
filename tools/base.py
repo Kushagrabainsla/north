@@ -20,6 +20,11 @@ class Tool(ABC):
 
     name: str
     description: str
+    # Whether running this tool mutates the filesystem or external state. The
+    # agent loop runs read-only tools concurrently but serializes mutating ones
+    # so two edits to the same file can't race (lost update). Default False;
+    # mutating tools opt in (OCP — no central switch-on-name).
+    is_mutating: bool = False
     # Override in subclasses with an OpenAI-compatible JSON Schema for the
     # function parameters.  The default accepts any key/value object.
     parameters_schema: dict = {

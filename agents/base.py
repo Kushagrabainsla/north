@@ -8,6 +8,7 @@ from typing import Any
 
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context.models import ContextDocument
+from context.repo_instructions import load_repo_instructions
 from tools.base import Tool
 from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 
@@ -73,6 +74,14 @@ class Agent(ABC):
 
         if payload.context:
             parts.append(payload.context)
+
+        if payload.workspace:
+            try:
+                repo_conventions = await load_repo_instructions(payload.workspace)
+                if repo_conventions:
+                    parts.append(repo_conventions)
+            except Exception as exc:
+                logger.warning("Repo instruction load failed for task %s: %s", payload.task_id, exc)
 
         fact_store = self._deps.fact_store
         facts_found = False

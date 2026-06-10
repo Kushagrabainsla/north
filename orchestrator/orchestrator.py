@@ -12,7 +12,7 @@ from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
-from approval import Card, CardType, JudgementFilter, Notifier
+from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
@@ -187,7 +187,7 @@ class Orchestrator:
         chosen_option: str,
     ) -> None:
         """Record a user approval decision from the notification callback or Web UI."""
-        status = LedgerStatus.APPROVED if decision == "approved" else LedgerStatus.REJECTED
+        status = LedgerStatus.APPROVED if decision == ApprovalDecision.APPROVED else LedgerStatus.REJECTED
         # Include the card message so the extraction pipeline can learn a
         # meaningful preference fact (e.g. "User always approves X from agent Y").
         # Without this, the input would just be an opaque card_id.

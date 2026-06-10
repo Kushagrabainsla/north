@@ -6,6 +6,7 @@ from context.extraction import ExtractionPipeline
 from context.file_store import FileContextStore
 from context.injection import ContextInjector
 from context.models import ContextDocument
+from context.repo_instructions import load_repo_instructions
 from context.task_snapshot import TaskContextSnapshot, TaskContextSnapshotStore
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "FileContextStore",
     "TaskContextSnapshot",
     "TaskContextSnapshotStore",
+    "load_repo_instructions",
 ]

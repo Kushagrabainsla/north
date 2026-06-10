@@ -18,6 +18,7 @@ class WriteFileTool(Tool):
     """Writes content to a file, creating parent directories as needed."""
 
     name = "write_file"
+    is_mutating = True
     description = "Write or overwrite a file with the given content (creates parent dirs as needed)."
     parameters_schema = {
         "type": "object",

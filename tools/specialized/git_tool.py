@@ -16,6 +16,7 @@ from typing import Any
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.specialized._subprocess import run_capture
 
 _TIMEOUT = 30
 
@@ -37,6 +38,7 @@ class GitTool(Tool):
     """Run git commands with structured output and safety guards."""
 
     name = "git"
+    is_mutating = True
     description = (
         "Run git operations in the workspace. "
         "Read-only actions (status, diff, log, branch, show) are safe and execute immediately. "
@@ -129,7 +131,7 @@ class GitTool(Tool):
                     ),
                 )
 
-        return await asyncio.to_thread(_run_sync, cmd, cwd)
+        return await asyncio.to_thread(run_capture, cmd, cwd, timeout=_TIMEOUT)
 
 
 def _build_command(action: str, args: str) -> list[str] | None:
@@ -165,41 +167,3 @@ def _build_command(action: str, args: str) -> list[str] | None:
             return base + ["merge"] + arg_parts
         case _:
             return None
-
-
-def _run_sync(cmd: list[str], cwd: Path) -> ToolOutput:
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return ToolOutput(success=False, error=f"git command timed out after {_TIMEOUT}s.")
-    except FileNotFoundError:
-        return ToolOutput(success=False, error="git executable not found.")
-    except Exception as exc:
-        return ToolOutput(success=False, error=str(exc))
-
-    stdout = result.stdout.strip()
-    stderr = result.stderr.strip()
-
-    # Cap output to prevent context overflow.
-    _MAX = 20_000
-    if len(stdout) > _MAX:
-        stdout = stdout[:_MAX] + f"\n[…{len(stdout) - _MAX} chars truncated]"
-
-    return ToolOutput(
-        success=result.returncode == 0,
-        data={
-            "command": " ".join(cmd),
-            "stdout": stdout,
-            "stderr": stderr,
-            "returncode": result.returncode,
-        },
-        error=stderr if result.returncode != 0 else None,
-    )

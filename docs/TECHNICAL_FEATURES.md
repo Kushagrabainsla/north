@@ -360,3 +360,28 @@ If both Layer 1 and Layer 2 are inconclusive, a standard approval card is emitte
 
 **Dependency injection:** `JudgementFilter` is instantiated once during server startup in `orchestrator/app.py` and shared between the `Orchestrator` (for general approvals) and `BashTool` (for command-specific approvals). `CommandSafetyInspector` is a zero-dependency value object created internally by `BashTool.__init__()`.
 
+The same approval flow (JudgementFilter → card → `wait_for_decision`) is shared by `BashTool`, `ShellTool`, and `PatchFileTool` via `tools/specialized/_approval.py:request_approval_decision()`, so the three tools never drift.
+
+## 14. Persistent PTY Shell Sessions
+
+**What:** `ShellTool` (`tools/specialized/shell_tool.py`) keeps a process alive across tool calls behind a pseudo-terminal. Where `BashTool` is one-shot (run → capture → exit), `ShellTool` exposes `start` / `read` / `write` / `stop` / `list` so an agent can launch `npm run dev`, `tsc --watch`, a REPL, or a debugger, then stream output, send input, and terminate it over several iterations.
+
+**Why:** Many real coding tasks need a long-running process — start a dev server then curl it, watch a compiler, drive an interactive REPL. A one-shot subprocess cannot express any of these.
+
+**How:**
+- Each session is backed by `pty.openpty()` (stdlib — no third-party dependency like `pexpect`; the model does the "wait for X" reasoning itself, so an expect layer adds nothing).
+- The PTY master fd is registered with the event loop via `loop.add_reader()`; output accumulates in a per-session ring buffer (`_MAX_BUFFER_BYTES`) drained on each `read`.
+- Processes spawn with `start_new_session=True` so `stop` can `killpg` the whole group (SIGTERM, then SIGKILL on timeout).
+- Safety mirrors `BashTool`: `start` and `write` go through the shared approval flow; `read` / `stop` / `list` operate on an already-approved session. A session cap (`_MAX_SESSIONS`) bounds runaway shells.
+
+## 15. Diff Preview Before Write
+
+**What:** When an `ApprovalStore` is injected, `PatchFileTool` computes the would-be new file content, renders a unified diff (`difflib`), and surfaces it in an approval card. The write happens only on confirm; a rejection leaves the file untouched.
+
+**Why:** It turns north's approval layer into a true review gate for edits — the user sees exactly what changes before it lands, rather than approving a blind "edit file" action. This plays to north's differentiator (the approval layer + ledger) rather than copying per-tool permission prompts.
+
+**How:**
+- Computation is split from writing: `_plan()` returns `(new_content, old_content, blocks_applied)` purely, with no side effect, for all three edit shapes (`edits` list, `old_string`/`new_string`, SEARCH/REPLACE blocks).
+- A no-op edit (`new_content == old_content`) short-circuits to success without prompting.
+- The injected, diff-previewing instance is registered in `orchestrator/app.py`, overriding the auto-discovered no-arg instance by name. Without a store (e.g. unit tests) the tool applies immediately — backward compatible.
+

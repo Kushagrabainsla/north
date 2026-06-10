@@ -33,6 +33,7 @@ class CreateToolTool(Tool):
     """Creates, updates, or lists north tools so agents can extend their own capabilities."""
 
     name = "create_tool"
+    is_mutating = True
     description = (
         "Last-resort tool manager — only use this when no existing tool can perform the required action. "
         "Always call action='list' first to check what tools exist before creating anything. "
