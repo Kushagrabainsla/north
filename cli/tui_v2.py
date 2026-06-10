@@ -89,11 +89,17 @@ class NorthApp(App[None]):
         border: none;
         padding: 0;
         background: $background;
+        /* Keep the scrollbar invisible in every state (default / hover / active)
+           so hovering or clicking the chat never flashes an accent-coloured
+           scrollbar — the only focus difference should be the input box border. */
         scrollbar-size: 1 1;
         scrollbar-background: $background;
         scrollbar-background-hover: $background;
+        scrollbar-background-active: $background;
         scrollbar-color: $background;
-        scrollbar-color-hover: $primary;
+        scrollbar-color-hover: $background;
+        scrollbar-color-active: $background;
+        scrollbar-corner-color: $background;
     }
 
     /* ── live streaming area ──────────────────────────────── */
@@ -106,6 +112,14 @@ class NorthApp(App[None]):
         padding: 0 0 0 4;
         background: $background;
         color: $text;
+        scrollbar-size: 1 1;
+        scrollbar-background: $background;
+        scrollbar-background-hover: $background;
+        scrollbar-background-active: $background;
+        scrollbar-color: $background;
+        scrollbar-color-hover: $background;
+        scrollbar-color-active: $background;
+        scrollbar-corner-color: $background;
     }
 
     /* Markdown renders paragraph / fence / list block sub-widgets with
