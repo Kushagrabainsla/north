@@ -27,6 +27,7 @@ See docs/CODING_STYLE.md Section 8 and README Section 10.2.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import json
 import os
 import shutil
@@ -235,7 +236,7 @@ def _launch_tui(
         log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
         proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
         pid_path.write_text(str(proc.pid), encoding="utf-8")
-        _wait_for_server(host, port)
+        _wait_for_server(host, port, proc=proc)
         workspace = resolved_workspace
 
     base_url = f"http://{host}:{port}"
@@ -690,7 +691,7 @@ def show_ledger(
     table.add_column("status", no_wrap=True)
     table.add_column("agent", style="dim")
     for entry in entries:
-        ts = entry["timestamp"][:19].replace("T", " ")
+        ts = datetime.datetime.fromisoformat(entry["timestamp"]).astimezone().strftime("%Y-%m-%d %H:%M")
         status = entry.get("status") or ""
         status_fmt = (
             f"[green]{status}[/green]"
@@ -1360,10 +1361,26 @@ def _is_north_server(host: str, port: int) -> bool:
         return False
 
 
-def _wait_for_server(host: str, port: int, timeout: int = 90) -> None:
-    """Poll until the server responds or timeout expires."""
+def _wait_for_server(
+    host: str,
+    port: int,
+    timeout: int = 90,
+    proc: subprocess.Popen | None = None,
+) -> None:
+    """Poll until the server responds or timeout expires.
+
+    When *proc* is supplied the loop also checks for early process exit so a
+    crash during startup is surfaced immediately rather than waiting the full
+    *timeout* seconds.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            _console.print(
+                f"  [red]server process exited unexpectedly (code {proc.returncode})[/red]",
+                err=True,
+            )
+            raise typer.Exit(1) from None
         if _is_north_server(host, port):
             _console.print("  [dim green]✓[/dim green]  server ready")
             return

@@ -13,6 +13,15 @@ def utcnow() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
 
+def localnow() -> datetime.datetime:
+    """Return the current timezone-aware local datetime.
+
+    Use this instead of datetime.now().astimezone() so all call sites go through
+    a single canonical implementation and the UTC→local conversion is consistent.
+    """
+    return utcnow().astimezone()
+
+
 def format_timestamp(dt: datetime.datetime | None = None) -> str:
     """Format a datetime as an ISO-8601 string.
 

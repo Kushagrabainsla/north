@@ -832,7 +832,11 @@ class Orchestrator:
     async def _run_agent_with_retry(self, agent: Agent, payload: AgentPayload) -> AgentResult:
         """Run an agent, retrying on failure up to the handler's max_retries."""
         task_id = payload.task_id
-        await self._stream_manager.emit(task_id, "agent_started", {"agent": agent.name})
+        await self._stream_manager.emit(
+            task_id,
+            "agent_started",
+            {"agent": agent.name, "task": payload.prompt[:100]},
+        )
 
         while True:
             t0 = time.monotonic()

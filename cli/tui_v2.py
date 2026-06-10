@@ -28,6 +28,10 @@ from textual.widgets import Input, Markdown, RichLog, Static
 
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
+# Seconds between SSE reconnect attempts; doubles on each failure up to _SSE_BACKOFF_MAX.
+_SSE_BACKOFF_BASE = 2.0
+_SSE_BACKOFF_MAX = 30.0
+
 
 def _fmt_params(params: dict) -> str:
     parts = []
@@ -41,15 +45,28 @@ def _fmt_params(params: dict) -> str:
     return ", ".join(parts[:4])
 
 
+def _read_strategy(settings_path: Path) -> str:
+    """Read the current strategy from the north settings file.
+
+    Falls back to 'cruise' if the file is absent or unreadable so the info bar
+    always shows something meaningful without crashing the TUI.
+    """
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        return str(data.get("strategy", "cruise"))
+    except Exception:
+        return "cruise"
+
+
 class NorthApp(App[None]):
     """Textual chat UI for north."""
 
     # Layout (top → bottom):
     #   #log           — scrollable chat history            (1fr)
     #   #streaming     — live markdown during token stream  (auto, hidden)
-    #   #status        — spinner / hint line                (1 row)
+    #   #status        — spinner / info line                (1 row)
     #   #sep-top       — ─── top border of input box        (1 row)
-    #   #input-row     — [❯] [                           ]  (1 row)
+    #   #input-row     — >  [                           ]   (1 row)
     #   #sep-bot       — ─── bottom border of input box     (1 row)
     #   #pad-bot       — one blank line below               (1 row)
 
@@ -81,7 +98,7 @@ class NorthApp(App[None]):
         height: auto;
         max-height: 50%;
         display: none;
-        padding: 0 0 0 2;
+        padding: 0 0 0 4;
         background: $background;
         color: $text;
     }
@@ -134,7 +151,7 @@ class NorthApp(App[None]):
         height: 1;
         padding: 0 1 0 2;
         background: $background;
-        color: cyan;
+        color: $text-muted;
     }
 
     #prompt {
@@ -229,6 +246,8 @@ class NorthApp(App[None]):
         self._current_input: str = ""
         self._spin_frame: int = 0
         self._status_text: str = ""
+        self._strategy: str = "cruise"
+        self._settings_path = Path.home() / ".north" / "settings.json"
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
@@ -236,7 +255,7 @@ class NorthApp(App[None]):
         yield Static("", id="status")
         yield Static("", id="sep-top")
         with Horizontal(id="input-row"):
-            yield Static("❯", id="prompt-prefix")
+            yield Static(">", id="prompt-prefix")
             yield Input(id="prompt")
         yield Static("", id="sep-bot")
         yield Static("", id="pad-bot")
@@ -251,6 +270,7 @@ class NorthApp(App[None]):
             except Exception:
                 pass
 
+        self._strategy = _read_strategy(self._settings_path)
         self._redraw_seps()
         self._set_status("")
 
@@ -262,8 +282,6 @@ class NorthApp(App[None]):
 
     def _draw_banner(self) -> None:
         log = self.query_one("#log", RichLog)
-        # Pre-fill with blank lines so the banner sits at the bottom of the log.
-        # Blank lines scroll off as conversation grows — standard terminal chat trick.
         banner_lines = 4  # blank + "north" + blank + rule
         pad = max(0, log.content_region.height - banner_lines)
         for _ in range(pad):
@@ -286,8 +304,6 @@ class NorthApp(App[None]):
 
     def _write_rule(self) -> None:
         log = self.query_one("#log", RichLog)
-        # Use the log's scrollable content region — 1 col narrower than the
-        # screen when the scrollbar gutter is reserved.
         width = log.scrollable_content_region.width or (self.size.width - 1) or 80
         log.write("[bright_black]" + "─" * width + "[/bright_black]")
         log.scroll_end(animate=False)
@@ -300,12 +316,13 @@ class NorthApp(App[None]):
                 f"[bright_black]  {f}  {self._status_text}[/bright_black]"
             )
 
+    def _idle_status(self) -> str:
+        return f"[bright_black]  {self._strategy}  ·  ↑↓ history  ·  ctrl+c quit[/bright_black]"
+
     def _set_status(self, text: str) -> None:
         self._status_text = text
         if not text:
-            self.query_one("#status", Static).update(
-                "[bright_black]  ↑↓ history  ·  ctrl+c to quit[/bright_black]"
-            )
+            self.query_one("#status", Static).update(self._idle_status())
         else:
             f = _SPIN[self._spin_frame % len(_SPIN)]
             self.query_one("#status", Static).update(
@@ -339,7 +356,7 @@ class NorthApp(App[None]):
         md.display = False
         md.update("")
         if final_output:
-            self._log_rich(RichPadding(RichMarkdown(final_output), (0, 0, 0, 2)))
+            self._log_rich(RichPadding(RichMarkdown(final_output), (0, 0, 0, 4)))
 
     # ── SSE event handler ────────────────────────────────────────────────────
 
@@ -370,21 +387,30 @@ class NorthApp(App[None]):
         elif event == "north_star_conflict":
             tension = (data.get("tension") or "")[:200]
             self._set_status("")
-            self._log("  [yellow]goal conflict[/yellow]")
-            self._log_rich(RichText("  " + tension, style="white"))
+            self._log("  [yellow]◆[/yellow]  [yellow]goal conflict[/yellow]")
+            self._log_rich(RichText("    " + tension, style="white"))
 
         elif event in ("executing", "agent_started"):
-            agents = data.get("agents") or []
             agent = data.get("agent", "")
+            agents = data.get("agents") or []
             label = ", ".join(agents) if agents else agent or "general"
             self._set_status(f"running {label}…")
+            # Write an agent header line to the chat log so the user can see
+            # which agent is working and on what task.
+            if agent:
+                task_desc = (data.get("task") or "").strip()
+                if task_desc:
+                    desc_part = f"  [bright_black]{task_desc[:80]}[/bright_black]"
+                else:
+                    desc_part = ""
+                self._log(f"  [cyan]◆[/cyan]  [white]{agent}[/white]{desc_part}")
 
         elif event == "tool_called":
             tool = data.get("tool", "")
             params = data.get("params") or {}
             params_str = _fmt_params(params)
             suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
-            self._log(f"  [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
+            self._log(f"    [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
             self._set_status(f"{tool}…")
             if task_id:
                 self._task_tool_activity.setdefault(task_id, []).append(
@@ -395,9 +421,9 @@ class NorthApp(App[None]):
             tool = data.get("tool", "")
             success = data.get("success", True)
             self._log(
-                f"  [dim green]✓  {tool}[/dim green]"
+                f"    [dim green]✓  {tool}[/dim green]"
                 if success
-                else f"  [dim red]✗  {tool}[/dim red]"
+                else f"    [dim red]✗  {tool}[/dim red]"
             )
             if task_id:
                 formatted = data.get("formatted", "")
@@ -423,7 +449,7 @@ class NorthApp(App[None]):
             if task_id not in self._streaming_active:
                 self._streaming_active.add(task_id)
                 self._set_status("")
-                self._log("  [bright_black]north[/bright_black]")
+                self._log("  [cyan]◆[/cyan]  [white]north[/white]")
                 self._start_streaming()
             self._update_streaming(task_id)
 
@@ -458,9 +484,11 @@ class NorthApp(App[None]):
             if was_streaming:
                 self._finish_streaming(task_id, output)
             elif output:
-                self._log("  [bright_black]north[/bright_black]")
-                self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 2)))
+                self._log("  [cyan]◆[/cyan]  [white]north[/white]")
+                self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
 
+            # Refresh strategy in case the user issued a strategy command.
+            self._strategy = _read_strategy(self._settings_path)
             self._set_status("")
             self._user_task_ids.discard(task_id)
             user_msg = self._pending_user_messages.pop(task_id, "")
@@ -483,8 +511,8 @@ class NorthApp(App[None]):
             error = data.get("error", "Task failed.")
             self._set_status("")
             self._user_task_ids.discard(task_id)
-            self._log("  [bright_black]north — error[/bright_black]")
-            self._log_rich(RichText("  " + error, style="red"))
+            self._log("  [red]◆[/red]  [red]error[/red]")
+            self._log_rich(RichText("    " + error, style="red"))
             self._write_rule()
 
         elif event == "task_cancelled":
@@ -501,15 +529,16 @@ class NorthApp(App[None]):
         elif event == "approval_required":
             self._approval_pending = data
             self._set_status("")
-            self._log("  [yellow]approval required[/yellow]")
-            self._log_rich(RichText("  " + data.get("message", ""), style="white"))
+            self._log("  [yellow]◆[/yellow]  [yellow]approval required[/yellow]")
+            self._log_rich(RichText("    " + data.get("message", ""), style="white"))
             options = data.get("options") or ["Approve", "Reject"]
             for i, opt in enumerate(options, 1):
-                self._log(f"  [bright_black][{i}][/bright_black]  {opt}")
+                self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
 
     # ── SSE listener (runs as Textual worker in the same event loop) ─────────
 
     async def _listen(self) -> None:
+        delay = _SSE_BACKOFF_BASE
         while True:
             try:
                 async with (
@@ -523,8 +552,11 @@ class NorthApp(App[None]):
                 ):
                     if resp.status_code != 200:
                         await resp.aread()
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(delay)
+                        delay = min(delay * 2, _SSE_BACKOFF_MAX)
                         continue
+                    # Successful connection — reset backoff.
+                    delay = _SSE_BACKOFF_BASE
                     current_event = ""
                     async for line in resp.aiter_lines():
                         if line.startswith("event:"):
@@ -541,7 +573,8 @@ class NorthApp(App[None]):
             except asyncio.CancelledError:
                 return
             except Exception:
-                await asyncio.sleep(2)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, _SSE_BACKOFF_MAX)
 
     # ── approval ─────────────────────────────────────────────────────────────
 
@@ -614,7 +647,7 @@ class NorthApp(App[None]):
         except Exception:
             pass
 
-        self._log(f"  [cyan]❯[/cyan]  {text}")
+        self._log(f"  [bright_black]>[/bright_black]  {text}")
 
         body: dict = {"prompt": text}
         if self.workspace:
@@ -653,10 +686,10 @@ class NorthApp(App[None]):
                     self._pending_user_messages[task_id] = text
         except httpx.ConnectError:
             self._set_status("")
-            self._log("  [red]cannot reach north server[/red]")
+            self._log("  [red]◆[/red]  [red]cannot reach north server[/red]")
         except Exception as exc:
             self._set_status("")
-            self._log(f"  [red]error: {exc}[/red]")
+            self._log(f"  [red]◆[/red]  [red]error: {exc}[/red]")
 
     # ── history navigation ────────────────────────────────────────────────────
 

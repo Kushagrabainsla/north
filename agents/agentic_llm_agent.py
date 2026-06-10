@@ -14,7 +14,6 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 from typing import Any
 
 from agents.constants import (
@@ -41,6 +40,7 @@ from inference.models import ToolCall, ToolCallRequest
 from tools.base import Tool
 from tools.models import ToolInput
 from utils.ids import generate_id
+from utils.time import localnow
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ class AgenticLLMAgent(LLMAgent):
         context: str,
         scored_tools: list[tuple[Tool, float]],
     ) -> dict[str, Any]:
-        now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        now = localnow().strftime("%Y-%m-%d %H:%M %Z")
         system_prompt = f"Current date/time: {now}\n\n" + self._load_system_prompt()
         user_text = self._build_task_message(payload, context, scored_tools)
 
@@ -305,7 +305,7 @@ class AgenticLLMAgent(LLMAgent):
     ) -> str:
         """User message without the tool list (tools are passed as function defs)."""
         reliability_lines = "\n".join(f"- {t.name} reliability: {score:.0%}" for t, score in scored_tools)
-        now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        now = localnow().strftime("%Y-%m-%d %H:%M %Z")
         system_lines = [f"- current date/time: {now}"]
         if payload.workspace:
             system_lines.append(f"- workspace: {payload.workspace}")

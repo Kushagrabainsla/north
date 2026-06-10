@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from agents.base import Agent
 from agents.exceptions import AgentConfigError, AgentOutputParseError
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
+from utils.time import localnow
 from inference.models import (
     POOL_TO_PRIORITY,
     CompletionRequest,
@@ -56,7 +56,7 @@ class LLMAgent(Agent):
         scored_tools: list[tuple[Tool, float]],
     ) -> str:
         tool_lines = "\n".join(f"- {t.name} (reliability {score:.0%}): {t.description}" for t, score in scored_tools)
-        now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        now = localnow().strftime("%Y-%m-%d %H:%M %Z")
         system_lines = [f"- current date/time: {now}"]
         if payload.workspace:
             system_lines += [
