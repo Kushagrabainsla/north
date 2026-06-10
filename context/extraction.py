@@ -39,7 +39,13 @@ _DOCUMENT_MAP: dict[str, ContextDocument] = {
     "north_stars": ContextDocument.NORTH_STARS,
 }
 
-_SKIPPED_SOURCES = {LedgerSource.SYSTEM, LedgerSource.INFERENCE_ROUTER}
+# Only the user's own messages are a valid source of facts about the user.
+# Extracting from agent/system outputs let the pipeline learn the assistant's
+# own (sometimes hallucinated) text as if it were user-stated fact — a
+# self-reinforcing memory-poisoning loop. Facts come from what the USER wrote.
+_USER_AUTHORED_SOURCES = frozenset(
+    {LedgerSource.PROMPT, LedgerSource.MIC, LedgerSource.MANUAL_INJECTION}
+)
 # Failed-task entries carry noise (error messages, stack traces) rather than
 # durable facts about the user.  Sending them to the LLM wastes budget.
 _SKIPPED_STATUSES = {LedgerStatus.FAILED}
@@ -47,34 +53,44 @@ _SKIPPED_STATUSES = {LedgerStatus.FAILED}
 _EXTRACTION_PROMPT = """\
 You are the memory extraction pipeline for a personal AI operating system.
 
-A new event from the system audit log:
+Below is a message the USER wrote:
 
-Source: {source}
-Action: {action}
-Input: {input}
-Output: {output}
+\"\"\"
+{message}
+\"\"\"
 
-Decide if this event reveals something NEW, MEANINGFUL, and DURABLE about the user.
-Durable means it will still be true or useful weeks from now.
+Extract a durable fact about the user ONLY IF the user states it explicitly in
+this message. Durable means it will still be true or useful weeks from now.
 
-If yes, respond with JSON:
+Anti-fabrication contract — follow exactly:
+- Extract ONLY information the user literally wrote above. Never infer, assume,
+  generalize, or invent.
+- Every name, company, person, number, or date in the fact MUST appear verbatim
+  in the message above. If it is not in the message, you may not write it.
+- Greetings, questions, commands, and small-talk reveal NO durable fact.
+- This is the user's own message — it is NOT an assistant reply. Do not treat
+  any AI-sounding content as a fact about the user.
+- If you are not certain the user explicitly stated a durable fact, or the
+  message contains none, return extract:false. When in doubt, return false.
+
+If a durable fact is explicitly present, respond with JSON:
 {{"extract": true, "document": "<public|judgement_rules|north_stars>", "delta": "<fact>"}}
 
-If no, respond with:
+Otherwise respond with:
 {{"extract": false}}
 
 Document rules:
-- "public": stable facts — name, role, schedule patterns, preferences, tools they use, people they work with.
-- "judgement_rules": how the user decides — what they approve/reject, thresholds, priorities, communication style.
-- "north_stars": goals with time horizons — career, projects, personal growth, this week's focus.
+- "public": stable identity facts the user stated — their name, role, employer,
+  schedule, preferences, tools they use, people they work with.
+- "judgement_rules": how the user decides — what they approve/reject, thresholds,
+  priorities, communication style.
+- "north_stars": goals with time horizons the user stated — career, projects,
+  this week's focus.
 
 Fact format:
-- One sentence, third-person neutral. Include specifics: names, numbers, dates when available.
-- For "public" and "judgement_rules": present tense ("User prefers X", "User works at Y").
-- For "north_stars": goal-oriented phrasing ("User wants to X by [date/horizon]", "User is working toward Y").
-- Never extract: error messages, transient state, system internals, one-off tasks with no lasting signal.
-
-Be conservative — extract only when clearly useful for future tasks.
+- One sentence, third-person neutral, grounded only in the user's words.
+- "public"/"judgement_rules": present tense ("User works at Y").
+- "north_stars": goal-oriented phrasing ("User wants to X by [date/horizon]").
 """
 
 _DEDUP_PROMPT = """\
@@ -130,7 +146,8 @@ class ExtractionPipeline:
         north_home: Path,
         poll_interval_seconds: int = _POLL_INTERVAL_SECONDS,
         max_daily_cost_usd: float = 0.10,
-        min_output_chars: int = 100,
+        min_output_chars: int = 100,  # retained for config compatibility; unused
+        min_input_chars: int = 12,
         max_concurrent: int = _MAX_CONCURRENT_EXTRACTIONS,
         fact_store: FactStore | None = None,
     ) -> None:
@@ -142,7 +159,7 @@ class ExtractionPipeline:
         self._backup_dir = north_home / "context_backup"
         self._poll_interval = poll_interval_seconds
         self._max_daily_cost = max_daily_cost_usd
-        self._min_output_chars = min_output_chars
+        self._min_input_chars = min_input_chars
         self._max_concurrent = max_concurrent
         self._fact_store = fact_store
         # Prevents concurrent _process_batch calls (background loop + per-task
@@ -167,14 +184,19 @@ class ExtractionPipeline:
     # ------------------------------------------------------------------ #
 
     def _filter_valid_entries(self, entries: list[LedgerEntry]) -> list[LedgerEntry]:
-        """Skip internal/failed/low-signal entries; advance watermark past skipped ones."""
+        """Keep only the user's own non-trivial messages; advance the watermark past the rest.
+
+        Facts about the user are extracted from what the *user* wrote (``input``),
+        never from agent/system output — the latter would let the pipeline learn
+        the assistant's own text as user fact.
+        """
         valid: list[LedgerEntry] = []
         for entry in entries:
+            message = (entry.input or "").strip()
             skip = (
-                entry.source in _SKIPPED_SOURCES
+                entry.source not in _USER_AUTHORED_SOURCES
                 or entry.status in _SKIPPED_STATUSES
-                or not entry.output
-                or len(entry.output) < self._min_output_chars
+                or len(message) < self._min_input_chars
             )
             if skip:
                 self._save_watermark(entry.timestamp)
@@ -247,13 +269,8 @@ class ExtractionPipeline:
         return self._process_extraction_results(to_process, results)
 
     async def _process_entry(self, entry: LedgerEntry) -> bool:
-        """Ask the LLM whether this entry yields a user fact worth storing."""
-        prompt = _EXTRACTION_PROMPT.format(
-            source=entry.source.value,
-            action=entry.action or "",
-            input=(entry.input or "")[:1000],
-            output=(entry.output or "")[:2000],
-        )
+        """Ask the LLM whether the user's message yields a fact worth storing."""
+        prompt = _EXTRACTION_PROMPT.format(message=(entry.input or "").strip()[:2000])
 
         response = await self._inference_router.complete(
             CompletionRequest(
