@@ -3,10 +3,6 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  {% if not request.cookies.get('north_secret') %}
-  <meta http-equiv="refresh" content="0;url=/ui/auth?next={{ request.url.path }}" />
-  {% endif %}
-  <meta name="north-secret" content="{{ request.cookies.get('north_secret', '') }}" />
   <title>{% block title %}north{% endblock %}</title>
   <meta name="description" content="{% block description %}north — Personal Life Operating System{% endblock %}" />
   <link rel="stylesheet" href="/static/css/main.css" />

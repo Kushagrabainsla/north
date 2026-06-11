@@ -5,6 +5,7 @@ See docs/CODING_STYLE.md Section 16.1.
 
 from __future__ import annotations
 
+import functools
 import sys
 from pathlib import Path
 
@@ -34,6 +35,44 @@ _BLOCKED_PREFIXES: tuple[str, ...] = (
 )
 
 
+@functools.lru_cache(maxsize=1)
+def _resolved_blocked_prefixes() -> tuple[str, ...]:
+    """Expand and resolve _BLOCKED_PREFIXES once; falls back to the raw prefix."""
+    resolved: list[str] = []
+    for prefix in _BLOCKED_PREFIXES:
+        try:
+            resolved.append(str(Path(prefix).expanduser().resolve()))
+        except Exception:
+            resolved.append(prefix)
+    return tuple(resolved)
+
+
+def _is_blocked_path(resolved: str) -> bool:
+    """True when *resolved* (an absolute path string) sits under a blocked prefix."""
+    return any(resolved == prefix or resolved.startswith(prefix + "/") for prefix in _resolved_blocked_prefixes())
+
+
+def references_sensitive_path(command: str) -> bool:
+    """True when any path-like token in *command* points into a blocked directory.
+
+    Shared by tools that pass raw command strings to a shell (e.g. BashTool's
+    instant-safe fast path) and therefore never go through resolve_path().
+    Only absolute and ~-prefixed tokens are checked — relative paths stay
+    inside the caller's cwd and are covered by the workspace rules.
+    """
+    for token in command.split():
+        candidate = token.strip("'\"")
+        if not candidate.startswith(("/", "~")):
+            continue
+        try:
+            resolved = str(Path(candidate).expanduser().resolve())
+        except (OSError, ValueError):
+            return True  # unresolvable path-like token — treat as sensitive
+        if _is_blocked_path(resolved):
+            return True
+    return False
+
+
 def resolve_path(path_str: str, workspace: str | None) -> Path | None:
     """Resolve *path_str*, optionally scoped to *workspace*.
 
@@ -55,14 +94,7 @@ def resolve_path(path_str: str, workspace: str | None) -> Path | None:
     # No workspace — resolve relative to CWD, block system paths on POSIX.
     resolved = (Path.cwd() / p).resolve() if not p.is_absolute() else p.resolve()
 
-    if sys.platform != "win32":
-        s = str(resolved)
-        for prefix in _BLOCKED_PREFIXES:
-            try:
-                resolved_prefix = str(Path(prefix).expanduser().resolve())
-            except Exception:
-                resolved_prefix = prefix
-            if s == resolved_prefix or s.startswith(resolved_prefix + "/"):
-                return None
+    if sys.platform != "win32" and _is_blocked_path(str(resolved)):
+        return None
 
     return resolved

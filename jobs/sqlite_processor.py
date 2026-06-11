@@ -51,6 +51,10 @@ class SQLiteJobProcessor(JobProcessor):
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._init_schema()
+        # Strong references to in-flight job tasks. The event loop only keeps
+        # weak refs, so without this a dispatched job can be garbage-collected
+        # mid-run and silently stay RUNNING forever (CODING_STYLE §10.5).
+        self._running_jobs: set[asyncio.Task] = set()
 
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
@@ -209,10 +213,12 @@ class SQLiteJobProcessor(JobProcessor):
                 job = await self.claim_next()
                 if job is not None:
                     if on_job is not None:
-                        asyncio.create_task(
+                        task = asyncio.create_task(
                             self._run_job(job, on_job),
                             name=f"job-{job.job_id}",
                         )
+                        self._running_jobs.add(task)
+                        task.add_done_callback(self._running_jobs.discard)
                     else:
                         await self.mark_completed(job.job_id)
             except asyncio.CancelledError:

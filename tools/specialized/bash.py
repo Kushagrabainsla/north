@@ -11,8 +11,10 @@ See docs/CODING_STYLE.md Section 16.1.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import TYPE_CHECKING, Any
 
+from tools._path import references_sensitive_path
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import request_approval_decision
@@ -48,8 +50,23 @@ def _cap(text: str) -> str:
     return kept + f"\n[…{omitted} chars truncated]"
 
 
+# Any of these makes a command compound — chaining, substitution, redirection,
+# subshells, or find's `{}` placeholder. A safe-looking prefix then proves
+# nothing about what actually runs, so the command always goes to approval.
+_SHELL_METACHARS = re.compile(r"[;&|`$<>(){}\n]")
+# find actions that mutate the filesystem or write files; `find` is otherwise
+# read-only and stays on the fast path.
+_FIND_MUTATING_FLAGS = ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls")
+
+
 class CommandSafetyInspector:
-    """Inspector responsible for checking if a command is instantly safe/read-only."""
+    """Inspector responsible for checking if a command is instantly safe/read-only.
+
+    The prefix list is a convenience fast-path, not a security boundary — but it
+    must not be trivially escapable. Compound commands (shell metacharacters),
+    mutating `find` actions, and reads of sensitive paths (~/.ssh, /etc, ...)
+    all fall through to the approval card.
+    """
 
     def __init__(self) -> None:
         self.instant_safe_prefixes = [
@@ -67,8 +84,15 @@ class CommandSafetyInspector:
         ]
 
     def is_instantly_safe(self, command: str) -> bool:
-        cleaned = command.strip().lower()
-        return any(cleaned.startswith(prefix) for prefix in self.instant_safe_prefixes)
+        cleaned = command.strip()
+        if _SHELL_METACHARS.search(cleaned):
+            return False
+        lowered = cleaned.lower()
+        if not any(lowered.startswith(prefix) for prefix in self.instant_safe_prefixes):
+            return False
+        if lowered.startswith("find ") and any(flag in lowered for flag in _FIND_MUTATING_FLAGS):
+            return False
+        return not references_sensitive_path(cleaned)
 
 
 class BashTool(Tool):

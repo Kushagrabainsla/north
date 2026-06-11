@@ -17,7 +17,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from agents.constants import (
-    _CREATE_TOOL_PREVIEW_CHARS,
     _TOOL_RESULT_MIN_FIELD_CHARS,
     ENGINEERING_AGENTS,
     MAX_DELEGATION_DEPTH,
@@ -344,26 +343,8 @@ class AgenticLLMAgent(LLMAgent):
             decision = await self._request_approval(payload, params)
             result_str = json.dumps({"decision": decision})
             return call, result_str, not _is_rejection(decision)
-        if call.name == "create_tool" and params.get("action") in ("create", "update"):
-            name = params.get("name", "unknown")
-            action = params.get("action", "create")
-            tool_type = params.get("tool_type", "specialized")
-            content = params.get("content", "").strip()
-            preview = (
-                (content[:_CREATE_TOOL_PREVIEW_CHARS] + "\n…") if len(content) > _CREATE_TOOL_PREVIEW_CHARS else content
-            )
-            msg = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
-                f"```python\n{preview}\n```" if preview else "(stub — no implementation provided)"
-            )
-            decision = await self._request_approval(
-                payload,
-                {
-                    "message": msg,
-                    "options": ["Approve", "Reject"],
-                },
-            )
-            if _is_rejection(decision):
-                return call, json.dumps({"success": False, "error": "User rejected tool creation."}), False
+        # create_tool gates its own create/update actions behind an approval
+        # card (see CreateToolTool._request_approval) — no special case here.
         # Default the workspace but respect an explicit model-supplied value —
         # same semantics as the orchestrator's direct-tool path.
         if payload.workspace and "workspace" not in params:

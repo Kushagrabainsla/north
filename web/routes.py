@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -20,9 +20,16 @@ from jobs.cron_store import UserCronStore
 from jobs.models import JobStatus
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerStatus
-from utils.security import load_secret
+from utils.security import load_secret, verify_request_secret, verify_secret
 
-router = APIRouter(prefix="/ui", tags=["web"])
+# Every dashboard route requires the shared secret (header or session cookie),
+# exactly like the API router. The dashboard can read the ledger, resolve
+# approvals, and edit context documents — it must not be weaker than the API.
+router = APIRouter(prefix="/ui", tags=["web"], dependencies=[Depends(verify_request_secret)])
+
+# /ui/auth must stay reachable *without* the cookie (it is how the cookie is
+# bootstrapped), so it lives on its own router and validates the secret itself.
+auth_router = APIRouter(prefix="/ui", tags=["web"])
 
 _templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
@@ -73,18 +80,30 @@ def _get_ledger() -> LedgerWriter:
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 
-@router.get("/auth", include_in_schema=False)
-async def auth(request: Request, next: str = "/ui/") -> Response:
-    """Set the shared secret as an HttpOnly session cookie then redirect.
+@auth_router.get("/auth", include_in_schema=False)
+async def auth(request: Request, next: str = "/ui/", secret: str = "") -> Response:
+    """Exchange the shared secret for an HttpOnly session cookie, then redirect.
 
-    Visiting /ui/auth once per browser session authenticates the Web UI
-    for all subsequent HTMX requests without embedding the secret in HTML.
+    Visit ``/ui/auth?secret=<north secret>`` once per browser session to
+    authenticate the Web UI. The secret must be presented — handing out the
+    cookie unconditionally would let anyone who can reach the port log in.
     """
-    secret = load_secret()
+    if not verify_secret(secret):
+        return HTMLResponse(
+            content=(
+                "<h1>403 — Forbidden</h1>"
+                "<p>Open <code>/ui/auth?secret=&lt;your north secret&gt;</code> to sign in. "
+                "The secret is in <code>~/.north/secret.key</code>.</p>"
+            ),
+            status_code=403,
+        )
+    # Only same-site relative redirects — never to another origin.
+    if not next.startswith("/") or next.startswith("//"):
+        next = "/ui/"
     response = RedirectResponse(url=next, status_code=302)
     response.set_cookie(
         key="north_secret",
-        value=secret,
+        value=load_secret(),
         httponly=True,
         samesite="strict",
         path="/",

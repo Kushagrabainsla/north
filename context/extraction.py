@@ -189,6 +189,12 @@ class ExtractionPipeline:
         Facts about the user are extracted from what the *user* wrote (``input``),
         never from agent/system output — the latter would let the pipeline learn
         the assistant's own text as user fact.
+
+        The watermark only advances past the contiguous *prefix* of skipped
+        entries. Skipped entries that come after a kept entry must not move it:
+        the watermark is a single timestamp, so jumping past a newer skipped
+        entry would also jump past any older kept entry whose extraction later
+        fails, silently dropping its retry.
         """
         valid: list[LedgerEntry] = []
         for entry in entries:
@@ -198,10 +204,10 @@ class ExtractionPipeline:
                 or entry.status in _SKIPPED_STATUSES
                 or len(message) < self._min_input_chars
             )
-            if skip:
-                self._save_watermark(entry.timestamp)
-            else:
+            if not skip:
                 valid.append(entry)
+            elif not valid:
+                self._save_watermark(entry.timestamp)
         return valid
 
     async def _run_extractions_concurrently(self, entries: list[LedgerEntry]) -> list[bool | Exception]:
@@ -242,7 +248,7 @@ class ExtractionPipeline:
     async def _process_batch_locked(self, since_override: datetime.datetime | None = None) -> int:
         try:
             metrics = await self._ledger.get_metrics(days=1)
-            daily_cost = metrics.get("totals", {}).get("cost_usd", 0.0)
+            daily_cost = metrics.get("total_cost_usd", 0.0)
             if daily_cost >= self._max_daily_cost:
                 logger.info(
                     "ExtractionPipeline: daily cost cap $%.2f reached (used $%.4f), skipping",

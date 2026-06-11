@@ -13,12 +13,19 @@ from typing import TYPE_CHECKING, Any
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.specialized._approval import request_approval_decision
 
 if TYPE_CHECKING:
+    from approval.judgement_filter import JudgementFilter
+    from approval.store import ApprovalStore
+    from orchestrator.stream import EventStreamManager
     from tools.registry import ToolRegistry
 
 _TOOLS_ROOT = Path(__file__).parent.parent
 _AGENTS_ROOT = _TOOLS_ROOT.parent / "agents"
+
+# Code shown in the approval card before truncation.
+_PREVIEW_CHARS = 1_500
 
 _TOOL_COMMENT = (
     "# Specialized tools for this agent. Universal tools are\n"
@@ -118,8 +125,23 @@ class CreateToolTool(Tool):
         "required": ["action"],
     }
 
-    def __init__(self, tool_registry: ToolRegistry | None = None) -> None:
+    def __init__(
+        self,
+        tool_registry: ToolRegistry | None = None,
+        approval_store: ApprovalStore | None = None,
+        stream_manager: EventStreamManager | None = None,
+        approval_timeout_seconds: float = 300.0,
+        judgement_filter: JudgementFilter | None = None,
+    ) -> None:
         self._registry = tool_registry
+        # Approval gate for create/update, same pattern as BashTool/PatchFileTool.
+        # Without an ApprovalStore (tests), changes apply immediately. The gate
+        # lives in the tool — not the agent loop — so every caller (agents,
+        # delegation, the orchestrator's direct-tool path) goes through it.
+        self._approval_store = approval_store
+        self._stream_manager = stream_manager
+        self._approval_timeout_seconds = approval_timeout_seconds
+        self._judgement_filter = judgement_filter
 
     def format_output(self, data: dict[str, Any]) -> str:
         action = data.get("action")
@@ -162,12 +184,35 @@ class CreateToolTool(Tool):
             return _list_tools()
         if action == "read":
             return _read_tool(input.params.get("name") or "")
-        if action == "create":
-            return self._create(input.params)
-        if action == "update":
-            return self._update(input.params)
+        if action in ("create", "update"):
+            if not await self._request_approval(input.params, action):
+                return ToolOutput(success=False, error="Tool creation cancelled by user.")
+            return self._create(input.params) if action == "create" else self._update(input.params)
 
         return ToolOutput(success=False, error=f"Unknown action '{action}'. Use: list, read, create, update.")
+
+    async def _request_approval(self, params: dict, action: str) -> bool:
+        """Show the proposed tool code to the user and wait for a decision."""
+        if self._approval_store is None:
+            return True
+        name = params.get("name", "unknown")
+        tool_type = params.get("tool_type", "specialized")
+        content = (params.get("content") or "").strip()
+        preview = (content[:_PREVIEW_CHARS] + "\n…") if len(content) > _PREVIEW_CHARS else content
+        message = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
+            f"```python\n{preview}\n```" if preview else "(stub — no implementation provided)"
+        )
+        return await request_approval_decision(
+            self._approval_store,
+            task_id=params.get("task_id"),
+            agent="create_tool",
+            title="Tool Change — Approval Required",
+            message=message,
+            options=("Approve", "Reject"),
+            stream_manager=self._stream_manager,
+            judgement_filter=self._judgement_filter,
+            timeout=self._approval_timeout_seconds,
+        )
 
     # ── Action handlers ───────────────────────────────────────────────────────
 

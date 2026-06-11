@@ -72,6 +72,33 @@ class LedgerWriter(ABC):
         """
         return 0
 
+    async def cost_breakdown(
+        self,
+        since: datetime,
+        source: LedgerSource | None = None,
+        agent: str | None = None,
+    ) -> dict:
+        """Aggregate cost_usd for entries since *since*.
+
+        Returns {"total": float, "by_component": {agent: cost}, "by_model":
+        {model: cost}}. The default implementation aggregates in Python over
+        query() so in-memory/fake stores work unchanged; SQL-backed stores
+        override it with a GROUP BY, which also avoids the row-limit truncation
+        the query() path is subject to.
+        """
+        entries = await self.query(LedgerFilters(source=source, agent=agent, since=since, limit=10_000))
+        total = 0.0
+        by_component: dict[str, float] = {}
+        by_model: dict[str, float] = {}
+        for e in entries:
+            cost = e.cost_usd or 0.0
+            total += cost
+            component = e.agent or "unknown"
+            by_component[component] = by_component.get(component, 0.0) + cost
+            model = e.model_used or "unknown"
+            by_model[model] = by_model.get(model, 0.0) + cost
+        return {"total": total, "by_component": by_component, "by_model": by_model}
+
     async def get_metrics(self, days: int = 7) -> dict:
         """Return aggregated system metrics for the last `days` days.
 

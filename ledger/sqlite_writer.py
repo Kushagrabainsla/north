@@ -182,6 +182,52 @@ class SQLiteLedgerWriter(LedgerWriter):
             rows = conn.execute(sql, (LedgerStatus.PENDING.value, limit)).fetchall()
         return [r["task_id"] for r in rows]
 
+    async def cost_breakdown(
+        self,
+        since: datetime,
+        source: LedgerSource | None = None,
+        agent: str | None = None,
+    ) -> dict:
+        try:
+            return await asyncio.to_thread(self._cost_breakdown_sync, since, source, agent)
+        except sqlite3.Error as e:
+            raise LedgerReadError(f"Failed to aggregate costs: {e}") from e
+
+    def _cost_breakdown_sync(self, since: datetime, source: LedgerSource | None, agent: str | None) -> dict:
+        clauses = ["timestamp >= ?"]
+        params: list = [since.isoformat()]
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source.value)
+        if agent is not None:
+            clauses.append("agent = ?")
+            params.append(agent)
+        where = " AND ".join(clauses)
+
+        with open_db_connection(self._db_path) as conn:
+            total = conn.execute(
+                f"SELECT COALESCE(SUM(cost_usd), 0.0) AS total FROM ledger WHERE {where}",
+                params,
+            ).fetchone()["total"]
+            component_rows = conn.execute(
+                f"""SELECT COALESCE(agent, 'unknown') AS component,
+                           COALESCE(SUM(cost_usd), 0.0) AS cost
+                    FROM ledger WHERE {where} GROUP BY component""",
+                params,
+            ).fetchall()
+            model_rows = conn.execute(
+                f"""SELECT COALESCE(model_used, 'unknown') AS model,
+                           COALESCE(SUM(cost_usd), 0.0) AS cost
+                    FROM ledger WHERE {where} GROUP BY model""",
+                params,
+            ).fetchall()
+
+        return {
+            "total": total,
+            "by_component": {r["component"]: r["cost"] for r in component_rows},
+            "by_model": {r["model"]: r["cost"] for r in model_rows},
+        }
+
     async def get_metrics(self, days: int = 7) -> dict:
         return await asyncio.to_thread(self._get_metrics_sync, days)
 

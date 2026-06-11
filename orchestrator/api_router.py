@@ -528,32 +528,19 @@ async def inference_costs(
     days = {"day": 1, "week": 7, "month": 30}.get(period, 7)
     since = now - datetime.timedelta(days=days)
 
-    entries = await _get_ledger().query(
-        LedgerFilters(
-            source=LedgerSource.INFERENCE_ROUTER,
-            agent=agent,
-            since=since,
-            limit=10000,
-        )
+    # Aggregation happens in the ledger (SQL GROUP BY for the SQLite store)
+    # instead of summing up to 10k fetched rows here.
+    breakdown = await _get_ledger().cost_breakdown(
+        since=since,
+        source=LedgerSource.INFERENCE_ROUTER,
+        agent=agent,
     )
-
-    total = 0.0
-    by_component: dict[str, float] = {}
-    by_model: dict[str, float] = {}
-
-    for e in entries:
-        cost = e.cost_usd or 0.0
-        total += cost
-        component = e.agent or "unknown"
-        by_component[component] = by_component.get(component, 0.0) + cost
-        model = e.model_used or "unknown"
-        by_model[model] = by_model.get(model, 0.0) + cost
 
     return CostSummary(
         period=period,
-        total_cost_usd=round(total, 6),
-        by_component={k: round(v, 6) for k, v in by_component.items()},
-        by_model={k: round(v, 6) for k, v in by_model.items()},
+        total_cost_usd=round(breakdown["total"], 6),
+        by_component={k: round(v, 6) for k, v in breakdown["by_component"].items()},
+        by_model={k: round(v, 6) for k, v in breakdown["by_model"].items()},
     )
 
 

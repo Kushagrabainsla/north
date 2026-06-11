@@ -54,6 +54,7 @@ from tools.universal.schedule_task import ScheduleTaskTool
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
 from utils.time import utcnow
+from web.routes import auth_router as web_auth_router
 from web.routes import configure as configure_web
 from web.routes import router as web_router
 
@@ -125,7 +126,18 @@ def _build_tool_registry(
     tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
     tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     tool_registry.make_universal("schedule_task")
-    tool_registry.register(CreateToolTool(tool_registry=tool_registry))
+    # create/update actions are gated behind a user approval card inside the
+    # tool itself, so every entry point (agent loop, delegation, direct-tool
+    # execution) sees the same gate.
+    tool_registry.register(
+        CreateToolTool(
+            tool_registry=tool_registry,
+            approval_store=deps.approval_store,
+            stream_manager=deps.stream_manager,
+            approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+            judgement_filter=judgement_filter,
+        )
+    )
     create_agent_tool = CreateAgentTool(cron_store=deps.cron_store)
     tool_registry.register(create_agent_tool)
     tool_registry.make_universal("create_agent")
@@ -510,6 +522,7 @@ async def _task_capacity_handler(request: Request, exc: TaskCapacityError) -> JS
 app.include_router(health_router)
 app.include_router(orchestrator_router)
 app.include_router(webhook_router)
+app.include_router(web_auth_router)
 app.include_router(web_router)
 
 _static_dir = Path(__file__).parent.parent / "web" / "static"

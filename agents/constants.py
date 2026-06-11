@@ -13,5 +13,3 @@ ENGINEERING_AGENTS: frozenset[str] = frozenset({"researcher", "architect", "code
 MAX_TOOL_RESULT_CHARS = 40_000
 # Minimum chars allocated per field when splitting the cap across a tool result dict.
 _TOOL_RESULT_MIN_FIELD_CHARS: int = 200
-# Max chars of agent-written tool code shown in a create_tool approval card.
-_CREATE_TOOL_PREVIEW_CHARS: int = 1_500
