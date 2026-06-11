@@ -6,12 +6,12 @@ See docs/CODING_STYLE.md Sections 5.3, 6.4, 9.7, 13.
 from __future__ import annotations
 
 import json
-import re
 
 from context import ContextDocument, ContextStore
 from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import OrchestratorError
 from utils.prompts import load_prompt
+from utils.text import strip_code_fences
 
 
 class NorthStarChecker:
@@ -63,12 +63,7 @@ class NorthStarChecker:
         except Exception as e:
             raise OrchestratorError(f"Inference call failed during North Star check: {e}") from e
 
-        text = response.text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\n", "", text)
-            text = re.sub(r"\n```$", "", text)
-            text = text.strip()
-
+        text = strip_code_fences(response.text)
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:

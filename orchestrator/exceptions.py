@@ -16,5 +16,9 @@ class NorthStarConflictError(OrchestratorError):
     """Raised when a task conflicts with the user's North Star goals."""
 
 
+class TaskCapacityError(OrchestratorError):
+    """Raised when the concurrent-task cap is reached. API routes map this to HTTP 429."""
+
+
 class RoutingError(OrchestratorError):
     """Raised when intent routing or execution plan construction fails."""

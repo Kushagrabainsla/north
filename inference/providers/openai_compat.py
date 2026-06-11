@@ -155,6 +155,7 @@ class OpenAICompatibleProvider:
         tokens_in = 0
         tokens_out = 0
         cost_usd = 0.0
+        saw_tool_call = False
 
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as resp:
@@ -181,9 +182,14 @@ class OpenAICompatibleProvider:
                     text_token = delta.get("content") or ""
                     if text_token:
                         content_parts.append(text_token)
-                        if token_callback is not None:
+                        # Once a tool_calls delta has arrived the response is a
+                        # tool-call turn — its content never reaches the final
+                        # answer, so forwarding it would show the user text
+                        # that is then discarded.
+                        if token_callback is not None and not saw_tool_call:
                             await token_callback(text_token)
                     for tc in delta.get("tool_calls", []):
+                        saw_tool_call = True
                         idx = tc.get("index", 0)
                         if idx not in tool_calls_acc:
                             tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}

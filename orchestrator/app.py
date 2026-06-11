@@ -15,7 +15,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from agents.models import AgentDependencies
@@ -30,11 +31,11 @@ from context.extraction import ExtractionPipeline
 from context.injection import ContextInjector
 from jobs.models import Job
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler
-from ledger.base import LedgerFilters
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.api_router import configure as configure_api
 from orchestrator.api_router import health_router, webhook_router
 from orchestrator.api_router import router as orchestrator_router
+from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
 from orchestrator.north_star import NorthStarChecker
@@ -50,7 +51,6 @@ from tools.universal.create_agent import CreateAgentTool
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
-from utils.ids import generate_id
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
 from utils.time import utcnow
@@ -265,14 +265,14 @@ def _build_context_injector(deps) -> ContextInjector:
 
 async def _reconcile_pending_tasks(deps, orchestrator: Orchestrator) -> None:
     try:
-        pending_entries = await deps.ledger.query(LedgerFilters(status=LedgerStatus.PENDING, limit=500))
-        pending_task_ids = {e.task_id for e in pending_entries if e.task_id}
+        # Only tasks whose *latest* ledger entry is PENDING are orphans.
+        # Querying all PENDING entries would also match the initial
+        # task_received entry of every task that later completed.
+        pending_task_ids = set(await deps.ledger.pending_task_ids())
         orphaned = pending_task_ids - set(orchestrator._active_tasks)
         for orphaned_id in orphaned:
             await deps.ledger.write(
-                LedgerEntry(
-                    id=generate_id(),
-                    timestamp=utcnow(),
+                LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     task_id=orphaned_id,
                     action="task_failed",
@@ -365,9 +365,7 @@ def _launch_background_tasks(
             failed_before = now - datetime.timedelta(days=settings.task_cleanup_failed_days)
             pruned = await deps.ledger.prune(completed_before, failed_before)
             await deps.ledger.write(
-                LedgerEntry(
-                    id=generate_id(),
-                    timestamp=utcnow(),
+                LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     action=(f"task_context_cleanup: removed {n} stale rows, pruned {pruned} ledger entries"),
                     status=LedgerStatus.COMPLETED,
@@ -503,6 +501,11 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+@app.exception_handler(TaskCapacityError)
+async def _task_capacity_handler(request: Request, exc: TaskCapacityError) -> JSONResponse:
+    return JSONResponse(status_code=429, content={"detail": str(exc)})
+
 
 app.include_router(health_router)
 app.include_router(orchestrator_router)

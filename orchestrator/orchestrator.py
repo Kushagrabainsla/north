@@ -24,7 +24,7 @@ from orchestrator.constants import (
     POOL_REFRESH_COOLDOWN,
     STRATEGY_CMD_RE,
 )
-from orchestrator.exceptions import NorthStarConflictError, OrchestratorError
+from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
 from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.models import (
     ExecutionMode,
@@ -112,11 +112,11 @@ class Orchestrator:
     async def submit_task(self, request: TaskRequest) -> TaskResponse:
         """Register and begin processing a new task. Returns immediately.
 
-        Raises OrchestratorError when the concurrent-task cap is reached so
+        Raises TaskCapacityError when the concurrent-task cap is reached so
         callers (API routes, webhook handler) can return 429 to the client.
         """
         if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
-            raise OrchestratorError(
+            raise TaskCapacityError(
                 f"Too many concurrent tasks ({len(self._active_tasks)} active, "
                 f"max {MAX_CONCURRENT_TASKS}). Try again once a task finishes."
             )
@@ -160,15 +160,22 @@ class Orchestrator:
             created_at=format_timestamp(entry.timestamp),
         )
 
-    async def cancel_task(self, task_id: str) -> None:
-        """Cancel a running task: stop its pipeline and write a terminal ledger entry."""
+    async def cancel_task(self, task_id: str) -> bool:
+        """Cancel a running task: stop its pipeline and write a terminal ledger entry.
+
+        Returns False when the task is not in flight (unknown id or already
+        finished) — writing a CANCELLED entry then would rewrite the history
+        of a completed task, since get_task() reads the most recent entry.
+        """
         running = self._active_tasks.pop(task_id, None)
-        if running is not None and not running.done():
+        if running is None:
+            return False
+        if not running.done():
             running.cancel()
+        if self._tracked_router:
+            self._tracked_router.pop_task_cost(task_id)
         await self._write_ledger(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
+            LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
                 action="task_cancelled",
@@ -177,6 +184,7 @@ class Orchestrator:
         )
         await self._stream_manager.emit(task_id, "task_cancelled", {})
         await self._stream_manager.emit_done(task_id)
+        return True
 
     async def respond_approval(
         self,
@@ -198,9 +206,7 @@ class Orchestrator:
             else f"card_id={card_id}"
         )
         await self._write_ledger(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
+            LedgerEntry.new(
                 source=LedgerSource.APPROVAL,
                 task_id=task_id,
                 agent=agent,
@@ -262,9 +268,7 @@ class Orchestrator:
             decision, chosen_option = await self._judgement_filter.check(card)
             if decision is not None:
                 await self._write_ledger(
-                    LedgerEntry(
-                        id=generate_id(),
-                        timestamp=utcnow(),
+                    LedgerEntry.new(
                         source=LedgerSource.APPROVAL,
                         task_id=card.task_id,
                         agent=card.agent,
@@ -274,7 +278,7 @@ class Orchestrator:
                         status=LedgerStatus.COMPLETED,
                     )
                 )
-                self._approval_store.resolve(card.id, decision)
+                self._approval_store.resolve(card.id, decision, chosen_option=chosen_option or "")
                 return
         await self._notifier.notify(card)
 
@@ -305,10 +309,8 @@ class Orchestrator:
 
         self._north_settings.set_strategy(mode)
         msg = f"Strategy set to **{mode.value}**. {describe(mode)}"
-        await self._ledger.write(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
+        await self._write_ledger(
+            LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
                 action="agent_completed",
@@ -345,22 +347,23 @@ class Orchestrator:
             raise
         except NorthStarConflictError as e:
             duration_ms = int((time.monotonic() - task_start) * 1000)
+            task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
             await self._write_ledger(
-                LedgerEntry(
-                    id=generate_id(),
-                    timestamp=utcnow(),
+                LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     task_id=task_id,
                     action="task_cancelled",
                     output=str(e),
                     status=LedgerStatus.CANCELLED,
                     duration_ms=duration_ms,
+                    cost_usd=task_cost_usd,
                 )
             )
             await self._stream_manager.emit(task_id, "task_cancelled", {"reason": str(e)})
             await self._stream_manager.emit_done(task_id)
         except Exception as e:
             duration_ms = int((time.monotonic() - task_start) * 1000)
+            task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
             error_type = classify_error(e)
             logger.exception(
                 "Unhandled error processing task %s — error_type=%s duration_ms=%d: %s",
@@ -370,9 +373,7 @@ class Orchestrator:
                 e,
             )
             await self._write_ledger(
-                LedgerEntry(
-                    id=generate_id(),
-                    timestamp=utcnow(),
+                LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     task_id=task_id,
                     action="task_failed",
@@ -380,6 +381,7 @@ class Orchestrator:
                     status=LedgerStatus.FAILED,
                     duration_ms=duration_ms,
                     error_type=error_type,
+                    cost_usd=task_cost_usd,
                 )
             )
             await self._stream_manager.emit(task_id, "task_failed", {"error": str(e), "error_type": error_type})
@@ -392,9 +394,7 @@ class Orchestrator:
         classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id)
 
         await self._write_ledger(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
+            LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
                 action=f"classified_as_{'consequential' if classification.is_consequential else 'trivial'}",
@@ -452,8 +452,15 @@ class Orchestrator:
                 "North Star approval timed out for task %s — treating as rejection",
                 task_id,
             )
-        chosen_opt = (current.chosen_option if current else "").lower()
-        if chosen_opt != card.options[0].lower():
+            # Resolve so the card doesn't linger as "pending" in the store forever.
+            self._approval_store.resolve(card.id, ApprovalDecision.TIMEOUT_REJECTED)
+            raise NorthStarConflictError(tension or "North Star conflict (approval timed out)")
+        # An explicit option choice wins; otherwise fall back to the decision
+        # status — the JudgementFilter and plain approve/reject buttons resolve
+        # with a status only, no chosen_option.
+        chosen_opt = (current.chosen_option or "").strip().lower()
+        approved = chosen_opt == card.options[0].lower() if chosen_opt else current.status == ApprovalDecision.APPROVED
+        if not approved:
             raise NorthStarConflictError(tension or "North Star conflict")
 
     async def _stage_north_star(
@@ -488,9 +495,7 @@ class Orchestrator:
         except OrchestratorError as e:
             logger.warning("North Star check skipped (inference unavailable): %s", e)
             await self._write_ledger(
-                LedgerEntry(
-                    id=generate_id(),
-                    timestamp=utcnow(),
+                LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     task_id=task_id,
                     action="north_star_check_skipped",
@@ -503,9 +508,7 @@ class Orchestrator:
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
         await self._write_ledger(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
+            LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
                 action=check_action,
@@ -519,14 +522,54 @@ class Orchestrator:
 
         await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": reasoning})
 
+    async def _skip_agent_with_failed_deps(self, task_id: str, name: str, failed_deps: list[str]) -> None:
+        """Record an agent as skipped because its dependencies failed."""
+        logger.warning(
+            "Skipping agent '%s' in task %s — dependencies failed: %s",
+            name,
+            task_id,
+            failed_deps,
+        )
+        # Mark failed in the task context so any read() waiting on this agent's
+        # output errors out immediately instead of blocking until timeout.
+        await self._task_context_store.update_agent_status(task_id, name, "failed")
+        await self._stream_manager.emit(task_id, "agent_skipped", {"agent": name, "failed_dependencies": failed_deps})
+        await self._write_ledger(
+            LedgerEntry.new(
+                source=LedgerSource.AGENT,
+                task_id=task_id,
+                agent=name,
+                action="agent_skipped",
+                output=f"Skipped — dependencies failed: {', '.join(failed_deps)}",
+                status=LedgerStatus.FAILED,
+                error_type="dependency_failure",
+            )
+        )
+
     async def _execute_hierarchical_groups(
         self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
     ) -> list[str]:
-        """Execute agents in hierarchical mode, passing results from earlier steps."""
+        """Execute agents in hierarchical mode, passing results from earlier steps.
+
+        Agents whose declared dependencies already failed are skipped (and
+        counted as failures) rather than run with missing upstream context.
+        Agents without declared dependencies always run.
+        """
         all_failures: list[str] = []
         accumulated_snippets: list[str] = []
         for group in plan.parallel_groups:
-            agents = [self._agent_registry.get(name) for name in group]
+            runnable: list[str] = []
+            for name in group:
+                failed_deps = [d for d in plan.dependencies.get(name, []) if d in all_failures]
+                if failed_deps:
+                    all_failures.append(name)
+                    await self._skip_agent_with_failed_deps(task_id, name, failed_deps)
+                else:
+                    runnable.append(name)
+            if not runnable:
+                continue
+
+            agents = [self._agent_registry.get(name) for name in runnable]
             prior_context = "\n\n".join(accumulated_snippets)
             effective_prompt = (
                 f"{prompt}\n\n## Results from earlier steps\n{prior_context}" if prior_context else prompt
@@ -537,7 +580,7 @@ class Orchestrator:
             all_data = await self._task_context_store.get_all(task_id)
             new_snippets = [
                 f"[{name}]: {(all_data.get(name) or {}).get('output', '')}"
-                for name in group
+                for name in runnable
                 if (all_data.get(name) or {}).get("output")
             ]
             accumulated_snippets.extend(new_snippets)
@@ -592,7 +635,7 @@ class Orchestrator:
         t = asyncio.create_task(self._record_episode(task_id, prompt, plan.agents, domain))
         self._background_tasks.add(t)
         t.add_done_callback(self._background_tasks.discard)
-        await self._finish_task(task_id)
+        await self._finish_task(task_id, failures=all_failures, total_agents=len(plan.agents))
 
     async def _execute_single_tool(
         self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
@@ -621,14 +664,12 @@ class Orchestrator:
             logger.warning("single_tool fallback: tool %r not found, re-routing to agent", plan.direct_tool)
             fallback = self._execution_planner.build_fallback_plan("general", task_id)
             await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
-            fallback_failures: list[str] = []
-            for group in fallback.parallel_groups:
-                agents = [self._agent_registry.get(name) for name in group]
-                failed = await self._execute_agent_group(task_id, prompt, agents, workspace, context=context)
-                fallback_failures.extend(failed)
+            fallback_failures = await self._execute_parallel_groups(
+                task_id, prompt, fallback, workspace, context=context
+            )
             if fallback_failures:
                 await self._report_execution_failures(task_id, fallback_failures)
-            await self._finish_task(task_id)
+            await self._finish_task(task_id, failures=fallback_failures, total_agents=len(fallback.agents))
             return
         except Exception as exc:
             logger.warning("Direct tool execution error in task %s: %s", task_id, exc, exc_info=True)
@@ -638,9 +679,7 @@ class Orchestrator:
         await self._stream_manager.emit(task_id, "tool_result", {"tool": plan.direct_tool, "success": success})
 
         await self._write_ledger(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
+            LedgerEntry.new(
                 source=LedgerSource.AGENT,
                 task_id=task_id,
                 agent="tool_executor",
@@ -653,20 +692,56 @@ class Orchestrator:
         await self._stream_manager.emit(task_id, "token", {"text": output})
         await self._finish_task(task_id, skip_extraction=True)
 
-    async def _finish_task(self, task_id: str, *, skip_extraction: bool = False) -> None:
-        """Write completion ledger entry and emit done events."""
+    async def _finish_task(
+        self,
+        task_id: str,
+        *,
+        skip_extraction: bool = False,
+        failures: list[str] | None = None,
+        total_agents: int = 0,
+    ) -> None:
+        """Write the terminal ledger entry and emit done events.
+
+        When every agent failed the task finishes as FAILED; partial failures
+        finish as COMPLETED but with a distinct action so the history shows
+        the task did not fully succeed.
+        """
+        failures = failures or []
+        all_failed = total_agents > 0 and len(failures) >= total_agents
         task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
+        if all_failed:
+            action, status = "task_failed", LedgerStatus.FAILED
+        elif failures:
+            action, status = "task_completed_with_failures", LedgerStatus.COMPLETED
+        else:
+            action, status = "task_completed", LedgerStatus.COMPLETED
         await self._write_ledger(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
+            LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
-                action="task_completed",
-                status=LedgerStatus.COMPLETED,
+                action=action,
+                output=f"Failed agents: {', '.join(failures)}" if failures else None,
+                status=status,
+                error_type="agent_failure" if all_failed else None,
+                cost_usd=task_cost_usd,
             )
         )
-        await self._stream_manager.emit(task_id, "task_completed", {"cost_usd": task_cost_usd})
+        if all_failed:
+            await self._stream_manager.emit(
+                task_id,
+                "task_failed",
+                {
+                    "error": f"All agents failed: {', '.join(failures)}",
+                    "error_type": "agent_failure",
+                    "cost_usd": task_cost_usd,
+                },
+            )
+        else:
+            await self._stream_manager.emit(
+                task_id,
+                "task_completed",
+                {"cost_usd": task_cost_usd, "failed_agents": failures},
+            )
         await self._stream_manager.emit_done(task_id)
         # Release the in-memory Condition for this task; DB rows are kept for
         # the retention window but no more readers will wait on this task_id.
@@ -794,9 +869,7 @@ class Orchestrator:
                 )
                 failed.append(agent.name)
                 await self._write_ledger(
-                    LedgerEntry(
-                        id=generate_id(),
-                        timestamp=utcnow(),
+                    LedgerEntry.new(
                         source=LedgerSource.AGENT,
                         task_id=task_id,
                         agent=agent.name,
@@ -858,6 +931,9 @@ class Orchestrator:
                 should_retry = await self._failure_handler.handle_failure(task_id, agent.name, exc)
                 if not should_retry:
                     raise
+                # The failed attempt may have streamed partial output — tell
+                # the UI to discard it before the retry re-streams the answer.
+                await self._stream_manager.emit(task_id, "stream_reset", {"agent": agent.name})
                 self._maybe_refresh_pools_background()
 
     async def _handle_agent_result(self, task_id: str, agent: Agent, result: AgentResult) -> None:
@@ -878,9 +954,7 @@ class Orchestrator:
         )
 
         await self._write_ledger(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=utcnow(),
+            LedgerEntry.new(
                 source=LedgerSource.AGENT,
                 task_id=task_id,
                 agent=agent.name,

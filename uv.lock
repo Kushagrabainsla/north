@@ -2,8 +2,12 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
-    "python_full_version >= '3.13'",
-    "python_full_version < '3.13'",
+    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "(python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.13' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "(python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux')",
 ]
 
 [[package]]
@@ -1033,6 +1037,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "rich" },
+    { name = "ripgrep", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "sounddevice", marker = "sys_platform == 'darwin'" },
     { name = "textual" },
     { name = "typer" },
@@ -1066,6 +1071,8 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.29" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0.0" },
+    { name = "ripgrep", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=15.0.0" },
+    { name = "ripgrep", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=15.0.0" },
     { name = "sounddevice", marker = "sys_platform == 'darwin'", specifier = ">=0.4.6" },
     { name = "textual", specifier = ">=0.80.0" },
     { name = "typer", specifier = ">=0.9.0" },
@@ -1432,11 +1439,11 @@ name = "pynput"
 version = "1.8.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "evdev", marker = "'linux' in sys_platform" },
+    { name = "evdev", marker = "(platform_machine != 'x86_64' and 'linux' in sys_platform) or (sys_platform != 'linux' and 'linux' in sys_platform)" },
     { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
-    { name = "python-xlib", marker = "'linux' in sys_platform" },
-    { name = "six" },
+    { name = "python-xlib", marker = "(platform_machine != 'x86_64' and 'linux' in sys_platform) or (sys_platform != 'linux' and 'linux' in sys_platform)" },
+    { name = "six", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/c6/e2d415610cfbc78308bee44218a46124aaa3301b1df08814df819b2254a1/pynput-1.8.2.tar.gz", hash = "sha256:f493c87157cd3861b4468f7f896857051762f44ed26f1b641e7cc5840a457087", size = 82818, upload-time = "2026-05-12T19:11:39.464Z" }
 wheels = [
@@ -1461,10 +1468,10 @@ name = "pyobjc-framework-applicationservices"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
-    { name = "pyobjc-framework-coretext" },
-    { name = "pyobjc-framework-quartz" },
+    { name = "pyobjc-core", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "pyobjc-framework-cocoa", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "pyobjc-framework-coretext", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "pyobjc-framework-quartz", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/6a/d4e613c8e926a5744fc47a9e9fea08384a510dc4f27d844f7ad7a2d793bd/pyobjc_framework_applicationservices-12.1.tar.gz", hash = "sha256:c06abb74f119bc27aeb41bf1aef8102c0ae1288aec1ac8665ea186a067a8945b", size = 103247, upload-time = "2025-11-14T10:08:52.18Z" }
 wheels = [
@@ -1480,7 +1487,7 @@ name = "pyobjc-framework-cocoa"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
+    { name = "pyobjc-core", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/02/a3/16ca9a15e77c061a9250afbae2eae26f2e1579eb8ca9462ae2d2c71e1169/pyobjc_framework_cocoa-12.1.tar.gz", hash = "sha256:5556c87db95711b985d5efdaaf01c917ddd41d148b1e52a0c66b1a2e2c5c1640", size = 2772191, upload-time = "2025-11-14T10:13:02.069Z" }
 wheels = [
@@ -1496,9 +1503,9 @@ name = "pyobjc-framework-coretext"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
-    { name = "pyobjc-framework-quartz" },
+    { name = "pyobjc-core", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "pyobjc-framework-cocoa", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "pyobjc-framework-quartz", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/29/da/682c9c92a39f713bd3c56e7375fa8f1b10ad558ecb075258ab6f1cdd4a6d/pyobjc_framework_coretext-12.1.tar.gz", hash = "sha256:e0adb717738fae395dc645c9e8a10bb5f6a4277e73cba8fa2a57f3b518e71da5", size = 90124, upload-time = "2025-11-14T10:14:38.596Z" }
 wheels = [
@@ -1514,8 +1521,8 @@ name = "pyobjc-framework-quartz"
 version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyobjc-core" },
-    { name = "pyobjc-framework-cocoa" },
+    { name = "pyobjc-core", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
+    { name = "pyobjc-framework-cocoa", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/94/18/cc59f3d4355c9456fc945eae7fe8797003c4da99212dd531ad1b0de8a0c6/pyobjc_framework_quartz-12.1.tar.gz", hash = "sha256:27f782f3513ac88ec9b6c82d9767eef95a5cf4175ce88a1e5a65875fee799608", size = 3159099, upload-time = "2025-11-14T10:21:24.31Z" }
 wheels = [
@@ -1630,7 +1637,7 @@ name = "python-xlib"
 version = "0.33"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six" },
+    { name = "six", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/f5/8c0653e5bb54e0cbdfe27bf32d41f27bc4e12faa8742778c17f2a71be2c0/python-xlib-0.33.tar.gz", hash = "sha256:55af7906a2c75ce6cb280a584776080602444f75815a7aff4d287bb2d7018b32", size = 269068, upload-time = "2022-12-25T18:53:00.824Z" }
 wheels = [
@@ -1697,6 +1704,16 @@ wheels = [
 ]
 
 [[package]]
+name = "ripgrep"
+version = "15.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/18/0740869cfcee3b9671d601aec90541cc68e342794cecf02c6eec7ee12f19/ripgrep-15.1.0.tar.gz", hash = "sha256:3b4793859cd25c57ffd894b59ba9155636616b4084a1c12d0b9e819c16931ebf", size = 488918, upload-time = "2026-05-24T04:02:30.224Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/42/994bb17dc45399f60bc850c9ea295b9638eb7abee9ec26cc386a2ebc264d/ripgrep-15.1.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3f99a068cea48d10ffc6b3c43bef37b684e1ba449d4ae57b0f96c4521f8d923f", size = 2072593, upload-time = "2026-05-24T04:02:26.66Z" },
+    { url = "https://files.pythonhosted.org/packages/29/5c/951baee5033a25e9b79df51b378276fd0b3a88c7aba9665d50178e9738c1/ripgrep-15.1.0-py3-none-manylinux_2_39_x86_64.whl", hash = "sha256:9b9bbd02a7f2c3e88882f9a9df416da8e272957071ba8ab59a7a7f06813643cf", size = 7817112, upload-time = "2026-05-24T04:02:28.625Z" },
+]
+
+[[package]]
 name = "ruff"
 version = "0.15.15"
 source = { registry = "https://pypi.org/simple" }
@@ -1753,7 +1770,7 @@ name = "sounddevice"
 version = "0.5.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi" },
+    { name = "cffi", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2a/f9/2592608737553638fca98e21e54bfec40bf577bb98a61b2770c912aab25e/sounddevice-0.5.5.tar.gz", hash = "sha256:22487b65198cb5bf2208755105b524f78ad173e5ab6b445bdab1c989f6698df3", size = 143191, upload-time = "2026-01-23T18:36:43.529Z" }
 wheels = [

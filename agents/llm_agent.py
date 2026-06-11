@@ -10,13 +10,14 @@ from typing import Any
 from agents.base import Agent
 from agents.exceptions import AgentConfigError, AgentOutputParseError
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
-from utils.time import localnow
 from inference.models import (
     POOL_TO_PRIORITY,
     CompletionRequest,
     PoolPriority,
 )
 from tools.base import Tool
+from utils.text import strip_code_fences
+from utils.time import localnow
 
 
 class LLMAgent(Agent):
@@ -112,16 +113,8 @@ class LLMAgent(Agent):
 
         Strips a fenced code block if the model wraps the JSON in ```json ... ```.
         """
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            # Drop the opening fence (with optional `json` tag) and the closing fence.
-            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
-            if cleaned.endswith("```"):
-                cleaned = cleaned.rsplit("```", 1)[0]
-            cleaned = cleaned.strip()
-
         try:
-            parsed = json.loads(cleaned)
+            parsed = json.loads(strip_code_fences(text))
         except json.JSONDecodeError as e:
             raise AgentOutputParseError(f"{self.name} returned non-JSON output: {text[:200]}") from e
 

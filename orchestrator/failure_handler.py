@@ -18,6 +18,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Error types where a retry cannot succeed: the failure is deterministic
+# (missing prompt file, bad pool name), so retrying just burns time and cost.
+_NON_RETRYABLE_ERROR_TYPES = frozenset({"config_error"})
+
 
 def classify_error(exc: Exception) -> str:
     """Return a stable error-type tag for a failed agent exception.
@@ -98,9 +102,12 @@ class FailureHandler:
             True if a retry should be attempted, False otherwise.
         """
         # Increment first so the count reflects attempts already made (1-indexed).
+        # Note: max_retries bounds total *attempts* — max_retries=3 means the
+        # agent runs at most 3 times (the first run plus 2 retries).
         attempt = self.increment_retry_count(task_id, agent_name)
 
         error_type = classify_error(exception)
+        retryable = error_type not in _NON_RETRYABLE_ERROR_TYPES
 
         # Emit failure event
         if self._stream_manager:
@@ -113,9 +120,22 @@ class FailureHandler:
                     "error_type": error_type,
                     "retry_attempt": attempt,
                     "max_retries": self.max_retries,
-                    "will_retry": attempt < self.max_retries,
+                    "will_retry": retryable and attempt < self.max_retries,
                 },
             )
+
+        if not retryable:
+            await self._task_context_store.update_agent_status(task_id, agent_name, "failed")
+            logger.error(
+                "Agent '%s' failed in task '%s' — error_type=%s is not retryable: %s",
+                agent_name,
+                task_id,
+                error_type,
+                exception,
+                exc_info=True,
+            )
+            self.clear_retry_count(task_id, agent_name)
+            return False
 
         if attempt >= self.max_retries:
             await self._task_context_store.update_agent_status(task_id, agent_name, "failed")

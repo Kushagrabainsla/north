@@ -54,6 +54,16 @@ class LedgerWriter(ABC):
             LedgerReadError: if the underlying store fails.
         """
 
+    async def pending_task_ids(self, limit: int = 500) -> list[str]:
+        """Return task_ids whose *latest* entry is still PENDING.
+
+        Used by the startup reconciliation sweep to find tasks that were
+        in-flight when the server stopped. A task that later completed,
+        failed, or was cancelled has a newer terminal entry and is excluded.
+        Default no-op returns an empty list.
+        """
+        return []
+
     async def prune(self, completed_before: datetime, failed_before: datetime) -> int:
         """Delete old terminal entries to keep the ledger bounded.
 

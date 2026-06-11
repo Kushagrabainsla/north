@@ -70,15 +70,14 @@ class TaskContextStore:
         def _run() -> None:
             now_str = format_timestamp(utcnow())
             with open_db_connection(self._db_path) as conn:
-                for agent in agents:
-                    conn.execute(
-                        """
-                        INSERT OR REPLACE INTO task_state
-                            (task_id, agent, key, value, status, written_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (task_id, agent, "_status", None, "pending", now_str),
-                    )
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO task_state
+                        (task_id, agent, key, value, status, written_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [(task_id, agent, "_status", None, "pending", now_str) for agent in agents],
+                )
                 conn.commit()
 
         await asyncio.to_thread(_run)
@@ -100,7 +99,11 @@ class TaskContextStore:
 
         loop = asyncio.get_running_loop()
         start_time = loop.time()
-        poll_interval = 2.0
+        # write() notifies the Condition, so the wait normally wakes instantly.
+        # The poll is only a safety net for a missed notification (e.g. the
+        # Condition was replaced by release_conditions mid-wait) — keep it slow
+        # so waiting readers don't hammer the DB.
+        poll_interval = 10.0
         condition = self._get_condition(task_id)
 
         while True:

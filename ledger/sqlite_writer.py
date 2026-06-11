@@ -154,6 +154,34 @@ class SQLiteLedgerWriter(LedgerWriter):
         with open_db_connection(self._db_path) as conn:
             return list(conn.execute(sql, params).fetchall())
 
+    async def pending_task_ids(self, limit: int = 500) -> list[str]:
+        try:
+            return await asyncio.to_thread(self._pending_task_ids_sync, limit)
+        except sqlite3.Error as e:
+            raise LedgerReadError(f"Failed to query pending task ids: {e}") from e
+
+    def _pending_task_ids_sync(self, limit: int) -> list[str]:
+        # Rank entries per task by recency and keep tasks whose newest entry is
+        # still PENDING — completed/failed/cancelled tasks have a newer
+        # terminal entry and drop out.
+        sql = """
+            SELECT task_id FROM (
+                SELECT task_id,
+                       status,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY task_id
+                           ORDER BY timestamp DESC, created_at DESC
+                       ) AS rn
+                FROM ledger
+                WHERE task_id IS NOT NULL AND status IS NOT NULL
+            )
+            WHERE rn = 1 AND status = ?
+            LIMIT ?
+        """
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(sql, (LedgerStatus.PENDING.value, limit)).fetchall()
+        return [r["task_id"] for r in rows]
+
     async def get_metrics(self, days: int = 7) -> dict:
         return await asyncio.to_thread(self._get_metrics_sync, days)
 
@@ -262,11 +290,16 @@ class SQLiteLedgerWriter(LedgerWriter):
             raise LedgerWriteError(f"Failed to prune ledger: {e}") from e
 
     def _prune_sync(self, completed_before: datetime, failed_before: datetime) -> int:
+        # PENDING and CANCELLED rows share the completed retention window:
+        # every task leaves an initial PENDING entry behind, so without this
+        # they would accumulate forever.
         with open_db_connection(self._db_path) as conn:
             cur = conn.execute(
-                "DELETE FROM ledger WHERE (status = ? AND timestamp < ?) OR (status = ? AND timestamp < ?)",
+                "DELETE FROM ledger WHERE (status IN (?, ?, ?) AND timestamp < ?) OR (status = ? AND timestamp < ?)",
                 (
                     LedgerStatus.COMPLETED.value,
+                    LedgerStatus.PENDING.value,
+                    LedgerStatus.CANCELLED.value,
                     completed_before.isoformat(),
                     LedgerStatus.FAILED.value,
                     failed_before.isoformat(),

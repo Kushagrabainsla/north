@@ -17,6 +17,7 @@ the conversation and retry. See agents/context_compaction.py.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -62,6 +63,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Seconds to batch model-confidence DB writes. Scores change on every inference
+# call; writing each one individually doubles the DB traffic for no benefit.
+_SCORE_FLUSH_INTERVAL_SECONDS = 30.0
+
 
 class ModelDispatcher(InferenceRouter):
     """Routes inference calls across multiple providers with per-model cooldowns."""
@@ -84,6 +89,9 @@ class ModelDispatcher(InferenceRouter):
             confidence_tracker.load_model_scores_sync() if confidence_tracker is not None else {}
         )
         self._background_tasks: set[asyncio.Task] = set()
+        # Scores changed since the last batched DB flush.
+        self._dirty_scores: set[_CooldownKey] = set()
+        self._flush_task: asyncio.Task | None = None
         self._build_registry()
         self._cooldowns.load()
 
@@ -129,11 +137,32 @@ class ModelDispatcher(InferenceRouter):
         token_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> ToolCallResponse:
         text = " ".join(str(m.get("content") or "") for m in request.messages)
-        estimated = len(text) // 4
+        # Tool schemas are sent with every request and can dwarf short
+        # conversations — include them or the context-fit check undercounts.
+        tools_chars = sum(len(json.dumps(t)) for t in request.tools) if request.tools else 0
+        estimated = (len(text) + tools_chars) // 4
         candidates = self._candidates(ModelCapability.TOOL_CALLS, self._effective_priority(request.priority), estimated)
 
+        forwarded = False
+        wrapped_cb: Callable[[str], Awaitable[None]] | None = None
+        if token_callback is not None:
+
+            async def wrapped_cb(token: str) -> None:
+                nonlocal forwarded
+                forwarded = True
+                await token_callback(token)
+
         async def _call(provider: Provider, model_id: str) -> ToolCallResponse:
-            return await provider.complete_with_tools(model_id, request, token_callback)
+            nonlocal forwarded
+            if forwarded:
+                # A previous candidate streamed partial output before failing.
+                # Ask the UI to discard it (when the callback supports reset)
+                # so the re-streamed answer isn't shown twice.
+                reset = getattr(token_callback, "reset", None)
+                if reset is not None:
+                    await reset()
+                forwarded = False
+            return await provider.complete_with_tools(model_id, request, wrapped_cb)
 
         return await self._dispatch(candidates, _call)
 
@@ -166,6 +195,9 @@ class ModelDispatcher(InferenceRouter):
 
     async def aclose(self) -> None:
         """Close all provider HTTPX clients. Call on application shutdown."""
+        if self._flush_task is not None and not self._flush_task.done():
+            self._flush_task.cancel()
+        await self._flush_dirty_scores()  # don't lose scores batched since the last flush
         for provider in self._providers:
             if hasattr(provider, "aclose"):
                 await provider.aclose()
@@ -222,12 +254,33 @@ class ModelDispatcher(InferenceRouter):
         self._model_confidence[key] = (new_score, prev_uses + 1)
 
     def _persist_model_score(self, key: _CooldownKey) -> None:
+        """Mark a score dirty and schedule a debounced flush.
+
+        Scores are written in one batch every _SCORE_FLUSH_INTERVAL_SECONDS
+        instead of one DB write per inference call.
+        """
         if self._confidence_tracker is None:
             return
-        score, uses = self._model_confidence[key]
-        t = asyncio.create_task(self._confidence_tracker.save_model_score(key[0], key[1], score, uses))
-        self._background_tasks.add(t)
-        t.add_done_callback(self._background_tasks.discard)
+        self._dirty_scores.add(key)
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.create_task(self._flush_scores_after_delay())
+
+    async def _flush_scores_after_delay(self) -> None:
+        await asyncio.sleep(_SCORE_FLUSH_INTERVAL_SECONDS)
+        await self._flush_dirty_scores()
+
+    async def _flush_dirty_scores(self) -> None:
+        if self._confidence_tracker is None or not self._dirty_scores:
+            return
+        dirty, self._dirty_scores = self._dirty_scores, set()
+        for key in dirty:
+            score, uses = self._model_confidence.get(key, (None, None))
+            if score is None:
+                continue
+            try:
+                await self._confidence_tracker.save_model_score(key[0], key[1], score, uses)
+            except Exception:
+                logger.warning("Failed to persist model score for %s/%s", key[1], key[0], exc_info=True)
 
     def _effective_quality(self, info: ModelInfo) -> float:
         """Blend price-based base_quality with live call success rate."""

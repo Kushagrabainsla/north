@@ -2,6 +2,26 @@
 
 from __future__ import annotations
 
+import re
+
+_FENCE_OPEN_RE = re.compile(r"^```[\w-]*\s*\n")
+_FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
+
+
+def strip_code_fences(text: str) -> str:
+    """Strip a wrapping ``` fence (with optional language tag) from LLM output.
+
+    Models asked for JSON frequently wrap it in a fenced code block anyway;
+    every JSON-parsing call site shares this one normalization.
+    """
+    cleaned = text.strip()
+    if not cleaned.startswith("```"):
+        return cleaned
+    cleaned = _FENCE_OPEN_RE.sub("", cleaned)
+    cleaned = _FENCE_CLOSE_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
 STOPWORDS: frozenset[str] = frozenset(
     {
         "a",

@@ -125,7 +125,7 @@ def compact_history(messages: list[dict], keep_recent: int = 4) -> list[dict]:
     """
     tool_indices = [i for i, msg in enumerate(messages) if msg.get("role") == "tool"]
     if len(tool_indices) <= keep_recent:
-        return
+        return messages
 
     call_id_to_assistant: dict[str, int] = {}
     for i, msg in enumerate(messages):

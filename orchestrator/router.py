@@ -17,6 +17,7 @@ from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
 from utils.prompts import load_prompt
+from utils.text import strip_code_fences
 
 _PLAN_CACHE_TTL_SECONDS: int = 3600  # 1 hour
 _PLAN_CACHE_MAX_SIZE: int = 256
@@ -70,10 +71,14 @@ class ExecutionPlanner:
         cached = self._plan_cache.get(cache_key)
         if cached is not None:
             insert_ts, cached_cls, cached_plan = cached
-            if (time.monotonic() - insert_ts) < _PLAN_CACHE_TTL_SECONDS:
+            # Revalidate against the current registries: agents/tools can be
+            # created or removed at runtime, and executing a stale plan fails
+            # only at agent-lookup time, well after planning.
+            if (time.monotonic() - insert_ts) < _PLAN_CACHE_TTL_SECONDS and self._plan_still_valid(cached_plan):
                 logger.debug("Planner cache hit for key %s", cache_key[:8])
                 # Return a fresh plan with the new task_id so task tracking is correct.
                 return cached_cls, cached_plan.with_task_id(task_id)
+            del self._plan_cache[cache_key]
 
         agents_info = [{"name": a.name, "domain": a.domain, "accepts": a.config.accepts} for a in all_agents]
         tools_info = self._summarise_tools()
@@ -117,14 +122,8 @@ class ExecutionPlanner:
             logger.warning("Planner LLM call failed — falling back to general single-agent plan: %s", exc)
             return _FALLBACK_CLASSIFICATION, self.build_fallback_plan("general", task_id)
 
-        text = response.text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\n", "", text)
-            text = re.sub(r"\n```$", "", text)
-            text = text.strip()
-
         try:
-            data = json.loads(text)
+            data = json.loads(strip_code_fences(response.text))
         except json.JSONDecodeError as exc:
             logger.warning(
                 "Planner LLM response was not valid JSON — falling back to general single-agent plan: %s",
@@ -154,6 +153,19 @@ class ExecutionPlanner:
         return classification, plan
 
     # ------------------------------------------------------------------
+
+    def _plan_still_valid(self, plan: ExecutionPlan) -> bool:
+        """Return True when every agent/tool the cached plan references still exists."""
+        if plan.mode == ExecutionMode.SINGLE_TOOL:
+            if self._tool_registry is None or not plan.direct_tool:
+                return False
+            try:
+                self._tool_registry.get(plan.direct_tool)
+            except Exception:
+                return False
+            return True
+        registered = set(self._agent_registry.names())
+        return bool(plan.agents) and set(plan.agents) <= registered
 
     def _summarise_tools(self) -> list[dict[str, Any]]:
         """Return a compact list of available tools for the router prompt."""

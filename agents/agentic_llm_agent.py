@@ -364,7 +364,9 @@ class AgenticLLMAgent(LLMAgent):
             )
             if _is_rejection(decision):
                 return call, json.dumps({"success": False, "error": "User rejected tool creation."}), False
-        if payload.workspace:
+        # Default the workspace but respect an explicit model-supplied value —
+        # same semantics as the orchestrator's direct-tool path.
+        if payload.workspace and "workspace" not in params:
             params["workspace"] = payload.workspace
         if payload.task_id and "task_id" not in params:
             params["task_id"] = payload.task_id
@@ -412,13 +414,7 @@ class AgenticLLMAgent(LLMAgent):
     def _make_token_callback(self, task_id: str) -> Callable[[str], Awaitable[None]] | None:
         if self._deps.stream_manager is None or not task_id:
             return None
-        stream_mgr = self._deps.stream_manager
-        _task_id = task_id
-
-        async def _cb(token: str) -> None:
-            await stream_mgr.emit(_task_id, "token", {"text": token})
-
-        return _cb
+        return _TokenRelay(self._deps.stream_manager, task_id)
 
     async def _delegate_task(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Run a specialist sub-agent and return its output as a tool result."""
@@ -576,30 +572,59 @@ class AgenticLLMAgent(LLMAgent):
         except Exception as exc:
             logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
             return json.dumps({"success": False, "error": str(exc)})
-        raw = json.dumps(data)
-        # Cap the result so a single large tool response can't exhaust the
-        # model's context window. Truncate *inside* the data dict so the JSON
-        # returned to the model is always syntactically valid.
-        if len(raw) > MAX_TOOL_RESULT_CHARS:
-            omitted = len(raw) - MAX_TOOL_RESULT_CHARS
-            inner = data.get("data", {})
-            per_field = max(
-                _TOOL_RESULT_MIN_FIELD_CHARS,
-                (MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS) // max(len(inner), 1),
-            )
-            data["data"] = {
-                k: (v[:per_field] + "…[truncated]" if isinstance(v, str) and len(v) > per_field else v)
-                for k, v in inner.items()
-            }
-            data["_note"] = f"{omitted} chars omitted from original output."
-            raw = json.dumps(data)
-            # Non-string fields (large lists/dicts) bypass the per-field cap above;
-            # fall back to a bounded, still-valid-JSON summary of the data block.
-            if len(raw) > MAX_TOOL_RESULT_CHARS:
-                summary = json.dumps(data["data"])[: MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS]
-                data["data"] = {"_truncated": summary + "…"}
-                raw = json.dumps(data)
+        return _cap_tool_result(data)
+
+
+def _cap_tool_result(data: dict[str, Any]) -> str:
+    """Serialize a tool result, bounded to MAX_TOOL_RESULT_CHARS.
+
+    A single large tool response must not exhaust the model's context window.
+    Truncation happens *inside* the data dict so the JSON returned to the model
+    is always syntactically valid: first each string field is capped, then —
+    when non-string fields (large lists/dicts) still blow the budget — the
+    whole data block is replaced with a bounded summary.
+    """
+    raw = json.dumps(data)
+    if len(raw) <= MAX_TOOL_RESULT_CHARS:
         return raw
+
+    omitted = len(raw) - MAX_TOOL_RESULT_CHARS
+    inner = data.get("data", {})
+    if isinstance(inner, dict):
+        per_field = max(
+            _TOOL_RESULT_MIN_FIELD_CHARS,
+            (MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS) // max(len(inner), 1),
+        )
+        data["data"] = {
+            k: (v[:per_field] + "…[truncated]" if isinstance(v, str) and len(v) > per_field else v)
+            for k, v in inner.items()
+        }
+    data["_note"] = f"{omitted} chars omitted from original output."
+    raw = json.dumps(data)
+    if len(raw) > MAX_TOOL_RESULT_CHARS:
+        summary = json.dumps(data["data"])[: MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS]
+        data["data"] = {"_truncated": summary + "…"}
+        raw = json.dumps(data)
+    return raw
+
+
+class _TokenRelay:
+    """Token callback that forwards streamed tokens to the SSE stream.
+
+    ``reset()`` is the optional protocol the ModelDispatcher uses after a
+    mid-stream failover: it emits a ``stream_reset`` event so UIs discard the
+    partial output streamed by the failed attempt before it is re-streamed.
+    """
+
+    def __init__(self, stream_manager: Any, task_id: str) -> None:
+        self._stream_manager = stream_manager
+        self._task_id = task_id
+
+    async def __call__(self, token: str) -> None:
+        await self._stream_manager.emit(self._task_id, "token", {"text": token})
+
+    async def reset(self) -> None:
+        await self._stream_manager.emit(self._task_id, "stream_reset", {})
 
 
 def _extract_success(tool_result_str: str) -> bool:

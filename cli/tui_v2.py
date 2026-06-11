@@ -12,6 +12,7 @@ tui.py is kept for reference but is no longer invoked.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -406,12 +407,10 @@ class NorthApp(App[None]):
     def on_mount(self) -> None:
         history_file = Path.home() / ".north" / "tui_history"
         if history_file.exists():
-            try:
+            with contextlib.suppress(Exception):
                 self._input_history = [
                     line for line in history_file.read_text().splitlines() if line.strip()
                 ]
-            except Exception:
-                pass
 
         self._strategy = _read_strategy(self._settings_path)
         self._refresh_hint()

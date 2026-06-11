@@ -50,10 +50,13 @@ class CostTracker(InferenceRouter):
         """Return accumulated cost for task_id and remove it from the store."""
         return self._task_costs.pop(task_id, 0.0)
 
+    def _add_cost(self, task_id: str | None, cost_usd: float) -> None:
+        if task_id and cost_usd:
+            self._task_costs[task_id] = self._task_costs.get(task_id, 0.0) + cost_usd
+
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         response = await self._inner.complete(request)
-        if request.task_id:
-            self._task_costs[request.task_id] = self._task_costs.get(request.task_id, 0.0) + response.cost_usd
+        self._add_cost(request.task_id, response.cost_usd)
         return response
 
     async def complete_with_tools(
@@ -62,20 +65,17 @@ class CostTracker(InferenceRouter):
         token_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> ToolCallResponse:
         response = await self._inner.complete_with_tools(request, token_callback)
-        if request.task_id:
-            self._task_costs[request.task_id] = self._task_costs.get(request.task_id, 0.0) + response.cost_usd
+        self._add_cost(request.task_id, response.cost_usd)
         return response
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         response = await self._inner.embed(request)
-        if request.task_id and response.cost_usd:
-            self._task_costs[request.task_id] = self._task_costs.get(request.task_id, 0.0) + response.cost_usd
+        self._add_cost(request.task_id, response.cost_usd)
         return response
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         response = await self._inner.transcribe(request)
-        if request.task_id and response.cost_usd:
-            self._task_costs[request.task_id] = self._task_costs.get(request.task_id, 0.0) + response.cost_usd
+        self._add_cost(request.task_id, response.cost_usd)
         return response
 
     async def get_model(self, priority: PoolPriority) -> str:

@@ -8,6 +8,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from utils.ids import generate_id
+from utils.time import utcnow
+
 
 class LedgerSource(StrEnum):
     """Origin of a Ledger entry. Canonical list — see README Section 4.3."""
@@ -47,6 +50,15 @@ class LedgerEntry(BaseModel):
     id: str
     timestamp: datetime
     source: LedgerSource
+
+    @classmethod
+    def new(cls, source: LedgerSource, **fields: Any) -> LedgerEntry:
+        """Create an entry with a generated id and the current UTC timestamp.
+
+        Every writer needs exactly this trio; the factory keeps call sites to
+        the fields that actually vary (CODING_STYLE §5 DRY).
+        """
+        return cls(id=generate_id(), timestamp=utcnow(), source=source, **fields)
 
     task_id: str | None = None
     agent: str | None = None

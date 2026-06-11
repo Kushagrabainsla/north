@@ -70,6 +70,9 @@ class CooldownStore:
             if self._path.exists():
                 with contextlib.suppress(Exception):
                     data = json.loads(self._path.read_text())
+            # Drop already-expired entries so the file doesn't grow forever.
+            now_wall = time.time()
+            data = {k: v for k, v in data.items() if v > now_wall}
             model_id, provider_name = key
             data[f"{model_id}::{provider_name}"] = wall_expiry
             self._path.write_text(json.dumps(data, indent=2))

@@ -8,6 +8,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# Directories never worth walking for a coding task. Shared by the
+# file-walking tools (search_files, glob) so the exclusion list cannot drift.
+PRUNED_DIRS: frozenset[str] = frozenset(
+    {".git", "node_modules", "__pycache__", ".venv", "venv", ".ruff_cache", ".pytest_cache", "build", "dist"}
+)
+
 # Well-known sensitive system directories blocked when no workspace is set.
 _BLOCKED_PREFIXES: tuple[str, ...] = (
     "/etc",

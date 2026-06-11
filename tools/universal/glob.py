@@ -14,15 +14,11 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from tools._path import resolve_path
+from tools._path import PRUNED_DIRS, resolve_path
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
 _MAX_RESULTS = 200
-# Directories never worth walking for a coding task.
-_PRUNED_DIRS: frozenset[str] = frozenset(
-    {".git", "node_modules", "__pycache__", ".venv", "venv", ".ruff_cache", ".pytest_cache", "build", "dist"}
-)
 
 
 class GlobTool(Tool):
@@ -81,7 +77,7 @@ def _coerce_limit(value: Any) -> int:
 
 
 def _is_pruned(path: Path, base: Path) -> bool:
-    return any(part in _PRUNED_DIRS for part in path.relative_to(base).parts)
+    return any(part in PRUNED_DIRS for part in path.relative_to(base).parts)
 
 
 def _glob_sync(base: Path, pattern: str, limit: int) -> ToolOutput:

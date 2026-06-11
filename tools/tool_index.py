@@ -51,7 +51,15 @@ class ToolIndex:
         self._cache: list[tuple[str, list[float]]] | None = None
 
     async def update_tool(self, name: str, description: str) -> None:
-        """Embed and upsert a tool. Call once per tool at registration time."""
+        """Embed and upsert a tool. Call once per tool at registration time.
+
+        Skips the embedding call when the stored description is unchanged —
+        the whole registry is re-indexed at every startup, and without this
+        each boot would re-embed every tool.
+        """
+        stored = await asyncio.to_thread(self._get_description_sync, name)
+        if stored == description:
+            return
         try:
             embeddings = await self._embed_fn([description])
         except Exception:
@@ -109,6 +117,11 @@ class ToolIndex:
                 "updated_at=excluded.updated_at",
                 (name, description, emb_json, now),
             )
+
+    def _get_description_sync(self, name: str) -> str | None:
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute("SELECT description FROM tool_embeddings WHERE name = ?", (name,)).fetchone()
+        return row["description"] if row is not None else None
 
     def _delete_sync(self, name: str) -> None:
         with open_db_connection(self._db_path) as conn:

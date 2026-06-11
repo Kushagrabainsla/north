@@ -50,6 +50,12 @@ echo "NORTH_OPENROUTER_API_KEY=sk-or-your-key" >> ~/.north/.env
 north start
 ```
 
+> **Fast code search:** north bundles [ripgrep](https://github.com/BurntSushi/ripgrep) automatically
+> on macOS (Apple Silicon) and Linux (x86_64), and the Docker image includes it on every
+> architecture. On other platforms, install ripgrep yourself (`brew install ripgrep` /
+> `apt install ripgrep`) or point `NORTH_RIPGREP` at the binary — otherwise the
+> `search_files` tool transparently uses a slower built-in search.
+
 ### Server / headless deployments
 
 Running north on a remote server or home server? Use the Docker Compose mode:

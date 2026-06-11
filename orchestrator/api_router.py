@@ -98,58 +98,47 @@ def configure(
     _north_settings = north_settings
 
 
+def _require[T](value: T | None, name: str) -> T:
+    """Return a configured singleton or fail loudly when configure() was skipped."""
+    if value is None:
+        raise RuntimeError(f"{name} not configured")
+    return value
+
+
 def _get_orchestrator() -> Orchestrator:
-    if _orchestrator is None:
-        raise RuntimeError("Orchestrator not configured")
-    return _orchestrator
+    return _require(_orchestrator, "Orchestrator")
 
 
 def _get_stream_manager() -> EventStreamManager:
-    if _stream_manager is None:
-        raise RuntimeError("EventStreamManager not configured")
-    return _stream_manager
+    return _require(_stream_manager, "EventStreamManager")
 
 
 def _get_ledger() -> LedgerWriter:
-    if _ledger is None:
-        raise RuntimeError("LedgerWriter not configured")
-    return _ledger
+    return _require(_ledger, "LedgerWriter")
 
 
 def _get_agent_registry() -> AgentRegistry:
-    if _agent_registry is None:
-        raise RuntimeError("AgentRegistry not configured")
-    return _agent_registry
+    return _require(_agent_registry, "AgentRegistry")
 
 
 def _get_context_store() -> ContextStore:
-    if _context_store is None:
-        raise RuntimeError("ContextStore not configured")
-    return _context_store
+    return _require(_context_store, "ContextStore")
 
 
 def _get_context_injector() -> ContextInjector:
-    if _context_injector is None:
-        raise RuntimeError("ContextInjector not configured")
-    return _context_injector
+    return _require(_context_injector, "ContextInjector")
 
 
 def _get_job_processor() -> JobProcessor:
-    if _job_processor is None:
-        raise RuntimeError("JobProcessor not configured")
-    return _job_processor
+    return _require(_job_processor, "JobProcessor")
 
 
 def _get_inference_router() -> InferenceRouter:
-    if _inference_router is None:
-        raise RuntimeError("InferenceRouter not configured")
-    return _inference_router
+    return _require(_inference_router, "InferenceRouter")
 
 
 def _get_confidence_tracker() -> ConfidenceTracker:
-    if _confidence_tracker is None:
-        raise RuntimeError("ConfidenceTracker not configured")
-    return _confidence_tracker
+    return _require(_confidence_tracker, "ConfidenceTracker")
 
 
 # ── Transcription endpoint ────────────────────────────────────────────────────
@@ -214,7 +203,9 @@ async def get_task(task_id: str) -> TaskResponse:
 @router.delete("/task/{task_id}", status_code=204)
 async def cancel_task(task_id: str) -> None:
     """Cancel a pending task."""
-    await _get_orchestrator().cancel_task(task_id)
+    cancelled = await _get_orchestrator().cancel_task(task_id)
+    if not cancelled:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} is not in flight — nothing to cancel.")
 
 
 # ── SSE stream ────────────────────────────────────────────────────────────────
@@ -470,9 +461,7 @@ async def cancel_job(job_id: str) -> None:
 
 
 def _get_cron_store() -> UserCronStore:
-    if _cron_store is None:
-        raise RuntimeError("CronStore not configured")
-    return _cron_store
+    return _require(_cron_store, "CronStore")
 
 
 class CronEntryOut(BaseModel):
