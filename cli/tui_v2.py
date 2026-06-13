@@ -22,6 +22,7 @@ from collections import deque
 from pathlib import Path
 
 import httpx
+from rich.markdown import Markdown as RichMarkdown
 from rich.padding import Padding as RichPadding
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
@@ -117,7 +118,12 @@ def _strip_markup(s: str) -> str:
 def _to_prose(md: str) -> str:
     """Flatten markdown to clean terminal prose: drop ``` fences, heading hashes,
     and bold/italic/inline-code markers, while preserving code-block *content*
-    and list structure verbatim."""
+    and list structure verbatim.
+
+    NOTE: not for the chat view — assistant messages render through a real
+    markdown engine (RichMarkdown / the streaming Markdown widget) so tables and
+    lists survive. This flattener has no table support and is kept only for
+    plain-text sinks (exports, logs) where there is no renderer to defer to."""
     out: list[str] = []
     in_code = False
     for line in md.split("\n"):
@@ -577,7 +583,18 @@ class NorthApp(App[None]):
         md.display = False
         md.update("")
         if final_output:
-            self._log_rich(RichPadding(RichText(_to_prose(final_output)), (0, 0, 0, 4)))
+            # Render the finalized message through a real markdown engine so the
+            # scrollback matches what was shown live in the streaming Markdown
+            # widget — tables, lists, and inline styling survive the handoff.
+            # (Do NOT flatten with _to_prose here: it has no table support and
+            # forks rendering from the streaming path, which is what produced the
+            # "table un-renders when the stream finishes" bug.)
+            # TODO(tier-2): for byte-identical fidelity, mount a Textual Markdown
+            # widget into the log instead of writing a rich.markdown renderable —
+            # rich's table/heading chrome differs subtly from Textual's. Deferred
+            # because #log is a RichLog and that conversion touches every _log()
+            # call site.
+            self._log_rich(RichPadding(RichMarkdown(final_output), (0, 0, 0, 4)))
 
     # ── SSE event handler ────────────────────────────────────────────────────
 
@@ -717,7 +734,10 @@ class NorthApp(App[None]):
                 self._finish_streaming(task_id, output)
             elif output:
                 self._log("  [cyan]◆[/cyan]  [white]north[/white]")
-                self._log_rich(RichPadding(RichText(_to_prose(output)), (0, 0, 0, 4)))
+                # Same markdown path as _finish_streaming — keep the non-streamed
+                # branch (output fetched whole from the ledger) rendering tables
+                # and lists identically rather than flattening to prose.
+                self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
 
             # Refresh strategy in case the user issued a strategy command.
             self._strategy = _read_strategy(self._settings_path)
