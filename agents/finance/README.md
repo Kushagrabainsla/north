@@ -4,10 +4,9 @@ This agent specializes in personal budgeting, tracking expenses, and looking up 
 
 ## Tools Used
 
-- `web_search`: Search financial information.
-- `gmail_api`: Sync invoices.
-- `market_data_api`: Fetch asset rates.
-- `expense_tracker`: Log expenditures.
+No specialized tools (`tools.yaml` is empty). The agent uses the universal tool set granted
+to every agent — chiefly `web_search` and `fetch_url` for financial information, plus
+`read_file` / `write_file` for any workspace files.
 
 ## How to Test
 

@@ -46,9 +46,7 @@ class ReadFileTool(Tool):
         if not content:
             return "(empty)"
         start = data.get("start_line", 1)
-        numbered = "\n".join(
-            f"{i:>6}\t{line}" for i, line in enumerate(content.splitlines(), start)
-        )
+        numbered = "\n".join(f"{i:>6}\t{line}" for i, line in enumerate(content.splitlines(), start))
         if data.get("truncated"):
             numbered += f"\n… (truncated at {_MAX_LINES} lines)"
         return numbered

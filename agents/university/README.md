@@ -4,10 +4,9 @@ This agent specializes in managing school deadlines, syncing assignments from Ca
 
 ## Tools Used
 
-- `web_search`: Search academic research.
-- `calendar_api`: Schedule study blocks.
-- `gmail_api`: Read course emails.
-- `canvas_api`: Sync assignments.
+No specialized tools (`tools.yaml` is empty). The agent uses the universal tool set granted
+to every agent — chiefly `web_search` and `fetch_url` for academic research, plus `read_file` /
+`write_file` for any workspace files.
 
 ## How to Test
 

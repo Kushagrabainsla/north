@@ -4,9 +4,9 @@ This agent specializes in tracking calories, logging workouts, and providing die
 
 ## Tools Used
 
-- `web_search`: Search for health tips and guidelines.
-- `calendar_api`: Schedule workouts.
-- `nutrition_api`: Query food nutrition and log meals.
+No specialized tools (`tools.yaml` is empty). The agent uses the universal tool set granted
+to every agent — chiefly `web_search` and `fetch_url` for health guidance, plus `read_file` /
+`write_file` for any workspace files.
 
 ## How to Test
 

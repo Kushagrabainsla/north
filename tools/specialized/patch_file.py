@@ -156,9 +156,7 @@ def _unified_diff(path: Path, old: str, new: str) -> str:
     return diff
 
 
-def _plan(
-    path: Path, edits: Any, old_string: str | None, new_string: str | None
-) -> tuple[str, str, int] | ToolOutput:
+def _plan(path: Path, edits: Any, old_string: str | None, new_string: str | None) -> tuple[str, str, int] | ToolOutput:
     """Compute the would-be new file content without writing it.
 
     Returns (new_content, old_content, blocks_applied) or a ToolOutput on error.
@@ -201,9 +199,7 @@ def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
     return new_content, content, len(edits)
 
 
-def _plan_blocks_or_legacy(
-    content: str, old_string: str | None, new_string: str
-) -> tuple[str, str, int] | ToolOutput:
+def _plan_blocks_or_legacy(content: str, old_string: str | None, new_string: str) -> tuple[str, str, int] | ToolOutput:
     blocks = _BLOCK_RE.findall(new_string)
     if blocks:
         new_content = content

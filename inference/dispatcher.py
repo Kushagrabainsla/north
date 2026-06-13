@@ -325,15 +325,12 @@ class ModelDispatcher(InferenceRouter):
 
         # Precompute quality scores once to avoid repeated EMA calculations during sort/shuffle.
         quality: dict[_CooldownKey, float] = {
-            (info.model_id, info.provider_name): self._effective_quality(info)
-            for info, _ in available
+            (info.model_id, info.provider_name): self._effective_quality(info) for info, _ in available
         }
 
         if priority == PoolPriority.HIGH:
             available.sort(key=lambda x: quality[(x[0].model_id, x[0].provider_name)], reverse=True)
-            available = shuffle_groups(
-                available, key=lambda x: round(quality[(x[0].model_id, x[0].provider_name)], 6)
-            )
+            available = shuffle_groups(available, key=lambda x: round(quality[(x[0].model_id, x[0].provider_name)], 6))
         elif priority == PoolPriority.LOW:
             available.sort(
                 key=lambda x: (

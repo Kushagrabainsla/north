@@ -165,7 +165,7 @@ uv run pytest
 ```
 
 - **Adding an agent:** drop a folder into `/agents/<name>/` — the Orchestrator discovers it automatically
-- **Adding a tool:** implement the `Tool` ABC and register it in `TOOL_GRAPH`
+- **Adding a tool:** implement the `Tool` ABC and drop the file in a `tools/` subdir (`universal/` for all agents, else `specialized/`/`semantic/`/`analysis/`) — it's auto-discovered
 - **Bugs and feature requests:** open a GitHub issue
 - **Security issues:** see [SECURITY.md](SECURITY.md) — do not open a public issue
 

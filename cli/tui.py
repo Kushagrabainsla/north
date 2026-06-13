@@ -1,12 +1,9 @@
-"""North TUI v2 — Textual-based chat UI.
+"""North TUI — Textual-based chat UI.
 
-Replaces tui.py (prompt_toolkit + Rich.Live) with a Textual App that owns the
-full render cycle. This is the same approach used by Bubbletea-based tools like
-gh copilot: the framework explicitly re-positions the cursor inside the Input
-widget after every frame, so live streaming output and the input box coexist
-without cursor conflicts.
-
-tui.py is kept for reference but is no longer invoked.
+A Textual App that owns the full render cycle. This is the same approach used
+by Bubbletea-based tools like gh copilot: the framework explicitly re-positions
+the cursor inside the Input widget after every frame, so live streaming output
+and the input box coexist without cursor conflicts.
 """
 
 from __future__ import annotations
@@ -15,10 +12,10 @@ import asyncio
 import contextlib
 import json
 import os
-import re
 import sys
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
@@ -31,68 +28,21 @@ from textual.containers import Horizontal
 from textual.suggester import Suggester
 from textual.widgets import Input, Markdown, RichLog, Static
 
-_SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-# Seconds between SSE reconnect attempts; doubles on each failure up to _SSE_BACKOFF_MAX.
-_SSE_BACKOFF_BASE = 2.0
-_SSE_BACKOFF_MAX = 30.0
-
-
-def _fmt_params(params: dict) -> str:
-    parts = []
-    for k, v in params.items():
-        if k in ("workspace", "task_id"):
-            continue
-        v_str = repr(v)
-        if len(v_str) > 60:
-            v_str = v_str[:57] + "…'"
-        parts.append(f"{k}={v_str}")
-    return ", ".join(parts[:4])
-
-
-def _short_model(model: str) -> str:
-    """Trim a router model id (e.g. 'meta-llama/llama-4-scout-17b:free') to a
-    compact label for the info bar."""
-    name = model.rsplit("/", 1)[-1].removesuffix(":free")
-    return name if len(name) <= 28 else name[:27] + "…"
-
-
-# Fill-bar colour thresholds: (max_fill_fraction, hex_colour). The first row
-# whose fraction the fill is below wins, so order matters (low → high).
-_FILL_COLOURS = (
-    (0.50, "#3fb950"),  # green
-    (0.75, "#d29922"),  # yellow
-    (0.90, "#db6d28"),  # orange
-    (1.01, "#f85149"),  # red
+from cli.constants import (
+    _SLASH_COMMANDS,
+    _SPIN,
+    _SSE_BACKOFF_BASE,
+    _SSE_BACKOFF_MAX,
 )
-_FILL_CHARS = "▁▂▃▄▅▆▇█"
-
-
-# Slash commands handled locally by the TUI (never sent to the orchestrator).
-_SLASH_COMMANDS: dict[str, str] = {
-    "/help": "show available commands",
-    "/clear": "clear the conversation log",
-    "/cost": "show session tokens and cost",
-    "/agents": "list registered agents",
-    "/strategy": "show the current strategy",
-    "/quit": "exit north",
-}
-
-
-def _compute_suggestion(value: str, history: list[str]) -> str | None:
-    """Ghost-text completion for the prompt: slash commands when the line starts
-    with '/', otherwise the most recent matching history entry."""
-    if not value:
-        return None
-    if value.startswith("/"):
-        for cmd in _SLASH_COMMANDS:
-            if cmd.startswith(value) and cmd != value:
-                return cmd
-        return None
-    for past in reversed(history):
-        if past.startswith(value) and past != value:
-            return past
-    return None
+from cli.formatting import (
+    _compute_suggestion,
+    _fill_bar,
+    _fmt_elapsed,
+    _fmt_params,
+    _fmt_tokens,
+    _short_model,
+    _strip_markup,
+)
 
 
 class _NorthSuggester(Suggester):
@@ -104,67 +54,6 @@ class _NorthSuggester(Suggester):
 
     async def get_suggestion(self, value: str) -> str | None:
         return _compute_suggestion(value, self._history_getter())
-
-
-_MARKUP_RE = re.compile(r"\[/?[^\[\]]*\]")
-
-
-def _strip_markup(s: str) -> str:
-    """Remove Textual console-markup tags so a segment's display width can be
-    measured. Only well-formed [tag] / [/tag] spans are removed."""
-    return _MARKUP_RE.sub("", s)
-
-
-def _to_prose(md: str) -> str:
-    """Flatten markdown to clean terminal prose: drop ``` fences, heading hashes,
-    and bold/italic/inline-code markers, while preserving code-block *content*
-    and list structure verbatim.
-
-    NOTE: not for the chat view — assistant messages render through a real
-    markdown engine (RichMarkdown / the streaming Markdown widget) so tables and
-    lists survive. This flattener has no table support and is kept only for
-    plain-text sinks (exports, logs) where there is no renderer to defer to."""
-    out: list[str] = []
-    in_code = False
-    for line in md.split("\n"):
-        if line.lstrip().startswith("```"):
-            in_code = not in_code  # drop the fence marker line itself
-            continue
-        if in_code:
-            out.append(line)  # preserve code lines exactly
-            continue
-        line = re.sub(r"^\s*#{1,6}\s*", "", line)  # heading hashes
-        line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)  # **bold**
-        line = re.sub(r"__(.+?)__", r"\1", line)  # __bold__
-        line = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\1", line)  # *italic*
-        line = re.sub(r"`([^`]+)`", r"\1", line)  # `inline code`
-        out.append(line)
-    return "\n".join(out)
-
-
-def _fmt_tokens(n: int) -> str:
-    """Compact token count: 940 → '940', 12_400 → '12.4K', 200_000 → '200K'."""
-    if n < 1000:
-        return str(n)
-    k = n / 1000
-    return f"{k:.0f}K" if k >= 100 or k == int(k) else f"{k:.1f}K"
-
-
-def _fmt_elapsed(seconds: float) -> str:
-    """Elapsed session time: '0:42', '12:05', '1:03:20'."""
-    s = int(seconds)
-    h, rem = divmod(s, 3600)
-    m, sec = divmod(rem, 60)
-    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
-
-
-def _fill_bar(fraction: float, width: int = 10) -> str:
-    """Block-character fill bar coloured green→yellow→orange→red by fraction."""
-    fraction = max(0.0, min(1.0, fraction))
-    colour = next(c for limit, c in _FILL_COLOURS if fraction < limit)
-    filled = int(round(fraction * width))
-    bar = "█" * filled + "░" * (width - filled)
-    return f"[{colour}]{bar}[/{colour}]"
 
 
 def _read_strategy(settings_path: Path) -> str:
@@ -386,6 +275,30 @@ class NorthApp(App[None]):
         self._model: str = ""
         self._settings_path = Path.home() / ".north" / "settings.json"
 
+        # SSE event name → handler. Adding an event = adding one _on_* method
+        # and one entry here; no change to the dispatch path itself.
+        self._event_handlers: dict[str, Callable[[str, dict], Awaitable[None]]] = {
+            "classifying": self._on_classifying,
+            "classified": self._on_classified,
+            "routed": self._on_routed,
+            "north_star_checking": self._on_north_star_checking,
+            "north_star_aligned": self._on_north_star_noop,
+            "north_star_check_skipped": self._on_north_star_noop,
+            "north_star_conflict": self._on_north_star_conflict,
+            "model": self._on_model,
+            "compaction": self._on_compaction,
+            "executing": self._on_agent_started,
+            "agent_started": self._on_agent_started,
+            "tool_called": self._on_tool_called,
+            "tool_result": self._on_tool_result,
+            "token": self._on_token,
+            "task_synthesis": self._on_task_synthesis,
+            "task_completed": self._on_task_completed,
+            "task_failed": self._on_task_failed,
+            "task_cancelled": self._on_task_cancelled,
+            "approval_required": self._on_approval_required,
+        }
+
         # ── session metrics (drive the live status bar) ──────────────────────
         self._session_tokens: int = 0  # cumulative estimate (chars/4)
         self._session_cost: float = 0.0  # summed task_completed.cost_usd
@@ -414,9 +327,7 @@ class NorthApp(App[None]):
         history_file = Path.home() / ".north" / "tui_history"
         if history_file.exists():
             with contextlib.suppress(Exception):
-                self._input_history = [
-                    line for line in history_file.read_text().splitlines() if line.strip()
-                ]
+                self._input_history = [line for line in history_file.read_text().splitlines() if line.strip()]
 
         self._strategy = _read_strategy(self._settings_path)
         self._refresh_hint()
@@ -441,7 +352,7 @@ class NorthApp(App[None]):
         cwd = self.workspace or os.getcwd()
         home = str(Path.home())
         if cwd.startswith(home):
-            cwd = "~" + cwd[len(home):]
+            cwd = "~" + cwd[len(home) :]
 
         toolsets = await self._fetch_agents()
 
@@ -538,9 +449,7 @@ class NorthApp(App[None]):
         self._spin_frame += 1
         if self._status_text:
             f = _SPIN[self._spin_frame % len(_SPIN)]
-            self.query_one("#status", Static).update(
-                f"[bright_black]  {f}  {self._status_text}[/bright_black]"
-            )
+            self.query_one("#status", Static).update(f"[bright_black]  {f}  {self._status_text}[/bright_black]")
         # Refresh the bar roughly once a second so elapsed time ticks live
         # without redrawing on every 80ms animation frame.
         if self._spin_frame % 12 == 0:
@@ -552,9 +461,7 @@ class NorthApp(App[None]):
             self.query_one("#status", Static).update("")
         else:
             f = _SPIN[self._spin_frame % len(_SPIN)]
-            self.query_one("#status", Static).update(
-                f"[bright_black]  {f}  {text}[/bright_black]"
-            )
+            self.query_one("#status", Static).update(f"[bright_black]  {f}  {text}[/bright_black]")
 
     def _log(self, markup: str) -> None:
         log = self.query_one("#log", RichLog)
@@ -574,9 +481,7 @@ class NorthApp(App[None]):
         md.update("")
 
     def _update_streaming(self, task_id: str) -> None:
-        self.query_one("#streaming", Markdown).update(
-            self._token_buffer.get(task_id, "")
-        )
+        self.query_one("#streaming", Markdown).update(self._token_buffer.get(task_id, ""))
 
     def _finish_streaming(self, task_id: str, final_output: str) -> None:
         md = self.query_one("#streaming", Markdown)
@@ -598,204 +503,201 @@ class NorthApp(App[None]):
 
     # ── SSE event handler ────────────────────────────────────────────────────
 
-    async def _handle_event(self, event: str, data: dict) -> None:  # noqa: C901
+    async def _handle_event(self, event: str, data: dict) -> None:
         task_id = data.get("task_id", "")
-
         if task_id and task_id not in self._user_task_ids:
             return
+        handler = self._event_handlers.get(event)
+        if handler is not None:
+            await handler(task_id, data)
 
-        if event == "classifying":
-            self._set_status("classifying…")
+    async def _on_classifying(self, task_id: str, data: dict) -> None:
+        self._set_status("classifying…")
 
-        elif event == "classified":
-            domain = data.get("domain", "")
-            flag = "  ·  consequential" if data.get("is_consequential") else ""
-            self._set_status(f"routing → {domain}{flag}…")
+    async def _on_classified(self, task_id: str, data: dict) -> None:
+        domain = data.get("domain", "")
+        flag = "  ·  consequential" if data.get("is_consequential") else ""
+        self._set_status(f"routing → {domain}{flag}…")
 
-        elif event == "routed":
-            agents = data.get("agents") or []
-            self._set_status(f"running {', '.join(agents) or 'general'}…")
+    async def _on_routed(self, task_id: str, data: dict) -> None:
+        agents = data.get("agents") or []
+        self._set_status(f"running {', '.join(agents) or 'general'}…")
 
-        elif event == "north_star_checking":
-            self._set_status("checking goals…")
+    async def _on_north_star_checking(self, task_id: str, data: dict) -> None:
+        self._set_status("checking goals…")
 
-        elif event in ("north_star_aligned", "north_star_check_skipped"):
-            pass
+    async def _on_north_star_noop(self, task_id: str, data: dict) -> None:
+        """north_star_aligned / north_star_check_skipped — no UI change."""
 
-        elif event == "north_star_conflict":
-            tension = (data.get("tension") or "")[:200]
-            self._set_status("")
-            self._log("  [yellow]◆[/yellow]  [yellow]goal conflict[/yellow]")
-            self._log_rich(RichText("    " + tension, style="white"))
+    async def _on_north_star_conflict(self, task_id: str, data: dict) -> None:
+        tension = (data.get("tension") or "")[:200]
+        self._set_status("")
+        self._log("  [yellow]◆[/yellow]  [yellow]goal conflict[/yellow]")
+        self._log_rich(RichText("    " + tension, style="white"))
 
-        elif event == "model":
-            self._model = data.get("model", "")
-            self._refresh_hint()
-            self._render_status_bar()
+    async def _on_model(self, task_id: str, data: dict) -> None:
+        self._model = data.get("model", "")
+        self._refresh_hint()
+        self._render_status_bar()
 
-        elif event == "compaction":
-            self._compactions += 1
-            self._render_status_bar()
+    async def _on_compaction(self, task_id: str, data: dict) -> None:
+        self._compactions += 1
+        self._render_status_bar()
 
-        elif event in ("executing", "agent_started"):
-            agent = data.get("agent", "")
-            agents = data.get("agents") or []
-            label = ", ".join(agents) if agents else agent or "general"
-            self._set_status(f"running {label}…")
-            # Write an agent header for specialist agents so the user can see who
-            # is working. The default 'general' agent is suppressed — its header
-            # would just echo the user's prompt (already shown) and the answer is
-            # labelled '◆ north' below.
-            if agent and agent != "general":
-                task_desc = (data.get("task") or "").strip()
-                desc_part = f"  [bright_black]{task_desc[:80]}[/bright_black]" if task_desc else ""
-                self._log(f"  [cyan]◆[/cyan]  [white]{agent}[/white]{desc_part}")
+    async def _on_agent_started(self, task_id: str, data: dict) -> None:
+        agent = data.get("agent", "")
+        agents = data.get("agents") or []
+        label = ", ".join(agents) if agents else agent or "general"
+        self._set_status(f"running {label}…")
+        # Write an agent header for specialist agents so the user can see who
+        # is working. The default 'general' agent is suppressed — its header
+        # would just echo the user's prompt (already shown) and the answer is
+        # labelled '◆ north' below.
+        if agent and agent != "general":
+            task_desc = (data.get("task") or "").strip()
+            desc_part = f"  [bright_black]{task_desc[:80]}[/bright_black]" if task_desc else ""
+            self._log(f"  [cyan]◆[/cyan]  [white]{agent}[/white]{desc_part}")
 
-        elif event == "tool_called":
-            tool = data.get("tool", "")
-            params = data.get("params") or {}
-            params_str = _fmt_params(params)
-            suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
-            self._log(f"    [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
-            self._set_status(f"{tool}…")
-            if task_id:
-                self._task_tool_activity.setdefault(task_id, []).append(
-                    {"tool": tool, "params": params_str, "result": None}
-                )
-
-        elif event == "tool_result":
-            tool = data.get("tool", "")
-            success = data.get("success", True)
-            self._log(
-                f"    [dim green]✓  {tool}[/dim green]"
-                if success
-                else f"    [dim red]✗  {tool}[/dim red]"
+    async def _on_tool_called(self, task_id: str, data: dict) -> None:
+        tool = data.get("tool", "")
+        params = data.get("params") or {}
+        params_str = _fmt_params(params)
+        suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
+        self._log(f"    [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
+        self._set_status(f"{tool}…")
+        if task_id:
+            self._task_tool_activity.setdefault(task_id, []).append(
+                {"tool": tool, "params": params_str, "result": None}
             )
-            if task_id:
-                formatted = data.get("formatted", "")
-                error = data.get("error", "")
-                result = (
-                    formatted[:200].replace("\n", " ")
-                    if formatted
-                    else f"failed: {error[:100]}"
-                    if error
-                    else ("ok" if success else "failed")
+
+    async def _on_tool_result(self, task_id: str, data: dict) -> None:
+        tool = data.get("tool", "")
+        success = data.get("success", True)
+        self._log(f"    [dim green]✓  {tool}[/dim green]" if success else f"    [dim red]✗  {tool}[/dim red]")
+        if task_id:
+            formatted = data.get("formatted", "")
+            error = data.get("error", "")
+            result = (
+                formatted[:200].replace("\n", " ")
+                if formatted
+                else f"failed: {error[:100]}"
+                if error
+                else ("ok" if success else "failed")
+            )
+            for entry in self._task_tool_activity.get(task_id, []):
+                if entry["tool"] == tool and entry["result"] is None:
+                    entry["result"] = result
+                    break
+        self._set_status("thinking…")
+
+    async def _on_token(self, task_id: str, data: dict) -> None:
+        text = data.get("text", "")
+        if not text:
+            return
+        self._token_buffer[task_id] = self._token_buffer.get(task_id, "") + text
+        # Rough running token estimate (≈4 chars/token) for the status bar.
+        self._session_tokens += max(1, len(text) // 4)
+        if task_id not in self._streaming_active:
+            self._streaming_active.add(task_id)
+            self._set_status("")
+            self._log("  [cyan]◆[/cyan]  [white]north[/white]")
+            self._start_streaming()
+        self._update_streaming(task_id)
+
+    async def _on_task_synthesis(self, task_id: str, data: dict) -> None:
+        self._set_status("synthesising…")
+
+    async def _on_task_completed(self, task_id: str, data: dict) -> None:
+        sys.stdout.write("\a")
+        sys.stdout.flush()
+        self._session_cost += float(data.get("cost_usd", 0.0) or 0.0)
+        output = self._token_buffer.pop(task_id, "")
+        was_streaming = task_id in self._streaming_active
+        self._streaming_active.discard(task_id)
+
+        if not output:
+            output = await self._fetch_ledger_output(task_id)
+
+        if was_streaming:
+            self._finish_streaming(task_id, output)
+        elif output:
+            self._log("  [cyan]◆[/cyan]  [white]north[/white]")
+            # Same markdown path as _finish_streaming — keep the non-streamed
+            # branch (output fetched whole from the ledger) rendering tables
+            # and lists identically rather than flattening to prose.
+            self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
+
+        # Refresh strategy in case the user issued a strategy command.
+        self._strategy = _read_strategy(self._settings_path)
+        self._refresh_hint()
+        self._set_status("")
+        self._user_task_ids.discard(task_id)
+        user_msg = self._pending_user_messages.pop(task_id, "")
+        tools_used = self._task_tool_activity.pop(task_id, [])
+        if user_msg and output:
+            short = output[:600] + ("…" if len(output) > 600 else "")
+            self._conversation_history.append({"user": user_msg, "tools": tools_used, "north": short})
+        self._render_status_bar()
+        self._write_rule()
+
+    async def _fetch_ledger_output(self, task_id: str) -> str:
+        """Reconstruct a completed task's answer from the ledger when no tokens streamed."""
+        try:
+            async with httpx.AsyncClient() as c:
+                r = await c.get(
+                    f"{self.base_url}/orchestrator/ledger",
+                    params={"task_id": task_id, "limit": 20},
+                    headers=self.headers,
+                    timeout=5.0,
                 )
-                for entry in self._task_tool_activity.get(task_id, []):
-                    if entry["tool"] == tool and entry["result"] is None:
-                        entry["result"] = result
-                        break
-            self._set_status("thinking…")
-
-        elif event == "token":
-            text = data.get("text", "")
-            if not text:
-                return
-            self._token_buffer[task_id] = self._token_buffer.get(task_id, "") + text
-            # Rough running token estimate (≈4 chars/token) for the status bar.
-            self._session_tokens += max(1, len(text) // 4)
-            if task_id not in self._streaming_active:
-                self._streaming_active.add(task_id)
-                self._set_status("")
-                self._log("  [cyan]◆[/cyan]  [white]north[/white]")
-                self._start_streaming()
-            self._update_streaming(task_id)
-
-        elif event == "task_synthesis":
-            self._set_status("synthesising…")
-
-        elif event == "task_completed":
-            sys.stdout.write("\a")
-            sys.stdout.flush()
-            self._session_cost += float(data.get("cost_usd", 0.0) or 0.0)
-            output = self._token_buffer.pop(task_id, "")
-            was_streaming = task_id in self._streaming_active
-            self._streaming_active.discard(task_id)
-
-            if not output:
-                try:
-                    async with httpx.AsyncClient() as c:
-                        r = await c.get(
-                            f"{self.base_url}/orchestrator/ledger",
-                            params={"task_id": task_id, "limit": 20},
-                            headers=self.headers,
-                            timeout=5.0,
-                        )
-                        entries = r.json()
-                        output = "\n\n".join(
-                            e["output"]
-                            for e in entries
-                            if e.get("action") == "agent_completed" and e.get("output")
-                        )
-                except Exception:
-                    pass
-
-            if was_streaming:
-                self._finish_streaming(task_id, output)
-            elif output:
-                self._log("  [cyan]◆[/cyan]  [white]north[/white]")
-                # Same markdown path as _finish_streaming — keep the non-streamed
-                # branch (output fetched whole from the ledger) rendering tables
-                # and lists identically rather than flattening to prose.
-                self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
-
-            # Refresh strategy in case the user issued a strategy command.
-            self._strategy = _read_strategy(self._settings_path)
-            self._refresh_hint()
-            self._set_status("")
-            self._user_task_ids.discard(task_id)
-            user_msg = self._pending_user_messages.pop(task_id, "")
-            tools_used = self._task_tool_activity.pop(task_id, [])
-            if user_msg and output:
-                short = output[:600] + ("…" if len(output) > 600 else "")
-                self._conversation_history.append(
-                    {"user": user_msg, "tools": tools_used, "north": short}
+                entries = r.json()
+                return "\n\n".join(
+                    e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output")
                 )
-            self._render_status_bar()
-            self._write_rule()
+        except Exception:
+            return ""
 
-        elif event == "task_failed":
-            sys.stdout.write("\a")
-            sys.stdout.flush()
-            if task_id in self._streaming_active:
-                self._finish_streaming(task_id, "")
-            self._streaming_active.discard(task_id)
-            self._token_buffer.pop(task_id, None)
-            self._task_tool_activity.pop(task_id, None)
-            error = data.get("error", "Task failed.")
-            self._set_status("")
-            self._user_task_ids.discard(task_id)
-            self._log("  [red]◆[/red]  [red]error[/red]")
-            self._log_rich(RichText("    " + error, style="red"))
-            self._render_status_bar()
-            self._write_rule()
+    async def _on_task_failed(self, task_id: str, data: dict) -> None:
+        sys.stdout.write("\a")
+        sys.stdout.flush()
+        if task_id in self._streaming_active:
+            self._finish_streaming(task_id, "")
+        self._streaming_active.discard(task_id)
+        self._token_buffer.pop(task_id, None)
+        self._task_tool_activity.pop(task_id, None)
+        error = data.get("error", "Task failed.")
+        self._set_status("")
+        self._user_task_ids.discard(task_id)
+        self._log("  [red]◆[/red]  [red]error[/red]")
+        self._log_rich(RichText("    " + error, style="red"))
+        self._render_status_bar()
+        self._write_rule()
 
-        elif event == "task_cancelled":
-            if task_id in self._streaming_active:
-                self._finish_streaming(task_id, "")
-            self._streaming_active.discard(task_id)
-            self._token_buffer.pop(task_id, None)
-            self._task_tool_activity.pop(task_id, None)
-            self._set_status("")
-            self._user_task_ids.discard(task_id)
-            self._log("  [dim]cancelled[/dim]")
-            self._render_status_bar()
-            self._write_rule()
+    async def _on_task_cancelled(self, task_id: str, data: dict) -> None:
+        if task_id in self._streaming_active:
+            self._finish_streaming(task_id, "")
+        self._streaming_active.discard(task_id)
+        self._token_buffer.pop(task_id, None)
+        self._task_tool_activity.pop(task_id, None)
+        self._set_status("")
+        self._user_task_ids.discard(task_id)
+        self._log("  [dim]cancelled[/dim]")
+        self._render_status_bar()
+        self._write_rule()
 
-        elif event == "approval_required":
-            self._approval_pending = data
-            self._set_status("")
-            if self.yolo:
-                # Auto-approve mode: take the first option without prompting.
-                options = data.get("options") or ["Approve", "Reject"]
-                self._log(f"  [#f85149]⚠[/#f85149]  [bright_black]auto-approved: {options[0]}[/bright_black]")
-                await self._submit_approval("1")
-                return
-            self._log("  [yellow]◆[/yellow]  [yellow]approval required[/yellow]")
-            self._log_rich(RichText("    " + data.get("message", ""), style="white"))
-            options = data.get("options") or ["Approve", "Reject"]
-            for i, opt in enumerate(options, 1):
-                self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
+    async def _on_approval_required(self, task_id: str, data: dict) -> None:
+        self._approval_pending = data
+        self._set_status("")
+        options = data.get("options") or ["Approve", "Reject"]
+        if self.yolo:
+            # Auto-approve mode: take the first option without prompting.
+            self._log(f"  [#f85149]⚠[/#f85149]  [bright_black]auto-approved: {options[0]}[/bright_black]")
+            await self._submit_approval("1")
+            return
+        self._log("  [yellow]◆[/yellow]  [yellow]approval required[/yellow]")
+        self._log_rich(RichText("    " + data.get("message", ""), style="white"))
+        for i, opt in enumerate(options, 1):
+            self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
 
     # ── SSE listener (runs as Textual worker in the same event loop) ─────────
 

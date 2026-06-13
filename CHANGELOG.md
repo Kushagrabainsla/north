@@ -2,7 +2,20 @@
 
 All notable changes to north are documented here.
 
-## [1.3.6] - 2026-06-09
+## [Unreleased]
+### Changed
+- **Split the cli/ package into constants.py, formatting.py, _client.py, and _server.py**: data, pure formatters, HTTP client, and server/process helpers so main.py/tui.py hold only commands and the App (§4.1, §7.3).
+- **Renamed `cli/tui_v2.py` → `cli/tui.py`**: the "_v2" suffix was a migration artefact (the old prompt_toolkit `tui.py` is long gone); the Textual UI is now just `cli/tui`. Updated the import in `cli/main.py` and the module docstring.
+- **TUI event handling is now a dispatch table** (`cli/tui.py`): the 201-line `_handle_event` `if/elif` chain (carrying `# noqa: C901`) became a `{event → _on_*}` map with one focused handler per SSE event; the complexity suppression is gone (SRP, §4.1).
+- **`KasaTool.run` decomposed** (`tools/specialized/kasa_tool.py`): the 195-line method is now thin orchestration (validate → discover → match → dispatch) over extracted helpers — `_resolve_action_params`, `_dispatch_device_action`, `_apply_action_to_devices`, and a single `_device_state` that replaces the two near-identical device-snapshot blocks (DRY, §5). Kelvin bounds and action verbs are named constants.
+- **`AgenticLLMAgent._execute` split into phases** (`agents/agentic_llm_agent.py`): conversation setup, pre-call compaction, and the model-change emit were extracted into `_init_conversation`, `_compact_for_next_call`, and `_maybe_emit_model`, leaving the ReAct loop readable (§4.1, §4.3).
+- **`north agent create` scaffolding extracted** (`cli/main.py`): file-writing moved out of the 174-line command into `_write_agent_scaffold` (over a small `_AgentScaffold` dataclass) and `_discover_universal_tool_names` (SRP, §4.1; arg count, §4.4).
+
+### Docs
+- **Docs reconciled with the current code** (`docs/CODING_STYLE.md`, `docs/ARCHITECTURE.md`, `README.md`, `CONTRIBUTING.md`, agent `README.md`s): replaced the non-existent static `TOOL_GRAPH`/`TOOL_IMPLEMENTATIONS` and `tools/implementations/` model with the real filesystem-discovery registry (`universal`/`specialized`/`semantic`/`analysis` + per-agent `tools.yaml`); corrected the §7.3 module layout (dropped `orchestrator/classifier.py`, `agents/router.py`, `utils/migrations.py`; added the files that actually exist); rewrote §11.4 to describe per-store `CREATE TABLE IF NOT EXISTS` schema ownership; refreshed the agent set, folder structure, and tool-graph sections; fixed the test-count figure.
+
+### Fixed
+- **Formatting drift** (8 files incl. `cli/main.py`, `web/routes.py`, `inference/dispatcher.py`): brought back under `ruff format`; the whole tree now passes `ruff format --check`.
 ### Added
 - **`shell` tool — long-lived PTY sessions** (`tools/specialized/shell_tool.py`): start/read/write/stop/list actions keep a process alive across tool calls behind a pseudo-terminal (stdlib `pty`, no new dependency) for dev servers, `--watch` builds, REPLs, and debuggers. `start` and `write` are approval-gated like `bash`; output streams into a per-session ring buffer. Wired into coder + tester.
 - **Diff preview before write** (`tools/specialized/patch_file.py`): when an `ApprovalStore` is injected, `patch_file` computes the change, shows a unified diff in an approval card, and writes only on confirm — rejection leaves the file untouched. Falls back to immediate apply when no store is present.

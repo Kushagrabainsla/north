@@ -43,9 +43,7 @@ _DOCUMENT_MAP: dict[str, ContextDocument] = {
 # Extracting from agent/system outputs let the pipeline learn the assistant's
 # own (sometimes hallucinated) text as if it were user-stated fact — a
 # self-reinforcing memory-poisoning loop. Facts come from what the USER wrote.
-_USER_AUTHORED_SOURCES = frozenset(
-    {LedgerSource.PROMPT, LedgerSource.MIC, LedgerSource.MANUAL_INJECTION}
-)
+_USER_AUTHORED_SOURCES = frozenset({LedgerSource.PROMPT, LedgerSource.MIC, LedgerSource.MANUAL_INJECTION})
 # Failed-task entries carry noise (error messages, stack traces) rather than
 # durable facts about the user.  Sending them to the LLM wastes budget.
 _SKIPPED_STATUSES = {LedgerStatus.FAILED}

@@ -31,12 +31,11 @@ import datetime
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
 
 import httpx
 import typer
@@ -47,40 +46,34 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from cli.tui_v2 import run as _tui_run
+from cli._client import _api, _headers
+from cli._server import (
+    _docker_available,
+    _find_compose_file,
+    _find_project_root,
+    _get_install_url,
+    _is_north_server,
+    _kill_port,
+    _port_in_use,
+    _resolve_workspace,
+    _start_server_process,
+    _sync_docker_secret,
+)
+from cli.constants import (
+    _BASE_URL,
+    _CONFIG_KEYS,
+    _PROVIDERS,
+    _STEP_ICONS,
+    _STEP_LABELS,
+    _VALID_DOCS,
+    _Provider,
+)
+from cli.formatting import _build_steps_table
+from cli.tui import run as _tui_run
 from utils.security import load_secret
 from utils.version import NORTH_VERSION
 
 _console = Console(force_terminal=sys.stdout.isatty())
-
-
-class _Provider(TypedDict):
-    name: str
-    env_key: str
-    description: str
-    url: str
-
-
-_PROVIDERS: list[_Provider] = [
-    {
-        "name": "OpenRouter",
-        "env_key": "NORTH_OPENROUTER_API_KEY",
-        "description": "All models — Claude, GPT-4, Gemini, Llama, and more (recommended)",
-        "url": "https://openrouter.ai/keys",
-    },
-    {
-        "name": "Groq",
-        "env_key": "NORTH_GROQ_API_KEY",
-        "description": "Ultra-fast open-source models — Llama, Mixtral",
-        "url": "https://console.groq.com/keys",
-    },
-    {
-        "name": "Gemini",
-        "env_key": "NORTH_GEMINI_API_KEY",
-        "description": "Google Gemini 1.5 Pro and Flash",
-        "url": "https://aistudio.google.com/apikey",
-    },
-]
 
 
 def _provider_is_configured(provider: _Provider, env_file: Path) -> bool:
@@ -187,9 +180,6 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 
-_BASE_URL = "http://127.0.0.1:8000"
-_TIMEOUT = 30.0
-
 
 @app.callback()
 def _root(
@@ -253,33 +243,6 @@ def _launch_tui(
     asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace, yolo=yolo))
 
 
-def _headers() -> dict[str, str]:
-    return {"X-North-Secret": load_secret()}
-
-
-def _api(method: str, path: str, **kwargs: object) -> httpx.Response:
-    """Execute a synchronous HTTP call to the Orchestrator API."""
-    url = f"{_BASE_URL}{path}"
-    try:
-        response = httpx.request(method, url, headers=_headers(), timeout=_TIMEOUT, **kwargs)  # type: ignore[arg-type]
-        response.raise_for_status()
-        return response
-    except httpx.ConnectError:
-        typer.secho(
-            "ERROR: Cannot reach the north server. Is it running?\n  uvicorn orchestrator.app:app --port 8000",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
-    except httpx.HTTPStatusError as exc:
-        typer.secho(
-            f"ERROR: Server returned {exc.response.status_code}: {exc.response.text}",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
-
-
 # ── task ─────────────────────────────────────────────────────────────────────
 
 task_app = typer.Typer(help="Task management.", no_args_is_help=True)
@@ -340,53 +303,6 @@ def list_tasks() -> None:
 # ── chat ─────────────────────────────────────────────────────────────────────
 
 # ── shared task runner ────────────────────────────────────────────────────────
-
-_STEP_ICONS: dict[str, str] = {
-    "classifying": "→",
-    "classified": "✓",
-    "classified_as_trivial": "✓",
-    "north_star_checking": "→",
-    "north_star_aligned": "✓",
-    "north_star_conflict": "◆",
-    "routing": "→",
-    "routed": "✓",
-    "executing": "→",
-    "agent_started": "→",
-    "agent_completed": "✓",
-    "tool_called": "→",
-    "tool_result": "✓",
-}
-
-_STEP_LABELS: dict[str, str] = {
-    "classifying": "classifying…",
-    "classified": "classified",
-    "classified_as_trivial": "quick task",
-    "north_star_checking": "checking goals…",
-    "north_star_aligned": "goals aligned",
-    "north_star_conflict": "goal conflict",
-    "routing": "planning…",
-    "routed": "plan ready",
-    "executing": "running agents…",
-}
-
-
-def _build_steps_table(steps: list[tuple[str, str, bool]]) -> Table:
-    """Render pipeline steps as a borderless table. Each step is (icon, label, active)."""
-    t = Table.grid(padding=(0, 2))
-    t.add_column(width=1)
-    t.add_column()
-    for icon, label, active in steps:
-        if active:
-            t.add_row(
-                Text(icon, style="white"),
-                Text(label, style="white"),
-            )
-        else:
-            t.add_row(
-                Text(icon, style="dim green"),
-                Text(label, style="dim"),
-            )
-    return t
 
 
 def _run_task(prompt: str, workspace: str | None = None) -> str:
@@ -602,8 +518,6 @@ def stream_task(
 context_app = typer.Typer(help="Manage context documents.", no_args_is_help=True)
 app.add_typer(context_app, name="context")
 
-_VALID_DOCS = ["public", "private", "privacy_rules", "judgement_rules", "north_stars"]
-
 
 @context_app.command("show")
 def context_show(
@@ -802,6 +716,98 @@ def _list_agents_impl() -> None:
     _console.print()
 
 
+@dataclass
+class _AgentScaffold:
+    """Everything needed to write a new agent's folder to disk."""
+
+    name: str
+    domain: str
+    description: str
+    model_pool: str
+    tools: list[str]
+    accepts: list[str]
+    agentic: bool
+    system_prompt: str
+
+
+def _discover_universal_tool_names() -> set[str]:
+    """Names of universal tools (auto-included for every agent) from the installed package."""
+    try:
+        import importlib.util as ilu
+
+        spec = ilu.find_spec("tools.universal")
+        if spec and spec.submodule_search_locations:
+            udir = Path(list(spec.submodule_search_locations)[0])
+            return {p.stem for p in udir.glob("*.py") if not p.stem.startswith("_")}
+    except Exception:
+        pass
+    return set()
+
+
+def _write_agent_scaffold(agent_dir: Path, scaffold: _AgentScaffold) -> None:
+    """Write the agent.py / config.yaml / tools.yaml / prompts / README files to disk."""
+    import yaml  # type: ignore[import-untyped]
+
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "prompts").mkdir()
+
+    class_name = "".join(word.title() for word in scaffold.name.split("_")) + "Agent"
+    base_import = (
+        "from agents.agentic_llm_agent import AgenticLLMAgent"
+        if scaffold.agentic
+        else "from agents.llm_agent import LLMAgent"
+    )
+    base_class = "AgenticLLMAgent" if scaffold.agentic else "LLMAgent"
+
+    (agent_dir / "agent.py").write_text(
+        f'"""{class_name} domain specialist.\n\nSee docs/CODING_STYLE.md Section 15.\n"""\n\n'
+        f"from __future__ import annotations\n\n"
+        f"{base_import}\n\n\n"
+        f"class {class_name}({base_class}):\n"
+        f'    """Domain specialist for {scaffold.domain}."""\n',
+        encoding="utf-8",
+    )
+    (agent_dir / "config.yaml").write_text(
+        yaml.dump(
+            {
+                "agent": scaffold.name,
+                "domain": scaffold.domain,
+                "model_pool": scaffold.model_pool,
+                "accepts": scaffold.accepts,
+                "output_format": "structured_json",
+                "version": NORTH_VERSION,
+                "class_name": class_name,
+            },
+            default_flow_style=False,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    universal = _discover_universal_tool_names()
+    universal_requested = [t for t in scaffold.tools if t in universal]
+    specialized_tools = [t for t in scaffold.tools if t not in universal]
+    if universal_requested:
+        typer.secho(
+            f"  Note: {', '.join(universal_requested)} are universal — auto-included, omitted from tools.yaml",
+            fg=typer.colors.BRIGHT_BLACK,
+        )
+    tools_comment = (
+        "# Specialized tools for this agent. Universal tools are\n"
+        "# automatically available to all agents and do not need to be listed here.\n"
+    )
+    tools_body = "tools:\n" + "".join(f"  - {t}\n" for t in specialized_tools) if specialized_tools else "tools: []\n"
+    (agent_dir / "tools.yaml").write_text(tools_comment + tools_body, encoding="utf-8")
+
+    (agent_dir / "prompts" / "system.md").write_text(scaffold.system_prompt, encoding="utf-8")
+    (agent_dir / "README.md").write_text(
+        f"# {scaffold.name.title()} Agent\n\n{scaffold.description}\n\n"
+        f"**Domain:** {scaffold.domain}  \n**Pool:** {scaffold.model_pool}  "
+        f"\n**Accepts:** {', '.join(scaffold.accepts)}\n",
+        encoding="utf-8",
+    )
+
+
 @agent_app.command("create")
 def create_agent(
     name: str | None = typer.Option(None, "--name", help="Agent name (slug, lowercase)."),
@@ -880,79 +886,18 @@ def create_agent(
             f"Available tools: {', '.join(tools) if tools else 'none'}.\n"
         )
 
-    # Write scaffold to disk
-    agent_dir.mkdir(parents=True)
-    (agent_dir / "prompts").mkdir()
-
-    class_name = "".join(word.title() for word in name.split("_")) + "Agent"
-
-    base_import = (
-        "from agents.agentic_llm_agent import AgenticLLMAgent" if agentic else "from agents.llm_agent import LLMAgent"
-    )
-    base_class = "AgenticLLMAgent" if agentic else "LLMAgent"
-
-    (agent_dir / "agent.py").write_text(
-        f'"""{class_name} domain specialist.\n\nSee docs/CODING_STYLE.md Section 15.\n"""\n\n'
-        f"from __future__ import annotations\n\n"
-        f"{base_import}\n\n\n"
-        f"class {class_name}({base_class}):\n"
-        f'    """Domain specialist for {domain}."""\n',
-        encoding="utf-8",
-    )
-
-    import yaml  # type: ignore[import-untyped]
-
-    (agent_dir / "config.yaml").write_text(
-        yaml.dump(
-            {
-                "agent": name,
-                "domain": domain,
-                "model_pool": model_pool,
-                "accepts": accepts,
-                "output_format": "structured_json",
-                "version": NORTH_VERSION,
-                "class_name": class_name,
-            },
-            default_flow_style=False,
-            sort_keys=False,
+    _write_agent_scaffold(
+        agent_dir,
+        _AgentScaffold(
+            name=name,
+            domain=domain,
+            description=description,
+            model_pool=model_pool,
+            tools=tools,
+            accepts=accepts,
+            agentic=agentic,
+            system_prompt=system_prompt,
         ),
-        encoding="utf-8",
-    )
-
-    # Discover universal tool names by scanning the installed package.
-    try:
-        import importlib.util as _ilu
-
-        _spec = _ilu.find_spec("tools.universal")
-        if _spec and _spec.submodule_search_locations:
-            _udir = Path(list(_spec.submodule_search_locations)[0])
-            _universal = {p.stem for p in _udir.glob("*.py") if not p.stem.startswith("_")}
-        else:
-            _universal = set()
-    except Exception:
-        _universal = set()
-
-    universal_requested = [t for t in tools if t in _universal]
-    specialized_tools = [t for t in tools if t not in _universal]
-
-    if universal_requested:
-        typer.secho(
-            f"  Note: {', '.join(universal_requested)} are universal — auto-included, omitted from tools.yaml",
-            fg=typer.colors.BRIGHT_BLACK,
-        )
-
-    _tools_comment = (
-        "# Specialized tools for this agent. Universal tools are\n"
-        "# automatically available to all agents and do not need to be listed here.\n"
-    )
-    _tools_body = "tools:\n" + "".join(f"  - {t}\n" for t in specialized_tools) if specialized_tools else "tools: []\n"
-    (agent_dir / "tools.yaml").write_text(_tools_comment + _tools_body, encoding="utf-8")
-
-    (agent_dir / "prompts" / "system.md").write_text(system_prompt, encoding="utf-8")
-    (agent_dir / "README.md").write_text(
-        f"# {name.title()} Agent\n\n{description}\n\n"
-        f"**Domain:** {domain}  \n**Pool:** {model_pool}  \n**Accepts:** {', '.join(accepts)}\n",
-        encoding="utf-8",
     )
 
     # Update prompts/planner.md so the new domain is routable.
@@ -1294,13 +1239,6 @@ def tools_confidence(
 config_app = typer.Typer(help="System configuration.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 
-_CONFIG_KEYS = {
-    "ledger.retention_days": ("task_cleanup_completed_days", int),
-    "jobs.poll_interval_seconds": ("job_poll_interval_seconds", int),
-    "agent.read_timeout_seconds": ("agent_read_timeout_seconds", int),
-    "inference.pool_refresh_hours": ("inference_pool_refresh_interval_hours", int),
-}
-
 
 @config_app.command("set")
 def config_set(
@@ -1351,20 +1289,6 @@ def config_set(
 # ── port helpers ──────────────────────────────────────────────────────────────
 
 
-def _port_in_use(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        return s.connect_ex((host, port)) == 0
-
-
-def _is_north_server(host: str, port: int) -> bool:
-    try:
-        resp = httpx.get(f"http://{host}:{port}/docs", timeout=2.0)
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-
 def _wait_for_server(
     host: str,
     port: int,
@@ -1391,118 +1315,6 @@ def _wait_for_server(
         time.sleep(1)
     _console.print("  [red]server did not respond in time[/red]", err=True)
     raise typer.Exit(1) from None
-
-
-def _sync_docker_secret(compose_file: Path) -> None:
-    """Read the north secret from the running Docker container and cache it locally."""
-    try:
-        result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "exec", "-T", "north", "cat", "/data/secret.key"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            secret_path = Path.home() / ".north" / "secret.key"
-            secret_path.parent.mkdir(parents=True, exist_ok=True)
-            secret_path.write_text(result.stdout.strip(), encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _kill_port(host: str, port: int) -> bool:
-    try:
-        import psutil
-
-        killed = False
-        for conn in psutil.net_connections(kind="inet"):
-            if conn.laddr.port == port and conn.status == "LISTEN":
-                try:
-                    psutil.Process(conn.pid).kill()
-                    killed = True
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-        return killed
-    except ImportError:
-        # Fallback: platform-agnostic subprocess approach
-        try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True,
-                text=True,
-            )
-            pids = result.stdout.strip().split()
-            if not pids:
-                return False
-            subprocess.run(["kill", "-9"] + pids, capture_output=True)
-            return True
-        except Exception:
-            return False
-    except Exception:
-        return False
-
-
-# ── start ─────────────────────────────────────────────────────────────────────
-
-
-def _find_compose_file() -> Path | None:
-    """Return the canonical (image-based) compose file to use.
-
-    Priority:
-    1. Walk up from CWD for a docker-compose.yml the user dropped in their tree.
-    2. ~/.north/docker-compose.yml — written on first run from the bundled copy.
-    3. Bundled copy inside the installed package (cli/docker-compose.yml).
-
-    The source-build variant lives at docker-compose.dev.yml and is selected
-    explicitly (docker compose -f docker-compose.dev.yml …); it is intentionally
-    never auto-discovered here, so `north start --docker` behaves identically
-    regardless of the working directory.
-    """
-    north_home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
-    installed = north_home / "docker-compose.yml"
-
-    cwd = Path.cwd()
-    for candidate in [cwd, *cwd.parents]:
-        f = candidate / "docker-compose.yml"
-        if f.exists() and f != installed:
-            return f
-
-    if not installed.exists():
-        bundled = Path(__file__).parent / "docker-compose.yml"
-        if bundled.exists():
-            north_home.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(bundled, installed)
-
-    return installed if installed.exists() else None
-
-
-def _find_git_root(start: Path) -> Path:
-    """Walk up from start to find the git repo root. Falls back to start."""
-    current = start.resolve()
-    for candidate in [current, *current.parents]:
-        if (candidate / ".git").exists():
-            return candidate
-    return current
-
-
-def _resolve_workspace(explicit: str | None) -> str:
-    """Resolve the effective workspace root — the single source of truth.
-
-    An explicit --workspace always wins. Otherwise default to the enclosing git
-    root, except when that root is $HOME itself (e.g. a dotfiles repo at ~/.git),
-    in which case fall back to the current directory so the tool sandbox is never
-    silently widened to the whole home directory. Running directly in $HOME still
-    yields $HOME because cwd is home.
-    """
-    if explicit:
-        return str(Path(explicit).resolve())
-    cwd = Path.cwd()
-    root = _find_git_root(cwd)
-    return str(cwd if root == Path.home() else root)
-
-
-def _docker_available() -> bool:
-    return shutil.which("docker") is not None
 
 
 @app.command("start")
@@ -1568,7 +1380,6 @@ def start(
 
     # ── Local uvicorn launch ──────────────────────────────────────────────
     from config.settings import settings
-    from utils.security import load_secret
 
     settings.north_home.mkdir(parents=True, exist_ok=True)
     (settings.north_home / "tasks").mkdir(parents=True, exist_ok=True)
@@ -1851,43 +1662,6 @@ def update(
         typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
 
 
-def _get_install_url() -> tuple[str | None, bool]:
-    """Return (url, is_git_url) describing how north was installed.
-
-    Reads the PEP 610 direct_url.json from the installed dist-info.
-    is_git_url is True when north was installed with `uv tool install git+<url>`,
-    meaning `uv tool upgrade north` is the right update path.
-    """
-    try:
-        import json as _json
-        from importlib.metadata import Distribution
-
-        du = Distribution.from_name("north").read_text("direct_url.json")
-        if du:
-            data = _json.loads(du)
-            url = data.get("url", "")
-            is_git = "vcs_info" in data and not url.startswith("file://")
-            return url, is_git
-    except Exception:
-        pass
-    return None, False
-
-
-def _find_project_root() -> Path | None:
-    """Find the north project root (directory containing pyproject.toml + agents/).
-
-    Walks up from __file__ first (editable installs where main.py lives in the
-    repo), then falls back to CWD (running directly from the checkout).
-    """
-    for p in Path(__file__).resolve().parents:
-        if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
-            return p
-    for p in [Path.cwd(), *Path.cwd().parents]:
-        if (p / "pyproject.toml").exists() and (p / "agents").is_dir():
-            return p
-    return None
-
-
 def _stop_server(port: int) -> None:
     """Stop a locally-running north server. Mirrors the logic in the stop command."""
     import signal
@@ -1920,38 +1694,6 @@ def _stop_server(port: int) -> None:
         time.sleep(1)
 
 
-def _start_server_process(port: int, project_root: Path | None = None) -> subprocess.Popen:
-    """Spawn uvicorn and record the PID. Mirrors the logic in the start command."""
-    from config.settings import settings
-
-    log_path = settings.north_home / "north.log"
-    pid_path = settings.north_home / "north.pid"
-    workspace_path = settings.north_home / "workspace.txt"
-    workspace = (
-        workspace_path.read_text(encoding="utf-8").strip()
-        if workspace_path.exists()
-        else _resolve_workspace(None)
-    )
-    cmd = [
-        sys.executable,
-        "-m",
-        "uvicorn",
-        "orchestrator.app:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--log-level",
-        "info",
-    ]
-    server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": workspace}
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
-    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
-    pid_path.write_text(str(proc.pid), encoding="utf-8")
-    return proc
-
-
 def _run_command(cmd: list[str], *, cwd: Path) -> bool:
     """Run a subprocess, printing its output only on failure. Returns True on success."""
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
@@ -1959,20 +1701,6 @@ def _run_command(cmd: list[str], *, cwd: Path) -> bool:
         output = (result.stdout + result.stderr).strip()
         _console.print(f"  [dim red]{output}[/dim red]")
     return result.returncode == 0
-
-
-def _git_describe(root: Path) -> str | None:
-    try:
-        r = subprocess.run(
-            ["git", "log", "-1", "--pretty=format:%h %s"],
-            capture_output=True,
-            text=True,
-            cwd=root,
-            timeout=5,
-        )
-        return r.stdout.strip() if r.returncode == 0 else None
-    except Exception:
-        return None
 
 
 if __name__ == "__main__":

@@ -232,8 +232,10 @@ context/base.py        ContextStore      <- FileContextStore (v1), DBContextStor
 ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
 inference/base.py      InferenceRouter   <- ModelDispatcher (multi-provider)
 approval/base.py       Notifier          <- MacOSNotifier, TerminalNotifier (dev/test)
-tools/base.py          Tool              <- WebSearchTool, CalendarTool, GmailTool, etc.
-agents/base.py         Agent             <- HealthAgent, JobAgent, UniversityAgent, FinanceAgent
+tools/base.py          Tool              <- WebSearchTool, ReadFileTool, BashTool, GitTool, etc.
+agents/base.py         Agent             <- LLMAgent / AgenticLLMAgent (subclassed per domain:
+                                            ArchitectAgent, CoderAgent, TesterAgent, ResearcherAgent,
+                                            HealthAgent, JobAgent, FinanceAgent, UniversityAgent, …)
 jobs/base.py           JobProcessor      <- SQLiteJobProcessor
 ```
 
@@ -280,20 +282,39 @@ Swapping any backend (e.g. `FileContextStore` → `DBContextStore`) is one line.
 
 The Orchestrator scans `/agents` at startup. A valid agent folder contains `config.yaml` and `agent.py`. Adding an agent = adding a folder. The registry exposes `get(name)`, `all()`, and `for_domain(domain)`. No registry code changes when agents come or go.
 
-### 6.5 Tools Are Discovered from the Graph
+### 6.5 Tools Are Discovered from the Filesystem
 
-Tools register by name in `tools/registry.py`. Any class implementing `Tool` and appearing in `TOOL_GRAPH` is available to the listed agents. The v1 graph:
+`ToolRegistry` (`tools/registry.py`) auto-discovers every `Tool` subclass by walking the
+tool package directories — it does **not** read a hand-maintained graph dict. Adding a tool
+is adding a file:
 
-```python
-TOOL_GRAPH: dict[str, list[str]] = {
-    "health":     ["web_search", "calendar_api", "nutrition_api"],
-    "university": ["web_search", "calendar_api", "gmail_api", "canvas_api"],
-    "job":        ["web_search", "calendar_api", "gmail_api", "linkedin_api"],
-    "finance":    ["web_search", "gmail_api", "market_data_api", "expense_tracker"],
-}
+```
+tools/
+  universal/    <- available to EVERY agent (read_file, write_file, glob, list_dir,
+                   search_files, web_search, fetch_url, schedule_task, create_tool,
+                   create_agent, query_metrics)
+  specialized/  <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
+  semantic/     <- code intelligence (search_symbols, find_references)
+  analysis/     <- static analysis (check_types)
 ```
 
-`TOOL_IMPLEMENTATIONS` (in the same file) maps each tool name to its concrete class instance.
+The agent→tool mapping is a **dynamic graph**, not a constant. Universal tools are granted
+to all agents; each agent additionally lists its specialized tools in its own `tools.yaml`:
+
+```yaml
+# agents/coder/tools.yaml
+tools:
+  - bash
+  - shell
+  - git
+  - gh
+  - patch_file
+```
+
+The registry exposes `tools_for_agent(agent)` (universal + that agent's specialized set,
+sorted by confidence) and `update_graph(agent, tool_names)` for runtime changes (e.g. a tool
+hot-loaded mid-task by `create_tool`). `make_universal(name)` promotes a tool to the
+all-agents set. No registry code changes when tools come or go.
 
 ---
 
@@ -361,22 +382,32 @@ context/
   models.py          <- ContextDocument (enum of valid document names)
   exceptions.py      <- ContextReadError, ContextWriteError
   file_store.py      <- FileContextStore
+  fact_store.py      <- atomic fact store
+  episodic.py        <- episodic memory layer
+  embedding_index.py <- semantic search / cosine-similarity index
+  extraction.py      <- ledger → context extraction pipeline
+  injection.py       <- manual context injection
+  repo_instructions.py <- loads AGENTS.md / CLAUDE.md / .cursorrules for a workspace
+  task_snapshot.py   <- per-task context snapshot
 
 inference/
   __init__.py
   base.py            <- InferenceRouter (ABC)
   models.py          <- ModelPool, PoolPriority, InferenceRecord, CostSummary
   exceptions.py      <- AllModelsRateLimitedError, ContextTooLargeError, PoolRefreshError
+  constants.py       <- quality tiers and tuning constants
   capability.py      <- ModelCapability, ModelInfo, quality_from_cost
   provider.py        <- Provider (Protocol)
   dispatcher.py      <- ModelDispatcher (multi-provider router)
+  routing.py         <- strategy-aware model ordering
+  cooldowns.py       <- per-model rate-limit cooldown tracking
   factory.py         <- build_router()
   cost_tracker.py    <- CostTracker (InferenceRouter decorator)
   providers/
     openai_compat.py <- OpenAICompatibleProvider (base class for OpenAI-format providers)
-    openrouter.py    <- OpenRouterRouter
-    groq.py          <- GroqRouter
-    gemini.py        <- GeminiRouter
+    openrouter.py    <- OpenRouter provider
+    groq.py          <- Groq provider
+    gemini.py        <- Gemini provider
 
 approval/
   __init__.py
@@ -391,47 +422,54 @@ approval/
 
 agents/
   __init__.py
-  base.py            <- Agent (ABC)
-  models.py          <- AgentPayload, AgentResult, AgentConfig
-  exceptions.py      <- AgentNotFoundError, AgentExecutionError
-  registry.py        <- AgentRegistry
-  health/
-    agent.py         <- HealthAgent
+  base.py              <- Agent (ABC)
+  models.py            <- AgentPayload, AgentResult, AgentConfig
+  exceptions.py        <- AgentNotFoundError, AgentExecutionError
+  constants.py         <- agent tuning constants (iteration caps, tool-result limits)
+  schemas.py           <- DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
+  registry.py          <- AgentRegistry (folder discovery)
+  llm_agent.py         <- LLMAgent (single-call base)
+  agentic_llm_agent.py <- AgenticLLMAgent (ReAct loop, native function calling)
+  context_compaction.py <- token-aware history compaction
+  workspace_lock.py    <- per-workspace mutation lock
+  coder/               <- one folder per domain agent: agent.py + config.yaml +
+    agent.py           <- CoderAgent              tools.yaml + prompts/
     config.yaml
     tools.yaml
     prompts/
-  university/
-  job/
-  finance/
+  architect/  tester/  researcher/  general/  home/  news_briefing/
+  health/  job/  finance/  university/
 
 tools/
   __init__.py
   base.py            <- Tool, AuthenticatedTool, CacheableTool
   models.py          <- ToolInput, ToolOutput, ConfidenceScore
   exceptions.py      <- ToolExecutionError, ToolAuthError
-  registry.py        <- ToolRegistry, TOOL_GRAPH
-  confidence.py      <- ConfidenceTracker
-  implementations/
-    web_search.py
-    calendar_api.py
-    gmail_api.py
-    canvas_api.py
-    nutrition_api.py
-    market_data_api.py
-    expense_tracker.py
-    linkedin_api.py
+  registry.py        <- ToolRegistry (filesystem discovery + dynamic agent→tool graph)
+  tool_index.py      <- tool metadata index
+  confidence.py      <- ConfidenceTracker (EMA scoring)
+  _path.py           <- shared path-safety helpers
+  universal/         <- granted to every agent (read_file, write_file, glob, list_dir,
+                        search_files, web_search, fetch_url, schedule_task,
+                        create_tool, create_agent, query_metrics)
+  specialized/       <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
+  semantic/          <- code intelligence (search_symbols, find_references)
+  analysis/          <- static analysis (check_types)
 
 orchestrator/
   __init__.py
   models.py          <- TaskRequest, TaskResponse, ExecutionPlan, IntentClassification
   exceptions.py      <- OrchestratorError, NorthStarConflictError, RoutingError
+  constants.py       <- orchestrator tuning constants
   orchestrator.py    <- Orchestrator
-  classifier.py      <- IntentClassifier
+  router.py          <- ExecutionPlanner (intent classification + execution planning)
   north_star.py      <- NorthStarChecker
-  router.py          <- ExecutionPlanner
+  synthesizer.py     <- multi-agent result synthesis
   task_context.py    <- TaskContextStore
   failure_handler.py <- FailureHandler
-  stream.py          <- SSE event stream
+  stream.py          <- EventStreamManager (SSE event stream)
+  app.py             <- FastAPI app + lifespan (background tasks)
+  api_router.py      <- REST routes (secret-gated APIRouter)
 
 jobs/
   __init__.py
@@ -444,9 +482,14 @@ jobs/
 utils/
   db.py              <- open_db_connection()
   ids.py             <- generate_id(), generate_task_id()
-  time.py            <- utcnow(), format_timestamp()
+  time.py            <- utcnow(), localnow(), format_timestamp()
   security.py        <- generate_secret(), load_secret(), verify_secret()
   prompts.py         <- load_prompt()
+  net.py             <- SSRF-safe HTTP helpers
+  text.py            <- shared text helpers
+  math.py            <- shared numeric helpers (EMA, clamps)
+  logging.py         <- logging setup
+  version.py         <- NORTH_VERSION
 
 config/
   settings.py        <- Settings (BaseSettings)
@@ -711,25 +754,30 @@ with open_db_connection(db_path) as conn:
     # auto-commits on exit, auto-rollbacks on exception
 ```
 
-### 11.4 Schema Migrations Are Versioned
+### 11.4 Each Store Owns Its Schema
 
-Every schema change has a migration function in `utils/migrations.py`. Schema version is stored in the database and checked at startup.
+There is no central migrations module. Each SQLite-backed store creates and evolves its own
+schema at construction time using idempotent `CREATE TABLE IF NOT EXISTS` (and additive
+`ALTER TABLE` guarded by a column check). This keeps each store self-contained — the store
+that owns a table owns its schema.
 
 ```python
-# utils/migrations.py
-MIGRATIONS: list[tuple[int, str]] = [
-    (1, "CREATE TABLE ledger (id TEXT PRIMARY KEY, ...)"),
-    (2, "ALTER TABLE ledger ADD COLUMN agent_output JSON"),
-    (3, "CREATE TABLE tool_confidence (agent TEXT, tool TEXT, ...)"),
-]
-
-def apply_pending_migrations(conn: sqlite3.Connection) -> None:
-    current_version = _get_schema_version(conn)
-    for version, sql in MIGRATIONS:
-        if version > current_version:
-            conn.execute(sql)
-            _set_schema_version(conn, version)
+# ledger/sqlite_writer.py — schema set up once, on construction
+def _ensure_schema(self) -> None:
+    with open_db_connection(self._db_path) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS ledger ("
+            "  id TEXT PRIMARY KEY, source TEXT, task_id TEXT, ...)"
+        )
 ```
+
+Stores that follow this pattern: `ledger/sqlite_writer.py`, `jobs/sqlite_processor.py`,
+`jobs/cron_store.py`, `context/{fact_store,episodic,embedding_index}.py`.
+`open_db_connection()` in `utils/db.py` is the single connection helper (WAL pragmas, row
+factory) used by all of them.
+
+If a future change needs cross-store versioned migrations, introduce a real `utils/migrations.py`
+with a spec update first (§8) — do not invent one ad hoc.
 
 ---
 
@@ -1541,7 +1589,7 @@ NORTH_OPENROUTER_API_KEY=sk-or-your-key-here
 ### 21.3 CONTRIBUTING.md Covers the Three Key Flows
 
 1. How to add a new agent (folder structure, required files, config schema, how to test)
-2. How to add a new tool (implement `Tool`, register in `TOOL_GRAPH`, add edges)
+2. How to add a new tool (implement `Tool`, drop it in the right `tools/` subdir for auto-discovery, list it in an agent's `tools.yaml` if specialized)
 3. How to run the full test suite and what passing looks like
 
 ### 21.4 No Exposed Secrets
@@ -1609,7 +1657,7 @@ One canonical tool per job. Adding `requests` next to `httpx`, or `unittest` nex
 
 ### 23.4 Tests Are Currently Deferred
 
-Do not write tests when adding new functionality. The pytest harness and the existing 92 tests stay in place; Section 18 stays in place as the convention for when this policy is lifted.
+Do not write tests when adding new functionality. The pytest harness and the existing test suite (~426 tests) stay in place; Section 18 stays in place as the convention for when this policy is lifted.
 
 **Why:** Build-speed during the pre-MVP phase, while module shape is still moving and the cost of keeping tests synchronized outweighs their value.
 

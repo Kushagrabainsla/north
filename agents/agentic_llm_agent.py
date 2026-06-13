@@ -208,19 +208,7 @@ class AgenticLLMAgent(LLMAgent):
         context: str,
         scored_tools: list[tuple[Tool, float]],
     ) -> dict[str, Any]:
-        now = localnow().strftime("%Y-%m-%d %H:%M %Z")
-        system_prompt = f"Current date/time: {now}\n\n" + self._load_system_prompt()
-        user_text = self._build_task_message(payload, context, scored_tools)
-
-        messages: list[dict] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ]
-
-        tool_map = {t.name: t for t, _ in scored_tools}
-        # Agents with bash/git/patch_file produce larger tool outputs; give their
-        # compaction summaries more room to preserve file paths and error messages.
-        compact_tokens = COMPACT_TOKENS_HEAVY if tool_map.keys() & HEAVY_OUTPUT_TOOLS else COMPACT_TOKENS_DEFAULT
+        messages, tool_map, compact_tokens = self._init_conversation(payload, context, scored_tools)
         total_cost_usd: float = 0.0
         last_tokens_in: int = 0
         last_model_used: str = ""
@@ -230,28 +218,9 @@ class AgenticLLMAgent(LLMAgent):
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
-            # Token-aware compaction: summarise old history when we approach the
-            # model's context window (75% threshold). Runs before the next API
-            # call so the compacted messages are what gets sent.
-            if last_tokens_in > 0:
-                _msgs_before = len(messages)
-                await compact_if_needed(
-                    messages,
-                    tokens_in=last_tokens_in,
-                    model_used=last_model_used,
-                    inference_router=self._deps.inference_router,
-                    component=self.name,
-                    task_id=payload.task_id,
-                    keep_recent=self._deps.agent_history_keep_recent,
-                    max_summary_tokens=compact_tokens,
-                )
-                # Notify the UI when history was actually compacted (message count
-                # dropped) so the status bar's compression counter stays truthful.
-                if len(messages) < _msgs_before and self._deps.stream_manager and payload.task_id:
-                    await self._deps.stream_manager.emit(payload.task_id, "compaction", {})
-            else:
-                # First iteration: apply the lightweight truncation as a baseline.
-                compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
+            await self._compact_for_next_call(
+                messages, last_tokens_in, last_model_used, compact_tokens, payload.task_id
+            )
 
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
@@ -276,17 +245,7 @@ class AgenticLLMAgent(LLMAgent):
             total_cost_usd += response.cost_usd
             last_tokens_in = response.tokens_in
             last_model_used = response.model_used
-
-            # Surface which model answered so the UI can display it. Emitted only
-            # when it changes (the router may pick a different model per call).
-            if (
-                response.model_used
-                and response.model_used != emitted_model
-                and self._deps.stream_manager
-                and payload.task_id
-            ):
-                emitted_model = response.model_used
-                await self._deps.stream_manager.emit(payload.task_id, "model", {"model": response.model_used})
+            emitted_model = await self._maybe_emit_model(response, emitted_model, payload.task_id)
 
             if response.type == "message":
                 # Final answer — tokens were already streamed via token_cb.
@@ -314,6 +273,69 @@ class AgenticLLMAgent(LLMAgent):
             total_cost_usd,
             tools_used,
         )
+
+    def _init_conversation(
+        self,
+        payload: AgentPayload,
+        context: str,
+        scored_tools: list[tuple[Tool, float]],
+    ) -> tuple[list[dict], dict[str, Tool], int]:
+        """Build the initial system+user messages, tool map, and compaction budget."""
+        now = localnow().strftime("%Y-%m-%d %H:%M %Z")
+        system_prompt = f"Current date/time: {now}\n\n" + self._load_system_prompt()
+        user_text = self._build_task_message(payload, context, scored_tools)
+        messages: list[dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ]
+        tool_map = {t.name: t for t, _ in scored_tools}
+        # Agents with bash/git/patch_file produce larger tool outputs; give their
+        # compaction summaries more room to preserve file paths and error messages.
+        compact_tokens = COMPACT_TOKENS_HEAVY if tool_map.keys() & HEAVY_OUTPUT_TOOLS else COMPACT_TOKENS_DEFAULT
+        return messages, tool_map, compact_tokens
+
+    async def _compact_for_next_call(
+        self,
+        messages: list[dict],
+        last_tokens_in: int,
+        last_model_used: str,
+        compact_tokens: int,
+        task_id: str,
+    ) -> None:
+        """Compact conversation history before the next API call.
+
+        Token-aware: summarise old history when we approach the model's context
+        window (75% threshold). On the first iteration (no token count yet) apply
+        lightweight truncation as a baseline instead.
+        """
+        if last_tokens_in <= 0:
+            compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
+            return
+        msgs_before = len(messages)
+        await compact_if_needed(
+            messages,
+            tokens_in=last_tokens_in,
+            model_used=last_model_used,
+            inference_router=self._deps.inference_router,
+            component=self.name,
+            task_id=task_id,
+            keep_recent=self._deps.agent_history_keep_recent,
+            max_summary_tokens=compact_tokens,
+        )
+        # Notify the UI when history was actually compacted (message count dropped)
+        # so the status bar's compression counter stays truthful.
+        if len(messages) < msgs_before and self._deps.stream_manager and task_id:
+            await self._deps.stream_manager.emit(task_id, "compaction", {})
+
+    async def _maybe_emit_model(self, response: Any, emitted_model: str, task_id: str) -> str:
+        """Emit a 'model' event when the answering model changes.
+
+        Returns the model name now reflected in the UI (unchanged when no emit).
+        """
+        if response.model_used and response.model_used != emitted_model and self._deps.stream_manager and task_id:
+            await self._deps.stream_manager.emit(task_id, "model", {"model": response.model_used})
+            return response.model_used
+        return emitted_model
 
     # ------------------------------------------------------------------
 

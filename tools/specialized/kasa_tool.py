@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from tools.base import Tool
@@ -47,6 +48,27 @@ _COLOR_TEMPS: dict[str, int] = {
     "cool": 5000,
     "daylight": 6500,
 }
+
+# Valid colour-temperature range for Kasa bulbs, in Kelvin.
+_KELVIN_MIN = 2500
+_KELVIN_MAX = 6500
+
+# Human-readable verb per control action, for the result summary.
+_ACTION_VERBS: dict[str, str] = {
+    "on": "Turned on",
+    "off": "Turned off",
+    "toggle": "Toggled",
+}
+
+
+@dataclass
+class _ActionParams:
+    """Resolved colour/brightness parameters for a single control action."""
+
+    hue: int | None = None
+    saturation: int = 100
+    kelvin: int | None = None
+    brightness: int | None = None
 
 
 def _run_kasa_discover() -> list[tuple[str, str]]:
@@ -89,6 +111,134 @@ async def _connect_devices(pairs: list[tuple[str, str]]) -> dict[str, Any]:
         except Exception:
             pass
     return found
+
+
+def _device_state(
+    dev: Any,
+    ip: str,
+    alias_map: dict[str, str],
+    *,
+    include_model: bool = False,
+    include_hsv: bool = False,
+) -> dict[str, Any]:
+    """Snapshot a device's current state into a serialisable dict."""
+    entry: dict[str, Any] = {
+        "alias": alias_map.get(ip, dev.alias or ip),
+        "host": ip,
+        "is_on": dev.is_on,
+    }
+    if include_model:
+        entry["model"] = getattr(dev, "model", "unknown")
+    if (brightness := getattr(dev, "brightness", None)) is not None:
+        entry["brightness"] = brightness
+    if color_temp := getattr(dev, "color_temp", None):
+        entry["color_temp"] = color_temp
+    if include_hsv and (hsv := getattr(dev, "hsv", None)):
+        entry["hue"] = hsv.hue
+        entry["saturation"] = hsv.saturation
+    return entry
+
+
+def _resolve_action_params(action: str, params: dict[str, Any]) -> _ActionParams:
+    """Parse and validate colour/brightness params for a control action.
+
+    Raises:
+        ValueError: with a user-facing message when a required param is missing or invalid.
+    """
+    resolved = _ActionParams()
+    if action == "color":
+        color_name = params.get("color", "").strip().lower()
+        if color_name:
+            if color_name not in _COLOR_NAMES:
+                raise ValueError(f"Unknown colour {color_name!r}. Known: {', '.join(_COLOR_NAMES)}")
+            resolved.hue, resolved.saturation = _COLOR_NAMES[color_name]
+        elif (raw_hue := params.get("hue")) is not None:
+            try:
+                resolved.hue = int(raw_hue)
+                resolved.saturation = int(params.get("saturation", 100))
+            except (ValueError, TypeError):
+                raise ValueError("'hue' and 'saturation' must be integers.") from None
+        else:
+            raise ValueError("action='color' requires 'color' (name) or 'hue'.")
+    elif action == "color_temp":
+        raw_ct = str(params.get("color_temp", "")).strip().lower()
+        if not raw_ct:
+            raise ValueError("action='color_temp' requires 'color_temp'.")
+        if raw_ct in _COLOR_TEMPS:
+            resolved.kelvin = _COLOR_TEMPS[raw_ct]
+        else:
+            try:
+                resolved.kelvin = int(raw_ct)
+            except ValueError:
+                raise ValueError(
+                    f"Unknown color_temp {raw_ct!r}. Use: {', '.join(_COLOR_TEMPS)} "
+                    f"or a number {_KELVIN_MIN}–{_KELVIN_MAX}."
+                ) from None
+            if not (_KELVIN_MIN <= resolved.kelvin <= _KELVIN_MAX):
+                raise ValueError(f"color_temp must be {_KELVIN_MIN}–{_KELVIN_MAX} K.")
+    elif action == "brightness":
+        raw_br = params.get("brightness")
+        if raw_br is None:
+            raise ValueError("action='brightness' requires 'brightness' (0–100).")
+        try:
+            resolved.brightness = max(0, min(100, int(raw_br)))
+        except (ValueError, TypeError):
+            raise ValueError("'brightness' must be an integer 0–100.") from None
+    return resolved
+
+
+async def _dispatch_device_action(dev: Any, action: str, resolved: _ActionParams) -> None:
+    """Apply a single resolved action to one device."""
+    if action == "on":
+        await dev.turn_on()
+    elif action == "off":
+        await dev.turn_off()
+    elif action == "toggle":
+        await (dev.turn_off() if dev.is_on else dev.turn_on())
+    elif action == "brightness":
+        await dev.set_brightness(resolved.brightness)
+    elif action == "color":
+        await dev.set_hsv(resolved.hue, resolved.saturation, 100)
+    elif action == "color_temp":
+        await dev.set_color_temp(resolved.kelvin)
+
+
+async def _apply_action_to_devices(
+    matched: dict[str, Any],
+    action: str,
+    resolved: _ActionParams,
+    alias_map: dict[str, str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Run the action against each matched device. Returns (results, errors)."""
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for ip, dev in matched.items():
+        alias = alias_map.get(ip, dev.alias or ip)
+        try:
+            await _dispatch_device_action(dev, action, resolved)
+            await dev.update()
+            results.append(_device_state(dev, ip, alias_map, include_hsv=action == "color"))
+        except Exception as exc:
+            errors.append(f"{alias}: {exc}")
+    return results, errors
+
+
+def _summarize_action(
+    action: str,
+    resolved: _ActionParams,
+    results: list[dict[str, Any]],
+    errors: list[str],
+) -> str:
+    """Build a human-readable summary of a completed control action."""
+    verbs = {
+        **_ACTION_VERBS,
+        "brightness": f"Set brightness to {resolved.brightness}%",
+        "color": f"Set colour (hue={resolved.hue}, sat={resolved.saturation}%)",
+        "color_temp": f"Set colour temperature to {resolved.kelvin}K",
+    }
+    names = ", ".join(r["alias"] for r in results)
+    suffix = f" Errors: {'; '.join(errors)}" if errors else ""
+    return f"{verbs.get(action, action)}: {names}.{suffix}"
 
 
 class KasaTool(Tool):
@@ -201,27 +351,7 @@ class KasaTool(Tool):
 
         target_hint = str(input.params.get("device", "")).strip().lower()
         if action != "list":
-            # Mutating actions must name their target explicitly — an omitted
-            # device must never fan out to every bulb on the network — and are
-            # gated behind user approval (fail-closed when no gate is wired).
-            if not target_hint:
-                return ToolOutput(
-                    success=False,
-                    error=(
-                        "Parameter 'device' is required for control actions. "
-                        "Use action='list' to see available devices, then target one by alias or IP."
-                    ),
-                )
-            denial = await gate_mutating_action(
-                self._approval_store,
-                agent="kasa",
-                title="Smart Device Control — Approval Required",
-                message=f"kasa action={action!r} device={target_hint!r}",
-                task_id=input.params.get("task_id"),
-                stream_manager=self._stream_manager,
-                judgement_filter=self._judgement_filter,
-                timeout=self._approval_timeout_seconds,
-            )
+            denial = await self._gate_control_action(action, target_hint, input.params)
             if denial is not None:
                 return ToolOutput(success=False, error=denial)
 
@@ -233,160 +363,110 @@ class KasaTool(Tool):
                 error="python-kasa is not installed. Run: uv add python-kasa",
             )
 
-        try:
-            pairs = await asyncio.to_thread(_run_kasa_discover)
-        except Exception as exc:
-            return ToolOutput(success=False, error=f"Discovery subprocess failed: {exc}")
-
-        if not pairs:
-            return ToolOutput(
-                success=True,
-                data={"devices": [], "message": "No Kasa devices found on the network."},
-            )
-
-        try:
-            found = await _connect_devices(pairs)
-        except Exception as exc:
-            return ToolOutput(success=False, error=f"Failed to connect to devices: {exc}")
-
-        if not found:
-            return ToolOutput(
-                success=True,
-                data={"devices": [], "message": "Devices discovered but could not connect to any."},
-            )
-
-        alias_map = dict(pairs)
-
-        if target_hint:
-            matched = {
-                ip: dev
-                for ip, dev in found.items()
-                if target_hint in ip.lower()
-                or target_hint in (dev.alias or "").lower()
-                or target_hint in alias_map.get(ip, "").lower()
-            }
-            if not matched:
-                names = [alias_map.get(ip, dev.alias or ip) for ip, dev in found.items()]
-                return ToolOutput(
-                    success=False,
-                    error=f"No device matching {target_hint!r}. Found: {', '.join(names)}",
-                )
-        else:
-            # Only reachable for action='list' — control actions required a device above.
-            matched = found
+        found, alias_map, early = await self._discover_and_connect()
+        if early is not None:
+            return early
 
         if action == "list":
-            device_list = []
-            for ip, dev in found.items():
-                entry: dict[str, Any] = {
-                    "alias": alias_map.get(ip, dev.alias or ip),
-                    "host": ip,
-                    "is_on": dev.is_on,
-                    "model": getattr(dev, "model", "unknown"),
-                }
-                if (br := getattr(dev, "brightness", None)) is not None:
-                    entry["brightness"] = br
-                if ct := getattr(dev, "color_temp", None):
-                    entry["color_temp"] = ct
-                hsv = getattr(dev, "hsv", None)
-                if hsv:
-                    entry["hue"] = hsv.hue
-                    entry["saturation"] = hsv.saturation
-                device_list.append(entry)
-            return ToolOutput(success=True, data={"devices": device_list})
+            devices = [
+                _device_state(dev, ip, alias_map, include_model=True, include_hsv=True) for ip, dev in found.items()
+            ]
+            return ToolOutput(success=True, data={"devices": devices})
 
-        # Resolve colour / brightness params before the device loop
-        hue: int | None = None
-        saturation: int = 100
-        kelvin: int | None = None
-        brightness_val: int | None = None
+        matched = self._match_devices(found, alias_map, target_hint)
+        if isinstance(matched, ToolOutput):
+            return matched
 
-        if action == "color":
-            color_name = input.params.get("color", "").strip().lower()
-            if color_name:
-                if color_name not in _COLOR_NAMES:
-                    known = ", ".join(_COLOR_NAMES)
-                    return ToolOutput(success=False, error=f"Unknown colour {color_name!r}. Known: {known}")
-                hue, saturation = _COLOR_NAMES[color_name]
-            elif (raw_hue := input.params.get("hue")) is not None:
-                try:
-                    hue = int(raw_hue)
-                    saturation = int(input.params.get("saturation", 100))
-                except (ValueError, TypeError):
-                    return ToolOutput(success=False, error="'hue' and 'saturation' must be integers.")
-            else:
-                return ToolOutput(success=False, error="action='color' requires 'color' (name) or 'hue'.")
+        try:
+            resolved = _resolve_action_params(action, input.params)
+        except ValueError as exc:
+            return ToolOutput(success=False, error=str(exc))
 
-        elif action == "color_temp":
-            raw_ct = str(input.params.get("color_temp", "")).strip().lower()
-            if not raw_ct:
-                return ToolOutput(success=False, error="action='color_temp' requires 'color_temp'.")
-            if raw_ct in _COLOR_TEMPS:
-                kelvin = _COLOR_TEMPS[raw_ct]
-            else:
-                try:
-                    kelvin = int(raw_ct)
-                    if not (2500 <= kelvin <= 6500):
-                        return ToolOutput(success=False, error="color_temp must be 2500–6500 K.")
-                except ValueError:
-                    known = ", ".join(_COLOR_TEMPS)
-                    return ToolOutput(
-                        success=False,
-                        error=f"Unknown color_temp {raw_ct!r}. Use: {known} or a number 2500–6500.",
-                    )
-
-        elif action == "brightness":
-            raw_br = input.params.get("brightness")
-            if raw_br is None:
-                return ToolOutput(success=False, error="action='brightness' requires 'brightness' (0–100).")
-            try:
-                brightness_val = max(0, min(100, int(raw_br)))
-            except (ValueError, TypeError):
-                return ToolOutput(success=False, error="'brightness' must be an integer 0–100.")
-
-        results = []
-        errors = []
-        for ip, dev in matched.items():
-            alias = alias_map.get(ip, dev.alias or ip)
-            try:
-                if action == "on":
-                    await dev.turn_on()
-                elif action == "off":
-                    await dev.turn_off()
-                elif action == "toggle":
-                    await dev.turn_off() if dev.is_on else await dev.turn_on()
-                elif action == "brightness":
-                    await dev.set_brightness(brightness_val)
-                elif action == "color":
-                    await dev.set_hsv(hue, saturation, 100)
-                elif action == "color_temp":
-                    await dev.set_color_temp(kelvin)
-
-                await dev.update()
-                entry: dict[str, Any] = {"alias": alias, "host": ip, "is_on": dev.is_on}
-                if (br := getattr(dev, "brightness", None)) is not None:
-                    entry["brightness"] = br
-                if ct := getattr(dev, "color_temp", None):
-                    entry["color_temp"] = ct
-                hsv = getattr(dev, "hsv", None)
-                if hsv and action == "color":
-                    entry["hue"] = hsv.hue
-                    entry["saturation"] = hsv.saturation
-                results.append(entry)
-            except Exception as exc:
-                errors.append(f"{alias}: {exc}")
-
+        results, errors = await _apply_action_to_devices(matched, action, resolved, alias_map)
         if errors and not results:
             return ToolOutput(success=False, error="; ".join(errors))
 
-        _VERBS = {
-            "on": "Turned on",
-            "off": "Turned off",
-            "toggle": "Toggled",
-            "brightness": f"Set brightness to {brightness_val}%",
-            "color": f"Set colour (hue={hue}, sat={saturation}%)",
-            "color_temp": f"Set colour temperature to {kelvin}K",
-        }
-        names = ", ".join(r["alias"] for r in results)
-        message = f"{_VERBS.get(action, action)}: {names}." + (f" Errors: {'; '.join(errors)}" if errors else "")
+        message = _summarize_action(action, resolved, results, errors)
         return ToolOutput(success=True, data={"devices": results, "message": message})
+
+    async def _gate_control_action(self, action: str, target_hint: str, params: dict[str, Any]) -> str | None:
+        """Require an explicit target and obtain approval for a mutating action.
+
+        Returns a denial message to surface to the user, or None when approved.
+        Mutating actions must name their target explicitly — an omitted device
+        must never fan out to every bulb on the network — and are gated behind
+        user approval (fail-closed when no gate is wired).
+        """
+        if not target_hint:
+            return (
+                "Parameter 'device' is required for control actions. "
+                "Use action='list' to see available devices, then target one by alias or IP."
+            )
+        return await gate_mutating_action(
+            self._approval_store,
+            agent="kasa",
+            title="Smart Device Control — Approval Required",
+            message=f"kasa action={action!r} device={target_hint!r}",
+            task_id=params.get("task_id"),
+            stream_manager=self._stream_manager,
+            judgement_filter=self._judgement_filter,
+            timeout=self._approval_timeout_seconds,
+        )
+
+    @staticmethod
+    async def _discover_and_connect() -> tuple[dict[str, Any], dict[str, str], ToolOutput | None]:
+        """Discover and connect to devices on the LAN.
+
+        Returns (found, alias_map, early_return). When early_return is not None
+        the caller should return it directly (no devices, or a discovery error).
+        """
+        try:
+            pairs = await asyncio.to_thread(_run_kasa_discover)
+        except Exception as exc:
+            return {}, {}, ToolOutput(success=False, error=f"Discovery subprocess failed: {exc}")
+        if not pairs:
+            return (
+                {},
+                {},
+                ToolOutput(
+                    success=True,
+                    data={"devices": [], "message": "No Kasa devices found on the network."},
+                ),
+            )
+        try:
+            found = await _connect_devices(pairs)
+        except Exception as exc:
+            return {}, {}, ToolOutput(success=False, error=f"Failed to connect to devices: {exc}")
+        if not found:
+            return (
+                {},
+                {},
+                ToolOutput(
+                    success=True,
+                    data={
+                        "devices": [],
+                        "message": "Devices discovered but could not connect to any.",
+                    },
+                ),
+            )
+        return found, dict(pairs), None
+
+    @staticmethod
+    def _match_devices(
+        found: dict[str, Any], alias_map: dict[str, str], target_hint: str
+    ) -> dict[str, Any] | ToolOutput:
+        """Filter discovered devices by the target hint, or return an error output."""
+        matched = {
+            ip: dev
+            for ip, dev in found.items()
+            if target_hint in ip.lower()
+            or target_hint in (dev.alias or "").lower()
+            or target_hint in alias_map.get(ip, "").lower()
+        }
+        if not matched:
+            names = [alias_map.get(ip, dev.alias or ip) for ip, dev in found.items()]
+            return ToolOutput(
+                success=False,
+                error=f"No device matching {target_hint!r}. Found: {', '.join(names)}",
+            )
+        return matched

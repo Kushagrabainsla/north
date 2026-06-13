@@ -336,8 +336,7 @@ async def schedule_oneshot(request: Request) -> Response:
         scheduled_at = datetime.fromisoformat(run_at_str)
     except (ValueError, TypeError):
         return HTMLResponse(
-            content="<h1>400 — Bad Request</h1><p>Invalid run-at time. "
-            "<a href='/ui/jobs'>Back to jobs</a>.</p>",
+            content="<h1>400 — Bad Request</h1><p>Invalid run-at time. <a href='/ui/jobs'>Back to jobs</a>.</p>",
             status_code=400,
         )
     if scheduled_at.tzinfo is None:

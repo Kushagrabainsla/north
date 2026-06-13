@@ -676,16 +676,27 @@ POST   /orchestrator/webhooks/{source}   -> receive an external event and submit
 
 Agents are domain specialists. Each knows one domain and operates only within it. They do not talk to each other directly. All communication goes through the Task Context Object managed by the Orchestrator.
 
-### 7.1 v1 Agent Set
+### 7.1 Agent Set
+
+The agent set is discovered from the `/agents` folder at startup (§7.2), so it evolves
+without code changes. The current set:
 
 | Agent | Domain | Responsibilities |
 |-------|--------|-----------------|
-| Health | Health and wellness | Meal planning, grocery lists, dietary tracking, workout planning |
-| University | Academic | Coursework, Canvas deadlines, research papers, professor communications, GPA tracking |
-| Job | Career | LinkedIn internship tasks, professional communications, career goals, interview prep, applications |
-| Finance | Personal finance | Budgeting, expense tracking, savings progress, investment research |
-| Code | Software development | Code generation, debugging, refactoring, technical Q&A — uses reasoning pool |
+| Architect | Engineering | Designs implementation plans, decomposes work — reasoning pool |
+| Coder | Engineering | Code generation, debugging, refactoring, edits — reasoning pool |
+| Tester | QA | Runs the suite, verifies changes, reports failures — fast_cheap pool |
+| Researcher | Research | Open-ended investigation, gathering and synthesising sources |
 | General | General purpose | Open-ended chat, planning, questions that don't map to a domain agent |
+| Home | Smart home | Controls local devices (e.g. Kasa bulbs) behind approval gates |
+| News Briefing | News | Assembles briefings from web sources |
+| Health | Health and wellness | Meal planning, workouts, dietary and fitness tracking |
+| University | Academic | Coursework, deadlines, research papers, communications |
+| Job | Career | Internship tasks, professional communications, interview prep |
+| Finance | Personal finance | Budgeting, expense tracking, investment research |
+
+Every agent subclasses `LLMAgent` (single call) or `AgenticLLMAgent` (ReAct loop with native
+function calling); the engineering agents (Architect, Coder) run on the reasoning pool.
 
 ### 7.2 Folder Structure
 
@@ -693,46 +704,40 @@ Each agent is a self-contained folder dropped into `/agents`. The Orchestrator s
 
 ```
 /agents
-  /health
-    agent.py              <- core logic, LLM prompting, tool calls, output formatting
-    config.yaml           <- declaration: domain, model pool, accepted tasks
-    tools.yaml            <- tool edges with initial confidence scores
+  /coder
+    agent.py              <- core logic (usually a thin AgenticLLMAgent/LLMAgent subclass)
+    config.yaml           <- declaration: agent, domain, model pool, accepted keywords
+    tools.yaml            <- the specialized tools this agent gets (universal tools are implicit)
     prompts/
-      system.md           <- system prompt defining agent personality and expertise
-      templates/          <- task-specific prompt templates
-    tests/
-      test_agent.py       <- isolated agent tests (no Orchestrator required)
-  /university/
-  /job/
-  /finance/
-  /code/
-  /general/
+      system.md           <- system prompt defining the agent's expertise
+  /architect/  /tester/  /researcher/  /general/  /home/  /news_briefing/
+  /health/  /job/  /finance/  /university/
 ```
 
 **config.yaml example:**
 ```yaml
-agent: health
-domain: health
-model_pool: fast_cheap
-similar_to: null        # set to another agent name to inherit its tool confidence scores
-accepts:
-  - meal_planning
-  - grocery_list
-  - dietary_tracking
-  - workout_planning
+agent: coder
+domain: engineering
+model_pool: reasoning
+accepts:                   # routing keywords matched against the prompt
+  - "code"
+  - "implement"
+  - "fix"
+  - "debug"
 output_format: structured_json
 version: 1.0.0
+class_name: CoderAgent     # the Agent subclass in agent.py
 ```
 
-**tools.yaml example:**
+**tools.yaml example** (a plain list of specialized tool names; universal tools are granted
+to every agent automatically and are not listed):
 ```yaml
 tools:
-  - name: web_search
-    initial_confidence: 0.5
-  - name: calendar_api
-    initial_confidence: 0.7
-  - name: nutrition_api
-    initial_confidence: 0.8
+  - bash
+  - shell
+  - git
+  - gh
+  - patch_file
 ```
 
 ### 7.3 Agent Registration
@@ -761,46 +766,45 @@ Tasks it accepts: contract_review, compliance_check
 Created /agents/legal/
    agent.py        <- boilerplate logic ready to customize
    config.yaml     <- pre-filled from your answers
-   tools.yaml      <- tools with default confidence scores
+   tools.yaml      <- specialized tools (universal tools are implicit)
    prompts/
      system.md     <- LLM-generated starter prompt for legal domain
-   tests/
-     test_agent.py <- basic test scaffold
+   README.md       <- agent overview (domain, pool, accepted keywords)
 ```
+
+`north agent create` also adds the new domain to `prompts/planner.md` so the orchestrator can
+route to it.
 
 The generator uses a reasoning pool call to produce a reasonable starting `system.md` based on the declared domain and tasks. The agent has a running start, not a blank page.
 
 ### 7.4 Tool Graph
 
-Tools are not assigned statically per agent. They exist in a directed graph where edges connect agents to tools. An agent traverses only its own edges, loading only the tools it needs into context. No token waste from irrelevant tool definitions.
+Tools are discovered from the filesystem, not assigned by a hand-written graph. `ToolRegistry`
+(`tools/registry.py`) walks the tool package directories and registers every `Tool` subclass it
+finds. The agent→tool mapping is then a two-tier graph:
 
-**Graph structure:**
+- **Universal tools** (`tools/universal/`) are granted to *every* agent: `read_file`,
+  `write_file`, `glob`, `list_dir`, `search_files`, `web_search`, `fetch_url`,
+  `schedule_task`, `create_tool`, `create_agent`, `query_metrics`.
+- **Specialized tools** are opt-in per agent. Each agent lists the ones it wants in its
+  `tools.yaml`; the registry maps that into the graph at load time.
 
 ```
-Tool Graph (directed):
+Specialized tool edges (from each agent's tools.yaml):
 
-health ──────────────────> nutrition_api
-health ──────────────────> fitness_tracker
-health ──────────────────> calendar_api <── university, job
-health ──────────────────> web_search   <── job, finance, university
+coder ───> bash, shell, git, gh, patch_file
+tester ──> bash, shell, git, gh
+home ────> kasa
+researcher ─> (universal only)
 
-university ──────────────> canvas_api
-university ──────────────> web_search
-university ──────────────> calendar_api
-university ──────────────> gmail_api   <── job, finance
-
-job ─────────────────────> linkedin_api
-job ─────────────────────> gmail_api
-job ─────────────────────> calendar_api
-job ─────────────────────> web_search
-
-finance ─────────────────> market_data_api
-finance ─────────────────> expense_tracker
-finance ─────────────────> web_search
-finance ─────────────────> gmail_api
+Universal tools ── granted to every agent ──> read_file, write_file, glob, list_dir,
+                                              search_files, web_search, fetch_url, …
 ```
 
-Cross-domain tools (calendar_api, web_search, gmail_api) are graph nodes with multiple incoming edges. The agent traverses its own edges and picks up shared tools naturally through the graph structure.
+`tools_for_agent(agent)` returns the universal set plus that agent's specialized set, sorted
+by confidence score (§8). `update_graph(agent, names)` adjusts edges at runtime — e.g. when a
+tool is hot-loaded mid-task by `create_tool`. An agent loads only its own tools into context,
+so there is no token waste from irrelevant tool definitions.
 
 **Context loading order:** when an agent spins up, it loads its tool definitions into context sorted by confidence score descending. Low confidence tools are only loaded if the specific task explicitly requires them. This keeps the agent's context window lean.
 
@@ -1428,8 +1432,8 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
    Ledger write (async): source=system, action="routed", agents=["job","university"]
 
 5. Job agent spins up (reasoning pool, high priority):
-   Traverses tool graph: calendar_api [0.9], web_search [0.7], gmail_api [0.6]
-   Loads those three tool definitions into context (sorted by confidence).
+   Loads its tools (universal set + specialized) sorted by confidence: web_search [0.9], read_file [0.7], schedule_task [0.6]
+   Loads those tool definitions into context (sorted by confidence).
    Reads public.md: LinkedIn internship, distributed systems team, June 2nd start.
    Reads judgement_rules.md: prefers mornings for deep work.
    Produces first-week prep plan: onboarding checklist, team research, tool setup.
@@ -1562,21 +1566,18 @@ north/
 
   tools/
     __init__.py
-    base.py             <- Tool (ABC)
-    registry.py         <- tool graph definition and edge traversal
+    base.py             <- Tool, AuthenticatedTool, CacheableTool (ABCs)
+    registry.py         <- ToolRegistry: filesystem discovery + dynamic agent→tool graph
+    tool_index.py       <- tool metadata index
     confidence.py       <- confidence score read/write against tools.db
-    models.py           <- ToolEdge, ToolResult
+    models.py           <- ToolInput, ToolOutput, ConfidenceScore
     exceptions.py
-    implementations/
-      web_search.py
-      calendar_api.py
-      gmail_api.py
-      canvas_api.py
-      nutrition_api.py
-      market_data_api.py
-      linkedin_api.py
-      fitness_tracker.py
-      expense_tracker.py
+    universal/          <- granted to every agent (read_file, write_file, glob, list_dir,
+                           search_files, web_search, fetch_url, schedule_task,
+                           create_tool, create_agent, query_metrics)
+    specialized/        <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
+    semantic/           <- code intelligence (search_symbols, find_references)
+    analysis/           <- static analysis (check_types)
 
   web/
     routes.py           <- Jinja2 routes for all /ui/* pages (configure() singleton)
