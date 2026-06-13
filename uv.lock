@@ -1026,7 +1026,6 @@ dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "numpy", marker = "sys_platform == 'darwin'" },
-    { name = "prompt-toolkit" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -1060,7 +1059,6 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "numpy", marker = "sys_platform == 'darwin'", specifier = ">=1.26.0" },
-    { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
@@ -1176,18 +1174,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/49/e8c8a7bc6b741ab6f15896022eee4f906d04d7ccd15aeeb515dd04bbeb6d/primp-1.3.1-cp314-cp314t-win32.whl", hash = "sha256:4346dcef805279028bf4a54bb87dd43d0920130e25b5790689f5c96c9ba0d9e5", size = 4262615, upload-time = "2026-05-23T17:39:13.88Z" },
     { url = "https://files.pythonhosted.org/packages/a9/84/7ae4a257dec6dff329d4a8d9051d907316095c27ffc8d1ea15c359e6eeb5/primp-1.3.1-cp314-cp314t-win_amd64.whl", hash = "sha256:6c55f152a73b6d6af8ac37bdb648d8bbfd7e656f9ef40d87feb3c0d81cee930a", size = 4660584, upload-time = "2026-05-23T17:39:10.081Z" },
     { url = "https://files.pythonhosted.org/packages/99/20/10e0d96bfaeef1f0cd339ccf9bb8feb4bf798fde93198f7a96c73441080a/primp-1.3.1-cp314-cp314t-win_arm64.whl", hash = "sha256:46a529d74583d6ceba52e15bf4c678fcf24e6d669c1ce935262d5490d1b25801", size = 4623226, upload-time = "2026-05-23T17:38:57.256Z" },
-]
-
-[[package]]
-name = "prompt-toolkit"
-version = "3.0.52"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "wcwidth" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/96/06e01a7b38dce6fe1db213e061a4602dd6032a8a97ef6c1a862537732421/prompt_toolkit-3.0.52.tar.gz", hash = "sha256:28cde192929c8e7321de85de1ddbe736f1375148b02f2e17edd840042b1be855", size = 434198, upload-time = "2025-08-27T15:24:02.057Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/03/0d3ce49e2505ae70cf43bc5bb3033955d2fc9f932163e84dc0779cc47f48/prompt_toolkit-3.0.52-py3-none-any.whl", hash = "sha256:9aac639a3bbd33284347de5ad8d68ecc044b91a762dc39b7c21095fcd6a19955", size = 391431, upload-time = "2025-08-27T15:23:59.498Z" },
 ]
 
 [[package]]
@@ -1882,15 +1868,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f6/b1/8e7077a8641086aea449e1b5752a570f1b5906c64e0a33cd6d93b63a066b/uvicorn-0.47.0.tar.gz", hash = "sha256:7c9a0ea1a9414106bbab7324609c162d8fa0cdcdcb703060987269d77c7bb533", size = 90582, upload-time = "2026-05-14T18:16:54.455Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/15/41/ac2dfdbc1f60c7af4f994c7a335cfa7040c01642b605d65f611cecc2a1e4/uvicorn-0.47.0-py3-none-any.whl", hash = "sha256:2c5715bc12d1892d84752049f400cd1c3cb018514967fdfeb97640443a6a9432", size = 71301, upload-time = "2026-05-14T18:16:51.762Z" },
-]
-
-[[package]]
-name = "wcwidth"
-version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2c/ee/afaf0f85a9a18fe47a67f1e4422ed6cf1fe642f0ae0a2f81166231303c52/wcwidth-0.7.0.tar.gz", hash = "sha256:90e3a7ea092341c44b99562e75d09e4d5160fe7a3974c6fb842a101a95e7eed0", size = 182132, upload-time = "2026-05-02T16:04:12.653Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/52/e465037f5375f43533d1a80b6923955201596a99142ed524d77b571a1418/wcwidth-0.7.0-py3-none-any.whl", hash = "sha256:5d69154c429a82910e241c738cd0e2976fac8a2dd47a1a805f4afed1c0f136f2", size = 110825, upload-time = "2026-05-02T16:04:11.033Z" },
 ]
 
 [[package]]

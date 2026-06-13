@@ -98,6 +98,13 @@ def _safe_next(next: str) -> str:
     return next
 
 
+def _is_loopback(request: Request) -> bool:
+    # Skip the Secure cookie flag only on loopback, where there is no plaintext
+    # network hop and a developer is typically on http://127.0.0.1 / localhost.
+    host = (request.url.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
 @auth_router.get("/auth", include_in_schema=False)
 async def auth_form(request: Request, next: str = "/ui/") -> HTMLResponse:
     """Render the sign-in form.
@@ -129,6 +136,7 @@ async def auth_submit(request: Request) -> Response:
         key=SESSION_COOKIE,
         value=issue_session_token(),
         httponly=True,
+        secure=not _is_loopback(request),
         samesite="strict",
         path="/",
     )
@@ -307,7 +315,7 @@ async def job_cancel(request: Request, job_id: str) -> RedirectResponse:
 
 
 @router.post("/jobs/schedule/oneshot", include_in_schema=False)
-async def schedule_oneshot(request: Request) -> RedirectResponse:
+async def schedule_oneshot(request: Request) -> Response:
     """Create a one-shot job from the web form."""
     from datetime import datetime
 
@@ -319,29 +327,37 @@ async def schedule_oneshot(request: Request) -> RedirectResponse:
     agent = str(form.get("agent", "general")).strip()
     run_at_str = str(form.get("run_at", "")).strip()
 
-    if task and run_at_str and _job_processor is not None:
-        try:
-            scheduled_at = datetime.fromisoformat(run_at_str)
-            if scheduled_at.tzinfo is None:
-                scheduled_at = scheduled_at.replace(tzinfo=UTC)
-            job = Job(
-                job_id=generate_id(),
-                type=JobType.ASYNC,
-                agent=agent,
-                task=task,
-                payload={"scheduled_by": "web_ui"},
-                priority=JobPriority.MEDIUM,
-                scheduled_at=scheduled_at,
-            )
-            await _job_processor.enqueue(job)
-        except (ValueError, Exception):
-            pass
+    if not (task and run_at_str and _job_processor is not None):
+        return RedirectResponse(url="/ui/jobs", status_code=303)
+
+    # Only the parsing/validation of user input is fragile — keep the try narrow
+    # so a real failure inside enqueue() propagates and gets logged.
+    try:
+        scheduled_at = datetime.fromisoformat(run_at_str)
+    except (ValueError, TypeError):
+        return HTMLResponse(
+            content="<h1>400 — Bad Request</h1><p>Invalid run-at time. "
+            "<a href='/ui/jobs'>Back to jobs</a>.</p>",
+            status_code=400,
+        )
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=UTC)
+    job = Job(
+        job_id=generate_id(),
+        type=JobType.ASYNC,
+        agent=agent,
+        task=task,
+        payload={"scheduled_by": "web_ui"},
+        priority=JobPriority.MEDIUM,
+        scheduled_at=scheduled_at,
+    )
+    await _job_processor.enqueue(job)
 
     return RedirectResponse(url="/ui/jobs", status_code=303)
 
 
 @router.post("/jobs/schedule/recurring", include_in_schema=False)
-async def schedule_recurring(request: Request) -> RedirectResponse:
+async def schedule_recurring(request: Request) -> Response:
     """Create a recurring cron entry from the web form."""
     import re
 
@@ -353,22 +369,31 @@ async def schedule_recurring(request: Request) -> RedirectResponse:
     minute_str = str(form.get("minute", "0")).strip()
     weekday_str = str(form.get("weekday", "")).strip()
 
-    if task and hour_str and _cron_store is not None:
-        try:
-            hour = int(hour_str)
-            minute = int(minute_str) if minute_str else 0
-            weekday = int(weekday_str) if weekday_str else None
-            entry_name = name or "user_" + re.sub(r"[^a-z0-9]+", "_", task.lower())[:40].strip("_")
-            await _cron_store.add(
-                name=entry_name,
-                agent=agent,
-                task=task,
-                hour=hour,
-                minute=minute,
-                weekday=weekday,
-            )
-        except (ValueError, Exception):
-            pass
+    if not (task and hour_str and _cron_store is not None):
+        return RedirectResponse(url="/ui/jobs", status_code=303)
+
+    # Only the int() parsing of user input is fragile — keep the try narrow so a
+    # real failure inside _cron_store.add() propagates and gets logged.
+    try:
+        hour = int(hour_str)
+        minute = int(minute_str) if minute_str else 0
+        weekday = int(weekday_str) if weekday_str else None
+    except (ValueError, TypeError):
+        return HTMLResponse(
+            content="<h1>400 — Bad Request</h1><p>Hour, minute, and weekday must be numbers. "
+            "<a href='/ui/jobs'>Back to jobs</a>.</p>",
+            status_code=400,
+        )
+
+    entry_name = name or "user_" + re.sub(r"[^a-z0-9]+", "_", task.lower())[:40].strip("_")
+    await _cron_store.add(
+        name=entry_name,
+        agent=agent,
+        task=task,
+        hour=hour,
+        minute=minute,
+        weekday=weekday,
+    )
 
     return RedirectResponse(url="/ui/jobs", status_code=303)
 

@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from utils.db import open_db_connection
+from utils.math import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -30,18 +31,6 @@ CREATE TABLE IF NOT EXISTS context_embeddings (
 """
 
 EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
-
-
-def _cosine(a: list[float], b: list[float]) -> float:
-    import numpy as np  # already a project dependency
-
-    va = np.array(a, dtype=float)
-    vb = np.array(b, dtype=float)
-    na = float(np.linalg.norm(va))
-    nb = float(np.linalg.norm(vb))
-    if na == 0 or nb == 0:
-        return 0.0
-    return float(np.dot(va, vb) / (na * nb))
 
 
 def _split_paragraphs(text: str) -> list[str]:
@@ -106,7 +95,7 @@ class EmbeddingIndex:
 
         scored: list[tuple[float, str, str]] = []
         for doc, chunk_text, emb in self._cache:
-            sim = _cosine(qvec, emb)
+            sim = cosine_similarity(qvec, emb)
             label = doc.removesuffix(".md").replace("_", " ").title()
             scored.append((sim, label, chunk_text))
         scored.sort(key=lambda x: x[0], reverse=True)

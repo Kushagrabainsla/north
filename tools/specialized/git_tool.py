@@ -130,7 +130,10 @@ class GitTool(Tool):
         if not shutil.which("git"):
             return ToolOutput(success=False, error="git is not installed or not in PATH.")
 
-        cmd = _build_command(action, args)
+        try:
+            cmd = _build_command(action, args)
+        except ValueError as exc:
+            return ToolOutput(success=False, error=f"Could not parse args: {exc}")
         if cmd is None:
             return ToolOutput(
                 success=False,
@@ -175,10 +178,9 @@ def _is_mutating(action: str, cmd: list[str]) -> bool:
 
 def _build_command(action: str, args: str) -> list[str] | None:
     base: list[str] = ["git"]
-    try:
-        arg_parts = shlex.split(args) if args else []
-    except ValueError:
-        arg_parts = args.split()
+    # shlex.split honours quoting so paths/refs containing spaces survive intact;
+    # a malformed quote raises ValueError, surfaced as a tool error by the caller.
+    arg_parts = shlex.split(args) if args else []
 
     match action:
         case "status":

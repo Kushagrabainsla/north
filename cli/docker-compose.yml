@@ -1,14 +1,24 @@
+# Canonical end-user compose file (image-based). This is what `north start
+# --docker` resolves to. For a source-build variant used in local development,
+# see docker-compose.dev.yml at the repo root (selected explicitly, never
+# auto-discovered).
 services:
   north:
     image: ghcr.io/kushagrabainsla/north:latest
+    # Bind to loopback only by default. north holds your secret and can drive
+    # tools, so LAN/public exposure is an explicit opt-in: change this to
+    # "8000:8000" (all interfaces) only if you understand the network risk.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      - north_data:/data
-      - ${HOME}:${HOME}
+      - north_data:/data  # Persists ledger, context, jobs, and secret across restarts
+      # Mount a single explicit workspace — never your whole $HOME. Broader
+      # mounts are an explicit opt-in: point NORTH_NORTH_WORKSPACE at the
+      # directory you want agents to read/write.
+      - ${NORTH_NORTH_WORKSPACE:-./workspace}:/workspace
     environment:
       - NORTH_HOME=/data
-      - NORTH_NORTH_WORKSPACE=${NORTH_NORTH_WORKSPACE:-${PWD}}  # Never default to $HOME — workspace scopes tool access
+      - NORTH_NORTH_WORKSPACE=/workspace  # Workspace root inside the container scopes tool access
       - NORTH_SECRET=${NORTH_SECRET:-}
       - NORTH_OPENROUTER_API_KEY=${NORTH_OPENROUTER_API_KEY:-}
       - NORTH_ENV=${NORTH_ENV:-production}

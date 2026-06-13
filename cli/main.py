@@ -223,9 +223,7 @@ def _launch_tui(
 
         log_path = settings.north_home / "north.log"
         pid_path = settings.north_home / "north.pid"
-        # Default to the enclosing repo (or CWD) — never $HOME, which would
-        # put every dotfile and credential dir inside the tool workspace.
-        resolved_workspace = workspace or str(_find_git_root(Path.cwd()))
+        resolved_workspace = _resolve_workspace(workspace)
 
         cmd = [
             sys.executable,
@@ -248,7 +246,7 @@ def _launch_tui(
 
     base_url = f"http://{host}:{port}"
     headers = _headers()
-    resolved_workspace = workspace or str(_find_git_root(Path.cwd()))
+    resolved_workspace = _resolve_workspace(workspace)
 
     import asyncio
 
@@ -305,7 +303,7 @@ def task_default(
     if prompt is None:
         typer.echo(ctx.get_help())
         raise typer.Exit()
-    resolved = workspace or str(_find_git_root(Path.cwd()))
+    resolved = _resolve_workspace(workspace)
     _run_task(prompt, workspace=resolved)
 
 
@@ -1448,12 +1446,17 @@ def _kill_port(host: str, port: int) -> bool:
 
 
 def _find_compose_file() -> Path | None:
-    """Return the compose file to use.
+    """Return the canonical (image-based) compose file to use.
 
     Priority:
-    1. Walk up from CWD — lets developers use their local repo copy (with build: .).
+    1. Walk up from CWD for a docker-compose.yml the user dropped in their tree.
     2. ~/.north/docker-compose.yml — written on first run from the bundled copy.
     3. Bundled copy inside the installed package (cli/docker-compose.yml).
+
+    The source-build variant lives at docker-compose.dev.yml and is selected
+    explicitly (docker compose -f docker-compose.dev.yml …); it is intentionally
+    never auto-discovered here, so `north start --docker` behaves identically
+    regardless of the working directory.
     """
     north_home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
     installed = north_home / "docker-compose.yml"
@@ -1482,6 +1485,22 @@ def _find_git_root(start: Path) -> Path:
     return current
 
 
+def _resolve_workspace(explicit: str | None) -> str:
+    """Resolve the effective workspace root — the single source of truth.
+
+    An explicit --workspace always wins. Otherwise default to the enclosing git
+    root, except when that root is $HOME itself (e.g. a dotfiles repo at ~/.git),
+    in which case fall back to the current directory so the tool sandbox is never
+    silently widened to the whole home directory. Running directly in $HOME still
+    yields $HOME because cwd is home.
+    """
+    if explicit:
+        return str(Path(explicit).resolve())
+    cwd = Path.cwd()
+    root = _find_git_root(cwd)
+    return str(cwd if root == Path.home() else root)
+
+
 def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
@@ -1497,7 +1516,7 @@ def start(
         None,
         "--workspace",
         "-w",
-        help="Root directory agents can read/write. Defaults to current directory.",
+        help="Root directory agents can read/write. Defaults to the git root of the current directory.",
     ),
 ) -> None:
     """Start north, then drop into interactive chat.
@@ -1506,8 +1525,7 @@ def start(
     on your own machine. Pass --docker for server or headless deployments.
     Pass --no-chat to start the server without entering the chat REPL.
     """
-    base = Path(workspace).resolve() if workspace else Path.cwd()
-    resolved_workspace = str(base)
+    resolved_workspace = _resolve_workspace(workspace)
 
     compose_file = _find_compose_file()
     use_docker = docker and _docker_available() and compose_file is not None
@@ -1912,7 +1930,7 @@ def _start_server_process(port: int, project_root: Path | None = None) -> subpro
     workspace = (
         workspace_path.read_text(encoding="utf-8").strip()
         if workspace_path.exists()
-        else str(_find_git_root(Path.cwd()))
+        else _resolve_workspace(None)
     )
     cmd = [
         sys.executable,

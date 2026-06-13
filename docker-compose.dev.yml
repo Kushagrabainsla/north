@@ -1,0 +1,36 @@
+# Local-development compose file (source build). Select it explicitly:
+#   docker compose -f docker-compose.dev.yml up --build
+# It is intentionally NOT auto-discovered by `north start --docker`, which uses
+# the canonical image-based cli/docker-compose.yml. Same security posture as the
+# canonical file: loopback-only port and a single explicit workspace mount —
+# LAN exposure and broader mounts are an explicit opt-in.
+services:
+  north:
+    build: .
+    image: north:local
+    # Bind to loopback only by default — see the canonical compose file for the
+    # rationale. Change to "8000:8000" to expose on the LAN only if you accept
+    # the network risk.
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - north_data:/data  # Persists ledger, context, jobs, and secret across restarts
+      # Mount a single explicit workspace — never your whole $HOME.
+      - ${NORTH_NORTH_WORKSPACE:-./workspace}:/workspace
+    environment:
+      - NORTH_HOME=/data
+      - NORTH_NORTH_WORKSPACE=/workspace  # Workspace root inside the container scopes tool access
+      - NORTH_SECRET=${NORTH_SECRET:-}  # Auto-generated if omitted
+      - NORTH_OPENROUTER_API_KEY=${NORTH_OPENROUTER_API_KEY:-}
+      - NORTH_ENV=${NORTH_ENV:-production}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  north_data:
+    driver: local

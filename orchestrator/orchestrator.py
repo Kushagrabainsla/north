@@ -403,6 +403,15 @@ class Orchestrator:
             )
             await self._stream_manager.emit(task_id, "task_failed", {"error": str(e), "error_type": error_type})
             await self._stream_manager.emit_done(task_id)
+        finally:
+            # Reap this task's tracked cost exactly once, regardless of exit path.
+            # The success/failure/conflict/cancel paths already pop it to record
+            # the cost in the ledger; popping again here is a no-op (pop_task_cost
+            # returns 0.0 when absent), so this only catches tasks that recorded
+            # cost but never reached one of those pops — preventing an unbounded
+            # leak in CostTracker._task_costs on a long-lived server.
+            if self._tracked_router is not None:
+                self._tracked_router.pop_task_cost(task_id)
 
     async def _stage_plan(self, task_id: str, prompt: str) -> tuple[IntentClassification, ExecutionPlan]:
         """Stages 1+3: Classify intent and build execution plan in one LLM call."""
