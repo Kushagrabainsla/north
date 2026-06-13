@@ -5,14 +5,40 @@ See docs/CODING_STYLE.md Section 17.
 
 from __future__ import annotations
 
+import logging
 import os
 import stat as _stat
-import warnings
 from pathlib import Path
 from typing import Literal
 
 from pydantic import PrivateAttr
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
+
+
+def read_secret_file(secret_file: Path) -> str:
+    """Read a secret key file, enforcing owner-only permissions (fail closed).
+
+    A group/world-readable key file is tightened to 0600 before the secret is
+    used; if that fails the read is refused rather than proceeding with an
+    exposed key.
+    """
+    mode = secret_file.stat().st_mode
+    if mode & (_stat.S_IRWXG | _stat.S_IRWXO):
+        try:
+            secret_file.chmod(0o600)
+            logger.warning(
+                "%s was group/world-accessible (mode %s) — permissions tightened to 0600.",
+                secret_file,
+                oct(mode & 0o777),
+            )
+        except OSError as exc:
+            raise PermissionError(
+                f"{secret_file} is group/world-accessible (mode {oct(mode & 0o777)}) and could not be "
+                f"fixed automatically ({exc}). Run: chmod 600 {secret_file}"
+            ) from exc
+    return secret_file.read_text(encoding="utf-8").strip()
 
 
 class Settings(BaseSettings):
@@ -33,7 +59,9 @@ class Settings(BaseSettings):
     north_home: Path = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
 
     # Default workspace for filesystem/shell tools when no workspace is provided per-request.
-    # Set via NORTH_NORTH_WORKSPACE env var. In Docker, defaults to $HOME via docker-compose.
+    # Set via NORTH_NORTH_WORKSPACE env var. Must never default to $HOME — the workspace
+    # scopes what tools may touch, and even an explicit broad root cannot re-open the
+    # sensitive-path blocklist (~/.ssh, ~/.north, /etc, ...; see tools/_path.py).
     north_workspace: str = ""
 
     # Pre-shared secret override — set NORTH_SECRET in Docker instead of using a key file
@@ -77,13 +105,7 @@ class Settings(BaseSettings):
         secret_file = self.north_home / "secret.key"
         if not secret_file.exists():
             return ""
-        mode = secret_file.stat().st_mode
-        if mode & (_stat.S_IRGRP | _stat.S_IROTH):
-            warnings.warn(
-                f"{secret_file} is world/group-readable (mode {oct(mode & 0o777)}). Run: chmod 600 ~/.north/secret.key",
-                stacklevel=2,
-            )
-        value = secret_file.read_text(encoding="utf-8").strip()
+        value = read_secret_file(secret_file)
         self._secret_cache = value
         return value
 
@@ -95,8 +117,11 @@ class Settings(BaseSettings):
     def is_test(self) -> bool:
         return self.north_env == "test"
 
+    # Only ~/.north/.env is a trusted config source. A .env in the CWD is
+    # attacker-influenced in any cloned repo and must never override config
+    # (e.g. NORTH_SECRET), so it is deliberately not loaded.
     model_config = {
-        "env_file": [str(Path.home() / ".north" / ".env"), ".env"],
+        "env_file": str(Path.home() / ".north" / ".env"),
         "env_prefix": "NORTH_",
         "extra": "ignore",
     }

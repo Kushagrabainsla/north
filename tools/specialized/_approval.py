@@ -1,9 +1,12 @@
 """Shared command/diff approval flow for specialized tools.
 
-BashTool, ShellTool, and PatchFileTool all gate an action behind the same
-approval card: optionally consult the learned JudgementFilter, otherwise surface
-a card to the user and wait for a decision. This is the single definition of
-that flow so the three tools never drift (see CODING_STYLE §5 DRY).
+BashTool, ShellTool, PatchFileTool, CreateToolTool, GitTool, GhTool, and
+KasaTool all gate an action behind the same approval card: optionally consult
+the learned JudgementFilter, otherwise surface a card to the user and wait for
+a decision. ``gate_mutating_action`` is the fail-closed wrapper for tools whose
+approval dependencies are optional: without a wired ApprovalStore, mutating
+actions are refused — never silently allowed. This is the single definition of
+that flow so the tools never drift (see CODING_STYLE §5 DRY).
 """
 
 from __future__ import annotations
@@ -78,3 +81,40 @@ async def request_approval_decision(
         approval_store.resolve(card.id, ApprovalDecision.REJECTED)
         return False
     return resolved.chosen_option.lower() == card.options[0].lower()
+
+
+async def gate_mutating_action(
+    approval_store: ApprovalStore | None,
+    *,
+    agent: str,
+    title: str,
+    message: str,
+    task_id: str | None,
+    stream_manager: EventStreamManager | None = None,
+    judgement_filter: JudgementFilter | None = None,
+    timeout: float = 300.0,
+) -> str | None:
+    """Fail-closed approval gate for mutating tool actions.
+
+    Returns ``None`` when the action may proceed, or an error string the tool
+    must return as a failure. Without an ApprovalStore (e.g. an auto-discovered
+    instance that never got its dependencies injected) the action is refused —
+    a missing gate must never mean an open gate.
+    """
+    if approval_store is None:
+        return (
+            f"{agent}: this action mutates state and requires user approval, but no approval "
+            "gate is configured for this tool instance. Refusing (fail closed)."
+        )
+    approved = await request_approval_decision(
+        approval_store,
+        task_id=task_id,
+        agent=agent,
+        title=title,
+        message=message,
+        options=("Approve", "Reject"),
+        stream_manager=stream_manager,
+        judgement_filter=judgement_filter,
+        timeout=timeout,
+    )
+    return None if approved else "Action rejected by user."

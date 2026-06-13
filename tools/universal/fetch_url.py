@@ -1,8 +1,9 @@
 """FetchUrlTool — download and extract readable text from a URL.
 
-Fetches the page with httpx (already a project dependency), strips HTML
-tags via BeautifulSoup (already a project dependency), and returns the
-plain-text content capped at _MAX_CHARS so it fits in a model context window.
+Fetches the page via the SSRF-guarded helper in utils/net (private/internal
+addresses are blocked, redirects re-validated, size and time capped), strips
+HTML tags, and returns the plain-text content capped at _MAX_CHARS so it fits
+in a model context window.
 """
 
 from __future__ import annotations
@@ -13,10 +14,10 @@ import httpx
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from utils.net import UnsafeUrlError, fetch_url_text
 from utils.text import strip_html
 
 _MAX_CHARS = 30_000
-_TIMEOUT = 20.0
 
 
 class FetchUrlTool(Tool):
@@ -24,9 +25,10 @@ class FetchUrlTool(Tool):
 
     name = "fetch_url"
     description = (
-        "Fetch a URL and return its readable text content. "
+        "Fetch a public URL and return its readable text content. "
         "Use for reading documentation pages, articles, job postings, or any specific URL "
-        "whose full content matters. Returns plain text, not HTML."
+        "whose full content matters. Returns plain text, not HTML. "
+        "Private/internal network addresses are blocked."
     )
     parameters_schema = {
         "type": "object",
@@ -40,26 +42,20 @@ class FetchUrlTool(Tool):
         url = input.params.get("url", "").strip()
         if not url:
             return ToolOutput(success=False, error="Parameter 'url' is required.")
-        if not url.startswith(("http://", "https://")):
-            return ToolOutput(success=False, error="URL must start with http:// or https://")
         return await asyncio.to_thread(_fetch_sync, url)
 
 
 def _fetch_sync(url: str) -> ToolOutput:
     try:
-        with httpx.Client(timeout=_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(
-                url,
-                headers={"User-Agent": "north/1.0 (personal AI assistant)"},
-            )
-            resp.raise_for_status()
+        fetched = fetch_url_text(url)
+    except UnsafeUrlError as e:
+        return ToolOutput(success=False, error=str(e))
     except httpx.HTTPStatusError as e:
         return ToolOutput(success=False, error=f"HTTP {e.response.status_code}: {url}")
     except httpx.RequestError as e:
         return ToolOutput(success=False, error=f"Request failed: {e}")
 
-    content_type = resp.headers.get("content-type", "")
-    text = strip_html(resp.text) if "html" in content_type else resp.text
+    text = strip_html(fetched.text) if "html" in fetched.content_type else fetched.text
 
     if len(text) > _MAX_CHARS:
         omitted = len(text) - _MAX_CHARS
@@ -68,9 +64,9 @@ def _fetch_sync(url: str) -> ToolOutput:
     return ToolOutput(
         success=True,
         data={
-            "url": url,
+            "url": fetched.url,
             "content": text,
-            "content_type": content_type,
+            "content_type": fetched.content_type,
             "chars": len(text),
         },
     )

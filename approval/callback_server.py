@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from approval.models import ApprovalDecision
 from config.settings import settings
 from utils.security import load_secret, verify_secret
+from utils.version import NORTH_VERSION
 
 
 class CallbackPayload(BaseModel):
@@ -38,7 +39,7 @@ class CallbackResponse(BaseModel):
 app = FastAPI(
     title="north Callback Server",
     description="Receives user action decisions from macOS notifications",
-    version="1.0.0",
+    version=NORTH_VERSION,
 )
 
 

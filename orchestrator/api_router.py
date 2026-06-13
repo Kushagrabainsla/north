@@ -150,14 +150,33 @@ class TranscriptionOut(BaseModel):
     cost_usd: float
 
 
+# 25 MB ≈ 25 minutes of 16-bit 16 kHz WAV — far more than a dictation clip.
+# Bounding the read prevents a single request from exhausting memory and
+# putting an unbounded payload in front of a paid transcription API.
+MAX_TRANSCRIBE_BYTES = 25 * 1024 * 1024
+
+
+async def _read_body_capped(request: Request, max_bytes: int) -> bytes:
+    """Read the request body, rejecting payloads larger than *max_bytes* (413)."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"Body exceeds {max_bytes} byte limit.")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"Body exceeds {max_bytes} byte limit.")
+    return bytes(body)
+
+
 @router.post("/transcribe", response_model=TranscriptionOut)
 async def transcribe_audio(request: Request) -> TranscriptionOut:
     """Transcribe raw audio bytes (WAV/MP3) via OpenRouter Whisper.
 
-    The request body must be the raw audio file bytes. The Content-Type
-    header should be audio/wav or audio/mpeg.
+    The request body must be the raw audio file bytes (max 25 MB). The
+    Content-Type header should be audio/wav or audio/mpeg.
     """
-    audio_bytes = await request.body()
+    audio_bytes = await _read_body_capped(request, MAX_TRANSCRIBE_BYTES)
     if not audio_bytes:
         raise HTTPException(status_code=422, detail="Empty audio body.")
 
@@ -718,19 +737,28 @@ async def receive_webhook(source: str, request: Request) -> dict:
 
 class ApprovalResponse(BaseModel):
     card_id: str
-    task_id: str
-    agent: str
     decision: str
     chosen_option: str = ""
+    # Legacy fields — ignored. The decision binds to the server-issued card:
+    # task_id and agent are read from the stored card, never trusted from the client.
+    task_id: str = ""
+    agent: str = ""
 
 
 @router.post("/approval/respond", status_code=204)
 async def respond_approval(body: ApprovalResponse) -> None:
-    """Receive an approval decision from the notification callback server or Web UI."""
-    await _get_orchestrator().respond_approval(
-        card_id=body.card_id,
-        task_id=body.task_id,
-        agent=body.agent,
-        decision=body.decision,
-        chosen_option=body.chosen_option,
-    )
+    """Receive an approval decision from the notification callback server or Web UI.
+
+    The card_id must reference a pending card issued by this server; the
+    task/agent identity comes from that card, not the request body.
+    """
+    try:
+        await _get_orchestrator().respond_approval(
+            card_id=body.card_id,
+            decision=body.decision,
+            chosen_option=body.chosen_option,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None

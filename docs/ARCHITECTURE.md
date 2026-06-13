@@ -47,7 +47,7 @@ north is a personal AI operating system that runs continuously in the background
 
 ## 2. System Overview
 
-north is built from eight distinct layers. Each has one clear job. Together they form a pipeline from raw input to real-world execution on your behalf.
+north is built from six distinct layers — Perception, Orchestrator, Agent, Approval, plus the shared Ledger and Context layers. Each has one clear job. Together they form a pipeline from raw input to real-world execution on your behalf.
 
 ```
 +-----------------------------------------------------+

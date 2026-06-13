@@ -33,6 +33,7 @@ from agents.context_compaction import (
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.schemas import DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
+from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
 from inference.exceptions import ContextTooLargeError
 from inference.models import ToolCall, ToolCallRequest
@@ -151,10 +152,12 @@ class AgenticLLMAgent(LLMAgent):
     ) -> list[tuple[ToolCall, str, bool]]:
         """Run read-only calls concurrently and mutating calls sequentially.
 
-        Mutating tools (file writes, shell, git) are serialized so concurrent
-        edits to the same file cannot lose an update. Every call is wrapped so a
-        raised exception becomes a failed tool result rather than cancelling its
-        siblings (CODING_STYLE §10.5). Results preserve the original call order.
+        Mutating tools (file writes, shell, git) are serialized under the
+        per-WORKSPACE lock — not per agent instance — so a delegated coder and
+        tester working in the same tree cannot interleave mutations. Every call
+        is wrapped so a raised exception becomes a failed tool result rather
+        than cancelling its siblings (CODING_STYLE §10.5). Results preserve the
+        original call order.
         """
         results: dict[int, tuple[ToolCall, str, bool]] = {}
 
@@ -169,7 +172,14 @@ class AgenticLLMAgent(LLMAgent):
 
         for index, call in enumerate(calls):
             if index not in results:
-                results[index] = await self._safe_execute_call(call, payload, tool_map)
+                if call.name == "delegate_task":
+                    # Never hold the workspace lock across delegation — the
+                    # sub-agent acquires it for its own mutations and would
+                    # deadlock against its parent.
+                    results[index] = await self._safe_execute_call(call, payload, tool_map)
+                else:
+                    async with workspace_lock(payload.workspace):
+                        results[index] = await self._safe_execute_call(call, payload, tool_map)
 
         return [results[index] for index in range(len(calls))]
 
@@ -276,9 +286,7 @@ class AgenticLLMAgent(LLMAgent):
                 and payload.task_id
             ):
                 emitted_model = response.model_used
-                await self._deps.stream_manager.emit(
-                    payload.task_id, "model", {"model": response.model_used}
-                )
+                await self._deps.stream_manager.emit(payload.task_id, "model", {"model": response.model_used})
 
             if response.type == "message":
                 # Final answer — tokens were already streamed via token_cb.
@@ -622,9 +630,7 @@ def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, boo
 
 # Decisions that mean the action was not approved (a user reject, a model "reject",
 # or a timeout treated as rejection).
-_REJECTION_DECISIONS = frozenset(
-    {"reject", ApprovalDecision.REJECTED.value, ApprovalDecision.TIMEOUT_REJECTED.value}
-)
+_REJECTION_DECISIONS = frozenset({"reject", ApprovalDecision.REJECTED.value, ApprovalDecision.TIMEOUT_REJECTED.value})
 
 
 def _is_rejection(decision: str) -> bool:

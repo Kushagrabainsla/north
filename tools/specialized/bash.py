@@ -51,12 +51,9 @@ def _cap(text: str) -> str:
 
 
 # Any of these makes a command compound — chaining, substitution, redirection,
-# subshells, or find's `{}` placeholder. A safe-looking prefix then proves
-# nothing about what actually runs, so the command always goes to approval.
+# subshells, or placeholders. A safe-looking prefix then proves nothing about
+# what actually runs, so the command always goes to approval.
 _SHELL_METACHARS = re.compile(r"[;&|`$<>(){}\n]")
-# find actions that mutate the filesystem or write files; `find` is otherwise
-# read-only and stays on the fast path.
-_FIND_MUTATING_FLAGS = ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls")
 
 
 class CommandSafetyInspector:
@@ -64,8 +61,9 @@ class CommandSafetyInspector:
 
     The prefix list is a convenience fast-path, not a security boundary — but it
     must not be trivially escapable. Compound commands (shell metacharacters),
-    mutating `find` actions, and reads of sensitive paths (~/.ssh, /etc, ...)
-    all fall through to the approval card.
+    filesystem-traversal commands (`find` — it can walk arbitrary trees and run
+    actions), and reads of sensitive paths (~/.ssh, ~/.north, /etc, ...) all
+    fall through to the approval card.
     """
 
     def __init__(self) -> None:
@@ -77,7 +75,6 @@ class CommandSafetyInspector:
             "git branch",
             "cat ",
             "grep ",
-            "find ",
             "ls ",
             "pwd",
             "whoami",
@@ -90,9 +87,19 @@ class CommandSafetyInspector:
         lowered = cleaned.lower()
         if not any(lowered.startswith(prefix) for prefix in self.instant_safe_prefixes):
             return False
-        if lowered.startswith("find ") and any(flag in lowered for flag in _FIND_MUTATING_FLAGS):
+        if lowered.startswith("grep ") and _grep_is_recursive(cleaned):
             return False
         return not references_sensitive_path(cleaned)
+
+
+def _grep_is_recursive(command: str) -> bool:
+    """True when a grep command walks a directory tree (-r/-R/--recursive)."""
+    for token in command.split()[1:]:
+        if token in ("--recursive", "--dereference-recursive"):
+            return True
+        if token.startswith("-") and not token.startswith("--") and ("r" in token or "R" in token):
+            return True
+    return False
 
 
 class BashTool(Tool):

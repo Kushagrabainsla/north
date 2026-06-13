@@ -49,6 +49,7 @@ from rich.text import Text
 
 from cli.tui_v2 import run as _tui_run
 from utils.security import load_secret
+from utils.version import NORTH_VERSION
 
 _console = Console(force_terminal=sys.stdout.isatty())
 
@@ -193,9 +194,7 @@ _TIMEOUT = 30.0
 @app.callback()
 def _root(
     ctx: typer.Context,
-    yolo: bool = typer.Option(
-        False, "--yolo", help="Auto-approve every approval prompt (shows a ⚠ YOLO badge)."
-    ),
+    yolo: bool = typer.Option(False, "--yolo", help="Auto-approve every approval prompt (shows a ⚠ YOLO badge)."),
 ) -> None:
     """north — Personal Life Operating System.
 
@@ -224,7 +223,9 @@ def _launch_tui(
 
         log_path = settings.north_home / "north.log"
         pid_path = settings.north_home / "north.pid"
-        resolved_workspace = workspace or str(Path.home())
+        # Default to the enclosing repo (or CWD) — never $HOME, which would
+        # put every dotfile and credential dir inside the tool workspace.
+        resolved_workspace = workspace or str(_find_git_root(Path.cwd()))
 
         cmd = [
             sys.executable,
@@ -250,7 +251,6 @@ def _launch_tui(
     resolved_workspace = workspace or str(_find_git_root(Path.cwd()))
 
     import asyncio
-
 
     asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace, yolo=yolo))
 
@@ -912,7 +912,7 @@ def create_agent(
                 "model_pool": model_pool,
                 "accepts": accepts,
                 "output_format": "structured_json",
-                "version": "1.0.0",
+                "version": NORTH_VERSION,
                 "class_name": class_name,
             },
             default_flow_style=False,
@@ -1909,7 +1909,11 @@ def _start_server_process(port: int, project_root: Path | None = None) -> subpro
     log_path = settings.north_home / "north.log"
     pid_path = settings.north_home / "north.pid"
     workspace_path = settings.north_home / "workspace.txt"
-    workspace = workspace_path.read_text(encoding="utf-8").strip() if workspace_path.exists() else str(Path.home())
+    workspace = (
+        workspace_path.read_text(encoding="utf-8").strip()
+        if workspace_path.exists()
+        else str(_find_git_root(Path.cwd()))
+    )
     cmd = [
         sys.executable,
         "-m",

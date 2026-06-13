@@ -100,6 +100,10 @@ class Orchestrator:
         self._extraction_pipeline = extraction_pipeline
         # Maps task_id → running asyncio.Task so cancel_task() can stop it.
         self._active_tasks: dict[str, asyncio.Task] = {}
+        # Makes the capacity check-then-register in submit_task atomic — without
+        # it, concurrent submissions could all pass the check before any of them
+        # registers, bypassing MAX_CONCURRENT_TASKS.
+        self._submit_lock = asyncio.Lock()
         # Holds references to short-lived fire-and-forget tasks (episode recording,
         # etc.) so they are not garbage-collected before they finish.
         self._background_tasks: set[asyncio.Task] = set()
@@ -115,31 +119,32 @@ class Orchestrator:
         Raises TaskCapacityError when the concurrent-task cap is reached so
         callers (API routes, webhook handler) can return 429 to the client.
         """
-        if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
-            raise TaskCapacityError(
-                f"Too many concurrent tasks ({len(self._active_tasks)} active, "
-                f"max {MAX_CONCURRENT_TASKS}). Try again once a task finishes."
-            )
-        task_id = generate_task_id()
-        now = utcnow()
+        async with self._submit_lock:
+            if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
+                raise TaskCapacityError(
+                    f"Too many concurrent tasks ({len(self._active_tasks)} active, "
+                    f"max {MAX_CONCURRENT_TASKS}). Try again once a task finishes."
+                )
+            task_id = generate_task_id()
+            now = utcnow()
 
-        # Await the initial write so get_task() never returns None for a live task.
-        await self._write_ledger(
-            LedgerEntry(
-                id=generate_id(),
-                timestamp=now,
-                source=request.source,
-                task_id=task_id,
-                input=request.prompt,
-                action="task_received",
-                status=LedgerStatus.PENDING,
+            # Await the initial write so get_task() never returns None for a live task.
+            await self._write_ledger(
+                LedgerEntry(
+                    id=generate_id(),
+                    timestamp=now,
+                    source=request.source,
+                    task_id=task_id,
+                    input=request.prompt,
+                    action="task_received",
+                    status=LedgerStatus.PENDING,
+                )
             )
-        )
 
-        # Kick off async processing; store handle so cancel_task() can stop it.
-        task = asyncio.create_task(self._process_task(task_id, request))
-        self._active_tasks[task_id] = task
-        task.add_done_callback(lambda _: self._active_tasks.pop(task_id, None))
+            # Kick off async processing; store handle so cancel_task() can stop it.
+            task = asyncio.create_task(self._process_task(task_id, request))
+            self._active_tasks[task_id] = task
+            task.add_done_callback(lambda _: self._active_tasks.pop(task_id, None))
 
         return TaskResponse(
             task_id=task_id,
@@ -189,36 +194,48 @@ class Orchestrator:
     async def respond_approval(
         self,
         card_id: str,
-        task_id: str,
-        agent: str,
         decision: str,
         chosen_option: str,
     ) -> None:
-        """Record a user approval decision from the notification callback or Web UI."""
+        """Record a user approval decision from the notification callback or Web UI.
+
+        The decision is bound to the server-issued card: task_id and agent are
+        taken from the stored card, never from the client, and a card can only
+        be resolved while it is pending.
+
+        Raises:
+            LookupError: card_id does not correspond to an issued card.
+            ValueError: the card was already resolved.
+        """
+        card = self._approval_store.get(card_id)
+        if card is None:
+            raise LookupError(f"Unknown approval card {card_id!r}.")
+        if card.status != "pending":
+            raise ValueError(f"Approval card {card_id!r} is already resolved ({card.status}).")
+
+        if not self._approval_store.resolve(card_id, decision, chosen_option=chosen_option):
+            raise ValueError(f"Approval card {card_id!r} could not be resolved.")
+
         status = LedgerStatus.APPROVED if decision == ApprovalDecision.APPROVED else LedgerStatus.REJECTED
         # Include the card message so the extraction pipeline can learn a
         # meaningful preference fact (e.g. "User always approves X from agent Y").
         # Without this, the input would just be an opaque card_id.
-        card = self._approval_store.get(card_id)
         ledger_input = (
-            f"question: {card.message}\noptions: {', '.join(card.options)}"
-            if card and card.message
-            else f"card_id={card_id}"
+            f"question: {card.message}\noptions: {', '.join(card.options)}" if card.message else f"card_id={card_id}"
         )
         await self._write_ledger(
             LedgerEntry.new(
                 source=LedgerSource.APPROVAL,
-                task_id=task_id,
-                agent=agent,
+                task_id=card.task_id,
+                agent=card.agent,
                 action=f"approval_responded: {decision}",
                 input=ledger_input,
                 output=f"chosen_option={chosen_option or decision}",
                 status=status,
             )
         )
-        self._approval_store.resolve(card_id, decision, chosen_option=chosen_option)
         await self._stream_manager.emit(
-            task_id,
+            card.task_id,
             "approval_responded",
             {
                 "card_id": card_id,
@@ -493,18 +510,23 @@ class Orchestrator:
         try:
             aligned, tension, reasoning = await self._north_star_checker.check_alignment(prompt, task_id=task_id)
         except OrchestratorError as e:
-            logger.warning("North Star check skipped (inference unavailable): %s", e)
+            # Fail CLOSED: a consequential task whose alignment cannot be
+            # evaluated is blocked, not waved through. The user can resubmit
+            # once inference is available again.
+            logger.warning("North Star check failed — blocking task (fail closed): %s", e)
             await self._write_ledger(
                 LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     task_id=task_id,
-                    action="north_star_check_skipped",
+                    action="north_star_check_failed",
                     output=str(e),
-                    status=LedgerStatus.COMPLETED,
+                    status=LedgerStatus.FAILED,
                 )
             )
-            await self._stream_manager.emit(task_id, "north_star_check_skipped", {"reason": str(e)})
-            return
+            await self._stream_manager.emit(task_id, "north_star_check_failed", {"reason": str(e)})
+            raise NorthStarConflictError(
+                f"North Star alignment could not be evaluated — task blocked (fail closed): {e}"
+            ) from e
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
         await self._write_ledger(

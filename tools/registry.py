@@ -1,10 +1,16 @@
-"""Tool registry with auto-discovery from tools/universal/ and tools/specialized/.
+"""Tool registry with auto-discovery from the tool package directories.
 
-Universal tools are given to every agent automatically.
-Specialized tools are available to agents that declare them in tools.yaml.
+Universal tools are given to every agent automatically. tools/universal/,
+tools/analysis/, and tools/semantic/ are all universal directories — the
+analysis/semantic helpers (check_types, search_symbols, find_references) are
+read-only and the coder/tester workflows depend on them, so they must always
+resolve in the registry.
+Specialized tools (tools/specialized/) are available to agents that declare
+them in tools.yaml.
 
 To add a new tool:
-  - Drop a .py file with a Tool subclass into tools/universal/ → all agents get it
+  - Drop a .py file with a Tool subclass into tools/universal/, tools/analysis/,
+    or tools/semantic/ → all agents get it
   - Drop a .py file with a Tool subclass into tools/specialized/ → agents opt in via tools.yaml
   - Tools that need constructor args (e.g. ScheduleTaskTool) are registered manually via
     tool_registry.register() after auto-discovery — they just need to be in specialized/.
@@ -24,6 +30,13 @@ from tools.exceptions import ToolNotFoundError
 logger = logging.getLogger(__name__)
 
 _TOOLS_ROOT = Path(__file__).parent
+# Directories whose tools every agent receives. analysis/ and semantic/ hold
+# the read-only coding helpers the coder/tester prompts are built around.
+_UNIVERSAL_DIRS: tuple[tuple[str, str], ...] = (
+    ("universal", "tools.universal"),
+    ("analysis", "tools.analysis"),
+    ("semantic", "tools.semantic"),
+)
 # Hot-reload TTL: re-scan tool directories at most once per this many seconds.
 # Short enough that tools written by create_tool mid-task appear quickly;
 # long enough that a 12-iteration ReAct loop doesn't scan 12 times.
@@ -94,10 +107,11 @@ class ToolRegistry:
             self._auto_discover()
 
     def _auto_discover(self) -> None:
-        universal = _discover(_TOOLS_ROOT / "universal", "tools.universal")
-        for tool in universal.values():
-            self._tools[tool.name] = tool
-        self._universal = list(universal.keys())
+        self._universal = []
+        for directory, package in _UNIVERSAL_DIRS:
+            for tool in _discover(_TOOLS_ROOT / directory, package).values():
+                self._tools[tool.name] = tool
+                self._universal.append(tool.name)
 
         specialized = _discover(_TOOLS_ROOT / "specialized", "tools.specialized")
         for tool in specialized.values():
@@ -109,13 +123,13 @@ class ToolRegistry:
         Only adds tools not already registered — existing tools are not
         replaced so in-flight tasks are unaffected.
         """
-        universal = _discover(_TOOLS_ROOT / "universal", "tools.universal")
-        for tool in universal.values():
-            if tool.name not in self._tools:
-                self._tools[tool.name] = tool
-                if tool.name not in self._universal:
-                    self._universal.append(tool.name)
-                logger.info("ToolRegistry.reload: picked up new universal tool %r", tool.name)
+        for directory, package in _UNIVERSAL_DIRS:
+            for tool in _discover(_TOOLS_ROOT / directory, package).values():
+                if tool.name not in self._tools:
+                    self._tools[tool.name] = tool
+                    if tool.name not in self._universal:
+                        self._universal.append(tool.name)
+                    logger.info("ToolRegistry.reload: picked up new universal tool %r", tool.name)
 
         specialized = _discover(_TOOLS_ROOT / "specialized", "tools.specialized")
         for tool in specialized.values():

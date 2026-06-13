@@ -90,14 +90,11 @@ class ContextInjector:
         return await self._ingest(text, source_hint=f"file:{filename}", task_id=task_id)
 
     async def inject_url(self, url: str, task_id: str | None = None) -> ContextDocument:
-        """Fetch a URL and ingest its text content."""
-        import httpx
+        """Fetch a URL (SSRF-guarded — public hosts only) and ingest its text content."""
+        from utils.net import fetch_url_text
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
-            text = strip_html(response.text) if "html" in content_type else response.text
+        fetched = await asyncio.to_thread(fetch_url_text, url, timeout=30.0)
+        text = strip_html(fetched.text) if "html" in fetched.content_type else fetched.text
 
         return await self._ingest(text, source_hint=f"url:{url}", task_id=task_id)
 

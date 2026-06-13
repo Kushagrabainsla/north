@@ -185,6 +185,16 @@ class CreateToolTool(Tool):
         if action == "read":
             return _read_tool(input.params.get("name") or "")
         if action in ("create", "update"):
+            # Fail closed: model-authored code may be hot-loaded into the live
+            # process, so it must never land without a human looking at it.
+            if self._approval_store is None:
+                return ToolOutput(
+                    success=False,
+                    error=(
+                        "create_tool: tool create/update requires user approval, but no approval "
+                        "gate is configured for this tool instance. Refusing (fail closed)."
+                    ),
+                )
             if not await self._request_approval(input.params, action):
                 return ToolOutput(success=False, error="Tool creation cancelled by user.")
             return self._create(input.params) if action == "create" else self._update(input.params)
@@ -193,8 +203,6 @@ class CreateToolTool(Tool):
 
     async def _request_approval(self, params: dict, action: str) -> bool:
         """Show the proposed tool code to the user and wait for a decision."""
-        if self._approval_store is None:
-            return True
         name = params.get("name", "unknown")
         tool_type = params.get("tool_type", "specialized")
         content = (params.get("content") or "").strip()
@@ -379,17 +387,48 @@ _FORBIDDEN_IMPORTS: frozenset[str] = frozenset(
         "multiprocessing",
         "signal",
         "threading",
+        # Dynamic import / interpreter escape hatches that defeat this check.
+        "importlib",
+        "builtins",
+        "runpy",
+        "code",
+        "codeop",
+        "pickle",
+        "marshal",
+        "shutil",
+        "sys",
     }
 )
-_FORBIDDEN_CALLS: frozenset[str] = frozenset({"exec", "eval", "compile", "__import__"})
+_FORBIDDEN_CALLS: frozenset[str] = frozenset(
+    {
+        "exec",
+        "eval",
+        "compile",
+        "__import__",
+        # Filesystem and reflection escapes: open() reads any file; getattr &
+        # friends reconstruct any of the above from strings.
+        "open",
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "locals",
+        "vars",
+        "breakpoint",
+    }
+)
+_FORBIDDEN_ATTRIBUTES: frozenset[str] = frozenset({"__builtins__", "__globals__", "__subclasses__", "__import__"})
 
 
 def _check_code_safety(code: str) -> tuple[bool, str]:
-    """Parse `code` with the AST and reject obviously dangerous patterns.
+    """Parse `code` with the AST and reject dangerous patterns.
 
     Returns (safe, reason). `reason` is empty when safe.
-    Does NOT sandbox execution — this is a static best-effort check, not a
-    security boundary. The real boundary is the user approval gate.
+    Denies dynamic-import/reflection escapes (importlib, builtins, getattr,
+    open, dunder access) in addition to direct process/network primitives.
+    Does NOT sandbox execution — the hot-load only happens after the user has
+    approved the exact code, and that approval gate is the real boundary; this
+    check exists to stop obviously dangerous code from even reaching the card.
     """
     try:
         tree = ast.parse(code)
@@ -413,6 +452,10 @@ def _check_code_safety(code: str) -> tuple[bool, str]:
             )
             if func_name in _FORBIDDEN_CALLS:
                 return False, f"Forbidden call: '{func_name}'"
+        if isinstance(node, ast.Attribute) and node.attr in _FORBIDDEN_ATTRIBUTES:
+            return False, f"Forbidden attribute access: '{node.attr}'"
+        if isinstance(node, ast.Name) and node.id in _FORBIDDEN_ATTRIBUTES:
+            return False, f"Forbidden name: '{node.id}'"
 
     return True, ""
 

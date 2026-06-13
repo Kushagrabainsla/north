@@ -44,6 +44,9 @@ from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
 from tools.registry import ToolRegistry
 from tools.specialized.bash import BashTool
+from tools.specialized.gh_tool import GhTool
+from tools.specialized.git_tool import GitTool
+from tools.specialized.kasa_tool import KasaTool
 from tools.specialized.patch_file import PatchFileTool
 from tools.specialized.shell_tool import ShellTool
 from tools.tool_index import ToolIndex
@@ -54,6 +57,7 @@ from tools.universal.schedule_task import ScheduleTaskTool
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
 from utils.time import utcnow
+from utils.version import NORTH_VERSION
 from web.routes import auth_router as web_auth_router
 from web.routes import configure as configure_web
 from web.routes import router as web_router
@@ -74,6 +78,9 @@ _RELIABLE_TOOLS = frozenset(
         "fetch_url",
         "git",
         "patch_file",
+        "check_types",
+        "search_symbols",
+        "find_references",
     }
 )
 
@@ -171,6 +178,18 @@ def _build_tool_registry(
             judgement_filter=judgement_filter,
         )
     )
+    # Override the auto-discovered (gate-less, fail-closed) GitTool/GhTool/KasaTool
+    # with instances wired to the approval flow so their mutating actions surface
+    # approval cards instead of being refused outright.
+    for tool_cls in (GitTool, GhTool, KasaTool):
+        tool_registry.register(
+            tool_cls(
+                approval_store=deps.approval_store,
+                stream_manager=deps.stream_manager,
+                approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+                judgement_filter=judgement_filter,
+            )
+        )
     return tool_registry, create_agent_tool
 
 
@@ -510,9 +529,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="north Orchestrator",
     description="Personal Life Operating System — core API",
-    version="1.0.0",
+    version=NORTH_VERSION,
     lifespan=lifespan,
 )
+
 
 @app.exception_handler(TaskCapacityError)
 async def _task_capacity_handler(request: Request, exc: TaskCapacityError) -> JSONResponse:

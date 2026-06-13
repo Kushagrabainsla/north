@@ -53,15 +53,21 @@ class ApprovalStore:
             self._cards.pop(card.id, None)
             self._events.pop(card.id, None)
 
-    def resolve(self, card_id: str, status: str, chosen_option: str = "") -> None:
-        """Update the status of a card and wake any waiting coroutines."""
-        if card_id in self._cards:
-            self._cards[card_id] = self._cards[card_id].model_copy(
-                update={"status": status, "chosen_option": chosen_option}
-            )
-            event = self._events.get(card_id)
-            if event is not None:
-                event.set()
+    def resolve(self, card_id: str, status: str, chosen_option: str = "") -> bool:
+        """Resolve a pending card and wake any waiting coroutines.
+
+        Returns True when the card existed and was pending. A card that is
+        unknown or already resolved is left untouched (False) — a decision
+        binds to exactly one issued card and cannot be replayed or overwritten.
+        """
+        card = self._cards.get(card_id)
+        if card is None or card.status != "pending":
+            return False
+        self._cards[card_id] = card.model_copy(update={"status": status, "chosen_option": chosen_option})
+        event = self._events.get(card_id)
+        if event is not None:
+            event.set()
+        return True
 
     async def wait_for_decision(self, card_id: str, timeout: float = 300.0) -> Card | None:
         """Block until the card is resolved or *timeout* seconds elapse.

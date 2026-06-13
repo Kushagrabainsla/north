@@ -1,4 +1,11 @@
-"""Search for function and class definitions using AST."""
+"""Search for function and class definitions.
+
+Python files are parsed with the AST (reliable for def/async def/class).
+TypeScript/JavaScript and Go use best-effort regex heuristics: they can match
+text in comments/strings and miss decorated/overloaded or unusually formatted
+declarations. Treat results as a navigation aid, not authoritative semantic
+analysis — verify with check_types or the build.
+"""
 
 from __future__ import annotations
 
@@ -17,9 +24,11 @@ class SearchSymbolsTool(Tool):
 
     name = "search_symbols"
     description = (
-        "Search for function and class definitions in a code file. "
-        "Returns exact line numbers and signatures. "
-        "Supports Python (.py), TypeScript/JavaScript (.ts, .tsx, .js, .jsx), and Go (.go) files."
+        "Find function and class definitions in a code file, with line numbers and signatures. "
+        "Python uses real AST parsing (incl. async def); TypeScript/JavaScript and Go use "
+        "best-effort regex heuristics that may miss unusual declarations or match comments. "
+        "Use it to navigate, then verify changes with check_types or tests. "
+        "Supports .py, .ts, .tsx, .js, .jsx, and .go files."
     )
     parameters_schema = {
         "type": "object",
@@ -96,14 +105,15 @@ def _search_python_symbols(path: Path, search_type: str) -> ToolOutput:
 
     symbols = []
     for node in ast.walk(tree):
-        if search_type in ("function", "all") and isinstance(node, ast.FunctionDef):
+        if search_type in ("function", "all") and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             args = ", ".join(arg.arg for arg in node.args.args)
+            prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
             symbols.append(
                 {
                     "name": node.name,
                     "type": "function",
                     "line": node.lineno,
-                    "signature": f"def {node.name}({args})",
+                    "signature": f"{prefix} {node.name}({args})",
                 }
             )
         elif search_type in ("class", "all") and isinstance(node, ast.ClassDef):

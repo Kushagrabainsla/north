@@ -20,16 +20,27 @@ from jobs.cron_store import UserCronStore
 from jobs.models import JobStatus
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerStatus
-from utils.security import load_secret, verify_request_secret, verify_secret
+from utils.security import SESSION_COOKIE, issue_session_token, verify_request_secret, verify_secret
 
 # Every dashboard route requires the shared secret (header or session cookie),
 # exactly like the API router. The dashboard can read the ledger, resolve
 # approvals, and edit context documents — it must not be weaker than the API.
 router = APIRouter(prefix="/ui", tags=["web"], dependencies=[Depends(verify_request_secret)])
 
-# /ui/auth must stay reachable *without* the cookie (it is how the cookie is
+# /ui/auth must stay reachable *without* the cookie (it is how the session is
 # bootstrapped), so it lives on its own router and validates the secret itself.
 auth_router = APIRouter(prefix="/ui", tags=["web"])
+
+_LOGIN_FORM_HTML = """\
+<h1>north — sign in</h1>
+<p>Paste your north secret (from <code>~/.north/secret.key</code>). It is sent once
+over a POST body and exchanged for a session cookie — never placed in a URL.</p>
+<form method="post" action="/ui/auth">
+  <input type="password" name="secret" autofocus autocomplete="off" />
+  <input type="hidden" name="next" value="{next}" />
+  <button type="submit">Sign in</button>
+</form>
+"""
 
 _templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
@@ -80,30 +91,43 @@ def _get_ledger() -> LedgerWriter:
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 
-@auth_router.get("/auth", include_in_schema=False)
-async def auth(request: Request, next: str = "/ui/", secret: str = "") -> Response:
-    """Exchange the shared secret for an HttpOnly session cookie, then redirect.
-
-    Visit ``/ui/auth?secret=<north secret>`` once per browser session to
-    authenticate the Web UI. The secret must be presented — handing out the
-    cookie unconditionally would let anyone who can reach the port log in.
-    """
-    if not verify_secret(secret):
-        return HTMLResponse(
-            content=(
-                "<h1>403 — Forbidden</h1>"
-                "<p>Open <code>/ui/auth?secret=&lt;your north secret&gt;</code> to sign in. "
-                "The secret is in <code>~/.north/secret.key</code>.</p>"
-            ),
-            status_code=403,
-        )
+def _safe_next(next: str) -> str:
     # Only same-site relative redirects — never to another origin.
     if not next.startswith("/") or next.startswith("//"):
-        next = "/ui/"
-    response = RedirectResponse(url=next, status_code=302)
+        return "/ui/"
+    return next
+
+
+@auth_router.get("/auth", include_in_schema=False)
+async def auth_form(request: Request, next: str = "/ui/") -> HTMLResponse:
+    """Render the sign-in form.
+
+    The secret is never accepted via the query string — URLs land in server
+    logs, browser history, and Referer headers.
+    """
+    return HTMLResponse(content=_LOGIN_FORM_HTML.format(next=_safe_next(next)))
+
+
+@auth_router.post("/auth", include_in_schema=False)
+async def auth_submit(request: Request) -> Response:
+    """Exchange the shared secret (POST body) for a signed session cookie.
+
+    The cookie holds a signed, expiring session token — never the master
+    secret — so a leaked cookie cannot be replayed as an API credential
+    after expiry and never exposes the key itself.
+    """
+    form = await request.form()
+    secret = str(form.get("secret", ""))
+    next_url = _safe_next(str(form.get("next", "/ui/")))
+    if not verify_secret(secret):
+        return HTMLResponse(
+            content="<h1>403 — Forbidden</h1><p>Invalid secret. <a href='/ui/auth'>Try again</a>.</p>",
+            status_code=403,
+        )
+    response = RedirectResponse(url=next_url, status_code=303)
     response.set_cookie(
-        key="north_secret",
-        value=load_secret(),
+        key=SESSION_COOKIE,
+        value=issue_session_token(),
         httponly=True,
         samesite="strict",
         path="/",

@@ -49,9 +49,23 @@ _MIGRATIONS = [
 # Column order for INSERTs. Placeholders are derived from this tuple so the two
 # can never drift (CODING_STYLE §9.6 — no magic count).
 _INSERT_COLUMN_NAMES = (
-    "id", "timestamp", "source", "task_id", "agent", "input", "action", "output",
-    "agent_output", "tools_used", "model_used", "tokens_in", "tokens_out", "cost_usd",
-    "status", "duration_ms", "error_type",
+    "id",
+    "timestamp",
+    "source",
+    "task_id",
+    "agent",
+    "input",
+    "action",
+    "output",
+    "agent_output",
+    "tools_used",
+    "model_used",
+    "tokens_in",
+    "tokens_out",
+    "cost_usd",
+    "status",
+    "duration_ms",
+    "error_type",
 )
 _INSERT_COLUMNS = ", ".join(_INSERT_COLUMN_NAMES)
 _INSERT_PLACEHOLDERS = ", ".join(["?"] * len(_INSERT_COLUMN_NAMES))
@@ -262,12 +276,20 @@ class SQLiteLedgerWriter(LedgerWriter):
                 (since_iso,),
             ).fetchall()
 
+            # A task counts as failed for an agent only when the agent's *latest*
+            # entry for it is 'failed' — a retried attempt that later succeeded
+            # leaves intermediate failed rows behind and must not skew success_rate.
             error_rows = conn.execute(
-                """SELECT agent,
-                          COUNT(DISTINCT task_id) as failed_tasks
-                   FROM ledger
-                   WHERE timestamp >= ? AND agent IS NOT NULL
-                         AND task_id IS NOT NULL AND status = 'failed'
+                """SELECT agent, COUNT(*) as failed_tasks FROM (
+                       SELECT agent, task_id, status,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY agent, task_id
+                                  ORDER BY timestamp DESC, rowid DESC
+                              ) AS rn
+                       FROM ledger
+                       WHERE timestamp >= ? AND agent IS NOT NULL AND task_id IS NOT NULL
+                   )
+                   WHERE rn = 1 AND status = 'failed'
                    GROUP BY agent""",
                 (since_iso,),
             ).fetchall()

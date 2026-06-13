@@ -9,7 +9,7 @@ services:
       - ${HOME}:${HOME}   # Agents can read/write your home directory
     environment:
       - NORTH_HOME=/data
-      - NORTH_NORTH_WORKSPACE=${NORTH_NORTH_WORKSPACE:-${HOME}}
+      - NORTH_NORTH_WORKSPACE=${NORTH_NORTH_WORKSPACE:-${PWD}}  # Never default to $HOME — workspace scopes tool access
       - NORTH_SECRET=${NORTH_SECRET:-}  # Auto-generated if omitted
       - NORTH_OPENROUTER_API_KEY=${NORTH_OPENROUTER_API_KEY:-}
       - NORTH_ENV=${NORTH_ENV:-production}

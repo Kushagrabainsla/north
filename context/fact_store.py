@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS context_facts (
 
 _MAX_FACTS_RETURNED: int = 15
 _DEDUP_SIMILARITY_THRESHOLD: float = 0.85
+# Retention cap: the store holds at most this many facts (oldest evicted on
+# insert), which also bounds every cosine scan and the in-memory cache.
+_MAX_FACTS_STORED: int = 5_000
+# Dedup-on-insert only compares against the most recent rows per category —
+# an O(all rows) scan per insert does not scale and recent facts are the
+# plausible duplicates anyway.
+_DEDUP_SCAN_LIMIT: int = 500
 
 
 class FactStore:
@@ -56,6 +63,9 @@ class FactStore:
             conn.execute(_SCHEMA)
         # (id, content, embedding_vector) — rebuilt lazily, invalidated on insert.
         self._cache: list[tuple[str, str, list[float]]] | None = None
+        # Serializes cache rebuilds: concurrent searches after an invalidation
+        # must not interleave loads and clobber each other's cache.
+        self._cache_lock = asyncio.Lock()
 
     async def add_fact(self, content: str, category: str = "public") -> None:
         """Embed and persist one fact. Silently skips empty content or embed failure.
@@ -98,13 +108,11 @@ class FactStore:
             return await asyncio.to_thread(self._recent_facts_sync, max_results)
         qvec = q_embs[0]
 
-        if self._cache is None:
-            await self._rebuild_cache()
-
-        if not self._cache:
+        cache = await self._get_cache()
+        if not cache:
             return []
 
-        scored = [(content, cosine_similarity(qvec, emb)) for _, content, emb in self._cache if emb]
+        scored = [(content, cosine_similarity(qvec, emb)) for _, content, emb in cache if emb]
         scored.sort(key=lambda x: x[1], reverse=True)
         return [content for content, _ in scored[:max_results]]
 
@@ -118,25 +126,42 @@ class FactStore:
     def invalidate_cache(self) -> None:
         self._cache = None
 
-    async def _rebuild_cache(self) -> None:
-        rows = await asyncio.to_thread(self._load_all_sync)
-        parsed: list[tuple[str, str, list[float]]] = []
-        for row_id, content, emb_json in rows:
-            if emb_json:
-                try:
-                    emb = json.loads(emb_json)
-                    if emb:
-                        parsed.append((row_id, content, emb))
-                except (json.JSONDecodeError, ValueError):
-                    pass
-        self._cache = parsed
+    async def _get_cache(self) -> list[tuple[str, str, list[float]]]:
+        """Return the embedding cache, rebuilding it at most once concurrently.
+
+        The lock prevents the rebuild race: two coroutines that both observe an
+        invalidated cache would otherwise interleave loads and swap in stale or
+        duplicated data. The rebuild is built into a local list and swapped in
+        atomically (single assignment) once complete.
+        """
+        cache = self._cache
+        if cache is not None:
+            return cache
+        async with self._cache_lock:
+            if self._cache is None:
+                rows = await asyncio.to_thread(self._load_all_sync)
+                parsed: list[tuple[str, str, list[float]]] = []
+                for row_id, content, emb_json in rows:
+                    if emb_json:
+                        try:
+                            emb = json.loads(emb_json)
+                            if emb:
+                                parsed.append((row_id, content, emb))
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+                self._cache = parsed
+            return self._cache
 
     def _find_similar_sync(self, category: str, emb: list[float], threshold: float) -> str | None:
-        """Return the id of an existing fact in *category* with similarity >= threshold, or None."""
+        """Return the id of a recent fact in *category* with similarity >= threshold, or None.
+
+        Bounded to the most recent _DEDUP_SCAN_LIMIT rows so insert cost does
+        not grow with total store size.
+        """
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT id, embedding FROM context_facts WHERE category = ?",
-                (category,),
+                "SELECT id, embedding FROM context_facts WHERE category = ? ORDER BY updated_at DESC LIMIT ?",
+                (category, _DEDUP_SCAN_LIMIT),
             ).fetchall()
         for row in rows:
             if not row["embedding"]:
@@ -149,9 +174,7 @@ class FactStore:
                 pass
         return None
 
-    def _insert_or_replace_sync(
-        self, content: str, category: str, emb_json: str, replace_id: str | None
-    ) -> None:
+    def _insert_or_replace_sync(self, content: str, category: str, emb_json: str, replace_id: str | None) -> None:
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
             if replace_id:
@@ -163,6 +186,13 @@ class FactStore:
                 conn.execute(
                     "INSERT INTO context_facts (id, content, category, embedding, updated_at) VALUES (?, ?, ?, ?, ?)",
                     (generate_id(), content, category, emb_json, now),
+                )
+                # Retention: evict the oldest facts beyond the cap so the store
+                # (and every scan over it) stays bounded.
+                conn.execute(
+                    "DELETE FROM context_facts WHERE id NOT IN "
+                    "(SELECT id FROM context_facts ORDER BY updated_at DESC LIMIT ?)",
+                    (_MAX_FACTS_STORED,),
                 )
 
     def _load_all_sync(self) -> list[tuple[str, str, str]]:

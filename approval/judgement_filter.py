@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 _AUTO_CONFIDENCE_THRESHOLD = 0.8
 
+# APPROVAL cards from these sources gate mutating/destructive actions (shell
+# commands, file patches, git/gh writes, runtime tool changes, device control).
+# They are NEVER auto-approved — a human must see them — regardless of what the
+# rules or the LLM say. Auto-rejection stays allowed (rejecting is safe).
+NEVER_AUTO_APPROVE_AGENTS: frozenset[str] = frozenset(
+    {"bash", "shell", "patch_file", "create_tool", "git", "gh", "kasa"}
+)
+
 _PROMPT_TEMPLATE = """\
 You are the Judgement Rules Filter for a personal AI operating system called north.
 
@@ -118,6 +126,18 @@ class JudgementFilter:
         rule = result.get("rule", "")
 
         if decision == "none" or confidence < _AUTO_CONFIDENCE_THRESHOLD:
+            return None, ""
+
+        # Fail-closed gate: destructive tool classes always require a human for
+        # approval. This check is here — in the single producer of auto-decisions
+        # — so every caller (BashTool, ShellTool, PatchFileTool, CreateToolTool,
+        # GitTool, GhTool, agents, the orchestrator) inherits it.
+        if decision == "approved" and card.type == CardType.APPROVAL and card.agent in NEVER_AUTO_APPROVE_AGENTS:
+            logger.info(
+                "JudgementFilter: refusing to auto-approve high-stakes card %s from %r — surfacing to user",
+                card.id,
+                card.agent,
+            )
             return None, ""
 
         logger.info(

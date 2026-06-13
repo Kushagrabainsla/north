@@ -19,15 +19,22 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
-from tools._path import PRUNED_DIRS, resolve_path
+from tools._path import PRUNED_DIRS, SENSITIVE_DIR_NAMES, is_sensitive_path, resolve_path
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
 _MAX_MATCHES = 200
 _RG_TIMEOUT_SECONDS = 30
+# Wall-clock budget for the pure-Python fallback so a pathological regex
+# (ReDoS) cannot wedge an executor thread; checked between files and lines.
+_PY_TIMEOUT_SECONDS = 30.0
+# Individual lines are truncated before matching — catastrophic backtracking
+# cost grows with input length, so bounding the line bounds the worst case.
+_MAX_LINE_CHARS = 2_000
 # Common install locations checked when `rg` is not on PATH (launchd services
 # often run with a minimal PATH that misses Homebrew/cargo).
 _RG_CANDIDATE_PATHS: tuple[str, ...] = (
@@ -145,7 +152,7 @@ class SearchFilesTool(Tool):
         if mode not in _OUTPUT_MODES:
             return ToolOutput(success=False, error=f"output_mode must be one of {sorted(_OUTPUT_MODES)}.")
 
-        options = _SearchOptions(
+        options = SearchOptions(
             globs=_resolve_globs(input.params.get("file_glob", "*"), input.params.get("file_type")),
             mode=mode,
             context=_coerce_int(input.params.get("context"), default=0, minimum=0),
@@ -153,16 +160,10 @@ class SearchFilesTool(Tool):
             case_insensitive=bool(input.params.get("case_insensitive", False)),
         )
 
-        rg = _rg_binary()
-        if rg is not None:
-            result = await asyncio.to_thread(_search_rg, rg, resolved, pattern, options)
-            if result is not None:
-                return result
-            # rg failed structurally (spawn error, unexpected exit) — fall back.
-        return await asyncio.to_thread(_search_sync, resolved, pattern, options)
+        return await run_search(resolved, pattern, options)
 
 
-class _SearchOptions:
+class SearchOptions:
     __slots__ = ("globs", "mode", "context", "limit", "case_insensitive")
 
     def __init__(
@@ -173,6 +174,21 @@ class _SearchOptions:
         self.context = context
         self.limit = limit
         self.case_insensitive = case_insensitive
+
+
+async def run_search(base: Path, pattern: str, options: SearchOptions) -> ToolOutput:
+    """Shared search engine: ripgrep when available, bounded Python fallback otherwise.
+
+    Reused by FindReferencesTool so reference lookup and content search share
+    one engine (and one sensitive-path policy) instead of two walkers.
+    """
+    rg = _rg_binary()
+    if rg is not None:
+        result = await asyncio.to_thread(_search_rg, rg, base, pattern, options)
+        if result is not None:
+            return result
+        # rg failed structurally (spawn error, unexpected exit) — fall back.
+    return await asyncio.to_thread(_search_sync, base, pattern, options)
 
 
 def _coerce_int(value: Any, *, default: int, minimum: int, cap: int | None = None) -> int:
@@ -196,12 +212,14 @@ def _resolve_globs(file_glob: str, file_type: str | None) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
-def _build_rg_command(rg: str, base: Path, pattern: str, options: _SearchOptions) -> list[str]:
+def _build_rg_command(rg: str, base: Path, pattern: str, options: SearchOptions) -> list[str]:
     # --hidden searches dotfiles (.github/, .env...) which agents legitimately
     # need; the pruned-dir globs keep .git and dependency dirs out everywhere,
-    # including outside git repos where .gitignore doesn't apply.
+    # including outside git repos where .gitignore doesn't apply. Sensitive
+    # credential dirs (~/.ssh, ~/.north, ...) are excluded so a broad search
+    # root can never become a secret-exfiltration path.
     cmd = [rg, "--sort", "path", "--hidden", "--no-messages"]
-    for d in sorted(PRUNED_DIRS):
+    for d in sorted(PRUNED_DIRS | SENSITIVE_DIR_NAMES):
         cmd += ["-g", f"!**/{d}/**"]
     for g in options.globs:
         if g and g != "*":
@@ -242,7 +260,7 @@ def _parse_rg_content(stdout: str, limit: int) -> list[dict]:
     return matches
 
 
-def _search_rg(rg: str, base: Path, pattern: str, options: _SearchOptions) -> ToolOutput | None:
+def _search_rg(rg: str, base: Path, pattern: str, options: SearchOptions) -> ToolOutput | None:
     """Search with ripgrep. Returns None when the Python fallback should run instead."""
     cmd = _build_rg_command(rg, base, pattern, options)
     try:
@@ -284,22 +302,26 @@ def _search_rg(rg: str, base: Path, pattern: str, options: _SearchOptions) -> To
 # ---------------------------------------------------------------------------
 
 
+_SKIPPED_DIR_NAMES = PRUNED_DIRS | SENSITIVE_DIR_NAMES
+
+
 def _iter_files(base: Path, globs: tuple[str, ...]):
     if base.is_file():
-        yield base
+        if not is_sensitive_path(base):
+            yield base
         return
     seen: set[Path] = set()
     for glob in globs:
         for file in base.rglob(glob):
             if file in seen or not file.is_file():
                 continue
-            if any(part in PRUNED_DIRS for part in file.relative_to(base).parts):
+            if any(part in _SKIPPED_DIR_NAMES for part in file.relative_to(base).parts):
                 continue
             seen.add(file)
             yield file
 
 
-def _search_sync(base: Path, pattern: str, options: _SearchOptions) -> ToolOutput:
+def _search_sync(base: Path, pattern: str, options: SearchOptions) -> ToolOutput:
     try:
         regex = re.compile(pattern, re.IGNORECASE if options.case_insensitive else 0)
     except re.error as exc:
@@ -308,14 +330,22 @@ def _search_sync(base: Path, pattern: str, options: _SearchOptions) -> ToolOutpu
     matches: list[dict] = []
     files: list[str] = []
     counts: list[dict] = []
+    deadline = time.monotonic() + _PY_TIMEOUT_SECONDS
 
     for file in _iter_files(base, options.globs):
+        if time.monotonic() > deadline:
+            return ToolOutput(success=False, error=f"Search timed out after {_PY_TIMEOUT_SECONDS:.0f}s.")
         try:
             lines = file.read_text(encoding="utf-8").splitlines()
         except (UnicodeDecodeError, OSError):
             continue
 
-        hit_lines = [i for i, line in enumerate(lines) if regex.search(line)]
+        hit_lines: list[int] = []
+        for i, line in enumerate(lines):
+            if i % 1000 == 0 and time.monotonic() > deadline:
+                return ToolOutput(success=False, error=f"Search timed out after {_PY_TIMEOUT_SECONDS:.0f}s.")
+            if regex.search(line[:_MAX_LINE_CHARS]):
+                hit_lines.append(i)
         if not hit_lines:
             continue
 

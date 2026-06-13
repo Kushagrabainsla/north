@@ -14,7 +14,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from tools._path import PRUNED_DIRS, resolve_path
+from tools._path import PRUNED_DIRS, SENSITIVE_DIR_NAMES, resolve_path
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
@@ -76,8 +76,11 @@ def _coerce_limit(value: Any) -> int:
     return min(limit, _MAX_RESULTS) if limit >= 1 else _MAX_RESULTS
 
 
+_SKIPPED_DIR_NAMES = PRUNED_DIRS | SENSITIVE_DIR_NAMES
+
+
 def _is_pruned(path: Path, base: Path) -> bool:
-    return any(part in PRUNED_DIRS for part in path.relative_to(base).parts)
+    return any(part in _SKIPPED_DIR_NAMES for part in path.relative_to(base).parts)
 
 
 def _glob_sync(base: Path, pattern: str, limit: int) -> ToolOutput:
@@ -85,9 +88,7 @@ def _glob_sync(base: Path, pattern: str, limit: int) -> ToolOutput:
         return ToolOutput(success=False, error=f"Not a directory: {base}")
 
     try:
-        candidates = [
-            p for p in base.glob(pattern) if p.is_file() and not _is_pruned(p, base)
-        ]
+        candidates = [p for p in base.glob(pattern) if p.is_file() and not _is_pruned(p, base)]
     except (ValueError, OSError) as exc:
         return ToolOutput(success=False, error=f"Invalid glob pattern: {exc}")
 

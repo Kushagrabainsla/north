@@ -1,37 +1,43 @@
 """GitTool — structured git operations for engineering agents.
 
-Safe read-only operations (status, diff, log, branch, show) execute
-immediately.  Write operations (add, commit, push, stash) are allowed but
-the coder agent's system prompt instructs it to call ``request_approval``
-before any of them.  Truly dangerous operations (force-push, reset --hard,
-clean -fdx) are permanently blocked with a clear error message.
+Safe read-only operations (status, diff, log, show, and listing branches)
+execute immediately. Mutating operations (add, commit, push, pull, checkout,
+stash, merge, branch create/delete) are gated in code behind a user approval
+card — the gate does not rely on the agent's system prompt. Force pushes are
+permanently blocked via token-level argument parsing. reset/clean are not
+offered as actions at all.
 """
 
 from __future__ import annotations
 
 import asyncio
+import shlex
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.specialized._approval import gate_mutating_action
 from tools.specialized._subprocess import run_capture
+
+if TYPE_CHECKING:
+    from approval.judgement_filter import JudgementFilter
+    from approval.store import ApprovalStore
+    from orchestrator.stream import EventStreamManager
 
 _TIMEOUT = 30
 
-# Operations blocked outright — too destructive even with approval.
-_ALWAYS_BLOCKED: frozenset[str] = frozenset(
-    {
-        "push --force",
-        "push -f",
-        "push --force-with-lease",
-        "reset --hard",
-        "clean -f",
-        "clean -fd",
-        "clean -fdx",
-    }
-)
+# Actions that never change repository state. Everything else is mutating and
+# requires in-code approval before the subprocess is spawned.
+_READONLY_ACTIONS: frozenset[str] = frozenset({"status", "diff", "log", "show"})
+# `branch` is read-only only when listing; these flags keep it on the fast path.
+_BRANCH_LIST_FLAGS: frozenset[str] = frozenset({"-a", "-r", "-v", "-vv", "--list", "--all", "--show-current"})
+
+
+def _is_force_flag(token: str) -> bool:
+    """Token-level force detection — robust against `--force-with-lease=ref` etc."""
+    return token == "-f" or token.startswith("--force")
 
 
 class GitTool(Tool):
@@ -41,9 +47,10 @@ class GitTool(Tool):
     is_mutating = True
     description = (
         "Run git operations in the workspace. "
-        "Read-only actions (status, diff, log, branch, show) are safe and execute immediately. "
-        "Write actions (add, commit, push, pull, stash, checkout) require you to call "
-        "request_approval first. Force-push and reset --hard are always blocked."
+        "Read-only actions (status, diff, log, show, branch listing) execute immediately. "
+        "Mutating actions (add, commit, push, pull, checkout, stash, merge, branch create/delete) "
+        "automatically show the user an approval card before running — no separate "
+        "request_approval call is needed. Force-push is always blocked; reset/clean are not available."
     )
     parameters_schema = {
         "type": "object",
@@ -85,6 +92,18 @@ class GitTool(Tool):
         "required": ["action"],
     }
 
+    def __init__(
+        self,
+        approval_store: ApprovalStore | None = None,
+        stream_manager: EventStreamManager | None = None,
+        approval_timeout_seconds: float = 300.0,
+        judgement_filter: JudgementFilter | None = None,
+    ) -> None:
+        self._approval_store = approval_store
+        self._stream_manager = stream_manager
+        self._approval_timeout_seconds = approval_timeout_seconds
+        self._judgement_filter = judgement_filter
+
     def format_output(self, data: dict[str, Any]) -> str:
         stdout = str(data.get("stdout", "")).strip()
         command = str(data.get("command", ""))
@@ -111,7 +130,6 @@ class GitTool(Tool):
         if not shutil.which("git"):
             return ToolOutput(success=False, error="git is not installed or not in PATH.")
 
-        # Build the full git command.
         cmd = _build_command(action, args)
         if cmd is None:
             return ToolOutput(
@@ -120,23 +138,47 @@ class GitTool(Tool):
                 f"Valid: status, diff, log, branch, show, add, commit, push, pull, checkout, stash, merge.",
             )
 
-        # Block permanently dangerous operations.
-        cmd_str = " ".join(cmd[1:])  # everything after "git"
-        for blocked in _ALWAYS_BLOCKED:
-            if cmd_str.startswith(blocked):
-                return ToolOutput(
-                    success=False,
-                    error=(
-                        f"'{cmd_str}' is permanently blocked — too destructive. Use a targeted reset or revert instead."
-                    ),
-                )
+        # Force pushes are permanently blocked — token-level so quoting or flag
+        # reordering cannot slip past a prefix match.
+        if action == "push" and any(_is_force_flag(t) for t in cmd[2:]):
+            return ToolOutput(
+                success=False,
+                error="Force-push is permanently blocked — too destructive. Push to a new branch instead.",
+            )
+
+        if _is_mutating(action, cmd):
+            denial = await gate_mutating_action(
+                self._approval_store,
+                agent="git",
+                title="Git Operation — Approval Required",
+                message=f"```\n{' '.join(cmd)}\n```",
+                task_id=input.params.get("task_id"),
+                stream_manager=self._stream_manager,
+                judgement_filter=self._judgement_filter,
+                timeout=self._approval_timeout_seconds,
+            )
+            if denial is not None:
+                return ToolOutput(success=False, error=denial)
 
         return await asyncio.to_thread(run_capture, cmd, cwd, timeout=_TIMEOUT)
 
 
+def _is_mutating(action: str, cmd: list[str]) -> bool:
+    if action in _READONLY_ACTIONS:
+        return False
+    if action == "branch":
+        # Listing branches is read-only; any non-list flag or positional
+        # argument (create/delete/rename) makes it mutating.
+        return any(token not in _BRANCH_LIST_FLAGS for token in cmd[2:])
+    return True
+
+
 def _build_command(action: str, args: str) -> list[str] | None:
     base: list[str] = ["git"]
-    arg_parts = args.split() if args else []
+    try:
+        arg_parts = shlex.split(args) if args else []
+    except ValueError:
+        arg_parts = args.split()
 
     match action:
         case "status":

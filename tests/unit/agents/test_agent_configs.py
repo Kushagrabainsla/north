@@ -31,15 +31,18 @@ def test_config_loads(name: str) -> None:
     assert config.domain == "engineering"
 
 
-def test_architect_uses_reasoning_pool() -> None:
+@pytest.mark.parametrize("name", ["architect", "coder"])
+def test_implementation_agents_use_reasoning_pool(name: str) -> None:
+    """Design AND implementation run on the reasoning pool — code that auto-commits
+    must not come from the cheapest models (review finding R5#33)."""
     from agents.models import AgentConfig
 
-    config = AgentConfig.from_yaml(AGENTS_DIR / "architect" / "config.yaml")
+    config = AgentConfig.from_yaml(AGENTS_DIR / name / "config.yaml")
     assert config.model_pool == "reasoning"
 
 
-@pytest.mark.parametrize("name", ["coder", "researcher", "tester"])
-def test_non_architect_uses_fast_cheap_pool(name: str) -> None:
+@pytest.mark.parametrize("name", ["researcher", "tester"])
+def test_support_agents_use_fast_cheap_pool(name: str) -> None:
     from agents.models import AgentConfig
 
     config = AgentConfig.from_yaml(AGENTS_DIR / name / "config.yaml")

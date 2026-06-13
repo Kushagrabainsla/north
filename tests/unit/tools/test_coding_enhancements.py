@@ -100,6 +100,32 @@ async def test_search_symbols_multi_language():
         tmp_path.unlink()
 
 
+@pytest.mark.asyncio
+async def test_search_symbols_python_async_def():
+    """ast.AsyncFunctionDef is a distinct node — async defs must not be missed (R5#31)."""
+    tool = SearchSymbolsTool()
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w+", delete=False) as tmp:
+        tmp.write(
+            "def sync_fn():\n    pass\n\n"
+            "async def async_fn(x):\n    return x\n\n"
+            "class Service:\n"
+            "    async def handler(self):\n        pass\n"
+        )
+        tmp.flush()
+        tmp_path = Path(tmp.name)
+
+    try:
+        res = await tool.run(ToolInput(params={"path": str(tmp_path), "type": "function"}))
+        assert res.success
+        by_name = {s["name"]: s for s in res.data["symbols"]}
+        assert set(by_name) == {"sync_fn", "async_fn", "handler"}
+        assert by_name["sync_fn"]["signature"].startswith("def ")
+        assert by_name["async_fn"]["signature"].startswith("async def ")
+        assert by_name["handler"]["signature"].startswith("async def ")
+    finally:
+        tmp_path.unlink()
+
+
 def test_parse_error_line():
     # Python mypy parser test
     parsed = _parse_error_line("main.py:10: error: Need type annotation", "python")

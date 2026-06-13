@@ -124,7 +124,7 @@ Running `north` with no subcommand opens the full TUI — chat, live tool activi
 
 ## How it works
 
-north is built in eight layers: Perception → Orchestrator → Agent Layer → Approval Layer, with a Ledger (append-only audit trail) and Context Layer (your goals, preferences, and decision patterns) shared across everything.
+north is built in six layers: Perception → Orchestrator → Agent Layer → Approval Layer, with a Ledger (append-only audit trail) and Context Layer (your goals, preferences, and decision patterns) shared across everything.
 
 Full architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 Engineering deep-dives: [docs/TECHNICAL_FEATURES.md](docs/TECHNICAL_FEATURES.md)

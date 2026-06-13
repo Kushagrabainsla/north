@@ -321,15 +321,16 @@ async def test_empty_tool_calls_list_breaks_loop(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_architect_resolves_high_priority(tmp_path: Path) -> None:
+@pytest.mark.parametrize("name", ["architect", "coder"])
+def test_reasoning_pool_agents_resolve_high_priority(name: str, tmp_path: Path) -> None:
     from inference.models import PoolPriority
 
-    agent = _load_agent("architect", tmp_path)
+    agent = _load_agent(name, tmp_path)
     assert agent._resolve_priority() == PoolPriority.HIGH
 
 
-@pytest.mark.parametrize("name", ["coder", "researcher", "tester"])
-def test_non_architect_resolves_medium_priority(name: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize("name", ["researcher", "tester"])
+def test_fast_cheap_agents_resolve_medium_priority(name: str, tmp_path: Path) -> None:
     from inference.models import PoolPriority
 
     agent = _load_agent(name, tmp_path)

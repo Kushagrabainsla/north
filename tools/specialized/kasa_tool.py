@@ -13,10 +13,16 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.specialized._approval import gate_mutating_action
+
+if TYPE_CHECKING:
+    from approval.judgement_filter import JudgementFilter
+    from approval.store import ApprovalStore
+    from orchestrator.stream import EventStreamManager
 
 # Named colours → (hue 0-360, saturation 0-100)
 _COLOR_NAMES: dict[str, tuple[int, int]] = {
@@ -89,11 +95,13 @@ class KasaTool(Tool):
     """Discover and control TP-Link Kasa smart bulbs on the local network."""
 
     name = "kasa"
+    is_mutating = True
     description = (
         "Control TP-Link Kasa smart bulbs over the local network. "
         "Supports on/off/toggle, brightness, colour (by name or hue), "
         "colour temperature, and listing devices. "
-        "Specify a device alias or IP to target one bulb; omit to affect all discovered bulbs."
+        "Every control action requires an explicit 'device' (alias or IP) and user approval; "
+        "only action='list' works without a device."
     )
     parameters_schema = {
         "type": "object",
@@ -111,7 +119,10 @@ class KasaTool(Tool):
             },
             "device": {
                 "type": "string",
-                "description": ("Device alias (e.g. 'Desk lamp') or IP address. Omit to target all discovered bulbs."),
+                "description": (
+                    "Device alias (e.g. 'Desk lamp') or IP address. "
+                    "Required for every action except 'list' — there is no implicit 'all devices' target."
+                ),
             },
             "brightness": {
                 "type": "integer",
@@ -151,6 +162,18 @@ class KasaTool(Tool):
         "required": ["action"],
     }
 
+    def __init__(
+        self,
+        approval_store: ApprovalStore | None = None,
+        stream_manager: EventStreamManager | None = None,
+        approval_timeout_seconds: float = 300.0,
+        judgement_filter: JudgementFilter | None = None,
+    ) -> None:
+        self._approval_store = approval_store
+        self._stream_manager = stream_manager
+        self._approval_timeout_seconds = approval_timeout_seconds
+        self._judgement_filter = judgement_filter
+
     def format_output(self, data: dict[str, Any]) -> str:
         devices = data.get("devices", [])
         if not devices:
@@ -175,6 +198,32 @@ class KasaTool(Tool):
         action = input.params.get("action")
         if not action:
             return ToolOutput(success=False, error="Parameter 'action' is required.")
+
+        target_hint = str(input.params.get("device", "")).strip().lower()
+        if action != "list":
+            # Mutating actions must name their target explicitly — an omitted
+            # device must never fan out to every bulb on the network — and are
+            # gated behind user approval (fail-closed when no gate is wired).
+            if not target_hint:
+                return ToolOutput(
+                    success=False,
+                    error=(
+                        "Parameter 'device' is required for control actions. "
+                        "Use action='list' to see available devices, then target one by alias or IP."
+                    ),
+                )
+            denial = await gate_mutating_action(
+                self._approval_store,
+                agent="kasa",
+                title="Smart Device Control — Approval Required",
+                message=f"kasa action={action!r} device={target_hint!r}",
+                task_id=input.params.get("task_id"),
+                stream_manager=self._stream_manager,
+                judgement_filter=self._judgement_filter,
+                timeout=self._approval_timeout_seconds,
+            )
+            if denial is not None:
+                return ToolOutput(success=False, error=denial)
 
         try:
             import kasa  # noqa: F401
@@ -207,7 +256,6 @@ class KasaTool(Tool):
             )
 
         alias_map = dict(pairs)
-        target_hint = input.params.get("device", "").strip().lower()
 
         if target_hint:
             matched = {
@@ -224,6 +272,7 @@ class KasaTool(Tool):
                     error=f"No device matching {target_hint!r}. Found: {', '.join(names)}",
                 )
         else:
+            # Only reachable for action='list' — control actions required a device above.
             matched = found
 
         if action == "list":

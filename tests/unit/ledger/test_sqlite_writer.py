@@ -75,6 +75,58 @@ async def test_get_returns_none_for_missing_entry(writer: SQLiteLedgerWriter) ->
     assert await writer.get("does-not-exist") is None
 
 
+async def test_metrics_success_rate_ignores_retried_then_succeeded(writer: SQLiteLedgerWriter) -> None:
+    """A task whose agent failed once then succeeded counts as a success, not a
+    failure — only the latest per-(agent, task) status matters (review finding R1#7)."""
+    base = datetime.now(UTC)
+    await writer.write(
+        _entry(
+            "r1",
+            source=LedgerSource.AGENT,
+            agent="coder",
+            task_id="task-retry",
+            action="agent_execution_failed",
+            status=LedgerStatus.FAILED,
+            timestamp=base,
+        )
+    )
+    await writer.write(
+        _entry(
+            "r2",
+            source=LedgerSource.AGENT,
+            agent="coder",
+            task_id="task-retry",
+            action="agent_completed",
+            status=LedgerStatus.COMPLETED,
+            timestamp=base + timedelta(seconds=1),
+        )
+    )
+
+    metrics = await writer.get_metrics(days=7)
+    coder = next(a for a in metrics["by_agent"] if a["agent"] == "coder")
+    assert coder["tasks"] == 1
+    assert coder["success_rate"] == 1.0
+
+
+async def test_metrics_success_rate_counts_genuinely_failed_task(writer: SQLiteLedgerWriter) -> None:
+    """A task whose latest agent status is failed still drags the rate down."""
+    await writer.write(
+        _entry(
+            "f1",
+            source=LedgerSource.AGENT,
+            agent="tester",
+            task_id="task-broken",
+            action="agent_execution_failed",
+            status=LedgerStatus.FAILED,
+        )
+    )
+
+    metrics = await writer.get_metrics(days=7)
+    tester = next(a for a in metrics["by_agent"] if a["agent"] == "tester")
+    assert tester["tasks"] == 1
+    assert tester["success_rate"] == 0.0
+
+
 async def test_query_filters_by_task_id(writer: SQLiteLedgerWriter) -> None:
     await writer.write(_entry("e1", task_id="task-A"))
     await writer.write(_entry("e2", task_id="task-A"))
