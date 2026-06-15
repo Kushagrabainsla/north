@@ -1127,6 +1127,27 @@ class CacheableTool(Tool, ABC):
     async def set_cached(self, key: str, result: ToolOutput) -> None: ...
 ```
 
+### 16.1.1 Filesystem Write Policy
+
+Every path-touching tool resolves through `tools/_path.py:resolve_path()` (the single fail-closed gate). Two — and only two — write zones exist:
+
+1. **The workspace** — all user-facing work (code, edited files, deliverables) lands here, in place. This is the deliverable; review it via `git diff`.
+2. **`<NORTH_HOME>/tasks/{task_id}/`** — internal agent handoff scratch only (research notes, specs, QA reports). A narrow carve-out inside the otherwise-blocked `~/.north`, available regardless of the active workspace.
+
+Everything else under `~/.north` stays blocked — secrets (`secret.key`), `.env`, and all `*.db` (including the task-context DBs that share `~/.north/tasks/`). Agents never hardcode the handoff path: the orchestrator injects the absolute dir via `_path.handoff_dir_for()` into the `## Handoff Directory` prompt section, so it is defined once and never drifts.
+
+### 16.1.2 Output Verification
+
+Don't trust an agent's narrative — verify it against evidence. An LLM writes what
+a successful answer *sounds like* ("created the file", "tests pass"), with no idea
+whether it is true. `orchestrator/verification.py:verify_claims()` cross-checks
+action claims in the final answer against the tools that actually **succeeded**
+(`AgentResult.successful_tools`). Unsupported claims are non-fatally flagged: the
+output is annotated and a `claims_unverified` ledger entry is recorded, so a
+fabricated completion is visible rather than silently marked clean. Patterns
+favour precision (flag, don't cry wolf); `successful_tools is None` (a non-tool
+agent) skips the check.
+
 ### 16.2 Confidence Scoring
 
 ```python

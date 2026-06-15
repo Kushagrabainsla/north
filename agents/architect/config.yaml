@@ -9,8 +9,8 @@ accepts:
   - "structure"
   - "architect"
 produces:
-  - ".north/tasks/{task_id}/architecture/spec.md"
-  - ".north/tasks/{task_id}/architecture/decision_log.md"
+  - "{handoff_dir}/architecture/spec.md"
+  - "{handoff_dir}/architecture/decision_log.md"
 output_format: structured_json
 version: 1.0.0
 class_name: ArchitectAgent

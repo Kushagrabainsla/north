@@ -38,6 +38,7 @@ from orchestrator.router import ExecutionPlanner
 from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
+from orchestrator.verification import verify_claims
 from tools.exceptions import ToolNotFoundError
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
@@ -967,8 +968,48 @@ class Orchestrator:
                 await self._stream_manager.emit(task_id, "stream_reset", {"agent": agent.name})
                 self._maybe_refresh_pools_background()
 
+    async def _verify_agent_claims(self, task_id: str, agent: Agent, result: AgentResult) -> None:
+        """Flag final-answer claims unsupported by tool evidence.
+
+        Agents narrate actions ("created the file", "tests pass") the model has no
+        way of knowing are true. This cross-checks such claims against the tools
+        that actually succeeded. Non-fatal: it annotates the output and records a
+        `claims_unverified` ledger entry so a fabricated completion is visible
+        rather than silently recorded as clean.
+        """
+        # Only agentic agents report tool evidence (successful_tools is a list,
+        # possibly empty); questions/approvals carry no completion claims.
+        if result.successful_tools is None or result.requires_approval or result.has_question:
+            return
+        violations = verify_claims(result.output, result.successful_tools)
+        if not violations:
+            return
+
+        bullets = "\n".join(f"- {v}" for v in violations)
+        result.output = (
+            f"{result.output}\n\n---\n"
+            "⚠️ **Unverified claims** — no tool evidence was found for part of this answer:\n"
+            f"{bullets}\n\n"
+            "Treat the above as not done until confirmed."
+        )
+        await self._write_ledger(
+            LedgerEntry.new(
+                source=LedgerSource.SYSTEM,
+                task_id=task_id,
+                agent=agent.name,
+                action="claims_unverified",
+                output="; ".join(violations),
+                status=LedgerStatus.COMPLETED,
+                error_type="unverified_claims",
+            )
+        )
+        await self._stream_manager.emit(
+            task_id, "claims_unverified", {"agent": agent.name, "violations": violations}
+        )
+
     async def _handle_agent_result(self, task_id: str, agent: Agent, result: AgentResult) -> None:
         """Write result to task context, ledger, and notify user if needed."""
+        await self._verify_agent_claims(task_id, agent, result)
         await self._task_context_store.write(
             task_id=task_id,
             agent=agent.name,

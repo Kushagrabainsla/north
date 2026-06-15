@@ -8,12 +8,17 @@ check_types, search_symbols, find_references) resolves it through
 in *all* branches — with or without a workspace — so setting a broad workspace
 (e.g. $HOME) can never re-open access to ~/.ssh, ~/.north, /etc, etc.
 
-See docs/CODING_STYLE.md Section 16.1.
+The sole exception is ``<NORTH_HOME>/tasks/`` (see ``_handoff_root``): a narrow,
+always-allowed carve-out for internal agent handoff files. Secrets and all DB
+files inside ~/.north stay blocked even there.
+
+See docs/CODING_STYLE.md Section 16.1.1.
 """
 
 from __future__ import annotations
 
 import functools
+import os
 import sys
 from pathlib import Path
 
@@ -51,6 +56,13 @@ _BLOCKED_PREFIXES: tuple[str, ...] = (
 # Filenames whose contents are secrets wherever they live.
 _BLOCKED_FILENAMES: frozenset[str] = frozenset({"secret.key"})
 
+# SQLite state suffixes. north's own DBs (ledger, jobs, task-context, ...) live
+# under ~/.north — including the task-context DBs that share ~/.north/tasks/ with
+# the agent handoff carve-out. Agents must never write these directly; they go
+# through the proper stores/tools. Enforced only inside ~/.north so a workspace
+# may still contain editable .db files.
+_DB_SUFFIXES: tuple[str, ...] = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3")
+
 # Marker files that identify a project root, checked from a file upward.
 _PROJECT_ROOT_MARKERS: tuple[str, ...] = (
     ".git",
@@ -75,10 +87,49 @@ def _resolved_blocked_prefixes() -> tuple[str, ...]:
     return tuple(resolved)
 
 
+@functools.lru_cache(maxsize=1)
+def _handoff_root() -> str:
+    """Absolute path of the per-task handoff area: ``<NORTH_HOME>/tasks``.
+
+    Derived from the same ``NORTH_HOME`` override as ``config.settings`` (kept in
+    sync by env, not import, so this module stays dependency-light). This single
+    subtree is the *only* writable carve-out inside the otherwise-blocked
+    ``~/.north`` home — secrets (``secret.key``), DBs, and ``.env`` live in the
+    home root, outside ``tasks/``, so they remain blocked.
+    """
+    base = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
+    try:
+        return str((base / "tasks").resolve())
+    except Exception:
+        return str(base / "tasks")
+
+
+def _in_handoff_root(resolved: str) -> bool:
+    """True when *resolved* is the handoff root or a path strictly under it."""
+    root = _handoff_root()
+    return resolved == root or resolved.startswith(root + "/")
+
+
+def handoff_dir_for(task_id: str) -> str:
+    """Absolute per-task handoff directory: ``<NORTH_HOME>/tasks/<task_id>``.
+
+    The single source of truth for where agents write internal pipeline
+    artifacts (research notes, specs, QA reports). Injected into agent prompts
+    so paths are never hardcoded or workspace-relative.
+    """
+    return f"{_handoff_root()}/{task_id}"
+
+
 def _is_blocked_path(resolved: str) -> bool:
     """True when *resolved* (an absolute path string) sits under a blocked prefix."""
     if Path(resolved).name in _BLOCKED_FILENAMES:
         return True
+    # Carve-out: the per-task handoff area is writable agent scratch even though
+    # the rest of ~/.north is blocked. Checked after the filename block above so
+    # a secret.key inside tasks/ can never be exposed. The task-context SQLite
+    # DBs share ~/.north/tasks/ with this carve-out, so DB files stay blocked.
+    if _in_handoff_root(resolved):
+        return resolved.endswith(_DB_SUFFIXES)
     return any(resolved == prefix or resolved.startswith(prefix + "/") for prefix in _resolved_blocked_prefixes())
 
 
@@ -132,13 +183,20 @@ def resolve_path(path_str: str, workspace: str | None) -> Path | None:
     """
     p = Path(path_str).expanduser()
 
-    if workspace:
+    if p.is_absolute():
+        candidate = p.resolve()
+    elif workspace:
+        candidate = (Path(workspace).resolve() / p).resolve()
+    else:
+        candidate = (Path.cwd() / p).resolve()
+
+    # The per-task handoff area is an always-allowed write zone (internal agent
+    # scratch) regardless of the active workspace, so it must not be rejected by
+    # the workspace-containment check. The blocklist below still applies.
+    if workspace and not _in_handoff_root(str(candidate)):
         root = Path(workspace).resolve()
-        candidate = (root / p).resolve()
         if not str(candidate).startswith(str(root) + "/") and candidate != root:
             return None
-    else:
-        candidate = (Path.cwd() / p).resolve() if not p.is_absolute() else p.resolve()
 
     if sys.platform != "win32" and _is_blocked_path(str(candidate)):
         return None

@@ -38,7 +38,9 @@ class LLMAgent(Agent):
         path = self._prompts_dir() / "system.md"
         if not path.exists():
             raise AgentConfigError(f"Missing system prompt at {path}. Every LLMAgent needs one.")
-        self._system_prompt_cache: str = path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY
+        self._system_prompt_cache: str = (
+            path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY + _DELIVERABLE_POLICY
+        )
 
     def _prompts_dir(self) -> Path:
         """Resolve the agent's `prompts/` folder relative to its module file."""
@@ -140,3 +142,24 @@ Follow this strict priority order — only escalate when the step above cannot s
 Never create or update a tool for something an existing tool already handles.
 Never create a tool when `write_file` can do the job directly, or when composing existing available tools is sufficient.
 After creating or updating a tool, you can use it immediately in the next step of this task."""
+
+
+_DELIVERABLE_POLICY = """
+
+## Deliverable policy
+
+Separate what the user asked for from what the system needs internally:
+
+- **Deliverables** — anything the user explicitly asked you to produce (a document, summary,
+  report, code file, dataset). Write these into the **workspace** shown in `## System Context`,
+  where the user can open them. Always state the absolute path you wrote, and put the substance
+  of the result (or a tight summary) directly in your final answer — never reply with only a
+  pointer to a file.
+- **Internal files** — anything you produce only so another agent or the system can continue
+  (research context for downstream design, specs, QA reports, snapshots). Write these to your
+  `## Handoff Directory` when one is provided. They are not the deliverable; do not point the
+  user at them.
+
+In a build task the deliverable is the working code in the workspace, not your intermediate
+notes. In a research or analysis task the deliverable is the findings themselves — deliver them
+to the workspace and state them in your answer."""

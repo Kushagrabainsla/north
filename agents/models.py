@@ -52,6 +52,10 @@ class AgentResult(BaseModel):
     cost_usd: float = 0.0
     duration_ms: int | None = None
     tools_used: list[str] = Field(default_factory=list)  # deduplicated, ordered by first call
+    # Tools that succeeded at least once, deduplicated and ordered by first success.
+    # Evidence for claims-vs-output verification (orchestrator/verification.py).
+    # None means the agent has no tool loop, so its output is not verifiable this way.
+    successful_tools: list[str] | None = None
 
 
 class AgentConfig(BaseModel):

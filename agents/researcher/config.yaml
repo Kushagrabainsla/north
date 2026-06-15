@@ -12,8 +12,8 @@ accepts:
   - "create"
   - "develop"
 produces:
-  - ".north/tasks/{task_id}/research/context.md"
-  - ".north/tasks/{task_id}/research/references.json"
+  - "{handoff_dir}/research/context.md"
+  - "{handoff_dir}/research/references.json"
 output_format: structured_json
 version: 1.0.0
 class_name: ResearcherAgent

@@ -1376,6 +1376,11 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
   tasks/
     task_{id}.db         <- one SQLite file per active task (Task Context Object)
                             cleaned up per Section 6.6 cleanup policy
+    {task_id}/           <- per-task handoff directory (internal agent scratch)
+      research/          <-   researcher: context.md, references.json
+      architecture/      <-   architect: spec.md, decision_log.md
+      implementation/    <-   coder: implementation_notes.md (code itself goes to the workspace)
+      qa/                <-   tester: qa_report_v{N}.md
   context/
     public.md
     private.md           <- local only, never synced, never leaves machine

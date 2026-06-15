@@ -37,6 +37,7 @@ from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
 from inference.exceptions import ContextTooLargeError
 from inference.models import ToolCall, ToolCallRequest
+from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
 from utils.ids import generate_id
@@ -112,11 +113,13 @@ class AgenticLLMAgent(LLMAgent):
         payload: AgentPayload,
         tool_map: dict[str, Tool],
         messages: list[dict],
-    ) -> None:
+    ) -> list[tuple[str, bool]]:
         """Execute the requested tool calls and update logging/history.
 
         Read-only calls run concurrently; mutating calls run sequentially so two
         edits to the same file cannot race. Results are returned in call order.
+        Returns ``(tool_name, success)`` per call as evidence for output
+        verification.
         """
         # Announce every call *before* execution so the UI shows live in-progress
         # state rather than a retrospective log after the tool has already finished.
@@ -143,6 +146,7 @@ class AgenticLLMAgent(LLMAgent):
             await self._record_tool_call_confidence(call.name, success)
 
         self._append_tool_call_exchange(messages, results)
+        return [(call.name, success) for call, _, success in results]
 
     async def _execute_calls_ordered(
         self,
@@ -215,6 +219,8 @@ class AgenticLLMAgent(LLMAgent):
         emitted_model: str = ""
         _seen_tools: set[str] = set()
         tools_used: list[str] = []
+        _seen_success: set[str] = set()
+        successful_tools: list[str] = []
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
@@ -241,6 +247,7 @@ class AgenticLLMAgent(LLMAgent):
                         "Context overflow",
                         total_cost_usd,
                         tools_used,
+                        successful_tools,
                     )
             total_cost_usd += response.cost_usd
             last_tokens_in = response.tokens_in
@@ -250,7 +257,7 @@ class AgenticLLMAgent(LLMAgent):
             if response.type == "message":
                 # Final answer — tokens were already streamed via token_cb.
                 content = response.content or ""
-                return _final_answer(content, content[:120], total_cost_usd, tools_used)
+                return _final_answer(content, content[:120], total_cost_usd, tools_used, successful_tools)
 
             # Tool calls branch — execute the requested calls.
             if not response.calls:
@@ -259,19 +266,25 @@ class AgenticLLMAgent(LLMAgent):
                     "No actionable response",
                     total_cost_usd,
                     tools_used,
+                    successful_tools,
                 )
 
             for call in response.calls:
                 if call.name not in _seen_tools:
                     _seen_tools.add(call.name)
                     tools_used.append(call.name)
-            await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
+            evidence = await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
+            for name, success in evidence:
+                if success and name not in _seen_success:
+                    _seen_success.add(name)
+                    successful_tools.append(name)
 
         return _final_answer(
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
             total_cost_usd,
             tools_used,
+            successful_tools,
         )
 
     def _init_conversation(
@@ -418,6 +431,7 @@ class AgenticLLMAgent(LLMAgent):
             f"{recent_conv}"
             f"## Task\n{payload.prompt}\n\n"
             f"## Task ID\n{payload.task_id}\n\n"
+            f"## Handoff Directory\n{handoff_dir_for(payload.task_id)}\n\n"
             f"## Context\n{background or '(none)'}\n\n"
             f"## Tool reliability hints\n{reliability_lines or '(none)'}\n"
         )
@@ -674,6 +688,7 @@ def _final_answer(
     summary: str,
     cost_usd: float = 0.0,
     tools_used: list[str] | None = None,
+    successful_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "output": output,
@@ -685,4 +700,7 @@ def _final_answer(
         "question_options": [],
         "cost_usd": cost_usd,
         "tools_used": tools_used or [],
+        # Always a list for agentic agents (even when empty) so the orchestrator
+        # treats the output as verifiable; None would skip verification.
+        "successful_tools": successful_tools if successful_tools is not None else [],
     }
