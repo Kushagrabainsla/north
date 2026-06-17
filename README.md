@@ -70,13 +70,10 @@ NORTH_GEMINI_API_KEY=...
 | `north config set <key> <value>` | Set a config value |
 | `north metrics` | Show system performance metrics |
 
+
+
 ---
 
-## Development
-
-```bash
-uv sync                  # install deps
-uv run pytest            # run tests
-uv run ruff check        # lint
-uv run ruff check --fix  # auto-fix lint
-```
+<p align="center">
+  <sub>MIT licensed · Built by <a href="https://github.com/Kushagrabainsla">Kushagra Bainsla</a></sub>
+</p>
