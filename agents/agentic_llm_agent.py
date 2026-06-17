@@ -39,6 +39,7 @@ from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
 from inference.exceptions import ContextTooLargeError
 from inference.models import ToolCall, ToolCallRequest
+from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
@@ -110,12 +111,22 @@ class AgenticLLMAgent(LLMAgent):
                 ],
             }
         )
-        for call, result_str, _ in results:
+        for call, result_str, success in results:
+            content = result_str
+            # A failed delegation must never be paraphrased into success. Inject a
+            # hard instruction into the tool result the model reads next so it
+            # surfaces the failure via ask_user instead of inventing progress.
+            if call.name == "delegate_task" and not success:
+                content += (
+                    "\n\n[SYSTEM: The delegation failed. You MUST NOT claim it succeeded "
+                    "or that any sub-agent is still working. Call ask_user to inform the "
+                    "user of the failure and ask how to proceed.]"
+                )
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": call.call_id,
-                    "content": result_str,
+                    "content": content,
                 }
             )
 
@@ -524,10 +535,26 @@ class AgenticLLMAgent(LLMAgent):
             except Exception:
                 return _failed_json(f"Agent '{agent_name}' not found and no 'general' fallback.")
 
+        # An explicit workspace in the delegation params wins; otherwise the
+        # sub-agent inherits the parent's. The delegate_task schema nests
+        # metadata under "context", so accept a workspace from either place.
+        # Engineering agents that write real source must have a project
+        # directory - warn loudly when it is missing so a coder writing into
+        # the handoff scratch dir is detectable.
+        context = params.get("context") if isinstance(params.get("context"), dict) else {}
+        workspace = str(params.get("workspace") or context.get("workspace") or payload.workspace or "")
+        if not workspace and agent_name in ENGINEERING_AGENTS:
+            logger.warning(
+                "Delegating to engineering agent '%s' in task '%s' with an empty "
+                "workspace - source code may land in the handoff scratch directory.",
+                agent_name,
+                payload.task_id,
+            )
+
         sub_payload = AgentPayload(
             task_id=payload.task_id,
             prompt=task,
-            workspace=payload.workspace,
+            workspace=workspace,
             delegation_depth=payload.delegation_depth + 1,
             delegation_chain=payload.delegation_chain + [self.name],
         )
@@ -536,7 +563,28 @@ class AgenticLLMAgent(LLMAgent):
             return json.dumps({"success": True, "output": result.output, "summary": result.summary})
         except Exception as exc:
             logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
+            await self._record_delegation_failure(payload, agent_name, str(exc))
             return _failed_json(str(exc))
+
+    async def _record_delegation_failure(self, payload: AgentPayload, agent_name: str, error: str) -> None:
+        """Write a ledger entry so a failed delegation is never silently dropped."""
+        ledger = self._deps.ledger
+        if ledger is None:
+            return
+        try:
+            await ledger.write(
+                LedgerEntry.new(
+                    source=LedgerSource.AGENT,
+                    task_id=payload.task_id,
+                    agent=agent_name,
+                    action="delegation_failed",
+                    status=LedgerStatus.FAILED,
+                    output=f"Delegation from '{self.name}' to '{agent_name}' failed: {error}",
+                    error_type="DelegationError",
+                )
+            )
+        except Exception as exc:  # never let audit-trail writes break the agent loop
+            logger.warning("Failed to record delegation failure for task '%s': %s", payload.task_id, exc)
 
     def _require_approval_store(self) -> Any:
         """Return the injected ApprovalStore or fail loudly if it is missing."""

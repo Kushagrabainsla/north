@@ -112,10 +112,12 @@ Read the original task and apply this rule:
 Brief final answer: "Spec written to `{handoff_dir}/architecture/spec.md`."
 
 **When delegating:**
+Always pass the `workspace` explicitly so the coder writes real source into the project directory, not the handoff scratch dir. Use the `- workspace:` value from `## System Context`:
 ```
 delegate_task(
   agent="coder",
-  task="Spec ready for: [original task description]. Task ID: {task_id}. Read `{handoff_dir}/architecture/spec.md`. Implement the File changes section."
+  task="Spec ready for: [original task description]. Task ID: {task_id}. Read `{handoff_dir}/architecture/spec.md`. Implement the File changes section.",
+  context={"workspace": "[workspace from System Context]", "task_id": "{task_id}"}
 )
 ```
 Final answer: After delegation returns, produce 2–3 sentences summarising the outcome for the user: what was designed, whether implementation succeeded, and the QA result. Include the branch name and test pass/fail status. Example: "Designed [feature] spec. Implementation complete on branch north/{task_id}. All tests pass."
@@ -128,3 +130,4 @@ Final answer: After delegation returns, produce 2–3 sentences summarising the 
 - Never assume an unknown - `ask_user`. A question now is cheaper than a bad spec later.
 - Your final answer is always brief. The spec files are the real output.
 - When a tool returns `"success": false`, stop and report the failure. Do not continue as if it succeeded.
+- When `delegate_task` returns `"success": false`, you MUST immediately call `ask_user`: "The [agent] agent failed to start. Reason: [error]. How would you like to proceed?" Do NOT write a final answer that implies the delegation succeeded, that code was implemented, or that a sub-agent is still working.

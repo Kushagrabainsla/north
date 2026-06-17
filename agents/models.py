@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
     from context.fact_store import FactStore
+    from ledger.base import LedgerWriter
     from tools.tool_index import ToolIndex
 
 
@@ -121,6 +122,9 @@ class AgentDependencies:
     # Semantic context retrieval: per-fact embeddings instead of full doc load.
     # None → fall back to full markdown document load.
     fact_store: FactStore | None = field(default=None)
+    # Optional ledger writer for recording delegation failures from agents.
+    # Injected at startup; None in tests that do not require audit trail.
+    ledger: LedgerWriter | None = field(default=None)
     # Iteration caps injected from Settings so agents never read config globals.
     agent_max_iterations: int = 40
     agent_history_keep_recent: int = 10

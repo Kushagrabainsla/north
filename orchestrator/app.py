@@ -52,6 +52,7 @@ from tools.specialized.shell_tool import ShellTool
 from tools.tool_index import ToolIndex
 from tools.universal.create_agent import CreateAgentTool
 from tools.universal.create_tool import CreateToolTool
+from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from utils.logging import configure_structured_logging
@@ -150,6 +151,8 @@ def _build_tool_registry(
     tool_registry.make_universal("create_agent")
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
     tool_registry.make_universal("query_metrics")
+    tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))
+    tool_registry.make_universal("get_task_status")
     # BashTool and ShellTool gate every command behind user approval and cannot
     # be auto-discovered (they need the ApprovalStore injected at startup).
     tool_registry.register(
@@ -218,6 +221,7 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
         episodic_store=deps.episodic_store,
         approval_store=deps.approval_store,
         fact_store=deps.fact_store,
+        ledger=deps.ledger,
         agent_max_iterations=settings.agent_max_iterations,
         agent_history_keep_recent=settings.agent_history_keep_recent,
         approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
