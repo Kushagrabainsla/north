@@ -24,6 +24,7 @@ class ApprovalDecision(StrEnum):
 
     APPROVED = "approved"
     REJECTED = "rejected"
+    ANSWERED = "answered"  # a QUESTION card was given a free-form/selected answer
     TIMEOUT_REJECTED = "timeout_rejected"
 
 

@@ -235,6 +235,7 @@
       "agent_started", "agent_completed",
       "tool_called", "tool_result",
       "token",
+      "reasoning",
       "task_synthesis",
       "approval_required",
       "task_completed", "task_failed", "task_cancelled",
@@ -242,6 +243,8 @@
 
     // Accumulate streamed tokens so task_completed can use them directly.
     let tokenBuffer = "";
+    // The model's private chain-of-thought, shown dimmed and never part of the answer.
+    let reasoningBuffer = "";
 
     function handleSseEvent(evt) {
       try {
@@ -268,6 +271,9 @@
           tokenBuffer += token;
           const bubble = document.getElementById("chat-thinking-" + taskId);
           if (bubble) {
+            // The answer has started — drop the dim reasoning preview.
+            const stale = bubble.querySelector(".bubble-reasoning");
+            if (stale) stale.remove();
             let streamDiv = bubble.querySelector(".bubble-streaming");
             if (!streamDiv) {
               streamDiv = document.createElement("div");
@@ -275,6 +281,20 @@
               bubble.appendChild(streamDiv);
             }
             streamDiv.innerHTML = renderMarkdown(tokenBuffer);
+            chatThread.scrollTop = chatThread.scrollHeight;
+          }
+        } else if (event === "reasoning") {
+          // Private reasoning — render dimmed, only until the answer streams.
+          reasoningBuffer += data.text || "";
+          const bubble = document.getElementById("chat-thinking-" + taskId);
+          if (bubble && !bubble.querySelector(".bubble-streaming")) {
+            let reasonDiv = bubble.querySelector(".bubble-reasoning");
+            if (!reasonDiv) {
+              reasonDiv = document.createElement("div");
+              reasonDiv.className = "bubble-content bubble-reasoning";
+              bubble.appendChild(reasonDiv);
+            }
+            reasonDiv.textContent = reasoningBuffer;
             chatThread.scrollTop = chatThread.scrollHeight;
           }
         } else if (event === "approval_required") {

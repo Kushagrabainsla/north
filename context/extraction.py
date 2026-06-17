@@ -10,6 +10,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +22,7 @@ from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from utils.ids import generate_id
+from utils.text import STOPWORDS
 from utils.time import utcnow
 
 if TYPE_CHECKING:
@@ -39,11 +41,15 @@ _DOCUMENT_MAP: dict[str, ContextDocument] = {
     "north_stars": ContextDocument.NORTH_STARS,
 }
 
-# Only the user's own messages are a valid source of facts about the user.
+# Only the user's own words are a valid source of facts about the user.
 # Extracting from agent/system outputs let the pipeline learn the assistant's
 # own (sometimes hallucinated) text as if it were user-stated fact — a
-# self-reinforcing memory-poisoning loop. Facts come from what the USER wrote.
-_USER_AUTHORED_SOURCES = frozenset({LedgerSource.PROMPT, LedgerSource.MIC, LedgerSource.MANUAL_INJECTION})
+# self-reinforcing memory-poisoning loop. PROMPT/MIC/MANUAL_INJECTION are messages
+# the user typed; CLARIFICATION is the user's answer to an ask_user question — also
+# their own words, so a preference stated by answering is learned like any other.
+_USER_AUTHORED_SOURCES = frozenset(
+    {LedgerSource.PROMPT, LedgerSource.MIC, LedgerSource.MANUAL_INJECTION, LedgerSource.CLARIFICATION}
+)
 # Failed-task entries carry noise (error messages, stack traces) rather than
 # durable facts about the user.  Sending them to the LLM wastes budget.
 _SKIPPED_STATUSES = {LedgerStatus.FAILED}
@@ -51,14 +57,17 @@ _SKIPPED_STATUSES = {LedgerStatus.FAILED}
 _EXTRACTION_PROMPT = """\
 You are the memory extraction pipeline for a personal AI operating system.
 
-Below is a message the USER wrote:
+Below is something the USER stated — either a message they typed, or (shown as
+"north asked: ... / The user answered: ...") their answer to a question north
+asked:
 
 \"\"\"
 {message}
 \"\"\"
 
-Extract a durable fact about the user ONLY IF the user states it explicitly in
-this message. Durable means it will still be true or useful weeks from now.
+Extract a durable fact ONLY IF the USER states it explicitly. When the text is a
+question-and-answer, the fact comes from the USER's answer, never from north's
+question. Durable means it will still be true or useful weeks from now.
 
 Anti-fabrication contract — follow exactly:
 - Extract ONLY information the user literally wrote above. Never infer, assume,
@@ -87,8 +96,13 @@ Document rules:
 
 Fact format:
 - One sentence, third-person neutral, grounded only in the user's words.
-- "public"/"judgement_rules": present tense ("User works at Y").
-- "north_stars": goal-oriented phrasing ("User wants to X by [date/horizon]").
+- Fill the fact with the user's ACTUAL words. Never emit a placeholder, a single
+  letter, a bracketed slot, or an example token (e.g. "X", "Y", "<company>") — if
+  you cannot name the real value from the message, return extract:false instead.
+- "public"/"judgement_rules": present tense. Shape: "User <verb> <real detail>"
+  — e.g. for a message saying "I use Postgres", write "User uses Postgres".
+- "north_stars": goal-oriented. Shape: "User wants to <real goal> by <real
+  horizon>" — only include the horizon if the user actually stated one.
 """
 
 _DEDUP_PROMPT = """\
@@ -105,6 +119,27 @@ New fact to add:
 Is the core information in the new fact ALREADY present in the document (even if worded differently)?
 Reply with JSON only: {{"duplicate": true}} or {{"duplicate": false}}
 """
+
+# Deterministic dedup thresholds, measured as Jaccard overlap of content tokens.
+# At/above _DEDUP_CERTAIN a new fact is a duplicate outright (no LLM call); at/above
+# _DEDUP_MAYBE — or sharing ≥2 content words — it is ambiguous enough to spend one
+# LLM call on. Below that, lexical overlap is too thin to be the same fact.
+_DEDUP_CERTAIN = 0.8
+_DEDUP_MAYBE = 0.34
+_DEDUP_MIN_SHARED = 2
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _content_tokens(text: str) -> frozenset[str]:
+    """Lowercased, punctuation-free, stopword-free tokens of a fact line."""
+    return frozenset(t for t in _TOKEN_RE.findall(text.lower()) if t not in STOPWORDS)
+
+
+def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
 
 _MAX_DOCUMENT_CHARS = 8_000  # trim when a context doc exceeds this
 _TRIM_TARGET_CHARS = 5_000  # target size after trimming
@@ -330,7 +365,14 @@ class ExtractionPipeline:
         return True
 
     async def _is_duplicate(self, doc: ContextDocument, delta: str, task_id: str | None) -> bool:
-        """Return True if delta is already captured in the document."""
+        """Return True if delta is already captured (or is contentless noise).
+
+        Two stages, cheapest first. A deterministic per-line Jaccard catches
+        near-identical restatements ("works at Y" vs "works at Y.") without any
+        LLM call — the case the old word-overlap fast path missed for short
+        facts. Genuinely ambiguous overlaps fall through to a single LLM dedup
+        call for semantic matches ("states they work at Y").
+        """
         try:
             existing = await self._context_store.read(doc)
         except Exception:
@@ -338,15 +380,28 @@ class ExtractionPipeline:
         if not existing or len(existing) < 20:
             return False
 
-        # Fast path: if fewer than 3 meaningful words overlap, it can't be a
-        # duplicate — skip the LLM call entirely.
-        key_words = {w.lower() for w in delta.split() if len(w) > 4}
-        existing_lower = existing.lower()
-        overlap = sum(1 for w in key_words if w in existing_lower)
-        # Require at least 3 overlapping words AND at least 2/3 of key words —
-        # a higher bar than the old max(2, 1/2) so the LLM is only called for
-        # genuinely ambiguous near-duplicates.
-        if key_words and overlap >= max(3, len(key_words) * 2 // 3):
+        delta_tokens = _content_tokens(delta)
+        if not delta_tokens:
+            # A fact with no content words (only stopwords/placeholder) carries
+            # nothing durable — drop it rather than store noise.
+            return True
+
+        best = 0.0
+        max_shared = 0
+        for line in existing.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            line_tokens = _content_tokens(line)
+            j = _jaccard(delta_tokens, line_tokens)
+            if j >= _DEDUP_CERTAIN:
+                return True  # near-identical restatement — no LLM needed
+            best = max(best, j)
+            max_shared = max(max_shared, len(delta_tokens & line_tokens))
+
+        # Ambiguous near-duplicate: spend one LLM call only when lexical overlap
+        # is real, then trust its semantic judgement.
+        if best >= _DEDUP_MAYBE or max_shared >= _DEDUP_MIN_SHARED:
             prompt = _DEDUP_PROMPT.format(existing=existing[-2000:], delta=delta)
             try:
                 resp = await self._inference_router.complete(

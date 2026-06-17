@@ -24,6 +24,7 @@ class LedgerSource(StrEnum):
     MANUAL_INJECTION = "manual_injection"
     INFERENCE_ROUTER = "inference_router"
     APPROVAL = "approval"
+    CLARIFICATION = "clarification"  # the user's answer to an ask_user question — learnable
     WEBHOOK = "webhook"
 
 

@@ -40,11 +40,13 @@ Choose the entry agent based on the task description:
 | Task description | Entry agent |
 |---|---|
 | "research", "investigate", "explore", "find out", "look into", "analyze" | `researcher` |
-| "design", "architect", "spec", "plan", "high level design", "how should X be structured" | `architect` |
-| "build", "implement", "create", "develop", "ship", "make" | `researcher` (full pipeline) |
-| "code", "write the code", "program" | `coder` |
+| "design", "architect", "spec", "plan", "how should X be structured" | `architect` |
+| "build", "implement", "create", "develop", "ship", "make" a project/app/feature/system | `architect` |
+| "code", "write the code", "program" (the design is already clear) | `coder` |
 | "fix", "debug", "patch", "the bug in X", "X is broken" | `coder` |
 | "test", "verify", "validate", "does X work", "run QA" | `tester` |
+
+**Building something new starts with the `architect`** — it clarifies unknowns with the user, designs the solution, pulls in `researcher` when it needs outside context, then delegates implementation to `coder`. Route to `researcher` directly only for pure information-gathering ("find out X"); it hands its findings to the architect afterwards. Route to `coder` directly only when the change is small and fully specified (a fix, a single named file).
 
 Use `engineering` for any task that involves code, specs, or technical investigation — regardless of complexity. Even a trivial single-line fix belongs in `coder`, which has the correct git workflow and verification steps.
 

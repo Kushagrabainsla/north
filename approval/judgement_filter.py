@@ -25,6 +25,8 @@ from inference.models import CompletionRequest, PoolPriority
 logger = logging.getLogger(__name__)
 
 _AUTO_CONFIDENCE_THRESHOLD = 0.8
+# Below this much learned text (rules + preferences) there is nothing to match on.
+_MIN_LEARNED_CONTEXT_CHARS = 20
 
 # APPROVAL cards from these sources gate mutating/destructive actions (shell
 # commands, file patches, git/gh writes, runtime tool changes, device control).
@@ -42,7 +44,7 @@ The user has a set of learned decision rules in judgement_rules.md:
 ---
 {rules}
 ---
-
+{preferences}
 A card is about to be surfaced to the user:
   Type:    {card_type}
   Agent:   {agent}
@@ -50,23 +52,26 @@ A card is about to be surfaced to the user:
   Message: {message}
   Options: {options}
 
-Does any rule clearly cover this situation and indicate an automatic decision?
+Does a learned rule (or, for a QUESTION, a known preference) clearly determine the
+outcome — so the user does not need to be asked again?
 
 Reply with JSON only — no prose:
 {{
   "decision": "approved" | "rejected" | "answered" | "none",
-  "chosen_option": "<option text if answered, else empty string>",
+  "chosen_option": "<the answer text if answered, else empty string>",
   "confidence": <0.0 to 1.0>,
-  "rule": "<one-line summary of the matching rule, or empty string>"
+  "rule": "<one-line summary of the matching rule/preference, or empty string>"
 }}
 
 Rules:
-- Use "none" if no rule clearly applies, or confidence is below {threshold}.
-- Use "approved" only for APPROVAL cards where the rule clearly says to approve.
-- Use "rejected" only for APPROVAL cards where the rule clearly says to reject.
-- Use "answered" only for QUESTION cards where a rule pre-selects an option.
+- Use "none" if nothing clearly applies, or confidence is below {threshold}.
+- Use "approved" only for APPROVAL cards where a rule clearly says to approve.
+- Use "rejected" only for APPROVAL cards where a rule clearly says to reject.
+- Use "answered" only for QUESTION cards where a learned rule or a known preference
+  clearly determines the answer. Put that answer in chosen_option — it need not be
+  one of the listed options.
 - INFORMATION cards should always return "none" (they need no decision).
-- When in doubt, return "none" — surfacing a card is always safer than suppressing it.
+- When in doubt, return "none" — asking the user is always safer than guessing.
 """
 
 
@@ -86,17 +91,33 @@ class JudgementFilter:
         self._inference_router = inference_router
 
     async def check(self, card: Card) -> tuple[str | None, str]:
-        """Return (decision, chosen_option) or (None, '') if no rule fires."""
+        """Return (decision, chosen_option) or (None, '') if nothing fires.
+
+        APPROVAL cards are judged against learned rules only. QUESTION cards also
+        consider the user's known preferences (public.md), so a preference stated
+        once — by answering an earlier question — can answer the next one without
+        re-asking.
+        """
         # INFORMATION cards never need filtering — they carry no decision.
         if card.type == CardType.INFORMATION:
             return None, ""
 
-        rules = await self._context_store.read(ContextDocument.JUDGEMENT_RULES)
-        if not rules or len(rules.strip()) < 20:
+        rules = await self._context_store.read(ContextDocument.JUDGEMENT_RULES) or ""
+        preferences = ""
+        if card.type == CardType.QUESTION:
+            preferences = await self._context_store.read(ContextDocument.PUBLIC) or ""
+
+        # Need at least some learned context to act on, or there is nothing to match.
+        if len((rules + preferences).strip()) < _MIN_LEARNED_CONTEXT_CHARS:
             return None, ""
 
         prompt = _PROMPT_TEMPLATE.format(
-            rules=rules[:3000],
+            rules=rules[:3000] or "(no rules learned yet)",
+            preferences=(
+                f"\nThe user's known preferences and identity:\n---\n{preferences[:2000]}\n---\n"
+                if preferences.strip()
+                else ""
+            ),
             card_type=card.type.value,
             agent=card.agent,
             title=card.title,

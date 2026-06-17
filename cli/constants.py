@@ -89,6 +89,9 @@ _CONFIG_KEYS = {
 # ── TUI ─────────────────────────────────────────────────────────────────────
 _SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
+# Max chars of the model's private reasoning shown as a dim "thinking" preview.
+_REASONING_PREVIEW_CHARS = 120
+
 # Seconds between SSE reconnect attempts; doubles on each failure up to _SSE_BACKOFF_MAX.
 _SSE_BACKOFF_BASE = 2.0
 _SSE_BACKOFF_MAX = 30.0

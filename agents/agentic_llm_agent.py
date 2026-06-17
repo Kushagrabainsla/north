@@ -32,7 +32,9 @@ from agents.context_compaction import (
 )
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
-from agents.schemas import DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
+from agents.reasoning import ReasoningStreamSplitter, strip_reasoning
+from agents.schemas import ASK_USER_SCHEMA, DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
+from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface_card
 from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
 from inference.exceptions import ContextTooLargeError
@@ -40,10 +42,20 @@ from inference.models import ToolCall, ToolCallRequest
 from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
-from utils.ids import generate_id
 from utils.time import localnow
 
 logger = logging.getLogger(__name__)
+
+# Returned to the model when ask_user times out with no answer — steers it to be
+# explicit about the gap rather than silently fabricating the missing detail.
+_ASK_USER_NO_ANSWER = (
+    "No answer received in time. Do not fabricate the missing detail — state the "
+    "specific assumption you are forced to make, or stop and summarise exactly what "
+    "you still need from the user."
+)
+
+# Agent-loop built-ins, not registry tools — excluded from tool-reliability tracking.
+_INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user"})
 
 
 class AgenticLLMAgent(LLMAgent):
@@ -62,7 +74,7 @@ class AgenticLLMAgent(LLMAgent):
 
     async def _record_tool_call_confidence(self, tool_name: str, success: bool) -> None:
         """Record tool execution confidence if not a special internal tool."""
-        if tool_name not in ("request_approval", "delegate_task"):
+        if tool_name not in _INTERNAL_TOOLS:
             t = asyncio.create_task(self._deps.confidence_tracker.record_use(self.name, tool_name, success))
             self._background_tasks.add(t)
             t.add_done_callback(self._background_tasks.discard)
@@ -214,6 +226,8 @@ class AgenticLLMAgent(LLMAgent):
     ) -> dict[str, Any]:
         messages, tool_map, compact_tokens = self._init_conversation(payload, context, scored_tools)
         total_cost_usd: float = 0.0
+        total_tokens_in: int = 0
+        total_tokens_out: int = 0
         last_tokens_in: int = 0
         last_model_used: str = ""
         emitted_model: str = ""
@@ -231,7 +245,11 @@ class AgenticLLMAgent(LLMAgent):
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
             _sync_hot_loaded_tools(self._deps, self.name, tool_map)
-            tools = [t.schema() for t in tool_map.values()] + [DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA]
+            tools = [t.schema() for t in tool_map.values()] + [
+                DELEGATE_TASK_SCHEMA,
+                REQUEST_APPROVAL_SCHEMA,
+                ASK_USER_SCHEMA,
+            ]
 
             token_cb = self._make_token_callback(payload.task_id)
 
@@ -239,6 +257,10 @@ class AgenticLLMAgent(LLMAgent):
                 response = await self._complete_with_tools(messages, tools, payload.task_id, token_cb)
             except ContextTooLargeError:
                 compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
+                # Discard whatever the failed attempt streamed before re-streaming
+                # so the splitter starts clean and UIs drop the partial output.
+                if token_cb is not None:
+                    await token_cb.reset()
                 try:
                     response = await self._complete_with_tools(messages, tools, payload.task_id, token_cb)
                 except ContextTooLargeError:
@@ -248,25 +270,40 @@ class AgenticLLMAgent(LLMAgent):
                         total_cost_usd,
                         tools_used,
                         successful_tools,
+                        total_tokens_in,
+                        total_tokens_out,
                     )
+            # Stream finished — release any reasoning/answer fragment the splitter
+            # withheld in case it began a tag that never completed.
+            if token_cb is not None:
+                await token_cb.flush()
             total_cost_usd += response.cost_usd
+            total_tokens_in += response.tokens_in
+            total_tokens_out += response.tokens_out
             last_tokens_in = response.tokens_in
             last_model_used = response.model_used
             emitted_model = await self._maybe_emit_model(response, emitted_model, payload.task_id)
 
             if response.type == "message":
-                # Final answer — tokens were already streamed via token_cb.
-                content = response.content or ""
-                return _final_answer(content, content[:120], total_cost_usd, tools_used, successful_tools)
+                # Final answer — answer tokens were already streamed via token_cb;
+                # strip the model's private reasoning from the stored copy so it
+                # matches the streamed view and never feeds extraction/verification.
+                content = strip_reasoning(response.content or "")
+                return _final_answer(
+                    content, content[:120], total_cost_usd, tools_used, successful_tools,
+                    total_tokens_in, total_tokens_out,
+                )
 
             # Tool calls branch — execute the requested calls.
             if not response.calls:
                 return _final_answer(
-                    response.content or "The model returned no tool calls and no message.",
+                    strip_reasoning(response.content or "") or "The model returned no tool calls and no message.",
                     "No actionable response",
                     total_cost_usd,
                     tools_used,
                     successful_tools,
+                    total_tokens_in,
+                    total_tokens_out,
                 )
 
             for call in response.calls:
@@ -285,6 +322,8 @@ class AgenticLLMAgent(LLMAgent):
             total_cost_usd,
             tools_used,
             successful_tools,
+            total_tokens_in,
+            total_tokens_out,
         )
 
     def _init_conversation(
@@ -386,6 +425,10 @@ class AgenticLLMAgent(LLMAgent):
             decision = await self._request_approval(payload, params)
             result_str = json.dumps({"decision": decision})
             return call, result_str, not _is_rejection(decision)
+        if call.name == "ask_user":
+            result_str = await self._ask_user(payload, params)
+            success = json.loads(result_str).get("success", False)
+            return call, result_str, success
         # create_tool gates its own create/update actions behind an approval
         # card (see CreateToolTool._request_approval) — no special case here.
         # Default the workspace but respect an explicit model-supplied value —
@@ -515,66 +558,71 @@ class AgenticLLMAgent(LLMAgent):
             logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
             return json.dumps({"success": False, "error": str(exc)})
 
-    async def _request_approval(self, payload: AgentPayload, params: dict[str, Any]) -> str:
+    def _require_approval_store(self) -> Any:
+        """Return the injected ApprovalStore or fail loudly if it is missing."""
         store = self._deps.approval_store
         if store is None:
             raise RuntimeError(
-                f"Agent '{self.name}' called request_approval but no ApprovalStore "
-                "was injected into AgentDependencies. Wire it at startup."
+                f"Agent '{self.name}' needs an ApprovalStore for user interaction but "
+                "none was injected into AgentDependencies. Wire it at startup."
             )
+        return store
 
-        message = str(params.get("message", "Action requires your approval."))
-        options = list(params.get("options", ["Approve", "Reject"]))
-        card_id = generate_id()
-
-        card = Card(
-            id=card_id,
-            type=CardType.APPROVAL,
+    async def _surface_card(
+        self, payload: AgentPayload, *, card_type: CardType, title: str, body: str, options: list[str], event: CardEvent
+    ) -> Card:
+        """Build, optionally auto-resolve, and surface a card; return it resolved."""
+        return await surface_card(
+            store=self._require_approval_store(),
+            stream_manager=self._deps.stream_manager,
+            judgement_filter=self._deps.judgement_filter,
+            timeout=self._deps.approval_timeout_seconds,
+            agent_name=self.name,
             task_id=payload.task_id,
-            agent=self.name,
-            title=f"{self.name.title()} — Approval Required",
-            message=message,
+            card_type=card_type,
+            title=title,
+            body=body,
             options=options,
+            event=event,
         )
 
-        # Check learned judgement rules before surfacing to the user.
-        # If a rule fires with high confidence, return the auto-decision
-        # immediately without creating a pending card or emitting any SSE.
-        if self._deps.judgement_filter is not None:
-            try:
-                auto_decision, _ = await self._deps.judgement_filter.check(card)
-                if auto_decision is not None:
-                    logger.debug(
-                        "JudgementFilter auto-%s for agent %s: %r",
-                        auto_decision,
-                        self.name,
-                        message[:80],
-                    )
-                    return auto_decision
-            except Exception:
-                logger.debug("JudgementFilter check failed for agent %s — surfacing card", self.name)
+    async def _request_approval(self, payload: AgentPayload, params: dict[str, Any]) -> str:
+        """Ask the user to approve an irreversible action; return their decision."""
+        card = await self._surface_card(
+            payload,
+            card_type=CardType.APPROVAL,
+            title=f"{self.name.title()} — Approval Required",
+            body=str(params.get("message", "Action requires your approval.")),
+            options=list(params.get("options", list(APPROVAL_DEFAULT_OPTIONS))),
+            event=CardEvent.APPROVAL,
+        )
+        return card.status
 
-        store.add(card)
+    async def _ask_user(self, payload: AgentPayload, params: dict[str, Any]) -> str:
+        """Ask the user a clarifying question mid-loop and block until they answer.
 
-        if self._deps.stream_manager and payload.task_id:
-            await self._deps.stream_manager.emit(
-                payload.task_id,
-                "approval_required",
-                {
-                    "card_id": card_id,
-                    "task_id": payload.task_id,
-                    "agent": self.name,
-                    "title": card.title,
-                    "message": message,
-                    "options": options,
-                },
-            )
+        The card is a QUESTION and the return carries the user's actual answer (free
+        text or a chosen option) so the agent continues with it instead of assuming.
+        This is how an agent refuses to invent an unknown — it asks. A learned rule
+        may answer it automatically (see :func:`surface_card`).
+        """
+        question = str(params.get("question", "")).strip()
+        if not question:
+            return json.dumps({"success": False, "error": "ask_user requires a non-empty 'question'."})
+        options = [str(o) for o in params.get("options", []) if str(o).strip()]
 
-        current = await store.wait_for_decision(card_id, timeout=self._deps.approval_timeout_seconds)
-        if current is None:
-            store.resolve(card_id, ApprovalDecision.REJECTED)
-            return ApprovalDecision.TIMEOUT_REJECTED
-        return current.status
+        card = await self._surface_card(
+            payload,
+            card_type=CardType.QUESTION,
+            title=f"{self.name.title()} — Question",
+            body=question,
+            options=options,
+            event=CardEvent.QUESTION,
+        )
+        answer = (card.chosen_option or "").strip()
+        if not answer:
+            return json.dumps({"success": False, "answered": False, "error": _ASK_USER_NO_ANSWER})
+        return json.dumps({"success": True, "answered": True, "answer": answer})
 
     async def _call_tool(
         self,
@@ -634,21 +682,40 @@ def _cap_tool_result(data: dict[str, Any]) -> str:
 
 
 class _TokenRelay:
-    """Token callback that forwards streamed tokens to the SSE stream.
+    """Token callback that forwards streamed tokens to the SSE stream, splitting
+    private reasoning (``<thought>…</thought>``) onto a separate channel.
+
+    Answer text is emitted as ``token`` events (the unchanged contract); reasoning
+    text is emitted as ``reasoning`` events so a UI can render it dimmed instead of
+    treating it as the answer. Because tags can straddle token boundaries, a
+    :class:`ReasoningStreamSplitter` buffers ambiguous fragments — :meth:`flush`
+    releases anything still held when the stream ends.
 
     ``reset()`` is the optional protocol the ModelDispatcher uses after a
     mid-stream failover: it emits a ``stream_reset`` event so UIs discard the
-    partial output streamed by the failed attempt before it is re-streamed.
+    partial output streamed by the failed attempt, and starts a fresh splitter so
+    no carry buffer leaks across the re-stream.
     """
 
     def __init__(self, stream_manager: Any, task_id: str) -> None:
         self._stream_manager = stream_manager
         self._task_id = task_id
+        self._splitter = ReasoningStreamSplitter()
+
+    async def _emit(self, segments: list[tuple[str, str]]) -> None:
+        for channel, fragment in segments:
+            event = "token" if channel == "answer" else "reasoning"
+            await self._stream_manager.emit(self._task_id, event, {"text": fragment})
 
     async def __call__(self, token: str) -> None:
-        await self._stream_manager.emit(self._task_id, "token", {"text": token})
+        await self._emit(self._splitter.feed(token))
+
+    async def flush(self) -> None:
+        """Release any text the splitter is still holding at end of stream."""
+        await self._emit(self._splitter.flush())
 
     async def reset(self) -> None:
+        self._splitter = ReasoningStreamSplitter()
         await self._stream_manager.emit(self._task_id, "stream_reset", {})
 
 
@@ -689,6 +756,8 @@ def _final_answer(
     cost_usd: float = 0.0,
     tools_used: list[str] | None = None,
     successful_tools: list[str] | None = None,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
 ) -> dict[str, Any]:
     return {
         "output": output,
@@ -699,6 +768,8 @@ def _final_answer(
         "question": None,
         "question_options": [],
         "cost_usd": cost_usd,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
         "tools_used": tools_used or [],
         # Always a list for agentic agents (even when empty) so the orchestrator
         # treats the output as verifiable; None would skip verification.

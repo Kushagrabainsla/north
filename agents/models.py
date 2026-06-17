@@ -50,6 +50,8 @@ class AgentResult(BaseModel):
     question: str | None = None
     question_options: list[str] = Field(default_factory=list)
     cost_usd: float = 0.0
+    tokens_in: int = 0  # summed prompt tokens across the agent's LLM calls
+    tokens_out: int = 0  # summed completion tokens across the agent's LLM calls
     duration_ms: int | None = None
     tools_used: list[str] = Field(default_factory=list)  # deduplicated, ordered by first call
     # Tools that succeeded at least once, deduplicated and ordered by first success.

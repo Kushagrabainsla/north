@@ -48,6 +48,14 @@ from utils.time import format_timestamp, utcnow
 
 logger = logging.getLogger(__name__)
 
+# Ledger status recorded for each approval-card decision. Answers to questions are
+# handled separately (recorded as learnable clarifications), so they are absent here.
+_APPROVAL_DECISION_STATUS: dict[str, LedgerStatus] = {
+    ApprovalDecision.APPROVED: LedgerStatus.APPROVED,
+    ApprovalDecision.REJECTED: LedgerStatus.REJECTED,
+    ApprovalDecision.TIMEOUT_REJECTED: LedgerStatus.REJECTED,
+}
+
 
 def _on_extraction_done(t: asyncio.Task) -> None:
     if t.cancelled():
@@ -217,19 +225,33 @@ class Orchestrator:
         if not self._approval_store.resolve(card_id, decision, chosen_option=chosen_option):
             raise ValueError(f"Approval card {card_id!r} could not be resolved.")
 
-        status = LedgerStatus.APPROVED if decision == ApprovalDecision.APPROVED else LedgerStatus.REJECTED
-        # Include the card message so the extraction pipeline can learn a
-        # meaningful preference fact (e.g. "User always approves X from agent Y").
-        # Without this, the input would just be an opaque card_id.
-        ledger_input = (
-            f"question: {card.message}\noptions: {', '.join(card.options)}" if card.message else f"card_id={card_id}"
+        # An answered question is a durable preference in the user's own words —
+        # record it from a *learnable* source (the extraction pipeline reads it),
+        # phrased so the fact comes from the answer, not north's question. Every
+        # other decision is an audit-only APPROVAL entry.
+        is_clarification = (
+            card.type == CardType.QUESTION and decision == ApprovalDecision.ANSWERED and bool(chosen_option.strip())
         )
+        if is_clarification:
+            source = LedgerSource.CLARIFICATION
+            status = LedgerStatus.COMPLETED
+            action = "clarification_answered"
+            ledger_input = f"north asked: {card.message}\nThe user answered: {chosen_option}"
+        else:
+            source = LedgerSource.APPROVAL
+            status = _APPROVAL_DECISION_STATUS.get(decision, LedgerStatus.REJECTED)
+            action = f"approval_responded: {decision}"
+            ledger_input = (
+                f"question: {card.message}\noptions: {', '.join(card.options)}"
+                if card.message
+                else f"card_id={card_id}"
+            )
         await self._write_ledger(
             LedgerEntry.new(
-                source=LedgerSource.APPROVAL,
+                source=source,
                 task_id=card.task_id,
                 agent=card.agent,
-                action=f"approval_responded: {decision}",
+                action=action,
                 input=ledger_input,
                 output=f"chosen_option={chosen_option or decision}",
                 status=status,
@@ -350,7 +372,7 @@ class Orchestrator:
             if await self._handle_strategy_command(task_id, request.prompt):
                 return
 
-            classification, plan = await self._stage_plan(task_id, request.prompt)
+            classification, plan = await self._stage_plan(task_id, request.prompt, request.context)
             await self._stage_north_star(task_id, request.prompt, classification)
             await self._stage_execute(
                 task_id,
@@ -414,11 +436,13 @@ class Orchestrator:
             if self._tracked_router is not None:
                 self._tracked_router.pop_task_cost(task_id)
 
-    async def _stage_plan(self, task_id: str, prompt: str) -> tuple[IntentClassification, ExecutionPlan]:
+    async def _stage_plan(
+        self, task_id: str, prompt: str, context: str = ""
+    ) -> tuple[IntentClassification, ExecutionPlan]:
         """Stages 1+3: Classify intent and build execution plan in one LLM call."""
         await self._stream_manager.emit(task_id, "classifying", {"prompt": prompt})
 
-        classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id)
+        classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id, context=context)
 
         await self._write_ledger(
             LedgerEntry.new(
@@ -1036,6 +1060,9 @@ class Orchestrator:
                 tools_used=result.tools_used,
                 status=LedgerStatus.COMPLETED,
                 duration_ms=result.duration_ms,
+                cost_usd=result.cost_usd,
+                tokens_in=result.tokens_in,
+                tokens_out=result.tokens_out,
             )
         )
 

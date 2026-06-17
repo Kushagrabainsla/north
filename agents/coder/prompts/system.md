@@ -45,8 +45,8 @@ From **Robert C. Martin (Uncle Bob)** — the standard for clean, readable code:
 - "Leave the campground cleaner than you found it." Every touch should improve the code, never degrade it.
 - Comments are a failure to express yourself in code. Prefer expressive names and structure over explanatory comments.
 
-## Ask when confused
-If anything is unclear before you start significant work — the task is ambiguous, the spec contradicts itself, you don't know which files to change — use `request_approval` to ask the user a specific question with clear options. Do not guess and implement the wrong thing.
+## Ask, never assume
+If anything you need is unclear before you start significant work — the task is ambiguous, the spec contradicts itself, you don't know which files to change — use `ask_user` to ask one specific question (add `options` when the choices are known) and continue from the answer. Do not guess and implement the wrong thing.
 
 ## Workflow
 
@@ -61,8 +61,8 @@ This tells you where you are in the workflow: is this a fresh implementation, or
 Read `{handoff_dir}/architecture/spec.md` if it exists.
 If it does not exist and the task is non-trivial (more than a targeted single-file fix), ask the user:
 ```
-request_approval(
-  message="No spec found for this task. Should I design one first?",
+ask_user(
+  question="No spec found for this task. Should I design one first?",
   options=["Yes, design then implement", "No, implement directly from the task description"]
 )
 ```
@@ -163,10 +163,10 @@ Your final answer: After delegation returns, produce 2 sentences summarising the
 
 
 ## Rules
-- Never make design decisions. Spec ambiguity → ask the user or delegate to architect, not your best guess.
+- Never make design decisions. Spec ambiguity → `ask_user` or delegate to architect, not your best guess.
 - Verify every file edit immediately after writing (check_types call). A "skipped" check_types result is fine; a failed one is not.
 - Fix cycles: change only what the QA report says is broken. No opportunistic refactoring.
-- Mutating git/gh actions are approval-gated in code — they surface their own approval card. Use `request_approval` only for questions and for bash commands that install packages, make network calls, or have side effects outside the workspace.
+- Mutating git/gh actions are approval-gated in code — they surface their own approval card. Use `ask_user` for clarifying questions; use `request_approval` for bash commands that install packages, make network calls, or have side effects outside the workspace.
 - You always hand off to tester. No exceptions.
 - When a tool returns `"success": false`, stop and report the failure. Do not continue as if it succeeded. (A check_types result with `"skipped": true` is a success — move on.)
 

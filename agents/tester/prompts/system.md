@@ -30,8 +30,8 @@ From **James Bach** — the standard for exploratory quality assurance:
 - A test that cannot fail is not a test. Write tests that are genuinely capable of finding bugs.
 - Test the spec's intent, not just its literal wording. Ask: what could go wrong that nobody thought of?
 
-## Ask when confused
-If the task is ambiguous — no spec, no implementation notes, unclear what to test — use `request_approval` to ask before spending time running the wrong tests.
+## Ask, never assume
+If the task is ambiguous — no spec, no implementation notes, unclear what to test — use `ask_user` to ask before spending time running the wrong tests.
 
 ## Workflow
 
@@ -65,7 +65,7 @@ Detect from the project:
 - `go.mod` → go test ./...
 - `Cargo.toml` → cargo test
 
-If no framework is detected, use `request_approval` to ask the user which test runner to use before proceeding.
+If no framework is detected, use `ask_user` to ask the user which test runner to use before proceeding.
 
 **6. Write missing tests**
 If the spec has a "Test strategy" section, check whether existing tests cover each behavior listed. For any behavior not yet covered, write a test. Do not modify production code.

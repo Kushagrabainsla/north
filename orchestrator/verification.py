@@ -16,6 +16,23 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+# Words that frame a claim verb as an intention, plan, or hypothetical rather
+# than a completed action: "I should create the file", "let's write a test",
+# "we need to generate the spec", "the files I created earlier were too brief".
+# When one of these governs the claim verb, the sentence is not a completion
+# claim, so it must not be checked against tool evidence. Reflective past-tense
+# narration ("the file I created") is caught by the relative-pronoun markers.
+_NON_COMPLETION_RE = re.compile(
+    r"\b(?:should|would|could|will|shall|can|might|may|let'?s|going\s+to|gonna|"
+    r"plan(?:ning)?\s+to|need(?:s|ed)?\s+to|want(?:s|ed)?\s+to|try(?:ing)?\s+to|"
+    r"intend(?:s|ed)?\s+to|about\s+to|hope\s+to|aim\s+to|propose\s+to|"
+    r"(?:file|files|script|test|tests|spec|code)\s+(?:i|we|you))\b",
+    re.IGNORECASE,
+)
+
+# How far back to look for a non-completion marker governing a claim verb.
+_GOVERNING_WINDOW_CHARS = 40
+
 # (label, claim pattern, tools whose successful use substantiates the claim).
 _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
     (
@@ -52,6 +69,20 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
 )
 
 
+def _has_completion_claim(output: str, pattern: re.Pattern[str]) -> bool:
+    """True if *output* asserts the claim as a completed action.
+
+    A match governed by an intent/hypothetical marker (a plan, a suggestion, a
+    past-tense reflection) in the preceding window does not count — only an
+    unqualified assertion that the action was done.
+    """
+    for m in pattern.finditer(output):
+        window = output[max(0, m.start() - _GOVERNING_WINDOW_CHARS) : m.start()]
+        if not _NON_COMPLETION_RE.search(window):
+            return True
+    return False
+
+
 def verify_claims(output: str, successful_tools: Iterable[str]) -> list[str]:
     """Return violations: claims in *output* unsupported by a successful tool call.
 
@@ -63,7 +94,7 @@ def verify_claims(output: str, successful_tools: Iterable[str]) -> list[str]:
     succeeded = set(successful_tools)
     violations: list[str] = []
     for label, pattern, required in _RULES:
-        if pattern.search(output) and not (required & succeeded):
+        if not (required & succeeded) and _has_completion_claim(output, pattern):
             tool_list = " or ".join(f"`{t}`" for t in sorted(required))
             violations.append(f"output describes {label} but no successful {tool_list} call was recorded")
     return violations

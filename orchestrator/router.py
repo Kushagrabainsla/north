@@ -22,13 +22,42 @@ from utils.text import strip_code_fences
 _PLAN_CACHE_TTL_SECONDS: int = 3600  # 1 hour
 _PLAN_CACHE_MAX_SIZE: int = 256
 _NORMALIZE_RE = re.compile(r"[^a-z0-9 ]")
+# Only the most recent dialogue disambiguates a follow-up; cap it so the planner
+# prompt and the routing cache key stay bounded on long conversations.
+_PLANNER_CONVERSATION_TAIL_CHARS: int = 2000
 
 
-def _plan_cache_key(prompt: str) -> str:
-    """Stable hash of a normalized prompt for routing cache lookups."""
-    normalized = _NORMALIZE_RE.sub("", prompt.lower().strip())
-    normalized = " ".join(normalized.split())  # collapse whitespace
+def _normalize(text: str) -> str:
+    return " ".join(_NORMALIZE_RE.sub("", text.lower().strip()).split())
+
+
+def _plan_cache_key(prompt: str, conversation: str = "") -> str:
+    """Stable hash of the normalized prompt (plus recent conversation) for routing.
+
+    The conversation is folded in because it now affects routing — the same
+    prompt ("yes, go ahead") must not reuse a plan cached under a different
+    conversation, or follow-ups would route to the wrong agent.
+    """
+    normalized = _normalize(prompt)
+    if conversation:
+        normalized = f"{normalized}␟{_normalize(conversation)}"
     return hashlib.md5(normalized.encode()).hexdigest()
+
+
+def _recent_conversation(context: str) -> str:
+    """Extract just the recent-conversation section from a context blob.
+
+    The planner only needs dialogue to disambiguate follow-ups like "go ahead";
+    personal background facts add noise and would pollute the routing cache key.
+    Returns "" when the blob has no conversation section (backward compatible).
+    """
+    if context.startswith("## Recent conversation"):
+        # Keep up to the next top-level (##) section, matching how the agent
+        # splits the same blob in _build_task_message.
+        parts = re.split(r"\n\n(?=##)", context, maxsplit=1)
+        section = parts[0].strip().removeprefix("## Recent conversation").strip()
+        return section[-_PLANNER_CONVERSATION_TAIL_CHARS:]
+    return ""
 
 
 logger = logging.getLogger(__name__)
@@ -58,16 +87,21 @@ class ExecutionPlanner:
         # Cache: normalized_hash → (insert_ts, classification, plan)
         self._plan_cache: dict[str, tuple[float, IntentClassification, ExecutionPlan]] = {}
 
-    async def plan_all(self, prompt: str, task_id: str) -> tuple[IntentClassification, ExecutionPlan]:
+    async def plan_all(
+        self, prompt: str, task_id: str, context: str = ""
+    ) -> tuple[IntentClassification, ExecutionPlan]:
         """Single LLM call that classifies the task AND builds the execution plan.
 
-        Replaces the separate classify → route two-call pipeline.
+        Replaces the separate classify → route two-call pipeline. *context* is the
+        task's context blob; its recent-conversation section is given to the
+        planner so follow-ups ("yes, go ahead") route from the dialogue, not blind.
         """
         all_agents = self._agent_registry.all()
         if not all_agents:
             raise RoutingError("No agents are registered.")
 
-        cache_key = _plan_cache_key(prompt)
+        conversation = _recent_conversation(context)
+        cache_key = _plan_cache_key(prompt, conversation)
         cached = self._plan_cache.get(cache_key)
         if cached is not None:
             insert_ts, cached_cls, cached_plan = cached
@@ -99,11 +133,21 @@ class ExecutionPlanner:
             "=== System Context ===\n" + "\n".join(system_context_lines) + "\n\n" if system_context_lines else ""
         )
 
+        conversation_block = (
+            f"=== Recent Conversation ===\n{conversation}\n"
+            "(Use this to resolve what the User Task refers to — e.g. a short "
+            "confirmation like 'yes, go ahead' continues the work just discussed. "
+            "Classify and route based on that actual intent.)\n\n"
+            if conversation
+            else ""
+        )
+
         full_prompt = (
             f"{system_prompt}\n\n"
             f"{system_context_block}"
             f"=== Available Agents ===\n{json.dumps(agents_info, indent=2)}\n\n"
             f"=== Available Tools ===\n{json.dumps(tools_info, indent=2)}\n\n"
+            f"{conversation_block}"
             f"=== User Task ===\n{prompt}"
         )
 

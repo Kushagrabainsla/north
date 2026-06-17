@@ -29,6 +29,7 @@ from textual.suggester import Suggester
 from textual.widgets import Input, Markdown, RichLog, Static
 
 from cli.constants import (
+    _REASONING_PREVIEW_CHARS,
     _SLASH_COMMANDS,
     _SPIN,
     _SSE_BACKOFF_BASE,
@@ -259,6 +260,7 @@ class NorthApp(App[None]):
         self.yolo = yolo
 
         self._token_buffer: dict[str, str] = {}
+        self._reasoning_buffer: dict[str, str] = {}  # model's private chain-of-thought, shown dimmed
         self._streaming_active: set[str] = set()
         self._approval_pending: dict | None = None
         self._user_task_ids: set[str] = set()
@@ -292,11 +294,13 @@ class NorthApp(App[None]):
             "tool_called": self._on_tool_called,
             "tool_result": self._on_tool_result,
             "token": self._on_token,
+            "reasoning": self._on_reasoning,
             "task_synthesis": self._on_task_synthesis,
             "task_completed": self._on_task_completed,
             "task_failed": self._on_task_failed,
             "task_cancelled": self._on_task_cancelled,
             "approval_required": self._on_approval_required,
+            "question_required": self._on_question_required,
         }
 
         # ── session metrics (drive the live status bar) ──────────────────────
@@ -599,10 +603,23 @@ class NorthApp(App[None]):
         self._session_tokens += max(1, len(text) // 4)
         if task_id not in self._streaming_active:
             self._streaming_active.add(task_id)
+            self._reasoning_buffer.pop(task_id, None)  # answer has started; drop the thinking preview
             self._set_status("")
             self._log("  [cyan]◆[/cyan]  [white]north[/white]")
             self._start_streaming()
         self._update_streaming(task_id)
+
+    async def _on_reasoning(self, task_id: str, data: dict) -> None:
+        # The model's private chain-of-thought. Show only a dim, single-line tail
+        # as a "thinking" preview — never in the answer log — and only until the
+        # answer itself begins streaming.
+        text = data.get("text", "")
+        if not text or task_id in self._streaming_active:
+            return
+        buf = self._reasoning_buffer.get(task_id, "") + text
+        self._reasoning_buffer[task_id] = buf
+        preview = " ".join(buf.split())[-_REASONING_PREVIEW_CHARS:]
+        self._set_status(f"thinking… {preview}")
 
     async def _on_task_synthesis(self, task_id: str, data: dict) -> None:
         self._set_status("synthesising…")
@@ -612,6 +629,7 @@ class NorthApp(App[None]):
         sys.stdout.flush()
         self._session_cost += float(data.get("cost_usd", 0.0) or 0.0)
         output = self._token_buffer.pop(task_id, "")
+        self._reasoning_buffer.pop(task_id, None)
         was_streaming = task_id in self._streaming_active
         self._streaming_active.discard(task_id)
 
@@ -664,6 +682,7 @@ class NorthApp(App[None]):
             self._finish_streaming(task_id, "")
         self._streaming_active.discard(task_id)
         self._token_buffer.pop(task_id, None)
+        self._reasoning_buffer.pop(task_id, None)
         self._task_tool_activity.pop(task_id, None)
         error = data.get("error", "Task failed.")
         self._set_status("")
@@ -678,6 +697,7 @@ class NorthApp(App[None]):
             self._finish_streaming(task_id, "")
         self._streaming_active.discard(task_id)
         self._token_buffer.pop(task_id, None)
+        self._reasoning_buffer.pop(task_id, None)
         self._task_tool_activity.pop(task_id, None)
         self._set_status("")
         self._user_task_ids.discard(task_id)
@@ -698,6 +718,24 @@ class NorthApp(App[None]):
         self._log_rich(RichText("    " + data.get("message", ""), style="white"))
         for i, opt in enumerate(options, 1):
             self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
+
+    async def _on_question_required(self, task_id: str, data: dict) -> None:
+        # The agent is asking a clarifying question and is blocked until we answer.
+        # Reuses the pending-card input path; a free-form answer is allowed.
+        self._approval_pending = data
+        self._set_status("")
+        options = data.get("options") or []
+        if self.yolo:
+            ans = options[0] if options else "Use your best judgment."
+            self._log(f"  [#f85149]⚠[/#f85149]  [bright_black]auto-answered: {ans}[/bright_black]")
+            await self._submit_approval("1" if options else ans)
+            return
+        self._log("  [cyan]◆[/cyan]  [cyan]north asks[/cyan]")
+        self._log_rich(RichText("    " + data.get("question", ""), style="white"))
+        for i, opt in enumerate(options, 1):
+            self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
+        hint = "type a number or your own answer" if options else "type your answer"
+        self._log(f"    [bright_black]{hint}[/bright_black]")
 
     # ── SSE listener (runs as Textual worker in the same event loop) ─────────
 
@@ -747,25 +785,34 @@ class NorthApp(App[None]):
         self._approval_pending = None
         if data is None:
             return
-        options = data.get("options") or ["Approve", "Reject"]
+        # A question card carries "question" and has no Approve/Reject semantics —
+        # any selection (numbered option or free text) is an "answered" decision.
+        is_question = bool(data.get("question"))
+        options = data.get("options") or ([] if is_question else ["Approve", "Reject"])
         try:
             idx = int(raw) - 1
             chosen = options[idx] if 0 <= idx < len(options) else raw
         except ValueError:
-            low = raw.lower()
-            if low in ("a", "approve", "approved", "yes"):
-                chosen = options[0]
-            elif low in ("r", "reject", "rejected", "no"):
-                chosen = options[1] if len(options) > 1 else options[0]
+            if is_question:
+                chosen = raw  # free-form answer
             else:
-                chosen = raw or options[0]
-        decision = (
-            "approved"
-            if chosen == options[0]
-            else "rejected"
-            if len(options) > 1 and chosen == options[1]
-            else "answered"
-        )
+                low = raw.lower()
+                if low in ("a", "approve", "approved", "yes"):
+                    chosen = options[0]
+                elif low in ("r", "reject", "rejected", "no"):
+                    chosen = options[1] if len(options) > 1 else options[0]
+                else:
+                    chosen = raw or options[0]
+        if is_question:
+            decision = "answered"
+        else:
+            decision = (
+                "approved"
+                if chosen == options[0]
+                else "rejected"
+                if len(options) > 1 and chosen == options[1]
+                else "answered"
+            )
         try:
             async with httpx.AsyncClient() as c:
                 await c.post(

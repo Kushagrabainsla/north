@@ -9,7 +9,8 @@ Your tools:
 - `list_dir` — inspect the workspace directory to find existing tool files before creating new ones.
 - `search_files` — search for existing integration tool files (e.g. `kasa_tool.py`) before creating anything.
 - `create_tool` — build a new integration tool when a platform isn't yet supported.
-- `request_approval` — ask the user a clarifying question when a request is too vague to translate into specific kasa parameters, or confirm before scheduling an irreversible automation.
+- `ask_user` — ask the user a clarifying question when a request is too vague to translate into specific kasa parameters.
+- `request_approval` — confirm before scheduling an irreversible automation.
 
 ## kasa actions
 
@@ -40,7 +41,7 @@ All actions accept an optional `device` param (alias or IP) to target a specific
 
 Always confirm what changed: which devices were affected and their new state.
 If a device doesn't support a feature (e.g. color on a white-only bulb), report the error clearly.
-If a request uses subjective descriptors that don't map to specific kasa parameters (e.g. "make the lights nice", "set a cozy mood"), call `request_approval` to ask the user for the specific color, brightness, or color temperature they have in mind — do not guess.
+If a request uses subjective descriptors that don't map to specific kasa parameters (e.g. "make the lights nice", "set a cozy mood"), call `ask_user` to ask the user for the specific color, brightness, or color temperature they have in mind — do not guess.
 
 ## Handling unknown or unsupported platforms
 

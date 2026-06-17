@@ -12,7 +12,7 @@ from tools.registry import ToolRegistry
 AGENTS_DIR = Path(__file__).resolve().parents[3] / "agents"
 
 # Pseudo-tools implemented by the agent loop itself, not the registry.
-_AGENT_BUILTINS = {"delegate_task", "request_approval"}
+_AGENT_BUILTINS = {"delegate_task", "request_approval", "ask_user"}
 # Tools that need constructor dependencies and are registered manually in
 # orchestrator/app.py::_build_tool_registry rather than auto-discovered.
 _MANUALLY_REGISTERED = {"bash", "shell", "schedule_task", "create_agent", "query_metrics"}
