@@ -75,5 +75,6 @@ NORTH_GEMINI_API_KEY=...
 ---
 
 <p align="center">
-  <sub>MIT licensed · Built by <a href="https://github.com/Kushagrabainsla">Kushagra Bainsla</a></sub>
+  <sub><strong>north</strong> · a digital version of you</sub><br>
+  <sub>MIT · <a href="https://github.com/Kushagrabainsla/north">GitHub</a></sub>
 </p>
