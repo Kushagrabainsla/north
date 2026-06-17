@@ -20,7 +20,7 @@ dependencies = [
     "sounddevice>=0.4.6; sys_platform == 'darwin'",
     "pynput>=1.7.6; sys_platform == 'darwin'",
     "beautifulsoup4>=4.12.0",
-    "numpy>=1.26.0; sys_platform == 'darwin'",
+    "numpy>=1.26.0",
     "psutil>=5.9.0",
     "rich>=13.0.0",
     "textual>=0.80.0",
