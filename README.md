@@ -1,6 +1,11 @@
-# north
+<!-- Logo is hosted off-repo so `uv tool install git+...` never downloads it.
+     To set the URL: drag the image into any GitHub issue/PR comment box,
+     copy the generated user-attachments URL, paste it below (don't submit the comment). -->
+<p align="center">
+  <img src="https://repository-images.githubusercontent.com/1221207908/a9516630-e5f6-475f-ab80-44b2dd6dc9c8" alt="north" width="480">
+</p>
 
-**Personal AI operating system.** You give north your goals (your north stars). It handles coordination across health, finances, academics, and career in the background. You review and approve.
+**A digital version of you that learns how you think and earns autonomy over time.** It starts by suggesting, moves to acting with your approval, and takes on more as it earns your trust.
 
 ---
 
@@ -10,10 +15,20 @@
 curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash
 ```
 
-Add your API key to `~/.north/.env`:
+The installer asks for an API key and saves it for you. One provider is enough to start; you can integrate keys from any of these:
+
+| Provider | Key | Create a key |
+|---|---|---|
+| OpenRouter | `NORTH_OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| Groq | `NORTH_GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) |
+| Gemini | `NORTH_GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+
+To add or change keys later, edit `~/.north/.env`:
 
 ```
 NORTH_OPENROUTER_API_KEY=sk-or-...
+NORTH_GROQ_API_KEY=gsk_...
+NORTH_GEMINI_API_KEY=...
 ```
 
 ---
