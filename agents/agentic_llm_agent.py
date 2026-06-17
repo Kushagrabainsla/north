@@ -111,12 +111,15 @@ class AgenticLLMAgent(LLMAgent):
                 ],
             }
         )
-        for call, result_str, success in results:
+        for call, result_str, _ in results:
             content = result_str
-            # A failed delegation must never be paraphrased into success. Inject a
-            # hard instruction into the tool result the model reads next so it
-            # surfaces the failure via ask_user instead of inventing progress.
-            if call.name == "delegate_task" and not success:
+            # A genuine delegation failure must never be paraphrased into success.
+            # Inject a hard instruction into the tool result the model reads next
+            # so it surfaces the failure via ask_user instead of inventing
+            # progress. Only fires on the `delegation_failed` marker - control-flow
+            # guardrails (depth/cycle limits) deliberately omit it so they keep
+            # their "summarise and finish" instruction instead.
+            if call.name == "delegate_task" and _is_delegation_failure(result_str):
                 content += (
                     "\n\n[SYSTEM: The delegation failed. You MUST NOT claim it succeeded "
                     "or that any sub-agent is still working. Call ask_user to inform the "
@@ -515,7 +518,7 @@ class AgenticLLMAgent(LLMAgent):
 
         registry = self._deps.agent_registry
         if registry is None:
-            return _failed_json("Agent registry not available for delegation.")
+            return await self._delegation_failed(payload, agent_name, "Agent registry not available for delegation.")
 
         task = str(params.get("task", ""))
         if not task:
@@ -525,15 +528,19 @@ class AgenticLLMAgent(LLMAgent):
             agent = registry.get(agent_name)
         except Exception:
             if agent_name in ENGINEERING_AGENTS:
-                return _failed_json(
+                return await self._delegation_failed(
+                    payload,
+                    agent_name,
                     f"Engineering agent '{agent_name}' not found. "
                     "Cannot fall back to general for engineering tasks. "
-                    "Ensure the agent is registered and retry."
+                    "Ensure the agent is registered and retry.",
                 )
             try:
                 agent = registry.get("general")
             except Exception:
-                return _failed_json(f"Agent '{agent_name}' not found and no 'general' fallback.")
+                return await self._delegation_failed(
+                    payload, agent_name, f"Agent '{agent_name}' not found and no 'general' fallback."
+                )
 
         # An explicit workspace in the delegation params wins; otherwise the
         # sub-agent inherits the parent's. The delegate_task schema nests
@@ -563,8 +570,19 @@ class AgenticLLMAgent(LLMAgent):
             return json.dumps({"success": True, "output": result.output, "summary": result.summary})
         except Exception as exc:
             logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
-            await self._record_delegation_failure(payload, agent_name, str(exc))
-            return _failed_json(str(exc))
+            return await self._delegation_failed(payload, agent_name, str(exc))
+
+    async def _delegation_failed(self, payload: AgentPayload, agent_name: str, error: str) -> str:
+        """Record a genuine delegation failure and return a marked failure result.
+
+        Used for failures the user must hear about (agent missing, sub-agent
+        crashed) - not for control-flow guardrails (depth/cycle limits) where
+        the model is told to summarise and finish. The ``delegation_failed``
+        marker is what the ReAct loop keys on to inject the ask_user directive,
+        so guardrails (which use plain ``_failed_json``) never trigger it.
+        """
+        await self._record_delegation_failure(payload, agent_name, error)
+        return json.dumps({"success": False, "error": error, "delegation_failed": True})
 
     async def _record_delegation_failure(self, payload: AgentPayload, agent_name: str, error: str) -> None:
         """Write a ledger entry so a failed delegation is never silently dropped."""
@@ -745,6 +763,15 @@ class _TokenRelay:
 def _extract_success(tool_result_str: str) -> bool:
     try:
         return bool(json.loads(tool_result_str).get("success", False))
+    except (json.JSONDecodeError, AttributeError):
+        return False
+
+
+def _is_delegation_failure(tool_result_str: str) -> bool:
+    """True only for a genuine delegation failure (agent missing / sub-agent
+    crashed), not for control-flow guardrails which omit the marker."""
+    try:
+        return bool(json.loads(tool_result_str).get("delegation_failed", False))
     except (json.JSONDecodeError, AttributeError):
         return False
 

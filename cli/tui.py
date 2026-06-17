@@ -24,7 +24,7 @@ from rich.padding import Padding as RichPadding
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, VerticalScroll
 from textual.suggester import Suggester
 from textual.widgets import Input, Markdown, RichLog, Static
 
@@ -75,7 +75,8 @@ class NorthApp(App[None]):
 
     # Layout (top → bottom):
     #   #log           - scrollable chat history (top-anchored)  (1fr)
-    #   #streaming     - live markdown during token stream       (auto, hidden)
+    #   #streaming-wrap - scrollable live stream area (≤50%, hidden when idle)
+    #     #streaming    - live markdown during token stream
     #   #status        - working spinner (empty when idle)        (1 row)
     #   #input-row     - ╭ >  [                       ] ╮ box     (3 rows)
     #   #hint          - dim shortcuts (strategy · history · …)   (1 row)
@@ -109,14 +110,17 @@ class NorthApp(App[None]):
 
     /* ── live streaming area ──────────────────────────────── */
 
-    #streaming {
+    /* Scrollable wrapper: caps the live area at half the screen and lets the
+       user scroll through output longer than that while it streams. The inner
+       Markdown sizes to its content; this container provides the scrollbar. */
+    #streaming-wrap {
         width: 100%;
         height: auto;
         max-height: 50%;
         display: none;
-        padding: 0 0 0 4;
+        overflow-y: auto;
+        overflow-x: hidden;
         background: $background;
-        color: $text;
         scrollbar-size: 1 1;
         scrollbar-background: $background;
         scrollbar-background-hover: $background;
@@ -125,6 +129,14 @@ class NorthApp(App[None]):
         scrollbar-color-hover: $background;
         scrollbar-color-active: $background;
         scrollbar-corner-color: $background;
+    }
+
+    #streaming {
+        width: 100%;
+        height: auto;
+        padding: 0 0 0 4;
+        background: $background;
+        color: $text;
     }
 
     /* Markdown renders paragraph / fence / list block sub-widgets with
@@ -219,6 +231,9 @@ class NorthApp(App[None]):
     #log:focus,
     #log:focus-within,
     #log:hover,
+    #streaming-wrap:focus,
+    #streaming-wrap:focus-within,
+    #streaming-wrap:hover,
     #streaming:focus,
     #streaming:focus-within,
     #status:focus,
@@ -316,7 +331,8 @@ class NorthApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
-        yield Markdown("", id="streaming")
+        with VerticalScroll(id="streaming-wrap"):
+            yield Markdown("", id="streaming")
         yield Static("", id="status")
         yield Static("", id="statusbar")
         with Horizontal(id="input-row"):
@@ -480,17 +496,18 @@ class NorthApp(App[None]):
     # ── streaming widget ─────────────────────────────────────────────────────
 
     def _start_streaming(self) -> None:
-        md = self.query_one("#streaming", Markdown)
-        md.display = True
-        md.update("")
+        self.query_one("#streaming-wrap", VerticalScroll).display = True
+        self.query_one("#streaming", Markdown).update("")
 
     def _update_streaming(self, task_id: str) -> None:
         self.query_one("#streaming", Markdown).update(self._token_buffer.get(task_id, ""))
+        # Keep the newest tokens in view as they stream; the user can still
+        # scroll up through the live area (it's a VerticalScroll now).
+        self.query_one("#streaming-wrap", VerticalScroll).scroll_end(animate=False)
 
     def _finish_streaming(self, task_id: str, final_output: str) -> None:
-        md = self.query_one("#streaming", Markdown)
-        md.display = False
-        md.update("")
+        self.query_one("#streaming-wrap", VerticalScroll).display = False
+        self.query_one("#streaming", Markdown).update("")
         if final_output:
             # Render the finalized message through a real markdown engine so the
             # scrollback matches what was shown live in the streaming Markdown
