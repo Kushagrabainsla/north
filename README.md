@@ -80,6 +80,3 @@ uv run pytest            # run tests
 uv run ruff check        # lint
 uv run ruff check --fix  # auto-fix lint
 ```
-
-- **Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
