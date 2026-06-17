@@ -5,13 +5,13 @@ Some models emit their private reasoning inline, wrapped in tags like
 as output or stored as the result. This module provides two views of the same
 rule set so the live stream and the persisted output agree exactly:
 
-- :func:`strip_reasoning` — remove reasoning blocks from a complete string.
-- :class:`ReasoningStreamSplitter` — the streaming equivalent: fed text chunks
+- :func:`strip_reasoning` - remove reasoning blocks from a complete string.
+- :class:`ReasoningStreamSplitter` - the streaming equivalent: fed text chunks
   as they arrive, it classifies each fragment as ``answer`` or ``reasoning`` so a
   UI can route reasoning to a dimmed channel instead of the answer.
 
 A half-open reasoning block (an open tag with no matching close) is discarded by
-both — an unterminated thought is never an answer.
+both - an unterminated thought is never an answer.
 
 See docs/CODING_STYLE.md Section 15.
 """
@@ -85,7 +85,7 @@ class ReasoningStreamSplitter:
 
     Feed it text chunks via :meth:`feed`; it returns ``(channel, fragment)``
     pairs where *channel* is ``"answer"`` or ``"reasoning"``. Tags may straddle
-    chunk boundaries — a fragment that could begin a marker is held back until
+    chunk boundaries - a fragment that could begin a marker is held back until
     the next chunk confirms or denies it. Call :meth:`flush` at end of stream to
     release any held text.
     """
@@ -130,7 +130,7 @@ class ReasoningStreamSplitter:
     def flush(self) -> list[tuple[str, str]]:
         """Release held text at end of stream.
 
-        Held answer text is emitted — it was only withheld in case it began a
+        Held answer text is emitted - it was only withheld in case it began a
         marker that never arrived. A half-open reasoning block is discarded,
         matching :func:`strip_reasoning`.
         """

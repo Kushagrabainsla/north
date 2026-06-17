@@ -1,4 +1,4 @@
-"""Constants for the north CLI and TUI — data only, no behaviour.
+"""Constants for the north CLI and TUI - data only, no behaviour.
 
 Kept in one place so commands (`cli/main.py`), the Textual UI (`cli/tui.py`), and
 the shared helpers (`cli/formatting.py`, `cli/_client.py`, `cli/_server.py`) all
@@ -27,13 +27,13 @@ _PROVIDERS: list[_Provider] = [
     {
         "name": "OpenRouter",
         "env_key": "NORTH_OPENROUTER_API_KEY",
-        "description": "All models — Claude, GPT-4, Gemini, Llama, and more (recommended)",
+        "description": "All models - Claude, GPT-4, Gemini, Llama, and more (recommended)",
         "url": "https://openrouter.ai/keys",
     },
     {
         "name": "Groq",
         "env_key": "NORTH_GROQ_API_KEY",
-        "description": "Ultra-fast open-source models — Llama, Mixtral",
+        "description": "Ultra-fast open-source models - Llama, Mixtral",
         "url": "https://console.groq.com/keys",
     },
     {

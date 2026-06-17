@@ -13,7 +13,7 @@ from utils.time import utcnow
 
 
 class LedgerSource(StrEnum):
-    """Origin of a Ledger entry. Canonical list — see README Section 4.3."""
+    """Origin of a Ledger entry. Canonical list - see README Section 4.3."""
 
     PROMPT = "prompt"
     MIC = "mic"
@@ -24,7 +24,7 @@ class LedgerSource(StrEnum):
     MANUAL_INJECTION = "manual_injection"
     INFERENCE_ROUTER = "inference_router"
     APPROVAL = "approval"
-    CLARIFICATION = "clarification"  # the user's answer to an ask_user question — learnable
+    CLARIFICATION = "clarification"  # the user's answer to an ask_user question - learnable
     WEBHOOK = "webhook"
 
 

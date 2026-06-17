@@ -18,15 +18,15 @@ warn()    { echo -e "  ${yellow}!${reset}  $*"; }
 fail()    { echo -e "  ${red}✗${reset}  $*"; exit 1; }
 
 echo ""
-echo -e "${bold}★ north — Personal Life Operating System${reset}"
+echo -e "${bold}★ north - Personal Life Operating System${reset}"
 echo ""
 
-# ── 1. Check for Docker (optional — only needed for --docker server mode) ─────
+# ── 1. Check for Docker (optional - only needed for --docker server mode) ─────
 
 if command -v docker &>/dev/null; then
-    success "Docker found ($(docker --version | cut -d' ' -f3 | tr -d ',')) — available for --docker mode"
+    success "Docker found ($(docker --version | cut -d' ' -f3 | tr -d ',')) - available for --docker mode"
 else
-    info "Docker not found — north will run in local mode (recommended for personal use)"
+    info "Docker not found - north will run in local mode (recommended for personal use)"
 fi
 
 # ── 2. Install uv if needed ───────────────────────────────────────────────────
@@ -72,7 +72,7 @@ else
         echo "NORTH_OPENROUTER_API_KEY=$api_key" >> "$ENV_FILE"
         success "API key saved to $ENV_FILE"
     else
-        warn "Skipped — add it later: echo 'NORTH_OPENROUTER_API_KEY=sk-or-...' >> $ENV_FILE"
+        warn "Skipped - add it later: echo 'NORTH_OPENROUTER_API_KEY=sk-or-...' >> $ENV_FILE"
     fi
 fi
 

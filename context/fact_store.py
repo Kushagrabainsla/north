@@ -4,7 +4,7 @@ Each extracted fact is stored as one row, embedded individually, and retrieved
 by cosine similarity at agent load time. This replaces the flat-markdown "load
 everything" approach with targeted semantic retrieval (~15 facts vs. full docs).
 
-The markdown files in FileContextStore remain as a human-readable mirror — facts
+The markdown files in FileContextStore remain as a human-readable mirror - facts
 are written to both, so the web UI and existing backup/trim logic stay intact.
 """
 
@@ -38,7 +38,7 @@ _DEDUP_SIMILARITY_THRESHOLD: float = 0.85
 # Retention cap: the store holds at most this many facts (oldest evicted on
 # insert), which also bounds every cosine scan and the in-memory cache.
 _MAX_FACTS_STORED: int = 5_000
-# Dedup-on-insert only compares against the most recent rows per category —
+# Dedup-on-insert only compares against the most recent rows per category  - 
 # an O(all rows) scan per insert does not scale and recent facts are the
 # plausible duplicates anyway.
 _DEDUP_SCAN_LIMIT: int = 500
@@ -61,7 +61,7 @@ class FactStore:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_SCHEMA)
-        # (id, content, embedding_vector) — rebuilt lazily, invalidated on insert.
+        # (id, content, embedding_vector) - rebuilt lazily, invalidated on insert.
         self._cache: list[tuple[str, str, list[float]]] | None = None
         # Serializes cache rebuilds: concurrent searches after an invalidation
         # must not interleave loads and clobber each other's cache.
@@ -83,7 +83,7 @@ class FactStore:
             new_emb = embeddings[0] if embeddings else []
             emb_json = json.dumps(new_emb) if new_emb else json.dumps([])
         except Exception:
-            logger.warning("FactStore: embed failed — storing fact without embedding")
+            logger.warning("FactStore: embed failed - storing fact without embedding")
             emb_json = json.dumps([])
 
         replace_id: str | None = None

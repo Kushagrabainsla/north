@@ -1,12 +1,12 @@
 """Claims-vs-evidence verification (orchestrator stage).
 
 Agents narrate what they did ("created the file", "tests pass"). The model has
-no idea whether that is true — it writes what a successful answer sounds like.
+no idea whether that is true - it writes what a successful answer sounds like.
 This module cross-checks such claims in an agent's final answer against the
 tools that actually *succeeded*, so a fabricated "I ran the tests and they pass"
 with no test execution is flagged rather than recorded as a clean completion.
 
-Conservative by design: the patterns favour precision over recall — better to
+Conservative by design: the patterns favour precision over recall - better to
 miss a borderline claim than to cry wolf on a legitimate one. See
 docs/CODING_STYLE.md Section 16.1.2.
 """
@@ -73,7 +73,7 @@ def _has_completion_claim(output: str, pattern: re.Pattern[str]) -> bool:
     """True if *output* asserts the claim as a completed action.
 
     A match governed by an intent/hypothetical marker (a plan, a suggestion, a
-    past-tense reflection) in the preceding window does not count — only an
+    past-tense reflection) in the preceding window does not count - only an
     unqualified assertion that the action was done.
     """
     for m in pattern.finditer(output):

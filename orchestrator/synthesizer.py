@@ -1,4 +1,4 @@
-"""ResultSynthesizer — merges outputs from multiple agents into one response.
+"""ResultSynthesizer - merges outputs from multiple agents into one response.
 
 Invoked by the Orchestrator after Stage 4 when more than one agent contributed
 to a task. Uses the cheapest inference pool (LOW / high_volume) because the

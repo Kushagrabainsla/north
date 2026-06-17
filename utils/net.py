@@ -72,7 +72,7 @@ def validate_public_url(url: str) -> None:
             or ip.is_reserved
             or ip.is_unspecified
         ):
-            raise UnsafeUrlError(f"URL host {host!r} resolves to non-public address {ip} — blocked.")
+            raise UnsafeUrlError(f"URL host {host!r} resolves to non-public address {ip} - blocked.")
 
 
 def fetch_url_text(url: str, *, timeout: float = _DEFAULT_TIMEOUT) -> FetchedText:
@@ -80,7 +80,7 @@ def fetch_url_text(url: str, *, timeout: float = _DEFAULT_TIMEOUT) -> FetchedTex
 
     Redirects are followed manually (up to _MAX_REDIRECTS) so every hop is
     re-validated against the private-network blocklist. The body read is
-    capped at _MAX_RESPONSE_BYTES. Synchronous — call via asyncio.to_thread.
+    capped at _MAX_RESPONSE_BYTES. Synchronous - call via asyncio.to_thread.
 
     Raises:
         UnsafeUrlError: destination (or a redirect hop) is not public.

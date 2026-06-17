@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Inference — north{% endblock %}
+{% block title %}Inference - north{% endblock %}
 {% block description %}OpenRouter inference costs and model routing{% endblock %}
 
 {% block content %}
@@ -41,11 +41,11 @@
       <tbody>
         {% for m in models %}
         <tr class="ledger-row">
-          <td><code>{{ m.get("id", "—") }}</code></td>
-          <td><span class="badge badge-source">{{ m.get("pool", "—") }}</span></td>
-          <td>{{ m.get("context_length", "—") }}</td>
-          <td>{{ m.get("prompt_price", "—") }}</td>
-          <td>{{ m.get("completion_price", "—") }}</td>
+          <td><code>{{ m.get("id", " - ") }}</code></td>
+          <td><span class="badge badge-source">{{ m.get("pool", " - ") }}</span></td>
+          <td>{{ m.get("context_length", " - ") }}</td>
+          <td>{{ m.get("prompt_price", " - ") }}</td>
+          <td>{{ m.get("completion_price", " - ") }}</td>
         </tr>
         {% endfor %}
       </tbody>

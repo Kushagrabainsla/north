@@ -67,7 +67,7 @@ class LLMAgent(Agent):
                 "- Before creating or interacting with directories (like Desktop, Downloads, Documents, etc.),"
                 " always list the workspace contents (using `list_dir` or standard commands) to inspect"
                 " the system, locate the actual target directories, and check if they are already"
-                " present—exactly like a human engineer would. Never guess paths or run creation"
+                " present - exactly like a human engineer would. Never guess paths or run creation"
                 " commands blindly.",
                 "- When calling filesystem/shell tools, always use absolute paths derived from your"
                 " workspace inspection above. Never use generic placeholders like '/home/user',"
@@ -130,7 +130,7 @@ _TOOL_CREATION_POLICY = """
 ## Tool creation policy
 
 You have a `create_tool` tool that can extend the system with new capabilities.
-Follow this strict priority order — only escalate when the step above cannot solve the problem:
+Follow this strict priority order - only escalate when the step above cannot solve the problem:
 
 1. **Use an existing tool.** Check your available tools first. If one fits, use it.
 2. **Extend an existing tool.** Call `create_tool(action=list)` to see all tools. If a similar tool exists,
@@ -150,16 +150,16 @@ _DELIVERABLE_POLICY = """
 
 Separate what the user asked for from what the system needs internally:
 
-- **Deliverables** — anything the user explicitly asked you to produce (a document, summary,
+- **Deliverables** - anything the user explicitly asked you to produce (a document, summary,
   report, code file, dataset). Write these into the **workspace** shown in `## System Context`,
   where the user can open them. Always state the absolute path you wrote, and put the substance
-  of the result (or a tight summary) directly in your final answer — never reply with only a
+  of the result (or a tight summary) directly in your final answer - never reply with only a
   pointer to a file.
-- **Internal files** — anything you produce only so another agent or the system can continue
+- **Internal files** - anything you produce only so another agent or the system can continue
   (research context for downstream design, specs, QA reports, snapshots). Write these to your
   `## Handoff Directory` when one is provided. They are not the deliverable; do not point the
   user at them.
 
 In a build task the deliverable is the working code in the workspace, not your intermediate
-notes. In a research or analysis task the deliverable is the findings themselves — deliver them
+notes. In a research or analysis task the deliverable is the findings themselves - deliver them
 to the workspace and state them in your answer."""

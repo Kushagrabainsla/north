@@ -1,4 +1,4 @@
-"""Tests for jobs.scheduler — CronEntry, next_firing, next_due_entry, CronScheduler."""
+"""Tests for jobs.scheduler - CronEntry, next_firing, next_due_entry, CronScheduler."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def test_cron_entry_rejects_out_of_range_weekday() -> None:
         CronEntry(name="x", agent="a", task="t", hour=0, minute=0, weekday=7)
 
 
-# next_firing — daily (weekday=None)
+# next_firing - daily (weekday=None)
 
 
 def test_next_firing_daily_today_if_time_later_today() -> None:
@@ -49,7 +49,7 @@ def test_next_firing_daily_strictly_after_when_same_minute() -> None:
     assert next_firing(entry, after) == datetime(2026, 5, 22, 7, 0, tzinfo=UTC)
 
 
-# next_firing — weekly
+# next_firing - weekly
 
 
 def test_next_firing_weekly_advances_to_correct_weekday() -> None:
@@ -129,7 +129,7 @@ def test_build_job_constructs_pending_cron_job(tmp_path) -> None:
     assert job.job_id != ""
 
 
-# CronScheduler.run — composition of pieces already tested above.
+# CronScheduler.run - composition of pieces already tested above.
 # The loop body is exactly: next_due_entry → asyncio.sleep → processor.enqueue.
 # Each piece has its own test. The only run() behavior worth verifying
 # separately is the empty-entries short-circuit.
@@ -139,5 +139,5 @@ async def test_scheduler_run_returns_when_no_entries(tmp_path) -> None:
     processor = SQLiteJobProcessor(tmp_path / "jobs.db")
     scheduler = CronScheduler(processor, [])
 
-    # No infinite loop with empty entries — returns immediately.
+    # No infinite loop with empty entries - returns immediately.
     await scheduler.run()

@@ -49,7 +49,7 @@ async def _wait_for_ledger_action(
 ) -> None:
     """Poll the ledger until `action` appears for `task_id` or `timeout` expires.
 
-    Replaces asyncio.sleep() in pipeline tests — correct on slow machines,
+    Replaces asyncio.sleep() in pipeline tests - correct on slow machines,
     fast on fast ones.
     """
     deadline = asyncio.get_event_loop().time() + timeout
@@ -558,7 +558,7 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
 
     assert await asyncio.to_thread(_count, "old-ep") == 1
 
-    # record() a new episode — this should trigger pruning
+    # record() a new episode - this should trigger pruning
     await store.record("new-task", "general", "new summary")
 
     assert await asyncio.to_thread(_count, "old-ep") == 0

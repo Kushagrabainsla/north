@@ -1,4 +1,4 @@
-"""AgentRegistry — discover agents at runtime from the `agents/` filesystem."""
+"""AgentRegistry - discover agents at runtime from the `agents/` filesystem."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class AgentRegistry:
     registry imports each agent's module, looks up the class named
     `config.resolved_class_name`, and instantiates it with `(config, deps)`.
     New agent folders dropped at runtime are picked up automatically on the
-    next call to `get()` — no restart required.
+    next call to `get()` - no restart required.
     """
 
     def __init__(self, agents_dir: Path, deps: AgentDependencies) -> None:
@@ -112,7 +112,7 @@ class AgentRegistry:
     def reload(self) -> list[str]:
         """Discover agent directories added since startup.
 
-        Existing agents are not re-instantiated — only new folders are loaded.
+        Existing agents are not re-instantiated - only new folders are loaded.
         Returns the names of newly registered agents.
         """
         new_names: list[str] = []
@@ -144,7 +144,7 @@ class AgentRegistry:
 
     def get(self, name: str) -> Agent:
         if name not in self._agents:
-            # Trigger a live filesystem scan before raising — new agent folders
+            # Trigger a live filesystem scan before raising - new agent folders
             # dropped at runtime are registered here without a server restart.
             self.reload()
         if name not in self._agents:

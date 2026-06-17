@@ -83,7 +83,7 @@ def _find_compose_file() -> Path | None:
 
     Priority:
     1. Walk up from CWD for a docker-compose.yml the user dropped in their tree.
-    2. ~/.north/docker-compose.yml — written on first run from the bundled copy.
+    2. ~/.north/docker-compose.yml - written on first run from the bundled copy.
     3. Bundled copy inside the installed package (cli/docker-compose.yml).
 
     The source-build variant lives at docker-compose.dev.yml and is selected
@@ -119,7 +119,7 @@ def _find_git_root(start: Path) -> Path:
 
 
 def _resolve_workspace(explicit: str | None) -> str:
-    """Resolve the effective workspace root — the single source of truth.
+    """Resolve the effective workspace root - the single source of truth.
 
     An explicit --workspace always wins. Otherwise default to the enclosing git
     root, except when that root is $HOME itself (e.g. a dotfiles repo at ~/.git),

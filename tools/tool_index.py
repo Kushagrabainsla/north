@@ -47,13 +47,13 @@ class ToolIndex:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute(_SCHEMA)
-        # (tool_name, embedding_vector) — rebuilt lazily, invalidated on update.
+        # (tool_name, embedding_vector) - rebuilt lazily, invalidated on update.
         self._cache: list[tuple[str, list[float]]] | None = None
 
     async def update_tool(self, name: str, description: str) -> None:
         """Embed and upsert a tool. Call once per tool at registration time.
 
-        Skips the embedding call when the stored description is unchanged —
+        Skips the embedding call when the stored description is unchanged  - 
         the whole registry is re-indexed at every startup, and without this
         each boot would re-embed every tool.
         """
@@ -63,7 +63,7 @@ class ToolIndex:
         try:
             embeddings = await self._embed_fn([description])
         except Exception:
-            logger.warning("ToolIndex: embed failed for %s — tool not indexed", name)
+            logger.warning("ToolIndex: embed failed for %s - tool not indexed", name)
             return
         if not embeddings:
             return

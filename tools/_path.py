@@ -5,7 +5,7 @@ that touches a path (read_file, write_file, search_files, glob, list_dir,
 check_types, search_symbols, find_references) resolves it through
 ``resolve_path()``, and every tool that walks a tree prunes via
 ``PRUNED_DIRS``/``SENSITIVE_DIR_NAMES``. The sensitive-path blocklist applies
-in *all* branches — with or without a workspace — so setting a broad workspace
+in *all* branches - with or without a workspace - so setting a broad workspace
 (e.g. $HOME) can never re-open access to ~/.ssh, ~/.north, /etc, etc.
 
 The sole exception is ``<NORTH_HOME>/tasks/`` (see ``_handoff_root``): a narrow,
@@ -57,7 +57,7 @@ _BLOCKED_PREFIXES: tuple[str, ...] = (
 _BLOCKED_FILENAMES: frozenset[str] = frozenset({"secret.key"})
 
 # SQLite state suffixes. north's own DBs (ledger, jobs, task-context, ...) live
-# under ~/.north — including the task-context DBs that share ~/.north/tasks/ with
+# under ~/.north - including the task-context DBs that share ~/.north/tasks/ with
 # the agent handoff carve-out. Agents must never write these directly; they go
 # through the proper stores/tools. Enforced only inside ~/.north so a workspace
 # may still contain editable .db files.
@@ -94,7 +94,7 @@ def _handoff_root() -> str:
     Derived from the same ``NORTH_HOME`` override as ``config.settings`` (kept in
     sync by env, not import, so this module stays dependency-light). This single
     subtree is the *only* writable carve-out inside the otherwise-blocked
-    ``~/.north`` home — secrets (``secret.key``), DBs, and ``.env`` live in the
+    ``~/.north`` home - secrets (``secret.key``), DBs, and ``.env`` live in the
     home root, outside ``tasks/``, so they remain blocked.
     """
     base = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
@@ -144,7 +144,7 @@ def is_sensitive_path(path: Path) -> bool:
     try:
         resolved = Path(path).expanduser().resolve()
     except (OSError, ValueError):
-        return True  # unresolvable — treat as sensitive (fail closed)
+        return True  # unresolvable - treat as sensitive (fail closed)
     if any(part in SENSITIVE_DIR_NAMES for part in resolved.parts):
         return True
     return _is_blocked_path(str(resolved))
@@ -155,7 +155,7 @@ def references_sensitive_path(command: str) -> bool:
 
     Shared by tools that pass raw command strings to a shell (e.g. BashTool's
     instant-safe fast path) and therefore never go through resolve_path().
-    Only absolute and ~-prefixed tokens are checked — relative paths stay
+    Only absolute and ~-prefixed tokens are checked - relative paths stay
     inside the caller's cwd and are covered by the workspace rules.
     """
     for token in command.split():
@@ -165,7 +165,7 @@ def references_sensitive_path(command: str) -> bool:
         try:
             resolved = str(Path(candidate).expanduser().resolve())
         except (OSError, ValueError):
-            return True  # unresolvable path-like token — treat as sensitive
+            return True  # unresolvable path-like token - treat as sensitive
         if _is_blocked_path(resolved):
             return True
     return False

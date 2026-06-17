@@ -47,7 +47,7 @@ _MIGRATIONS = [
 ]
 
 # Column order for INSERTs. Placeholders are derived from this tuple so the two
-# can never drift (CODING_STYLE §9.6 — no magic count).
+# can never drift (CODING_STYLE §9.6 - no magic count).
 _INSERT_COLUMN_NAMES = (
     "id",
     "timestamp",
@@ -176,7 +176,7 @@ class SQLiteLedgerWriter(LedgerWriter):
 
     def _pending_task_ids_sync(self, limit: int) -> list[str]:
         # Rank entries per task by recency and keep tasks whose newest entry is
-        # still PENDING — completed/failed/cancelled tasks have a newer
+        # still PENDING - completed/failed/cancelled tasks have a newer
         # terminal entry and drop out.
         sql = """
             SELECT task_id FROM (
@@ -277,7 +277,7 @@ class SQLiteLedgerWriter(LedgerWriter):
             ).fetchall()
 
             # A task counts as failed for an agent only when the agent's *latest*
-            # entry for it is 'failed' — a retried attempt that later succeeded
+            # entry for it is 'failed' - a retried attempt that later succeeded
             # leaves intermediate failed rows behind and must not skew success_rate.
             error_rows = conn.execute(
                 """SELECT agent, COUNT(*) as failed_tasks FROM (

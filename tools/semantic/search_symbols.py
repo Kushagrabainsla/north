@@ -4,7 +4,7 @@ Python files are parsed with the AST (reliable for def/async def/class).
 TypeScript/JavaScript and Go use best-effort regex heuristics: they can match
 text in comments/strings and miss decorated/overloaded or unusually formatted
 declarations. Treat results as a navigation aid, not authoritative semantic
-analysis — verify with check_types or the build.
+analysis - verify with check_types or the build.
 """
 
 from __future__ import annotations

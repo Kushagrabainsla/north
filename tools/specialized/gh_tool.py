@@ -1,9 +1,9 @@
-"""GhTool — GitHub CLI operations for engineering agents.
+"""GhTool - GitHub CLI operations for engineering agents.
 
 Mirrors GitTool's safety model: read-only actions (pr view/diff/list/checks,
 issue view/list, repo view, run list/view) execute immediately; mutating
 actions (pr create/comment/merge/review, issue create/comment) are gated in
-code behind a user approval card — the gate does not rely on the agent's
+code behind a user approval card - the gate does not rely on the agent's
 system prompt.
 
 Authentication is delegated to the ``gh`` CLI itself (``gh auth login``); this
@@ -16,17 +16,12 @@ import asyncio
 import shlex
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from tools.base import Tool
+from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import gate_mutating_action
-from tools.specialized._subprocess import run_capture
-
-if TYPE_CHECKING:
-    from approval.judgement_filter import JudgementFilter
-    from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
+from tools.specialized._subprocess import format_diff_output, run_capture
 
 _TIMEOUT = 30
 
@@ -57,7 +52,7 @@ _MUTATING_ACTIONS: frozenset[str] = frozenset(
 )
 
 
-class GhTool(Tool):
+class GhTool(ApprovalGatedTool):
     """Run GitHub CLI operations with structured output and safety guards."""
 
     name = "gh"
@@ -67,7 +62,7 @@ class GhTool(Tool):
         "Read-only actions (pr_view, pr_diff, pr_list, pr_checks, issue_view, issue_list, "
         "repo_view, run_list, run_view) execute immediately. "
         "Mutating actions (pr_create, pr_comment, pr_merge, pr_review, issue_create, "
-        "issue_comment) automatically show the user an approval card before running — "
+        "issue_comment) automatically show the user an approval card before running - "
         "no separate request_approval call is needed. "
         "Pass extra flags via 'args', e.g. args='123 --body \"LGTM\"'."
     )
@@ -96,22 +91,10 @@ class GhTool(Tool):
         "required": ["action"],
     }
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventStreamManager | None = None,
-        approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
-    ) -> None:
-        self._approval_store = approval_store
-        self._stream_manager = stream_manager
-        self._approval_timeout_seconds = approval_timeout_seconds
-        self._judgement_filter = judgement_filter
-
     def format_output(self, data: dict[str, Any]) -> str:
         stdout = str(data.get("stdout", "")).strip()
         if "pr/diff" in str(data.get("command", "")) or "pr diff" in str(data.get("command", "")):
-            return f"```diff\n{stdout}\n```" if stdout else "No diff."
+            return format_diff_output(stdout)
         return stdout or "(no output)"
 
     async def run(self, input: ToolInput) -> ToolOutput:
@@ -142,7 +125,7 @@ class GhTool(Tool):
             denial = await gate_mutating_action(
                 self._approval_store,
                 agent="gh",
-                title="GitHub Operation — Approval Required",
+                title="GitHub Operation - Approval Required",
                 message=f"```\n{' '.join(cmd)}\n```",
                 task_id=input.params.get("task_id"),
                 stream_manager=self._stream_manager,

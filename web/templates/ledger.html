@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Ledger — north{% endblock %}
+{% block title %}Ledger - north{% endblock %}
 {% block description %}Full audit trail of all north events{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <h1>Event Ledger</h1>
-  <p class="page-subtitle">Append-only audit trail — {{ entries | length }} entries shown</p>
+  <p class="page-subtitle">Append-only audit trail - {{ entries | length }} entries shown</p>
 </div>
 
 <div class="ledger-controls">
@@ -32,14 +32,14 @@
       <tr class="ledger-row ledger-{{ entry.status.value if entry.status else 'unknown' }}">
         <td class="ledger-time local-time" data-utc="{{ entry.timestamp.isoformat() }}" data-format="datetime">{{ entry.timestamp.strftime("%Y-%m-%d %H:%M:%S") }}</td>
         <td><span class="badge badge-source">{{ entry.source.value }}</span></td>
-        <td class="ledger-task-id">{{ entry.task_id or "—" }}</td>
-        <td>{{ entry.agent or "—" }}</td>
-        <td class="ledger-action">{{ entry.action or "—" }}</td>
+        <td class="ledger-task-id">{{ entry.task_id or " - " }}</td>
+        <td>{{ entry.agent or " - " }}</td>
+        <td class="ledger-action">{{ entry.action or " - " }}</td>
         <td>
           {% if entry.status %}
           <span class="badge badge-status badge-{{ entry.status.value }}">{{ entry.status.value }}</span>
           {% else %}
-          <span>—</span>
+          <span> - </span>
           {% endif %}
         </td>
         <td class="ledger-output">{{ (entry.output or "")[:80] }}{% if entry.output and entry.output | length > 80 %}…{% endif %}</td>

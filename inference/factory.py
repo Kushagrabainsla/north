@@ -1,7 +1,7 @@
 """Builds the active InferenceRouter from current settings.
 
 Add new provider branches here when a new provider key is introduced.
-OpenRouter is always the last provider in the chain — broadest model
+OpenRouter is always the last provider in the chain - broadest model
 coverage as the final fallback.
 """
 

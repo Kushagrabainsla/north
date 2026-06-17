@@ -159,7 +159,7 @@ async def test_full_chain_result_is_valid_agentresult(tmp_path: Path) -> None:
             ],
             "architect": [_delegate("coder", "Spec ready.", "d2"), _msg("ok")],
             "coder": [_delegate("tester", "Code done.", "d3"), _msg("ok")],
-            "tester": [_msg("PASS — 42 tests passed.")],
+            "tester": [_msg("PASS - 42 tests passed.")],
         }
     )
     registry, _ = _make_registry(tmp_path, router)
@@ -186,7 +186,7 @@ async def test_tester_delegates_to_coder_on_code_bug(tmp_path: Path) -> None:
     router = ChainRouter(
         {
             "tester": [
-                _delegate("coder", f"QA failed — code bug. Task ID: {task_id}. Fix test_x.", "d1"),
+                _delegate("coder", f"QA failed - code bug. Task ID: {task_id}. Fix test_x.", "d1"),
             ],
             "coder": [
                 _delegate("tester", f"Fix applied. Task ID: {task_id}. Re-run QA.", "d2"),
@@ -216,8 +216,8 @@ async def test_tester_fix_cycle_terminates_with_pass(tmp_path: Path) -> None:
         {
             "tester": [
                 _delegate("coder", "QA failed. Fix.", "d1"),
-                _msg("PASS — sub-run all tests pass."),
-                _msg("PASS — all tests pass after fix."),
+                _msg("PASS - sub-run all tests pass."),
+                _msg("PASS - all tests pass after fix."),
             ],
             "coder": [
                 _delegate("tester", "Fixed. Re-run.", "d2"),
@@ -419,7 +419,7 @@ async def test_task_id_consistent_through_sub_agents(tmp_path: Path) -> None:
 
 async def test_delegation_depth_limit_stops_infinite_chain(tmp_path: Path) -> None:
     """A runaway delegation chain must terminate when _MAX_DELEGATION_DEPTH is hit."""
-    # All agents permanently try to delegate — would loop forever without the cap.
+    # All agents permanently try to delegate - would loop forever without the cap.
     router = ChainRouter(
         {
             "researcher": [_delegate("architect", "Keep going.", f"r{i}") for i in range(15)],

@@ -1,4 +1,4 @@
-"""ListDirTool — list directory contents in the workspace.
+"""ListDirTool - list directory contents in the workspace.
 
 See docs/CODING_STYLE.md Section 16.1.
 """

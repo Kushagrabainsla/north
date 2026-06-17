@@ -1,6 +1,6 @@
 """Pure presentation helpers for the north CLI and TUI.
 
-Formatting and rendering functions with no I/O and no shared state — they take
+Formatting and rendering functions with no I/O and no shared state - they take
 values and return strings or Rich renderables. Kept out of `cli/main.py` and
 `cli/tui.py` so those files hold commands and the App, not display plumbing (§4.1).
 """
@@ -61,7 +61,7 @@ def _to_prose(md: str) -> str:
     and bold/italic/inline-code markers, while preserving code-block *content*
     and list structure verbatim.
 
-    NOTE: not for the chat view — assistant messages render through a real
+    NOTE: not for the chat view - assistant messages render through a real
     markdown engine (RichMarkdown / the streaming Markdown widget) so tables and
     lists survive. This flattener has no table support and is kept only for
     plain-text sinks (exports, logs) where there is no renderer to defer to."""

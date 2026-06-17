@@ -39,7 +39,7 @@ def test_expiry_cannot_be_forged() -> None:
 
 
 def test_expired_token_rejected() -> None:
-    past = 1_000_000  # 1970 — long expired
+    past = 1_000_000  # 1970 - long expired
     assert verify_session_token(f"{past}.{security._sign_session(past)}") is False
 
 
@@ -58,7 +58,7 @@ async def test_request_auth_accepts_session_cookie() -> None:
 
 
 async def test_request_auth_rejects_master_secret_in_cookie() -> None:
-    """The master secret is not a valid cookie value — only session tokens are."""
+    """The master secret is not a valid cookie value - only session tokens are."""
     with pytest.raises(HTTPException):
         await verify_request_secret(x_north_secret=None, north_session=_TEST_SECRET)
 

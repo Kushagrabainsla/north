@@ -102,7 +102,7 @@ async def test_search_symbols_multi_language():
 
 @pytest.mark.asyncio
 async def test_search_symbols_python_async_def():
-    """ast.AsyncFunctionDef is a distinct node — async defs must not be missed (R5#31)."""
+    """ast.AsyncFunctionDef is a distinct node - async defs must not be missed (R5#31)."""
     tool = SearchSymbolsTool()
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w+", delete=False) as tmp:
         tmp.write(

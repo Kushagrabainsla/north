@@ -1,5 +1,5 @@
 /**
- * north Dashboard — main.js
+ * north Dashboard - main.js
  */
 
 (function () {
@@ -36,10 +36,10 @@
   const STEP_DEFS = {
     classifying:           ["◎", "Classifying your message…"],
     classified:            ["✓", "Classified"],
-    classified_as_trivial: ["✓", "Quick task — skipping north star check"],
+    classified_as_trivial: ["✓", "Quick task - skipping north star check"],
     north_star_checking:   ["★", "Checking north stars…"],
     north_star_aligned:    ["✓", "Aligned with your goals"],
-    north_star_conflict:   ["!", "North star conflict — check approvals"],
+    north_star_conflict:   ["!", "North star conflict - check approvals"],
     routing:               ["⇢", "Planning which agents to run…"],
     routed:                ["✓", "Execution plan ready"],
     executing:             ["▶", "Running agents…"],
@@ -160,7 +160,7 @@
     if (!chatThread) return;
     const thinking = document.getElementById("chat-thinking-" + taskId);
 
-    // Mark last active step as done and remove the thinking dots — keep steps
+    // Mark last active step as done and remove the thinking dots - keep steps
     if (thinking) {
       const lastActive = thinking.querySelector(".step-pill.step-active");
       if (lastActive) lastActive.classList.replace("step-active", "step-done");
@@ -176,7 +176,7 @@
     const bubble = thinking || document.getElementById("chat-north-" + taskId);
     if (bubble) {
       bubble.id = "chat-north-" + taskId;
-      // Remove any pending approval widget — task is done
+      // Remove any pending approval widget - task is done
       const approvalWidget = bubble.querySelector(".approval-widget");
       if (approvalWidget) approvalWidget.remove();
       const content = document.createElement("div");
@@ -223,7 +223,7 @@
   function subscribeToTask(taskId, cleanPrompt) {
     _appendThinkingBubble(taskId);
 
-    // EventSource sends same-origin cookies automatically — auth handled via cookie.
+    // EventSource sends same-origin cookies automatically - auth handled via cookie.
     const es = new EventSource("/orchestrator/stream/" + taskId);
 
     // The server emits named SSE events (event: classified, event: routing, …).
@@ -264,14 +264,14 @@
           const icon = data.success === false ? "✗" : "✓";
           _addStep(taskId, icon, "  " + (data.tool || "tool") + " done");
         } else if (event === "token") {
-          // Progressive token rendering — append to a live streaming div inside the
+          // Progressive token rendering - append to a live streaming div inside the
           // thinking bubble.  The accumulated text becomes the final answer when
           // task_completed fires, avoiding the extra ledger fetch.
           const token = data.text || "";
           tokenBuffer += token;
           const bubble = document.getElementById("chat-thinking-" + taskId);
           if (bubble) {
-            // The answer has started — drop the dim reasoning preview.
+            // The answer has started - drop the dim reasoning preview.
             const stale = bubble.querySelector(".bubble-reasoning");
             if (stale) stale.remove();
             let streamDiv = bubble.querySelector(".bubble-streaming");
@@ -284,7 +284,7 @@
             chatThread.scrollTop = chatThread.scrollHeight;
           }
         } else if (event === "reasoning") {
-          // Private reasoning — render dimmed, only until the answer streams.
+          // Private reasoning - render dimmed, only until the answer streams.
           reasoningBuffer += data.text || "";
           const bubble = document.getElementById("chat-thinking-" + taskId);
           if (bubble && !bubble.querySelector(".bubble-streaming")) {
@@ -335,7 +335,7 @@
             chatThread.scrollTop = chatThread.scrollHeight;
           }
         } else if (event === "task_synthesis") {
-          // Multi-agent synthesis arrived — override token buffer with merged output.
+          // Multi-agent synthesis arrived - override token buffer with merged output.
           if (data.output) {
             tokenBuffer = data.output;
           }
@@ -347,14 +347,14 @@
         if (event === "task_completed") {
           es.close();
           loadStrategyBadge();
-          // Remove the live streaming div — the final bubble will replace it.
+          // Remove the live streaming div - the final bubble will replace it.
           const bubble = document.getElementById("chat-thinking-" + taskId);
           if (bubble) {
             const streamDiv = bubble.querySelector(".bubble-streaming");
             if (streamDiv) streamDiv.remove();
           }
           if (tokenBuffer) {
-            // Tokens were streamed — use them directly without a ledger round-trip.
+            // Tokens were streamed - use them directly without a ledger round-trip.
             _appendNorthBubble([{ agent: "", text: tokenBuffer }], taskId);
             if (cleanPrompt) {
               chatHistory.push([cleanPrompt, tokenBuffer]);
@@ -362,7 +362,7 @@
             }
             tokenBuffer = "";
           } else {
-            // No tokens (e.g. multi-agent synthesis path) — fetch from ledger.
+            // No tokens (e.g. multi-agent synthesis path) - fetch from ledger.
             setTimeout(async function () {
               try {
                 const resp = await fetch(
@@ -510,11 +510,11 @@
             feedEl.prepend(item);
           }
         } else {
-          taskInput.placeholder = "Error submitting — try again";
+          taskInput.placeholder = "Error submitting - try again";
           setTimeout(function () { taskInput.placeholder = "What would you like north to do?"; }, 3000);
         }
       } catch (_) {
-        taskInput.placeholder = "Network error — try again";
+        taskInput.placeholder = "Network error - try again";
         setTimeout(function () { taskInput.placeholder = "What would you like north to do?"; }, 3000);
       } finally {
         taskInput.disabled = false;

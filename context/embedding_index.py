@@ -51,7 +51,7 @@ class EmbeddingIndex:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
-        # (doc, chunk_text, embedding_vector) — rebuilt lazily, invalidated on update.
+        # (doc, chunk_text, embedding_vector) - rebuilt lazily, invalidated on update.
         self._cache: list[tuple[str, str, list[float]]] | None = None
 
     async def update_document(self, doc_name: str, content: str) -> None:
@@ -64,7 +64,7 @@ class EmbeddingIndex:
         try:
             embeddings = await self._embed_fn(chunks)
         except Exception:
-            logger.warning("EmbeddingIndex: embed failed for %s — index not updated", doc_name)
+            logger.warning("EmbeddingIndex: embed failed for %s - index not updated", doc_name)
             return
         await asyncio.to_thread(self._write_chunks_sync, doc_name, chunks, embeddings)
         self._cache = None  # invalidate so next search reloads fresh data

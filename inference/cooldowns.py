@@ -1,4 +1,4 @@
-"""Cooldown store — tracks rate-limit and payment-exhausted cooldowns per model."""
+"""Cooldown store - tracks rate-limit and payment-exhausted cooldowns per model."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ _PAYMENT_EXHAUSTED_SECS: float = 86_400.0  # 24 h
 class CooldownStore:
     """Tracks per-model cooldowns in memory with optional disk persistence for payment cooldowns.
 
-    Rate-limit cooldowns (60 s) are memory-only — they reset on restart.
+    Rate-limit cooldowns (60 s) are memory-only - they reset on restart.
     Payment-exhausted cooldowns (24 h) are persisted to disk so they survive restarts.
     """
 
@@ -45,7 +45,7 @@ class CooldownStore:
             if self._expiry:
                 logger.info("Loaded %d persisted payment cooldown(s) from disk", len(self._expiry))
         except Exception:
-            logger.warning("Failed to load cooldowns file — starting fresh", exc_info=True)
+            logger.warning("Failed to load cooldowns file - starting fresh", exc_info=True)
 
     def is_active(self, key: _CooldownKey) -> bool:
         """Return True if the model is currently under cooldown."""

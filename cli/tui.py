@@ -1,4 +1,4 @@
-"""North TUI — Textual-based chat UI.
+"""North TUI - Textual-based chat UI.
 
 A Textual App that owns the full render cycle. This is the same approach used
 by Bubbletea-based tools like gh copilot: the framework explicitly re-positions
@@ -74,11 +74,11 @@ class NorthApp(App[None]):
     """Textual chat UI for north."""
 
     # Layout (top → bottom):
-    #   #log           — scrollable chat history (top-anchored)  (1fr)
-    #   #streaming     — live markdown during token stream       (auto, hidden)
-    #   #status        — working spinner (empty when idle)        (1 row)
-    #   #input-row     — ╭ >  [                       ] ╮ box     (3 rows)
-    #   #hint          — dim shortcuts (strategy · history · …)   (1 row)
+    #   #log           - scrollable chat history (top-anchored)  (1fr)
+    #   #streaming     - live markdown during token stream       (auto, hidden)
+    #   #status        - working spinner (empty when idle)        (1 row)
+    #   #input-row     - ╭ >  [                       ] ╮ box     (3 rows)
+    #   #hint          - dim shortcuts (strategy · history · …)   (1 row)
 
     CSS = """
     Screen {
@@ -96,7 +96,7 @@ class NorthApp(App[None]):
         background: $background;
         /* Keep the scrollbar invisible in every state (default / hover / active)
            so hovering or clicking the chat never flashes an accent-coloured
-           scrollbar — the only focus difference should be the input box border. */
+           scrollbar - the only focus difference should be the input box border. */
         scrollbar-size: 1 1;
         scrollbar-background: $background;
         scrollbar-background-hover: $background;
@@ -128,7 +128,7 @@ class NorthApp(App[None]):
     }
 
     /* Markdown renders paragraph / fence / list block sub-widgets with
-       $panel by default — flatten them all to $background so there is
+       $panel by default - flatten them all to $background so there is
        no lighter-shade box inside the streaming area. */
     #streaming MarkdownBlock,
     #streaming MarkdownParagraph,
@@ -407,7 +407,7 @@ class NorthApp(App[None]):
         ctx_max = context_window_for(self._model) if self._model else 0
         fraction = (self._session_tokens / ctx_max) if ctx_max else 0.0
 
-        model = _short_model(self._model) if self._model else "—"
+        model = _short_model(self._model) if self._model else " - "
         tokens = f"{_fmt_tokens(self._session_tokens)}/{_fmt_tokens(ctx_max)}" if ctx_max else ""
         bar = _fill_bar(fraction) if ctx_max else ""
         cost = f"${self._session_cost:.4f}"
@@ -417,7 +417,7 @@ class NorthApp(App[None]):
         elapsed = _fmt_elapsed(time.monotonic() - self._start_time)
         yolo = "[#f85149]⚠ YOLO[/#f85149]" if self.yolo else ""
 
-        # (text, priority) — higher priority survives longer as width shrinks.
+        # (text, priority) - higher priority survives longer as width shrinks.
         segments: list[tuple[str, int]] = [
             (f"[#6cb6ff]{model}[/#6cb6ff]", 5),
             (f"{tokens} {bar}".strip(), 4),
@@ -494,12 +494,12 @@ class NorthApp(App[None]):
         if final_output:
             # Render the finalized message through a real markdown engine so the
             # scrollback matches what was shown live in the streaming Markdown
-            # widget — tables, lists, and inline styling survive the handoff.
+            # widget - tables, lists, and inline styling survive the handoff.
             # (Do NOT flatten with _to_prose here: it has no table support and
             # forks rendering from the streaming path, which is what produced the
             # "table un-renders when the stream finishes" bug.)
             # TODO(tier-2): for byte-identical fidelity, mount a Textual Markdown
-            # widget into the log instead of writing a rich.markdown renderable —
+            # widget into the log instead of writing a rich.markdown renderable  - 
             # rich's table/heading chrome differs subtly from Textual's. Deferred
             # because #log is a RichLog and that conversion touches every _log()
             # call site.
@@ -531,7 +531,7 @@ class NorthApp(App[None]):
         self._set_status("checking goals…")
 
     async def _on_north_star_noop(self, task_id: str, data: dict) -> None:
-        """north_star_aligned / north_star_check_skipped — no UI change."""
+        """north_star_aligned / north_star_check_skipped - no UI change."""
 
     async def _on_north_star_conflict(self, task_id: str, data: dict) -> None:
         tension = (data.get("tension") or "")[:200]
@@ -554,7 +554,7 @@ class NorthApp(App[None]):
         label = ", ".join(agents) if agents else agent or "general"
         self._set_status(f"running {label}…")
         # Write an agent header for specialist agents so the user can see who
-        # is working. The default 'general' agent is suppressed — its header
+        # is working. The default 'general' agent is suppressed - its header
         # would just echo the user's prompt (already shown) and the answer is
         # labelled '◆ north' below.
         if agent and agent != "general":
@@ -611,7 +611,7 @@ class NorthApp(App[None]):
 
     async def _on_reasoning(self, task_id: str, data: dict) -> None:
         # The model's private chain-of-thought. Show only a dim, single-line tail
-        # as a "thinking" preview — never in the answer log — and only until the
+        # as a "thinking" preview - never in the answer log - and only until the
         # answer itself begins streaming.
         text = data.get("text", "")
         if not text or task_id in self._streaming_active:
@@ -640,7 +640,7 @@ class NorthApp(App[None]):
             self._finish_streaming(task_id, output)
         elif output:
             self._log("  [cyan]◆[/cyan]  [white]north[/white]")
-            # Same markdown path as _finish_streaming — keep the non-streamed
+            # Same markdown path as _finish_streaming - keep the non-streamed
             # branch (output fetched whole from the ledger) rendering tables
             # and lists identically rather than flattening to prose.
             self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
@@ -757,7 +757,7 @@ class NorthApp(App[None]):
                         await asyncio.sleep(delay)
                         delay = min(delay * 2, _SSE_BACKOFF_MAX)
                         continue
-                    # Successful connection — reset backoff.
+                    # Successful connection - reset backoff.
                     delay = _SSE_BACKOFF_BASE
                     current_event = ""
                     async for line in resp.aiter_lines():
@@ -785,7 +785,7 @@ class NorthApp(App[None]):
         self._approval_pending = None
         if data is None:
             return
-        # A question card carries "question" and has no Approve/Reject semantics —
+        # A question card carries "question" and has no Approve/Reject semantics  - 
         # any selection (numbered option or free text) is an "answered" decision.
         is_question = bool(data.get("question"))
         options = data.get("options") or ([] if is_question else ["Approve", "Reject"])
@@ -853,10 +853,10 @@ class NorthApp(App[None]):
         text = getattr(event, "text", "")
         n_lines = text.count("\n") + 1
         if n_lines < 3 and len(text) <= 200:
-            return  # small paste — let the Input insert it normally
+            return  # small paste - let the Input insert it normally
         self._pending_paste = text
         prompt = self.query_one("#prompt", Input)
-        prompt.value = f"[pasted: {n_lines} lines, {len(text)} chars — press Enter to send]"
+        prompt.value = f"[pasted: {n_lines} lines, {len(text)} chars - press Enter to send]"
         prompt.cursor_position = len(prompt.value)
         event.prevent_default()
         event.stop()
@@ -968,7 +968,7 @@ class NorthApp(App[None]):
             for name, desc in _SLASH_COMMANDS.items():
                 self._log(f"  [cyan]{name}[/cyan]  [bright_black]{desc}[/bright_black]")
         else:
-            self._log(f"  [bright_black]unknown command: {cmd} — try /help[/bright_black]")
+            self._log(f"  [bright_black]unknown command: {cmd} - try /help[/bright_black]")
 
     # ── history navigation ────────────────────────────────────────────────────
 
@@ -1008,7 +1008,7 @@ class NorthApp(App[None]):
         self._last_interrupt = now
         if self._user_task_ids:
             self.run_worker(self._cancel_active(), exclusive=False)
-            self._log("  [dim]interrupted — press ctrl+c again to exit[/dim]")
+            self._log("  [dim]interrupted - press ctrl+c again to exit[/dim]")
         else:
             self._log("  [dim]press ctrl+c again to exit[/dim]")
 

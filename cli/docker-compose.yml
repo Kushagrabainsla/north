@@ -12,7 +12,7 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - north_data:/data  # Persists ledger, context, jobs, and secret across restarts
-      # Mount a single explicit workspace — never your whole $HOME. Broader
+      # Mount a single explicit workspace - never your whole $HOME. Broader
       # mounts are an explicit opt-in: point NORTH_NORTH_WORKSPACE at the
       # directory you want agents to read/write.
       - ${NORTH_NORTH_WORKSPACE:-./workspace}:/workspace

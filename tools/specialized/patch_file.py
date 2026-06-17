@@ -1,4 +1,4 @@
-"""PatchFileTool — replace exact strings in a file, with optional diff preview.
+"""PatchFileTool - replace exact strings in a file, with optional diff preview.
 
 Analogous to Claude Code's Edit tool. Supports three change shapes: an ordered
 `edits` list, a single `old_string`/`new_string`, or `<<<<<<< SEARCH` /
@@ -16,30 +16,25 @@ import asyncio
 import difflib
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from tools._path import resolve_path
-from tools.base import Tool
+from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import request_approval_decision
-
-if TYPE_CHECKING:
-    from approval.judgement_filter import JudgementFilter
-    from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
 
 _BLOCK_RE = re.compile(r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE", re.DOTALL)
 _MAX_DIFF_CHARS = 8_000
 
 
-class PatchFileTool(Tool):
+class PatchFileTool(ApprovalGatedTool):
     """Replace exact strings in a file. Previews a unified diff before applying."""
 
     name = "patch_file"
     is_mutating = True
     description = (
         "Replace text in a file. Three ways to specify the change:\n"
-        "1. edits: a list of {old_string, new_string} objects applied in order — each "
+        "1. edits: a list of {old_string, new_string} objects applied in order - each "
         "old_string must appear exactly once at the time it is applied. Best for "
         "renaming a symbol across several sites in one call.\n"
         "2. old_string + new_string: a single exact replacement (old_string must be unique).\n"
@@ -69,7 +64,7 @@ class PatchFileTool(Tool):
             "old_string": {
                 "type": "string",
                 "description": (
-                    "Exact text to find — must appear exactly once in the file."
+                    "Exact text to find - must appear exactly once in the file."
                     " Optional if using edits or SEARCH/REPLACE blocks."
                 ),
             },
@@ -81,18 +76,6 @@ class PatchFileTool(Tool):
         },
         "required": ["path"],
     }
-
-    def __init__(
-        self,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventStreamManager | None = None,
-        approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
-    ) -> None:
-        self._approval_store = approval_store
-        self._stream_manager = stream_manager
-        self._approval_timeout_seconds = approval_timeout_seconds
-        self._judgement_filter = judgement_filter
 
     def format_output(self, data: dict[str, Any]) -> str:
         return f"Patched `{data.get('path', '?')}` successfully."
@@ -134,7 +117,7 @@ class PatchFileTool(Tool):
             self._approval_store,
             task_id=task_id,
             agent="patch_file",
-            title="File Edit — Approval Required",
+            title="File Edit - Approval Required",
             message=f"Apply this change to `{path}`?\n```diff\n{diff}\n```",
             options=("Apply", "Cancel"),
             stream_manager=self._stream_manager,
@@ -193,7 +176,7 @@ def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
         if count > 1:
             return ToolOutput(
                 success=False,
-                error=f"Edit {index}: old_string appears {count} times — add surrounding context.",
+                error=f"Edit {index}: old_string appears {count} times - add surrounding context.",
             )
         new_content = new_content.replace(old_string, replacement, 1)
     return new_content, content, len(edits)
@@ -233,7 +216,7 @@ def _plan_blocks_or_legacy(content: str, old_string: str | None, new_string: str
         return ToolOutput(
             success=False,
             error=(
-                f"old_string appears {count} times — not unique. "
+                f"old_string appears {count} times - not unique. "
                 "Add more surrounding context to make it match exactly once."
             ),
         )

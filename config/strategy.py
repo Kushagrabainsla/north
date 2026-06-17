@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 class StrategyMode(StrEnum):
-    ECO = "eco"  # cheapest model first — maximise cost savings
+    ECO = "eco"  # cheapest model first - maximise cost savings
     CRUISE = "cruise"  # role-aware best fit (default)
-    SPORT = "sport"  # most capable model first — maximise quality
+    SPORT = "sport"  # most capable model first - maximise quality
 
 
 _DESCRIPTIONS = {
@@ -48,7 +48,7 @@ class NorthSettings:
             self._approval_timeout_seconds = float(data.get("approval_timeout_seconds", self._DEFAULT_APPROVAL_TIMEOUT))
         except Exception as exc:
             logger.warning(
-                "settings.json is unreadable — resetting to defaults (%s): %s",
+                "settings.json is unreadable - resetting to defaults (%s): %s",
                 self._path,
                 exc,
             )

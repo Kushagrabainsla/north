@@ -1,4 +1,4 @@
-"""BashTool — run shell commands inside the workspace.
+"""BashTool - run shell commands inside the workspace.
 
 Every command is gated behind an explicit user approval card before the
 subprocess is spawned. The ApprovalStore + EventStreamManager are injected
@@ -15,7 +15,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from tools._path import references_sensitive_path
-from tools.base import Tool
+from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import request_approval_decision
 
@@ -29,10 +29,10 @@ _TIMEOUT = 30
 # model's context window.  The tail is truncated with a visible marker.
 _MAX_OUTPUT_CHARS = 30_000
 
-# These patterns are caught as a UX convenience — NOT a security boundary.
+# These patterns are caught as a UX convenience - NOT a security boundary.
 # The approval gate above is the actual guard: the user sees the exact command
 # and decides. This list only catches the most obviously destructive typos.
-# Do not rely on it to stop a determined attacker or a misbehaving model —
+# Do not rely on it to stop a determined attacker or a misbehaving model  - 
 # any determined bypass (extra spaces, equivalent syntax) will get through.
 _OBVIOUS_DESTRUCTIVE_HINTS = [
     "rm -rf /",
@@ -50,7 +50,7 @@ def _cap(text: str) -> str:
     return kept + f"\n[…{omitted} chars truncated]"
 
 
-# Any of these makes a command compound — chaining, substitution, redirection,
+# Any of these makes a command compound - chaining, substitution, redirection,
 # subshells, or placeholders. A safe-looking prefix then proves nothing about
 # what actually runs, so the command always goes to approval.
 _SHELL_METACHARS = re.compile(r"[;&|`$<>(){}\n]")
@@ -59,9 +59,9 @@ _SHELL_METACHARS = re.compile(r"[;&|`$<>(){}\n]")
 class CommandSafetyInspector:
     """Inspector responsible for checking if a command is instantly safe/read-only.
 
-    The prefix list is a convenience fast-path, not a security boundary — but it
+    The prefix list is a convenience fast-path, not a security boundary - but it
     must not be trivially escapable. Compound commands (shell metacharacters),
-    filesystem-traversal commands (`find` — it can walk arbitrary trees and run
+    filesystem-traversal commands (`find` - it can walk arbitrary trees and run
     actions), and reads of sensitive paths (~/.ssh, ~/.north, /etc, ...) all
     fall through to the approval card.
     """
@@ -102,10 +102,10 @@ def _grep_is_recursive(command: str) -> bool:
     return False
 
 
-class BashTool(Tool):
+class BashTool(ApprovalGatedTool):
     """Runs a shell command and returns stdout, stderr, and return code.
 
-    Requires explicit user approval before executing any command — the approval
+    Requires explicit user approval before executing any command - the approval
     card shows the exact command string so the user sees precisely what will run.
     """
 
@@ -142,10 +142,7 @@ class BashTool(Tool):
         approval_timeout_seconds: float = 300.0,
         judgement_filter: JudgementFilter | None = None,
     ) -> None:
-        self._approval_store = approval_store
-        self._stream_manager = stream_manager
-        self._approval_timeout_seconds = approval_timeout_seconds
-        self._judgement_filter = judgement_filter
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter)
         self._safety_inspector = CommandSafetyInspector()
 
     def format_output(self, data: dict[str, Any]) -> str:
@@ -160,7 +157,7 @@ class BashTool(Tool):
             self._approval_store,
             task_id=task_id,
             agent="bash",
-            title="Shell Command — Approval Required",
+            title="Shell Command - Approval Required",
             message=f"```\n{command}\n```",
             stream_manager=self._stream_manager,
             judgement_filter=self._judgement_filter,

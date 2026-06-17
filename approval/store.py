@@ -2,7 +2,7 @@
 
 Cards are added when a Notifier fires and resolved when the user responds
 via the approval endpoint or Web UI. A single ApprovalStore instance is
-constructed at startup and injected wherever it is needed — Orchestrator,
+constructed at startup and injected wherever it is needed - Orchestrator,
 AgentDependencies, and the web routes all share the same object so that
 approval waits and resolutions always touch the same in-memory registry.
 """
@@ -26,7 +26,7 @@ class ApprovalStore:
     for a decision use ``wait_for_decision()`` instead of polling; ``resolve()``
     sets the event so waiters wake immediately.
 
-    Safe for concurrent coroutines on a single event loop — not thread-safe
+    Safe for concurrent coroutines on a single event loop - not thread-safe
     (``asyncio.Event`` must be set from the loop thread). All current callers
     run on the event loop.
     """
@@ -57,7 +57,7 @@ class ApprovalStore:
         """Resolve a pending card and wake any waiting coroutines.
 
         Returns True when the card existed and was pending. A card that is
-        unknown or already resolved is left untouched (False) — a decision
+        unknown or already resolved is left untouched (False) - a decision
         binds to exactly one issued card and cannot be replayed or overwritten.
         """
         card = self._cards.get(card_id)
@@ -85,7 +85,7 @@ class ApprovalStore:
         except TimeoutError:
             pass
         finally:
-            # Release the Event regardless of outcome — it is no longer needed
+            # Release the Event regardless of outcome - it is no longer needed
             # once we have woken up (either resolved or timed out).
             self._events.pop(card_id, None)
         card = self._cards.get(card_id)

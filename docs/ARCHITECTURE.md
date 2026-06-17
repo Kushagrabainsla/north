@@ -23,15 +23,15 @@
 15. [Open Questions](#15-open-questions)
 16. [Tech Stack](#16-tech-stack)
 
-> **See also:** [docs/TECHNICAL_FEATURES.md](TECHNICAL_FEATURES.md) — deep-dives on the twelve most interesting engineering decisions (ReAct loop, dynamic pool tiering, EMA scoring, context compaction, SLSA attestation, etc.)
+> **See also:** [docs/TECHNICAL_FEATURES.md](TECHNICAL_FEATURES.md) - deep-dives on the twelve most interesting engineering decisions (ReAct loop, dynamic pool tiering, EMA scoring, context compaction, SLSA attestation, etc.)
 
 > **What changed in 1.3:** asyncio.Event-based approval waiting (§9), JSON mode for all structured-output callers (§8.2), native function calling + token streaming in the ReAct loop (§7.6, §8.7), EMA confidence scoring (§7.5), semantic context search via OpenRouter embeddings (§5.7), episodic memory layer (§5.8), webhook event ingestion (§4.3, §6.8, §11.5), and two new SQLite stores (`embeddings.db`, `episodic.db`, §12.1).
 >
 > **What changed since 1.3:** curl installer (`scripts/install.sh`), GHCR image publishing via GitHub Actions, bundled `cli/docker-compose.yml` so install works without cloning the repo, `$HOME` workspace mount in Docker, workspace auto-detection from CWD in `north task` / `north chat`, `~/.north/.env` as the canonical config location, and fixed `north tasks` returning stale historical entries (§6).
 >
-> **What changed (modular refactor + inference hardening):** extracted `agents/constants.py`, `agents/schemas.py`, `agents/context_compaction.py`, `inference/constants.py`, and `orchestrator/constants.py` — no module-level code lives inline in its parent module anymore; `duration_ms` and `error_type` columns added to `LedgerEntry` with idempotent SQLite migration (§4.2); `classify_error()` in `failure_handler.py` maps any exception to a stable string tag written to `error_type` (§6.7); CI split into parallel `lint` and `test` jobs with `astral-sh/setup-uv` caching and per-job `timeout-minutes`; Docker workflow updated to multi-platform (`linux/amd64`, `linux/arm64`), GHA layer cache, BuildKit SBOM + provenance, and SLSA attestation via `actions/attest@v4`.
+> **What changed (modular refactor + inference hardening):** extracted `agents/constants.py`, `agents/schemas.py`, `agents/context_compaction.py`, `inference/constants.py`, and `orchestrator/constants.py` - no module-level code lives inline in its parent module anymore; `duration_ms` and `error_type` columns added to `LedgerEntry` with idempotent SQLite migration (§4.2); `classify_error()` in `failure_handler.py` maps any exception to a stable string tag written to `error_type` (§6.7); CI split into parallel `lint` and `test` jobs with `astral-sh/setup-uv` caching and per-job `timeout-minutes`; Docker workflow updated to multi-platform (`linux/amd64`, `linux/arm64`), GHA layer cache, BuildKit SBOM + provenance, and SLSA attestation via `actions/attest@v4`.
 >
-> **What changed (1.3.3 — multi-provider inference):** replaced `OpenRouterInferenceRouter` with `ModelDispatcher` (multi-provider), added `GroqRouter` and `GeminiRouter`, introduced `ModelCapability`/`ModelInfo`/`Provider` protocol, per-model EMA confidence tracking (`inference/dispatcher.py`), `ContextTooLargeError` caught and compacted in `AgenticLLMAgent`.
+> **What changed (1.3.3 - multi-provider inference):** replaced `OpenRouterInferenceRouter` with `ModelDispatcher` (multi-provider), added `GroqRouter` and `GeminiRouter`, introduced `ModelCapability`/`ModelInfo`/`Provider` protocol, per-model EMA confidence tracking (`inference/dispatcher.py`), `ContextTooLargeError` caught and compacted in `AgenticLLMAgent`.
 
 ---
 
@@ -47,7 +47,7 @@ north is a personal AI operating system that runs continuously in the background
 
 ## 2. System Overview
 
-north is built from six distinct layers — Perception, Orchestrator, Agent, Approval, plus the shared Ledger and Context layers. Each has one clear job. Together they form a pipeline from raw input to real-world execution on your behalf.
+north is built from six distinct layers - Perception, Orchestrator, Agent, Approval, plus the shared Ledger and Context layers. Each has one clear job. Together they form a pipeline from raw input to real-world execution on your behalf.
 
 ```
 +-----------------------------------------------------+
@@ -277,7 +277,7 @@ General facts about the user freely available to all agents. Goals, preferences,
 #### private.md
 Sensitive information agents cannot read automatically. Specific account numbers, medical details, relationship dynamics. **Stored locally only. Never leaves the machine.**
 
-`private.md` is excluded from every agent's context by default — only agents with an explicit `can_read: private.md` entry in `privacy_rules.md` can access it, and this is enforced at context-load time in `Agent._load_context()`.
+`private.md` is excluded from every agent's context by default - only agents with an explicit `can_read: private.md` entry in `privacy_rules.md` can access it, and this is enforced at context-load time in `Agent._load_context()`.
 
 The dynamic flow described below (agent raises a runtime request → user approves → agent gets temporary access) is **not yet implemented**. Until it is, agents that need specific private facts should have them injected via `north context add --text "..."`, which routes through the extraction pipeline into the appropriate document.
 
@@ -364,19 +364,19 @@ Full visibility and control over what north knows.
 
 **How it works:**
 
-1. **Indexing** — every `write()` or `append()` call schedules a background `asyncio.create_task` that chunks the updated document into paragraphs, calls `InferenceRouter.embed()` in a batch, and stores `(doc, chunk_idx, chunk_text, embedding_vector)` rows in `embeddings.db`.  Indexing never blocks the write path.
+1. **Indexing** - every `write()` or `append()` call schedules a background `asyncio.create_task` that chunks the updated document into paragraphs, calls `InferenceRouter.embed()` in a batch, and stores `(doc, chunk_idx, chunk_text, embedding_vector)` rows in `embeddings.db`.  Indexing never blocks the write path.
 
-2. **Retrieval** — `search(query)` embeds the query string (one API call), computes cosine similarity against every stored paragraph vector using numpy, and returns the top-k `[Source Document]\n<paragraph>` blocks as a single string.
+2. **Retrieval** - `search(query)` embeds the query string (one API call), computes cosine similarity against every stored paragraph vector using numpy, and returns the top-k `[Source Document]\n<paragraph>` blocks as a single string.
 
-3. **Fallback** — if the `EmbeddingIndex` is absent or the embed call fails, `search()` falls back to paragraph-level keyword overlap scoring (already implemented in v1.2).  Agents that call `search()` always get a result.
+3. **Fallback** - if the `EmbeddingIndex` is absent or the embed call fails, `search()` falls back to paragraph-level keyword overlap scoring (already implemented in v1.2).  Agents that call `search()` always get a result.
 
-**Embedding model:** `openai/text-embedding-3-small` via OpenRouter's `POST /api/v1/embeddings` endpoint, same API key as inference.  Embedding calls are not tracked by the `CostTracker` — they are small enough that the noise is acceptable.
+**Embedding model:** `openai/text-embedding-3-small` via OpenRouter's `POST /api/v1/embeddings` endpoint, same API key as inference.  Embedding calls are not tracked by the `CostTracker` - they are small enough that the noise is acceptable.
 
 **Scope:** the embedding index covers the five context documents only.  It does not index the Ledger or the job queue.  Episodic memories (Section 5.8) have their own separate embedding store.
 
 ### 5.8 Episodic Memory
 
-The episodic memory layer gives north a growing record of what it has actually done — not just facts about you, but memories of specific past tasks.
+The episodic memory layer gives north a growing record of what it has actually done - not just facts about you, but memories of specific past tasks.
 
 **What is stored:** after every completed task, the Orchestrator writes a summary of the form `Task: <prompt truncated to 120 chars>\nResult: <agent output truncated to 400 chars>` to `~/.north/episodic.db` together with an embedding of that summary.
 
@@ -433,7 +433,7 @@ Stages 1+3 combined: ExecutionPlanner.plan_all() (single LLM call, reasoning poo
   together.  A separate IntentClassifier class no longer exists.
        |
        v
-Stage 2: North Star Check (reasoning pool) — consequential tasks only
+Stage 2: North Star Check (reasoning pool) - consequential tasks only
   -> reads north_stars.md via ContextStore
   -> aligns:    proceed to Stage 4
   -> conflicts: surface tension card to user, await decision before continuing
@@ -683,9 +683,9 @@ without code changes. The current set:
 
 | Agent | Domain | Responsibilities |
 |-------|--------|-----------------|
-| Architect | Engineering | Designs implementation plans, decomposes work — reasoning pool |
-| Coder | Engineering | Code generation, debugging, refactoring, edits — reasoning pool |
-| Tester | QA | Runs the suite, verifies changes, reports failures — fast_cheap pool |
+| Architect | Engineering | Designs implementation plans, decomposes work - reasoning pool |
+| Coder | Engineering | Code generation, debugging, refactoring, edits - reasoning pool |
+| Tester | QA | Runs the suite, verifies changes, reports failures - fast_cheap pool |
 | Researcher | Research | Open-ended investigation, gathering and synthesising sources |
 | General | General purpose | Open-ended chat, planning, questions that don't map to a domain agent |
 | Home | Smart home | Controls local devices (e.g. Kasa bulbs) behind approval gates |
@@ -802,7 +802,7 @@ Universal tools ── granted to every agent ──> read_file, write_file, glo
 ```
 
 `tools_for_agent(agent)` returns the universal set plus that agent's specialized set, sorted
-by confidence score (§8). `update_graph(agent, names)` adjusts edges at runtime — e.g. when a
+by confidence score (§8). `update_graph(agent, names)` adjusts edges at runtime - e.g. when a
 tool is hot-loaded mid-task by `create_tool`. An agent loads only its own tools into context,
 so there is no token waste from irrelevant tool definitions.
 
@@ -817,7 +817,7 @@ outcome = 1.0 if was_helpful else 0.0
 new_confidence = clamp(0.10 * outcome + 0.90 * current_confidence, 0.0, 1.0)
 ```
 
-The EMA means recent behavior dominates: a tool that failed early but now succeeds reliably recovers its score in ~10 successful uses.  The old fixed-delta approach (`+0.05 / -0.03`) took ~27 successful uses to recover from a low score — far too slow for the system to adapt.  Default prior for unseen tool pairs: 0.50.  Reliable filesystem/shell tools are seeded at 0.80 on startup via `seed_defaults()`.
+The EMA means recent behavior dominates: a tool that failed early but now succeeds reliably recovers its score in ~10 successful uses.  The old fixed-delta approach (`+0.05 / -0.03`) took ~27 successful uses to recover from a low score - far too slow for the system to adapt.  Default prior for unseen tool pairs: 0.50.  Reliable filesystem/shell tools are seeded at 0.80 on startup via `seed_defaults()`.
 
 **Persistence:** confidence scores are stored in `~/.north/tools.db`, a dedicated SQLite database. This is separate from the Ledger (event log) and separate from the Task Context Object (per-task scratch space). `tools.db` is the authoritative source for current confidence state.
 
@@ -873,7 +873,7 @@ loop (max 12 iterations):
 
 **Tool schemas:** every `Tool` subclass declares a `parameters_schema` class variable (JSON Schema object).  The base class `schema()` method wraps it in the OpenAI function definition format.  Tools without an explicit schema use `{type: object, additionalProperties: true}` as a safe default.
 
-**`request_approval` tool:** a synthetic tool injected into every agent's tool list.  When called, it creates an Approval card, emits `approval_required` via SSE, and blocks (via asyncio.Event — Section 9.7) until the user responds.  The model's decision to call this tool is treated like any other tool call.
+**`request_approval` tool:** a synthetic tool injected into every agent's tool list.  When called, it creates an Approval card, emits `approval_required` via SSE, and blocks (via asyncio.Event - Section 9.7) until the user responds.  The model's decision to call this tool is treated like any other tool call.
 
 ### 7.7 The If-Unsure-Ask Rule
 
@@ -907,7 +907,7 @@ All providers share the same `Provider` protocol (`inference/provider.py`) and a
 
 Each provider exposes a `refresh()` method that fetches its live model list from the provider's API.  `ModelDispatcher.refresh_pools()` calls every registered provider in sequence and rebuilds its internal registry.  Pools refresh every 6 hours via a background task and once at startup.
 
-Models are assigned a continuous `base_quality` score (0–1) derived from their output price via `quality_from_cost()` in `inference/capability.py` — log-scale normalisation over the ~$0.000001–$0.015/token pricing range.  `current_pools()` then bins by threshold for the CLI display:
+Models are assigned a continuous `base_quality` score (0–1) derived from their output price via `quality_from_cost()` in `inference/capability.py` - log-scale normalisation over the ~$0.000001–$0.015/token pricing range.  `current_pools()` then bins by threshold for the CLI display:
 
 ```
 reasoning pool:    base_quality ≥ 0.70  (most capable; frontier models)
@@ -920,7 +920,7 @@ A model can appear in both `free_fallback` and a quality tier.  Actual ranking w
 
 **Pool refresh failure handling:** if a provider's refresh call fails, `ModelDispatcher.refresh_pools()` logs a warning and retains the previously-loaded model registry for that provider. The Orchestrator continues accepting tasks in all cases.
 
-**Background refresh loop:** the pool refresh loop uses a loop-first pattern — the initial sleep is at the bottom of the loop, not the top — so it fires immediately on Orchestrator startup, then repeats every 6 hours. This guarantees that fresh model IDs are in place before the first real inference call, without a separate startup refresh step.
+**Background refresh loop:** the pool refresh loop uses a loop-first pattern - the initial sleep is at the bottom of the loop, not the top - so it fires immediately on Orchestrator startup, then repeats every 6 hours. This guarantees that fresh model IDs are in place before the first real inference call, without a separate startup refresh step.
 
 **Error-triggered refresh:** when any model in the fallback chain fails, `_maybe_refresh_pools_background()` in `orchestrator.py` schedules a background refresh subject to a 60-second cooldown (`POOL_REFRESH_COOLDOWN` in `orchestrator/constants.py`). A 404 from a retired model ID triggers a live pool update so the next attempt uses current IDs, without hammering the OpenRouter `/models` endpoint on every failure.
 
@@ -963,9 +963,9 @@ classifier                -> LOW (simple binary classification)
 
 Every `complete()` and `complete_with_tools()` call walks the ordered candidate list produced by `ModelDispatcher._candidates()` until one succeeds. Three exception classes handle failures in the chain:
 
-- `ModelRateLimitedError` — raised on HTTP 429, 404 (retired model), and 503. Applies a 60-second cooldown to the `(model_id, provider)` pair and silently advances to the next candidate.
-- `PaymentRequiredError` — raised on HTTP 402. Applies a 24-hour cooldown and advances.
-- `InferenceError` — raised on HTTP 400 (unsupported parameters, bad model ID) and other provider errors. Records a failure in the EMA, logs at `WARNING`, and advances to the next candidate.
+- `ModelRateLimitedError` - raised on HTTP 429, 404 (retired model), and 503. Applies a 60-second cooldown to the `(model_id, provider)` pair and silently advances to the next candidate.
+- `PaymentRequiredError` - raised on HTTP 402. Applies a 24-hour cooldown and advances.
+- `InferenceError` - raised on HTTP 400 (unsupported parameters, bad model ID) and other provider errors. Records a failure in the EMA, logs at `WARNING`, and advances to the next candidate.
 
 Any other exception (network failures, unexpected errors) records a failure in the EMA and re-raises immediately to the caller.
 
@@ -1042,7 +1042,7 @@ The Approval Layer is the primary interface between north and the user for conse
 
 ### 9.1 Notifications and Security
 
-The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. An optional `MacOSNotifier` (also exported as `AlerterNotifier`) uses the `alerter` subprocess for native macOS notification banners with action buttons — swap it in via `config/dependencies.py` if running on macOS and alerter is installed. A local callback server runs on `localhost:8001` and receives button taps.
+The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. An optional `MacOSNotifier` (also exported as `AlerterNotifier`) uses the `alerter` subprocess for native macOS notification banners with action buttons - swap it in via `config/dependencies.py` if running on macOS and alerter is installed. A local callback server runs on `localhost:8001` and receives button taps.
 
 **Security:** the notification callback server is secured with a shared secret generated at first startup and stored at `~/.north/secret.key`. Every notification payload embeds this secret in the callback URL or request body. Every callback request to `localhost:8001` must include the `X-North-Secret` header with the correct value. Requests without a valid secret are rejected with HTTP 403. This prevents any other local process from faking an approval action.
 
@@ -1112,18 +1112,18 @@ Every approval, rejection, and answered question is processed by the extraction 
 When a coroutine needs to wait for a user decision (north star conflict approval, mid-task `request_approval` tool call), it calls `approval_store.wait_for_decision(card_id, timeout=300.0)` rather than polling in a loop.
 
 ```python
-# Before (polling — held the event loop busy for up to 1 s per tick):
+# Before (polling - held the event loop busy for up to 1 s per tick):
 for _ in range(300):
     await asyncio.sleep(1)
     card = approval_store.get(card_id)
     if card and card.status != "pending":
         break
 
-# After (event-based — wakes exactly when the user clicks):
+# After (event-based - wakes exactly when the user clicks):
 card = await approval_store.wait_for_decision(card_id, timeout=300.0)
 ```
 
-`ApprovalStore` allocates an `asyncio.Event` for each card on `add()`.  `resolve()` calls `event.set()`.  `wait_for_decision()` awaits the event with a 300-second `asyncio.wait_for` timeout.  Under load with many concurrent pending approvals, zero CPU is consumed while waiting — each coroutine is simply suspended until its specific event fires.
+`ApprovalStore` allocates an `asyncio.Event` for each card on `add()`.  `resolve()` calls `event.set()`.  `wait_for_decision()` awaits the event with a 300-second `asyncio.wait_for` timeout.  Under load with many concurrent pending approvals, zero CPU is consumed while waiting - each coroutine is simply suspended until its specific event fires.
 
 ---
 
@@ -1138,14 +1138,14 @@ A local web UI served by the Orchestrator at `localhost:8000/ui`. Server-rendere
 **Three panels:**
 
 **Live Activity Feed**
-Real-time stream of Orchestrator activity via SSE (`GET /orchestrator/stream/{task_id}`). Every agent action, tool call, Ledger write, and job execution appears as it happens. Includes `token` events — individual text tokens streamed from the model's final answer as they arrive, enabling progressive rendering of the agent's response as it generates.
+Real-time stream of Orchestrator activity via SSE (`GET /orchestrator/stream/{task_id}`). Every agent action, tool call, Ledger write, and job execution appears as it happens. Includes `token` events - individual text tokens streamed from the model's final answer as they arrive, enabling progressive rendering of the agent's response as it generates.
 
 SSE event types:
 ```
 classifying          Stage 1 started
 classified           Trivial/consequential decision + domain
 north_star_checking  Stage 2 started
-north_star_conflict  Conflict detected — approval card incoming
+north_star_conflict  Conflict detected - approval card incoming
 north_star_aligned   Check passed
 routing              Stage 3 started
 routed               Agents selected + parallel groups
@@ -1288,7 +1288,7 @@ Job processor loop:
 
 The `CronScheduler` runs as a single asyncio background task. It combines two sources of entries and re-evaluates them every 60 seconds so newly added schedules take effect within a minute.
 
-**Built-in schedules** (`jobs/scheduler.py` — `V1_CRON_ENTRIES`):
+**Built-in schedules** (`jobs/scheduler.py` - `V1_CRON_ENTRIES`):
 ```
 health_daily_meal_plan         -> daily 7:00 AM
 university_canvas_check        -> daily 8:00 AM
@@ -1299,7 +1299,7 @@ finance_weekly_budget_check    -> every Sunday 6:00 PM
 task_context_cleanup           -> daily 3:00 AM
 ```
 
-**User-defined schedules** — stored in the `user_cron_entries` table in `~/.north/jobs.db`. Created three ways:
+**User-defined schedules** - stored in the `user_cron_entries` table in `~/.north/jobs.db`. Created three ways:
 1. Natural language: "remind me every Monday at 9am to review my goals"
    → agent calls `schedule_task` tool with `hour`, `minute`, `weekday` params
 2. Web UI: `/ui/jobs` → Recurring Schedules → "+ Add" form
@@ -1319,7 +1319,7 @@ A job enqueued with a future `scheduled_at` will sit as `pending` until the job 
 
 Triggered by signals rather than time.  v1 now supports two event sources:
 
-**Webhook ingestion** — external services send `POST /orchestrator/webhooks/{source}` with an `X-Webhook-Secret` header and a JSON body containing a `prompt` and optional `context` field.  The Orchestrator submits this as a task with `source: webhook` and the prompt prefixed with `[webhook:{source}]` so the classifier can route it correctly.
+**Webhook ingestion** - external services send `POST /orchestrator/webhooks/{source}` with an `X-Webhook-Secret` header and a JSON body containing a `prompt` and optional `context` field.  The Orchestrator submits this as a task with `source: webhook` and the prompt prefixed with `[webhook:{source}]` so the classifier can route it correctly.
 
 ```bash
 # A Gmail push notification triggers the job agent:
@@ -1329,7 +1329,7 @@ curl -X POST http://localhost:8000/orchestrator/webhooks/gmail \
   -d '{"prompt": "Recruiter from Stripe replied to your application", "context": "sender: recruiter@stripe.com"}'
 ```
 
-**Internal threshold events** — agents can schedule immediate threshold-triggered jobs via the `schedule_task` tool with `run_at: now`.  Infrastructure examples:
+**Internal threshold events** - agents can schedule immediate threshold-triggered jobs via the `schedule_task` tool with `run_at: now`.  Infrastructure examples:
 
 ```
 expense logged above monthly threshold -> finance agent budget check
@@ -1678,7 +1678,7 @@ Loading mental models of specific thinkers as advisory lenses on Orchestrator de
 Voice input depends on OpenRouter being reachable. A local Whisper variant (`mlx-whisper`) behind the same `InferenceRouter` interface would close this gap, but the switching policy is not yet defined.
 
 **Private Context Request Flow**
-Static access control is enforced: `Agent._load_context()` calls `_allowed_documents()` which reads `privacy_rules.md` before injecting any context into an agent's prompt. `private.md` is never included by default — only agents with an explicit `can_read: private.md` rule in `privacy_rules.md` can access it.
+Static access control is enforced: `Agent._load_context()` calls `_allowed_documents()` which reads `privacy_rules.md` before injecting any context into an agent's prompt. `private.md` is never included by default - only agents with an explicit `can_read: private.md` rule in `privacy_rules.md` can access it.
 
 What is **not yet implemented** is the *dynamic* private context request described in §5.3: the flow where an agent mid-task raises a request through the Orchestrator, the user approves via an Approval card, and the agent gets temporary access to `private.md` for that session only. Until this is built, agents that need private data must have it pre-granted in `privacy_rules.md`, or the user must inject the relevant facts via `north context add`.
 
@@ -1715,7 +1715,7 @@ pydantic>=2.0.0
 
 FastAPI handles:
 - All REST endpoints defined in Section 6.8
-- SSE stream via a custom `EventStreamManager` in `orchestrator/stream.py` using FastAPI's built-in `StreamingResponse` — no external SSE library
+- SSE stream via a custom `EventStreamManager` in `orchestrator/stream.py` using FastAPI's built-in `StreamingResponse` - no external SSE library
 - Request and response validation via Pydantic models
 - Automatic OpenAPI docs at `localhost:8000/docs` (available in development)
 
@@ -1782,9 +1782,9 @@ The Inference Router (Section 8) owns the transcription call exactly as it owns 
 
 Default transcription model: `groq/whisper-large-v3` (sub-second latency). Alternatives selectable via the Inference Router without code change:
 
-- `openai/whisper-1` — lowest cost
-- `openai/gpt-4o-transcribe` — highest accuracy on technical speech
-- `google/chirp-3` — strong on accented English
+- `openai/whisper-1` - lowest cost
+- `openai/gpt-4o-transcribe` - highest accuracy on technical speech
+- `google/chirp-3` - strong on accented English
 
 No additional Python dependency. The existing `httpx` client handles the request.
 
@@ -1839,7 +1839,7 @@ Every CLI command is a thin wrapper over the Orchestrator REST API via `httpx`. 
 ### 16.10 Notifications
 
 **TerminalNotifier (default on all platforms)**
-The default `Notifier` implementation (`approval/terminal.py`) prints approval cards to stdout/logs. It works anywhere Python runs — Linux, macOS, Docker, CI.
+The default `Notifier` implementation (`approval/terminal.py`) prints approval cards to stdout/logs. It works anywhere Python runs - Linux, macOS, Docker, CI.
 
 **MacOSNotifier / AlerterNotifier (macOS only, optional)**
 For native macOS notification banners with action buttons, `alerter` is called as a subprocess (`approval/macos.py`). `MacOSNotifier` and `AlerterNotifier` are aliases for the same class.
@@ -1855,10 +1855,10 @@ To enable, swap `TerminalNotifier()` → `MacOSNotifier(settings.secret)` in `co
 **Environment variables** for secrets and configuration that cannot be in the repo:
 
 ```bash
-# Inference providers — set in ~/.north/.env
-NORTH_OPENROUTER_API_KEY=sk-or-...          # required — broadest model catalogue
-NORTH_GROQ_API_KEY=gsk_...                  # optional — fast free-tier completions + Whisper transcription
-NORTH_GEMINI_API_KEY=AIza...                # optional — Gemini free-tier completions + embeddings
+# Inference providers - set in ~/.north/.env
+NORTH_OPENROUTER_API_KEY=sk-or-...          # required - broadest model catalogue
+NORTH_GROQ_API_KEY=gsk_...                  # optional - fast free-tier completions + Whisper transcription
+NORTH_GEMINI_API_KEY=AIza...                # optional - Gemini free-tier completions + embeddings
 
 # System
 NORTH_HOME=~/.north                         # optional, override data directory (e.g. /data in Docker)
@@ -1941,7 +1941,7 @@ Agents can read and write files within a configured workspace. In Docker mode, t
 ```bash
 cd ~/myproject
 north task "review my code"   # workspace auto-detected as git root of ~/myproject
-north chat                    # same — scoped to ~/myproject
+north chat                    # same - scoped to ~/myproject
 north chat --workspace ~/other-project   # explicit override
 ```
 

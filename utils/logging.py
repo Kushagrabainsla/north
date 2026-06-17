@@ -29,7 +29,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 
 # ---------------------------------------------------------------------------
-# Context variable — holds the active task_id for the current async context.
+# Context variable - holds the active task_id for the current async context.
 # ---------------------------------------------------------------------------
 
 _task_id_var: ContextVar[str] = ContextVar("task_id", default="")

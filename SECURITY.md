@@ -21,6 +21,6 @@ Expected response: acknowledgment within 7 days, triage within 14 days.
 
 ## Out of scope
 
-- Vulnerabilities in the underlying OS, Python interpreter, or upstream third-party dependencies — report those to their respective maintainers.
+- Vulnerabilities in the underlying OS, Python interpreter, or upstream third-party dependencies - report those to their respective maintainers.
 - Issues that require root or physical access on the local machine (north trusts the local user account).
-- Network-level attacks against `localhost:8000` or `localhost:8001` — these are local-only ports. Do not expose them publicly.
+- Network-level attacks against `localhost:8000` or `localhost:8001` - these are local-only ports. Do not expose them publicly.

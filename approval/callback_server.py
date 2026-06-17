@@ -1,4 +1,4 @@
-"""Callback server — FastAPI daemon on port 8001.
+"""Callback server - FastAPI daemon on port 8001.
 
 Receives action decisions from macOS native notifications (via `alerter`)
 and relays them to the main Orchestrator on port 8000.
@@ -91,5 +91,5 @@ def _map_action_to_decision(action: str) -> str:
         return ApprovalDecision.APPROVED.value
     if normalised in {"reject", "cancel", "no", "deny"}:
         return ApprovalDecision.REJECTED.value
-    # For question options — pass through as-is
+    # For question options - pass through as-is
     return action

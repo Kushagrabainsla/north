@@ -29,7 +29,7 @@ def read_secret_file(secret_file: Path) -> str:
         try:
             secret_file.chmod(0o600)
             logger.warning(
-                "%s was group/world-accessible (mode %s) — permissions tightened to 0600.",
+                "%s was group/world-accessible (mode %s) - permissions tightened to 0600.",
                 secret_file,
                 oct(mode & 0o777),
             )
@@ -50,24 +50,24 @@ class Settings(BaseSettings):
     # Required for production; empty default allows import/initialization without crash
     openrouter_api_key: str = ""
 
-    # Optional direct-provider keys — enables dedicated rate-limit buckets and
+    # Optional direct-provider keys - enables dedicated rate-limit buckets and
     # lower latency for those providers' models. Empty = provider not used.
     groq_api_key: str = ""
     gemini_api_key: str = ""
 
-    # Paths — NORTH_HOME env var is the canonical override (used in Docker)
+    # Paths - NORTH_HOME env var is the canonical override (used in Docker)
     north_home: Path = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
 
     # Default workspace for filesystem/shell tools when no workspace is provided per-request.
-    # Set via NORTH_NORTH_WORKSPACE env var. Must never default to $HOME — the workspace
+    # Set via NORTH_NORTH_WORKSPACE env var. Must never default to $HOME - the workspace
     # scopes what tools may touch, and even an explicit broad root cannot re-open the
     # sensitive-path blocklist (~/.ssh, ~/.north, /etc, ...; see tools/_path.py).
     north_workspace: str = ""
 
-    # Pre-shared secret override — set NORTH_SECRET in Docker instead of using a key file
+    # Pre-shared secret override - set NORTH_SECRET in Docker instead of using a key file
     north_secret: str = os.environ.get("NORTH_SECRET", "")
 
-    # Base URL for the main orchestrator server — override in Docker/multi-host deployments.
+    # Base URL for the main orchestrator server - override in Docker/multi-host deployments.
     north_orchestrator_url: str = "http://127.0.0.1:8000"
 
     # Runtime environment

@@ -1,4 +1,4 @@
-"""KasaTool — control TP-Link Kasa smart bulbs over the local network.
+"""KasaTool - control TP-Link Kasa smart bulbs over the local network.
 
 Uses python-kasa for device control. Discovery runs the `kasa discover` CLI
 as a subprocess (the only reliable method inside uvicorn's event loop, since
@@ -14,16 +14,11 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from tools.base import Tool
+from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import gate_mutating_action
-
-if TYPE_CHECKING:
-    from approval.judgement_filter import JudgementFilter
-    from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
 
 # Named colours → (hue 0-360, saturation 0-100)
 _COLOR_NAMES: dict[str, tuple[int, int]] = {
@@ -241,7 +236,7 @@ def _summarize_action(
     return f"{verbs.get(action, action)}: {names}.{suffix}"
 
 
-class KasaTool(Tool):
+class KasaTool(ApprovalGatedTool):
     """Discover and control TP-Link Kasa smart bulbs on the local network."""
 
     name = "kasa"
@@ -260,18 +255,18 @@ class KasaTool(Tool):
                 "type": "string",
                 "enum": ["on", "off", "toggle", "list", "brightness", "color", "color_temp"],
                 "description": (
-                    "'on'/'off'/'toggle' — power control. "
-                    "'brightness' — set brightness (requires brightness param). "
-                    "'color' — set colour by name or hue/saturation (requires color or hue param). "
-                    "'color_temp' — set white colour temperature (requires color_temp param). "
-                    "'list' — show all discovered devices and their state."
+                    "'on'/'off'/'toggle' - power control. "
+                    "'brightness' - set brightness (requires brightness param). "
+                    "'color' - set colour by name or hue/saturation (requires color or hue param). "
+                    "'color_temp' - set white colour temperature (requires color_temp param). "
+                    "'list' - show all discovered devices and their state."
                 ),
             },
             "device": {
                 "type": "string",
                 "description": (
                     "Device alias (e.g. 'Desk lamp') or IP address. "
-                    "Required for every action except 'list' — there is no implicit 'all devices' target."
+                    "Required for every action except 'list' - there is no implicit 'all devices' target."
                 ),
             },
             "brightness": {
@@ -312,18 +307,6 @@ class KasaTool(Tool):
         "required": ["action"],
     }
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventStreamManager | None = None,
-        approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
-    ) -> None:
-        self._approval_store = approval_store
-        self._stream_manager = stream_manager
-        self._approval_timeout_seconds = approval_timeout_seconds
-        self._judgement_filter = judgement_filter
-
     def format_output(self, data: dict[str, Any]) -> str:
         devices = data.get("devices", [])
         if not devices:
@@ -331,7 +314,7 @@ class KasaTool(Tool):
         blocks = []
         for d in devices:
             status = "on" if d.get("is_on") else "off"
-            header = f"**{d['alias']}** ({d['host']}) — {status}"
+            header = f"**{d['alias']}** ({d['host']}) - {status}"
             attrs = []
             if d.get("brightness") is not None:
                 attrs.append(f"- Brightness: {d['brightness']}%")
@@ -393,8 +376,8 @@ class KasaTool(Tool):
         """Require an explicit target and obtain approval for a mutating action.
 
         Returns a denial message to surface to the user, or None when approved.
-        Mutating actions must name their target explicitly — an omitted device
-        must never fan out to every bulb on the network — and are gated behind
+        Mutating actions must name their target explicitly - an omitted device
+        must never fan out to every bulb on the network - and are gated behind
         user approval (fail-closed when no gate is wired).
         """
         if not target_hint:
@@ -405,7 +388,7 @@ class KasaTool(Tool):
         return await gate_mutating_action(
             self._approval_store,
             agent="kasa",
-            title="Smart Device Control — Approval Required",
+            title="Smart Device Control - Approval Required",
             message=f"kasa action={action!r} device={target_hint!r}",
             task_id=params.get("task_id"),
             stream_manager=self._stream_manager,

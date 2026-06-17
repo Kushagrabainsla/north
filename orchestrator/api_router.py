@@ -40,14 +40,14 @@ router = APIRouter(
     dependencies=[Depends(verify_request_secret)],
 )
 
-# Unauthenticated router — only hosts /health so Docker / load-balancer probes
+# Unauthenticated router - only hosts /health so Docker / load-balancer probes
 # don't need the API secret.
 health_router = APIRouter(tags=["health"])
 
 
 @health_router.get("/health", include_in_schema=True)
 async def health_check() -> dict:
-    """Liveness probe — returns 200 {"status": "ok"} with no authentication.
+    """Liveness probe - returns 200 {"status": "ok"} with no authentication.
 
     Used by Docker HEALTHCHECK and any upstream load-balancer probe.
     """
@@ -150,7 +150,7 @@ class TranscriptionOut(BaseModel):
     cost_usd: float
 
 
-# 25 MB ≈ 25 minutes of 16-bit 16 kHz WAV — far more than a dictation clip.
+# 25 MB ≈ 25 minutes of 16-bit 16 kHz WAV - far more than a dictation clip.
 # Bounding the read prevents a single request from exhausting memory and
 # putting an unbounded payload in front of a paid transcription API.
 MAX_TRANSCRIBE_BYTES = 25 * 1024 * 1024
@@ -224,7 +224,7 @@ async def cancel_task(task_id: str) -> None:
     """Cancel a pending task."""
     cancelled = await _get_orchestrator().cancel_task(task_id)
     if not cancelled:
-        raise HTTPException(status_code=404, detail=f"Task {task_id!r} is not in flight — nothing to cancel.")
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} is not in flight - nothing to cancel.")
 
 
 # ── SSE stream ────────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ async def stream_task_events(task_id: str) -> StreamingResponse:
 
 @router.get("/stream")
 async def stream_global_events() -> StreamingResponse:
-    """Global SSE stream — all events across all tasks.
+    """Global SSE stream - all events across all tasks.
 
     Used by the TUI to receive a single persistent connection for every task
     without needing to subscribe per task_id.
@@ -692,7 +692,7 @@ async def update_settings(body: SettingsUpdate) -> SettingsOut:
 webhook_router = APIRouter(
     prefix="/orchestrator",
     tags=["webhooks"],
-    # No verify_request_secret dependency — we validate manually below to give
+    # No verify_request_secret dependency - we validate manually below to give
     # a clear 401 rather than the generic 403 from the cookie-based mechanism.
 )
 
@@ -706,7 +706,7 @@ async def receive_webhook(source: str, request: Request) -> dict:
     a ``prompt`` key.  Optionally include ``context`` for additional facts
     that should be injected as task context.
 
-    Authentication is via the ``X-Webhook-Secret`` header — same secret as
+    Authentication is via the ``X-Webhook-Secret`` header - same secret as
     the rest of the API.
     """
     secret = load_secret()
@@ -739,7 +739,7 @@ class ApprovalResponse(BaseModel):
     card_id: str
     decision: str
     chosen_option: str = ""
-    # Legacy fields — ignored. The decision binds to the server-issued card:
+    # Legacy fields - ignored. The decision binds to the server-issued card:
     # task_id and agent are read from the stored card, never trusted from the client.
     task_id: str = ""
     agent: str = ""

@@ -1,4 +1,4 @@
-"""AgenticLLMAgent — ReAct-loop agent using native function calling + streaming.
+"""AgenticLLMAgent - ReAct-loop agent using native function calling + streaming.
 
 Uses the OpenAI-compatible tools API instead of JSON-in-text so the model
 reliably selects and invokes functions.  Text tokens from the final answer
@@ -46,15 +46,15 @@ from utils.time import localnow
 
 logger = logging.getLogger(__name__)
 
-# Returned to the model when ask_user times out with no answer — steers it to be
+# Returned to the model when ask_user times out with no answer - steers it to be
 # explicit about the gap rather than silently fabricating the missing detail.
 _ASK_USER_NO_ANSWER = (
-    "No answer received in time. Do not fabricate the missing detail — state the "
+    "No answer received in time. Do not fabricate the missing detail - state the "
     "specific assumption you are forced to make, or stop and summarise exactly what "
     "you still need from the user."
 )
 
-# Agent-loop built-ins, not registry tools — excluded from tool-reliability tracking.
+# Agent-loop built-ins, not registry tools - excluded from tool-reliability tracking.
 _INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user"})
 
 
@@ -169,7 +169,7 @@ class AgenticLLMAgent(LLMAgent):
         """Run read-only calls concurrently and mutating calls sequentially.
 
         Mutating tools (file writes, shell, git) are serialized under the
-        per-WORKSPACE lock — not per agent instance — so a delegated coder and
+        per-WORKSPACE lock - not per agent instance - so a delegated coder and
         tester working in the same tree cannot interleave mutations. Every call
         is wrapped so a raised exception becomes a failed tool result rather
         than cancelling its siblings (CODING_STYLE §10.5). Results preserve the
@@ -189,7 +189,7 @@ class AgenticLLMAgent(LLMAgent):
         for index, call in enumerate(calls):
             if index not in results:
                 if call.name == "delegate_task":
-                    # Never hold the workspace lock across delegation — the
+                    # Never hold the workspace lock across delegation - the
                     # sub-agent acquires it for its own mutations and would
                     # deadlock against its parent.
                     results[index] = await self._safe_execute_call(call, payload, tool_map)
@@ -265,7 +265,7 @@ class AgenticLLMAgent(LLMAgent):
                     response = await self._complete_with_tools(messages, tools, payload.task_id, token_cb)
                 except ContextTooLargeError:
                     return _final_answer(
-                        "Context window exceeded — the conversation is too long to continue.",
+                        "Context window exceeded - the conversation is too long to continue.",
                         "Context overflow",
                         total_cost_usd,
                         tools_used,
@@ -273,7 +273,7 @@ class AgenticLLMAgent(LLMAgent):
                         total_tokens_in,
                         total_tokens_out,
                     )
-            # Stream finished — release any reasoning/answer fragment the splitter
+            # Stream finished - release any reasoning/answer fragment the splitter
             # withheld in case it began a tag that never completed.
             if token_cb is not None:
                 await token_cb.flush()
@@ -285,7 +285,7 @@ class AgenticLLMAgent(LLMAgent):
             emitted_model = await self._maybe_emit_model(response, emitted_model, payload.task_id)
 
             if response.type == "message":
-                # Final answer — answer tokens were already streamed via token_cb;
+                # Final answer - answer tokens were already streamed via token_cb;
                 # strip the model's private reasoning from the stored copy so it
                 # matches the streamed view and never feeds extraction/verification.
                 content = strip_reasoning(response.content or "")
@@ -294,7 +294,7 @@ class AgenticLLMAgent(LLMAgent):
                     total_tokens_in, total_tokens_out,
                 )
 
-            # Tool calls branch — execute the requested calls.
+            # Tool calls branch - execute the requested calls.
             if not response.calls:
                 return _final_answer(
                     strip_reasoning(response.content or "") or "The model returned no tool calls and no message.",
@@ -430,8 +430,8 @@ class AgenticLLMAgent(LLMAgent):
             success = json.loads(result_str).get("success", False)
             return call, result_str, success
         # create_tool gates its own create/update actions behind an approval
-        # card (see CreateToolTool._request_approval) — no special case here.
-        # Default the workspace but respect an explicit model-supplied value —
+        # card (see CreateToolTool._request_approval) - no special case here.
+        # Default the workspace but respect an explicit model-supplied value  - 
         # same semantics as the orchestrator's direct-tool path.
         if payload.workspace and "workspace" not in params:
             params["workspace"] = payload.workspace
@@ -487,62 +487,42 @@ class AgenticLLMAgent(LLMAgent):
     async def _delegate_task(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Run a specialist sub-agent and return its output as a tool result."""
         if payload.delegation_depth >= MAX_DELEGATION_DEPTH:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": (
-                        f"Delegation depth limit ({MAX_DELEGATION_DEPTH}) reached — "
-                        "you cannot delegate further. Write a final summary of what was "
-                        "accomplished, what was attempted, and what remains unresolved, "
-                        "then return that as your answer."
-                    ),
-                }
+            return _failed_json(
+                f"Delegation depth limit ({MAX_DELEGATION_DEPTH}) reached - "
+                "you cannot delegate further. Write a final summary of what was "
+                "accomplished, what was attempted, and what remains unresolved, "
+                "then return that as your answer."
             )
 
         agent_name = str(params.get("agent", "general"))
         if agent_name in payload.delegation_chain:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": (
-                        f"Delegation cycle detected — '{agent_name}' is already in the "
-                        f"current chain {payload.delegation_chain}. "
-                        "Summarise what you have and return your best result instead of delegating again."
-                    ),
-                }
+            return _failed_json(
+                f"Delegation cycle detected - '{agent_name}' is already in the "
+                f"current chain {payload.delegation_chain}. "
+                "Summarise what you have and return your best result instead of delegating again."
             )
 
         registry = self._deps.agent_registry
         if registry is None:
-            return json.dumps({"success": False, "error": "Agent registry not available for delegation."})
+            return _failed_json("Agent registry not available for delegation.")
 
         task = str(params.get("task", ""))
         if not task:
-            return json.dumps({"success": False, "error": "delegate_task requires a non-empty 'task' parameter."})
+            return _failed_json("delegate_task requires a non-empty 'task' parameter.")
 
         try:
             agent = registry.get(agent_name)
         except Exception:
             if agent_name in ENGINEERING_AGENTS:
-                return json.dumps(
-                    {
-                        "success": False,
-                        "error": (
-                            f"Engineering agent '{agent_name}' not found. "
-                            "Cannot fall back to general for engineering tasks. "
-                            "Ensure the agent is registered and retry."
-                        ),
-                    }
+                return _failed_json(
+                    f"Engineering agent '{agent_name}' not found. "
+                    "Cannot fall back to general for engineering tasks. "
+                    "Ensure the agent is registered and retry."
                 )
             try:
                 agent = registry.get("general")
             except Exception:
-                return json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Agent '{agent_name}' not found and no 'general' fallback.",
-                    }
-                )
+                return _failed_json(f"Agent '{agent_name}' not found and no 'general' fallback.")
 
         sub_payload = AgentPayload(
             task_id=payload.task_id,
@@ -556,7 +536,7 @@ class AgenticLLMAgent(LLMAgent):
             return json.dumps({"success": True, "output": result.output, "summary": result.summary})
         except Exception as exc:
             logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
-            return json.dumps({"success": False, "error": str(exc)})
+            return _failed_json(str(exc))
 
     def _require_approval_store(self) -> Any:
         """Return the injected ApprovalStore or fail loudly if it is missing."""
@@ -591,7 +571,7 @@ class AgenticLLMAgent(LLMAgent):
         card = await self._surface_card(
             payload,
             card_type=CardType.APPROVAL,
-            title=f"{self.name.title()} — Approval Required",
+            title=f"{self.name.title()} - Approval Required",
             body=str(params.get("message", "Action requires your approval.")),
             options=list(params.get("options", list(APPROVAL_DEFAULT_OPTIONS))),
             event=CardEvent.APPROVAL,
@@ -603,18 +583,18 @@ class AgenticLLMAgent(LLMAgent):
 
         The card is a QUESTION and the return carries the user's actual answer (free
         text or a chosen option) so the agent continues with it instead of assuming.
-        This is how an agent refuses to invent an unknown — it asks. A learned rule
+        This is how an agent refuses to invent an unknown - it asks. A learned rule
         may answer it automatically (see :func:`surface_card`).
         """
         question = str(params.get("question", "")).strip()
         if not question:
-            return json.dumps({"success": False, "error": "ask_user requires a non-empty 'question'."})
+            return _failed_json("ask_user requires a non-empty 'question'.")
         options = [str(o) for o in params.get("options", []) if str(o).strip()]
 
         card = await self._surface_card(
             payload,
             card_type=CardType.QUESTION,
-            title=f"{self.name.title()} — Question",
+            title=f"{self.name.title()} - Question",
             body=question,
             options=options,
             event=CardEvent.QUESTION,
@@ -631,12 +611,7 @@ class AgenticLLMAgent(LLMAgent):
         params: dict[str, Any],
     ) -> str:
         if tool_name not in tool_map:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}",
-                }
-            )
+            return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}")
         try:
             result = await tool_map[tool_name].run(ToolInput(params=params))
             data = result.model_dump()
@@ -644,7 +619,7 @@ class AgenticLLMAgent(LLMAgent):
                 data["formatted"] = tool_map[tool_name].format_output(result.data or {})
         except Exception as exc:
             logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
-            return json.dumps({"success": False, "error": str(exc)})
+            return _failed_json(str(exc))
         return _cap_tool_result(data)
 
 
@@ -653,8 +628,8 @@ def _cap_tool_result(data: dict[str, Any]) -> str:
 
     A single large tool response must not exhaust the model's context window.
     Truncation happens *inside* the data dict so the JSON returned to the model
-    is always syntactically valid: first each string field is capped, then —
-    when non-string fields (large lists/dicts) still blow the budget — the
+    is always syntactically valid: first each string field is capped, then  - 
+    when non-string fields (large lists/dicts) still blow the budget - the
     whole data block is replaced with a bounded summary.
     """
     raw = json.dumps(data)
@@ -688,7 +663,7 @@ class _TokenRelay:
     Answer text is emitted as ``token`` events (the unchanged contract); reasoning
     text is emitted as ``reasoning`` events so a UI can render it dimmed instead of
     treating it as the answer. Because tags can straddle token boundaries, a
-    :class:`ReasoningStreamSplitter` buffers ambiguous fragments — :meth:`flush`
+    :class:`ReasoningStreamSplitter` buffers ambiguous fragments - :meth:`flush`
     releases anything still held when the stream ends.
 
     ``reset()`` is the optional protocol the ModelDispatcher uses after a
@@ -728,7 +703,11 @@ def _extract_success(tool_result_str: str) -> bool:
 
 def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool]:
     """Build a failed tool-call result from an exception raised during execution."""
-    return call, json.dumps({"success": False, "error": str(exc)}), False
+    return call, _failed_json(str(exc)), False
+
+
+def _failed_json(msg: str) -> str:
+    return json.dumps({"success": False, "error": msg})
 
 
 # Decisions that mean the action was not approved (a user reject, a model "reject",

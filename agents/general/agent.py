@@ -1,4 +1,4 @@
-"""GeneralAgent — catch-all for conversational and cross-domain requests.
+"""GeneralAgent - catch-all for conversational and cross-domain requests.
 
 See docs/CODING_STYLE.md Section 15.
 """

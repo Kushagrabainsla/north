@@ -1,4 +1,4 @@
-"""ReadFileTool — read a workspace file as text, optionally a line range.
+"""ReadFileTool - read a workspace file as text, optionally a line range.
 
 See docs/CODING_STYLE.md Section 16.1.
 """

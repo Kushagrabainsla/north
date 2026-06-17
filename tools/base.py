@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tools.models import ToolInput, ToolOutput
+
+if TYPE_CHECKING:
+    from approval.judgement_filter import JudgementFilter
+    from approval.store import ApprovalStore
+    from orchestrator.stream import EventStreamManager
 
 
 class Tool(ABC):
     """Base class for every tool an agent can call.
 
     Subclasses set the class-level `name` and `description` strings and
-    implement `run()`. The Orchestrator only ever sees this interface —
+    implement `run()`. The Orchestrator only ever sees this interface  - 
     it does not know whether the concrete tool hits an external API, a
     local cache, or a mocked test double.
     """
@@ -23,7 +28,7 @@ class Tool(ABC):
     # Whether running this tool mutates the filesystem or external state. The
     # agent loop runs read-only tools concurrently but serializes mutating ones
     # so two edits to the same file can't race (lost update). Default False;
-    # mutating tools opt in (OCP — no central switch-on-name).
+    # mutating tools opt in (OCP - no central switch-on-name).
     is_mutating: bool = False
     # Override in subclasses with an OpenAI-compatible JSON Schema for the
     # function parameters.  The default accepts any key/value object.
@@ -46,7 +51,7 @@ class Tool(ABC):
     @abstractmethod
     async def run(self, input: ToolInput) -> ToolOutput:
         """Execute the tool against `input.params`. Must not raise on
-        recoverable errors — return `ToolOutput(success=False, error=...)`
+        recoverable errors - return `ToolOutput(success=False, error=...)`
         instead so the `ConfidenceTracker` can record the outcome."""
 
     def format_output(self, data: dict[str, Any]) -> str:
@@ -58,6 +63,22 @@ class Tool(ABC):
         maintaining a central switch-on-tool-name.
         """
         return json.dumps(data, indent=2) if data else "Done."
+
+
+class ApprovalGatedTool(Tool, ABC):
+    """Base class for tools that gate actions behind user approval."""
+
+    def __init__(
+        self,
+        approval_store: ApprovalStore | None = None,
+        stream_manager: EventStreamManager | None = None,
+        approval_timeout_seconds: float = 300.0,
+        judgement_filter: JudgementFilter | None = None,
+    ) -> None:
+        self._approval_store = approval_store
+        self._stream_manager = stream_manager
+        self._approval_timeout_seconds = approval_timeout_seconds
+        self._judgement_filter = judgement_filter
 
 
 class AuthenticatedTool(Tool, ABC):

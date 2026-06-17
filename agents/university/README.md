@@ -5,7 +5,7 @@ This agent specializes in managing school deadlines, syncing assignments from Ca
 ## Tools Used
 
 No specialized tools (`tools.yaml` is empty). The agent uses the universal tool set granted
-to every agent — chiefly `web_search` and `fetch_url` for academic research, plus `read_file` /
+to every agent - chiefly `web_search` and `fetch_url` for academic research, plus `read_file` /
 `write_file` for any workspace files.
 
 ## How to Test

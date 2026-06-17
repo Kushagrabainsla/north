@@ -1,15 +1,15 @@
-"""Discover and load a repository's own coding conventions — as untrusted data.
+"""Discover and load a repository's own coding conventions - as untrusted data.
 
 Coding agents follow a repo better when they read its house rules. This loader
 finds the well-known instruction files (AGENTS.md, CLAUDE.md, Copilot/Cursor
 rules) at the workspace root and the enclosing git root, and returns them as a
 single context section the agent can read. Files are small, so they are read
-fresh each call — no cache layer (see CODING_STYLE §22).
+fresh each call - no cache layer (see CODING_STYLE §22).
 
 Security: these files come from whatever repository the agent happens to be
 working in, so their content is attacker-influenced (prompt injection). They
-are returned clearly delimited and labeled as non-authoritative project data —
-never merged into system instructions — and the wrapper explicitly tells the
+are returned clearly delimited and labeled as non-authoritative project data  - 
+never merged into system instructions - and the wrapper explicitly tells the
 model to ignore any instruction inside them that tries to change its
 behaviour, tools, or approval requirements.
 """

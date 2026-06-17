@@ -1,4 +1,4 @@
-"""System metrics tool — lets agents query performance data from the ledger."""
+"""System metrics tool - lets agents query performance data from the ledger."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class QueryMetricsTool(Tool):
         if not m:
             return "No metrics data available."
 
-        lines = [f"## System Metrics — last {m.get('period_days', '?')} days\n"]
+        lines = [f"## System Metrics - last {m.get('period_days', '?')} days\n"]
         lines.append(f"- **Tasks**: {m.get('total_tasks', 0)}")
         lines.append(f"- **Total cost**: ${m.get('total_cost_usd', 0):.6f}")
         lines.append(f"- **Tokens in**: {m.get('total_tokens_in', 0):,}")
@@ -51,8 +51,8 @@ class QueryMetricsTool(Tool):
             lines.append("| Agent | Tasks | Success | Cost | p50 ms | p95 ms |")
             lines.append("|-------|-------|---------|------|--------|--------|")
             for a in by_agent:
-                p50 = str(a["p50_ms"]) if a.get("p50_ms") is not None else "—"
-                p95 = str(a["p95_ms"]) if a.get("p95_ms") is not None else "—"
+                p50 = str(a["p50_ms"]) if a.get("p50_ms") is not None else " - "
+                p95 = str(a["p95_ms"]) if a.get("p95_ms") is not None else " - "
                 lines.append(
                     f"| {a['agent']} | {a['tasks']} | "
                     f"{a['success_rate'] * 100:.0f}% | "

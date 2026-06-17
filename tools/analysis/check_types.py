@@ -7,7 +7,7 @@ they do in CI:
 - Python: the project's .venv interpreter (fallback sys.executable) -m mypy,
   cwd = project root, file referenced relative to the root.
 - TypeScript: project mode ``tsc --noEmit -p <tsconfig>`` with a locally
-  resolved tsc (node_modules/.bin or PATH, else ``npx --no-install`` — never
+  resolved tsc (node_modules/.bin or PATH, else ``npx --no-install`` - never
   auto-downloading from the npm registry).
 - Go: ``go vet`` on the file's package, run from the go.mod module root.
 
@@ -80,7 +80,7 @@ class CheckTypesTool(Tool):
 
 
 def _skipped(path: Path, reason: str) -> ToolOutput:
-    """Neutral non-failure for files no checker covers — the agent should move on."""
+    """Neutral non-failure for files no checker covers - the agent should move on."""
     return ToolOutput(success=True, data={"file": str(path), "skipped": True, "reason": reason})
 
 
@@ -170,7 +170,7 @@ def _check_typescript(path: Path) -> ToolOutput:
         return _skipped(path, "No local TypeScript compiler found (tsc/npx); skipping type check.")
 
     tsconfig = _find_upward(path, "tsconfig.json", stop=root)
-    # Project mode (tsc loads tsconfig.json — paths/jsx/lib apply) when a config
+    # Project mode (tsc loads tsconfig.json - paths/jsx/lib apply) when a config
     # exists; otherwise fall back to checking the single file directly.
     cmd = [*tsc, "--noEmit", "-p", str(tsconfig)] if tsconfig is not None else [*tsc, "--noEmit", str(path)]
 

@@ -1,7 +1,7 @@
 [project]
 name = "north"
 version = "1.3.6"
-description = "north — Personal Life Operating System."
+description = "north - Personal Life Operating System."
 readme = "README.md"
 requires-python = ">=3.12"
 license-files = ["LICENSE"]

@@ -43,7 +43,7 @@ The user has provided this content:
 {content}
 
 Decide which document this belongs to and write a concise delta to append (1–3 sentences maximum).
-The delta should capture only the essential new facts — do not copy the original content verbatim.
+The delta should capture only the essential new facts - do not copy the original content verbatim.
 Preserve key specifics: names, numbers, dates, deadlines, and thresholds.
 A vague summary is less useful than a precise one.
 Reply with JSON only:
@@ -90,7 +90,7 @@ class ContextInjector:
         return await self._ingest(text, source_hint=f"file:{filename}", task_id=task_id)
 
     async def inject_url(self, url: str, task_id: str | None = None) -> ContextDocument:
-        """Fetch a URL (SSRF-guarded — public hosts only) and ingest its text content."""
+        """Fetch a URL (SSRF-guarded - public hosts only) and ingest its text content."""
         from utils.net import fetch_url_text
 
         fetched = await asyncio.to_thread(fetch_url_text, url, timeout=30.0)

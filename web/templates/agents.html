@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Agents — north{% endblock %}
+{% block title %}Agents - north{% endblock %}
 {% block description %}Registered agent roster{% endblock %}
 
 {% block content %}
@@ -25,13 +25,13 @@
       <tr class="ledger-row">
         <td><strong>{{ agent.name }}</strong></td>
         <td><span class="badge badge-source">{{ agent.domain }}</span></td>
-        <td>{{ agent.description or "—" }}</td>
-        <td>{{ agent.model_pool if agent.model_pool else "—" }}</td>
+        <td>{{ agent.description or " - " }}</td>
+        <td>{{ agent.model_pool if agent.model_pool else " - " }}</td>
         <td>
           {% if agent.tools %}
             {% for t in agent.tools[:4] %}<span class="badge badge-source">{{ t }}</span> {% endfor %}
             {% if agent.tools | length > 4 %}+{{ agent.tools | length - 4 }}{% endif %}
-          {% else %}—{% endif %}
+          {% else %} - {% endif %}
         </td>
       </tr>
       {% endfor %}

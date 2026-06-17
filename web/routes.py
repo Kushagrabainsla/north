@@ -1,4 +1,4 @@
-"""Web dashboard FastAPI router — Jinja2 + HTMX server-rendered UI.
+"""Web dashboard FastAPI router - Jinja2 + HTMX server-rendered UI.
 
 Mounted at /ui on the main Orchestrator app (port 8000).
 
@@ -24,7 +24,7 @@ from utils.security import SESSION_COOKIE, issue_session_token, verify_request_s
 
 # Every dashboard route requires the shared secret (header or session cookie),
 # exactly like the API router. The dashboard can read the ledger, resolve
-# approvals, and edit context documents — it must not be weaker than the API.
+# approvals, and edit context documents - it must not be weaker than the API.
 router = APIRouter(prefix="/ui", tags=["web"], dependencies=[Depends(verify_request_secret)])
 
 # /ui/auth must stay reachable *without* the cookie (it is how the session is
@@ -32,9 +32,9 @@ router = APIRouter(prefix="/ui", tags=["web"], dependencies=[Depends(verify_requ
 auth_router = APIRouter(prefix="/ui", tags=["web"])
 
 _LOGIN_FORM_HTML = """\
-<h1>north — sign in</h1>
+<h1>north - sign in</h1>
 <p>Paste your north secret (from <code>~/.north/secret.key</code>). It is sent once
-over a POST body and exchanged for a session cookie — never placed in a URL.</p>
+over a POST body and exchanged for a session cookie - never placed in a URL.</p>
 <form method="post" action="/ui/auth">
   <input type="password" name="secret" autofocus autocomplete="off" />
   <input type="hidden" name="next" value="{next}" />
@@ -84,7 +84,7 @@ def configure(
 
 def _get_ledger() -> LedgerWriter:
     if _ledger is None:
-        raise RuntimeError("web routes not configured — call configure() at startup")
+        raise RuntimeError("web routes not configured - call configure() at startup")
     return _ledger
 
 
@@ -92,7 +92,7 @@ def _get_ledger() -> LedgerWriter:
 
 
 def _safe_next(next: str) -> str:
-    # Only same-site relative redirects — never to another origin.
+    # Only same-site relative redirects - never to another origin.
     if not next.startswith("/") or next.startswith("//"):
         return "/ui/"
     return next
@@ -109,7 +109,7 @@ def _is_loopback(request: Request) -> bool:
 async def auth_form(request: Request, next: str = "/ui/") -> HTMLResponse:
     """Render the sign-in form.
 
-    The secret is never accepted via the query string — URLs land in server
+    The secret is never accepted via the query string - URLs land in server
     logs, browser history, and Referer headers.
     """
     return HTMLResponse(content=_LOGIN_FORM_HTML.format(next=_safe_next(next)))
@@ -119,8 +119,8 @@ async def auth_form(request: Request, next: str = "/ui/") -> HTMLResponse:
 async def auth_submit(request: Request) -> Response:
     """Exchange the shared secret (POST body) for a signed session cookie.
 
-    The cookie holds a signed, expiring session token — never the master
-    secret — so a leaked cookie cannot be replayed as an API credential
+    The cookie holds a signed, expiring session token - never the master
+    secret - so a leaked cookie cannot be replayed as an API credential
     after expiry and never exposes the key itself.
     """
     form = await request.form()
@@ -128,7 +128,7 @@ async def auth_submit(request: Request) -> Response:
     next_url = _safe_next(str(form.get("next", "/ui/")))
     if not verify_secret(secret):
         return HTMLResponse(
-            content="<h1>403 — Forbidden</h1><p>Invalid secret. <a href='/ui/auth'>Try again</a>.</p>",
+            content="<h1>403 - Forbidden</h1><p>Invalid secret. <a href='/ui/auth'>Try again</a>.</p>",
             status_code=403,
         )
     response = RedirectResponse(url=next_url, status_code=303)
@@ -330,13 +330,13 @@ async def schedule_oneshot(request: Request) -> Response:
     if not (task and run_at_str and _job_processor is not None):
         return RedirectResponse(url="/ui/jobs", status_code=303)
 
-    # Only the parsing/validation of user input is fragile — keep the try narrow
+    # Only the parsing/validation of user input is fragile - keep the try narrow
     # so a real failure inside enqueue() propagates and gets logged.
     try:
         scheduled_at = datetime.fromisoformat(run_at_str)
     except (ValueError, TypeError):
         return HTMLResponse(
-            content="<h1>400 — Bad Request</h1><p>Invalid run-at time. <a href='/ui/jobs'>Back to jobs</a>.</p>",
+            content="<h1>400 - Bad Request</h1><p>Invalid run-at time. <a href='/ui/jobs'>Back to jobs</a>.</p>",
             status_code=400,
         )
     if scheduled_at.tzinfo is None:
@@ -371,7 +371,7 @@ async def schedule_recurring(request: Request) -> Response:
     if not (task and hour_str and _cron_store is not None):
         return RedirectResponse(url="/ui/jobs", status_code=303)
 
-    # Only the int() parsing of user input is fragile — keep the try narrow so a
+    # Only the int() parsing of user input is fragile - keep the try narrow so a
     # real failure inside _cron_store.add() propagates and gets logged.
     try:
         hour = int(hour_str)
@@ -379,7 +379,7 @@ async def schedule_recurring(request: Request) -> Response:
         weekday = int(weekday_str) if weekday_str else None
     except (ValueError, TypeError):
         return HTMLResponse(
-            content="<h1>400 — Bad Request</h1><p>Hour, minute, and weekday must be numbers. "
+            content="<h1>400 - Bad Request</h1><p>Hour, minute, and weekday must be numbers. "
             "<a href='/ui/jobs'>Back to jobs</a>.</p>",
             status_code=400,
         )

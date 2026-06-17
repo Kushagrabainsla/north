@@ -14,7 +14,7 @@ class JobProcessor(ABC):
     """Persistent job queue: CRUD + atomic claim.
 
     The processor stores jobs and hands them out to a runner. It does NOT
-    execute jobs itself — actual agent dispatch lives in the Orchestrator
+    execute jobs itself - actual agent dispatch lives in the Orchestrator
     (README Section 11.2).
     """
 

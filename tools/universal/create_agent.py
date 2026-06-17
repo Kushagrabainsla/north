@@ -5,7 +5,7 @@ system prompt, then hands them to this tool which writes the files and triggers
 a live reload. The new agent is immediately available for routing without any
 server restart.
 
-Mirrors the design of create_tool.py — see docs/CODING_STYLE.md Section 16.
+Mirrors the design of create_tool.py - see docs/CODING_STYLE.md Section 16.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ _AGENTS_ROOT = Path(__file__).parent.parent.parent / "agents"
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 _AGENT_PY_TEMPLATE = '''\
-"""Auto-generated agent — {name}."""
+"""Auto-generated agent - {name}."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ class CreateAgentTool(Tool):
     """Creates a new north agent at runtime from a description and system prompt.
 
     The calling agent generates the system_prompt content, accepts keywords,
-    and domain — this tool writes the files and hot-loads the result so the
+    and domain - this tool writes the files and hot-loads the result so the
     new agent is immediately available for routing without a server restart.
     """
 
@@ -69,7 +69,7 @@ class CreateAgentTool(Tool):
         "Creates a new north agent from a natural-language description. "
         "action='list': show all registered agents. "
         "action='read': return an agent's config and system prompt. "
-        "action='create': write agent files and hot-load — the new agent is available immediately. "
+        "action='create': write agent files and hot-load - the new agent is available immediately. "
         "You must supply name (snake_case), description, accepts (routing keywords), "
         "domain, and system_prompt when creating."
     )
@@ -141,7 +141,7 @@ class CreateAgentTool(Tool):
             lines = []
             for r in rows:
                 accepts_preview = ", ".join(r.get("accepts", [])[:4])
-                lines.append(f"[{r['domain']}] {r['name']} — {r['description']} (accepts: {accepts_preview}…)")
+                lines.append(f"[{r['domain']}] {r['name']} - {r['description']} (accepts: {accepts_preview}…)")
             return "\n".join(lines)
 
         if action == "read":
@@ -159,7 +159,7 @@ class CreateAgentTool(Tool):
         if action == "create":
             lines = [f"Agent created: {data['path']}"]
             if data.get("hot_loaded"):
-                lines.append("Hot-loaded — the agent is available immediately for routing.")
+                lines.append("Hot-loaded - the agent is available immediately for routing.")
             else:
                 lines.append("Files written. Agent will be auto-discovered on the next request.")
             return "\n".join(lines)

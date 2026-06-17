@@ -2,8 +2,8 @@
 
 north is a personal AI operating system. Before making changes, read:
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the full system specification.
-- [docs/CODING_STYLE.md](docs/CODING_STYLE.md) — coding conventions and the process rules in Section 23.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - the full system specification.
+- [docs/CODING_STYLE.md](docs/CODING_STYLE.md) - coding conventions and the process rules in Section 23.
 
 ## Quick start
 
@@ -26,7 +26,7 @@ Follows `docs/CODING_STYLE.md` Section 15 and `docs/ARCHITECTURE.md` Section 7. 
 
 ### 2. Adding a new tool
 
-Follows `docs/CODING_STYLE.md` Section 16 and `docs/ARCHITECTURE.md` Section 7.4. Briefly: implement the `Tool` ABC and drop the file in the right `tools/` subdir (`universal/` for all agents; `specialized/`, `semantic/`, or `analysis/` otherwise) — `ToolRegistry` discovers it automatically. For a specialized tool, list its name in the `tools.yaml` of each agent that should get it.
+Follows `docs/CODING_STYLE.md` Section 16 and `docs/ARCHITECTURE.md` Section 7.4. Briefly: implement the `Tool` ABC and drop the file in the right `tools/` subdir (`universal/` for all agents; `specialized/`, `semantic/`, or `analysis/` otherwise) - `ToolRegistry` discovers it automatically. For a specialized tool, list its name in the `tools.yaml` of each agent that should get it.
 
 ### 3. Running the test suite
 

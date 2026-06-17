@@ -33,7 +33,7 @@ def test_config_loads(name: str) -> None:
 
 @pytest.mark.parametrize("name", ["architect", "coder"])
 def test_implementation_agents_use_reasoning_pool(name: str) -> None:
-    """Design AND implementation run on the reasoning pool — code that auto-commits
+    """Design AND implementation run on the reasoning pool - code that auto-commits
     must not come from the cheapest models (review finding R5#33)."""
     from agents.models import AgentConfig
 
@@ -175,7 +175,7 @@ def test_tester_prompt_produces_qa_reports() -> None:
 
 
 def test_coder_prompt_always_delegates_to_tester() -> None:
-    """Coder must state it always hands off to tester — no exceptions."""
+    """Coder must state it always hands off to tester - no exceptions."""
     content = (AGENTS_DIR / "coder" / "prompts" / "system.md").read_text(encoding="utf-8")
     assert "tester" in content.lower()
     assert "always" in content.lower()
@@ -242,7 +242,7 @@ def test_tester_has_bash_only() -> None:
 
 
 def test_researcher_has_no_destructive_tools() -> None:
-    """Researcher is read-only — no bash, git, or patch_file."""
+    """Researcher is read-only - no bash, git, or patch_file."""
     tools_path = AGENTS_DIR / "researcher" / "tools.yaml"
     if not tools_path.exists():
         return  # empty tools.yaml is acceptable
@@ -253,7 +253,7 @@ def test_researcher_has_no_destructive_tools() -> None:
 
 
 def test_architect_has_no_implementation_tools() -> None:
-    """Architect makes design decisions — no bash, git, or patch_file."""
+    """Architect makes design decisions - no bash, git, or patch_file."""
     tools_path = AGENTS_DIR / "architect" / "tools.yaml"
     if not tools_path.exists():
         return  # empty is fine

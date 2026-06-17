@@ -15,7 +15,7 @@ HOME = Path.home()
 
 
 class TestResolvePathBlocklist:
-    """The blocklist applies in every branch — workspace or not."""
+    """The blocklist applies in every branch - workspace or not."""
 
     def test_blocks_ssh_without_workspace(self) -> None:
         assert resolve_path("~/.ssh/id_rsa", None) is None

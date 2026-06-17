@@ -47,7 +47,7 @@ def test_tool_graph_has_cross_domain_tools() -> None:
     assert "write_file" in universal
 
 
-# ToolRegistry — register / get
+# ToolRegistry - register / get
 
 
 def test_register_then_get_round_trips() -> None:
@@ -64,13 +64,13 @@ def test_get_unknown_tool_raises_tool_not_found() -> None:
         registry.get("nonexistent_tool")
 
 
-# ToolRegistry — agent-level lookups
+# ToolRegistry - agent-level lookups
 
 
 def test_tools_for_agent_returns_only_registered_tools_in_graph() -> None:
     registry = ToolRegistry(graph={"health": ["web_search"]})
     registry.register(_make_tool("web_search"))
-    # read_file intentionally NOT registered — should be silently skipped
+    # read_file intentionally NOT registered - should be silently skipped
 
     tools = registry.tools_for_agent("health", auto_reload=False)
 

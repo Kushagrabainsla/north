@@ -27,7 +27,7 @@ class ModelRateLimitedError(InferenceError):
 
 
 class PaymentRequiredError(InferenceError):
-    """A provider returned 402 — account has insufficient credits.
+    """A provider returned 402 - account has insufficient credits.
 
     ModelDispatcher applies a long cooldown to that (model, provider) pair
     and continues to the next candidate.
@@ -44,7 +44,7 @@ class ContextTooLargeError(InferenceError):
     def __init__(self, estimated_tokens: int, largest_context: int) -> None:
         super().__init__(
             f"Input (~{estimated_tokens:,} tokens) exceeds the largest available "
-            f"context window ({largest_context:,} tokens) — compact and retry"
+            f"context window ({largest_context:,} tokens) - compact and retry"
         )
         self.estimated_tokens = estimated_tokens
         self.largest_context = largest_context

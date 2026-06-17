@@ -1,7 +1,7 @@
-"""SearchFilesTool — grep-style content search across workspace files.
+"""SearchFilesTool - grep-style content search across workspace files.
 
 Supports the modes a coding agent actually needs: matching lines with context,
-a bare list of matching files, or per-file match counts — filtered by file glob
+a bare list of matching files, or per-file match counts - filtered by file glob
 or language type. Uses the ripgrep binary when one is installed (fast,
 .gitignore-aware, skips binary files); falls back to a pure-Python stdlib
 search so the tool always works.
@@ -32,7 +32,7 @@ _RG_TIMEOUT_SECONDS = 30
 # Wall-clock budget for the pure-Python fallback so a pathological regex
 # (ReDoS) cannot wedge an executor thread; checked between files and lines.
 _PY_TIMEOUT_SECONDS = 30.0
-# Individual lines are truncated before matching — catastrophic backtracking
+# Individual lines are truncated before matching - catastrophic backtracking
 # cost grows with input length, so bounding the line bounds the worst case.
 _MAX_LINE_CHARS = 2_000
 # Common install locations checked when `rg` is not on PATH (launchd services
@@ -187,7 +187,7 @@ async def run_search(base: Path, pattern: str, options: SearchOptions) -> ToolOu
         result = await asyncio.to_thread(_search_rg, rg, base, pattern, options)
         if result is not None:
             return result
-        # rg failed structurally (spawn error, unexpected exit) — fall back.
+        # rg failed structurally (spawn error, unexpected exit) - fall back.
     return await asyncio.to_thread(_search_sync, base, pattern, options)
 
 

@@ -1,4 +1,4 @@
-"""Tool manager — create, update, list, and hot-reload north tools at runtime."""
+"""Tool manager - create, update, list, and hot-reload north tools at runtime."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from tools.base import Tool
+from tools.base import ApprovalGatedTool, Tool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import request_approval_decision
 
@@ -36,19 +36,19 @@ _NAME_RE = re.compile(r'^\s+name\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
 _DESC_RE = re.compile(r'^\s+description\s*=\s*[\(\s]*["\']([^"\']+)["\']', re.MULTILINE)
 
 
-class CreateToolTool(Tool):
+class CreateToolTool(ApprovalGatedTool):
     """Creates, updates, or lists north tools so agents can extend their own capabilities."""
 
     name = "create_tool"
     is_mutating = True
     description = (
-        "Last-resort tool manager — only use this when no existing tool can perform the required action. "
+        "Last-resort tool manager - only use this when no existing tool can perform the required action. "
         "Always call action='list' first to check what tools exist before creating anything. "
         "action='list': show all tools with descriptions. "
         "action='read': return full source of a tool by name. "
         "action='update': extend an existing tool with new behaviour "
         "(preferred over creating a new one when a similar tool exists). "
-        "action='create': write a brand-new tool — "
+        "action='create': write a brand-new tool - "
         "provide full working Python in 'content' so it is immediately usable. "
         "Hot-loads into the running server so the new tool is available in the very next step."
     )
@@ -133,15 +133,8 @@ class CreateToolTool(Tool):
         approval_timeout_seconds: float = 300.0,
         judgement_filter: JudgementFilter | None = None,
     ) -> None:
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter)
         self._registry = tool_registry
-        # Approval gate for create/update, same pattern as BashTool/PatchFileTool.
-        # Without an ApprovalStore (tests), changes apply immediately. The gate
-        # lives in the tool — not the agent loop — so every caller (agents,
-        # delegation, the orchestrator's direct-tool path) goes through it.
-        self._approval_store = approval_store
-        self._stream_manager = stream_manager
-        self._approval_timeout_seconds = approval_timeout_seconds
-        self._judgement_filter = judgement_filter
 
     def format_output(self, data: dict[str, Any]) -> str:
         action = data.get("action")
@@ -150,7 +143,7 @@ class CreateToolTool(Tool):
             rows = data.get("tools", [])
             if not rows:
                 return "No tools found."
-            return "\n".join(f"[{r['type']}] {r['name']} — {r['description']}" for r in rows)
+            return "\n".join(f"[{r['type']}] {r['name']} - {r['description']}" for r in rows)
 
         if action == "read":
             return data.get("content", "(empty)")
@@ -158,9 +151,9 @@ class CreateToolTool(Tool):
         if action == "create":
             lines = [f"Tool created: {data['path']}"]
             if data.get("hot_loaded"):
-                lines.append("Hot-loaded — available immediately via delegate_task or next message.")
+                lines.append("Hot-loaded - available immediately via delegate_task or next message.")
             else:
-                lines.append("Restart north to activate (hot-load failed — check implementation).")
+                lines.append("Restart north to activate (hot-load failed - check implementation).")
             if data.get("agents_updated"):
                 lines.append(f"Wired to agents: {', '.join(data['agents_updated'])}")
             if data.get("agents_skipped"):
@@ -170,9 +163,9 @@ class CreateToolTool(Tool):
         if action == "update":
             lines = [f"Tool updated: {data['path']}"]
             if data.get("hot_loaded"):
-                lines.append("Hot-loaded — changes active immediately via delegate_task or next message.")
+                lines.append("Hot-loaded - changes active immediately via delegate_task or next message.")
             else:
-                lines.append("Restart north to apply changes (hot-load failed — check implementation).")
+                lines.append("Restart north to apply changes (hot-load failed - check implementation).")
             return "\n".join(lines)
 
         return str(data)
@@ -208,13 +201,13 @@ class CreateToolTool(Tool):
         content = (params.get("content") or "").strip()
         preview = (content[:_PREVIEW_CHARS] + "\n…") if len(content) > _PREVIEW_CHARS else content
         message = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
-            f"```python\n{preview}\n```" if preview else "(stub — no implementation provided)"
+            f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)"
         )
         return await request_approval_decision(
             self._approval_store,
             task_id=params.get("task_id"),
             agent="create_tool",
-            title="Tool Change — Approval Required",
+            title="Tool Change - Approval Required",
             message=message,
             options=("Approve", "Reject"),
             stream_manager=self._stream_manager,
@@ -316,7 +309,7 @@ class CreateToolTool(Tool):
         if f'name = "{tool_name}"' not in content and f"name = '{tool_name}'" not in content:
             return ToolOutput(
                 success=False,
-                error=f"Updated content must keep 'name = \"{tool_name}\"' — tool name cannot change.",
+                error=f"Updated content must keep 'name = \"{tool_name}\"' - tool name cannot change.",
             )
 
         safe, reason = _check_code_safety(content)
@@ -426,7 +419,7 @@ def _check_code_safety(code: str) -> tuple[bool, str]:
     Returns (safe, reason). `reason` is empty when safe.
     Denies dynamic-import/reflection escapes (importlib, builtins, getattr,
     open, dunder access) in addition to direct process/network primitives.
-    Does NOT sandbox execution — the hot-load only happens after the user has
+    Does NOT sandbox execution - the hot-load only happens after the user has
     approved the exact code, and that approval gate is the real boundary; this
     check exists to stop obviously dangerous code from even reaching the card.
     """
@@ -553,7 +546,7 @@ def _render_stub(tool_name: str, class_name: str, description: str, parameters: 
         notes_block = f"\n        # Implementation notes:\n{wrapped}\n"
 
     return (
-        f'"""Auto-generated tool stub — {tool_name}.\n\nEdit this file to implement the tool logic.\n"""\n\n'
+        f'"""Auto-generated tool stub - {tool_name}.\n\nEdit this file to implement the tool logic.\n"""\n\n'
         "from __future__ import annotations\n\n"
         "from typing import Any\n\n"
         "from tools.base import Tool\n"

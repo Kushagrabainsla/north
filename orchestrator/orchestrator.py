@@ -1,4 +1,4 @@
-"""Main Orchestrator — ties Stages 1–4.
+"""Main Orchestrator - ties Stages 1–4.
 
 See docs/CODING_STYLE.md Sections 2.5, 4.1, 6, 10.2, 14.
 """
@@ -109,7 +109,7 @@ class Orchestrator:
         self._extraction_pipeline = extraction_pipeline
         # Maps task_id → running asyncio.Task so cancel_task() can stop it.
         self._active_tasks: dict[str, asyncio.Task] = {}
-        # Makes the capacity check-then-register in submit_task atomic — without
+        # Makes the capacity check-then-register in submit_task atomic - without
         # it, concurrent submissions could all pass the check before any of them
         # registers, bypassing MAX_CONCURRENT_TASKS.
         self._submit_lock = asyncio.Lock()
@@ -178,7 +178,7 @@ class Orchestrator:
         """Cancel a running task: stop its pipeline and write a terminal ledger entry.
 
         Returns False when the task is not in flight (unknown id or already
-        finished) — writing a CANCELLED entry then would rewrite the history
+        finished) - writing a CANCELLED entry then would rewrite the history
         of a completed task, since get_task() reads the most recent entry.
         """
         running = self._active_tasks.pop(task_id, None)
@@ -225,7 +225,7 @@ class Orchestrator:
         if not self._approval_store.resolve(card_id, decision, chosen_option=chosen_option):
             raise ValueError(f"Approval card {card_id!r} could not be resolved.")
 
-        # An answered question is a durable preference in the user's own words —
+        # An answered question is a durable preference in the user's own words  - 
         # record it from a *learnable* source (the extraction pipeline reads it),
         # phrased so the fact comes from the answer, not north's question. Every
         # other decision is an audit-only APPROVAL entry.
@@ -301,7 +301,7 @@ class Orchestrator:
 
         Always registers the card in the ApprovalStore first so it is wait-able
         regardless of which code path follows.  The Notifier implementations
-        are responsible only for delivering the alert — they never touch the store.
+        are responsible only for delivering the alert - they never touch the store.
         """
         self._approval_store.add(card)
         if self._judgement_filter is not None:
@@ -329,8 +329,8 @@ class Orchestrator:
     def _detect_strategy_command(self, prompt: str) -> StrategyMode | None:
         """Return a StrategyMode if the prompt is an unambiguous strategy command.
 
-        Requires the prompt to be *only* a strategy directive — no surrounding
-        prose — so incidental mentions ("I was in sport mode") never mutate
+        Requires the prompt to be *only* a strategy directive - no surrounding
+        prose - so incidental mentions ("I was in sport mode") never mutate
         the running strategy.
         """
         match = STRATEGY_CMD_RE.match(prompt.strip())
@@ -368,7 +368,7 @@ class Orchestrator:
         bind_task_id(task_id)  # attach correlation ID to every log line in this context
         task_start = time.monotonic()
         try:
-            # Strategy command shortcut — handle before full pipeline
+            # Strategy command shortcut - handle before full pipeline
             if await self._handle_strategy_command(task_id, request.prompt):
                 return
 
@@ -386,52 +386,24 @@ class Orchestrator:
             # cancel_task() already wrote the ledger entry and emitted events.
             raise
         except NorthStarConflictError as e:
-            duration_ms = int((time.monotonic() - task_start) * 1000)
-            task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
-            await self._write_ledger(
-                LedgerEntry.new(
-                    source=LedgerSource.SYSTEM,
-                    task_id=task_id,
-                    action="task_cancelled",
-                    output=str(e),
-                    status=LedgerStatus.CANCELLED,
-                    duration_ms=duration_ms,
-                    cost_usd=task_cost_usd,
-                )
-            )
-            await self._stream_manager.emit(task_id, "task_cancelled", {"reason": str(e)})
+            logger.warning("Task %s rejected: conflicts with North Star goals", task_id)
+            await self._task_context_store.update_task_status(task_id, "failed")
+            await self._stream_manager.emit(task_id, "task_rejected", {"reason": str(e)})
+            await self._record_task_failure(task_id, task_start, str(e), LedgerStatus.CANCELLED, "north_star_conflict")
             await self._stream_manager.emit_done(task_id)
         except Exception as e:
-            duration_ms = int((time.monotonic() - task_start) * 1000)
-            task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
+            logger.error("Task %s failed: %s", task_id, e, exc_info=True)
+            await self._task_context_store.update_task_status(task_id, "failed")
             error_type = classify_error(e)
-            logger.exception(
-                "Unhandled error processing task %s — error_type=%s duration_ms=%d: %s",
-                task_id,
-                error_type,
-                duration_ms,
-                e,
-            )
-            await self._write_ledger(
-                LedgerEntry.new(
-                    source=LedgerSource.SYSTEM,
-                    task_id=task_id,
-                    action="task_failed",
-                    output=str(e),
-                    status=LedgerStatus.FAILED,
-                    duration_ms=duration_ms,
-                    error_type=error_type,
-                    cost_usd=task_cost_usd,
-                )
-            )
             await self._stream_manager.emit(task_id, "task_failed", {"error": str(e), "error_type": error_type})
+            await self._record_task_failure(task_id, task_start, str(e), LedgerStatus.FAILED, error_type)
             await self._stream_manager.emit_done(task_id)
         finally:
             # Reap this task's tracked cost exactly once, regardless of exit path.
             # The success/failure/conflict/cancel paths already pop it to record
             # the cost in the ledger; popping again here is a no-op (pop_task_cost
             # returns 0.0 when absent), so this only catches tasks that recorded
-            # cost but never reached one of those pops — preventing an unbounded
+            # cost but never reached one of those pops - preventing an unbounded
             # leak in CostTracker._task_costs on a long-lived server.
             if self._tracked_router is not None:
                 self._tracked_router.pop_task_cost(task_id)
@@ -500,14 +472,14 @@ class Orchestrator:
         current = await self._approval_store.wait_for_decision(card.id, timeout=timeout)
         if current is None:
             logger.warning(
-                "North Star approval timed out for task %s — treating as rejection",
+                "North Star approval timed out for task %s - treating as rejection",
                 task_id,
             )
             # Resolve so the card doesn't linger as "pending" in the store forever.
             self._approval_store.resolve(card.id, ApprovalDecision.TIMEOUT_REJECTED)
             raise NorthStarConflictError(tension or "North Star conflict (approval timed out)")
         # An explicit option choice wins; otherwise fall back to the decision
-        # status — the JudgementFilter and plain approve/reject buttons resolve
+        # status - the JudgementFilter and plain approve/reject buttons resolve
         # with a status only, no chosen_option.
         chosen_opt = (current.chosen_option or "").strip().lower()
         approved = chosen_opt == card.options[0].lower() if chosen_opt else current.status == ApprovalDecision.APPROVED
@@ -525,10 +497,10 @@ class Orchestrator:
             return
 
         # Skip when the classifier is uncertain to avoid false interruptions on
-        # borderline tasks (e.g. "schedule a reminder" — local? external?).
+        # borderline tasks (e.g. "schedule a reminder" - local? external?).
         if classification.confidence < NORTH_STAR_CONFIDENCE_THRESHOLD:
             logger.info(
-                "Skipping north star check for task %s — classifier confidence %.2f < %.2f threshold",
+                "Skipping north star check for task %s - classifier confidence %.2f < %.2f threshold",
                 task_id,
                 classification.confidence,
                 NORTH_STAR_CONFIDENCE_THRESHOLD,
@@ -547,7 +519,7 @@ class Orchestrator:
             # Fail CLOSED: a consequential task whose alignment cannot be
             # evaluated is blocked, not waved through. The user can resubmit
             # once inference is available again.
-            logger.warning("North Star check failed — blocking task (fail closed): %s", e)
+            logger.warning("North Star check failed - blocking task (fail closed): %s", e)
             await self._write_ledger(
                 LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
@@ -559,7 +531,7 @@ class Orchestrator:
             )
             await self._stream_manager.emit(task_id, "north_star_check_failed", {"reason": str(e)})
             raise NorthStarConflictError(
-                f"North Star alignment could not be evaluated — task blocked (fail closed): {e}"
+                f"North Star alignment could not be evaluated - task blocked (fail closed): {e}"
             ) from e
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
@@ -581,7 +553,7 @@ class Orchestrator:
     async def _skip_agent_with_failed_deps(self, task_id: str, name: str, failed_deps: list[str]) -> None:
         """Record an agent as skipped because its dependencies failed."""
         logger.warning(
-            "Skipping agent '%s' in task %s — dependencies failed: %s",
+            "Skipping agent '%s' in task %s - dependencies failed: %s",
             name,
             task_id,
             failed_deps,
@@ -596,7 +568,7 @@ class Orchestrator:
                 task_id=task_id,
                 agent=name,
                 action="agent_skipped",
-                output=f"Skipped — dependencies failed: {', '.join(failed_deps)}",
+                output=f"Skipped - dependencies failed: {', '.join(failed_deps)}",
                 status=LedgerStatus.FAILED,
                 error_type="dependency_failure",
             )
@@ -652,6 +624,27 @@ class Orchestrator:
             failed = await self._execute_agent_group(task_id, prompt, agents, workspace, context=context)
             all_failures.extend(failed)
         return all_failures
+
+    async def _record_task_failure(
+        self, task_id: str, task_start: float, output: str, status: str, error_type: str | None = None
+    ) -> None:
+        """Write a terminal ledger entry for a failed or cancelled task."""
+        duration_ms = int((time.monotonic() - task_start) * 1000)
+        task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
+        action = "task_cancelled" if status == LedgerStatus.CANCELLED else "task_failed"
+        await self._write_ledger(
+            LedgerEntry.new(
+                source=LedgerSource.SYSTEM,
+                task_id=task_id,
+                action=action,
+                output=output,
+                status=status,
+                error_type=error_type,
+                duration_ms=duration_ms,
+                cost_usd=task_cost_usd,
+            )
+        )
+
 
     async def _report_execution_failures(self, task_id: str, failures: list[str]) -> None:
         """Format and emit a message showing which agents failed to complete."""
@@ -804,7 +797,7 @@ class Orchestrator:
         self._task_context_store.release_conditions(task_id)
         # Trigger extraction immediately after agent tasks so preferences stated
         # mid-task land in judgement_rules.md before the next task starts.
-        # Single-tool tasks (deterministic, no agent reasoning) are skipped —
+        # Single-tool tasks (deterministic, no agent reasoning) are skipped  - 
         # they produce no signal worth extracting.
         if self._extraction_pipeline is not None and not skip_extraction:
             t = asyncio.create_task(self._extraction_pipeline.run_once())
@@ -854,7 +847,7 @@ class Orchestrator:
             try:
                 float(text)
                 logger.warning(
-                    "Episode summarization returned a numeric score for task %s (model=%s) — using fallback",
+                    "Episode summarization returned a numeric score for task %s (model=%s) - using fallback",
                     task_id,
                     response.model_used,
                 )
@@ -875,7 +868,7 @@ class Orchestrator:
     ) -> None:
         """Synthesize outputs from multiple agents into one response, if applicable."""
         if failures:
-            return  # Partial data — skip synthesis to avoid a confidently wrong summary.
+            return  # Partial data - skip synthesis to avoid a confidently wrong summary.
         if self._synthesizer is None or len(agents) < 2:
             return
         if mode not in (ExecutionMode.PARALLEL, ExecutionMode.HIERARCHICAL):
@@ -910,13 +903,13 @@ class Orchestrator:
         failed: list[str] = []
         for agent, result in zip(agents, results, strict=False):
             if isinstance(result, asyncio.CancelledError):
-                # A cancelled task means cancel_task() was called — propagate
+                # A cancelled task means cancel_task() was called - propagate
                 # so the outer _process_task handler can write the ledger entry.
                 raise result
             if isinstance(result, Exception):
                 error_type = classify_error(result)
                 logger.error(
-                    "Agent '%s' failed in task '%s' — error_type=%s: %s",
+                    "Agent '%s' failed in task '%s' - error_type=%s: %s",
                     agent.name,
                     task_id,
                     error_type,
@@ -987,7 +980,7 @@ class Orchestrator:
                 should_retry = await self._failure_handler.handle_failure(task_id, agent.name, exc)
                 if not should_retry:
                     raise
-                # The failed attempt may have streamed partial output — tell
+                # The failed attempt may have streamed partial output - tell
                 # the UI to discard it before the retry re-streams the answer.
                 await self._stream_manager.emit(task_id, "stream_reset", {"agent": agent.name})
                 self._maybe_refresh_pools_background()
@@ -1012,7 +1005,7 @@ class Orchestrator:
         bullets = "\n".join(f"- {v}" for v in violations)
         result.output = (
             f"{result.output}\n\n---\n"
-            "⚠️ **Unverified claims** — no tool evidence was found for part of this answer:\n"
+            "⚠️ **Unverified claims** - no tool evidence was found for part of this answer:\n"
             f"{bullets}\n\n"
             "Treat the above as not done until confirmed."
         )
@@ -1073,7 +1066,7 @@ class Orchestrator:
                 type=card_type,
                 task_id=task_id,
                 agent=agent.name,
-                title=f"{agent.name.capitalize()} Agent — Action Required",
+                title=f"{agent.name.capitalize()} Agent - Action Required",
                 message=result.question or result.output,
                 options=result.question_options if result.has_question else ["Approve", "Reject"],
             )
@@ -1084,7 +1077,7 @@ class Orchestrator:
                 type=CardType.INFORMATION,
                 task_id=task_id,
                 agent=agent.name,
-                title=f"{agent.name.capitalize()} — Done",
+                title=f"{agent.name.capitalize()} - Done",
                 message=result.summary,
             )
             await self._notify(card)

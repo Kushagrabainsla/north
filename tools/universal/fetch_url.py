@@ -1,4 +1,4 @@
-"""FetchUrlTool — download and extract readable text from a URL.
+"""FetchUrlTool - download and extract readable text from a URL.
 
 Fetches the page via the SSRF-guarded helper in utils/net (private/internal
 addresses are blocked, redirects re-validated, size and time capped), strips

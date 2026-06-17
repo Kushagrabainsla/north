@@ -1,7 +1,7 @@
 """Find textual references to a symbol in a file or directory.
 
 Best-effort textual search, not semantic analysis: it word-boundary-matches
-the symbol across source files (reusing the search_files engine — ripgrep when
+the symbol across source files (reusing the search_files engine - ripgrep when
 available, bounded Python fallback otherwise), so it also matches comments and
 strings and cannot see aliased imports. Verify behaviour-affecting conclusions
 with check_types or the test suite.
@@ -20,7 +20,7 @@ from tools.universal.search_files import SearchOptions, run_search
 
 _MAX_REFERENCES = 100
 
-# Source extensions searched in directory mode — references must be found in
+# Source extensions searched in directory mode - references must be found in
 # every language the engineering agents work in, not just Python.
 SOURCE_GLOBS: tuple[str, ...] = (
     "*.py",
@@ -53,7 +53,7 @@ class FindReferencesTool(Tool):
         "Find textual references to a symbol (function, class, variable name) in a file "
         "or directory, across common source languages (Python, TS/JS, Go, Rust, Java, ...). "
         "Best-effort text matching, not semantic analysis: it can match comments/strings "
-        "and misses aliased imports — confirm signature changes with check_types or tests. "
+        "and misses aliased imports - confirm signature changes with check_types or tests. "
         "Returns line numbers and context."
     )
     parameters_schema = {

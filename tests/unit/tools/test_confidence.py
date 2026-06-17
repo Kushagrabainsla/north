@@ -1,4 +1,4 @@
-"""Tests for ConfidenceTracker — EMA score math, persistence, agent inheritance."""
+"""Tests for ConfidenceTracker - EMA score math, persistence, agent inheritance."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ async def test_unhelpful_use_decreases_score(tracker: ConfidenceTracker) -> None
 
 
 async def test_repeated_helpful_use_approaches_max(tracker: ConfidenceTracker) -> None:
-    # EMA converges asymptotically — after 50 helpful steps the score is > 0.99.
+    # EMA converges asymptotically - after 50 helpful steps the score is > 0.99.
     for _ in range(50):
         await tracker.record_use("finance", "market_data_api", was_helpful=True)
     score = await tracker.get_score("finance", "market_data_api")
@@ -56,7 +56,7 @@ async def test_repeated_helpful_use_approaches_max(tracker: ConfidenceTracker) -
 async def test_repeated_unhelpful_use_approaches_min(
     tracker: ConfidenceTracker,
 ) -> None:
-    # EMA converges asymptotically — after 50 unhelpful steps the score is < 0.01.
+    # EMA converges asymptotically - after 50 unhelpful steps the score is < 0.01.
     for _ in range(50):
         await tracker.record_use("job", "linkedin_api", was_helpful=False)
     score = await tracker.get_score("job", "linkedin_api")
@@ -128,7 +128,7 @@ async def test_inherit_from_is_idempotent_and_preserves_existing_rows(
 
 
 async def test_persistence_across_tracker_instances(tmp_path: Path) -> None:
-    """Scores must persist across processes — write with one instance, read with another."""
+    """Scores must persist across processes - write with one instance, read with another."""
     db = tmp_path / "tools.db"
     t1 = ConfidenceTracker(db)
     expected = _ema(DEFAULT_CONFIDENCE, 1.0)

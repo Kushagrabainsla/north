@@ -1,4 +1,4 @@
-"""Inference layer for north — multi-provider chat completion, embeddings, and transcription.
+"""Inference layer for north - multi-provider chat completion, embeddings, and transcription.
 
 See README Section 8 and `docs/CODING_STYLE.md` Section 6.1.
 """

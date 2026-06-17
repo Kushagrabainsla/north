@@ -1,7 +1,7 @@
 """Tool registry with auto-discovery from the tool package directories.
 
 Universal tools are given to every agent automatically. tools/universal/,
-tools/analysis/, and tools/semantic/ are all universal directories — the
+tools/analysis/, and tools/semantic/ are all universal directories - the
 analysis/semantic helpers (check_types, search_symbols, find_references) are
 read-only and the coder/tester workflows depend on them, so they must always
 resolve in the registry.
@@ -13,7 +13,7 @@ To add a new tool:
     or tools/semantic/ → all agents get it
   - Drop a .py file with a Tool subclass into tools/specialized/ → agents opt in via tools.yaml
   - Tools that need constructor args (e.g. ScheduleTaskTool) are registered manually via
-    tool_registry.register() after auto-discovery — they just need to be in specialized/.
+    tool_registry.register() after auto-discovery - they just need to be in specialized/.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
 
     Files starting with '_' are skipped. Tools that require constructor
     arguments (and therefore raise on bare instantiation) are skipped silently
-    — they must be manually registered via ToolRegistry.register().
+    - they must be manually registered via ToolRegistry.register().
     """
     tools: dict[str, Tool] = {}
     if not directory.exists():
@@ -90,7 +90,7 @@ class ToolRegistry:
 
     New tool files dropped into tools/universal/ or tools/specialized/ at
     runtime are picked up automatically the first time any agent tries to call
-    them — no restart required.
+    them - no restart required.
     """
 
     def __init__(
@@ -120,7 +120,7 @@ class ToolRegistry:
     def reload(self) -> None:
         """Re-scan tool directories for new files.
 
-        Only adds tools not already registered — existing tools are not
+        Only adds tools not already registered - existing tools are not
         replaced so in-flight tasks are unaffected.
         """
         for directory, package in _UNIVERSAL_DIRS:

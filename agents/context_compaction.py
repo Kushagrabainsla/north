@@ -21,8 +21,8 @@ COMPACTION_THRESHOLD = 0.75
 # Agents with these tools produce larger, denser outputs (file contents, diffs,
 # bash stdout). Their summaries need more room to preserve file paths and errors.
 HEAVY_OUTPUT_TOOLS: frozenset[str] = frozenset({"bash", "git", "patch_file"})
-COMPACT_TOKENS_DEFAULT = 512  # ~350 words — general agents
-COMPACT_TOKENS_HEAVY = 1000  # ~700 words — agents with bash/git/patch_file
+COMPACT_TOKENS_DEFAULT = 512  # ~350 words - general agents
+COMPACT_TOKENS_HEAVY = 1000  # ~700 words - agents with bash/git/patch_file
 # keep_recent used when context overflows every available model's window.
 COMPACT_KEEP_RECENT_OVERFLOW: int = 1
 # Max chars per field/line kept when rendering history for summarisation.
@@ -120,7 +120,7 @@ def compact_history(messages: list[dict], keep_recent: int = 4) -> list[dict]:
 
     Mutates and returns the same list so callers can chain. Also truncates the
     arguments on the paired assistant tool_call so both halves of the exchange
-    shrink together — preventing context bloat from large input payloads that
+    shrink together - preventing context bloat from large input payloads that
     were already executed.
     """
     tool_indices = [i for i, msg in enumerate(messages) if msg.get("role") == "tool"]
@@ -230,7 +230,7 @@ async def compact_if_needed(
         summary = resp.text.strip()
     except Exception:
         logger.warning(
-            "Context compaction summarization failed for %s — falling back to truncation",
+            "Context compaction summarization failed for %s - falling back to truncation",
             component,
             exc_info=True,
         )
@@ -239,5 +239,5 @@ async def compact_if_needed(
 
     messages[2:first_kept] = [
         {"role": "user", "content": f"## Earlier context (auto-compacted)\n{summary}"},
-        {"role": "assistant", "content": "Understood — I have the compacted context."},
+        {"role": "assistant", "content": "Understood - I have the compacted context."},
     ]

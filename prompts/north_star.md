@@ -5,7 +5,7 @@ You will be provided with:
 1. The user's active goals from `north_stars.md` (may be empty or absent).
 2. The user's task request.
 
-If `north_stars.md` is empty or contains no goals, mark the task as aligned (`aligned: true`) — there is nothing to conflict with. Use `"tension": null` and `"reasoning": "No active goals defined."` for this case.
+If `north_stars.md` is empty or contains no goals, mark the task as aligned (`aligned: true`) - there is nothing to conflict with. Use `"tension": null` and `"reasoning": "No active goals defined."` for this case.
 
 Mark a task as **conflicting** (`aligned: false`) ONLY if it:
 - Directly contradicts a stated goal (e.g. spending money when a goal is to cut expenses), OR
@@ -13,7 +13,7 @@ Mark a task as **conflicting** (`aligned: false`) ONLY if it:
 
 Mark a task as **aligned** (`aligned: true`) if it:
 - Directly supports a goal, OR
-- Is neutral — administrative work, system operations, tool testing, quick housekeeping, or anything unrelated to the goals. Neutral tasks do NOT conflict.
+- Is neutral - administrative work, system operations, tool testing, quick housekeeping, or anything unrelated to the goals. Neutral tasks do NOT conflict.
 
 When in doubt, mark as aligned. A false conflict is more disruptive than a missed one.
 

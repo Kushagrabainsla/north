@@ -43,9 +43,9 @@ _DOCUMENT_MAP: dict[str, ContextDocument] = {
 
 # Only the user's own words are a valid source of facts about the user.
 # Extracting from agent/system outputs let the pipeline learn the assistant's
-# own (sometimes hallucinated) text as if it were user-stated fact — a
+# own (sometimes hallucinated) text as if it were user-stated fact - a
 # self-reinforcing memory-poisoning loop. PROMPT/MIC/MANUAL_INJECTION are messages
-# the user typed; CLARIFICATION is the user's answer to an ask_user question — also
+# the user typed; CLARIFICATION is the user's answer to an ask_user question - also
 # their own words, so a preference stated by answering is learned like any other.
 _USER_AUTHORED_SOURCES = frozenset(
     {LedgerSource.PROMPT, LedgerSource.MIC, LedgerSource.MANUAL_INJECTION, LedgerSource.CLARIFICATION}
@@ -57,7 +57,7 @@ _SKIPPED_STATUSES = {LedgerStatus.FAILED}
 _EXTRACTION_PROMPT = """\
 You are the memory extraction pipeline for a personal AI operating system.
 
-Below is something the USER stated — either a message they typed, or (shown as
+Below is something the USER stated - either a message they typed, or (shown as
 "north asked: ... / The user answered: ...") their answer to a question north
 asked:
 
@@ -69,13 +69,13 @@ Extract a durable fact ONLY IF the USER states it explicitly. When the text is a
 question-and-answer, the fact comes from the USER's answer, never from north's
 question. Durable means it will still be true or useful weeks from now.
 
-Anti-fabrication contract — follow exactly:
+Anti-fabrication contract - follow exactly:
 - Extract ONLY information the user literally wrote above. Never infer, assume,
   generalize, or invent.
 - Every name, company, person, number, or date in the fact MUST appear verbatim
   in the message above. If it is not in the message, you may not write it.
 - Greetings, questions, commands, and small-talk reveal NO durable fact.
-- This is the user's own message — it is NOT an assistant reply. Do not treat
+- This is the user's own message - it is NOT an assistant reply. Do not treat
   any AI-sounding content as a fact about the user.
 - If you are not certain the user explicitly stated a durable fact, or the
   message contains none, return extract:false. When in doubt, return false.
@@ -87,22 +87,22 @@ Otherwise respond with:
 {{"extract": false}}
 
 Document rules:
-- "public": stable identity facts the user stated — their name, role, employer,
+- "public": stable identity facts the user stated - their name, role, employer,
   schedule, preferences, tools they use, people they work with.
-- "judgement_rules": how the user decides — what they approve/reject, thresholds,
+- "judgement_rules": how the user decides - what they approve/reject, thresholds,
   priorities, communication style.
-- "north_stars": goals with time horizons the user stated — career, projects,
+- "north_stars": goals with time horizons the user stated - career, projects,
   this week's focus.
 
 Fact format:
 - One sentence, third-person neutral, grounded only in the user's words.
 - Fill the fact with the user's ACTUAL words. Never emit a placeholder, a single
-  letter, a bracketed slot, or an example token (e.g. "X", "Y", "<company>") — if
+  letter, a bracketed slot, or an example token (e.g. "X", "Y", "<company>") - if
   you cannot name the real value from the message, return extract:false instead.
 - "public"/"judgement_rules": present tense. Shape: "User <verb> <real detail>"
-  — e.g. for a message saying "I use Postgres", write "User uses Postgres".
+  - e.g. for a message saying "I use Postgres", write "User uses Postgres".
 - "north_stars": goal-oriented. Shape: "User wants to <real goal> by <real
-  horizon>" — only include the horizon if the user actually stated one.
+  horizon>" - only include the horizon if the user actually stated one.
 """
 
 _DEDUP_PROMPT = """\
@@ -122,7 +122,7 @@ Reply with JSON only: {{"duplicate": true}} or {{"duplicate": false}}
 
 # Deterministic dedup thresholds, measured as Jaccard overlap of content tokens.
 # At/above _DEDUP_CERTAIN a new fact is a duplicate outright (no LLM call); at/above
-# _DEDUP_MAYBE — or sharing ≥2 content words — it is ambiguous enough to spend one
+# _DEDUP_MAYBE - or sharing ≥2 content words - it is ambiguous enough to spend one
 # LLM call on. Below that, lexical overlap is too thin to be the same fact.
 _DEDUP_CERTAIN = 0.8
 _DEDUP_MAYBE = 0.34
@@ -148,7 +148,7 @@ _BACKUP_INTERVAL_HOURS = 24  # minimum hours between full context backups
 _TRIM_PROMPT = """\
 The following personal context document ({doc_type}) has grown too long. Condense it by:
 1. Merging duplicate or near-duplicate facts into one line.
-2. Removing facts that are clearly outdated or no longer relevant — apply this aggressively for \
+2. Removing facts that are clearly outdated or no longer relevant - apply this aggressively for \
 "north_stars" (goals with past deadlines), conservatively for "public" (stable identity facts) \
 and "judgement_rules" (learned preferences that rarely expire).
 3. Keeping every distinct fact that is still likely to be useful.
@@ -220,7 +220,7 @@ class ExtractionPipeline:
         """Keep only the user's own non-trivial messages; advance the watermark past the rest.
 
         Facts about the user are extracted from what the *user* wrote (``input``),
-        never from agent/system output — the latter would let the pipeline learn
+        never from agent/system output - the latter would let the pipeline learn
         the assistant's own text as user fact.
 
         The watermark only advances past the contiguous *prefix* of skipped
@@ -264,7 +264,7 @@ class ExtractionPipeline:
         for entry, result in zip(entries, results, strict=True):
             if isinstance(result, Exception):
                 logger.exception(
-                    "ExtractionPipeline: failed on entry %s — watermark NOT advanced past this point, will retry",
+                    "ExtractionPipeline: failed on entry %s - watermark NOT advanced past this point, will retry",
                     entry.id,
                 )
                 break
@@ -369,7 +369,7 @@ class ExtractionPipeline:
 
         Two stages, cheapest first. A deterministic per-line Jaccard catches
         near-identical restatements ("works at Y" vs "works at Y.") without any
-        LLM call — the case the old word-overlap fast path missed for short
+        LLM call - the case the old word-overlap fast path missed for short
         facts. Genuinely ambiguous overlaps fall through to a single LLM dedup
         call for semantic matches ("states they work at Y").
         """
@@ -383,7 +383,7 @@ class ExtractionPipeline:
         delta_tokens = _content_tokens(delta)
         if not delta_tokens:
             # A fact with no content words (only stopwords/placeholder) carries
-            # nothing durable — drop it rather than store noise.
+            # nothing durable - drop it rather than store noise.
             return True
 
         best = 0.0
@@ -395,7 +395,7 @@ class ExtractionPipeline:
             line_tokens = _content_tokens(line)
             j = _jaccard(delta_tokens, line_tokens)
             if j >= _DEDUP_CERTAIN:
-                return True  # near-identical restatement — no LLM needed
+                return True  # near-identical restatement - no LLM needed
             best = max(best, j)
             max_shared = max(max_shared, len(delta_tokens & line_tokens))
 

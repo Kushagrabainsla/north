@@ -150,7 +150,7 @@ class SQLiteJobProcessor(JobProcessor):
                     (job_id,),
                 ).fetchone()
                 if row and row["retry_count"] >= row["max_retries"]:
-                    # Max retries exhausted — mark terminal instead of re-queuing.
+                    # Max retries exhausted - mark terminal instead of re-queuing.
                     conn.execute(
                         "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
                         (JobStatus.FAILED.value, datetime.now(UTC).isoformat(), job_id),

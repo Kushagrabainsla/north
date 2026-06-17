@@ -31,13 +31,13 @@ def classify_error(exc: Exception) -> str:
     free-form error strings.
 
     Categories (mutually exclusive, checked in priority order):
-      rate_limit      — provider returned HTTP 429 or equivalent
-      context_overflow — model context window exceeded
-      timeout         — network or asyncio timeout
-      network         — connection-level failure
-      parse_error     — agent returned malformed / non-JSON output
-      config_error    — misconfigured agent (missing prompt, bad pool name)
-      logic_error     — everything else (programming error, assertion, etc.)
+      rate_limit      - provider returned HTTP 429 or equivalent
+      context_overflow - model context window exceeded
+      timeout         - network or asyncio timeout
+      network         - connection-level failure
+      parse_error     - agent returned malformed / non-JSON output
+      config_error    - misconfigured agent (missing prompt, bad pool name)
+      logic_error     - everything else (programming error, assertion, etc.)
     """
     msg = str(exc).lower()
     name = type(exc).__name__
@@ -102,7 +102,7 @@ class FailureHandler:
             True if a retry should be attempted, False otherwise.
         """
         # Increment first so the count reflects attempts already made (1-indexed).
-        # Note: max_retries bounds total *attempts* — max_retries=3 means the
+        # Note: max_retries bounds total *attempts* - max_retries=3 means the
         # agent runs at most 3 times (the first run plus 2 retries).
         attempt = self.increment_retry_count(task_id, agent_name)
 
@@ -127,7 +127,7 @@ class FailureHandler:
         if not retryable:
             await self._task_context_store.update_agent_status(task_id, agent_name, "failed")
             logger.error(
-                "Agent '%s' failed in task '%s' — error_type=%s is not retryable: %s",
+                "Agent '%s' failed in task '%s' - error_type=%s is not retryable: %s",
                 agent_name,
                 task_id,
                 error_type,
@@ -140,7 +140,7 @@ class FailureHandler:
         if attempt >= self.max_retries:
             await self._task_context_store.update_agent_status(task_id, agent_name, "failed")
             logger.error(
-                "Agent '%s' failed in task '%s' — error_type=%s, retries exhausted (%d/%d): %s",
+                "Agent '%s' failed in task '%s' - error_type=%s, retries exhausted (%d/%d): %s",
                 agent_name,
                 task_id,
                 error_type,
@@ -155,7 +155,7 @@ class FailureHandler:
         # Calculate exponential back-off cooldown
         cooldown = self.base_cooldown_seconds * (2 ** (attempt - 1))
         logger.warning(
-            "Agent '%s' failed in task '%s' — error_type=%s, attempt %d/%d, retrying in %.2fs: %s",
+            "Agent '%s' failed in task '%s' - error_type=%s, attempt %d/%d, retrying in %.2fs: %s",
             agent_name,
             task_id,
             error_type,

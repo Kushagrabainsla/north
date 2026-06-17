@@ -17,7 +17,7 @@ def open_db_connection(db_path: Path) -> Iterator[sqlite3.Connection]:
 
     Context manager: commits on clean exit, rolls back on exception, and always
     closes the connection.  A bare ``sqlite3.Connection`` used via ``with`` only
-    manages the transaction — it never closes, which leaks the file handle and
+    manages the transaction - it never closes, which leaks the file handle and
     WAL state until garbage collection.
     """
     conn = sqlite3.connect(str(db_path))

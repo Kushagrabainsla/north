@@ -106,27 +106,32 @@ def _parse_provider_selection(raw: str) -> list[_Provider]:
     return selected
 
 
-def _save_provider_key(env_file: Path, env_key: str, api_key: str) -> None:
-    """Write or update the key in ~/.north/.env and export it to the running environment."""
+def _update_env_file(env_file: Path, env_key: str, value: str) -> None:
+    """Write or replace a key=value line in an .env file and export it to the process."""
     lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
     prefix = f"{env_key}="
-    found = False
+    updated = False
     for i, line in enumerate(lines):
         if line.startswith(prefix):
-            lines[i] = f"{env_key}={api_key}"
-            found = True
+            lines[i] = f"{env_key}={value}"
+            updated = True
             break
-    if not found:
-        lines.append(f"{env_key}={api_key}")
+    if not updated:
+        lines.append(f"{env_key}={value}")
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ[env_key] = api_key
+    os.environ[env_key] = value
+
+
+def _save_provider_key(env_file: Path, env_key: str, api_key: str) -> None:
+    """Persist a provider API key and export it to the running environment."""
+    _update_env_file(env_file, env_key, api_key)
 
 
 def _prompt_provider_keys(env_file: Path, providers: list[_Provider]) -> bool:
     """Prompt the user for each provider's API key. Returns True if at least one was saved."""
     any_saved = False
     for p in providers:
-        typer.echo(f"\n  {p['name']}  —  get a key at {p['url']}")
+        typer.echo(f"\n  {p['name']}  -  get a key at {p['url']}")
         api_key = typer.prompt(f"  Enter your {p['name']} API key").strip()
         if not api_key:
             typer.secho(f"  Skipping {p['name']} (no key entered).", fg=typer.colors.YELLOW)
@@ -163,18 +168,18 @@ def _ensure_api_keys() -> None:
     raw = typer.prompt("Enter number(s) separated by commas (e.g. 1 or 1,3)").strip()
     chosen = _parse_provider_selection(raw)
     if not chosen:
-        typer.secho("No valid selection — north cannot start.", fg=typer.colors.RED, err=True)
+        typer.secho("No valid selection - north cannot start.", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
     settings.north_home.mkdir(parents=True, exist_ok=True)
     if not _prompt_provider_keys(env_file, chosen):
-        typer.secho("No API keys saved — north cannot start.", fg=typer.colors.RED, err=True)
+        typer.secho("No API keys saved - north cannot start.", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
 
 app = typer.Typer(
     name="north",
-    help="north — Personal Life Operating System CLI",
+    help="north - Personal Life Operating System CLI",
     no_args_is_help=False,
     add_completion=False,
     invoke_without_command=True,
@@ -186,12 +191,12 @@ def _root(
     ctx: typer.Context,
     yolo: bool = typer.Option(False, "--yolo", help="Auto-approve every approval prompt (shows a ⚠ YOLO badge)."),
 ) -> None:
-    """north — Personal Life Operating System.
+    """north - Personal Life Operating System.
 
     Run without a subcommand to open the interactive TUI.
     """
     if ctx.invoked_subcommand is None:
-        # No subcommand — boot the server if needed, then open the TUI.
+        # No subcommand - boot the server if needed, then open the TUI.
         _launch_tui(yolo=yolo)
 
 
@@ -203,7 +208,7 @@ def _launch_tui(
 ) -> None:
     """Auto-start the server if not running, then launch the TUI."""
     if not _port_in_use(host, port) or not _is_north_server(host, port):
-        _console.print("  [dim]server offline — starting…[/dim]")
+        _console.print("  [dim]server offline - starting…[/dim]")
         # Re-invoke `north start --no-chat` to start the server only, then TUI below.
         from config.settings import settings
         from utils.security import load_secret
@@ -410,14 +415,14 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                                 },
                             )
                         steps[-1] = ("✓" if decision != "rejected" else "✗", f"Approval: {chosen}", False)
-                        # Do NOT restart Live — cursor is now past the approval panel.
+                        # Do NOT restart Live - cursor is now past the approval panel.
                         # Subsequent live.update() calls on a stopped Live are no-ops;
                         # task_completed / task_cancelled will break the loop.
                         current_event = ""
                         continue
                     elif event == "token":
                         token_buffer += data.get("text", "")
-                        # Don't add a step pill per token — just accumulate silently.
+                        # Don't add a step pill per token - just accumulate silently.
                         current_event = ""
                         continue
                     elif event in _STEP_LABELS:
@@ -456,7 +461,7 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
         _console.print(
             Panel(
                 Text(failed_msg, style="red"),
-                title="[dim]north — error[/dim]",
+                title="[dim]north - error[/dim]",
                 border_style="bright_black",
                 padding=(1, 2),
             )
@@ -464,10 +469,10 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
         return ""
 
     if token_buffer:
-        # Tokens were streamed — use them directly, no ledger round-trip needed.
+        # Tokens were streamed - use them directly, no ledger round-trip needed.
         output_text = token_buffer
     else:
-        # No tokens (multi-agent synthesis or older path) — fetch from ledger.
+        # No tokens (multi-agent synthesis or older path) - fetch from ledger.
         try:
             ledger_resp = _api("GET", f"/orchestrator/ledger?task_id={task_id}&limit=20")
             entries = ledger_resp.json()
@@ -497,7 +502,7 @@ def stream_task(
 ) -> None:
     """Stream raw SSE events for a task (debug view)."""
     url = f"{_BASE_URL}/orchestrator/stream/{task_id}"
-    _console.print(f"[dim]Streaming {task_id} — Ctrl+C to stop[/dim]\n")
+    _console.print(f"[dim]Streaming {task_id} - Ctrl+C to stop[/dim]\n")
     try:
         with httpx.stream("GET", url, headers=_headers(), timeout=None) as response:
             for line in response.iter_lines():
@@ -789,7 +794,7 @@ def _write_agent_scaffold(agent_dir: Path, scaffold: _AgentScaffold) -> None:
     specialized_tools = [t for t in scaffold.tools if t not in universal]
     if universal_requested:
         typer.secho(
-            f"  Note: {', '.join(universal_requested)} are universal — auto-included, omitted from tools.yaml",
+            f"  Note: {', '.join(universal_requested)} are universal - auto-included, omitted from tools.yaml",
             fg=typer.colors.BRIGHT_BLACK,
         )
     tools_comment = (
@@ -841,7 +846,7 @@ def create_agent(
     raw_tools = typer.prompt(
         "Specialized tools (comma-separated, or blank).\n"
         "  Universal tools (web_search, fetch_url, read_file, write_file,\n"
-        "  list_dir, search_files, schedule_task) are auto-included — skip them",
+        "  list_dir, search_files, schedule_task) are auto-included - skip them",
         default="",
     )
     tools = [t.strip() for t in raw_tools.split(",") if t.strip()]
@@ -916,7 +921,7 @@ def create_agent(
         typer.echo(f"  prompts/planner.md  ← domain '{domain}' added to routing table")
     else:
         typer.secho(
-            "  Note: could not find prompts/planner.md — add the domain row manually.",
+            "  Note: could not find prompts/planner.md - add the domain row manually.",
             fg=typer.colors.YELLOW,
         )
     typer.echo("\nRestart north to load the new agent.")
@@ -1047,8 +1052,8 @@ def metrics(
                 str(a["tasks"]),
                 f"{a['success_rate'] * 100:.0f}%",
                 f"{a['cost_usd']:.6f}",
-                str(a["p50_ms"]) if a["p50_ms"] is not None else "—",
-                str(a["p95_ms"]) if a["p95_ms"] is not None else "—",
+                str(a["p50_ms"]) if a["p50_ms"] is not None else " - ",
+                str(a["p95_ms"]) if a["p95_ms"] is not None else " - ",
             )
         _console.print(t)
 
@@ -1158,7 +1163,7 @@ def dictate(
             wf.writeframes(audio_np.tobytes())
         wav_bytes = buf.getvalue()
 
-        # Send to Orchestrator transcription endpoint (raw bytes — bypass _api helper)
+        # Send to Orchestrator transcription endpoint (raw bytes - bypass _api helper)
         try:
             with httpx.Client(timeout=60.0) as client:
                 resp = client.post(
@@ -1269,18 +1274,8 @@ def config_set(
 
     env_file = settings.north_home / ".env"
     settings.north_home.mkdir(parents=True, exist_ok=True)
-
     env_key = f"NORTH_{key.upper().replace('.', '_')}"
-    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
-    updated = False
-    for i, line in enumerate(lines):
-        if line.startswith(f"{env_key}="):
-            lines[i] = f"{env_key}={value}"
-            updated = True
-            break
-    if not updated:
-        lines.append(f"{env_key}={value}")
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _update_env_file(env_file, env_key, value)
 
     typer.secho(f"✓ {env_key}={value}", fg=typer.colors.GREEN)
     typer.echo("  Restart north for the change to take effect.")
@@ -1333,7 +1328,7 @@ def start(
 ) -> None:
     """Start north, then drop into interactive chat.
 
-    Runs locally with uvicorn by default — the right choice for personal use
+    Runs locally with uvicorn by default - the right choice for personal use
     on your own machine. Pass --docker for server or headless deployments.
     Pass --no-chat to start the server without entering the chat REPL.
     """
@@ -1421,7 +1416,7 @@ def start(
     _console.print()
 
     # Launch the server as a subprocess so its stdout/stderr are fully
-    # redirected to the log file at the OS level — no monkey-patching needed.
+    # redirected to the log file at the OS level - no monkey-patching needed.
     # Every print(), logging call, traceback, and uvicorn line goes to the file.
     cmd = [
         sys.executable,
@@ -1465,8 +1460,6 @@ def stop(
     docker: bool = typer.Option(False, "--docker", help="Stop Docker Compose deployment instead of a local process."),
 ) -> None:
     """Stop north."""
-    import signal
-
     if docker:
         compose_file = _find_compose_file()
         if not _docker_available() or compose_file is None:
@@ -1482,31 +1475,12 @@ def stop(
     from config.settings import settings
 
     pid_path = settings.north_home / "north.pid"
-
-    if pid_path.exists():
-        try:
-            pid = int(pid_path.read_text(encoding="utf-8").strip())
-            os.kill(pid, signal.SIGTERM)
-            pid_path.unlink()
-            typer.secho(f"✓ Stopped (pid {pid}).", fg=typer.colors.GREEN)
-        except ProcessLookupError:
-            pid_path.unlink()
-            typer.secho("north was not running (removed stale PID file).", fg=typer.colors.YELLOW)
-        except Exception as exc:
-            typer.secho(f"Failed to stop: {exc}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from None
+    if not pid_path.exists() and not _port_in_use("127.0.0.1", port):
+        typer.echo("north is not running.")
         return
 
-    # Fallback: no PID file, try port-based kill
-    if _port_in_use("127.0.0.1", port):
-        typer.echo(f"Stopping process on port {port}…")
-        if _kill_port("127.0.0.1", port):
-            typer.secho("✓ Stopped.", fg=typer.colors.GREEN)
-        else:
-            typer.secho("Could not stop the process. Try killing it manually.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from None
-    else:
-        typer.echo("north is not running.")
+    _stop_server(port)
+    typer.secho("✓ Stopped.", fg=typer.colors.GREEN)
 
 
 @app.command("reset")
@@ -1516,7 +1490,7 @@ def reset(
 ) -> None:
     """Wipe north's data and start fresh.
 
-    Stops the server and deletes all local state — ledger, context, tasks,
+    Stops the server and deletes all local state - ledger, context, tasks,
     logs, learned preferences, and the secret key. Your API key in .env is
     kept unless you pass --all.
     """
@@ -1528,7 +1502,7 @@ def reset(
     if all:
         scope = f"{north_home}/ (everything including .env and API key)"
     else:
-        scope = f"{north_home}/ (data only — .env and API key are kept)"
+        scope = f"{north_home}/ (data only - .env and API key are kept)"
 
     if not yes:
         typer.secho(f"This will permanently delete: {scope}", fg=typer.colors.YELLOW)
@@ -1551,7 +1525,7 @@ def reset(
         typer.secho("✓ north fully removed. Run north start to begin fresh.", fg=typer.colors.GREEN)
         return
 
-    # Selective wipe — keep .env
+    # Selective wipe - keep .env
     env_backup = None
     env_file = north_home / ".env"
     if env_file.exists():

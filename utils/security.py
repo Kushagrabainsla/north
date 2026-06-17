@@ -15,7 +15,7 @@ from fastapi import Cookie, Header, HTTPException
 from config.settings import read_secret_file, settings
 
 # Web UI session cookie name. Holds a signed, expiring session token derived
-# from the master secret — never the master secret itself.
+# from the master secret - never the master secret itself.
 SESSION_COOKIE = "north_session"
 _SESSION_TTL_SECONDS = 7 * 24 * 3600
 
@@ -34,7 +34,7 @@ def load_secret() -> str:
     settings.north_home.mkdir(parents=True, exist_ok=True)
     secret = generate_secret()
     try:
-        # Exclusive create — raises FileExistsError if another process won the race.
+        # Exclusive create - raises FileExistsError if another process won the race.
         with secret_file.open("x") as f:
             f.write(secret)
         secret_file.chmod(0o600)
@@ -59,7 +59,7 @@ def _sign_session(expires_at: int) -> str:
 def issue_session_token() -> str:
     """Return a signed, expiring Web UI session token.
 
-    The token is an HMAC over an expiry timestamp keyed by the master secret —
+    The token is an HMAC over an expiry timestamp keyed by the master secret  - 
     it authenticates a browser session without ever placing the master secret
     in a cookie, URL, or log line.
     """
@@ -86,7 +86,7 @@ async def verify_request_secret(
 
     The header path is used by the CLI and external clients and carries the
     master secret. The cookie path is used by the Web UI and carries a signed
-    session token (set by POST /ui/auth) — never the master secret.
+    session token (set by POST /ui/auth) - never the master secret.
 
     Raises:
         HTTPException: 403 if neither credential is present or valid.

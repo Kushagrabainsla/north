@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class StreamEmitter(Protocol):
-    """Structural protocol satisfied by EventStreamManager — avoids circular imports."""
+    """Structural protocol satisfied by EventStreamManager - avoids circular imports."""
 
     async def emit(self, task_id: str, event: str, data: dict[str, Any]) -> None: ...
 
@@ -110,7 +110,7 @@ class AgentDependencies:
     # Required for the request_approval tool.  Must be the same ApprovalStore
     # instance used by the Orchestrator so waits and resolutions are consistent.
     approval_store: ApprovalStore | None = field(default=None)
-    # Optional — when set, request_approval checks learned judgement rules first
+    # Optional - when set, request_approval checks learned judgement rules first
     # and skips the user prompt when a rule fires at high confidence.
     # Injected after construction (same pattern as agent_registry) to avoid
     # building it twice.

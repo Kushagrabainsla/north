@@ -10,7 +10,7 @@ from tools.models import ToolInput
 
 
 async def test_unsupported_suffix_returns_neutral_skip(tmp_path: Path) -> None:
-    """A file no checker covers must NOT fail — the coder agent halts on failures."""
+    """A file no checker covers must NOT fail - the coder agent halts on failures."""
     file = tmp_path / "notes.txt"
     file.write_text("hello\n", encoding="utf-8")
 

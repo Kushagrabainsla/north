@@ -34,7 +34,7 @@ def _normalize(text: str) -> str:
 def _plan_cache_key(prompt: str, conversation: str = "") -> str:
     """Stable hash of the normalized prompt (plus recent conversation) for routing.
 
-    The conversation is folded in because it now affects routing — the same
+    The conversation is folded in because it now affects routing - the same
     prompt ("yes, go ahead") must not reuse a plan cached under a different
     conversation, or follow-ups would route to the wrong agent.
     """
@@ -127,7 +127,7 @@ class ExecutionPlanner:
             system_context_lines.append(f"- workspace (default cwd for shell/file tools): {self._workspace}")
             system_context_lines.append(
                 "- When constructing filesystem paths, always prefer absolute paths derived from the "
-                "workspace above. Never emit bare filenames or paths starting with '~' — expand them."
+                "workspace above. Never emit bare filenames or paths starting with '~' - expand them."
             )
         system_context_block = (
             "=== System Context ===\n" + "\n".join(system_context_lines) + "\n\n" if system_context_lines else ""
@@ -135,7 +135,7 @@ class ExecutionPlanner:
 
         conversation_block = (
             f"=== Recent Conversation ===\n{conversation}\n"
-            "(Use this to resolve what the User Task refers to — e.g. a short "
+            "(Use this to resolve what the User Task refers to - e.g. a short "
             "confirmation like 'yes, go ahead' continues the work just discussed. "
             "Classify and route based on that actual intent.)\n\n"
             if conversation
@@ -163,14 +163,14 @@ class ExecutionPlanner:
                 )
             )
         except Exception as exc:
-            logger.warning("Planner LLM call failed — falling back to general single-agent plan: %s", exc)
+            logger.warning("Planner LLM call failed - falling back to general single-agent plan: %s", exc)
             return _FALLBACK_CLASSIFICATION, self.build_fallback_plan("general", task_id)
 
         try:
             data = json.loads(strip_code_fences(response.text))
         except json.JSONDecodeError as exc:
             logger.warning(
-                "Planner LLM response was not valid JSON — falling back to general single-agent plan: %s",
+                "Planner LLM response was not valid JSON - falling back to general single-agent plan: %s",
                 exc,
             )
             return _FALLBACK_CLASSIFICATION, self.build_fallback_plan("general", task_id)
@@ -285,7 +285,7 @@ class ExecutionPlanner:
                 parallel_groups = self._compute_parallel_groups(agents, dependencies)
             except RoutingError:
                 logger.warning(
-                    "Dependency cycle in LLM response for agents %s — falling back to single agent",
+                    "Dependency cycle in LLM response for agents %s - falling back to single agent",
                     agents,
                 )
                 return self.build_fallback_plan(domain, task_id)

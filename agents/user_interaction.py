@@ -32,7 +32,7 @@ class CardEvent(StrEnum):
     QUESTION = "question_required"
 
 
-# Per-event key the card body is sent under — clients read these exact keys.
+# Per-event key the card body is sent under - clients read these exact keys.
 _EVENT_BODY_KEY: dict[CardEvent, str] = {
     CardEvent.APPROVAL: "message",
     CardEvent.QUESTION: "question",
@@ -55,7 +55,7 @@ async def _auto_resolve(
     try:
         decision, chosen_option = await judgement_filter.check(card)
     except Exception:
-        logger.debug("JudgementFilter check failed for agent %s — surfacing card", agent_name)
+        logger.debug("JudgementFilter check failed for agent %s - surfacing card", agent_name)
         return None
     if decision is None:
         return None

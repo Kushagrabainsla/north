@@ -1,4 +1,4 @@
-"""News Briefing Agent — daily digest of current events across four topic areas."""
+"""News Briefing Agent - daily digest of current events across four topic areas."""
 
 from __future__ import annotations
 

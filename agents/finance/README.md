@@ -5,7 +5,7 @@ This agent specializes in personal budgeting, tracking expenses, and looking up 
 ## Tools Used
 
 No specialized tools (`tools.yaml` is empty). The agent uses the universal tool set granted
-to every agent — chiefly `web_search` and `fetch_url` for financial information, plus
+to every agent - chiefly `web_search` and `fetch_url` for financial information, plus
 `read_file` / `write_file` for any workspace files.
 
 ## How to Test

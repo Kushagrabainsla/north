@@ -1,4 +1,4 @@
-"""Orchestrator package — public interface.
+"""Orchestrator package - public interface.
 
 See docs/CODING_STYLE.md Section 7.2.
 """

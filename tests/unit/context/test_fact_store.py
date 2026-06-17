@@ -45,7 +45,7 @@ async def test_dedup_updates_in_place_within_scan_window(db_path: Path) -> None:
 
 
 async def test_dedup_only_scans_recent_rows(db_path: Path, monkeypatch) -> None:
-    """An old near-duplicate outside the scan window no longer blocks an insert —
+    """An old near-duplicate outside the scan window no longer blocks an insert  - 
     the dedup scan is bounded instead of O(all rows)."""
     monkeypatch.setattr(fact_store_module, "_DEDUP_SCAN_LIMIT", 1)
     vectors = {

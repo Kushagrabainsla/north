@@ -1,4 +1,4 @@
-"""Tests for SQLiteJobProcessor — enqueue, get, claim_next, mark_*, cancel, list."""
+"""Tests for SQLiteJobProcessor - enqueue, get, claim_next, mark_*, cancel, list."""
 
 from __future__ import annotations
 

@@ -53,3 +53,22 @@ def run_capture(
         },
         error=stderr if result.returncode != 0 else None,
     )
+
+
+def format_diff_output(stdout: str) -> str:
+    """Format a unified diff string with a summary of files modified.
+
+    Extracts '+++ b/...' lines to build a bulleted summary, then appends the
+    full diff inside a markdown block. Shared by git and gh tools.
+    """
+    if not stdout:
+        return "No changes (empty diff)."
+    lines = stdout.splitlines()
+    files_changed = []
+    for line in lines:
+        if line.startswith("+++ b/"):
+            files_changed.append(line[6:])
+    summary = ""
+    if files_changed:
+        summary = "### Files Modified:\n" + "\n".join(f"- `{f}`" for f in files_changed) + "\n\n"
+    return f"{summary}### Diff:\n```diff\n{stdout}\n```"

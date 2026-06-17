@@ -1,4 +1,4 @@
-"""Tests for FileContextStore — read, write, append, search behavior."""
+"""Tests for FileContextStore - read, write, append, search behavior."""
 
 from __future__ import annotations
 

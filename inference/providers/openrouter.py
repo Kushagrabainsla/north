@@ -2,7 +2,7 @@
 
 Fetches the live model catalogue from GET /api/v1/models and serves as the
 broadest fallback provider. get_models() returns an empty dict until the
-first refresh() completes — the startup lifespan guarantees that happens
+first refresh() completes - the startup lifespan guarantees that happens
 before the server accepts requests.
 """
 

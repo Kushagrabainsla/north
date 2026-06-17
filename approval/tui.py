@@ -16,7 +16,7 @@ class TUIAwareNotifier(Notifier):
     """Delegates to fallback only when no TUI session is active."""
 
     def __init__(self, stream_manager: object, fallback: Notifier) -> None:
-        # stream_manager is EventStreamManager — typed as object to avoid
+        # stream_manager is EventStreamManager - typed as object to avoid
         # circular imports at module level.
         self._sm = stream_manager
         self._fallback = fallback
@@ -24,6 +24,6 @@ class TUIAwareNotifier(Notifier):
     async def notify(self, card: Card) -> None:
         if getattr(self._sm, "tui_connected", False):
             # The global SSE stream already carries the approval_required event
-            # emitted by the orchestrator — the TUI will handle it inline.
+            # emitted by the orchestrator - the TUI will handle it inline.
             return
         await self._fallback.notify(card)

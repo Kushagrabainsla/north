@@ -1,4 +1,4 @@
-"""WriteFileTool — write or overwrite a file in the workspace.
+"""WriteFileTool - write or overwrite a file in the workspace.
 
 See docs/CODING_STYLE.md Section 16.1.
 """

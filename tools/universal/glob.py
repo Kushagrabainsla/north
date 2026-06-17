@@ -1,4 +1,4 @@
-"""GlobTool — find files by name pattern, newest first.
+"""GlobTool - find files by name pattern, newest first.
 
 A name-matching counterpart to SearchFilesTool (which matches content).
 "Find every **/*Test*.ts" is a single call instead of a bash `find` that burns

@@ -47,7 +47,7 @@ class CronEntry:
 def next_firing(entry: CronEntry, after: datetime) -> datetime:
     """Return the first firing time strictly after `after` for `entry`.
 
-    Pure function — no side effects, no I/O. Same `after` always yields the
+    Pure function - no side effects, no I/O. Same `after` always yields the
     same answer, which makes the scheduler testable without mocking the clock
     in the surrounding async code.
     """
@@ -151,7 +151,7 @@ class CronScheduler:
         now_after_sleep = self._clock()
         if firing <= now_after_sleep:
             if await self._is_already_running(entry):
-                logger.info("CronScheduler: skipping %s — prior run still active", entry.name)
+                logger.info("CronScheduler: skipping %s - prior run still active", entry.name)
                 return
             await self._processor.enqueue(self.build_job(entry, firing))
 
@@ -182,7 +182,7 @@ class CronScheduler:
             await self._execute_due_entry(due, now)
 
 
-# V1 schedule — see README Section 11.3.
+# V1 schedule - see README Section 11.3.
 # weekday: 0=Mon … 6=Sun, None = daily.
 V1_CRON_ENTRIES: list[CronEntry] = [
     CronEntry(

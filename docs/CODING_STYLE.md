@@ -59,11 +59,11 @@ north is public. Every contributor should be able to read the codebase, understa
 
 Every class and interface in north satisfies all five. The north-specific application of each:
 
-### 2.1 SRP — Single Responsibility
+### 2.1 SRP - Single Responsibility
 
 One reason to change per class. If you describe a class with "and," split it. north's `InferenceRouter` selects models and refreshes pools; cost tracking lives in a separate `CostTracker`.
 
-### 2.2 OCP — Open/Closed
+### 2.2 OCP - Open/Closed
 
 Add behavior by adding a class, not by modifying an existing one. New tools subclass `Tool` and register in the tool graph. No existing file changes.
 
@@ -73,11 +73,11 @@ class LinkedInSearchTool(Tool):
     async def run(self, input: ToolInput) -> ToolOutput: ...
 ```
 
-### 2.3 LSP — Liskov Substitution
+### 2.3 LSP - Liskov Substitution
 
 Any concrete implementation must be fully substitutable for its ABC. Code written against `ContextStore` must work identically with `FileContextStore` or a future `DBContextStore`. Subclasses must not raise on methods the parent supports, narrow argument types, or widen return types.
 
-### 2.4 ISP — Interface Segregation
+### 2.4 ISP - Interface Segregation
 
 Clients depend only on what they use. north splits the tool hierarchy:
 
@@ -89,7 +89,7 @@ class CacheableTool(Tool, ABC): ...               # adds get_cached/set_cached()
 
 Each tool implements only the ABCs it needs. `WebSearchTool(Tool)`; `GmailTool(AuthenticatedTool)`; `MarketDataTool(AuthenticatedTool, CacheableTool)`.
 
-### 2.5 DIP — Dependency Inversion
+### 2.5 DIP - Dependency Inversion
 
 High-level modules depend on ABCs, not concretes. Dependencies are injected at the boundary, never instantiated inside.
 
@@ -140,7 +140,7 @@ More than three arguments means the function is doing too much or related fields
 
 ### 4.5 No Comments That Explain What
 
-If a comment explains *what* the code does, rename things until the code explains itself. Comments are reserved for *why* — a non-obvious constraint, a workaround, a surprising fact.
+If a comment explains *what* the code does, rename things until the code explains itself. Comments are reserved for *why* - a non-obvious constraint, a workaround, a surprising fact.
 
 ```python
 # acceptable: explains why, not what
@@ -162,7 +162,7 @@ Prefer positive predicates or extract to a named boolean. `if classification.is_
 
 ### 4.9 Early Return Over Nesting
 
-Return early on failure; do not nest the happy path. Reject invalid input, reject conflicts, reject anything that can't proceed — *then* run the success path at the bottom unindented.
+Return early on failure; do not nest the happy path. Reject invalid input, reject conflicts, reject anything that can't proceed - *then* run the success path at the bottom unindented.
 
 ---
 
@@ -191,7 +191,7 @@ Every LLM prompt is a markdown file under `prompts/`, loaded via `utils.prompts.
 
 ### 5.4 Models Are Defined Once
 
-Every Pydantic model is defined once in its module's `models.py`. Other modules import the canonical type — they never redefine a shape that already exists. `from ledger import LedgerEntry`, not `class TaskLedgerEntry(BaseModel): ...` somewhere else.
+Every Pydantic model is defined once in its module's `models.py`. Other modules import the canonical type - they never redefine a shape that already exists. `from ledger import LedgerEntry`, not `class TaskLedgerEntry(BaseModel): ...` somewhere else.
 
 ### 5.5 Enums Replace All Repeated Strings
 
@@ -241,11 +241,11 @@ jobs/base.py           JobProcessor      <- SQLiteJobProcessor
 
 ### 6.2 Interfaces Are Small and Focused
 
-Each ABC declares only the methods every implementation must support. Optional behavior splits into additional ABCs (ISP, Section 2.4). The `search()` placeholder on `ContextStore` is intentional — it raises in v1's `FileContextStore` and gets a real implementation in `DBContextStore` later. See README Section 5.2 for the canonical definition.
+Each ABC declares only the methods every implementation must support. Optional behavior splits into additional ABCs (ISP, Section 2.4). The `search()` placeholder on `ContextStore` is intentional - it raises in v1's `FileContextStore` and gets a real implementation in `DBContextStore` later. See README Section 5.2 for the canonical definition.
 
 ### 6.3 Dependency Injection at the Boundary
 
-Concrete implementations are wired once in `config/dependencies.py`. No module instantiates its own dependencies — everything goes in via constructors.
+Concrete implementations are wired once in `config/dependencies.py`. No module instantiates its own dependencies - everything goes in via constructors.
 
 ```python
 # config/dependencies.py
@@ -285,7 +285,7 @@ The Orchestrator scans `/agents` at startup. A valid agent folder contains `conf
 ### 6.5 Tools Are Discovered from the Filesystem
 
 `ToolRegistry` (`tools/registry.py`) auto-discovers every `Tool` subclass by walking the
-tool package directories — it does **not** read a hand-maintained graph dict. Adding a tool
+tool package directories - it does **not** read a hand-maintained graph dict. Adding a tool
 is adding a file:
 
 ```
@@ -758,11 +758,11 @@ with open_db_connection(db_path) as conn:
 
 There is no central migrations module. Each SQLite-backed store creates and evolves its own
 schema at construction time using idempotent `CREATE TABLE IF NOT EXISTS` (and additive
-`ALTER TABLE` guarded by a column check). This keeps each store self-contained — the store
+`ALTER TABLE` guarded by a column check). This keeps each store self-contained - the store
 that owns a table owns its schema.
 
 ```python
-# ledger/sqlite_writer.py — schema set up once, on construction
+# ledger/sqlite_writer.py - schema set up once, on construction
 def _ensure_schema(self) -> None:
     with open_db_connection(self._db_path) as conn:
         conn.execute(
@@ -777,7 +777,7 @@ Stores that follow this pattern: `ledger/sqlite_writer.py`, `jobs/sqlite_process
 factory) used by all of them.
 
 If a future change needs cross-store versioned migrations, introduce a real `utils/migrations.py`
-with a spec update first (§8) — do not invent one ad hoc.
+with a spec update first (§8) - do not invent one ad hoc.
 
 ---
 
@@ -1129,16 +1129,16 @@ class CacheableTool(Tool, ABC):
 
 ### 16.1.1 Filesystem Write Policy
 
-Every path-touching tool resolves through `tools/_path.py:resolve_path()` (the single fail-closed gate). Two — and only two — write zones exist:
+Every path-touching tool resolves through `tools/_path.py:resolve_path()` (the single fail-closed gate). Two - and only two - write zones exist:
 
-1. **The workspace** — all user-facing work (code, edited files, deliverables) lands here, in place. This is the deliverable; review it via `git diff`.
-2. **`<NORTH_HOME>/tasks/{task_id}/`** — internal agent handoff scratch only (research notes, specs, QA reports). A narrow carve-out inside the otherwise-blocked `~/.north`, available regardless of the active workspace.
+1. **The workspace** - all user-facing work (code, edited files, deliverables) lands here, in place. This is the deliverable; review it via `git diff`.
+2. **`<NORTH_HOME>/tasks/{task_id}/`** - internal agent handoff scratch only (research notes, specs, QA reports). A narrow carve-out inside the otherwise-blocked `~/.north`, available regardless of the active workspace.
 
-Everything else under `~/.north` stays blocked — secrets (`secret.key`), `.env`, and all `*.db` (including the task-context DBs that share `~/.north/tasks/`). Agents never hardcode the handoff path: the orchestrator injects the absolute dir via `_path.handoff_dir_for()` into the `## Handoff Directory` prompt section, so it is defined once and never drifts.
+Everything else under `~/.north` stays blocked - secrets (`secret.key`), `.env`, and all `*.db` (including the task-context DBs that share `~/.north/tasks/`). Agents never hardcode the handoff path: the orchestrator injects the absolute dir via `_path.handoff_dir_for()` into the `## Handoff Directory` prompt section, so it is defined once and never drifts.
 
 ### 16.1.2 Output Verification
 
-Don't trust an agent's narrative — verify it against evidence. An LLM writes what
+Don't trust an agent's narrative - verify it against evidence. An LLM writes what
 a successful answer *sounds like* ("created the file", "tests pass"), with no idea
 whether it is true. `orchestrator/verification.py:verify_claims()` cross-checks
 action claims in the final answer against the tools that actually **succeeded**
@@ -1200,7 +1200,7 @@ Agents explore code via semantic tools instead of spawning shell commands. These
 
 **Repository conventions:** when a task carries a `workspace`, agents auto-load that
 repo's `AGENTS.md` / `CLAUDE.md` / `.github/copilot-instructions.md` / `.cursorrules`
-into context (`context/repo_instructions.py`). Honour them — they are the repo's house rules.
+into context (`context/repo_instructions.py`). Honour them - they are the repo's house rules.
 - `bash` is appropriate for environment inspection or one-off commands
 
 ---
@@ -1260,11 +1260,11 @@ settings = Settings()
 Runtime environment config lives in `Settings` (Section 17.1) and is sourced from env vars / `.env`. User preferences that change at runtime (e.g. inference strategy) live in `NorthSettings` (`config/strategy.py`) and are persisted to `~/.north/settings.json`.
 
 ```python
-# system config — read-only at runtime, set via env vars
+# system config - read-only at runtime, set via env vars
 from config.settings import settings
 path = settings.north_home
 
-# user preferences — mutable at runtime, changed via prompt or API
+# user preferences - mutable at runtime, changed via prompt or API
 from config.strategy import NorthSettings, StrategyMode
 north_settings = NorthSettings(settings.north_home / "settings.json")
 north_settings.set_strategy(StrategyMode.ECO)
@@ -1276,9 +1276,9 @@ north_settings.set_strategy(StrategyMode.ECO)
 
 Every `CompletionRequest` carries a `PoolPriority` signal. `ModelDispatcher` reads `NorthSettings.strategy` at call time to determine the model ordering:
 
-- `eco` — cheapest priced model first, free models at tail
-- `cruise` — tier matching `PoolPriority`, cross-tier fallback, free at tail (default)
-- `sport` — most expensive first, free models at tail
+- `eco` - cheapest priced model first, free models at tail
+- `cruise` - tier matching `PoolPriority`, cross-tier fallback, free at tail (default)
+- `sport` - most expensive first, free models at tail
 
 Changing strategy takes effect on the next inference call. No restart required.
 
@@ -1499,7 +1499,7 @@ agents/finance/README.md
 
 ### 20.1 Commit Message Format
 
-Every commit message follows the `Release x.y.z: description` format — a single line, no body required.
+Every commit message follows the `Release x.y.z: description` format - a single line, no body required.
 
 ```
 Release {version}: {what changed in plain english}
@@ -1513,7 +1513,7 @@ Release 1.3.2: semantic tool selection and atomic fact store
 
 **Rules:**
 - Version must match `pyproject.toml` exactly at the time of commit.
-- Description is plain English — no angle brackets, no conventional-commit prefixes.
+- Description is plain English - no angle brackets, no conventional-commit prefixes.
 - One line only. The "why" lives in `CHANGELOG.md`, not in the commit body.
 
 
@@ -1635,15 +1635,15 @@ Do not add the following unless the spec explicitly requires it. If it feels nec
 
 - Caching layers
 - Generic retry middleware (failure handling is specified in the system spec)
-- Third-party logging frameworks (structlog, loguru) — the Ledger is the log
-- Event bus or pub/sub systems — Ledger writes are the observer pattern
-- Plugin lifecycle hooks — agents register via the folder system
+- Third-party logging frameworks (structlog, loguru) - the Ledger is the log
+- Event bus or pub/sub systems - Ledger writes are the observer pattern
+- Plugin lifecycle hooks - agents register via the folder system
 - Health check or metrics endpoints
 - Global mutable state anywhere except `config/dependencies.py`
-- Singletons — use dependency injection
+- Singletons - use dependency injection
 - Abstract base classes beyond the interface map in Section 6.1
-- God classes — if a class is growing, split it
-- Premature optimization — profile first, optimize second
+- God classes - if a class is growing, split it
+- Premature optimization - profile first, optimize second
 
 ---
 
@@ -1653,7 +1653,7 @@ Sections 1–22 cover *what* to write. This section covers *how* to land it. App
 
 ### 23.1 If Unsure, Ask
 
-When confused — about intent, scope, the right interface, which dependency, or where code belongs — stop and ask. Guessing is unacceptable.
+When confused - about intent, scope, the right interface, which dependency, or where code belongs - stop and ask. Guessing is unacceptable.
 
 **Ask when:** the request reads more than one way; the answer depends on a fact not in spec, code, or memory; the decision touches an architectural seam (new ABC, new module, new top-level dir, new public-interface field); or a choice would lock in an unapproved dependency.
 
@@ -1663,16 +1663,16 @@ When confused — about intent, scope, the right interface, which dependency, or
 
 Surface substantive changes and wait for confirmation. "Substantive" = anything beyond a typo fix or an edit directly instructed in the current message.
 
-**Exception — similar-pattern batching:** once the user has approved a kind of change (rename a symbol, apply a lint rule, the same refactor across modules), apply it to other obvious cases without re-asking. If borderline, ask.
+**Exception - similar-pattern batching:** once the user has approved a kind of change (rename a symbol, apply a lint rule, the same refactor across modules), apply it to other obvious cases without re-asking. If borderline, ask.
 
 ### 23.3 Tech Decisions: Research, Reason, Propose, Apply
 
 No new library, framework, service, or CLI tool enters north without these four steps in order:
 
-1. **Research** — 2–4 real alternatives, current docs, maintenance status, license.
-2. **Reason** — case-for and case-against per option, ending in the trade-off that drives the recommendation.
-3. **Propose** — present to the user as a question. Do not start coding against the new tech.
-4. **Apply** — on confirmation, update README Section 16, `pyproject.toml`, and this file if a new convention is needed. Then start using it.
+1. **Research** - 2–4 real alternatives, current docs, maintenance status, license.
+2. **Reason** - case-for and case-against per option, ending in the trade-off that drives the recommendation.
+3. **Propose** - present to the user as a question. Do not start coding against the new tech.
+4. **Apply** - on confirmation, update README Section 16, `pyproject.toml`, and this file if a new convention is needed. Then start using it.
 
 One canonical tool per job. Adding `requests` next to `httpx`, or `unittest` next to `pytest`, is a regression even if the new one is good in isolation.
 
@@ -1682,25 +1682,25 @@ Do not write tests when adding new functionality. The pytest harness and the exi
 
 **Why:** Build-speed during the pre-MVP phase, while module shape is still moving and the cost of keeping tests synchronized outweighs their value.
 
-**How to apply:** Skip writing test files for new modules. Skip updating tests during refactors unless an existing test breaks — then fix it. CHANGELOG entries no longer include "Tests under …" paragraphs.
+**How to apply:** Skip writing test files for new modules. Skip updating tests during refactors unless an existing test breaks - then fix it. CHANGELOG entries no longer include "Tests under …" paragraphs.
 
 ### 23.5 Every Change Updates CHANGELOG.md
 
-Every change — feature, fix, refactor, doc edit, dependency bump — adds an entry to the `[Unreleased]` section of `CHANGELOG.md`, in [Keep a Changelog](https://keepachangelog.com) format. Subheadings: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`. One scannable line per change; the "why" lives in the commit message.
+Every change - feature, fix, refactor, doc edit, dependency bump - adds an entry to the `[Unreleased]` section of `CHANGELOG.md`, in [Keep a Changelog](https://keepachangelog.com) format. Subheadings: `Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`. One scannable line per change; the "why" lives in the commit message.
 
-On a release, the contents of `[Unreleased]` move under a new `## [x.y.z] — YYYY-MM-DD` heading and `[Unreleased]` is reset to empty subheadings (semver per Section 21.5).
+On a release, the contents of `[Unreleased]` move under a new `## [x.y.z] - YYYY-MM-DD` heading and `[Unreleased]` is reset to empty subheadings (semver per Section 21.5).
 
 A change that touches code without updating the changelog is incomplete.
 
 ### 23.6 New Standards Land in This File
 
-When the user states a rule of practice — "always X", "never Y", "from now on Z" — capture it here in the most relevant existing section before acting on it. Keep entries terse: state the rule, give a one-line **Why**, give a one-line **How to apply**. Skip worked examples unless the rule cannot be understood without one. Adding to this file is not a license to expand it.
+When the user states a rule of practice - "always X", "never Y", "from now on Z" - capture it here in the most relevant existing section before acting on it. Keep entries terse: state the rule, give a one-line **Why**, give a one-line **How to apply**. Skip worked examples unless the rule cannot be understood without one. Adding to this file is not a license to expand it.
 
 ### 23.7 Pre-Commit Checklist
 
 Every commit is incomplete until all four obligations below are satisfied. Check them in order before writing the commit message.
 
-**Why:** Code that ships without a changelog entry, stale docs, or a mismatched version tag creates invisible technical debt — future contributors (and you, six months later) cannot tell what changed or why.
+**Why:** Code that ships without a changelog entry, stale docs, or a mismatched version tag creates invisible technical debt - future contributors (and you, six months later) cannot tell what changed or why.
 
 **Checklist:**
 
@@ -1709,19 +1709,19 @@ Every commit is incomplete until all four obligations below are satisfied. Check
 | 1 | **Changelog** | `CHANGELOG.md` | The change has a one-line entry under `[Unreleased] > Added / Changed / Fixed / …` (§23.5) |
 | 2 | **Version** | `pyproject.toml`, `uv.lock` (`uv lock`) | `pyproject.toml` version matches the semver rule (§21.5); `uv.lock` re-generated so it reflects the same version |
 | 3 | **Docs** | `docs/TECHNICAL_FEATURES.md` or `docs/ARCHITECTURE.md` | Any new architectural pattern, design decision, or non-obvious behaviour is documented in the right doc file |
-| 4 | **Commit message** | — | Follows the format in §20.1 and names the module(s) touched |
+| 4 | **Commit message** | - | Follows the format in §20.1 and names the module(s) touched |
 
 **How to apply:**
 
 - Run through the checklist top-to-bottom, not bottom-to-top.
 - A change that adds no new behaviour (pure typo fix, import sort) may skip obligations 2 and 3 but never obligation 1.
-- If a doc section for the new behaviour does not exist yet, create it — do not append to an ill-fitting section.
+- If a doc section for the new behaviour does not exist yet, create it - do not append to an ill-fitting section.
 - `uv lock` is the only acceptable way to update `uv.lock`; never hand-edit it.
 
 **What "complete" looks like for a typical feature commit:**
 
 ```
-# 1. CHANGELOG.md — entry added under [Unreleased]
+# 1. CHANGELOG.md - entry added under [Unreleased]
 ## [Unreleased]
 ### Added
 - BashTool three-layer command safety: instant bypass for read-only commands, …

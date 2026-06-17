@@ -2,7 +2,7 @@
 
 Subclasses set self.name, call super().__init__(), then optionally override
 embed() or transcribe() for providers that support those capabilities.
-All methods accept an explicit model_id — model selection belongs to ModelDispatcher.
+All methods accept an explicit model_id - model selection belongs to ModelDispatcher.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ async def _aiter_with_chunk_timeout(aiter, timeout: float):
         except StopAsyncIteration:
             return
         except TimeoutError as exc:
-            raise InferenceError(f"SSE stream stalled for {timeout:.0f}s — model stopped generating") from exc
+            raise InferenceError(f"SSE stream stalled for {timeout:.0f}s - model stopped generating") from exc
 
 
 class OpenAICompatibleProvider:
@@ -66,7 +66,7 @@ class OpenAICompatibleProvider:
 
     def _raise_for_status(self, response: httpx.Response, model_id: str) -> None:
         if response.status_code == 402:
-            raise PaymentRequiredError(f"{self.name} returned 402 — insufficient credits")
+            raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")
         if response.status_code in (429, 404, 503):
             raise ModelRateLimitedError(model_id, self.name)
         if response.status_code >= 400:
@@ -75,7 +75,7 @@ class OpenAICompatibleProvider:
     async def _raise_for_stream_status(self, resp: httpx.Response, model_id: str) -> None:
         if resp.status_code == 402:
             await resp.aread()
-            raise PaymentRequiredError(f"{self.name} returned 402 — insufficient credits")
+            raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")
         if resp.status_code in (429, 404, 503):
             await resp.aread()
             raise ModelRateLimitedError(model_id, self.name)
@@ -183,7 +183,7 @@ class OpenAICompatibleProvider:
                     if text_token:
                         content_parts.append(text_token)
                         # Once a tool_calls delta has arrived the response is a
-                        # tool-call turn — its content never reaches the final
+                        # tool-call turn - its content never reaches the final
                         # answer, so forwarding it would show the user text
                         # that is then discarded.
                         if token_callback is not None and not saw_tool_call:

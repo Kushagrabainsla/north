@@ -1,4 +1,4 @@
-"""Tests for utils.ids — generate_id, generate_task_id."""
+"""Tests for utils.ids - generate_id, generate_task_id."""
 
 from __future__ import annotations
 

@@ -111,7 +111,7 @@ def _validate_config() -> None:
 
 
 def _attach_tui_notifier(deps) -> None:
-    # Suppress macOS/terminal alerts while the TUI is connected — the global
+    # Suppress macOS/terminal alerts while the TUI is connected - the global
     # SSE stream handles approvals inline.
     deps.notifier = TUIAwareNotifier(
         stream_manager=deps.stream_manager,
@@ -307,7 +307,7 @@ async def _reconcile_pending_tasks(deps, orchestrator: Orchestrator) -> None:
                     source=LedgerSource.SYSTEM,
                     task_id=orphaned_id,
                     action="task_failed",
-                    output="Server restarted while task was pending — marked as failed.",
+                    output="Server restarted while task was pending - marked as failed.",
                     status=LedgerStatus.FAILED,
                 )
             )
@@ -442,7 +442,7 @@ def _warn_unknown_cron_agents(agent_registry: AgentRegistry) -> None:
     for entry in V1_CRON_ENTRIES:
         if entry.agent not in known and entry.agent != "system":
             logger.warning(
-                "V1 cron entry %r references unknown agent %r — job will fail at dispatch",
+                "V1 cron entry %r references unknown agent %r - job will fail at dispatch",
                 entry.name,
                 entry.agent,
             )
@@ -515,7 +515,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("scheduling background tasks")
     background_tasks = _launch_background_tasks(deps, orchestrator, extraction_pipeline, callback_server)
 
-    _step("startup complete — yielding to server")
+    _step("startup complete - yielding to server")
     try:
         yield
     finally:
@@ -528,7 +528,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="north Orchestrator",
-    description="Personal Life Operating System — core API",
+    description="Personal Life Operating System - core API",
     version=NORTH_VERSION,
     lifespan=lifespan,
 )

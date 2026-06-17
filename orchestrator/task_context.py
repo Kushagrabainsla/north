@@ -101,7 +101,7 @@ class TaskContextStore:
         start_time = loop.time()
         # write() notifies the Condition, so the wait normally wakes instantly.
         # The poll is only a safety net for a missed notification (e.g. the
-        # Condition was replaced by release_conditions mid-wait) — keep it slow
+        # Condition was replaced by release_conditions mid-wait) - keep it slow
         # so waiting readers don't hammer the DB.
         poll_interval = 10.0
         condition = self._get_condition(task_id)

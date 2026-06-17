@@ -1,4 +1,4 @@
-"""ShellTool — long-lived PTY shell sessions for watch processes, servers, REPLs.
+"""ShellTool - long-lived PTY shell sessions for watch processes, servers, REPLs.
 
 Unlike BashTool (one-shot: run, capture, exit), ShellTool keeps a process alive
 behind a pseudo-terminal so an agent can start `npm run dev` / `tsc --watch` /
@@ -26,7 +26,7 @@ import signal
 import time
 from typing import TYPE_CHECKING, Any
 
-from tools.base import Tool
+from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import request_approval_decision
 
@@ -127,7 +127,7 @@ class _ShellSession:
         return self.read_new()
 
 
-class ShellTool(Tool):
+class ShellTool(ApprovalGatedTool):
     """Start, read, write, and stop long-lived PTY shell sessions."""
 
     name = "shell"
@@ -164,10 +164,7 @@ class ShellTool(Tool):
         approval_timeout_seconds: float = 300.0,
         judgement_filter: JudgementFilter | None = None,
     ) -> None:
-        self._approval_store = approval_store
-        self._stream_manager = stream_manager
-        self._approval_timeout_seconds = approval_timeout_seconds
-        self._judgement_filter = judgement_filter
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter)
         self._sessions: dict[str, _ShellSession] = {}
 
     def format_output(self, data: dict[str, Any]) -> str:
@@ -176,7 +173,7 @@ class ShellTool(Tool):
             if not sessions:
                 return "No active shell sessions."
             return "\n".join(
-                f"{s['shell_id']}: {'running' if s['running'] else 'exited'} — {s['command']}" for s in sessions
+                f"{s['shell_id']}: {'running' if s['running'] else 'exited'} - {s['command']}" for s in sessions
             )
         header = data.get("shell_id", "")
         output = str(data.get("output", "")).strip()
@@ -298,7 +295,7 @@ class ShellTool(Tool):
             self._approval_store,
             task_id=task_id,
             agent="shell",
-            title="Shell Session — Approval Required",
+            title="Shell Session - Approval Required",
             message=f"```\n{message}\n```",
             stream_manager=self._stream_manager,
             judgement_filter=self._judgement_filter,

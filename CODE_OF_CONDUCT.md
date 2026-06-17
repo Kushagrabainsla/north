@@ -2,7 +2,7 @@
 
 This project follows the [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
 
-In short: be respectful, assume good intent, and engage constructively. Harassment, personal attacks, and discriminatory language are not tolerated in any project space — issues, pull requests, discussions, or related forums.
+In short: be respectful, assume good intent, and engage constructively. Harassment, personal attacks, and discriminatory language are not tolerated in any project space - issues, pull requests, discussions, or related forums.
 
 ## Enforcement
 

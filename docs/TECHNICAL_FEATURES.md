@@ -8,7 +8,7 @@
 
 **What:** `AgenticLLMAgent` runs a ReAct (Reason + Act) loop using the OpenAI-compatible tools API rather than JSON-in-text prompting.
 
-**Why:** JSON-in-text requires the model to produce a raw JSON string matching a hand-crafted schema, then parsing it with `json.loads()`. This fails silently when models wrap output in markdown fences, produce partial JSON, or hallucinate tool names. Function calling offloads schema enforcement to the provider — the model receives typed function definitions and returns a structured `tool_calls` object.
+**Why:** JSON-in-text requires the model to produce a raw JSON string matching a hand-crafted schema, then parsing it with `json.loads()`. This fails silently when models wrap output in markdown fences, produce partial JSON, or hallucinate tool names. Function calling offloads schema enforcement to the provider - the model receives typed function definitions and returns a structured `tool_calls` object.
 
 **How:**
 
@@ -31,7 +31,7 @@ for _ in range(max_iterations):
         continue
 ```
 
-All tool calls within one iteration execute in parallel. The `request_approval` and `delegate_task` tools are synthetic — they never touch the tool registry, they block on an `asyncio.Event` or sub-agent coroutine respectively.
+All tool calls within one iteration execute in parallel. The `request_approval` and `delegate_task` tools are synthetic - they never touch the tool registry, they block on an `asyncio.Event` or sub-agent coroutine respectively.
 
 ---
 
@@ -89,8 +89,8 @@ reasoning pool → fast_cheap pool → high_volume pool → free_fallback
 
 **Two exception classes advance the chain** (neither stops it):
 
-- `_RateLimited` — HTTP 429/402/404/503. Silent, no log entry.
-- `InferenceError` — HTTP 400, bad model ID, unsupported parameters. Logged at `WARNING`.
+- `_RateLimited` - HTTP 429/402/404/503. Silent, no log entry.
+- `InferenceError` - HTTP 400, bad model ID, unsupported parameters. Logged at `WARNING`.
 
 `AllModelsRateLimitedError` is raised only when the entire ordered list is exhausted.
 
@@ -167,7 +167,7 @@ keep last N exchanges verbatim
 summarize everything before them via a LOW-priority inference call
 replace old exchanges with:
   {"role": "user",      "content": "## Earlier context (auto-compacted)\n<summary>"}
-  {"role": "assistant", "content": "Understood — I have the compacted context."}
+  {"role": "assistant", "content": "Understood - I have the compacted context."}
 ```
 
 The summary call uses `PoolPriority.LOW` so it doesn't compete with the main agent call. Falls back to truncation-only if the summary call fails.
@@ -180,7 +180,7 @@ The summary call uses `PoolPriority.LOW` so it doesn't compete with the main age
 
 **What:** `complete_with_tools()` streams the model's text response token-by-token to an async callback, which emits `token` SSE events to the Web UI.
 
-**Why:** without streaming, the Web UI shows nothing until the full response is assembled server-side. Streaming gives the user progressive rendering — the response appears word by word as the model generates it, just like a native chat interface.
+**Why:** without streaming, the Web UI shows nothing until the full response is assembled server-side. Streaming gives the user progressive rendering - the response appears word by word as the model generates it, just like a native chat interface.
 
 **Implementation:** `OpenAICompatibleProvider.complete_with_tools()` uses `httpx.AsyncClient.stream()` and processes each `data: {...}` SSE chunk. Text token deltas go to `token_callback` immediately. Tool call argument chunks are accumulated in a dict until `[DONE]`.
 
@@ -219,7 +219,7 @@ search(query)
 
 **Fallback:** if `EmbeddingIndex` is absent or the embed call fails, `search()` falls back to paragraph-level keyword overlap scoring (already implemented). Callers always get a result regardless of embedding availability.
 
-**Embedding model:** `openai/text-embedding-3-small` via OpenRouter — same API key as inference, no extra dependency.
+**Embedding model:** `openai/text-embedding-3-small` via OpenRouter - same API key as inference, no extra dependency.
 
 ---
 
@@ -274,7 +274,7 @@ north ledger --error-type rate_limit --agent finance
 
 **What:** `ApprovalStore.wait_for_decision()` suspends a coroutine on an `asyncio.Event` until the user responds to an approval card, rather than polling in a loop.
 
-**Why:** a polling approach holds the event loop busy and adds 0–1 s latency to every approval. With `asyncio.Event`, zero CPU is consumed while waiting — the coroutine is simply suspended until the specific event fires.
+**Why:** a polling approach holds the event loop busy and adds 0–1 s latency to every approval. With `asyncio.Event`, zero CPU is consumed while waiting - the coroutine is simply suspended until the specific event fires.
 
 **Before (polling):**
 ```python
@@ -287,7 +287,7 @@ for _ in range(300):
 **After (event-based):**
 ```python
 card = await approval_store.wait_for_decision(card_id, timeout=300.0)
-# wakes exactly when resolve() is called — zero CPU while waiting
+# wakes exactly when resolve() is called - zero CPU while waiting
 ```
 
 **Implementation:** `ApprovalStore.add()` allocates a `asyncio.Event` per card. `resolve()` calls `event.set()`. `wait_for_decision()` uses `asyncio.wait_for(event.wait(), timeout=300.0)`. Under load with many concurrent pending approvals (e.g., multiple parallel agent tasks each waiting for sign-off), each coroutine is independently suspended with no shared state contention.
@@ -298,14 +298,14 @@ card = await approval_store.wait_for_decision(card_id, timeout=300.0)
 
 **What:** two workflow files in `.github/workflows/` cover the full release lifecycle.
 
-### `ci.yml` — Lint and Test
+### `ci.yml` - Lint and Test
 
 - **Parallel jobs:** `lint` (ruff) and `test` (pytest) run as independent jobs. Either can be re-run alone. Branch protection can require them separately.
 - **Caching:** `astral-sh/setup-uv@v8` handles uv dependency caching keyed on `pyproject.toml`. Cache hits skip the full install on subsequent runs.
 - **Concurrency:** `cancel-in-progress: true` kills the stale run on the same ref when a newer commit is pushed, so PRs never queue behind their own old runs.
-- **Timeouts:** `timeout-minutes: 5` on lint, `15` on tests — hung runners are killed automatically.
+- **Timeouts:** `timeout-minutes: 5` on lint, `15` on tests - hung runners are killed automatically.
 
-### `docker-publish.yml` — Build and Push
+### `docker-publish.yml` - Build and Push
 
 - **Multi-platform:** `linux/amd64` and `linux/arm64` built in a single `docker/build-push-action@v7` call via QEMU emulation (`docker/setup-qemu-action@v4`).
 - **Layer cache:** `cache-from/cache-to: type=gha` reuses Docker layer cache across workflow runs via the GitHub Actions cache backend. After the first push, unchanged layers are never rebuilt.
@@ -315,7 +315,7 @@ card = await approval_store.wait_for_decision(card_id, timeout=300.0)
   gh attestation verify oci://ghcr.io/kushagrabainsla/north:latest \
     --owner Kushagrabainsla
   ```
-- **Concurrency:** `cancel-in-progress: false` — a publish in flight on a tag is never interrupted.
+- **Concurrency:** `cancel-in-progress: false` - a publish in flight on a tag is never interrupted.
 - **Tagging:** branch name, `{{version}}`, `{{major}}.{{minor}}`, and `latest` (on default branch only) are all produced in a single metadata step.
 
 ---
@@ -324,17 +324,17 @@ card = await approval_store.wait_for_decision(card_id, timeout=300.0)
 
 **What:** `BashTool._request_approval()` evaluates every shell command through three progressively heavier gates before execution. If an earlier gate produces a decision, later gates are skipped entirely.
 
-**Why:** Without any bypass, every `git status` or `cat README.md` blocks on a manual approval card — adding 5–30 s of human latency to pure read-only operations. The three-layer design keeps developers in flow for safe commands while still gating anything risky.
+**Why:** Without any bypass, every `git status` or `cat README.md` blocks on a manual approval card - adding 5–30 s of human latency to pure read-only operations. The three-layer design keeps developers in flow for safe commands while still gating anything risky.
 
 **Layers (evaluated in order):**
 
 | Layer | Class | Cost | Decision |
 |---|---|---|---|
-| 1. Local inspection | `CommandSafetyInspector` | Zero — pure prefix match | Auto-approve read-only commands (`git status`, `cat`, `ls`, `grep`, etc.) |
+| 1. Local inspection | `CommandSafetyInspector` | Zero - pure prefix match | Auto-approve read-only commands (`git status`, `cat`, `ls`, `grep`, etc.) |
 | 2. Learned rules | `JudgementFilter` | One LLM call against `judgement_rules.md` | Auto-approve/reject based on patterns the user has established through prior approvals |
 | 3. Manual approval | `ApprovalStore` card | Human decision | Fallback for unknown or mutating commands |
 
-**Layer 1 — `CommandSafetyInspector`:**
+**Layer 1 - `CommandSafetyInspector`:**
 
 ```python
 class CommandSafetyInspector:
@@ -348,13 +348,13 @@ class CommandSafetyInspector:
         return any(cleaned.startswith(p) for p in self.instant_safe_prefixes)
 ```
 
-This is **not a security boundary** — it's a developer-velocity optimisation. The list intentionally covers only commands that cannot mutate the filesystem, push to remotes, or spawn network requests.
+This is **not a security boundary** - it's a developer-velocity optimisation. The list intentionally covers only commands that cannot mutate the filesystem, push to remotes, or spawn network requests.
 
-**Layer 2 — `JudgementFilter` (existing system):**
+**Layer 2 - `JudgementFilter` (existing system):**
 
 If the command is not instantly safe, `BashTool` forwards an approval card to `JudgementFilter.check()`. The filter compares the card against learned rules from `judgement_rules.md` (populated by the extraction pipeline from prior user approvals). If a matching rule exists, the command is auto-approved or auto-rejected with no human prompt.
 
-**Layer 3 — Manual approval card:**
+**Layer 3 - Manual approval card:**
 
 If both Layer 1 and Layer 2 are inconclusive, a standard approval card is emitted and the coroutine suspends on `ApprovalStore.wait_for_decision()` until the user responds (see §11).
 
@@ -366,10 +366,10 @@ The same approval flow (JudgementFilter → card → `wait_for_decision`) is sha
 
 **What:** `ShellTool` (`tools/specialized/shell_tool.py`) keeps a process alive across tool calls behind a pseudo-terminal. Where `BashTool` is one-shot (run → capture → exit), `ShellTool` exposes `start` / `read` / `write` / `stop` / `list` so an agent can launch `npm run dev`, `tsc --watch`, a REPL, or a debugger, then stream output, send input, and terminate it over several iterations.
 
-**Why:** Many real coding tasks need a long-running process — start a dev server then curl it, watch a compiler, drive an interactive REPL. A one-shot subprocess cannot express any of these.
+**Why:** Many real coding tasks need a long-running process - start a dev server then curl it, watch a compiler, drive an interactive REPL. A one-shot subprocess cannot express any of these.
 
 **How:**
-- Each session is backed by `pty.openpty()` (stdlib — no third-party dependency like `pexpect`; the model does the "wait for X" reasoning itself, so an expect layer adds nothing).
+- Each session is backed by `pty.openpty()` (stdlib - no third-party dependency like `pexpect`; the model does the "wait for X" reasoning itself, so an expect layer adds nothing).
 - The PTY master fd is registered with the event loop via `loop.add_reader()`; output accumulates in a per-session ring buffer (`_MAX_BUFFER_BYTES`) drained on each `read`.
 - Processes spawn with `start_new_session=True` so `stop` can `killpg` the whole group (SIGTERM, then SIGKILL on timeout).
 - Safety mirrors `BashTool`: `start` and `write` go through the shared approval flow; `read` / `stop` / `list` operate on an already-approved session. A session cap (`_MAX_SESSIONS`) bounds runaway shells.
@@ -378,10 +378,10 @@ The same approval flow (JudgementFilter → card → `wait_for_decision`) is sha
 
 **What:** When an `ApprovalStore` is injected, `PatchFileTool` computes the would-be new file content, renders a unified diff (`difflib`), and surfaces it in an approval card. The write happens only on confirm; a rejection leaves the file untouched.
 
-**Why:** It turns north's approval layer into a true review gate for edits — the user sees exactly what changes before it lands, rather than approving a blind "edit file" action. This plays to north's differentiator (the approval layer + ledger) rather than copying per-tool permission prompts.
+**Why:** It turns north's approval layer into a true review gate for edits - the user sees exactly what changes before it lands, rather than approving a blind "edit file" action. This plays to north's differentiator (the approval layer + ledger) rather than copying per-tool permission prompts.
 
 **How:**
 - Computation is split from writing: `_plan()` returns `(new_content, old_content, blocks_applied)` purely, with no side effect, for all three edit shapes (`edits` list, `old_string`/`new_string`, SEARCH/REPLACE blocks).
 - A no-op edit (`new_content == old_content`) short-circuits to success without prompting.
-- The injected, diff-previewing instance is registered in `orchestrator/app.py`, overriding the auto-discovered no-arg instance by name. Without a store (e.g. unit tests) the tool applies immediately — backward compatible.
+- The injected, diff-previewing instance is registered in `orchestrator/app.py`, overriding the auto-discovered no-arg instance by name. Without a store (e.g. unit tests) the tool applies immediately - backward compatible.
 

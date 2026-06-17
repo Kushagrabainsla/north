@@ -1,4 +1,4 @@
-"""Provider protocol — the contract individual inference providers must satisfy.
+"""Provider protocol - the contract individual inference providers must satisfy.
 
 Providers are called only by ModelDispatcher. External code talks exclusively
 to InferenceRouter (implemented by ModelDispatcher), never to Provider directly.

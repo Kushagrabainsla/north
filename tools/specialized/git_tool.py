@@ -1,9 +1,9 @@
-"""GitTool — structured git operations for engineering agents.
+"""GitTool - structured git operations for engineering agents.
 
 Safe read-only operations (status, diff, log, show, and listing branches)
 execute immediately. Mutating operations (add, commit, push, pull, checkout,
 stash, merge, branch create/delete) are gated in code behind a user approval
-card — the gate does not rely on the agent's system prompt. Force pushes are
+card - the gate does not rely on the agent's system prompt. Force pushes are
 permanently blocked via token-level argument parsing. reset/clean are not
 offered as actions at all.
 """
@@ -14,17 +14,12 @@ import asyncio
 import shlex
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from tools.base import Tool
+from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import gate_mutating_action
-from tools.specialized._subprocess import run_capture
-
-if TYPE_CHECKING:
-    from approval.judgement_filter import JudgementFilter
-    from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
+from tools.specialized._subprocess import format_diff_output, run_capture
 
 _TIMEOUT = 30
 
@@ -36,11 +31,11 @@ _BRANCH_LIST_FLAGS: frozenset[str] = frozenset({"-a", "-r", "-v", "-vv", "--list
 
 
 def _is_force_flag(token: str) -> bool:
-    """Token-level force detection — robust against `--force-with-lease=ref` etc."""
+    """Token-level force detection - robust against `--force-with-lease=ref` etc."""
     return token == "-f" or token.startswith("--force")
 
 
-class GitTool(Tool):
+class GitTool(ApprovalGatedTool):
     """Run git commands with structured output and safety guards."""
 
     name = "git"
@@ -49,7 +44,7 @@ class GitTool(Tool):
         "Run git operations in the workspace. "
         "Read-only actions (status, diff, log, show, branch listing) execute immediately. "
         "Mutating actions (add, commit, push, pull, checkout, stash, merge, branch create/delete) "
-        "automatically show the user an approval card before running — no separate "
+        "automatically show the user an approval card before running - no separate "
         "request_approval call is needed. Force-push is always blocked; reset/clean are not available."
     )
     parameters_schema = {
@@ -92,33 +87,11 @@ class GitTool(Tool):
         "required": ["action"],
     }
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventStreamManager | None = None,
-        approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
-    ) -> None:
-        self._approval_store = approval_store
-        self._stream_manager = stream_manager
-        self._approval_timeout_seconds = approval_timeout_seconds
-        self._judgement_filter = judgement_filter
-
     def format_output(self, data: dict[str, Any]) -> str:
         stdout = str(data.get("stdout", "")).strip()
         command = str(data.get("command", ""))
         if "diff" in command:
-            if not stdout:
-                return "No changes (empty diff)."
-            lines = stdout.splitlines()
-            files_changed = []
-            for line in lines:
-                if line.startswith("+++ b/"):
-                    files_changed.append(line[6:])
-            summary = ""
-            if files_changed:
-                summary = "### Files Modified:\n" + "\n".join(f"- `{f}`" for f in files_changed) + "\n\n"
-            return f"{summary}### Diff:\n```diff\n{stdout}\n```"
+            return format_diff_output(stdout)
         return stdout
 
     async def run(self, input: ToolInput) -> ToolOutput:
@@ -141,19 +114,19 @@ class GitTool(Tool):
                 f"Valid: status, diff, log, branch, show, add, commit, push, pull, checkout, stash, merge.",
             )
 
-        # Force pushes are permanently blocked — token-level so quoting or flag
+        # Force pushes are permanently blocked - token-level so quoting or flag
         # reordering cannot slip past a prefix match.
         if action == "push" and any(_is_force_flag(t) for t in cmd[2:]):
             return ToolOutput(
                 success=False,
-                error="Force-push is permanently blocked — too destructive. Push to a new branch instead.",
+                error="Force-push is permanently blocked - too destructive. Push to a new branch instead.",
             )
 
         if _is_mutating(action, cmd):
             denial = await gate_mutating_action(
                 self._approval_store,
                 agent="git",
-                title="Git Operation — Approval Required",
+                title="Git Operation - Approval Required",
                 message=f"```\n{' '.join(cmd)}\n```",
                 task_id=input.params.get("task_id"),
                 stream_manager=self._stream_manager,

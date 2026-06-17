@@ -9,7 +9,7 @@ class ContextDocument(StrEnum):
     """The five markdown files that constitute north's context. See README 5.1.
 
     Members are the file names on disk. Using the enum at API boundaries means
-    no caller can ask for an unknown document — the type system rejects it.
+    no caller can ask for an unknown document - the type system rejects it.
     """
 
     PUBLIC = "public.md"

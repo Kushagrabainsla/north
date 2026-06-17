@@ -1,4 +1,4 @@
-"""Coder Agent — engineering domain implementer.
+"""Coder Agent - engineering domain implementer.
 
 See docs/CODING_STYLE.md Section 15.
 """

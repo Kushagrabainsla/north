@@ -5,7 +5,7 @@ KasaTool all gate an action behind the same approval card: optionally consult
 the learned JudgementFilter, otherwise surface a card to the user and wait for
 a decision. ``gate_mutating_action`` is the fail-closed wrapper for tools whose
 approval dependencies are optional: without a wired ApprovalStore, mutating
-actions are refused — never silently allowed. This is the single definition of
+actions are refused - never silently allowed. This is the single definition of
 that flow so the tools never drift (see CODING_STYLE §5 DRY).
 """
 
@@ -98,7 +98,7 @@ async def gate_mutating_action(
 
     Returns ``None`` when the action may proceed, or an error string the tool
     must return as a failure. Without an ApprovalStore (e.g. an auto-discovered
-    instance that never got its dependencies injected) the action is refused —
+    instance that never got its dependencies injected) the action is refused  - 
     a missing gate must never mean an open gate.
     """
     if approval_store is None:

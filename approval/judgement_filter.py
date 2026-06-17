@@ -1,4 +1,4 @@
-"""Judgement Rules Filter — pre-screens cards against learned rules.
+"""Judgement Rules Filter - pre-screens cards against learned rules.
 
 Before any card reaches the Notifier, this filter reads judgement_rules.md
 and asks a fast LLM whether an existing rule clearly covers the situation.
@@ -6,7 +6,7 @@ Confidence >= 0.8 triggers an automatic decision (approved / rejected /
 answered); anything below surfaces the card to the user as normal.
 
 High-stakes APPROVAL cards from specific agents are never auto-resolved
-regardless of confidence — the user always gets to see them.
+regardless of confidence - the user always gets to see them.
 
 See README Sections 9.4 and 9.5.
 """
@@ -30,7 +30,7 @@ _MIN_LEARNED_CONTEXT_CHARS = 20
 
 # APPROVAL cards from these sources gate mutating/destructive actions (shell
 # commands, file patches, git/gh writes, runtime tool changes, device control).
-# They are NEVER auto-approved — a human must see them — regardless of what the
+# They are NEVER auto-approved - a human must see them - regardless of what the
 # rules or the LLM say. Auto-rejection stays allowed (rejecting is safe).
 NEVER_AUTO_APPROVE_AGENTS: frozenset[str] = frozenset(
     {"bash", "shell", "patch_file", "create_tool", "git", "gh", "kasa"}
@@ -53,9 +53,9 @@ A card is about to be surfaced to the user:
   Options: {options}
 
 Does a learned rule (or, for a QUESTION, a known preference) clearly determine the
-outcome — so the user does not need to be asked again?
+outcome - so the user does not need to be asked again?
 
-Reply with JSON only — no prose:
+Reply with JSON only - no prose:
 {{
   "decision": "approved" | "rejected" | "answered" | "none",
   "chosen_option": "<the answer text if answered, else empty string>",
@@ -68,10 +68,10 @@ Rules:
 - Use "approved" only for APPROVAL cards where a rule clearly says to approve.
 - Use "rejected" only for APPROVAL cards where a rule clearly says to reject.
 - Use "answered" only for QUESTION cards where a learned rule or a known preference
-  clearly determines the answer. Put that answer in chosen_option — it need not be
+  clearly determines the answer. Put that answer in chosen_option - it need not be
   one of the listed options.
 - INFORMATION cards should always return "none" (they need no decision).
-- When in doubt, return "none" — asking the user is always safer than guessing.
+- When in doubt, return "none" - asking the user is always safer than guessing.
 """
 
 
@@ -95,10 +95,10 @@ class JudgementFilter:
 
         APPROVAL cards are judged against learned rules only. QUESTION cards also
         consider the user's known preferences (public.md), so a preference stated
-        once — by answering an earlier question — can answer the next one without
+        once - by answering an earlier question - can answer the next one without
         re-asking.
         """
-        # INFORMATION cards never need filtering — they carry no decision.
+        # INFORMATION cards never need filtering - they carry no decision.
         if card.type == CardType.INFORMATION:
             return None, ""
 
@@ -150,12 +150,12 @@ class JudgementFilter:
             return None, ""
 
         # Fail-closed gate: destructive tool classes always require a human for
-        # approval. This check is here — in the single producer of auto-decisions
-        # — so every caller (BashTool, ShellTool, PatchFileTool, CreateToolTool,
+        # approval. This check is here - in the single producer of auto-decisions
+        # - so every caller (BashTool, ShellTool, PatchFileTool, CreateToolTool,
         # GitTool, GhTool, agents, the orchestrator) inherits it.
         if decision == "approved" and card.type == CardType.APPROVAL and card.agent in NEVER_AUTO_APPROVE_AGENTS:
             logger.info(
-                "JudgementFilter: refusing to auto-approve high-stakes card %s from %r — surfacing to user",
+                "JudgementFilter: refusing to auto-approve high-stakes card %s from %r - surfacing to user",
                 card.id,
                 card.agent,
             )

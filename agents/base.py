@@ -1,4 +1,4 @@
-"""Agent ABC — template method pattern. See docs/CODING_STYLE.md Section 15.1."""
+"""Agent ABC - template method pattern. See docs/CODING_STYLE.md Section 15.1."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 
 logger = logging.getLogger(__name__)
 
-# Per-document cap before truncation.  ~12k chars ≈ 3k tokens — enough for rich
+# Per-document cap before truncation.  ~12k chars ≈ 3k tokens - enough for rich
 # personal context without blowing a model's context window on large docs.
 _MAX_CONTEXT_CHARS = 12_000
 
@@ -65,10 +65,10 @@ class Agent(ABC):
         """Load context for this agent.
 
         Assembly order (all sections merged):
-        1. payload.context — conversation history or webhook data injected by the caller
+        1. payload.context - conversation history or webhook data injected by the caller
         2. FactStore semantic search (when available and populated)
         3. Full markdown document load (legacy fallback when FactStore is empty)
-        4. Episodic search — always appended last
+        4. Episodic search - always appended last
         """
         parts: list[str] = []
 
@@ -102,7 +102,7 @@ class Agent(ABC):
             for text in raw_parts:
                 if len(text) > _MAX_CONTEXT_CHARS:
                     omitted = len(text) - _MAX_CONTEXT_CHARS
-                    text = text[:_MAX_CONTEXT_CHARS] + f"\n\n[…{omitted} chars omitted — document too large]"
+                    text = text[:_MAX_CONTEXT_CHARS] + f"\n\n[…{omitted} chars omitted - document too large]"
                 parts.append(text)
 
         episodic = self._deps.episodic_store
@@ -122,7 +122,7 @@ class Agent(ABC):
         privacy_rules.md.  Falls back to [PUBLIC, JUDGEMENT_RULES] when the
         file is missing, empty, or contains no rule for this agent.
 
-        Engineering agents also read north_stars by default — design and
+        Engineering agents also read north_stars by default - design and
         implementation decisions should be checked against long-term goals.
 
         Example privacy_rules.md line:
@@ -151,7 +151,7 @@ class Agent(ABC):
                     docs.append(ContextDocument(token))
                 except ValueError:
                     logger.debug(
-                        "privacy_rules.md: unknown document %r for agent %s — skipping",
+                        "privacy_rules.md: unknown document %r for agent %s - skipping",
                         token,
                         self.name,
                     )

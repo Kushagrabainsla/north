@@ -162,7 +162,7 @@ class ConfidenceTracker:
         never overwrite earned data. Call once at startup before any tasks run.
 
         Args:
-            graph:          {agent_name: [tool_names]} — the full tool graph.
+            graph:          {agent_name: [tool_names]} - the full tool graph.
             reliable_tools: Tool names that get a high prior (0.80). Everything
                             else receives the neutral default (0.50).
         """

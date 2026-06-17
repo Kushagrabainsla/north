@@ -79,7 +79,7 @@ class TestCommandSafetyInspector:
 
 
 # ---------------------------------------------------------------------------
-# BashTool._request_approval — integration of safety layers
+# BashTool._request_approval - integration of safety layers
 # ---------------------------------------------------------------------------
 
 
@@ -152,7 +152,7 @@ class TestBashToolApprovalBypass:
 
 
 # ---------------------------------------------------------------------------
-# BashTool.run — end-to-end with obvious destructive check
+# BashTool.run - end-to-end with obvious destructive check
 # ---------------------------------------------------------------------------
 
 

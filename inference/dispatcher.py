@@ -1,4 +1,4 @@
-"""ModelDispatcher — multi-provider inference router.
+"""ModelDispatcher - multi-provider inference router.
 
 Implements InferenceRouter over an ordered list of Provider instances.
 Routing logic:
@@ -138,7 +138,7 @@ class ModelDispatcher(InferenceRouter):
     ) -> ToolCallResponse:
         text = " ".join(str(m.get("content") or "") for m in request.messages)
         # Tool schemas are sent with every request and can dwarf short
-        # conversations — include them or the context-fit check undercounts.
+        # conversations - include them or the context-fit check undercounts.
         tools_chars = sum(len(json.dumps(t)) for t in request.tools) if request.tools else 0
         estimated = (len(text) + tools_chars) // 4
         candidates = self._candidates(ModelCapability.TOOL_CALLS, self._effective_priority(request.priority), estimated)
@@ -377,14 +377,14 @@ class ModelDispatcher(InferenceRouter):
             except ModelRateLimitedError:
                 self._cooldowns.set_rate_limit(key)
                 logger.info(
-                    "Rate limited: %s/%s — skipping for 60 s",
+                    "Rate limited: %s/%s - skipping for 60 s",
                     info.provider_name,
                     info.model_id,
                 )
             except PaymentRequiredError:
                 self._cooldowns.set_payment_exhausted(key)
                 logger.warning(
-                    "Payment required: %s/%s — skipping for 24 h",
+                    "Payment required: %s/%s - skipping for 24 h",
                     info.provider_name,
                     info.model_id,
                 )
@@ -392,7 +392,7 @@ class ModelDispatcher(InferenceRouter):
                 self._record_model_outcome(key, False)
                 self._persist_model_score(key)
                 logger.warning(
-                    "Inference error on %s/%s — trying next candidate",
+                    "Inference error on %s/%s - trying next candidate",
                     info.provider_name,
                     info.model_id,
                     exc_info=True,
@@ -403,5 +403,5 @@ class ModelDispatcher(InferenceRouter):
                 raise
 
         raise AllModelsRateLimitedError(
-            f"All {len(candidates)} candidate(s) exhausted — every model is rate-limited or has insufficient credits"
+            f"All {len(candidates)} candidate(s) exhausted - every model is rate-limited or has insufficient credits"
         )

@@ -1,4 +1,4 @@
-"""Researcher Agent — engineering domain context gatherer.
+"""Researcher Agent - engineering domain context gatherer.
 
 See docs/CODING_STYLE.md Section 15.
 """

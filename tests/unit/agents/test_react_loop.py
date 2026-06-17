@@ -1,6 +1,6 @@
 """Tests for AgenticLLMAgent ReAct loop mechanics.
 
-Each engineering agent is a thin subclass of AgenticLLMAgent — all domain-
+Each engineering agent is a thin subclass of AgenticLLMAgent - all domain-
 specific behaviour lives in system prompts.  These tests verify the loop
 itself: final answer path, tool execution, cost accumulation, iteration cap,
 unknown-tool resilience, priority resolution, and context loading.
@@ -53,7 +53,7 @@ def _load_agent(name: str, tmp_path: Path, router: MockInferenceRouter | None = 
 
 
 # ---------------------------------------------------------------------------
-# Final answer path — all 4 agents complete successfully
+# Final answer path - all 4 agents complete successfully
 # ---------------------------------------------------------------------------
 
 
@@ -97,7 +97,7 @@ async def test_final_answer_content_is_preserved(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tool call path — loop continues after a tool call
+# Tool call path - loop continues after a tool call
 # ---------------------------------------------------------------------------
 
 
@@ -301,7 +301,7 @@ async def test_empty_tool_calls_list_breaks_loop(tmp_path: Path) -> None:
 
     class EmptyCallsRouter(MockInferenceRouter):
         async def complete_with_tools(self, request, token_callback=None):
-            # Returns tool_calls type but no actual calls — should break
+            # Returns tool_calls type but no actual calls - should break
             return ToolCallResponse(
                 type="tool_calls",
                 calls=[],
@@ -384,7 +384,7 @@ async def test_pre_loaded_context_bypasses_store(tmp_path: Path) -> None:
 async def test_empty_context_store_produces_empty_context(tmp_path: Path) -> None:
     """When the context store has no documents, _load_context must return empty string."""
     agent = _load_agent("researcher", tmp_path)
-    # tmp_path has no context docs — store returns empty strings
+    # tmp_path has no context docs - store returns empty strings
     payload = AgentPayload(task_id="t1", prompt="x")
     loaded = await agent._load_context(payload)
     assert isinstance(loaded, str)

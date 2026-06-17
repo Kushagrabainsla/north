@@ -1,4 +1,4 @@
-"""Tests for SQLiteLedgerWriter — write, get, query (Section 4 of the README)."""
+"""Tests for SQLiteLedgerWriter - write, get, query (Section 4 of the README)."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ async def test_get_returns_none_for_missing_entry(writer: SQLiteLedgerWriter) ->
 
 async def test_metrics_success_rate_ignores_retried_then_succeeded(writer: SQLiteLedgerWriter) -> None:
     """A task whose agent failed once then succeeded counts as a success, not a
-    failure — only the latest per-(agent, task) status matters (review finding R1#7)."""
+    failure - only the latest per-(agent, task) status matters (review finding R1#7)."""
     base = datetime.now(UTC)
     await writer.write(
         _entry(
@@ -190,7 +190,7 @@ async def test_query_respects_limit(writer: SQLiteLedgerWriter) -> None:
 async def test_write_is_idempotent_failure_on_duplicate_id(
     writer: SQLiteLedgerWriter,
 ) -> None:
-    """Ledger ids are primary keys — a duplicate id surfaces as a LedgerWriteError."""
+    """Ledger ids are primary keys - a duplicate id surfaces as a LedgerWriteError."""
     from ledger import LedgerWriteError
 
     await writer.write(_entry("dup"))

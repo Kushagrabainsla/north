@@ -1,9 +1,9 @@
-"""CostTracker — decorator that accumulates per-task inference costs.
+"""CostTracker - decorator that accumulates per-task inference costs.
 
 Wraps any InferenceRouter and intercepts every complete() call to
 accumulate cost_usd by task_id. Because all pipeline components
 (classifier, north-star checker, router, synthesizer, agents) share the
-same wrapped instance, the total reflects every LLM call for a task —
+same wrapped instance, the total reflects every LLM call for a task  - 
 not just agent calls.
 
 Usage:

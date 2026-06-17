@@ -1,4 +1,4 @@
-"""Architect Agent — engineering domain design specialist.
+"""Architect Agent - engineering domain design specialist.
 
 See docs/CODING_STYLE.md Section 15.
 """

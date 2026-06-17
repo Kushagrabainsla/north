@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Metrics — north{% endblock %}
+{% block title %}Metrics - north{% endblock %}
 {% block description %}System performance metrics from the ledger{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <h1>Metrics</h1>
-  <p class="page-subtitle">System performance — last {{ days }} days</p>
+  <p class="page-subtitle">System performance - last {{ days }} days</p>
 </div>
 
 <div class="ledger-controls">
@@ -61,8 +61,8 @@
           <td>{{ a.tasks }}</td>
           <td>{{ (a.success_rate * 100) | int }}%</td>
           <td>${{ "%.6f"|format(a.cost_usd) }}</td>
-          <td>{% if a.p50_ms is not none %}{{ a.p50_ms }} ms{% else %}—{% endif %}</td>
-          <td>{% if a.p95_ms is not none %}{{ a.p95_ms }} ms{% else %}—{% endif %}</td>
+          <td>{% if a.p50_ms is not none %}{{ a.p50_ms }} ms{% else %} - {% endif %}</td>
+          <td>{% if a.p95_ms is not none %}{{ a.p95_ms }} ms{% else %} - {% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>

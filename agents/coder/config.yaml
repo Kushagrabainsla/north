@@ -1,7 +1,7 @@
 agent: coder
 domain: engineering
 # Implementation quality matters: coder runs on the reasoning pool (like
-# architect). Tester stays on fast_cheap — its mutating actions are gated
+# architect). Tester stays on fast_cheap - its mutating actions are gated
 # in-code and QA verification is mechanical (run suite, report).
 model_pool: reasoning
 accepts:

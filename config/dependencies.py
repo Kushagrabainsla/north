@@ -1,8 +1,8 @@
 """Dependency injection wire-up.
 
 All components that can be constructed synchronously and do not have
-circular dependencies are built here.  The remaining pieces —
-``AgentRegistry``, ``Orchestrator``, and friends — are assembled in
+circular dependencies are built here.  The remaining pieces  - 
+``AgentRegistry``, ``Orchestrator``, and friends - are assembled in
 ``orchestrator/app.py`` because they either require async initialisation
 or have circular construction order (agent_registry ↔ agent_deps).
 
@@ -60,7 +60,7 @@ class Dependencies:
     task_context_store: TaskContextStore
     north_settings: NorthSettings
     # Shared async callable used by EpisodicStore, EmbeddingIndex, ToolIndex,
-    # and FactStore — guarantees a single embedding model and billing surface.
+    # and FactStore - guarantees a single embedding model and billing surface.
     embed_fn: EmbedFn | None = field(default=None)
     fact_store: FactStore | None = field(default=None)
 

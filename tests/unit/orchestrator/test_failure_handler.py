@@ -5,7 +5,7 @@ Covers the three critical bugs fixed in failure_handler.py:
 1. reconstruct_context writes 'result' and 'output' keys matching what
    _handle_agent_result writes during normal execution.
 2. handle_failure does NOT set the agent context status to 'failed' on
-   retriable failures — only on the terminal attempt.
+   retriable failures - only on the terminal attempt.
 3. handle_failure clears the retry counter after exhausting retries to
    prevent unbounded memory growth.
 
@@ -121,8 +121,8 @@ async def test_reconstruct_context_writes_result_and_output_keys(tmp_path: Path)
     assert "finance" in all_data, "finance agent keys not found in reconstructed context"
 
     agent_data = all_data["finance"]
-    assert "result" in agent_data, "'result' key missing — context reconstruction key mismatch"
-    assert "output" in agent_data, "'output' key missing — context reconstruction key mismatch"
+    assert "result" in agent_data, "'result' key missing - context reconstruction key mismatch"
+    assert "output" in agent_data, "'output' key missing - context reconstruction key mismatch"
     assert agent_data["result"] == structured_data
     assert agent_data["output"] == human_output
 
@@ -215,13 +215,13 @@ async def test_handle_failure_does_not_mark_failed_on_retriable_attempt(
     handler, store, _ = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
     await store.initialize_task("t1", ["finance"])
 
-    # First failure — attempt 1 < max_retries 3, so must be retriable
+    # First failure - attempt 1 < max_retries 3, so must be retriable
     should_retry = await handler.handle_failure("t1", "finance", RuntimeError("rate limit"))
     assert should_retry is True, "Expected retry=True on first failure"
 
     status = await asyncio.to_thread(_read_agent_status, tmp_path / "tasks.db", "t1", "finance")
     assert status == "pending", (
-        f"Agent status was '{status}' after retriable failure — should remain 'pending' until max_retries is exhausted"
+        f"Agent status was '{status}' after retriable failure - should remain 'pending' until max_retries is exhausted"
     )
 
 
@@ -233,16 +233,16 @@ async def test_handle_failure_marks_failed_only_on_terminal_attempt(
     handler, store, _ = _make_handler(tmp_path, max_retries=2, base_cooldown_seconds=0.0)
     await store.initialize_task("t1", ["finance"])
 
-    # Attempt 1 — retriable
+    # Attempt 1 - retriable
     r1 = await handler.handle_failure("t1", "finance", RuntimeError("err"))
     assert r1 is True
 
-    # Attempt 2 — terminal (attempt == max_retries)
+    # Attempt 2 - terminal (attempt == max_retries)
     r2 = await handler.handle_failure("t1", "finance", RuntimeError("err"))
     assert r2 is False
 
     status = await asyncio.to_thread(_read_agent_status, tmp_path / "tasks.db", "t1", "finance")
-    assert status == "failed", f"Agent status was '{status}' after terminal failure — expected 'failed'"
+    assert status == "failed", f"Agent status was '{status}' after terminal failure - expected 'failed'"
 
 
 @pytest.mark.asyncio
@@ -276,10 +276,10 @@ async def test_retry_count_cleared_after_terminal_failure(tmp_path: Path) -> Non
     await store.initialize_task("t1", ["finance"])
 
     await handler.handle_failure("t1", "finance", RuntimeError("attempt 1"))
-    await handler.handle_failure("t1", "finance", RuntimeError("attempt 2 — terminal"))
+    await handler.handle_failure("t1", "finance", RuntimeError("attempt 2 - terminal"))
 
     assert ("t1", "finance") not in handler._retry_counts, (
-        "Retry count was not cleared after terminal failure — memory leak"
+        "Retry count was not cleared after terminal failure - memory leak"
     )
 
 

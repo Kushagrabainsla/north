@@ -37,7 +37,7 @@ class MacOSNotifier(Notifier):
             import logging
 
             logging.getLogger(__name__).warning(
-                "alerter not found on PATH — falling back to terminal notifier for card %s", card.id
+                "alerter not found on PATH - falling back to terminal notifier for card %s", card.id
             )
             await self._terminal_fallback.notify(card)
             return

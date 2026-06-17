@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────────────────────── *
- * north — Design System                                                        *
+ * north - Design System                                                        *
  * Apple HIG dark mode semantics throughout.                                    *
  * ─────────────────────────────────────────────────────────────────────────── */
 
@@ -223,7 +223,7 @@ code {
   gap: 12px;
 }
 
-/* ── Command Bar — pinned at bottom ───────────────────────────────────────── */
+/* ── Command Bar - pinned at bottom ───────────────────────────────────────── */
 .command-bar {
   flex-shrink: 0;
   background: var(--bg-primary);
@@ -435,7 +435,7 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.18);
 }
 
-/* ── Agent Chips — uniform, no domain colours ─────────────────────────────── */
+/* ── Agent Chips - uniform, no domain colours ─────────────────────────────── */
 .agent-list { display: flex; flex-wrap: wrap; gap: 7px; }
 
 .agent-chip {
@@ -1057,7 +1057,7 @@ textarea:focus {
 }
 .chat-bubble.north .bubble-content.chat-error { color: var(--red); }
 
-/* Model's private reasoning — dimmed, italic, secondary to the answer. */
+/* Model's private reasoning - dimmed, italic, secondary to the answer. */
 .bubble-reasoning {
   color: var(--text-muted, #888);
   font-style: italic;
@@ -1156,7 +1156,7 @@ textarea:focus {
 .bubble-content.markdown ul, .bubble-content.markdown ol { padding-left: 1.4em; margin: 0 0 0.6em; }
 .bubble-content.markdown li { margin-bottom: 0.2em; }
 
-/* Live streaming response — appears inside the thinking bubble as tokens arrive */
+/* Live streaming response - appears inside the thinking bubble as tokens arrive */
 .bubble-streaming { white-space: normal; opacity: 0.85; border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; }
 .bubble-streaming::after { content: "▍"; animation: blink 0.7s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }

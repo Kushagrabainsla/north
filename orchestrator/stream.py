@@ -101,19 +101,19 @@ class EventStreamManager:
             try:
                 q.put_nowait(message)
             except asyncio.QueueFull:
-                logger.warning("SSE queue full for task %s — dropping event '%s'.", task_id, event)
+                logger.warning("SSE queue full for task %s - dropping event '%s'.", task_id, event)
 
         # Mirror every event to the global stream (TUI / watch clients).
         for q in self._global_subs:
             try:
                 q.put_nowait(message)
             except asyncio.QueueFull:
-                logger.warning("Global SSE queue full — dropping event '%s'.", event)
+                logger.warning("Global SSE queue full - dropping event '%s'.", event)
 
     async def emit_done(self, task_id: str) -> None:
         """Signal the end of a task stream, causing subscribers to close.
 
-        The None sentinel must always reach every subscriber — a subscriber
+        The None sentinel must always reach every subscriber - a subscriber
         that never receives it will block forever on queue.get().  If the
         queue is full, drain it first so the sentinel fits.
         """
@@ -145,7 +145,7 @@ class EventStreamManager:
             task_id:        The task to follow.
             max_queue_size: Maximum buffered events before drops occur.
         """
-        # Snapshot before registering the queue — no await in between, so an
+        # Snapshot before registering the queue - no await in between, so an
         # event is either in the snapshot or delivered via the queue, never both.
         replay = list(self._history.get(task_id, ()))
         done = task_id in self._done
@@ -171,7 +171,7 @@ class EventStreamManager:
     async def subscribe_global(self, max_queue_size: int = 512) -> AsyncIterator[str]:
         """Async generator that yields all task events across the system.
 
-        Stays open indefinitely — callers disconnect by cancelling the task or
+        Stays open indefinitely - callers disconnect by cancelling the task or
         closing the HTTP connection.  The None sentinel is never sent here;
         the stream closes only when the caller disconnects.
         """
