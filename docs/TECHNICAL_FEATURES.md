@@ -1,6 +1,7 @@
 # Technical Features
 > A reference for the most interesting engineering decisions in north.
 > For the full system spec see [ARCHITECTURE.md](ARCHITECTURE.md).
+> For the factory's orchestrator's talk see [FACTORY VIDEO](https://www.youtube.com/watch?v=ow1we5PzK-o)
 
 ---
 
