@@ -12,7 +12,7 @@ from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
-from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier
+from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier, UserInteraction
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
@@ -44,6 +44,7 @@ from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
+from utils.tasks import spawn
 from utils.time import format_timestamp, utcnow
 
 logger = logging.getLogger(__name__)
@@ -55,13 +56,6 @@ _APPROVAL_DECISION_STATUS: dict[str, LedgerStatus] = {
     ApprovalDecision.REJECTED: LedgerStatus.REJECTED,
     ApprovalDecision.TIMEOUT_REJECTED: LedgerStatus.REJECTED,
 }
-
-
-def _on_extraction_done(t: asyncio.Task) -> None:
-    if t.cancelled():
-        logger.warning("post-task extraction cancelled (shutdown during extraction?)")
-    elif t.exception() is not None:
-        logger.warning("post-task extraction failed: %s", t.exception())
 
 
 class Orchestrator:
@@ -96,11 +90,21 @@ class Orchestrator:
         self._execution_planner = execution_planner
         self._task_context_store = task_context_store
         self._failure_handler = failure_handler
-        self._notifier = notifier
         self._stream_manager = stream_manager
         self._approval_store = approval_store
         self._judgement_filter = judgement_filter
         self._north_settings = north_settings
+        # Single mediator for all user-facing cards (approvals, questions,
+        # information). Tools and agents use the same class with their own
+        # dependencies - see approval/interaction.py.
+        self._interaction = UserInteraction(
+            approval_store,
+            notifier=notifier,
+            judgement_filter=judgement_filter,
+            stream_manager=stream_manager,
+            on_auto_resolve=self._record_auto_resolve_ledger,
+            default_timeout=(north_settings.approval_timeout_seconds if north_settings else 300.0),
+        )
         self._synthesizer = synthesizer
         self._tracked_router = tracked_router
         self._episodic_store = episodic_store
@@ -113,9 +117,6 @@ class Orchestrator:
         # it, concurrent submissions could all pass the check before any of them
         # registers, bypassing MAX_CONCURRENT_TASKS.
         self._submit_lock = asyncio.Lock()
-        # Holds references to short-lived fire-and-forget tasks (episode recording,
-        # etc.) so they are not garbage-collected before they finish.
-        self._background_tasks: set[asyncio.Task] = set()
         self._last_pool_refresh_at: float = 0.0
 
     # ------------------------------------------------------------------ #
@@ -296,31 +297,23 @@ class Orchestrator:
     #  Notification with judgement filtering                               #
     # ------------------------------------------------------------------ #
 
-    async def _notify(self, card: Card) -> None:
-        """Register card, run judgement filter, then auto-resolve or surface to user.
+    async def _record_auto_resolve_ledger(self, card: Card, decision: str, chosen_option: str) -> None:
+        """Audit hook for UserInteraction: log a JudgementFilter auto-decision.
 
-        Always registers the card in the ApprovalStore first so it is wait-able
-        regardless of which code path follows.  The Notifier implementations
-        are responsible only for delivering the alert - they never touch the store.
+        Writes the same APPROVAL ledger entry a user decision would, so an
+        auto-approved/rejected card stays fully traceable.
         """
-        self._approval_store.add(card)
-        if self._judgement_filter is not None:
-            decision, chosen_option = await self._judgement_filter.check(card)
-            if decision is not None:
-                await self._write_ledger(
-                    LedgerEntry.new(
-                        source=LedgerSource.APPROVAL,
-                        task_id=card.task_id,
-                        agent=card.agent,
-                        action=f"judgement_filter_auto_{decision}",
-                        input=card.title,
-                        output=chosen_option or decision,
-                        status=LedgerStatus.COMPLETED,
-                    )
-                )
-                self._approval_store.resolve(card.id, decision, chosen_option=chosen_option or "")
-                return
-        await self._notifier.notify(card)
+        await self._write_ledger(
+            LedgerEntry.new(
+                source=LedgerSource.APPROVAL,
+                task_id=card.task_id,
+                agent=card.agent,
+                action=f"judgement_filter_auto_{decision}",
+                input=card.title,
+                output=chosen_option or decision,
+                status=LedgerStatus.COMPLETED,
+            )
+        )
 
     # ------------------------------------------------------------------ #
     #  Stage pipeline                                                      #
@@ -450,9 +443,10 @@ class Orchestrator:
     async def _handle_alignment_conflict(self, task_id: str, tension: str) -> None:
         """Prompt user for approval when a North Star conflict is detected.
 
-        The north_star_conflict SSE event is emitted first for UI awareness,
-        then the card is routed through _notify() so the JudgementFilter and
-        Notifier are applied consistently with every other approval card.
+        The north_star_conflict SSE event is emitted first for UI awareness, then
+        the card is routed through the shared UserInteraction mediator so the
+        JudgementFilter and Notifier are applied consistently with every other
+        approval card.
         """
         card = Card(
             id=generate_id(),
@@ -463,27 +457,16 @@ class Orchestrator:
             message=tension or "This task conflicts with one of your active goals. Proceed?",
             options=["Proceed anyway", "Cancel"],
         )
-        # Emit the conflict event before notifying so the UI can show context.
+        # Emit the conflict event before surfacing so the UI can show context.
         await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
-        # _notify() registers the card in the ApprovalStore, applies the
-        # JudgementFilter (auto-resolve if rules match), and fires the Notifier.
-        await self._notify(card)
+        # The shared mediator registers the card, applies the JudgementFilter
+        # (auto-resolving if a rule matches), fires the Notifier, and blocks until
+        # the user responds or the timeout elapses (then TIMEOUT_REJECTED).
         timeout = self._north_settings.approval_timeout_seconds if self._north_settings else 300.0
-        current = await self._approval_store.wait_for_decision(card.id, timeout=timeout)
-        if current is None:
-            logger.warning(
-                "North Star approval timed out for task %s - treating as rejection",
-                task_id,
-            )
-            # Resolve so the card doesn't linger as "pending" in the store forever.
-            self._approval_store.resolve(card.id, ApprovalDecision.TIMEOUT_REJECTED)
-            raise NorthStarConflictError(tension or "North Star conflict (approval timed out)")
-        # An explicit option choice wins; otherwise fall back to the decision
-        # status - the JudgementFilter and plain approve/reject buttons resolve
-        # with a status only, no chosen_option.
-        chosen_opt = (current.chosen_option or "").strip().lower()
-        approved = chosen_opt == card.options[0].lower() if chosen_opt else current.status == ApprovalDecision.APPROVED
-        if not approved:
+        decided = await self._interaction.request_decision(card, timeout=timeout)
+        if decided.status == ApprovalDecision.TIMEOUT_REJECTED:
+            logger.warning("North Star approval timed out for task %s - treating as rejection", task_id)
+        if decided.status != ApprovalDecision.APPROVED:
             raise NorthStarConflictError(tension or "North Star conflict")
 
     async def _stage_north_star(
@@ -681,9 +664,7 @@ class Orchestrator:
 
         await self._maybe_synthesize(task_id, plan.agents, plan.mode, failures=all_failures)
 
-        t = asyncio.create_task(self._record_episode(task_id, prompt, plan.agents, domain))
-        self._background_tasks.add(t)
-        t.add_done_callback(self._background_tasks.discard)
+        spawn(self._record_episode(task_id, prompt, plan.agents, domain), name=f"record_episode:{task_id}")
         await self._finish_task(task_id, failures=all_failures, total_agents=len(plan.agents))
 
     async def _execute_single_tool(
@@ -800,8 +781,7 @@ class Orchestrator:
         # Single-tool tasks (deterministic, no agent reasoning) are skipped  - 
         # they produce no signal worth extracting.
         if self._extraction_pipeline is not None and not skip_extraction:
-            t = asyncio.create_task(self._extraction_pipeline.run_once())
-            t.add_done_callback(_on_extraction_done)
+            spawn(self._extraction_pipeline.run_once(), name="extraction_run_once")
 
     async def _record_episode(self, task_id: str, prompt: str, agents: list[str], domain: str) -> None:
         """Write a task episode to episodic memory after completion."""
@@ -947,9 +927,7 @@ class Orchestrator:
             except Exception:
                 logger.warning("Post-failure inference pool refresh failed", exc_info=True)
 
-        t = asyncio.create_task(_refresh())
-        self._background_tasks.add(t)
-        t.add_done_callback(self._background_tasks.discard)
+        spawn(_refresh(), name="pool_refresh_after_failure")
 
     async def _run_agent_with_retry(self, agent: Agent, payload: AgentPayload) -> AgentResult:
         """Run an agent, retrying on failure up to the handler's max_retries."""
@@ -1070,7 +1048,7 @@ class Orchestrator:
                 message=result.question or result.output,
                 options=result.question_options if result.has_question else ["Approve", "Reject"],
             )
-            await self._notify(card)
+            await self._interaction.notify(card)
         else:
             card = Card(
                 id=generate_id(),
@@ -1080,4 +1058,4 @@ class Orchestrator:
                 title=f"{agent.name.capitalize()} - Done",
                 message=result.summary,
             )
-            await self._notify(card)
+            await self._interaction.notify(card)

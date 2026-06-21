@@ -82,5 +82,5 @@ class NorthSettings:
                 ),
                 encoding="utf-8",
             )
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning("Failed to persist strategy settings to %s: %s", self._path, exc)

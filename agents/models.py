@@ -15,6 +15,7 @@ from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from approval.base import Notifier
     from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
     from context.fact_store import FactStore
@@ -116,6 +117,9 @@ class AgentDependencies:
     # Injected after construction (same pattern as agent_registry) to avoid
     # building it twice.
     judgement_filter: JudgementFilter | None = field(default=None)
+    # Optional - when set, surfaced cards also fire a system alert (macOS/terminal)
+    # via the TUI-aware Notifier so approvals reach the user when no TUI is attached.
+    notifier: Notifier | None = field(default=None)
     # Semantic tool selection: top-K relevant tools injected per task instead
     # of the full registry list.  None → fall back to full injection.
     tool_index: ToolIndex | None = field(default=None)

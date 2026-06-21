@@ -43,6 +43,7 @@ from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
+from utils.tasks import spawn
 from utils.time import localnow
 
 logger = logging.getLogger(__name__)
@@ -67,29 +68,12 @@ class AgenticLLMAgent(LLMAgent):
     as they arrive so the UI can render them progressively.
     """
 
-    def __init__(self, config: Any, deps: Any) -> None:
-        super().__init__(config, deps)
-        # Strong references to fire-and-forget confidence-recording tasks so
-        # they are not garbage-collected before the DB write completes.
-        self._background_tasks: set[asyncio.Task] = set()
-
     async def _record_tool_call_confidence(self, tool_name: str, success: bool) -> None:
         """Record tool execution confidence if not a special internal tool."""
         if tool_name not in _INTERNAL_TOOLS:
-            t = asyncio.create_task(self._deps.confidence_tracker.record_use(self.name, tool_name, success))
-            self._background_tasks.add(t)
-            t.add_done_callback(self._background_tasks.discard)
-            t.add_done_callback(
-                lambda _t: (
-                    logger.warning(
-                        "Background confidence recording failed for %s/%s: %s",
-                        self.name,
-                        tool_name,
-                        _t.exception(),
-                    )
-                    if not _t.cancelled() and _t.exception() is not None
-                    else None
-                )
+            spawn(
+                self._deps.confidence_tracker.record_use(self.name, tool_name, success),
+                name=f"record_confidence:{self.name}/{tool_name}",
             )
 
     def _append_tool_call_exchange(self, messages: list[dict], results: list[tuple[ToolCall, str, bool]]) -> None:
@@ -622,6 +606,7 @@ class AgenticLLMAgent(LLMAgent):
             store=self._require_approval_store(),
             stream_manager=self._deps.stream_manager,
             judgement_filter=self._deps.judgement_filter,
+            notifier=self._deps.notifier,
             timeout=self._deps.approval_timeout_seconds,
             agent_name=self.name,
             task_id=payload.task_id,

@@ -57,9 +57,6 @@ class FactStore:
         self._embed_fn = embed_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_SCHEMA)
         # (id, content, embedding_vector) - rebuilt lazily, invalidated on insert.
         self._cache: list[tuple[str, str, list[float]]] | None = None

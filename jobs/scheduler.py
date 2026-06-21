@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from jobs.base import JobProcessor
-from jobs.models import Job, JobPriority, JobStatus, JobType
+from jobs.models import Job, JobPriority, JobType
 from utils.ids import generate_id
 
 if TYPE_CHECKING:
@@ -136,10 +136,7 @@ class CronScheduler:
     async def _is_already_running(self, entry: CronEntry) -> bool:
         """Return True if a prior firing of this entry is still pending or running."""
         try:
-            for status in (JobStatus.PENDING, JobStatus.RUNNING):
-                jobs = await self._processor.list_jobs(status=status, limit=50)
-                if any(j.agent == entry.agent and j.task == entry.task for j in jobs):
-                    return True
+            return await self._processor.has_active_job(entry.agent, entry.task)
         except Exception:
             logger.warning("CronScheduler: could not check for running jobs, proceeding")
         return False

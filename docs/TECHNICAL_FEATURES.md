@@ -15,24 +15,25 @@
 
 ```
 messages = [system_prompt, user_task]
-tools    = [typed JSON Schema defs] + [delegate_task, request_approval]
+tools    = [typed JSON Schema defs] + [delegate_task, request_approval, ask_user]
 
-for _ in range(max_iterations):
+for _ in range(agent_max_iterations):   # configurable from settings, default 40
     compact history if approaching context window limit
     response = complete_with_tools(messages, tools, token_callback)
 
     if response.type == "message":
-        stream tokens → SSE; return final answer          # done
+        stream tokens to SSE; return final answer          # done
 
     if response.type == "tool_calls":
-        execute all calls in parallel via asyncio.gather()
+        run read-only calls in parallel via asyncio.gather()
+        run mutating calls one at a time under a workspace lock
         record confidence via ConfidenceTracker
         emit tool_called + tool_result SSE events
         append (assistant tool-call turn + tool results) to messages
         continue
 ```
 
-All tool calls within one iteration execute in parallel. The `request_approval` and `delegate_task` tools are synthetic - they never touch the tool registry, they block on an `asyncio.Event` or sub-agent coroutine respectively.
+Within one iteration, read-only tool calls run in parallel, while mutating calls run one at a time under a per-workspace lock so two edits to the same file cannot race. The `delegate_task`, `request_approval`, and `ask_user` tools are synthetic: they never touch the tool registry. They run a sub-agent coroutine or block on the shared user-interaction mediator (see Section 16).
 
 ---
 
@@ -80,17 +81,15 @@ Actual candidate ranking within each strategy blends `base_quality` with a live 
 | Strategy | Model ordering | Use case |
 |---|---|---|
 | `eco` | cheapest first, climb on failure | minimise cost |
-| `cruise` | role-aware tier, fall through adjacent tiers | balanced default |
+| `cruise` | honour the requested priority, then rank candidates by quality and live success rate | balanced default |
 | `sport` | most capable first, descend on failure | maximise quality |
 
-**Cruise chain example** (`priority=HIGH`):
-```
-reasoning pool → fast_cheap pool → high_volume pool → free_fallback
-```
+**Cruise ranking** (`priority=HIGH`): candidates from the allowed pool are ranked by the strategy and by effective quality, which blends base quality with a live success rate. It is not a fixed tier ladder.
 
-**Two exception classes advance the chain** (neither stops it):
+**Exception classes that advance the chain** (none of them stops it):
 
-- `_RateLimited` - HTTP 429/402/404/503. Silent, no log entry.
+- `ModelRateLimitedError` - HTTP 429/404/503. A cooldown is applied, logged at `INFO`.
+- `PaymentRequiredError` - HTTP 402. A longer payment cooldown is applied, logged at `WARNING`.
 - `InferenceError` - HTTP 400, bad model ID, unsupported parameters. Logged at `WARNING`.
 
 `AllModelsRateLimitedError` is raised only when the entire ordered list is exhausted.
@@ -99,7 +98,7 @@ reasoning pool → fast_cheap pool → high_volume pool → free_fallback
 
 ## 4. Error-Triggered Pool Refresh with Cooldown
 
-**What:** when a model in the fallback chain fails, `_maybe_refresh_pools_background()` schedules a background pool refresh, subject to a 60-second cooldown.
+**What:** on a retryable agent failure, `_maybe_refresh_pools_background()` schedules a background pool refresh, subject to a 60-second cooldown.
 
 **Why:** a 404 from a retired model ID is a signal that the local pool cache is stale. Refreshing immediately means the next call uses current model IDs rather than continuing to hammer dead endpoints. The cooldown prevents a storm of refresh calls if many models fail in quick succession.
 
@@ -125,7 +124,7 @@ async def _maybe_refresh_pools_background(self) -> None:
     if now - self._last_pool_refresh_at < POOL_REFRESH_COOLDOWN:
         return
     self._last_pool_refresh_at = now
-    asyncio.create_task(self._deps.inference_router.refresh_pools())
+    spawn(self._deps.inference_router.refresh_pools(), name="pool_refresh")
 ```
 
 ---
@@ -134,19 +133,21 @@ async def _maybe_refresh_pools_background(self) -> None:
 
 **What:** every tool edge in the tool graph carries a confidence score from 0.0 to 1.0 updated by an exponential moving average after every use.
 
-**Why:** the old fixed-delta approach (`+0.05 / -0.03`) took ~27 successful uses to recover a low-scoring tool. EMA with α=0.10 recovers in ~10 successful uses, giving recent behaviour much more weight.
+**Why:** the old fixed-delta approach (`+0.05 / -0.03`) took ~27 successful uses to recover a low-scoring tool. EMA with a base alpha of 0.10 recovers in ~10 successful uses, giving recent behaviour much more weight. On consecutive failures the alpha grows so repeated failures lower confidence faster.
 
 **Formula:**
 
 ```python
-alpha = 0.10
+# base alpha on success; on consecutive failures alpha scales up:
+# 0.10 -> 0.20 -> 0.40 (capped at 0.50)
+alpha = 0.10 if was_helpful else min(0.50, 0.10 * 2 ** min(consecutive_failures, 2))
 outcome = 1.0 if was_helpful else 0.0
 new_confidence = clamp(alpha * outcome + (1 - alpha) * current_confidence, 0.0, 1.0)
 ```
 
-**Persistence:** scores live in `~/.north/tools.db`. On startup, reliable filesystem/shell tools are seeded at 0.80 via `seed_defaults()`. New agent pairs start at 0.50. A new agent can declare `similar_to: health` in `config.yaml` to inherit the health agent's confidence rows as its prior.
+**Persistence:** scores live in `~/.north/tools.db`. The read-modify-write runs in one atomic transaction (`BEGIN IMMEDIATE`) so two concurrent updates for the same (agent, tool) cannot clobber each other. On startup, reliable filesystem/shell tools are seeded at 0.80 via `seed_defaults()`. New agent pairs start at 0.50. A new agent can declare `similar_to: health` in `config.yaml` to inherit the health agent's confidence rows as its prior.
 
-**Effect on the agent loop:** tool definitions are injected into the prompt sorted by confidence descending. Low-confidence tools are only included when the task explicitly requires them, keeping context lean.
+**Effect on the agent loop:** when a tool index is available, the agent injects the top-k tools that are semantically relevant to the task, then sorts them by confidence descending. It falls back to the full tool list when the index is unavailable.
 
 ---
 
@@ -179,9 +180,9 @@ The summary call uses `PoolPriority.LOW` so it doesn't compete with the main age
 
 ## 7. Real-Time Token Streaming via SSE
 
-**What:** `complete_with_tools()` streams the model's text response token-by-token to an async callback, which emits `token` SSE events to the Web UI.
+**What:** `complete_with_tools()` streams the model's text response token-by-token to an async callback, which emits `token` SSE events to connected north clients (the CLI stream and the TUI).
 
-**Why:** without streaming, the Web UI shows nothing until the full response is assembled server-side. Streaming gives the user progressive rendering - the response appears word by word as the model generates it, just like a native chat interface.
+**Why:** without streaming, the client sees nothing until the full response is assembled server-side. Streaming gives the user progressive rendering. The response appears word by word as the model generates it, just like a native chat interface.
 
 **Implementation:** `OpenAICompatibleProvider.complete_with_tools()` uses `httpx.AsyncClient.stream()` and processes each `data: {...}` SSE chunk. Text token deltas go to `token_callback` immediately. Tool call argument chunks are accumulated in a dict until `[DONE]`.
 
@@ -206,7 +207,7 @@ async with self._client.stream("POST", "/chat/completions", json=body) as resp:
 
 ```
 write()/append() call
-  → asyncio.create_task(re-index updated document)
+  → spawn(re-index updated document, name="reindex")
       → chunk document into paragraphs
       → InferenceRouter.embed(paragraphs) in one batch call
       → INSERT INTO embeddings.db (doc, chunk_idx, text, vector)
@@ -236,13 +237,13 @@ CREATE TABLE episodes (
   id        TEXT PRIMARY KEY,
   task_id   TEXT,
   domain    TEXT NOT NULL,
-  summary   TEXT NOT NULL,      -- "Task: <120 chars>\nResult: <400 chars>"
+  summary   TEXT NOT NULL,      -- "Task: <200 chars>\nResult: <500 chars>"
   embedding TEXT,               -- JSON float array, null if embed failed
   timestamp TEXT NOT NULL
 )
 ```
 
-**Retrieval:** cosine similarity (numpy) over all stored vectors; keyword fallback when embeddings unavailable. The `ORDER BY timestamp DESC LIMIT 500` cap keeps retrieval fast as the store grows.
+**Retrieval:** cosine similarity (numpy) over all stored vectors; keyword fallback when embeddings are unavailable. Episodes are pruned on write: rows older than 90 days are deleted, then the oldest rows are trimmed so the store stays within a fixed cap. This keeps retrieval fast as the store grows.
 
 ---
 
@@ -252,9 +253,9 @@ CREATE TABLE episodes (
 
 **Why:** retry strategies differ by error type. A `rate_limit` needs a cooldown. A `network` error should retry immediately. A `logic_error` should never retry. Without explicit classification, all errors collapse into a single "failed" bucket and you can't distinguish them in the Ledger.
 
-**Tag taxonomy:**
+**Tag taxonomy:** tags are assigned by ordered heuristics over the exception's type and message text, not a strict status-code table.
 
-| Tag | Triggered by |
+| Tag | Typical signals |
 |---|---|
 | `rate_limit` | 429, 402, `AllModelsRateLimitedError` |
 | `context_overflow` | 400 with "context length" in message |
@@ -331,7 +332,7 @@ card = await approval_store.wait_for_decision(card_id, timeout=300.0)
 
 | Layer | Class | Cost | Decision |
 |---|---|---|---|
-| 1. Local inspection | `CommandSafetyInspector` | Zero - pure prefix match | Auto-approve read-only commands (`git status`, `cat`, `ls`, `grep`, etc.) |
+| 1. Local inspection | `CommandSafetyInspector` | Zero, local only | Auto-approve read-only commands (`git status`, `cat`, `ls`, `grep`, etc.) after metacharacter, recursive-grep, and sensitive-path screening |
 | 2. Learned rules | `JudgementFilter` | One LLM call against `judgement_rules.md` | Auto-approve/reject based on patterns the user has established through prior approvals |
 | 3. Manual approval | `ApprovalStore` card | Human decision | Fallback for unknown or mutating commands |
 
@@ -341,12 +342,18 @@ card = await approval_store.wait_for_decision(card_id, timeout=300.0)
 class CommandSafetyInspector:
     instant_safe_prefixes = [
         "git status", "git diff", "git log", "git show", "git branch",
-        "cat ", "grep ", "find ", "ls ", "pwd", "whoami",
-    ]
+        "cat ", "grep ", "ls ", "pwd", "whoami",
+    ]  # note: `find` is NOT here; it can walk trees and run actions
 
     def is_instantly_safe(self, command: str) -> bool:
-        cleaned = command.strip().lower()
-        return any(cleaned.startswith(p) for p in self.instant_safe_prefixes)
+        cleaned = command.strip()
+        if _SHELL_METACHARS.search(cleaned):           # ; & | ` $ < > ( ) { } newline
+            return False
+        if not any(cleaned.lower().startswith(p) for p in self.instant_safe_prefixes):
+            return False
+        if cleaned.lower().startswith("grep ") and _grep_is_recursive(cleaned):
+            return False
+        return not references_sensitive_path(cleaned)  # blocks ~/.ssh, /etc, and .. escapes
 ```
 
 This is **not a security boundary** - it's a developer-velocity optimisation. The list intentionally covers only commands that cannot mutate the filesystem, push to remotes, or spawn network requests.
@@ -361,7 +368,7 @@ If both Layer 1 and Layer 2 are inconclusive, a standard approval card is emitte
 
 **Dependency injection:** `JudgementFilter` is instantiated once during server startup in `orchestrator/app.py` and shared between the `Orchestrator` (for general approvals) and `BashTool` (for command-specific approvals). `CommandSafetyInspector` is a zero-dependency value object created internally by `BashTool.__init__()`.
 
-The same approval flow (JudgementFilter → card → `wait_for_decision`) is shared by `BashTool`, `ShellTool`, and `PatchFileTool` via `tools/specialized/_approval.py:request_approval_decision()`, so the three tools never drift.
+The same approval flow is shared by every gated tool (`BashTool`, `ShellTool`, `PatchFileTool`, `GitTool`, `GhTool`, `KasaTool`) through the one `UserInteraction` mediator (see Section 16), so the tools never drift.
 
 ## 14. Persistent PTY Shell Sessions
 
@@ -382,7 +389,27 @@ The same approval flow (JudgementFilter → card → `wait_for_decision`) is sha
 **Why:** It turns north's approval layer into a true review gate for edits - the user sees exactly what changes before it lands, rather than approving a blind "edit file" action. This plays to north's differentiator (the approval layer + ledger) rather than copying per-tool permission prompts.
 
 **How:**
-- Computation is split from writing: `_plan()` returns `(new_content, old_content, blocks_applied)` purely, with no side effect, for all three edit shapes (`edits` list, `old_string`/`new_string`, SEARCH/REPLACE blocks).
+- Computation is split from writing: `_plan()` performs no writes. It reads the current file contents and returns `(new_content, old_content, blocks_applied)` for all three edit shapes (`edits` list, `old_string`/`new_string`, SEARCH/REPLACE blocks).
 - A no-op edit (`new_content == old_content`) short-circuits to success without prompting.
-- The injected, diff-previewing instance is registered in `orchestrator/app.py`, overriding the auto-discovered no-arg instance by name. Without a store (e.g. unit tests) the tool applies immediately - backward compatible.
+- The injected, diff-previewing instance is registered in `orchestrator/app.py`, overriding the auto-discovered no-arg instance by name. Without a store (e.g. unit tests) the tool applies immediately, which keeps it backward compatible.
+
+---
+
+## 16. Unified User Interaction Mediator
+
+**What:** `approval/interaction.py:UserInteraction` is the single path for every user-facing card: approvals, questions, and information. Tools, agents, and the orchestrator all go through it.
+
+**Why:** the surface-then-await sequence used to be reimplemented in three places, which let them drift. For example, one path decided "approved" by matching a button label while another used the card status. One mediator removes the duplication and gives every card the same behavior.
+
+**How:** for each card it applies the learned `JudgementFilter` (which can auto-resolve), registers the card in the `ApprovalStore`, emits the SSE event, fires the TUI-aware `Notifier`, and for decisions it blocks on `wait_for_decision`. The decision is read from the card's `status` (approved or rejected), never from a button label. A timeout resolves the card as `timeout_rejected`. Each caller passes only the dependencies it has: the orchestrator wires a notifier and a ledger audit hook, while tools and agents pass the stream manager.
+
+---
+
+## 17. Supervised Background Tasks
+
+**What:** `utils/tasks.py:spawn(coro, *, name)` is the one way north launches a background coroutine it does not await.
+
+**Why:** a bare `asyncio.create_task(...)` can be garbage-collected before it finishes, and any exception it raises vanishes silently. Several places had hand-rolled "create a task and attach a logging callback" code that did the same thing in slightly different ways.
+
+**How:** `spawn` keeps a strong reference to the task until it completes and attaches a done-callback that logs any exception under the given name. Cancellation is logged at debug, not as an error. Re-indexing, episode recording, ledger writes, confidence recording, and pool refresh all use it.
 

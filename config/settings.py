@@ -11,7 +11,7 @@ import stat as _stat
 from pathlib import Path
 from typing import Literal
 
-from pydantic import PrivateAttr
+from pydantic import Field, PrivateAttr
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
@@ -74,22 +74,22 @@ class Settings(BaseSettings):
     north_env: Literal["development", "production", "test"] = "development"
 
     # Tuning parameters
-    job_poll_interval_seconds: int = 5
-    agent_read_timeout_seconds: int = 30
-    task_cleanup_completed_days: int = 7
-    task_cleanup_failed_days: int = 30
-    confidence_increase_per_helpful_use: float = 0.05
-    confidence_decrease_per_unhelpful_use: float = 0.03
-    confidence_auto_approve_threshold: float = 0.8
-    inference_pool_refresh_interval_hours: int = 6
-    agent_max_iterations: int = 40
-    agent_history_keep_recent: int = 10
+    job_poll_interval_seconds: int = Field(default=5, ge=1)
+    agent_read_timeout_seconds: int = Field(default=30, ge=1)
+    task_cleanup_completed_days: int = Field(default=7, ge=0)
+    task_cleanup_failed_days: int = Field(default=30, ge=0)
+    confidence_increase_per_helpful_use: float = Field(default=0.05, ge=0.0, le=1.0)
+    confidence_decrease_per_unhelpful_use: float = Field(default=0.03, ge=0.0, le=1.0)
+    confidence_auto_approve_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+    inference_pool_refresh_interval_hours: int = Field(default=6, ge=1)
+    agent_max_iterations: int = Field(default=40, ge=1)
+    agent_history_keep_recent: int = Field(default=10, ge=1)
 
     # Extraction pipeline tuning
-    extraction_poll_interval_seconds: int = 120
-    extraction_max_daily_cost_usd: float = 0.10
-    extraction_min_output_chars: int = 100
-    extraction_max_concurrent: int = 5
+    extraction_poll_interval_seconds: int = Field(default=120, ge=1)
+    extraction_max_daily_cost_usd: float = Field(default=0.10, ge=0.0)
+    extraction_min_output_chars: int = Field(default=100, ge=0)
+    extraction_max_concurrent: int = Field(default=5, ge=1)
 
     @property
     def secret(self) -> str:

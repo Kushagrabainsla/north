@@ -123,7 +123,8 @@ class AgentRegistry:
                 continue
             try:
                 config = AgentConfig.from_yaml(entry / "config.yaml")
-            except Exception:
+            except Exception as exc:
+                logger.warning("AgentRegistry.reload: skipping %s - invalid config.yaml: %s", entry.name, exc)
                 continue
             if config.agent in self._agents:
                 continue

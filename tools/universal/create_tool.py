@@ -16,6 +16,7 @@ from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import request_approval_decision
 
 if TYPE_CHECKING:
+    from approval.base import Notifier
     from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
@@ -132,8 +133,9 @@ class CreateToolTool(ApprovalGatedTool):
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
         judgement_filter: JudgementFilter | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter)
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter, notifier)
         self._registry = tool_registry
 
     def format_output(self, data: dict[str, Any]) -> str:
@@ -212,6 +214,7 @@ class CreateToolTool(ApprovalGatedTool):
             options=("Approve", "Reject"),
             stream_manager=self._stream_manager,
             judgement_filter=self._judgement_filter,
+            notifier=self._notifier,
             timeout=self._approval_timeout_seconds,
         )
 

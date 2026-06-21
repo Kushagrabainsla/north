@@ -68,7 +68,7 @@ from cli.constants import (
     _VALID_DOCS,
     _Provider,
 )
-from cli.formatting import _build_steps_table
+from cli.formatting import _build_steps_table, _reconstruct_task_output
 from cli.tui import run as _tui_run
 from utils.security import load_secret
 from utils.version import NORTH_VERSION
@@ -76,19 +76,27 @@ from utils.version import NORTH_VERSION
 _console = Console(force_terminal=sys.stdout.isatty())
 
 
-def _provider_is_configured(provider: _Provider, env_file: Path) -> bool:
+def _load_env_keys(env_file: Path) -> dict[str, str]:
+    """Parse ``KEY=value`` lines from *env_file* once. Returns {} when absent."""
+    if not env_file.exists():
+        return {}
+    keys: dict[str, str] = {}
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            keys[key.strip()] = value.strip()
+    return keys
+
+
+def _provider_is_configured(provider: _Provider, env_keys: dict[str, str]) -> bool:
     if os.environ.get(provider["env_key"], "").strip():
         return True
-    if not env_file.exists():
-        return False
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        if line.startswith(f"{provider['env_key']}=") and line.split("=", 1)[1].strip():
-            return True
-    return False
+    return bool(env_keys.get(provider["env_key"], "").strip())
 
 
 def _any_provider_configured(env_file: Path) -> bool:
-    return any(_provider_is_configured(p, env_file) for p in _PROVIDERS)
+    env_keys = _load_env_keys(env_file)
+    return any(_provider_is_configured(p, env_keys) for p in _PROVIDERS)
 
 
 def _parse_provider_selection(raw: str) -> list[_Provider]:
@@ -235,6 +243,7 @@ def _launch_tui(
         server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
         log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
         proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
+        log_file.close()  # child holds its own dup; close the parent's copy so the fd isn't leaked
         pid_path.write_text(str(proc.pid), encoding="utf-8")
         _wait_for_server(host, port, proc=proc)
         workspace = resolved_workspace
@@ -315,10 +324,7 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
     body: dict = {"prompt": prompt}
     if workspace:
         body["workspace"] = workspace
-    try:
-        resp = _api("POST", "/orchestrator/task", json=body)
-    except SystemExit:
-        return ""
+    resp = _api("POST", "/orchestrator/task", json=body)
     task_id = resp.json()["task_id"]
 
     steps: list[tuple[str, str, bool]] = []
@@ -476,10 +482,9 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
         try:
             ledger_resp = _api("GET", f"/orchestrator/ledger?task_id={task_id}&limit=20")
             entries = ledger_resp.json()
-            outputs = [e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output")]
-            output_text = "\n\n".join(outputs) if outputs else "Task completed."
+            output_text = _reconstruct_task_output(entries) or "Task completed."
         except Exception:
-            output_text = "Task completed."
+            output_text = "Task completed, but the result could not be retrieved."
 
     _console.print()
     _console.print(
@@ -1307,7 +1312,7 @@ def _wait_for_server(
         if _is_north_server(host, port):
             _console.print("  [dim green]✓[/dim green]  server ready")
             return
-        time.sleep(1)
+        time.sleep(0.25)
     _console.print("  [red]server did not respond in time[/red]", err=True)
     raise typer.Exit(1) from None
 
@@ -1443,6 +1448,7 @@ def start(
 
     log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
     proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
+    log_file.close()  # child holds its own dup; close the parent's copy so the fd isn't leaked
     pid_path.write_text(str(proc.pid), encoding="utf-8")
 
     _wait_for_server(host, port)

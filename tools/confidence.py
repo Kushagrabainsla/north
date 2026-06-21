@@ -115,6 +115,10 @@ class ConfidenceTracker:
         helpful_inc = 1 if was_helpful else 0
 
         with open_db_connection(self._db_path) as conn:
+            # Acquire the write lock up front so the SELECT-then-UPDATE below is
+            # atomic: concurrent record_use() calls for the same (agent, tool)
+            # cannot read the same baseline and clobber each other's EMA update.
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT confidence, uses_total, uses_helpful, consecutive_failures "
                 "FROM tool_confidence WHERE agent = ? AND tool = ?",

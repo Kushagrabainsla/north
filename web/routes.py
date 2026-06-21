@@ -7,6 +7,7 @@ See docs/CODING_STYLE.md Sections 12, 17.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC
 from pathlib import Path
 
@@ -55,6 +56,12 @@ _inference_router = None
 _confidence_tracker = None
 _cron_store: UserCronStore | None = None
 _approval_store: ApprovalStore | None = None
+# Bound Orchestrator.respond_approval, injected at startup. Routing web-form
+# decisions through it (instead of ApprovalStore.resolve directly) ensures the
+# ledger entry and judgement-rule learning happen exactly like the API path.
+_respond_approval = None
+
+logger = logging.getLogger(__name__)
 
 
 def configure(
@@ -67,10 +74,11 @@ def configure(
     confidence_tracker,
     cron_store: UserCronStore | None = None,
     approval_store: ApprovalStore | None = None,
+    respond_approval=None,
 ) -> None:
     global _ledger, _agent_registry, _context_store, _context_injector
     global _job_processor, _inference_router, _confidence_tracker, _cron_store
-    global _approval_store
+    global _approval_store, _respond_approval
     _ledger = ledger
     _agent_registry = agent_registry
     _context_store = context_store
@@ -80,6 +88,7 @@ def configure(
     _confidence_tracker = confidence_tracker
     _cron_store = cron_store
     _approval_store = approval_store
+    _respond_approval = respond_approval
 
 
 def _get_ledger() -> LedgerWriter:
@@ -211,9 +220,18 @@ async def approvals_respond(request: Request) -> RedirectResponse:
     form = await request.form()
     card_id = str(form.get("card_id", ""))
     decision = str(form.get("decision", "approved"))
+    chosen_option = str(form.get("chosen_option", ""))
 
-    if _approval_store is not None:
-        _approval_store.resolve(card_id, decision)
+    # Route through the Orchestrator so the decision is recorded in the ledger
+    # and feeds judgement-rule learning - identical to the API/callback path.
+    # Fall back to a direct store resolve only if the callable was not wired.
+    if _respond_approval is not None:
+        try:
+            await _respond_approval(card_id=card_id, decision=decision, chosen_option=chosen_option)
+        except (LookupError, ValueError) as exc:
+            logger.warning("Approval response for card %s rejected: %s", card_id, exc)
+    elif _approval_store is not None:
+        _approval_store.resolve(card_id, decision, chosen_option=chosen_option)
     return RedirectResponse(url="/ui/approvals", status_code=303)
 
 

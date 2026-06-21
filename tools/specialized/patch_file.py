@@ -122,6 +122,7 @@ class PatchFileTool(ApprovalGatedTool):
             options=("Apply", "Cancel"),
             stream_manager=self._stream_manager,
             judgement_filter=self._judgement_filter,
+            notifier=self._notifier,
             timeout=self._approval_timeout_seconds,
         )
 

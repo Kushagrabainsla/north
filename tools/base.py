@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
+    from approval.base import Notifier
     from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
@@ -74,11 +75,13 @@ class ApprovalGatedTool(Tool, ABC):
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
         judgement_filter: JudgementFilter | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
         self._approval_store = approval_store
         self._stream_manager = stream_manager
         self._approval_timeout_seconds = approval_timeout_seconds
         self._judgement_filter = judgement_filter
+        self._notifier = notifier
 
 
 class AuthenticatedTool(Tool, ABC):

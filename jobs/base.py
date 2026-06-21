@@ -58,6 +58,14 @@ class JobProcessor(ABC):
         """List jobs, optionally filtered by status, ordered by scheduled_at desc."""
 
     @abstractmethod
+    async def has_active_job(self, agent: str, task: str) -> bool:
+        """Return True if a pending or running job already exists for (agent, task).
+
+        Backs the cron scheduler's duplicate-run guard so a firing is skipped
+        while a prior run of the same entry is still in flight.
+        """
+
+    @abstractmethod
     async def run(
         self,
         on_job: Callable[[Job], Awaitable[Any]] | None = None,

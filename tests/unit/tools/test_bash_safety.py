@@ -65,6 +65,9 @@ class TestCommandSafetyInspector:
             "cat ~/.ssh/id_rsa",
             "cat ~/.north/.env",
             "cat ~/.north/secret.key",
+            # Relative parent-directory escapes must not bypass approval (CL1/A1).
+            "cat ../../.ssh/id_rsa",
+            "cat ../../../etc/passwd",
         ],
     )
     def test_mutating_commands_are_not_safe(self, command: str) -> None:
@@ -111,7 +114,9 @@ class TestBashToolApprovalBypass:
         approved = await tool._request_approval("task-1", "npm test")
         assert approved is True
         jf.check.assert_awaited_once()
-        tool._approval_store.add.assert_not_called()
+        # The auto-approved card is still recorded in the store (added + resolved)
+        # for audit; the point is that the user is never asked (no wait).
+        tool._approval_store.add.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_judgement_filter_auto_rejects(self) -> None:
@@ -125,12 +130,13 @@ class TestBashToolApprovalBypass:
     @pytest.mark.asyncio
     async def test_judgement_filter_undecided_falls_through_to_manual(self) -> None:
         jf = MagicMock()
-        jf.check = AsyncMock(return_value=("undecided", None))
+        jf.check = AsyncMock(return_value=(None, ""))
         tool = self._make_tool(judgement_filter=jf)
 
         # Simulate user approving via the approval store
         resolved_card = MagicMock()
         resolved_card.chosen_option = "Run"
+        resolved_card.status = "approved"
         tool._approval_store.wait_for_decision = AsyncMock(return_value=resolved_card)
 
         approved = await tool._request_approval("task-1", "python setup.py install")
@@ -145,6 +151,7 @@ class TestBashToolApprovalBypass:
 
         resolved_card = MagicMock()
         resolved_card.chosen_option = "Run"
+        resolved_card.status = "approved"
         tool._approval_store.wait_for_decision = AsyncMock(return_value=resolved_card)
 
         approved = await tool._request_approval("task-1", "make build")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -62,10 +63,25 @@ class CooldownStore:
         self._persist(key, mono_expiry)
 
     def _persist(self, key: _CooldownKey, mono_expiry: float) -> None:
+        """Persist payment cooldowns to disk without blocking the event loop.
+
+        When called from within a running loop the file I/O is offloaded to a
+        worker thread; otherwise (e.g. at startup) it runs inline.
+        """
+        if self._path is None:
+            return
+        wall_expiry = time.time() + max(0.0, mono_expiry - time.monotonic())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._persist_sync(key, wall_expiry)
+            return
+        loop.run_in_executor(None, self._persist_sync, key, wall_expiry)
+
+    def _persist_sync(self, key: _CooldownKey, wall_expiry: float) -> None:
         if self._path is None:
             return
         try:
-            wall_expiry = time.time() + max(0.0, mono_expiry - time.monotonic())
             data: dict[str, float] = {}
             if self._path.exists():
                 with contextlib.suppress(Exception):

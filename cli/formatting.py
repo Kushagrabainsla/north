@@ -15,6 +15,13 @@ from rich.text import Text
 from cli.constants import _FILL_COLOURS, _MARKUP_RE, _SLASH_COMMANDS
 
 
+def _reconstruct_task_output(entries: list[dict]) -> str:
+    """Join the ``agent_completed`` outputs from ledger *entries* into one string."""
+    return "\n\n".join(
+        e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output")
+    )
+
+
 def _fmt_params(params: dict) -> str:
     parts = []
     for k, v in params.items():

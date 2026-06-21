@@ -42,6 +42,7 @@ def _sync_docker_secret(compose_file: Path) -> None:
             secret_path = Path.home() / ".north" / "secret.key"
             secret_path.parent.mkdir(parents=True, exist_ok=True)
             secret_path.write_text(result.stdout.strip(), encoding="utf-8")
+            secret_path.chmod(0o600)
     except Exception:
         pass
 

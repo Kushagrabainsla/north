@@ -95,6 +95,10 @@ class EmbeddingIndex:
 
         scored: list[tuple[float, str, str]] = []
         for doc, chunk_text, emb in self._cache:
+            # Skip vectors whose dimension differs from the query (e.g. a row
+            # embedded by a different model) - one bad row must not break search.
+            if len(emb) != len(qvec):
+                continue
             sim = cosine_similarity(qvec, emb)
             label = doc.removesuffix(".md").replace("_", " ").title()
             scored.append((sim, label, chunk_text))

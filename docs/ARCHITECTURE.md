@@ -1,6 +1,6 @@
 # north: System Specification
 ### Personal Life Operating System
-> Version 1.3 · May 2026
+> Version 1.3.6 · May 2026
 
 ---
 
@@ -64,7 +64,7 @@ north is built from six distinct layers - Perception, Orchestrator, Agent, Appro
                          |
 +------------------------v----------------------------+
 |                   ORCHESTRATOR                      |
-|       Classifier -> North star check -> Route       |
+|     Plan (classify + plan) -> North star -> Route   |
 +-------+------------------+------------------+-------+
         |                  |                  |
 +-------v------+  +--------v-----+  +---------v----+  +---------+
@@ -121,10 +121,10 @@ The trade-off is explicit: audio leaves the machine in exchange for sub-second t
 
 ### 3.2 Text Input: Keyboard Prompt
 
-The user types a prompt directly into the Web UI or CLI and submits it. Routes directly to the Orchestrator via the same endpoint.
+The user types a prompt directly into the CLI or the interactive TUI and submits it. Routes directly to the Orchestrator via the same endpoint.
 
-- Available via Web UI input field
 - Available via CLI: `north task "your prompt here"`
+- Available via the interactive TUI: `north chat`
 - Both paths hit `POST /orchestrator/task`
 
 ### 3.3 What Is Out of Scope for v1
@@ -173,36 +173,37 @@ CREATE TABLE ledger (
   cost_usd        REAL,
   duration_ms     INTEGER,           -- wall-clock duration of the event in milliseconds
   error_type      TEXT,              -- stable tag from classify_error(): rate_limit | context_overflow | timeout | network | parse_error | config_error | logic_error
-  status          TEXT,              -- completed | pending | failed | approved | rejected | cancelled
+  status          TEXT,              -- completed | pending | failed | approved | rejected | cancelled | awaiting_input
   created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 ```
 
-**Two output fields are intentional.** `output` is a human-readable summary shown in the Ledger viewer in the Web UI. `agent_output` is the full structured JSON the agent produced, used exclusively for reconstructing the Task Context Object during failure recovery. Both are written together when an agent completes its subtask.
+**Two output fields are intentional.** `output` is a human-readable summary shown in the CLI and TUI ledger views. `agent_output` is the full structured JSON the agent produced, used exclusively for reconstructing the Task Context Object during failure recovery. Both are written together when an agent completes its subtask.
 
 ### 4.3 Source Field: Complete Enum
 
 The `source` field must be exactly one of the following values. All writers across the entire codebase must use these exact strings. No other values are valid.
 
 ```
-prompt              user typed a prompt via CLI or Web UI
+prompt              user typed a prompt via CLI or TUI
 mic                 user spoke via dictation key, Whisper transcribed
 cron                job triggered by the cron scheduler
 agent               an agent writing its own completion entry
 async               an async or retry job triggered by the job processor
 system              internal system events (startup, shutdown, config change,
-                    classifier decisions, routing decisions, north star checks,
+                    planning and routing decisions, north star checks,
                     extraction pipeline writes, tool confidence updates)
 manual_injection    user fed context via file, text, or URL
 inference_router    inference cost and model usage logging per API call
 approval            user approved, rejected, or answered a question card
+clarification       the user's answer to an ask_user question (learnable)
 webhook             task triggered by an external service via POST /orchestrator/webhooks/{source}
 ```
 
 ### 4.4 Write Rules
 
 - Every agent writes its own entry immediately upon completing its subtask, not when the whole task completes
-- The Orchestrator writes entries (source: system) for routing decisions, north star checks, and classifier decisions
+- The Orchestrator writes entries (source: system) for planning decisions, routing decisions, and north star checks
 - The Orchestrator writes entries (source: system) for every inter-agent data request it mediates
 - The job processor writes entries for every cron and async job execution
 - The Approval Layer writes entries (source: approval) for every approval, rejection, and question answered
@@ -341,20 +342,15 @@ north context add --text "My LinkedIn internship starts June 2nd, team is distri
 north context add --url "https://linkedin.com/jobs/view/123456"
 ```
 
-**Via Web UI:**
-- Drag and drop file upload
-- Text input field for direct facts
-- URL field for web content ingestion
-
 The extraction pipeline decides which context document each piece of information belongs to.
 
 ### 5.6 Context Viewer
 
-The Web UI exposes a context viewer where the user can:
-- Read all five context documents
-- Edit them directly (writes via `ContextStore.write()`)
-- See what the extraction pipeline added and when (Ledger filtered by `source: system`)
-- Delete or correct wrong extractions
+The context documents are plain markdown under `~/.north/context/`, so the user has full visibility and control directly:
+- Read all five context documents in any editor
+- Edit them in place (programmatic writes go through `ContextStore.write()`)
+- See what the extraction pipeline added and when (the ledger filtered by `source: system`)
+- Correct or delete wrong extractions by editing the files
 
 Full visibility and control over what north knows.
 
@@ -364,7 +360,7 @@ Full visibility and control over what north knows.
 
 **How it works:**
 
-1. **Indexing** - every `write()` or `append()` call schedules a background `asyncio.create_task` that chunks the updated document into paragraphs, calls `InferenceRouter.embed()` in a batch, and stores `(doc, chunk_idx, chunk_text, embedding_vector)` rows in `embeddings.db`.  Indexing never blocks the write path.
+1. **Indexing** - every `write()` or `append()` call schedules a supervised background task (`utils/tasks.py:spawn`) that chunks the updated document into paragraphs, calls `InferenceRouter.embed()` in a batch, and stores `(doc, chunk_idx, chunk_text, embedding_vector)` rows in `embeddings.db`.  Indexing never blocks the write path.
 
 2. **Retrieval** - `search(query)` embeds the query string (one API call), computes cosine similarity against every stored paragraph vector using numpy, and returns the top-k `[Source Document]\n<paragraph>` blocks as a single string.
 
@@ -378,7 +374,7 @@ Full visibility and control over what north knows.
 
 The episodic memory layer gives north a growing record of what it has actually done - not just facts about you, but memories of specific past tasks.
 
-**What is stored:** after every completed task, the Orchestrator writes a summary of the form `Task: <prompt truncated to 120 chars>\nResult: <agent output truncated to 400 chars>` to `~/.north/episodic.db` together with an embedding of that summary.
+**What is stored:** after every completed task, the Orchestrator writes a summary of the form `Task: <prompt truncated to 200 chars>\nResult: <agent output truncated to 500 chars>` to `~/.north/episodic.db` together with an embedding of that summary. Episodes older than 90 days are pruned on write, and the store is capped at a fixed number of most-recent rows.
 
 **Retrieval:** before executing each agent run, `Agent._load_context()` queries the episodic store for the top-3 semantically similar past episodes (embedding cosine similarity, keyword fallback).  Any results are injected into the agent's context block as a `## Relevant past context` section containing bulleted summaries.
 
@@ -447,9 +443,9 @@ Stage 4: Parallel Execution
   -> routes output to Approval Layer
 ```
 
-### 6.2 Classifier
+### 6.2 Intent Classification
 
-A single LLM call (high_volume pool) categorizing incoming intent as trivial or consequential.
+Intent classification is one dimension of `ExecutionPlanner.plan_all()` (reasoning pool), not a separate call or class. The same LLM response that builds the execution plan also labels the task trivial or consequential.
 
 **Trivial:** informational queries, simple lookups, article summaries, grocery lists, meal plans. No north star check. Routes directly to the appropriate agent and surfaces an Information card when done.
 
@@ -460,7 +456,7 @@ A single LLM call (high_volume pool) categorizing incoming intent as trivial or 
 Trivial tasks skip the north star check and the Approval card. After the agent completes:
 - The result is written to the Ledger with `status: completed`
 - An Information card notification is sent to the user
-- The result is displayed in the Web UI activity feed
+- The result is shown in the CLI output or the TUI activity feed
 - No user action is required to proceed
 
 ### 6.4 North Star Check
@@ -513,7 +509,7 @@ CREATE TABLE task_state (
 )
 ```
 
-Each task gets its own SQLite file at `~/.north/tasks/task_{id}.db`.
+All tasks share one SQLite file at `~/.north/tasks/tasks.db`, with a `task_id` column scoping each task's rows. Earlier versions used one file per task.
 
 **Locking model: standard database principles**
 
@@ -596,12 +592,12 @@ timeout       -> retry once immediately
                -> if succeeds: continues normally
                -> if fails: notify user
 
-api_error     -> retry once
+network       -> retry once
                -> if succeeds: continues normally
                -> if fails: notify user
 
 logic_error   -> notify immediately. do not retry.
-context_error -> notify immediately. needs user input to resolve.
+context_overflow -> notify immediately. needs user input to resolve.
 ```
 
 **Failure notification card:**
@@ -611,14 +607,14 @@ context_error -> notify immediately. needs user input to resolve.
 ```
 
 - **Retry Now:** Orchestrator reads `agent_output` from Ledger for all completed agents, reconstructs Task Context Object, retries only the failed agent
-- **Queue for Later:** creates async job in job queue with `retry_after` timestamp. Silent retry after cooldown. Sends notification on completion.
+- **Queue for Later:** creates async job in job queue with a `retry_after` timestamp. Silent retry after an exponential backoff cooldown. Sends notification on completion.
 - **Cancel Task:** writes cancellation to Ledger with `status: cancelled`. Task closed.
 
 **Token preservation:** because the Ledger stores `agent_output` (full structured JSON) per agent per task upon completion, a failure in a later agent never wastes work already done. The Orchestrator reconstructs partial Task Context Object state from the Ledger without re-executing completed agents.
 
 ### 6.8 Orchestrator REST API
 
-The Orchestrator exposes a local REST API on `localhost:8000`. Both the CLI and Web UI are clients of this API. The notification callback server also calls this API when the user taps an action button.
+The Orchestrator exposes a local REST API on `localhost:8000`. Both the CLI and the TUI are clients of this API. The notification callback server also calls this API when the user taps an action button.
 
 All endpoints require the shared secret header `X-North-Secret: {secret}` (see Section 9.1).
 
@@ -806,11 +802,11 @@ by confidence score (§8). `update_graph(agent, names)` adjusts edges at runtime
 tool is hot-loaded mid-task by `create_tool`. An agent loads only its own tools into context,
 so there is no token waste from irrelevant tool definitions.
 
-**Context loading order:** when an agent spins up, it loads its tool definitions into context sorted by confidence score descending. Low confidence tools are only loaded if the specific task explicitly requires them. This keeps the agent's context window lean.
+**Context loading order:** when a tool index is available, the agent injects the tools most semantically relevant to the task, then orders them by confidence score descending. Without an index it falls back to the agent's full tool set. Either way the context window stays lean.
 
 ### 7.5 Confidence Scoring and Persistence
 
-Every tool edge in the graph carries a confidence score from 0.0 to 1.0. Scores are updated after every tool use via an **exponential moving average (EMA)** with smoothing factor α = 0.10:
+Every tool edge in the graph carries a confidence score from 0.0 to 1.0. Scores are updated after every tool use via an **exponential moving average (EMA)** with a base smoothing factor α = 0.10 (it scales up on consecutive failures, see below):
 
 ```python
 outcome = 1.0 if was_helpful else 0.0
@@ -836,7 +832,7 @@ CREATE TABLE tool_confidence (
 
 `consecutive_failures` is used to scale the EMA alpha on repeated failures (α doubles per consecutive failure, capped at 0.5), so a tool that keeps failing loses confidence much faster than one that occasionally fails.
 
-On Orchestrator startup, all confidence scores are loaded from `tools.db` into memory. Every tool use updates the in-memory score and writes the delta to `tools.db`. Every confidence update is also logged to the Ledger with `source: system`.
+On Orchestrator startup, all confidence scores are loaded from `tools.db` into memory. Every tool use updates the in-memory score and writes the update to `tools.db` in a single atomic transaction (`BEGIN IMMEDIATE`) so two concurrent updates for the same (agent, tool) cannot clobber each other. Every confidence update is also logged to the Ledger with `source: system`.
 
 **New agent inheritance:** when a new agent declares `similar_to: health` in `config.yaml`, the Orchestrator copies confidence rows from the `health` agent in `tools.db` as the new agent's starting prior. Tools not present in the source agent start at `initial_confidence` from `tools.yaml`.
 
@@ -852,28 +848,30 @@ The previous approach required the model to produce a raw JSON string matching a
 
 ```
 messages = [system_prompt, user_message_with_task_and_context]
-tools    = [typed function defs from tool.schema() for each tool] + [request_approval]
+tools    = [typed function defs from tool.schema() for each tool]
+           + [request_approval, ask_user, delegate_task]
 
-loop (max 12 iterations):
+loop (max iterations, configurable, default 40):
   compact older tool results in messages to preserve context window
   response = complete_with_tools(messages, tools, token_callback)
 
   if response.type == "message":
     stream tokens to SSE; return final answer      # done
 
-  if response.type == "tool_call":
-    execute tool (or request_approval)
+  if response.type == "tool_calls":
+    run read-only calls in parallel; run mutating calls one at a time
+      under a per-workspace lock
     record confidence via ConfidenceTracker
     emit tool_called + tool_result SSE events
-    append assistant tool-call turn + tool result to messages
+    append assistant tool-call turn + tool results to messages
     continue
 ```
 
-**Token streaming (Section 8.7):** when the model produces a text response (the final answer), individual tokens are forwarded to the caller via an async `token_callback`.  `AgenticLLMAgent` passes a callback that emits `token` SSE events, so the Web UI renders the response progressively as it arrives.
+**Token streaming (Section 8.7):** when the model produces a text response (the final answer), individual tokens are forwarded to the caller via an async `token_callback`.  `AgenticLLMAgent` passes a callback that emits `token` SSE events, so connected clients (the CLI stream and the TUI) render the response progressively as it arrives.
 
 **Tool schemas:** every `Tool` subclass declares a `parameters_schema` class variable (JSON Schema object).  The base class `schema()` method wraps it in the OpenAI function definition format.  Tools without an explicit schema use `{type: object, additionalProperties: true}` as a safe default.
 
-**`request_approval` tool:** a synthetic tool injected into every agent's tool list.  When called, it creates an Approval card, emits `approval_required` via SSE, and blocks (via asyncio.Event - Section 9.7) until the user responds.  The model's decision to call this tool is treated like any other tool call.
+**`request_approval` tool:** a synthetic tool injected into every agent's tool list.  When called, it routes through the shared `UserInteraction` mediator (Section 9), which creates an Approval card, emits `approval_required` via SSE, fires the notifier, and blocks until the user responds.  The model's decision to call this tool is treated like any other tool call.
 
 ### 7.7 The If-Unsure-Ask Rule
 
@@ -883,7 +881,7 @@ Agents follow a clear decision hierarchy when they encounter ambiguity:
 2. Make a reasonable default, proceed, and flag it clearly in the output for the user to override via the Approval card.
 3. If the decision is consequential and no clear default exists: stop and raise a Question through `orchestrator.ask()`.
 
-When an agent raises a question, it sets `status: awaiting_input` in its Task Context Object row. The Orchestrator surfaces a Question card. The user answers via notification buttons or the Web UI. The answer is written back to the Task Context Object, the agent resumes, and the answered question is appended to `judgement_rules.md` so it is never asked again.
+When an agent raises a question, it sets `status: awaiting_input` in its Task Context Object row. The Orchestrator surfaces a Question card. The user answers via notification buttons, the CLI, or the TUI. The answer is written back to the Task Context Object, the agent resumes, and the answered question is appended to `judgement_rules.md` so it is never asked again.
 
 ---
 
@@ -922,41 +920,42 @@ A model can appear in both `free_fallback` and a quality tier.  Actual ranking w
 
 **Background refresh loop:** the pool refresh loop uses a loop-first pattern - the initial sleep is at the bottom of the loop, not the top - so it fires immediately on Orchestrator startup, then repeats every 6 hours. This guarantees that fresh model IDs are in place before the first real inference call, without a separate startup refresh step.
 
-**Error-triggered refresh:** when any model in the fallback chain fails, `_maybe_refresh_pools_background()` in `orchestrator.py` schedules a background refresh subject to a 60-second cooldown (`POOL_REFRESH_COOLDOWN` in `orchestrator/constants.py`). A 404 from a retired model ID triggers a live pool update so the next attempt uses current IDs, without hammering the OpenRouter `/models` endpoint on every failure.
+**Error-triggered refresh:** on a retryable agent failure, `_maybe_refresh_pools_background()` in `orchestrator.py` schedules a background refresh subject to a 60-second cooldown (`POOL_REFRESH_COOLDOWN` in `orchestrator/constants.py`). A 404 from a retired model ID gets the pool updated so the next attempt uses current IDs, without hammering the provider `/models` endpoint on every failure.
 
 ### 8.3 Inference Strategy
 
 The active strategy controls how models are ordered in the fallback chain for every call. Set via natural language ("switch to eco mode") or `POST /orchestrator/settings`. Persisted to `~/.north/settings.json`. Default: **cruise**.
 
 ```
-eco     Cheapest model first, climbs up price ladder only on failure.
-        Minimises cost; quality may vary on hard tasks.
+eco     Forces every call to the lowest-cost pool, regardless of the
+        caller's priority. Minimises cost; quality may vary on hard tasks.
 
-cruise  Role-aware ordering (default). Maps task priority to the appropriate
-        tier, then falls through adjacent tiers on failure:
-          HIGH   -> reasoning -> fast_cheap -> high_volume -> free
-          MEDIUM -> fast_cheap -> high_volume -> reasoning -> free
-          LOW    -> high_volume -> fast_cheap -> reasoning -> free
+cruise  Respects the caller's priority (default). Candidates are then ranked
+        by that priority:
+          HIGH   -> effective_quality descending (best first)
+          MEDIUM -> free models first, then quality
+          LOW    -> cost ascending (cheapest first), then quality
+        effective_quality blends base quality with each model's live success rate.
 
-sport   Most capable model first, descends to cheaper only on failure.
-        Maximises quality regardless of cost.
+sport   Forces every call to the highest-quality pool, regardless of the
+        caller's priority. Maximises quality regardless of cost.
 ```
 
-The current strategy is shown in the terminal prompt (`[eco] ❯`, `[cruise] ❯`, `[sport] ❯`) and as a badge in the Web UI command bar.
+The current strategy is shown in the terminal prompt (`[eco] ❯`, `[cruise] ❯`, `[sport] ❯`) and in the TUI status bar.
 
 ### 8.4 Priority Signals
 
 Every `CompletionRequest` carries a `PoolPriority` that `cruise` strategy uses to pick a starting tier. Components use priority as a signal of task complexity, not as a hard model assignment.
 
 ```
-orchestrator routing      -> MEDIUM
+orchestrator planning     -> HIGH (plan_all: classify + plan in one call)
 north star check          -> MEDIUM
 finance agent             -> HIGH (consequential domain)
 job agent                 -> HIGH (consequential domain)
 university agent          -> MEDIUM
 health agent              -> MEDIUM
 extraction pipeline       -> LOW (background job)
-classifier                -> LOW (simple binary classification)
+synthesizer               -> LOW (text merging, not reasoning)
 ```
 
 ### 8.5 Automatic Fallback Chain
@@ -992,7 +991,7 @@ task_id:    abc123
 
 `CostTracker` (an `InferenceRouter` decorator) intercepts every `complete()` and `complete_with_tools()` call and accumulates `cost_usd` keyed by `task_id`.  The Orchestrator calls `cost_tracker.pop_task_cost(task_id)` after all agents complete and emits the total in the `task_completed` SSE event.
 
-Cost summary available via CLI and Web UI:
+Cost summary available via the CLI:
 ```bash
 north inference costs --period week
 north inference costs --period month
@@ -1002,7 +1001,7 @@ north inference models           # show current pool state
 
 ### 8.6 JSON Mode
 
-All callers that expect a structured JSON response (classifier, north star checker, extraction pipeline, context injection router) pass `json_mode=True` in their `CompletionRequest`.  The router forwards this as `response_format: {type: json_object}` in the OpenRouter request body.
+All callers that expect a structured JSON response (planner, north star checker, extraction pipeline, context injection router) pass `json_mode=True` in their `CompletionRequest`.  The router forwards this as `response_format: {type: json_object}` in the OpenRouter request body.
 
 This eliminates the entire class of "Failed to parse classifier output as JSON" errors that arose when models wrapped responses in markdown fences or produced partial output.  The model is still instructed to produce JSON via its system prompt; `json_mode` is a belt-and-suspenders guarantee at the provider level.
 
@@ -1024,7 +1023,7 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
     """Embed a batch of texts and return one float vector per input."""
 ```
 
-`complete_with_tools` uses OpenRouter's streaming endpoint (`stream: true`) internally so text tokens from the final answer are forwarded to `token_callback` in real time.  Tool call arguments are accumulated from streaming delta chunks and resolved when `finish_reason: tool_calls` is received.  `CostTracker` wraps this method and accumulates `response.cost_usd` per `task_id` exactly as it does for `complete()`.
+`complete_with_tools` uses the provider's streaming endpoint (`stream: true`) internally - this lives in the shared `OpenAICompatibleProvider` base, so every OpenAI-compatible provider streams the same way. Text tokens from the final answer are forwarded to `token_callback` in real time.  Tool call arguments are accumulated from streaming delta chunks and resolved when `finish_reason: tool_calls` is received.  `CostTracker` wraps this method and accumulates `response.cost_usd` per `task_id` exactly as it does for `complete()`.
 
 `embed` calls `POST /api/v1/embeddings` with `openai/text-embedding-3-small`.  Used by `EmbeddingIndex` (§5.7) and `EpisodicStore` (§5.8).
 
@@ -1038,11 +1037,11 @@ Default transcription model: `groq/whisper-large-v3`. The Inference Router expos
 
 ## 9. Approval Layer
 
-The Approval Layer is the primary interface between north and the user for consequential outputs. Users do not interact with agents directly. They interact with notifications and the Web UI.
+The Approval Layer is the primary interface between north and the user for consequential outputs. Users do not interact with agents directly. They interact with notifications, the CLI, and the TUI.
 
 ### 9.1 Notifications and Security
 
-The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. An optional `MacOSNotifier` (also exported as `AlerterNotifier`) uses the `alerter` subprocess for native macOS notification banners with action buttons - swap it in via `config/dependencies.py` if running on macOS and alerter is installed. A local callback server runs on `localhost:8001` and receives button taps.
+The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. An optional `MacOSNotifier` uses the `alerter` subprocess for native macOS notification banners with action buttons - swap it in via `config/dependencies.py` if running on macOS and alerter is installed. At runtime the active notifier is wrapped by `TUIAwareNotifier`, which stays silent while the interactive TUI is attached (the TUI shows cards inline) and fires the underlying notifier otherwise. A local callback server runs on `localhost:8001` and receives button taps.
 
 **Security:** the notification callback server is secured with a shared secret generated at first startup and stored at `~/.north/secret.key`. Every notification payload embeds this secret in the callback URL or request body. Every callback request to `localhost:8001` must include the `X-North-Secret` header with the correct value. Requests without a valid secret are rejected with HTTP 403. This prevents any other local process from faking an approval action.
 
@@ -1054,7 +1053,7 @@ Agent completes work
 -> Sends notification (TerminalNotifier: stdout | MacOSNotifier: native banner)
    (callback URL contains the shared secret)
 -> User taps action button
--> POST to localhost:8001/callback with secret
+-> POST to localhost:8001/callback/decision with secret
 -> Callback server validates secret
 -> Forwards decision to POST /orchestrator/approval/respond
 -> Orchestrator writes to Ledger: source=approval, status=[approved|rejected]
@@ -1085,7 +1084,7 @@ Agent completes work
 
 ### 9.3 View Detail
 
-For complex outputs that do not fit in a notification (full itineraries, research summaries, meal plans), the [View Detail] button opens the full card in the Web UI on the second monitor. The user can approve, reject, or answer questions directly from the Web UI without interacting with the notification.
+For complex outputs that do not fit in a notification (full itineraries, research summaries, meal plans), the [View Detail] action shows the full card in the TUI, and the CLI prints the full detail inline. The user can approve, reject, or answer questions there without interacting with the notification banner.
 
 ### 9.4 Judgement Rules Filtering
 
@@ -1129,28 +1128,28 @@ card = await approval_store.wait_for_decision(card_id, timeout=300.0)
 
 ## 10. Interface Model
 
-north has two primary interfaces. Both talk to the same Orchestrator REST API. The CLI is direct access. The Web UI makes HTTP calls to the same endpoints.
+north has two primary interfaces. Both talk to the same Orchestrator REST API. The CLI gives direct, scriptable access. The TUI is an interactive terminal dashboard. There is no web UI.
 
-### 10.1 Web UI: Second Monitor Dashboard
+### 10.1 TUI: Interactive Dashboard
 
-A local web UI served by the Orchestrator at `localhost:8000/ui`. Server-rendered Jinja2 templates with HTMX for interactivity. No separate frontend process and no build step. Intended to run permanently on a second monitor, giving continuous visibility into everything north is doing.
+A Textual terminal app (`cli/tui.py`), launched with `north chat`. It subscribes to the Orchestrator's SSE stream and renders north's activity live in the terminal. No browser, no separate frontend process, and no build step.
 
-**Three panels:**
+**Three views:**
 
 **Live Activity Feed**
-Real-time stream of Orchestrator activity via SSE (`GET /orchestrator/stream/{task_id}`). Every agent action, tool call, Ledger write, and job execution appears as it happens. Includes `token` events - individual text tokens streamed from the model's final answer as they arrive, enabling progressive rendering of the agent's response as it generates.
+Real-time stream of Orchestrator activity via SSE (`GET /orchestrator/stream/{task_id}`, plus a global subscription used by the TUI). Every agent action, tool call, Ledger write, and job execution appears as it happens. Includes `token` events - individual text tokens streamed from the model's final answer as they arrive, enabling progressive rendering of the agent's response as it generates.
 
-SSE event types:
+Representative SSE event types (the planning call emits the classify and route events together):
 ```
-classifying          Stage 1 started
+classifying          Planning started (classify + plan)
 classified           Trivial/consequential decision + domain
-north_star_checking  Stage 2 started
+north_star_checking  North star check started
 north_star_conflict  Conflict detected - approval card incoming
 north_star_aligned   Check passed
-routing              Stage 3 started
 routed               Agents selected + parallel groups
-executing            Stage 4 started
+executing            Execution started
 agent_started        One agent beginning its ReAct loop
+agent_skipped        Agent skipped (failed dependency)
 tool_called          Agent called a tool (includes tool name + params)
 tool_result          Tool completed (includes success flag)
 token                One text token from the final answer (streaming)
@@ -1159,22 +1158,20 @@ approval_responded   User made a decision
 agent_completed      Agent produced its final answer
 task_synthesis       Multi-agent outputs merged into one response
 task_completed       Full task done (includes cost_usd)
+task_rejected        Task rejected at a gate (includes reason)
 task_cancelled       Task cancelled (includes reason)
 task_failed          Unrecoverable error
 ```
 
 **Approval Surface**
-Full card rendering for complex approvals and questions. Approve, reject, and answer questions directly here without opening a notification. All cards that have been sent as notifications are also mirrored here.
+Full card rendering for complex approvals and questions. Approve, reject, and answer questions inline without opening a notification banner. Cards that have been sent as notifications are also shown here.
 
-**Control Panel**
-- Submit text prompts to the Orchestrator (with session conversation history)
-- View and edit all five context documents
-- Browse Ledger history with filters (source, agent, task ID, date range)
-- Manage registered agents (view config, enable, disable)
-- View job queue with filters (status, agent, type) and cancel controls
-- View inference cost breakdown by period and agent
-- Manual context injection (file upload, text input, URL ingestion)
-- Tool confidence scores per agent (read-only view)
+**Control actions**
+- Submit prompts to the Orchestrator
+- Watch ledger and job activity stream by
+- View inference cost and task completion summaries
+
+Context documents, agents, the job queue, and cost breakdowns are managed through the CLI (Section 10.2).
 
 ### 10.2 CLI: Control Plane
 
@@ -1299,27 +1296,25 @@ finance_weekly_budget_check    -> every Sunday 6:00 PM
 task_context_cleanup           -> daily 3:00 AM
 ```
 
-**User-defined schedules** - stored in the `user_cron_entries` table in `~/.north/jobs.db`. Created three ways:
+**User-defined schedules** - stored in the `user_cron_entries` table in `~/.north/jobs.db`. Created two ways:
 1. Natural language: "remind me every Monday at 9am to review my goals"
    → agent calls `schedule_task` tool with `hour`, `minute`, `weekday` params
-2. Web UI: `/ui/jobs` → Recurring Schedules → "+ Add" form
-3. API: `POST /orchestrator/cron`
+2. API: `POST /orchestrator/cron`
 
-User entries are deleted with `DELETE /orchestrator/cron/{name}` or via the Web UI delete button.
+User entries are deleted with `DELETE /orchestrator/cron/{name}`.
 
 ### 11.4 One-Shot Scheduled Jobs
 
-A job enqueued with a future `scheduled_at` will sit as `pending` until the job processor clock catches up. Created three ways:
+A job enqueued with a future `scheduled_at` will sit as `pending` until the job processor clock catches up. Created two ways:
 1. Natural language: "remind me tomorrow at 5pm to call the doctor"
    → agent calls `schedule_task` tool with `run_at` param (ISO 8601 UTC)
-2. Web UI: `/ui/jobs` → One-Shot & Queue → "+ Schedule" form
-3. API: `POST /orchestrator/jobs` with `scheduled_at` field
+2. API: `POST /orchestrator/jobs` with `scheduled_at` field
 
 ### 11.5 Event-Driven Jobs
 
 Triggered by signals rather than time.  v1 now supports two event sources:
 
-**Webhook ingestion** - external services send `POST /orchestrator/webhooks/{source}` with an `X-Webhook-Secret` header and a JSON body containing a `prompt` and optional `context` field.  The Orchestrator submits this as a task with `source: webhook` and the prompt prefixed with `[webhook:{source}]` so the classifier can route it correctly.
+**Webhook ingestion** - external services send `POST /orchestrator/webhooks/{source}` with an `X-Webhook-Secret` header and a JSON body containing a `prompt` and optional `context` field.  The Orchestrator submits this as a task with `source: webhook` and the prompt prefixed with `[webhook:{source}]` so the planner can route it correctly.
 
 ```bash
 # A Gmail push notification triggers the job agent:
@@ -1345,8 +1340,8 @@ Created mid-task by the failure handling flow (Queue for Later) or by agents tha
 ```
 Finance agent fails (rate limit)
 -> user selects "Queue for Later"
--> job created: type=retry, retry_after=now + cooldown from Retry-After header
--> job processor picks it up after cooldown
+-> job created: type=retry, retry_after=now + exponential backoff cooldown
+-> job processor picks it up after the cooldown
 -> Orchestrator reads agent_output from Ledger for completed agents
 -> reconstructs Task Context Object
 -> retries only the failed agent
@@ -1374,7 +1369,7 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
   settings.json          <- user settings (inference strategy, etc.)
   secret.key             <- shared secret for notification callbacks and REST API auth
   tasks/
-    task_{id}.db         <- one SQLite file per active task (Task Context Object)
+    tasks.db             <- shared Task Context Object store (task_id column per task)
                             cleaned up per Section 6.6 cleanup policy
     {task_id}/           <- per-task handoff directory (internal agent scratch)
       research/          <-   researcher: context.md, references.json
@@ -1402,7 +1397,7 @@ everything else              -> standard local storage
 
 ### 12.3 Embedding Storage
 
-`embeddings.db` and `episodic.db` are both append-dominant SQLite databases using WAL mode.  They have no retention policy: embedding rows are replaced wholesale when a context document is overwritten, and episodic rows accumulate indefinitely (bounded by the 500-row `ORDER BY timestamp DESC LIMIT 500` query in `EpisodicStore`).
+`embeddings.db` and `episodic.db` are both append-dominant SQLite databases using WAL mode.  Embedding rows are replaced wholesale when a context document is overwritten. Episodic rows are pruned on write: rows older than 90 days are deleted, then the store is capped at a fixed number of most-recent rows.
 
 When context files grow large enough that paragraph-level embedding search degrades (thousands of paragraphs, many documents), the `EmbeddingIndex` can be replaced with a proper vector database (e.g. sqlite-vec, ChromaDB) behind the same interface with no changes to callers.  The `ContextStore.search()` contract is stable; the backing store is an implementation detail.
 
@@ -1413,13 +1408,13 @@ When context files grow large enough that paragraph-level embedding search degra
 Tracing a complete example. User says: "Help me prep for my first week at LinkedIn."
 
 ```
-1. User double-taps Fn key and speaks the prompt.
-   Whisper transcribes locally.
+1. User presses the dictation hotkey (default Right Option + Space) and speaks the prompt.
+   OpenRouter transcribes the audio.
    Text sent to POST /orchestrator/task (with X-North-Secret header).
    Ledger write (async): source=mic, input="Help me prep for my first week at LinkedIn"
 
-2. Classifier (high_volume pool):
-   "internship prep" -> consequential
+2. Planning (plan_all, reasoning pool):
+   "internship prep" -> consequential, and the execution plan is built in the same call
    Ledger write (async): source=system, action="classified: consequential"
    Proceed to north star check.
 
@@ -1429,11 +1424,11 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
    Ledger write (async): source=system, action="north_star_check: aligned"
    Proceed to routing.
 
-4. Routing Decision (reasoning pool):
+4. Routing (same plan_all call):
    Reads agent registry and public.md.
    Decides: job agent + university agent (check for schedule conflicts).
    parallel_groups: [["job", "university"]], no dependencies.
-   Task Context Object created: ~/.north/tasks/task_abc123.db
+   Task Context Object rows created in ~/.north/tasks/tasks.db (task_id=abc123)
    Ledger write (async): source=system, action="routed", agents=["job","university"]
 
 5. Job agent spins up (reasoning pool, high priority):
@@ -1460,10 +1455,10 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
    [Approve]  [View Detail]
 
 9. User taps View Detail.
-   Web UI on second monitor renders the full prep plan.
-   User reads it and taps Approve in the Web UI.
+   The TUI renders the full prep plan.
+   The user reads it and approves in the TUI (or via the notification button).
 
-10. Web UI calls POST /orchestrator/approval/respond (with X-North-Secret header).
+10. The TUI (or the notification callback server) calls POST /orchestrator/approval/respond (with X-North-Secret header).
     Orchestrator validates secret.
     Ledger write (async): source=approval, status=approved
     Extraction pipeline appends to judgement_rules.md:
@@ -1485,12 +1480,14 @@ north/
     api_router.py       <- all REST endpoints (tasks, ledger, context, jobs, inference, agents)
     orchestrator.py     <- core orchestration logic (classify → north star → route → execute)
     constants.py        <- MAX_CONCURRENT_TASKS, NORTH_STAR_CONFIDENCE_THRESHOLD, POOL_REFRESH_COOLDOWN, STRATEGY_CMD_RE
-    classifier.py       <- trivial vs consequential classification
+    orchestrator.py     <- Orchestrator: pipeline driver (plan -> north star -> route -> execute)
     north_star.py       <- north star alignment check
-    router.py           <- agent routing and parallel execution planning
-    task_context.py     <- Task Context Object management (SQLite per task)
+    router.py           <- ExecutionPlanner.plan_all(): classify + route in one call
+    synthesizer.py      <- merges multi-agent outputs into one response (LOW pool)
+    verification.py     <- post-execution verification helpers
+    task_context.py     <- Task Context Object management (shared tasks.db, task_id column)
     failure_handler.py  <- classify_error() + failure classification and retry logic
-    stream.py           <- SSE event stream for Web UI real-time updates
+    stream.py           <- SSE event stream for CLI/TUI real-time updates
     models.py           <- request/response Pydantic models
     exceptions.py
 
@@ -1553,8 +1550,10 @@ north/
   approval/
     __init__.py
     base.py             <- Notifier (ABC)
-    macos.py            <- MacOSNotifier / AlerterNotifier (alerter subprocess)
-    terminal.py         <- TerminalNotifier (fallback for dev/test)
+    macos.py            <- MacOSNotifier (alerter subprocess, optional)
+    terminal.py         <- TerminalNotifier (default)
+    tui.py              <- TUIAwareNotifier (wraps a Notifier; silent while TUI attached)
+    interaction.py      <- UserInteraction: one path for approval/question/information cards
     callback_server.py  <- local server on port 8001 receiving notification callbacks
     models.py           <- Card, CardType, ApprovalDecision
     store.py            <- ApprovalStore: asyncio.Event per card, wait_for_decision()
@@ -1584,24 +1583,12 @@ north/
     semantic/           <- code intelligence (search_symbols, find_references)
     analysis/           <- static analysis (check_types)
 
-  web/
-    routes.py           <- Jinja2 routes for all /ui/* pages (configure() singleton)
-    templates/
-      base.html         <- layout, nav, auth meta-redirect
-      dashboard.html    <- live activity feed + task input
-      approvals.html    <- approval surface (cards, respond buttons)
-      context_index.html
-      context_doc.html  <- view/edit a context document
-      agents.html
-      jobs.html
-      inference.html
-      ledger.html
-    static/
-      css/main.css
-      js/main.js
-
   cli/
     main.py             <- CLI entry point (Typer), thin wrapper over Orchestrator REST API
+    tui.py              <- Textual TUI client (north chat)
+    _client.py          <- shared httpx client for the local server
+    _server.py          <- server lifecycle helpers (start/stop, secret handling)
+    formatting.py       <- shared output formatting (ledger/task reconstruction)
 
   config/
     settings.py         <- Settings (pydantic-settings), all NORTH_* env vars
@@ -1611,13 +1598,14 @@ north/
     db.py               <- SQLite connection helpers (WAL mode, row_factory)
     ids.py              <- task/job/card ID generation
     prompts.py          <- prompt template loading
-    security.py         <- secret key generation, verification, cookie + header auth
+    security.py         <- secret key generation and header-based request auth
+    tasks.py            <- spawn(): supervised fire-and-forget background tasks
     time.py             <- datetime helpers
 
   prompts/
-    classifier.md       <- system prompt for the Orchestrator classifier
+    planner.md          <- system prompt for plan_all (classify + route)
     north_star.md       <- system prompt for the north star check
-    router.md           <- system prompt for the routing decision
+    synthesizer.md      <- system prompt for multi-agent output synthesis
 
   tests/
     integration/
@@ -1629,7 +1617,9 @@ north/
       utils/
 
   docs/
+    ARCHITECTURE.md
     CODING_STYLE.md
+    TECHNICAL_FEATURES.md
 
   exceptions.py         <- top-level NorthError base exception
   pyproject.toml
@@ -1651,7 +1641,7 @@ The following are deliberately deferred. No coding agent should make decisions o
 Canvas, Gmail, Google Calendar APIs. Deferred for v1. The job processor and webhook infrastructure (`POST /orchestrator/webhooks/{source}`) are ready to receive events when real integrations are added.
 
 **Mobile App**
-Approval surface on mobile. Post v1. The HTMX + server-rendered template stack means a mobile-friendly surface is reachable with template-level changes rather than a separate codebase. The deferral stands; the cost picture changed.
+Approval surface on mobile. Post v1. Because every interface is a client of the local REST API and SSE stream, a mobile surface would be a new client against that API rather than a change to the core. The deferral stands.
 
 **Proactive Orchestration**
 The Monday morning briefing: Orchestrator waking itself on a schedule to summarize the week ahead without any user prompt. The cron job infrastructure is ready. The specific content format is not yet defined.
@@ -1660,7 +1650,7 @@ The Monday morning briefing: Orchestrator waking itself on a schedule to summari
 How `judgement_rules.md`, `north_stars.md`, and `episodic.db` stay consistent across multiple machines. Deferred until the system is stable on a single machine.
 
 **Episodic Store Pruning**
-`episodic.db` currently queries `ORDER BY timestamp DESC LIMIT 500` to keep retrieval fast.  A more principled pruning strategy (deduplicate similar summaries, age out low-relevance episodes) is not yet designed.
+`episodic.db` is pruned on write today: episodes older than 90 days are deleted and the store is capped at a fixed number of most-recent rows.  A more principled strategy (deduplicate similar summaries, age out low-relevance episodes) is not yet designed.
 
 **Embedding Model Upgrade Path**
 `openai/text-embedding-3-small` is the current embedding model.  If better models appear on OpenRouter or if the 1536-dimension vectors become expensive to store at scale, the `EmbeddingIndex` needs a migration path for existing vectors.  Not designed yet.
@@ -1746,7 +1736,7 @@ Seven SQLite databases:
 ~/.north/episodic.db     <- per-task episode summaries with embeddings
 ~/.north/tool_index.db   <- per-tool embedding vectors for semantic tool selection
 ~/.north/facts.db        <- per-fact embedding vectors for semantic context retrieval
-~/.north/tasks/          <- one .db file per task (Task Context Object)
+~/.north/tasks/          <- shared tasks.db (Task Context Object, task_id column)
 ```
 
 ### 16.4 Async
@@ -1771,7 +1761,7 @@ All LLM API calls go through OpenRouter. HTTP calls use `httpx` with async suppo
 httpx>=0.27.0
 ```
 
-No LLM framework (LangChain, LlamaIndex, etc.). Direct API calls only. The Inference Router in `inference/router.py` manages everything (pool building, model selection, fallback, cost logging).
+No LLM framework (LangChain, LlamaIndex, etc.). Direct API calls only. The `ModelDispatcher` in `inference/dispatcher.py` (assembled by `inference/factory.py:build_router()`) manages everything (pool building, model selection, fallback, cost logging).
 
 ### 16.6 Voice Transcription
 
@@ -1801,28 +1791,14 @@ beautifulsoup4>=4.12  <- HTML parsing for URL ingestion
 
 ### 16.8 Frontend
 
-**HTMX + Jinja2**
-The Web UI is server-rendered Jinja2 templates with HTMX for interactivity. No npm, no build step, no separate frontend process. The Orchestrator's existing FastAPI app serves templates and static assets directly at `localhost:8000/ui` via `fastapi.templating.Jinja2Templates` and a `StaticFiles` mount.
+**Textual TUI**
+north has no web frontend. The interactive interface is a Textual terminal app (`cli/tui.py`), launched with `north chat`. It is a client of the Orchestrator REST API and SSE stream, so it needs no templates, no build step, and no separate process.
 
 ```
-jinja2>=3.1.0
-htmx              <- vendored as a single .js file in web/static/
+textual>=0.80.0   <- terminal UI framework for the interactive dashboard
 ```
 
-SSE wiring (uses Section 6.8's `GET /orchestrator/stream`) is HTMX's built-in SSE extension:
-
-```html
-<div hx-ext="sse"
-     sse-connect="/orchestrator/stream"
-     sse-swap="activity-event">
-</div>
-```
-
-Approval cards are plain `<form>` elements with `hx-post` to `/orchestrator/approval/respond`. No client-side state library, no hydration step.
-
-The shared secret is set as an HttpOnly session cookie on first load via `GET /auth/token` (localhost-only endpoint). It is never embedded in rendered HTML or accessible to JavaScript.
-
-Styling is a single hand-rolled `web/static/style.css` for v1. A classless CSS framework (e.g. Pico.css) can be added later as a separate decision if richer styling is needed.
+The TUI subscribes to `GET /orchestrator/stream` (Section 6.8), renders the live activity feed, and presents approval and question cards inline. It authenticates with the same `X-North-Secret` header read from `~/.north/secret.key`. There is no cookie and no browser session.
 
 ### 16.9 CLI
 
@@ -1841,14 +1817,14 @@ Every CLI command is a thin wrapper over the Orchestrator REST API via `httpx`. 
 **TerminalNotifier (default on all platforms)**
 The default `Notifier` implementation (`approval/terminal.py`) prints approval cards to stdout/logs. It works anywhere Python runs - Linux, macOS, Docker, CI.
 
-**MacOSNotifier / AlerterNotifier (macOS only, optional)**
-For native macOS notification banners with action buttons, `alerter` is called as a subprocess (`approval/macos.py`). `MacOSNotifier` and `AlerterNotifier` are aliases for the same class.
+**MacOSNotifier (macOS only, optional)**
+For native macOS notification banners with action buttons, `alerter` is called as a subprocess (`approval/macos.py`).
 
 ```bash
 brew install vjeantet/tap/alerter  # one-time, macOS only
 ```
 
-To enable, swap `TerminalNotifier()` → `MacOSNotifier(settings.secret)` in `config/dependencies.py`. The `Notifier` ABC (see `docs/CODING_STYLE.md` Section 6.1) hides this choice from the rest of the system.
+To enable, swap `TerminalNotifier()` → `MacOSNotifier(settings.secret)` in `config/dependencies.py`. At runtime the chosen notifier is wrapped by `TUIAwareNotifier`, which stays silent while the interactive TUI is attached. The `Notifier` ABC (see `docs/CODING_STYLE.md` Section 6.1) hides this choice from the rest of the system.
 
 ### 16.11 Environment and Configuration
 
@@ -1885,7 +1861,7 @@ NORTH_EXTRACTION_MAX_DAILY_COST_USD=0.10   # daily spend cap for the extraction 
 ```toml
 [project]
 name = "north"
-version = "1.0.0"
+version = "1.3.6"
 requires-python = ">=3.12"
 
 [project.scripts]
@@ -1895,7 +1871,8 @@ north = "cli.main:app"         # makes `north` available as a CLI command after 
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-    "httpx>=0.27.0",           # for TestClient in FastAPI tests
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
 ]
 ```
 
@@ -1920,7 +1897,7 @@ On first `north start`:
 
 ```
 ★ north  Mode         → Docker Compose
-         Web UI       → http://127.0.0.1:8000/ui/
+         Server       → http://127.0.0.1:8000
          Workspace    → /Users/you
 ```
 
@@ -2006,15 +1983,15 @@ fastapi = ">=0.110.0"
 uvicorn = ">=0.28.0"
 pydantic = ">=2.0.0"
 pydantic-settings = ">=2.2.0"   # Settings class, NORTH_* env var binding
-jinja2 = ">=3.1.0"              # server-rendered templates for the Web UI (Section 16.8)
 python-multipart = ">=0.0.29"   # FastAPI file upload (UploadFile)
 
 # HTTP client
 httpx = ">=0.27.0"
 
-# CLI
+# CLI and TUI
 typer = ">=0.9.0"
 rich = ">=13.0.0"               # terminal formatting for ledger output, agent status, cost tables
+textual = ">=0.80.0"            # interactive terminal UI (north chat)
 
 # Config
 pyyaml = ">=6.0"                # agent config.yaml / tools.yaml parsing
@@ -2027,6 +2004,9 @@ beautifulsoup4 = ">=4.12.0"
 # Web search
 ddgs = ">=1.0.0"                # DuckDuckGo search (no API key required)
 
+# Smart home
+python-kasa = ">=0.7.0"         # local control of Kasa devices (home agent)
+
 # Voice input
 sounddevice = ">=0.4.6"         # push-to-talk audio capture
 pynput = ">=1.7.6"              # keyboard listener for push-to-talk hotkey
@@ -2035,6 +2015,8 @@ numpy = ">=1.26.0"              # sounddevice returns numpy arrays; cosine simil
 
 # System
 psutil = ">=5.9.0"              # cross-platform process and port management (north start/stop)
+ripgrep = ">=15.0.0"           # bundled fast file search on macOS arm64 / linux x86_64;
+                                #   falls back to pure-Python or system rg elsewhere
 ```
 
 Scheduling has no external dependency: cron entries are `(hour, minute, weekday)` tuples and `jobs/scheduler.py` is a single asyncio background task (see Section 11.3).

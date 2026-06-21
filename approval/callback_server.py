@@ -8,7 +8,7 @@ See docs/CODING_STYLE.md Sections 12, 17.
 
 from __future__ import annotations
 
-import contextlib
+import logging
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -18,6 +18,8 @@ from approval.models import ApprovalDecision
 from config.settings import settings
 from utils.security import load_secret, verify_secret
 from utils.version import NORTH_VERSION
+
+logger = logging.getLogger(__name__)
 
 
 class CallbackPayload(BaseModel):
@@ -58,11 +60,14 @@ async def receive_decision(
 
     decision = _map_action_to_decision(payload.action)
 
-    # Forward the decision to the main orchestrator
+    # Forward the decision to the main orchestrator. A delivery failure must be
+    # visible (logged + received=False), never silently swallowed - a dropped
+    # approval otherwise looks identical to a successful one to the caller.
     secret = load_secret()
-    async with httpx.AsyncClient() as client:
-        with contextlib.suppress(httpx.RequestError):
-            await client.post(
+    forwarded = False
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
                 f"{settings.north_orchestrator_url}/orchestrator/approval/respond",
                 json={
                     "card_id": payload.card_id,
@@ -74,8 +79,12 @@ async def receive_decision(
                 headers={"X-North-Secret": secret},
                 timeout=10.0,
             )
+        response.raise_for_status()
+        forwarded = True
+    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+        logger.warning("Failed to forward approval decision for card %s: %s", payload.card_id, exc)
 
-    return CallbackResponse(received=True, card_id=payload.card_id)
+    return CallbackResponse(received=forwarded, card_id=payload.card_id)
 
 
 @app.get("/callback/health")

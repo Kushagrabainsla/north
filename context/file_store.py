@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,10 +11,13 @@ from typing import TYPE_CHECKING
 from context.base import ContextStore
 from context.exceptions import ContextReadError, ContextWriteError
 from context.models import ContextDocument
+from utils.tasks import spawn
 from utils.text import STOPWORDS
 
 if TYPE_CHECKING:
     from context.embedding_index import EmbeddingIndex
+
+logger = logging.getLogger(__name__)
 
 
 class FileContextStore(ContextStore):
@@ -32,9 +36,6 @@ class FileContextStore(ContextStore):
         # read-modify-write inside _append_sync is always atomic from the
         # perspective of async callers.
         self._locks: dict[str, asyncio.Lock] = {}
-        # Holds strong references to fire-and-forget embedding tasks so they
-        # are not garbage-collected before they complete.
-        self._embedding_tasks: set[asyncio.Task] = set()
 
     def attach_embedding_index(self, index: EmbeddingIndex) -> None:
         self._embedding_index = index
@@ -64,9 +65,10 @@ class FileContextStore(ContextStore):
             # background update completes will reload from DB rather than
             # serving the pre-write cache.
             self._embedding_index.invalidate_cache()
-            t = asyncio.create_task(self._embedding_index.update_document(document.value, content))
-            self._embedding_tasks.add(t)
-            t.add_done_callback(self._embedding_tasks.discard)
+            spawn(
+                self._embedding_index.update_document(document.value, content),
+                name=f"reindex:{document.value}",
+            )
 
     def _write_sync(self, document: ContextDocument, content: str) -> None:
         self._path(document).write_text(content, encoding="utf-8")
@@ -80,9 +82,10 @@ class FileContextStore(ContextStore):
                 raise ContextWriteError(f"Failed to append to {document.value}: {e}") from e
             if self._embedding_index is not None:
                 new_content = await self.read(document)
-                t = asyncio.create_task(self._embedding_index.update_document(document.value, new_content))
-                self._embedding_tasks.add(t)
-                t.add_done_callback(self._embedding_tasks.discard)
+                spawn(
+                    self._embedding_index.update_document(document.value, new_content),
+                    name=f"reindex:{document.value}",
+                )
 
     def _append_sync(self, document: ContextDocument, delta: str) -> None:
         path = self._path(document)
@@ -92,7 +95,11 @@ class FileContextStore(ContextStore):
 
     async def search(self, query: str, max_results: int = 5) -> str:
         if self._embedding_index is not None:
-            hits = await self._embedding_index.search(query, max_results=max_results)
+            try:
+                hits = await self._embedding_index.search(query, max_results=max_results)
+            except Exception as exc:
+                logger.warning("Embedding search failed (%s); falling back to keyword search", exc)
+                hits = []
             if hits:
                 sections = [f"[{label}]\n{chunk}" for label, chunk in hits]
                 return "\n\n---\n\n".join(sections)

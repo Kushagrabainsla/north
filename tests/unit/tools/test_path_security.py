@@ -64,6 +64,15 @@ class TestReferencesSensitivePath:
     def test_allows_plain_paths(self) -> None:
         assert references_sensitive_path("cat README.md") is False
 
+    def test_detects_relative_traversal(self) -> None:
+        # The instant-safe fast path must not let a relative parent escape read
+        # secrets outside the workspace without an approval card (CL1/A1).
+        assert references_sensitive_path("cat ../../.ssh/id_rsa") is True
+        assert references_sensitive_path("cat ../secret.txt") is True
+
+    def test_allows_relative_subpath(self) -> None:
+        assert references_sensitive_path("cat src/app.py") is False
+
 
 class TestIsSensitivePath:
     def test_sensitive_home_dirs(self) -> None:

@@ -33,6 +33,7 @@ def _approving_store() -> MagicMock:
     store = MagicMock()
     resolved = MagicMock()
     resolved.chosen_option = "Approve"
+    resolved.status = "approved"
     store.wait_for_decision = AsyncMock(return_value=resolved)
     return store
 
@@ -41,6 +42,7 @@ def _rejecting_store() -> MagicMock:
     store = MagicMock()
     resolved = MagicMock()
     resolved.chosen_option = "Reject"
+    resolved.status = "rejected"
     store.wait_for_decision = AsyncMock(return_value=resolved)
     return store
 

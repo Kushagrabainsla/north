@@ -130,6 +130,7 @@ class GhTool(ApprovalGatedTool):
                 task_id=input.params.get("task_id"),
                 stream_manager=self._stream_manager,
                 judgement_filter=self._judgement_filter,
+                notifier=self._notifier,
                 timeout=self._approval_timeout_seconds,
             )
             if denial is not None:

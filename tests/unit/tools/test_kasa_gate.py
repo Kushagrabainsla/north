@@ -30,6 +30,7 @@ async def test_control_action_refused_on_reject(monkeypatch) -> None:
     store = MagicMock()
     resolved = MagicMock()
     resolved.chosen_option = "Reject"
+    resolved.status = "rejected"
     store.wait_for_decision = AsyncMock(return_value=resolved)
 
     tool = KasaTool(approval_store=store)

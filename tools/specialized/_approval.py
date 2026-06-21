@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from approval.models import ApprovalDecision, Card, CardType
-from utils.ids import generate_id
+from approval.interaction import UserInteraction
 
 if TYPE_CHECKING:
+    from approval.base import Notifier
     from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
@@ -34,53 +34,30 @@ async def request_approval_decision(
     options: tuple[str, str] = _DEFAULT_OPTIONS,
     stream_manager: EventStreamManager | None = None,
     judgement_filter: JudgementFilter | None = None,
+    notifier: Notifier | None = None,
     timeout: float = 300.0,
 ) -> bool:
     """Return True when the action is approved (by a learned rule or the user).
 
-    Checks the JudgementFilter first; if it does not decide, surfaces a card and
-    waits up to *timeout* seconds. A timeout is treated as a rejection.
+    Thin tool-facing adapter over the shared ``UserInteraction`` mediator: it
+    consults the JudgementFilter, surfaces an APPROVAL card, and blocks up to
+    *timeout* seconds. A timeout is treated as a rejection.
     """
-    card = Card(
-        id=generate_id(),
-        type=CardType.APPROVAL,
-        task_id=task_id or "",
+    interaction = UserInteraction(
+        approval_store,
+        notifier=notifier,
+        judgement_filter=judgement_filter,
+        stream_manager=stream_manager,
+        default_timeout=timeout,
+    )
+    return await interaction.request_approval(
+        task_id=task_id,
         agent=agent,
         title=title,
         message=message,
-        options=list(options),
+        options=options,
+        timeout=timeout,
     )
-
-    if judgement_filter is not None:
-        try:
-            auto_decision, _ = await judgement_filter.check(card)
-            if auto_decision == ApprovalDecision.APPROVED:
-                return True
-            if auto_decision == ApprovalDecision.REJECTED:
-                return False
-        except Exception:
-            pass
-
-    approval_store.add(card)
-    if stream_manager and task_id:
-        await stream_manager.emit(
-            task_id,
-            "approval_required",
-            {
-                "card_id": card.id,
-                "task_id": task_id,
-                "agent": agent,
-                "title": title,
-                "message": message,
-                "options": card.options,
-            },
-        )
-
-    resolved = await approval_store.wait_for_decision(card.id, timeout=timeout)
-    if resolved is None:
-        approval_store.resolve(card.id, ApprovalDecision.REJECTED)
-        return False
-    return resolved.chosen_option.lower() == card.options[0].lower()
 
 
 async def gate_mutating_action(
@@ -92,6 +69,7 @@ async def gate_mutating_action(
     task_id: str | None,
     stream_manager: EventStreamManager | None = None,
     judgement_filter: JudgementFilter | None = None,
+    notifier: Notifier | None = None,
     timeout: float = 300.0,
 ) -> str | None:
     """Fail-closed approval gate for mutating tool actions.
@@ -115,6 +93,7 @@ async def gate_mutating_action(
         options=("Approve", "Reject"),
         stream_manager=stream_manager,
         judgement_filter=judgement_filter,
+        notifier=notifier,
         timeout=timeout,
     )
     return None if approved else "Action rejected by user."

@@ -15,7 +15,7 @@ import os
 import sys
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import httpx
@@ -41,6 +41,7 @@ from cli.formatting import (
     _fmt_elapsed,
     _fmt_params,
     _fmt_tokens,
+    _reconstruct_task_output,
     _short_model,
     _strip_markup,
 )
@@ -274,6 +275,10 @@ class NorthApp(App[None]):
         self.workspace = workspace
         self.yolo = yolo
 
+        # One HTTP client reused for the app's lifetime (closed on unmount) so
+        # each action/stream doesn't pay connection setup. Lazily created.
+        self._client: httpx.AsyncClient | None = None
+
         self._token_buffer: dict[str, str] = {}
         self._reasoning_buffer: dict[str, str] = {}  # model's private chain-of-thought, shown dimmed
         self._streaming_active: set[str] = set()
@@ -328,6 +333,17 @@ class NorthApp(App[None]):
         # Paste-preview: large pastes are stashed here and shown as a placeholder
         # until the user presses Enter, keeping the scrollback clean.
         self._pending_paste: str | None = None
+
+    @contextlib.asynccontextmanager
+    async def _http(self) -> AsyncIterator[httpx.AsyncClient]:
+        """Yield the shared HTTP client, created lazily and closed on unmount."""
+        if self._client is None:
+            self._client = httpx.AsyncClient()
+        yield self._client
+
+    async def on_unmount(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
@@ -395,7 +411,7 @@ class NorthApp(App[None]):
         """Best-effort list of registered agent names, shown as 'toolsets' in the
         banner. Returns an empty list if the server is unreachable."""
         try:
-            async with httpx.AsyncClient() as c:
+            async with self._http() as c:
                 r = await c.get(
                     f"{self.base_url}/orchestrator/agents",
                     headers=self.headers,
@@ -678,7 +694,7 @@ class NorthApp(App[None]):
     async def _fetch_ledger_output(self, task_id: str) -> str:
         """Reconstruct a completed task's answer from the ledger when no tokens streamed."""
         try:
-            async with httpx.AsyncClient() as c:
+            async with self._http() as c:
                 r = await c.get(
                     f"{self.base_url}/orchestrator/ledger",
                     params={"task_id": task_id, "limit": 20},
@@ -686,9 +702,7 @@ class NorthApp(App[None]):
                     timeout=5.0,
                 )
                 entries = r.json()
-                return "\n\n".join(
-                    e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output")
-                )
+                return _reconstruct_task_output(entries)
         except Exception:
             return ""
 
@@ -761,7 +775,7 @@ class NorthApp(App[None]):
         while True:
             try:
                 async with (
-                    httpx.AsyncClient() as client,
+                    self._http() as client,
                     client.stream(
                         "GET",
                         f"{self.base_url}/orchestrator/stream",
@@ -831,7 +845,7 @@ class NorthApp(App[None]):
                 else "answered"
             )
         try:
-            async with httpx.AsyncClient() as c:
+            async with self._http() as c:
                 await c.post(
                     f"{self.base_url}/orchestrator/approval/respond",
                     headers=self.headers,
@@ -937,7 +951,7 @@ class NorthApp(App[None]):
 
         self._set_status("…")
         try:
-            async with httpx.AsyncClient() as c:
+            async with self._http() as c:
                 resp = await c.post(
                     f"{self.base_url}/orchestrator/task",
                     headers=self.headers,
@@ -1033,7 +1047,7 @@ class NorthApp(App[None]):
         """Ask the server to cancel every task this session started."""
         for task_id in list(self._user_task_ids):
             try:
-                async with httpx.AsyncClient() as c:
+                async with self._http() as c:
                     await c.delete(
                         f"{self.base_url}/orchestrator/task/{task_id}",
                         headers=self.headers,

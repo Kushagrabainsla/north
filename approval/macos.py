@@ -12,6 +12,7 @@ import sys
 from approval.base import Notifier
 from approval.models import Card, CardType
 from approval.terminal import TerminalNotifier
+from utils.tasks import spawn
 
 
 class MacOSNotifier(Notifier):
@@ -73,7 +74,7 @@ class MacOSNotifier(Notifier):
             # but we can also capture standard exit if the process waits.
             # To stay non-blocking, we do not await proc.communicate() here,
             # instead we let it execute in the background.
-            asyncio.create_task(self._wait_and_handle_exit(proc, card))
+            spawn(self._wait_and_handle_exit(proc, card), name=f"alerter_exit:{card.id}")
         except Exception as e:
             # Fail silently to terminal fallback if subprocess launch fails
             sys.stderr.write(f"WARNING: Failed to launch macOS alerter: {e}\n")

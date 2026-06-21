@@ -234,9 +234,12 @@ class OpenAICompatibleProvider:
 
     @staticmethod
     def _parse_json_args(raw: str) -> dict:
+        if not raw:
+            return {}
         try:
-            return json.loads(raw) if raw else {}
+            return json.loads(raw)
         except json.JSONDecodeError:
+            logger.warning("Tool-call arguments were not valid JSON; using empty params. Raw: %.200s", raw)
             return {}
 
     # ---- embeddings (override in providers that support it) ----

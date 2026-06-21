@@ -7,7 +7,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS job_queue (
 
 _TERMINAL_STATUSES = (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
 
+# Exponential backoff before a failed job becomes eligible to retry.
+_RETRY_BASE_SECONDS: int = 30
+_RETRY_MAX_SECONDS: int = 3600
+
+
+def _retry_delay_seconds(retry_count: int) -> int:
+    """Delay before a failed job retries: 30s, 60s, 120s, ... capped at 1 hour."""
+    return min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
+
 
 class SQLiteJobProcessor(JobProcessor):
     """Persistent job queue backed by a SQLite file.
@@ -59,6 +68,14 @@ class SQLiteJobProcessor(JobProcessor):
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
+            # Indexes for the hot paths: claim_next (pending eligibility + ordering)
+            # and the cron duplicate-run guard (agent + task + status).
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_queue_pending ON job_queue (status, priority, scheduled_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_queue_agent_task ON job_queue (agent, task, status)"
+            )
 
     async def enqueue(self, job: Job) -> str:
         try:
@@ -198,6 +215,17 @@ class SQLiteJobProcessor(JobProcessor):
                 (status.value, datetime.now(UTC).isoformat(), job_id),
             )
 
+    async def has_active_job(self, agent: str, task: str) -> bool:
+        return await asyncio.to_thread(self._has_active_job_sync, agent, task)
+
+    def _has_active_job_sync(self, agent: str, task: str) -> bool:
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM job_queue WHERE agent = ? AND task = ? AND status IN (?, ?) LIMIT 1",
+                (agent, task, JobStatus.PENDING.value, JobStatus.RUNNING.value),
+            ).fetchone()
+            return row is not None
+
     async def list_jobs(self, status: JobStatus | None = None, limit: int = 100) -> list[Job]:
         rows = await asyncio.to_thread(self._list_sync, status, limit)
         return [self._row_to_job(r) for r in rows]
@@ -228,7 +256,7 @@ class SQLiteJobProcessor(JobProcessor):
             await asyncio.sleep(poll_interval_seconds)
 
     async def _run_job(self, job: Job, on_job: Callable[[Job], Awaitable[Any]]) -> None:
-        """Execute one job; mark completed or failed based on outcome."""
+        """Execute one job; mark completed, or schedule a retry / fail on error."""
         try:
             await on_job(job)
             await self.mark_completed(job.job_id)
@@ -236,7 +264,8 @@ class SQLiteJobProcessor(JobProcessor):
             raise
         except Exception:
             logger.exception("JobProcessor: job %s failed", job.job_id)
-            await self.mark_failed(job.job_id)
+            retry_after = datetime.now(UTC) + timedelta(seconds=_retry_delay_seconds(job.retry_count))
+            await self.mark_failed(job.job_id, retry_after=retry_after)
 
     def _list_sync(self, status: JobStatus | None, limit: int) -> list[sqlite3.Row]:
         with open_db_connection(self._db_path) as conn:

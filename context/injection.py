@@ -13,6 +13,7 @@ from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from utils.ids import generate_id
+from utils.tasks import spawn
 from utils.text import strip_html
 from utils.time import utcnow
 
@@ -131,15 +132,8 @@ class ContextInjector:
         return doc
 
     def _fire_ledger(self, entry: LedgerEntry) -> None:
-        """Schedule a ledger write as a background task, logging failures."""
-        task = asyncio.create_task(self._ledger.write(entry))
-        task.add_done_callback(
-            lambda t: (
-                logger.warning("Ledger write failed: %s", t.exception())
-                if not t.cancelled() and t.exception() is not None
-                else None
-            )
-        )
+        """Schedule a ledger write as a supervised background task."""
+        spawn(self._ledger.write(entry), name="ledger_write", logger=logger)
 
     async def _route(self, text: str) -> tuple[ContextDocument, str]:
         """Ask the LLM which document this text belongs to and extract a delta."""

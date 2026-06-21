@@ -116,7 +116,7 @@ Use these where they fit. Do not invent new structural patterns without a strong
 | **Template Method** | The `Agent` ABC fixes the `run()` skeleton (load context → load tools → `_execute()` → format result). Subclasses override `_execute()` only. |
 | **Repository** | `LedgerWriter`, `ContextStore`, `JobProcessor` expose domain methods; the storage engine (SQLite, files) is hidden behind them. |
 | **Factory** | `AgentFactory` builds agents from a folder path. `CardFactory` picks the right card type from an `AgentResult`'s classification flags. |
-| **Observer** | The Ledger is a passive observer: components fire-and-forget `asyncio.create_task(ledger.write(...))`; the extraction pipeline reads new entries on its own loop. No pub/sub framework. |
+| **Observer** | The Ledger is a passive observer: components fire-and-forget via `spawn(ledger.write(...), name=...)` (`utils/tasks.py`); the extraction pipeline reads new entries on its own loop. No pub/sub framework. |
 
 ---
 
@@ -182,7 +182,8 @@ utils/
   ids.py         <- generate_id(), generate_task_id()
   time.py        <- utcnow(), format_timestamp()
   security.py    <- generate_secret(), load_secret(), verify_secret()
-  prompts.py     <- load_prompt(path: str) -> str
+  prompts.py     <- load_prompt(path: str | Path) -> str
+  tasks.py       <- spawn(coro, *, name)  # supervised fire-and-forget background task
 ```
 
 ### 5.3 Prompts Are Files, Not Strings
@@ -208,6 +209,8 @@ class LedgerSource(str, Enum):
     MANUAL_INJECTION = "manual_injection"
     INFERENCE_ROUTER = "inference_router"
     APPROVAL = "approval"
+    WEBHOOK = "webhook"
+    CLARIFICATION = "clarification"
 
 class LedgerStatus(str, Enum):
     COMPLETED = "completed"
@@ -231,7 +234,8 @@ These abstract base classes must exist. Every concrete implementation fulfills e
 context/base.py        ContextStore      <- FileContextStore (v1), DBContextStore (future)
 ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
 inference/base.py      InferenceRouter   <- ModelDispatcher (multi-provider)
-approval/base.py       Notifier          <- MacOSNotifier, TerminalNotifier (dev/test)
+approval/base.py       Notifier          <- TerminalNotifier (default), MacOSNotifier (optional);
+                                            wrapped at runtime by TUIAwareNotifier
 tools/base.py          Tool              <- WebSearchTool, ReadFileTool, BashTool, GitTool, etc.
 agents/base.py         Agent             <- LLMAgent / AgenticLLMAgent (subclassed per domain:
                                             ArchitectAgent, CoderAgent, TesterAgent, ResearcherAgent,
@@ -266,14 +270,8 @@ def build_production_dependencies() -> Dependencies:
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
     )
 
-def build_test_dependencies(tmp_path: Path) -> Dependencies:
-    return Dependencies(
-        context_store=FileContextStore(tmp_path / "context"),
-        ledger=SQLiteLedgerWriter(tmp_path / "ledger.db"),
-        inference_router=MockInferenceRouter(),
-        notifier=TerminalNotifier(),
-        job_processor=SQLiteJobProcessor(tmp_path / "jobs.db"),
-    )
+# Test wiring lives in tests/conftest.py as build_test_dependencies(tmp_path).
+# It builds the same Dependencies with temp-dir stores and a MockInferenceRouter.
 ```
 
 Swapping any backend (e.g. `FileContextStore` → `DBContextStore`) is one line.
@@ -414,10 +412,12 @@ approval/
   base.py             <- Notifier (ABC)
   models.py           <- Card, CardType, ApprovalDecision
   exceptions.py       <- NotificationError
-  macos.py            <- MacOSNotifier, AlerterNotifier
-  terminal.py         <- TerminalNotifier (dev and test use)
+  macos.py            <- MacOSNotifier (optional native macOS alerts)
+  terminal.py         <- TerminalNotifier (default)
+  tui.py              <- TUIAwareNotifier (wraps a Notifier; silent while the TUI is attached)
+  interaction.py      <- UserInteraction (single path for approval/question/information cards)
   callback_server.py  <- FastAPI app on port 8001
-  store.py            <- module-level approval_store singleton (Web UI visibility)
+  store.py            <- module-level approval_store singleton (card registry)
   judgement_filter.py <- pre-screens cards against judgement_rules.md
 
 agents/
@@ -493,15 +493,13 @@ utils/
 
 config/
   settings.py        <- Settings (BaseSettings)
-  dependencies.py    <- Dependencies, build_production_dependencies(), build_test_dependencies()
+  dependencies.py    <- Dependencies, build_production_dependencies()
 
 cli/
   main.py            <- Typer app, all commands in one file
-
-web/
-  routes.py          <- Jinja2 routes for all /ui/* pages (configure() singleton)
-  templates/         <- Jinja2 HTML templates
-  static/            <- vendored JS, CSS
+  tui.py             <- Textual TUI client
+  _client.py         <- HTTP client for the local server
+  _server.py         <- server lifecycle helpers
 
 tests/
   unit/
@@ -947,14 +945,17 @@ Every caught error that affects system behavior writes a Ledger entry. Never swa
 try:
     result = await agent.run(payload)
 except AgentExecutionError as e:
-    asyncio.create_task(self._ledger.write(LedgerEntry(
-        source=LedgerSource.SYSTEM,
-        task_id=payload.task_id,
-        agent=agent.name,
-        action="agent_execution_failed",
-        output=str(e),
-        status=LedgerStatus.FAILED,
-    )))
+    spawn(
+        self._ledger.write(LedgerEntry(
+            source=LedgerSource.SYSTEM,
+            task_id=payload.task_id,
+            agent=agent.name,
+            action="agent_execution_failed",
+            output=str(e),
+            status=LedgerStatus.FAILED,
+        )),
+        name="error_ledger",
+    )
     await self._failure_handler.handle(payload.task_id, agent.name, e)
     raise
 ```
@@ -983,18 +984,21 @@ except InferenceError as e:
 
 ### 14.1 Always Fire and Forget
 
-Ledger writes are side effects. They never block the main execution path.
+Ledger writes are side effects. They stay off the main execution path, so a slow or failing write never blocks the task.
 
 ```python
-# correct: non-blocking
-asyncio.create_task(self._ledger.write(LedgerEntry(
-    source=LedgerSource.AGENT,
-    task_id=task_id,
-    agent=self.name,
-    output=result.summary,
-    agent_output=result.data,
-    status=LedgerStatus.COMPLETED,
-)))
+# correct: supervised fire-and-forget (see utils/tasks.py)
+spawn(
+    self._ledger.write(LedgerEntry(
+        source=LedgerSource.AGENT,
+        task_id=task_id,
+        agent=self.name,
+        output=result.summary,
+        agent_output=result.data,
+        status=LedgerStatus.COMPLETED,
+    )),
+    name="agent_completion_ledger",
+)
 
 # wrong: blocking the main path
 await self._ledger.write(LedgerEntry(...))
@@ -1162,7 +1166,7 @@ class ConfidenceTracker:
     async def record_use(self, agent: str, tool: str, was_helpful: bool) -> None:
         delta = CONFIDENCE_INCREASE if was_helpful else CONFIDENCE_DECREASE
         new_score = await self._apply_delta(agent, tool, delta)
-        asyncio.create_task(self._log_to_ledger(agent, tool, new_score))
+        spawn(self._log_to_ledger(agent, tool, new_score), name="confidence_ledger")
 
     async def get_tools_for_agent(self, agent_name: str) -> list[tuple[Tool, float]]:
         """Return tools for agent sorted by confidence score descending."""
@@ -1309,13 +1313,13 @@ tests/
     ledger/
       test_sqlite_writer.py
     inference/
-      test_openrouter_router.py
+      test_dispatcher.py
       test_cost_tracker.py
     orchestrator/
-      test_classifier.py
-      test_north_star.py
       test_router.py
       test_failure_handler.py
+      test_api_limits.py
+      test_orchestrator_security.py
     agents/
       test_health_agent.py
       test_job_agent.py
@@ -1340,7 +1344,8 @@ Fixtures used by more than one test file live in `tests/conftest.py`. Fixtures s
 # tests/conftest.py
 import pytest
 from pathlib import Path
-from config.dependencies import build_test_dependencies, Dependencies
+from config.dependencies import Dependencies
+# build_test_dependencies and MockInferenceRouter are defined in this file
 
 @pytest.fixture
 def deps(tmp_path: Path) -> Dependencies:
