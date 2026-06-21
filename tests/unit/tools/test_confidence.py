@@ -8,6 +8,7 @@ import pytest
 
 from tools import (
     DEFAULT_CONFIDENCE,
+    RELIABLE_CONFIDENCE,
     EMA_ALPHA,
     MAX_CONFIDENCE,
     MIN_CONFIDENCE,
@@ -29,6 +30,12 @@ async def test_score_for_unknown_pair_returns_default(
     tracker: ConfidenceTracker,
 ) -> None:
     assert await tracker.get_score("health", "nutrition_api") == DEFAULT_CONFIDENCE
+
+
+async def test_score_for_unknown_reliable_tool_returns_high_prior(
+    tracker: ConfidenceTracker,
+) -> None:
+    assert await tracker.get_score("health", "read_file") == RELIABLE_CONFIDENCE
 
 
 async def test_helpful_use_increases_score(tracker: ConfidenceTracker) -> None:

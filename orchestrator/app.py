@@ -67,23 +67,7 @@ logger = logging.getLogger(__name__)
 
 _AGENTS_DIR = Path(__file__).parent.parent / "agents"
 
-_RELIABLE_TOOLS = frozenset(
-    {
-        "read_file",
-        "write_file",
-        "list_dir",
-        "search_files",
-        "bash",
-        "web_search",
-        "schedule_task",
-        "fetch_url",
-        "git",
-        "patch_file",
-        "check_types",
-        "search_symbols",
-        "find_references",
-    }
-)
+from tools.confidence import RELIABLE_TOOLS
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +465,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, judgement_filter)
 
     _step("seeding confidence defaults")
-    await deps.confidence_tracker.seed_defaults(tool_graph, _RELIABLE_TOOLS)
+    await deps.confidence_tracker.seed_defaults(tool_graph, RELIABLE_TOOLS)
 
     _step("refreshing inference pools")
     await deps.inference_router.refresh_pools()

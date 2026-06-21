@@ -13,11 +13,30 @@ from utils.db import open_db_connection
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIDENCE: float = 0.5
+RELIABLE_CONFIDENCE: float = 0.80
 EMA_ALPHA: float = 0.10
 MIN_CONFIDENCE: float = 0.0
 MAX_CONFIDENCE: float = 1.0
 # Confidence below this threshold triggers a degradation warning.
 _WARN_THRESHOLD: float = 0.25
+
+RELIABLE_TOOLS = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "list_dir",
+        "search_files",
+        "bash",
+        "web_search",
+        "schedule_task",
+        "fetch_url",
+        "git",
+        "patch_file",
+        "check_types",
+        "search_symbols",
+        "find_references",
+    }
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tool_confidence (
@@ -75,7 +94,9 @@ class ConfidenceTracker:
 
     async def get_score(self, agent: str, tool: str) -> float:
         row = await asyncio.to_thread(self._get_row_sync, agent, tool)
-        return row["confidence"] if row is not None else DEFAULT_CONFIDENCE
+        if row is not None:
+            return row["confidence"]
+        return RELIABLE_CONFIDENCE if tool in RELIABLE_TOOLS else DEFAULT_CONFIDENCE
 
     def _get_row_sync(self, agent: str, tool: str) -> sqlite3.Row | None:
         with open_db_connection(self._db_path) as conn:
@@ -173,7 +194,7 @@ class ConfidenceTracker:
         with open_db_connection(self._db_path) as conn:
             for agent, tools in graph.items():
                 for tool in tools:
-                    score = 0.80 if tool in reliable_tools else DEFAULT_CONFIDENCE
+                    score = RELIABLE_CONFIDENCE if tool in reliable_tools else DEFAULT_CONFIDENCE
                     conn.execute(
                         "INSERT OR IGNORE INTO tool_confidence "
                         "(agent, tool, confidence, uses_total, uses_helpful, consecutive_failures, last_updated) "
