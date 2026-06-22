@@ -19,17 +19,18 @@ from approval import Notifier, TerminalNotifier
 from approval.store import ApprovalStore
 from config.settings import settings
 from config.strategy import NorthSettings
-from context import ContextStore, FileContextStore
+from memory import ContextStore, FileContextStore
 from inference import InferenceRouter
 from inference.factory import build_router
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
 
 if TYPE_CHECKING:
-    from context.episodic import EpisodicStore
-    from context.fact_store import FactStore
+    from memory.episodic import EpisodicStore
+    from memory.facts import FactStore
     from inference.cost_tracker import CostTracker
     from jobs.cron_store import UserCronStore
+    from memory import MemoryGateway
     from orchestrator.stream import EventStreamManager
     from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
@@ -59,6 +60,7 @@ class Dependencies:
     episodic_store: EpisodicStore
     task_context_store: TaskContextStore
     north_settings: NorthSettings
+    memory: MemoryGateway
     # Shared async callable used by EpisodicStore, EmbeddingIndex, ToolIndex,
     # and FactStore - guarantees a single embedding model and billing surface.
     embed_fn: EmbedFn | None = field(default=None)
@@ -67,11 +69,12 @@ class Dependencies:
 
 def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
     """Build and wire all synchronously-constructable production dependencies."""
-    from context.episodic import EpisodicStore
-    from context.fact_store import FactStore
+    from memory.episodic import EpisodicStore
+    from memory.facts import FactStore
     from inference.cost_tracker import CostTracker
     from inference.models import EmbedRequest
     from jobs.cron_store import UserCronStore
+    from memory import LocalMemoryGateway
     from orchestrator.stream import EventStreamManager
     from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
@@ -96,6 +99,14 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         resp = await cost_tracker.embed(EmbedRequest(texts=texts, component="embed"))
         return resp.embeddings
 
+    episodic_store = EpisodicStore(db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn)
+    fact_store = FactStore(db_path=settings.north_home / "facts.db", embed_fn=_embed_fn)
+    memory = LocalMemoryGateway(
+        context_store=context_store,
+        fact_store=fact_store,
+        episodic_store=episodic_store,
+    )
+
     return Dependencies(
         context_store=context_store,
         ledger=ledger,
@@ -107,15 +118,10 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         approval_store=ApprovalStore(),
         cron_store=UserCronStore(settings.north_home / "jobs.db"),
         confidence_tracker=confidence_tracker,
-        episodic_store=EpisodicStore(
-            db_path=settings.north_home / "episodic.db",
-            embed_fn=_embed_fn,
-        ),
+        episodic_store=episodic_store,
         task_context_store=TaskContextStore(),
         north_settings=north_settings,
+        memory=memory,
         embed_fn=_embed_fn,
-        fact_store=FactStore(
-            db_path=settings.north_home / "facts.db",
-            embed_fn=_embed_fn,
-        ),
+        fact_store=fact_store,
     )

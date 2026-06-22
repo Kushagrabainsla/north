@@ -8,14 +8,14 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from context.base import ContextStore
-from context.exceptions import ContextReadError, ContextWriteError
-from context.models import ContextDocument
+from memory.base import ContextStore
+from memory.exceptions import ContextReadError, ContextWriteError
+from memory.models import ContextDocument
 from utils.tasks import spawn
 from utils.text import STOPWORDS
 
 if TYPE_CHECKING:
-    from context.embedding_index import EmbeddingIndex
+    from memory.embeddings import EmbeddingIndex
 
 logger = logging.getLogger(__name__)
 

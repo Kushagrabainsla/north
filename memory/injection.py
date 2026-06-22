@@ -6,8 +6,8 @@ import asyncio
 import json
 import logging
 
-from context.base import ContextStore
-from context.models import ContextDocument
+from memory.base import ContextStore
+from memory.models import ContextDocument
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerWriter

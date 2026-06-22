@@ -201,7 +201,7 @@ async with self._client.stream("POST", "/chat/completions", json=body) as resp:
 
 ## 8. Semantic Context Search with Cosine Similarity
 
-**What:** `context/embedding_index.py:EmbeddingIndex` stores paragraph-level embedding vectors for the five context documents. `FileContextStore.search()` uses cosine similarity to retrieve the top-k relevant paragraphs.
+**What:** `memory/embeddings.py:EmbeddingIndex` stores paragraph-level embedding vectors for the five context documents. `FileContextStore.search()` uses cosine similarity to retrieve the top-k relevant paragraphs.
 
 **Architecture:**
 
@@ -227,23 +227,25 @@ search(query)
 
 ## 9. Episodic Memory Layer
 
-**What:** after every completed task, the Orchestrator writes a (prompt, output) summary to `~/.north/episodic.db` with an embedding vector. Before each agent run, the top-3 most semantically similar past episodes are injected into the agent's context block.
+**What:** a background consolidator (`memory/consolidator.py`) projects the ledger into `~/.north/episodic.db`, writing one summary per task with an embedding vector and an outcome (`success`/`failed`/`cancelled`). It is the single writer. Before each agent run, the top-3 most semantically similar past episodes the agent is permitted to see are injected into its context block, with failed and cancelled episodes labelled so they read as cautionary.
 
 **Why:** agents have no cross-session memory by default. Without episodic recall, the job agent would re-research the same companies every time. Episodic injection gives agents continuity without burdening the context window with the full ledger.
 
 **Storage schema:**
 ```sql
 CREATE TABLE episodes (
-  id        TEXT PRIMARY KEY,
-  task_id   TEXT,
-  domain    TEXT NOT NULL,
-  summary   TEXT NOT NULL,      -- "Task: <200 chars>\nResult: <500 chars>"
-  embedding TEXT,               -- JSON float array, null if embed failed
-  timestamp TEXT NOT NULL
+  id         TEXT PRIMARY KEY,
+  task_id    TEXT,              -- one episode per task (upsert)
+  domain     TEXT NOT NULL,     -- gates which agents may recall it
+  outcome    TEXT NOT NULL,     -- success | failed | cancelled
+  summary    TEXT NOT NULL,     -- "Task: <200 chars>\nResult: <500 chars>"
+  embedding  TEXT,              -- JSON float array, null if embed failed
+  timestamp  TEXT NOT NULL,
+  updated_at TEXT
 )
 ```
 
-**Retrieval:** cosine similarity (numpy) over all stored vectors; keyword fallback when embeddings are unavailable. Episodes are pruned on write: rows older than 90 days are deleted, then the oldest rows are trimmed so the store stays within a fixed cap. This keeps retrieval fast as the store grows.
+**Retrieval:** cosine similarity (numpy) over the stored vectors, filtered to the requesting agent's permitted domains; keyword fallback when embeddings are unavailable. Episodes are pruned on write by age only: rows older than 365 days are deleted. The row count is uncapped for now, so a full year of task history is retained and searched.
 
 ---
 

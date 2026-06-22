@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import json
 
-from context import ContextDocument, ContextStore
 from inference import CompletionRequest, InferenceRouter, PoolPriority
+from memory import ContextDocument, MemoryGateway
 from orchestrator.exceptions import OrchestratorError
 from utils.prompts import load_prompt
 from utils.text import strip_code_fences
@@ -17,8 +17,8 @@ from utils.text import strip_code_fences
 class NorthStarChecker:
     """Checks tasks against active goals across all time horizons."""
 
-    def __init__(self, context_store: ContextStore, inference_router: InferenceRouter) -> None:
-        self._context_store = context_store
+    def __init__(self, memory: MemoryGateway, inference_router: InferenceRouter) -> None:
+        self._memory = memory
         self._inference_router = inference_router
 
     async def check_alignment(self, prompt: str, task_id: str | None = None) -> tuple[bool, str | None, str]:
@@ -37,7 +37,7 @@ class NorthStarChecker:
         Raises:
             OrchestratorError: If verification/inference fails.
         """
-        goals = await self._context_store.read(ContextDocument.NORTH_STARS)
+        goals = await self._memory.read_document(self._memory.system_principal, ContextDocument.NORTH_STARS)
         if not goals.strip():
             return True, None, "No active goals found in north_stars.md. Proceeding."
 

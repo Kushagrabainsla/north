@@ -2,7 +2,7 @@
 
 All notable changes to north are documented here.
 
-## [Unreleased]
+## [1.3.6] - 2026-06-21
 ### Removed
 - **Web UI removed**: the server-rendered Jinja2/HTMX dashboard and all `/ui/*` routes are gone, the `web/` package is no longer wired into the app, and `jinja2` is dropped from dependencies. north is now CLI + TUI only; the Orchestrator REST API and SSE stream are unchanged, so the CLI and Textual TUI keep full functionality.
 - **Session-cookie auth removed** (`utils/security.py`): the `/auth/token` HttpOnly cookie flow (only the web UI used it) is gone. The Orchestrator and callback server authenticate with the `X-North-Secret` header only.
@@ -10,9 +10,14 @@ All notable changes to north are documented here.
 ### Added
 - **`UserInteraction` mediator** (`approval/interaction.py`): one shared path for every user-facing card (approval, question, information). Tools, agents, and the orchestrator all go through it, so the surface-then-await sequence is defined once instead of in three drifting copies (DRY, §5).
 - **`spawn()` supervised background tasks** (`utils/tasks.py`): one helper for fire-and-forget coroutines that keeps a strong reference until completion and logs any exception under a name. Replaces several hand-rolled `create_task` + done-callback patterns (re-indexing, episode/ledger writes, confidence recording, pool refresh).
+- **`MemoryGateway` single gated memory interface** (`memory/` package): one path for every read of north's memory (facts, episodes, context documents). Each read carries a `MemoryPrincipal`, so per-agent and per-tool permissions are enforced in one place. Agents (`recall`), the `JudgementFilter`, and the north-star check (`read_document` via a system principal) all go through it.
+- **`EpisodeConsolidator` background episode writer** (`memory/consolidator.py`): a watermark-based job that projects the ledger into episodic memory, recording one episode per task with its outcome (`success`/`failed`/`cancelled`). It is the single writer for `episodic.db`; failed and cancelled tasks are now remembered and labelled `[FAILED]`/`[CANCELLED]` on retrieval so they read as cautionary rather than as a template to copy.
 
 ### Changed
 - **Notifier threaded through tools and agents** (`tools/base.py`, `agents/models.py`, `orchestrator/app.py`): gated tools and agents now receive the `Notifier`, wrapped at runtime by `TUIAwareNotifier` (silent while the TUI is attached, fires an alert otherwise), so headless approvals reach the user instead of silently timing out.
+- **`context/` user-memory layer moved into a `memory/` package**: `ContextStore`/`MemoryGateway` ABCs in `memory/base.py`, `ContextDocument` + memory models in `memory/models.py`, plus `documents.py` (was `file_store`), `facts.py` (was `fact_store`), `episodic.py`, `embeddings.py` (was `embedding_index`), `extraction.py`, `injection.py`, `consolidator.py`, `exceptions.py`. `ledger/` stays separate; `context/` keeps only `repo_instructions.py` and `task_snapshot.py`.
+- **Episodic memory records every outcome, one row per task, 1-year retention, uncapped** (`memory/episodic.py`): added an `outcome` column and per-task upsert; retention raised 90 → 365 days and the row cap removed.
+- **`JudgementFilter` and `NorthStarChecker` read through the gateway** (`approval/judgement_filter.py`, `orchestrator/north_star.py`): both now take a `MemoryGateway` and read their documents via `read_document(system_principal, ...)` instead of holding a `ContextStore`.
 - **Split the cli/ package into constants.py, formatting.py, _client.py, and _server.py**: data, pure formatters, HTTP client, and server/process helpers so main.py/tui.py hold only commands and the App (§4.1, §7.3).
 - **Renamed `cli/tui_v2.py` → `cli/tui.py`**: the "_v2" suffix was a migration artefact (the old prompt_toolkit `tui.py` is long gone); the Textual UI is now just `cli/tui`. Updated the import in `cli/main.py` and the module docstring.
 - **TUI event handling is now a dispatch table** (`cli/tui.py`): the 201-line `_handle_event` `if/elif` chain (carrying `# noqa: C901`) became a `{event → _on_*}` map with one focused handler per SSE event; the complexity suppression is gone (SRP, §4.1).
@@ -24,6 +29,7 @@ All notable changes to north are documented here.
 - **Docs reconciled with the current code** (`docs/CODING_STYLE.md`, `docs/ARCHITECTURE.md`, `README.md`, `CONTRIBUTING.md`, agent `README.md`s): replaced the non-existent static `TOOL_GRAPH`/`TOOL_IMPLEMENTATIONS` and `tools/implementations/` model with the real filesystem-discovery registry (`universal`/`specialized`/`semantic`/`analysis` + per-agent `tools.yaml`); corrected the §7.3 module layout (dropped `orchestrator/classifier.py`, `agents/router.py`, `utils/migrations.py`; added the files that actually exist); rewrote §11.4 to describe per-store `CREATE TABLE IF NOT EXISTS` schema ownership; refreshed the agent set, folder structure, and tool-graph sections; fixed the test-count figure.
 
 ### Fixed
+- **Private-context leak via memory retrieval** (`memory/gateway.py`, `agents/base.py`, `memory/facts.py`, `memory/episodic.py`): `FactStore.search` and `EpisodicStore.search` bypassed the per-agent permission gate (`_allowed_documents`), so once `facts.db` had rows an agent could receive facts and episodes it was not permitted to read. Retrieval now runs through the `MemoryGateway`, which filters facts by allowed category and episodes by allowed domain with a fail-closed allow-list.
 - **Formatting drift** (8 files incl. `cli/main.py`, `inference/dispatcher.py`): brought back under `ruff format`; the whole tree now passes `ruff format --check`.
 ### Added
 - **`shell` tool - long-lived PTY sessions** (`tools/specialized/shell_tool.py`): start/read/write/stop/list actions keep a process alive across tool calls behind a pseudo-terminal (stdlib `pty`, no new dependency) for dev servers, `--watch` builds, REPLs, and debuggers. `start` and `write` are approval-gated like `bash`; output streams into a per-session ring buffer. Wired into coder + tester.

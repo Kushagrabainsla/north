@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from context import fact_store as fact_store_module
-from context.fact_store import FactStore
+from memory import facts as fact_store_module
+from memory.facts import FactStore
 
 
 def _embedder(vectors: dict[str, list[float]] | None = None, default: list[float] | None = None):

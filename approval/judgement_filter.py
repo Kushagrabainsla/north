@@ -17,10 +17,9 @@ import json
 import logging
 
 from approval.models import Card, CardType
-from context.base import ContextStore
-from context.models import ContextDocument
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
+from memory import ContextDocument, MemoryGateway
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +83,10 @@ class JudgementFilter:
 
     def __init__(
         self,
-        context_store: ContextStore,
+        memory: MemoryGateway,
         inference_router: InferenceRouter,
     ) -> None:
-        self._context_store = context_store
+        self._memory = memory
         self._inference_router = inference_router
 
     async def check(self, card: Card) -> tuple[str | None, str]:
@@ -102,10 +101,10 @@ class JudgementFilter:
         if card.type == CardType.INFORMATION:
             return None, ""
 
-        rules = await self._context_store.read(ContextDocument.JUDGEMENT_RULES) or ""
+        rules = await self._memory.read_document(self._memory.system_principal, ContextDocument.JUDGEMENT_RULES)
         preferences = ""
         if card.type == CardType.QUESTION:
-            preferences = await self._context_store.read(ContextDocument.PUBLIC) or ""
+            preferences = await self._memory.read_document(self._memory.system_principal, ContextDocument.PUBLIC)
 
         # Need at least some learned context to act on, or there is nothing to match.
         if len((rules + preferences).strip()) < _MIN_LEARNED_CONTEXT_CHARS:

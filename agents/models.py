@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import yaml
 from pydantic import BaseModel, Field
 
-from context.base import ContextStore
+from memory.base import ContextStore
 from inference.base import InferenceRouter
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
@@ -18,8 +18,9 @@ if TYPE_CHECKING:
     from approval.base import Notifier
     from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
-    from context.fact_store import FactStore
+    from memory.facts import FactStore
     from ledger.base import LedgerWriter
+    from memory import MemoryGateway
     from tools.tool_index import ToolIndex
 
 
@@ -126,6 +127,10 @@ class AgentDependencies:
     # Semantic context retrieval: per-fact embeddings instead of full doc load.
     # None → fall back to full markdown document load.
     fact_store: FactStore | None = field(default=None)
+    # Single gated memory interface. When set, agents read all context through
+    # it; when None, a gateway is built on the fly from the stores above so the
+    # gate still applies. See memory/gateway.py.
+    memory: MemoryGateway | None = field(default=None)
     # Optional ledger writer for recording delegation failures from agents.
     # Injected at startup; None in tests that do not require audit trail.
     ledger: LedgerWriter | None = field(default=None)

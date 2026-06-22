@@ -58,8 +58,8 @@ class FactStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
-        # (id, content, embedding_vector) - rebuilt lazily, invalidated on insert.
-        self._cache: list[tuple[str, str, list[float]]] | None = None
+        # (id, content, embedding_vector, category) - rebuilt lazily, invalidated on insert.
+        self._cache: list[tuple[str, str, list[float], str]] | None = None
         # Serializes cache rebuilds: concurrent searches after an invalidation
         # must not interleave loads and clobber each other's cache.
         self._cache_lock = asyncio.Lock()
@@ -92,24 +92,35 @@ class FactStore:
         await asyncio.to_thread(self._insert_or_replace_sync, content, category, emb_json, replace_id)
         self._cache = None
 
-    async def search(self, query: str, max_results: int = _MAX_FACTS_RETURNED) -> list[str]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = _MAX_FACTS_RETURNED,
+        allowed_categories: frozenset[str] | None = None,
+    ) -> list[str]:
         """Return up to max_results fact strings most semantically similar to query.
 
-        Falls back to recency order when embeddings are unavailable.
+        When *allowed_categories* is given, only facts in those categories are
+        considered, so a caller never receives a fact it is not permitted to
+        read. Falls back to recency order when embeddings are unavailable.
         """
         try:
             q_embs = await self._embed_fn([query])
         except Exception:
-            return await asyncio.to_thread(self._recent_facts_sync, max_results)
+            return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
         if not q_embs:
-            return await asyncio.to_thread(self._recent_facts_sync, max_results)
+            return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
         qvec = q_embs[0]
 
         cache = await self._get_cache()
         if not cache:
             return []
 
-        scored = [(content, cosine_similarity(qvec, emb)) for _, content, emb in cache if emb]
+        scored = [
+            (content, cosine_similarity(qvec, emb))
+            for _, content, emb, category in cache
+            if emb and (allowed_categories is None or category in allowed_categories)
+        ]
         scored.sort(key=lambda x: x[1], reverse=True)
         return [content for content, _ in scored[:max_results]]
 
@@ -123,7 +134,7 @@ class FactStore:
     def invalidate_cache(self) -> None:
         self._cache = None
 
-    async def _get_cache(self) -> list[tuple[str, str, list[float]]]:
+    async def _get_cache(self) -> list[tuple[str, str, list[float], str]]:
         """Return the embedding cache, rebuilding it at most once concurrently.
 
         The lock prevents the rebuild race: two coroutines that both observe an
@@ -137,13 +148,13 @@ class FactStore:
         async with self._cache_lock:
             if self._cache is None:
                 rows = await asyncio.to_thread(self._load_all_sync)
-                parsed: list[tuple[str, str, list[float]]] = []
-                for row_id, content, emb_json in rows:
+                parsed: list[tuple[str, str, list[float], str]] = []
+                for row_id, content, emb_json, category in rows:
                     if emb_json:
                         try:
                             emb = json.loads(emb_json)
                             if emb:
-                                parsed.append((row_id, content, emb))
+                                parsed.append((row_id, content, emb, category))
                         except (json.JSONDecodeError, ValueError):
                             pass
                 self._cache = parsed
@@ -192,17 +203,27 @@ class FactStore:
                     (_MAX_FACTS_STORED,),
                 )
 
-    def _load_all_sync(self) -> list[tuple[str, str, str]]:
+    def _load_all_sync(self) -> list[tuple[str, str, str, str]]:
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute("SELECT id, content, embedding FROM context_facts").fetchall()
-        return [(r["id"], r["content"], r["embedding"] or "") for r in rows]
+            rows = conn.execute("SELECT id, content, embedding, category FROM context_facts").fetchall()
+        return [(r["id"], r["content"], r["embedding"] or "", r["category"]) for r in rows]
 
-    def _recent_facts_sync(self, limit: int) -> list[str]:
+    def _recent_facts_sync(self, limit: int, allowed_categories: frozenset[str] | None = None) -> list[str]:
+        if allowed_categories is not None and not allowed_categories:
+            return []
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute(
-                "SELECT content FROM context_facts ORDER BY updated_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            if allowed_categories is not None:
+                placeholders = ",".join("?" * len(allowed_categories))
+                rows = conn.execute(
+                    f"SELECT content FROM context_facts WHERE category IN ({placeholders}) "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    (*allowed_categories, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT content FROM context_facts ORDER BY updated_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
         return [r["content"] for r in rows]
 
     def _count_sync(self) -> int:

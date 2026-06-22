@@ -103,7 +103,7 @@ def test_tester_class_name() -> None:
 def test_agent_instantiates(name: str, tmp_path: Path) -> None:
     """Every engineering agent must instantiate without error."""
     from agents.models import AgentConfig, AgentDependencies
-    from context import FileContextStore
+    from memory import FileContextStore
     from tests.conftest import MockInferenceRouter
     from tools.confidence import ConfidenceTracker
     from tools.registry import ToolRegistry

@@ -231,7 +231,8 @@ class LedgerStatus(str, Enum):
 These abstract base classes must exist. Every concrete implementation fulfills exactly one of these. No other component depends on a concrete class directly.
 
 ```
-context/base.py        ContextStore      <- FileContextStore (v1), DBContextStore (future)
+memory/base.py         ContextStore      <- FileContextStore (v1), DBContextStore (future)
+memory/base.py         MemoryGateway     <- LocalMemoryGateway (single gated read path)
 ledger/base.py         LedgerWriter      <- SQLiteLedgerWriter
 inference/base.py      InferenceRouter   <- ModelDispatcher (multi-provider)
 approval/base.py       Notifier          <- TerminalNotifier (default), MacOSNotifier (optional);
@@ -374,17 +375,22 @@ ledger/
   exceptions.py      <- LedgerWriteError, LedgerReadError
   sqlite_writer.py   <- SQLiteLedgerWriter
 
+memory/
+  __init__.py
+  base.py            <- ContextStore (ABC) + MemoryGateway (ABC)
+  models.py          <- ContextDocument, MemoryPrincipal, MemoryContext
+  gateway.py         <- LocalMemoryGateway (single gated read path)
+  exceptions.py      <- ContextReadError, ContextWriteError
+  documents.py       <- FileContextStore
+  facts.py           <- atomic fact store (per-fact embeddings)
+  episodic.py        <- episodic memory layer
+  embeddings.py      <- semantic search / cosine-similarity index
+  extraction.py      <- ledger → context extraction pipeline
+  consolidator.py    <- ledger → episodic memory (single writer)
+  injection.py       <- manual context injection
+
 context/
   __init__.py
-  base.py            <- ContextStore (ABC)
-  models.py          <- ContextDocument (enum of valid document names)
-  exceptions.py      <- ContextReadError, ContextWriteError
-  file_store.py      <- FileContextStore
-  fact_store.py      <- atomic fact store
-  episodic.py        <- episodic memory layer
-  embedding_index.py <- semantic search / cosine-similarity index
-  extraction.py      <- ledger → context extraction pipeline
-  injection.py       <- manual context injection
   repo_instructions.py <- loads AGENTS.md / CLAUDE.md / .cursorrules for a workspace
   task_snapshot.py   <- per-task context snapshot
 

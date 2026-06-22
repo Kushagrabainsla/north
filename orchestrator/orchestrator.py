@@ -16,7 +16,6 @@ from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
-from inference.models import CompletionRequest, PoolPriority
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.constants import (
     MAX_CONCURRENT_TASKS,
@@ -416,6 +415,9 @@ class Orchestrator:
                 action=f"classified_as_{'consequential' if classification.is_consequential else 'trivial'}",
                 output=classification.reasoning,
                 status=LedgerStatus.COMPLETED,
+                # Stamp the domain so the episode consolidator can tag each task's
+                # episode without re-deriving it (used for per-agent gating).
+                agent_output={"domain": classification.domain},
             )
         )
 
@@ -664,7 +666,8 @@ class Orchestrator:
 
         await self._maybe_synthesize(task_id, plan.agents, plan.mode, failures=all_failures)
 
-        spawn(self._record_episode(task_id, prompt, plan.agents, domain), name=f"record_episode:{task_id}")
+        # Episodes are written by the background EpisodeConsolidator (single writer)
+        # from the ledger, covering success, failure, and cancellation uniformly.
         await self._finish_task(task_id, failures=all_failures, total_agents=len(plan.agents))
 
     async def _execute_single_tool(
@@ -782,62 +785,6 @@ class Orchestrator:
         # they produce no signal worth extracting.
         if self._extraction_pipeline is not None and not skip_extraction:
             spawn(self._extraction_pipeline.run_once(), name="extraction_run_once")
-
-    async def _record_episode(self, task_id: str, prompt: str, agents: list[str], domain: str) -> None:
-        """Write a task episode to episodic memory after completion."""
-        if self._episodic_store is None:
-            return
-        all_data = await self._task_context_store.get_all(task_id)
-        outputs = [(all_data.get(agent) or {}).get("output", "") for agent in agents]
-        combined = "\n".join(o for o in outputs if o).strip()
-        if not combined:
-            return
-        summary = await self._summarize_episode(task_id, prompt, combined)
-        try:
-            await self._episodic_store.record(task_id=task_id, domain=domain, summary=summary)
-        except Exception:
-            logger.warning("Episodic record failed for task %s", task_id, exc_info=True)
-
-    async def _summarize_episode(self, task_id: str, prompt: str, output: str) -> str:
-        """Generate a retrieval-friendly episode summary via the LLM.
-
-        Falls back to a plain truncated string when the cost tracker is
-        unavailable (tests, offline mode) so episodic memory always gets
-        *something* rather than nothing.
-        """
-        fallback = f"Task: {prompt[:200]}\nResult: {output[:500]}"
-        if self._tracked_router is None:
-            return fallback
-        try:
-            response = await self._tracked_router.complete(  # CostTracker is also an InferenceRouter
-                CompletionRequest(
-                    prompt=(
-                        "Summarize this completed AI task in 2–3 sentences for future retrieval. "
-                        "Include what was requested, what was done, and any key outcomes or decisions.\n\n"
-                        f"Task: {prompt}\n\nResult: {output[:3000]}"
-                    ),
-                    priority=PoolPriority.LOW,
-                    component="episodic_summary",
-                    task_id=None,  # task already completed; task_id cost was already popped
-                )
-            )
-            text = response.text.strip()
-            # Guard/classifier models sometimes return a bare float score instead
-            # of prose. Detect and discard those so episodic memory stays readable.
-            try:
-                float(text)
-                logger.warning(
-                    "Episode summarization returned a numeric score for task %s (model=%s) - using fallback",
-                    task_id,
-                    response.model_used,
-                )
-                return fallback
-            except ValueError:
-                pass
-            return text or fallback
-        except Exception:
-            logger.warning("Episode summarization failed for task %s", task_id, exc_info=True)
-            return fallback
 
     async def _maybe_synthesize(
         self,

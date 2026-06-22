@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from approval.terminal import TerminalNotifier
-from context import FileContextStore
+from memory import FileContextStore
 from inference.base import InferenceRouter
 from inference.models import (
     CompletionRequest,
@@ -99,7 +99,7 @@ def build_test_dependencies(tmp_path: Path):
     """Return a dependency bundle wired to isolated temp paths with mock inference."""
     from dataclasses import dataclass
 
-    from context.base import ContextStore
+    from memory.base import ContextStore
 
     @dataclass
     class TestDependencies:

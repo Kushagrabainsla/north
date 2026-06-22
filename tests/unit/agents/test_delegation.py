@@ -18,7 +18,7 @@ from agents.agentic_llm_agent import AgenticLLMAgent
 from agents.constants import MAX_DELEGATION_DEPTH as _MAX_DELEGATION_DEPTH
 from agents.general.agent import GeneralAgent
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
-from context import FileContextStore
+from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry

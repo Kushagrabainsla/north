@@ -16,12 +16,13 @@ import pytest
 from agents.models import AgentDependencies, AgentPayload
 from approval.store import ApprovalStore
 from approval.terminal import TerminalNotifier
-from context import FileContextStore
-from context.extraction import ExtractionPipeline
+from memory import FileContextStore
+from memory.extraction import ExtractionPipeline
 from jobs import SQLiteJobProcessor
 from ledger import SQLiteLedgerWriter
 from ledger.base import LedgerFilters
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from memory import LocalMemoryGateway
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
@@ -100,7 +101,7 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
     orch = Orchestrator(
         ledger=ledger,
         agent_registry=agent_registry,
-        north_star_checker=NorthStarChecker(context_store, inference),
+        north_star_checker=NorthStarChecker(LocalMemoryGateway(context_store), inference),
         execution_planner=ExecutionPlanner(agent_registry, inference, tool_registry),
         task_context_store=task_ctx,
         failure_handler=failure_handler,
@@ -398,7 +399,7 @@ async def test_allowed_documents_defaults_without_rules(tmp_path):
     """When privacy_rules.md is empty, _allowed_documents() returns the safe defaults."""
     from agents.base import Agent
     from agents.models import AgentConfig
-    from context.models import ContextDocument
+    from memory import ContextDocument
 
     context_store = FileContextStore(tmp_path / "context")
     inference = MockInferenceRouter()
@@ -439,7 +440,7 @@ async def test_allowed_documents_respects_rules(tmp_path):
     """When privacy_rules.md has a matching rule, _allowed_documents() returns only those docs."""
     from agents.base import Agent
     from agents.models import AgentConfig
-    from context.models import ContextDocument
+    from memory import ContextDocument
 
     context_store = FileContextStore(tmp_path / "context")
     # Write a rule that restricts 'coder' to only public.md
@@ -531,7 +532,7 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
     """record() must remove episodes beyond the retention window."""
     import datetime
 
-    from context.episodic import _RETENTION_DAYS, EpisodicStore
+    from memory.episodic import _RETENTION_DAYS, EpisodicStore
     from utils.db import open_db_connection
 
     store = EpisodicStore(db_path=tmp_path / "episodic.db")

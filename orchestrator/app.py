@@ -25,9 +25,10 @@ from approval.judgement_filter import JudgementFilter
 from approval.tui import TUIAwareNotifier
 from config.dependencies import build_production_dependencies
 from config.settings import settings
-from context.embedding_index import EmbeddingIndex
-from context.extraction import ExtractionPipeline
-from context.injection import ContextInjector
+from memory.consolidator import EpisodeConsolidator
+from memory.embeddings import EmbeddingIndex
+from memory.extraction import ExtractionPipeline
+from memory.injection import ContextInjector
 from jobs.models import Job
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
@@ -207,6 +208,7 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
         approval_store=deps.approval_store,
         notifier=deps.notifier,
         fact_store=deps.fact_store,
+        memory=deps.memory,
         ledger=deps.ledger,
         agent_max_iterations=settings.agent_max_iterations,
         agent_history_keep_recent=settings.agent_history_keep_recent,
@@ -247,7 +249,7 @@ def _build_orchestrator(
         ledger=deps.ledger,
         agent_registry=agent_registry,
         north_star_checker=NorthStarChecker(
-            context_store=deps.context_store,
+            memory=deps.memory,
             inference_router=deps.cost_tracker,
         ),
         execution_planner=ExecutionPlanner(
@@ -390,6 +392,13 @@ def _launch_background_tasks(
         cron_store=deps.cron_store,
     )
 
+    episode_consolidator = EpisodeConsolidator(
+        ledger=deps.ledger,
+        episodic_store=deps.episodic_store,
+        inference_router=deps.cost_tracker,
+        north_home=settings.north_home,
+    )
+
     return [
         asyncio.create_task(
             _guarded(
@@ -403,6 +412,9 @@ def _launch_background_tasks(
         ),
         asyncio.create_task(_guarded(cron_scheduler.run(), "cron_scheduler"), name="cron_scheduler"),
         asyncio.create_task(_guarded(extraction_pipeline.run(), "extraction_pipeline"), name="extraction_pipeline"),
+        asyncio.create_task(
+            _guarded(episode_consolidator.run(), "episode_consolidator"), name="episode_consolidator"
+        ),
         asyncio.create_task(_guarded(callback_server.serve(), "callback_server"), name="callback_server"),
         asyncio.create_task(_guarded(_pool_refresh_loop(deps), "pool_refresh"), name="pool_refresh"),
     ]
@@ -450,7 +462,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("building tool registry")
     tool_graph = AgentRegistry.build_tool_graph(_AGENTS_DIR)
     judgement_filter = JudgementFilter(
-        context_store=deps.context_store,
+        memory=deps.memory,
         inference_router=deps.cost_tracker,
     )
     tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, judgement_filter)

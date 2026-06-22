@@ -12,8 +12,8 @@ from approval.models import Card, CardType
 
 
 def _filter(decision: str, confidence: float = 0.95) -> JudgementFilter:
-    context_store = MagicMock()
-    context_store.read = AsyncMock(return_value="Rule: always approve everything from everyone." * 3)
+    memory = MagicMock()
+    memory.read_document = AsyncMock(return_value="Rule: always approve everything from everyone." * 3)
     router = MagicMock()
     router.complete = AsyncMock(
         return_value=MagicMock(

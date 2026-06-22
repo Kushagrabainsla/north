@@ -1,14 +1,21 @@
-"""Abstract interface for the Context Layer. See README Section 5.2."""
+"""Memory layer interfaces. See docs/ARCHITECTURE.md Section 5.
+
+Holds the two base ABCs: ``ContextStore`` (the five markdown documents) and
+``MemoryGateway`` (the single gated read path over facts, episodes, and
+documents). Each gateway call carries a ``MemoryPrincipal`` so per-caller
+permissions are enforced in one place and nothing can bypass the gate by
+talking to a store directly.
+"""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from context.models import ContextDocument
+from memory.models import ContextDocument, MemoryContext, MemoryPrincipal
 
 if TYPE_CHECKING:
-    from context.embedding_index import EmbeddingIndex
+    from memory.embeddings import EmbeddingIndex
 
 
 class ContextStore(ABC):
@@ -49,3 +56,43 @@ class ContextStore(ABC):
         nothing matches.
         """
         raise NotImplementedError("search() must be implemented by a concrete ContextStore subclass.")
+
+
+class MemoryGateway(ABC):
+    """Single, gated entry point for every read of north's memory."""
+
+    @property
+    @abstractmethod
+    def system_principal(self) -> MemoryPrincipal:
+        """Principal for internal system reads (judgement filter, north-star check).
+
+        Grants the non-sensitive system documents (public, judgement_rules,
+        north_stars); never private, and recalls no episodes.
+        """
+        ...
+
+    @abstractmethod
+    async def principal_for(self, name: str, domain: str | None = None) -> MemoryPrincipal:
+        """Resolve a caller's permissions from privacy_rules.md into a principal."""
+        ...
+
+    @abstractmethod
+    async def recall(
+        self,
+        principal: MemoryPrincipal,
+        query: str,
+        *,
+        fact_limit: int = 15,
+        episode_limit: int = 3,
+    ) -> MemoryContext:
+        """Return the gated, merged memory relevant to *query* for *principal*.
+
+        Filters facts by allowed category, episodes by allowed domain, and falls
+        back to the permitted context documents when no facts exist yet.
+        """
+        ...
+
+    @abstractmethod
+    async def read_document(self, principal: MemoryPrincipal, doc: ContextDocument) -> str:
+        """Return a full context document, or '' if the principal may not read it."""
+        ...

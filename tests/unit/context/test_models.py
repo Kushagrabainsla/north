@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from context import ContextDocument
+from memory import ContextDocument
 
 
 def test_context_document_enum_matches_spec() -> None:

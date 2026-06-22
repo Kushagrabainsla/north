@@ -236,7 +236,7 @@ context/
 
 ### 5.2 The ContextStore Interface
 
-Nothing in the system reads or writes context files directly. Everything goes through the `ContextStore` interface. This makes the storage backend swappable: files today, database tomorrow, without changing any other layer.
+Nothing in the system reads or writes context files directly. Everything goes through the `ContextStore` interface (defined in `memory/base.py`). Agents, tools, and internal checks read through the gated `MemoryGateway`, which enforces per-agent permissions over facts, episodes, and documents. This makes the storage backend swappable: files today, database tomorrow, without changing any other layer.
 
 ```python
 from abc import ABC, abstractmethod
@@ -374,7 +374,7 @@ Full visibility and control over what north knows.
 
 The episodic memory layer gives north a growing record of what it has actually done - not just facts about you, but memories of specific past tasks.
 
-**What is stored:** after every completed task, the Orchestrator writes a summary of the form `Task: <prompt truncated to 200 chars>\nResult: <agent output truncated to 500 chars>` to `~/.north/episodic.db` together with an embedding of that summary. Episodes older than 90 days are pruned on write, and the store is capped at a fixed number of most-recent rows.
+**What is stored:** a background consolidator (`memory/consolidator.py`) projects the ledger into `~/.north/episodic.db`, writing one summary per task of the form `Task: <prompt truncated to 200 chars>\nResult: <agent output truncated to 500 chars>` with an embedding and an outcome (`success`/`failed`/`cancelled`). It is the single writer, so failed and cancelled tasks are recorded too. Episodes older than 365 days are pruned on write; the row count is uncapped for now.
 
 **Retrieval:** before executing each agent run, `Agent._load_context()` queries the episodic store for the top-3 semantically similar past episodes (embedding cosine similarity, keyword fallback).  Any results are injected into the agent's context block as a `## Relevant past context` section containing bulleted summaries.
 
@@ -392,12 +392,14 @@ This makes north progressively more context-aware about your patterns without th
 
 ```sql
 CREATE TABLE episodes (
-  id        TEXT PRIMARY KEY,
-  task_id   TEXT,
-  domain    TEXT NOT NULL,
-  summary   TEXT NOT NULL,
-  embedding TEXT,           -- JSON float array, null if embed call failed at write time
-  timestamp TEXT NOT NULL
+  id         TEXT PRIMARY KEY,
+  task_id    TEXT,              -- one episode per task (upsert)
+  domain     TEXT NOT NULL,     -- gates which agents may recall it
+  outcome    TEXT NOT NULL,     -- success | failed | cancelled
+  summary    TEXT NOT NULL,
+  embedding  TEXT,              -- JSON float array, null if embed call failed at write time
+  timestamp  TEXT NOT NULL,
+  updated_at TEXT
 )
 ```
 
@@ -1397,7 +1399,7 @@ everything else              -> standard local storage
 
 ### 12.3 Embedding Storage
 
-`embeddings.db` and `episodic.db` are both append-dominant SQLite databases using WAL mode.  Embedding rows are replaced wholesale when a context document is overwritten. Episodic rows are pruned on write: rows older than 90 days are deleted, then the store is capped at a fixed number of most-recent rows.
+`embeddings.db` and `episodic.db` are both append-dominant SQLite databases using WAL mode.  Embedding rows are replaced wholesale when a context document is overwritten. Episodic rows are pruned on write by age only: rows older than 365 days are deleted; the row count is uncapped for now.
 
 When context files grow large enough that paragraph-level embedding search degrades (thousands of paragraphs, many documents), the `EmbeddingIndex` can be replaced with a proper vector database (e.g. sqlite-vec, ChromaDB) behind the same interface with no changes to callers.  The `ContextStore.search()` contract is stable; the backing store is an implementation detail.
 
@@ -1512,16 +1514,24 @@ north/
     job/
     finance/
 
-  context/
+  memory/
     __init__.py
-    base.py             <- ContextStore (ABC)
-    models.py           <- ContextDocument (enum of the five valid document names)
+    base.py             <- ContextStore (ABC) + MemoryGateway (ABC)
+    models.py           <- ContextDocument, MemoryPrincipal, MemoryContext
+    gateway.py          <- LocalMemoryGateway: the single gated read path
     exceptions.py       <- ContextError, ContextReadError, ContextWriteError
-    file_store.py       <- FileContextStore (v1 concrete, optional EmbeddingIndex)
-    embedding_index.py  <- EmbeddingIndex: SQLite paragraph vectors + cosine search
+    documents.py        <- FileContextStore (v1 concrete, optional EmbeddingIndex)
+    facts.py            <- FactStore: per-fact embeddings, category-tagged
+    embeddings.py       <- EmbeddingIndex: SQLite paragraph vectors + cosine search
     episodic.py         <- EpisodicStore: per-task summaries + semantic retrieval
     extraction.py       <- extraction pipeline (Ledger → context docs, background job)
+    consolidator.py     <- EpisodeConsolidator: Ledger → episodic memory (single writer)
     injection.py        <- manual context injection handler (file, text, URL)
+
+  context/
+    __init__.py
+    repo_instructions.py <- loads AGENTS.md/CLAUDE.md/etc from the workspace
+    task_snapshot.py    <- per-task working-state snapshot
 
   ledger/
     __init__.py
@@ -1650,7 +1660,7 @@ The Monday morning briefing: Orchestrator waking itself on a schedule to summari
 How `judgement_rules.md`, `north_stars.md`, and `episodic.db` stay consistent across multiple machines. Deferred until the system is stable on a single machine.
 
 **Episodic Store Pruning**
-`episodic.db` is pruned on write today: episodes older than 90 days are deleted and the store is capped at a fixed number of most-recent rows.  A more principled strategy (deduplicate similar summaries, age out low-relevance episodes) is not yet designed.
+`episodic.db` is pruned on write today by age only: episodes older than 365 days are deleted, with no row cap.  A more principled strategy (deduplicate similar summaries, age out low-relevance episodes, and re-introduce a cap as the store grows) is not yet designed.
 
 **Embedding Model Upgrade Path**
 `openai/text-embedding-3-small` is the current embedding model.  If better models appear on OpenRouter or if the 1536-dimension vectors become expensive to store at scale, the `EmbeddingIndex` needs a migration path for existing vectors.  Not designed yet.

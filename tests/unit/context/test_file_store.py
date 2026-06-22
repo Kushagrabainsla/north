@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from context import ContextDocument, FileContextStore
+from memory import ContextDocument, FileContextStore
 
 
 @pytest.fixture

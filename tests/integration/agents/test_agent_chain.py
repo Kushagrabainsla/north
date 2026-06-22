@@ -23,7 +23,7 @@ from pathlib import Path
 from agents.models import AgentDependencies, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
 from approval.store import ApprovalStore
-from context import FileContextStore
+from memory import FileContextStore
 from inference.models import ToolCall, ToolCallResponse
 from tests.conftest import MockInferenceRouter
 from tools.confidence import ConfidenceTracker

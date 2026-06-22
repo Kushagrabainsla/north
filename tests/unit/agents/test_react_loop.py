@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
-from context import FileContextStore
+from memory import FileContextStore
 from inference.models import ToolCall, ToolCallResponse
 from tests.conftest import MockInferenceRouter
 from tools.confidence import ConfidenceTracker
@@ -365,7 +365,7 @@ def test_system_prompt_includes_tool_creation_policy(tmp_path: Path) -> None:
 
 async def test_engineering_agents_include_north_stars_in_context(tmp_path: Path) -> None:
     """All engineering agents must include NORTH_STARS in their default allowed documents."""
-    from context.models import ContextDocument
+    from memory import ContextDocument
 
     for name in ["architect", "coder", "researcher", "tester"]:
         agent = _load_agent(name, tmp_path)

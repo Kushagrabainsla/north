@@ -15,8 +15,8 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from context.base import ContextStore
-from context.models import ContextDocument
+from memory.base import ContextStore
+from memory.models import ContextDocument
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerFilters, LedgerWriter
@@ -26,7 +26,7 @@ from utils.text import STOPWORDS
 from utils.time import utcnow
 
 if TYPE_CHECKING:
-    from context.fact_store import FactStore
+    from memory.facts import FactStore
 
 logger = logging.getLogger(__name__)
 
