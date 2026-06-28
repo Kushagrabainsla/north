@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from approval.terminal import TerminalNotifier
-from memory import FileContextStore
 from inference.base import InferenceRouter
 from inference.models import (
     CompletionRequest,
@@ -32,6 +31,7 @@ from inference.models import (
 )
 from jobs import SQLiteJobProcessor
 from ledger import SQLiteLedgerWriter
+from memory import FileContextStore
 
 
 class MockInferenceRouter(InferenceRouter):

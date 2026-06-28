@@ -76,7 +76,7 @@ _STEP_LABELS: dict[str, str] = {
 
 
 # ── Context documents + config keys ─────────────────────────────────────────
-_VALID_DOCS = ["public", "private", "privacy_rules", "judgement_rules", "north_stars"]
+_VALID_DOCS = ["user", "judgement_rules", "north_stars", "soul"]
 
 _CONFIG_KEYS = {
     "ledger.retention_days": ("task_cleanup_completed_days", int),

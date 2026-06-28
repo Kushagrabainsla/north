@@ -1,10 +1,9 @@
 """Memory layer interfaces. See docs/ARCHITECTURE.md Section 5.
 
-Holds the two base ABCs: ``ContextStore`` (the five markdown documents) and
-``MemoryGateway`` (the single gated read path over facts, episodes, and
-documents). Each gateway call carries a ``MemoryPrincipal`` so per-caller
-permissions are enforced in one place and nothing can bypass the gate by
-talking to a store directly.
+Holds the two base ABCs: ``ContextStore`` (the context documents) and
+``MemoryGateway`` (the single read path over facts, episodes, and documents).
+Context documents and facts are non-sensitive; the gateway's one boundary is
+episodic task history, scoped per ``MemoryPrincipal`` to its own domain.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class ContextStore(ABC):
-    """Read and write the five context documents.
+    """Read and write the context documents.
 
     `read`, `write`, and `append` are mandatory. `search()` is reserved for a
     future `DBContextStore` backed by a vector DB; v1's `FileContextStore`
@@ -59,21 +58,11 @@ class ContextStore(ABC):
 
 
 class MemoryGateway(ABC):
-    """Single, gated entry point for every read of north's memory."""
-
-    @property
-    @abstractmethod
-    def system_principal(self) -> MemoryPrincipal:
-        """Principal for internal system reads (judgement filter, north-star check).
-
-        Grants the non-sensitive system documents (public, judgement_rules,
-        north_stars); never private, and recalls no episodes.
-        """
-        ...
+    """Single entry point for every read of north's memory."""
 
     @abstractmethod
     async def principal_for(self, name: str, domain: str | None = None) -> MemoryPrincipal:
-        """Resolve a caller's permissions from privacy_rules.md into a principal."""
+        """Build the principal for a caller (the episode domains it may read)."""
         ...
 
     @abstractmethod
@@ -85,14 +74,19 @@ class MemoryGateway(ABC):
         fact_limit: int = 15,
         episode_limit: int = 3,
     ) -> MemoryContext:
-        """Return the gated, merged memory relevant to *query* for *principal*.
+        """Return the memory relevant to *query* for *principal*.
 
-        Filters facts by allowed category, episodes by allowed domain, and falls
-        back to the permitted context documents when no facts exist yet.
+        Facts are the primary path; the user document is the fallback when no
+        facts exist yet. Episodes are filtered to the principal's domains.
         """
         ...
 
     @abstractmethod
-    async def read_document(self, principal: MemoryPrincipal, doc: ContextDocument) -> str:
-        """Return a full context document, or '' if the principal may not read it."""
+    async def read_document(self, doc: ContextDocument) -> str:
+        """Return the full text of a context document ('' if it does not exist)."""
+        ...
+
+    @abstractmethod
+    async def read_persona(self) -> str:
+        """Return north's persona text (soul.md), or the shipped default."""
         ...

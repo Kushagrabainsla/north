@@ -93,7 +93,7 @@ class JudgementFilter:
         """Return (decision, chosen_option) or (None, '') if nothing fires.
 
         APPROVAL cards are judged against learned rules only. QUESTION cards also
-        consider the user's known preferences (public.md), so a preference stated
+        consider the user's known preferences (user.md), so a preference stated
         once - by answering an earlier question - can answer the next one without
         re-asking.
         """
@@ -101,10 +101,10 @@ class JudgementFilter:
         if card.type == CardType.INFORMATION:
             return None, ""
 
-        rules = await self._memory.read_document(self._memory.system_principal, ContextDocument.JUDGEMENT_RULES)
+        rules = await self._memory.read_document(ContextDocument.JUDGEMENT_RULES)
         preferences = ""
         if card.type == CardType.QUESTION:
-            preferences = await self._memory.read_document(self._memory.system_principal, ContextDocument.PUBLIC)
+            preferences = await self._memory.read_document(ContextDocument.USER)
 
         # Need at least some learned context to act on, or there is nothing to match.
         if len((rules + preferences).strip()) < _MIN_LEARNED_CONTEXT_CHARS:

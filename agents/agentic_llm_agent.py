@@ -222,7 +222,8 @@ class AgenticLLMAgent(LLMAgent):
         context: str,
         scored_tools: list[tuple[Tool, float]],
     ) -> dict[str, Any]:
-        messages, tool_map, compact_tokens = self._init_conversation(payload, context, scored_tools)
+        persona = await self._memory().read_persona()
+        messages, tool_map, compact_tokens = self._init_conversation(payload, context, scored_tools, persona)
         total_cost_usd: float = 0.0
         total_tokens_in: int = 0
         total_tokens_out: int = 0
@@ -329,10 +330,16 @@ class AgenticLLMAgent(LLMAgent):
         payload: AgentPayload,
         context: str,
         scored_tools: list[tuple[Tool, float]],
+        persona: str = "",
     ) -> tuple[list[dict], dict[str, Tool], int]:
-        """Build the initial system+user messages, tool map, and compaction budget."""
+        """Build the initial system+user messages, tool map, and compaction budget.
+
+        The persona (soul.md) leads the system prompt so north's voice frames the
+        agent's own instructions.
+        """
         now = localnow().strftime("%Y-%m-%d %H:%M %Z")
-        system_prompt = f"Current date/time: {now}\n\n" + self._load_system_prompt()
+        preamble = f"{persona}\n\n" if persona else ""
+        system_prompt = f"{preamble}Current date/time: {now}\n\n" + self._load_system_prompt()
         user_text = self._build_task_message(payload, context, scored_tools)
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},

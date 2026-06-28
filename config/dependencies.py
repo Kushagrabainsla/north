@@ -19,18 +19,18 @@ from approval import Notifier, TerminalNotifier
 from approval.store import ApprovalStore
 from config.settings import settings
 from config.strategy import NorthSettings
-from memory import ContextStore, FileContextStore
 from inference import InferenceRouter
 from inference.factory import build_router
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
+from memory import ContextStore, FileContextStore
 
 if TYPE_CHECKING:
-    from memory.episodic import EpisodicStore
-    from memory.facts import FactStore
     from inference.cost_tracker import CostTracker
     from jobs.cron_store import UserCronStore
     from memory import MemoryGateway
+    from memory.episodic import EpisodicStore
+    from memory.facts import FactStore
     from orchestrator.stream import EventStreamManager
     from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
@@ -69,12 +69,12 @@ class Dependencies:
 
 def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
     """Build and wire all synchronously-constructable production dependencies."""
-    from memory.episodic import EpisodicStore
-    from memory.facts import FactStore
     from inference.cost_tracker import CostTracker
     from inference.models import EmbedRequest
     from jobs.cron_store import UserCronStore
     from memory import LocalMemoryGateway
+    from memory.episodic import EpisodicStore
+    from memory.facts import FactStore
     from orchestrator.stream import EventStreamManager
     from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
@@ -82,7 +82,14 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     if north_settings is None:
         north_settings = NorthSettings(settings.north_home / "settings.json")
 
-    context_store = FileContextStore(settings.north_home / "context")
+    context_dir = settings.north_home / "context"
+    legacy_public = context_dir / "public.md"
+    user_doc = context_dir / "user.md"
+    if legacy_public.exists() and not user_doc.exists():
+        # 2b memory model: public.md was renamed to user.md. Preserve the user's
+        # existing facts document under the new name (idempotent, one-time).
+        legacy_public.rename(user_doc)
+    context_store = FileContextStore(context_dir)
     ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
     base_router = build_router(

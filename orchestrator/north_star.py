@@ -37,7 +37,7 @@ class NorthStarChecker:
         Raises:
             OrchestratorError: If verification/inference fails.
         """
-        goals = await self._memory.read_document(self._memory.system_principal, ContextDocument.NORTH_STARS)
+        goals = await self._memory.read_document(ContextDocument.NORTH_STARS)
         if not goals.strip():
             return True, None, "No active goals found in north_stars.md. Proceeding."
 

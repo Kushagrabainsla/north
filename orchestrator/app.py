@@ -25,13 +25,13 @@ from approval.judgement_filter import JudgementFilter
 from approval.tui import TUIAwareNotifier
 from config.dependencies import build_production_dependencies
 from config.settings import settings
+from jobs.models import Job
+from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler
+from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory.consolidator import EpisodeConsolidator
 from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
 from memory.injection import ContextInjector
-from jobs.models import Job
-from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.api_router import configure as configure_api
 from orchestrator.api_router import health_router, webhook_router
 from orchestrator.api_router import router as orchestrator_router
@@ -42,6 +42,7 @@ from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
+from tools.confidence import RELIABLE_TOOLS
 from tools.registry import ToolRegistry
 from tools.specialized.bash import BashTool
 from tools.specialized.gh_tool import GhTool
@@ -63,9 +64,6 @@ from utils.version import NORTH_VERSION
 logger = logging.getLogger(__name__)
 
 _AGENTS_DIR = Path(__file__).parent.parent / "agents"
-
-from tools.confidence import RELIABLE_TOOLS
-
 
 # ---------------------------------------------------------------------------
 # Startup helpers
@@ -269,7 +267,7 @@ def _build_orchestrator(
         approval_store=deps.approval_store,
         judgement_filter=judgement_filter,
         north_settings=deps.north_settings,
-        synthesizer=ResultSynthesizer(inference_router=deps.cost_tracker),
+        synthesizer=ResultSynthesizer(inference_router=deps.cost_tracker, memory=deps.memory),
         tracked_router=deps.cost_tracker,
         episodic_store=deps.episodic_store,
         tool_registry=tool_registry,
@@ -292,7 +290,7 @@ async def _reconcile_pending_tasks(deps, orchestrator: Orchestrator) -> None:
         # Querying all PENDING entries would also match the initial
         # task_received entry of every task that later completed.
         pending_task_ids = set(await deps.ledger.pending_task_ids())
-        orphaned = pending_task_ids - set(orchestrator._active_tasks)
+        orphaned = pending_task_ids - orchestrator.active_task_ids
         for orphaned_id in orphaned:
             await deps.ledger.write(
                 LedgerEntry.new(
@@ -370,7 +368,7 @@ def _launch_background_tasks(
     async def _dispatch_job(job: Job) -> None:
         if job.task == "task_context_cleanup":
             n = await deps.task_context_store.cleanup_stale_tasks(
-                active_task_ids=frozenset(orchestrator._active_tasks),
+                active_task_ids=orchestrator.active_task_ids,
             )
             now = utcnow()
             completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)

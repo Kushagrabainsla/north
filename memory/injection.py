@@ -6,12 +6,12 @@ import asyncio
 import json
 import logging
 
-from memory.base import ContextStore
-from memory.models import ContextDocument
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from memory.base import ContextStore
+from memory.models import ContextDocument
 from utils.ids import generate_id
 from utils.tasks import spawn
 from utils.text import strip_html
@@ -22,9 +22,7 @@ logger = logging.getLogger(__name__)
 _MAX_CONTENT_CHARS = 4000
 
 _DOCUMENT_MAP: dict[str, ContextDocument] = {
-    "public": ContextDocument.PUBLIC,
-    "private": ContextDocument.PRIVATE,
-    "privacy_rules": ContextDocument.PRIVACY_RULES,
+    "user": ContextDocument.USER,
     "judgement_rules": ContextDocument.JUDGEMENT_RULES,
     "north_stars": ContextDocument.NORTH_STARS,
 }
@@ -32,10 +30,8 @@ _DOCUMENT_MAP: dict[str, ContextDocument] = {
 _ROUTING_PROMPT = """\
 You are routing user-supplied context into the correct document for a personal AI system.
 
-The five documents are:
-- public: general non-sensitive facts (schedule, preferences, career, background)
-- private: sensitive details (account numbers, medical, personal relationships)
-- privacy_rules: rules governing which agents can access which data
+The three documents are:
+- user: facts about the user (schedule, preferences, career, background, contacts)
 - judgement_rules: decision patterns and learned preferences
 - north_stars: goals across time horizons (lifetime, 5-year, 1-year, 3-month, this week)
 
@@ -48,14 +44,14 @@ The delta should capture only the essential new facts - do not copy the original
 Preserve key specifics: names, numbers, dates, deadlines, and thresholds.
 A vague summary is less useful than a precise one.
 Reply with JSON only:
-{{"document": "<public|private|privacy_rules|judgement_rules|north_stars>", "delta": "<1-3 sentences>"}}
+{{"document": "<user|judgement_rules|north_stars>", "delta": "<1-3 sentences>"}}
 """
 
 
 class ContextInjector:
     """Accepts text, file bytes, or a URL and adds the content to the context layer.
 
-    Uses a low-priority LLM call to decide which of the five documents to write
+    Uses a low-priority LLM call to decide which of the three documents to write
     to and what delta to append. All injections are logged to the Ledger with
     source=manual_injection.
     """
@@ -149,10 +145,10 @@ class ContextInjector:
             result = json.loads(response.text.strip())
             doc_key = result["document"]
             delta = str(result["delta"]).strip()
-            doc = _DOCUMENT_MAP.get(doc_key, ContextDocument.PUBLIC)
+            doc = _DOCUMENT_MAP.get(doc_key, ContextDocument.USER)
             return doc, delta
         except (json.JSONDecodeError, KeyError, ValueError):
-            return ContextDocument.PUBLIC, text[:_MAX_CONTENT_CHARS]
+            return ContextDocument.USER, text[:_MAX_CONTENT_CHARS]
 
 
 def _extract_pdf(content: bytes) -> str:

@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from orchestrator.failure_handler import FailureHandler
+from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.task_context import TaskContextStore
 from utils.db import open_db_connection
 from utils.ids import generate_id
@@ -313,3 +313,37 @@ def test_clear_retry_count_is_idempotent(tmp_path: Path) -> None:
     handler, _, _ = _make_handler(tmp_path)
     # Should not raise
     handler.clear_retry_count("nonexistent-task", "nonexistent-agent")
+
+
+# ---------------------------------------------------------------------------
+# B3: filesystem errors are deterministic, not retryable network failures
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (FileNotFoundError("prompts/system.md"), "config_error"),
+        (PermissionError("permission denied"), "config_error"),
+        (IsADirectoryError("is a directory"), "config_error"),
+        (ConnectionError("reset by peer"), "network"),
+        (ConnectionRefusedError("refused"), "network"),
+        (TimeoutError("timed out"), "timeout"),
+        (RuntimeError("connection refused"), "network"),
+        (RuntimeError("some programming bug"), "logic_error"),
+    ],
+)
+def test_classify_error_tags(exc: Exception, expected: str) -> None:
+    """Filesystem OSErrors classify as config_error, not the retryable network bucket."""
+    assert classify_error(exc) == expected
+
+
+@pytest.mark.asyncio
+async def test_handle_failure_does_not_retry_filesystem_errors(tmp_path: Path) -> None:
+    """A deterministic filesystem failure (missing file) must not be retried (B3)."""
+    handler, store, _ = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
+    await store.initialize_task("t1", ["coder"])
+
+    should_retry = await handler.handle_failure("t1", "coder", FileNotFoundError("prompts/system.md"))
+
+    assert should_retry is False

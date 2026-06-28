@@ -15,12 +15,12 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from memory.base import ContextStore
-from memory.models import ContextDocument
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from memory.base import ContextStore
+from memory.models import ContextDocument
 from utils.ids import generate_id
 from utils.text import STOPWORDS
 from utils.time import utcnow
@@ -36,7 +36,7 @@ _MAX_CONCURRENT_EXTRACTIONS = 5  # semaphore cap: fast enough, stays under rate 
 _WATERMARK_FILENAME = "extraction_watermark.txt"
 
 _DOCUMENT_MAP: dict[str, ContextDocument] = {
-    "public": ContextDocument.PUBLIC,
+    "user": ContextDocument.USER,
     "judgement_rules": ContextDocument.JUDGEMENT_RULES,
     "north_stars": ContextDocument.NORTH_STARS,
 }
@@ -81,13 +81,13 @@ Anti-fabrication contract - follow exactly:
   message contains none, return extract:false. When in doubt, return false.
 
 If a durable fact is explicitly present, respond with JSON:
-{{"extract": true, "document": "<public|judgement_rules|north_stars>", "delta": "<fact>"}}
+{{"extract": true, "document": "<user|judgement_rules|north_stars>", "delta": "<fact>"}}
 
 Otherwise respond with:
 {{"extract": false}}
 
 Document rules:
-- "public": stable identity facts the user stated - their name, role, employer,
+- "user": stable identity facts the user stated - their name, role, employer,
   schedule, preferences, tools they use, people they work with.
 - "judgement_rules": how the user decides - what they approve/reject, thresholds,
   priorities, communication style.
@@ -99,7 +99,7 @@ Fact format:
 - Fill the fact with the user's ACTUAL words. Never emit a placeholder, a single
   letter, a bracketed slot, or an example token (e.g. "X", "Y", "<company>") - if
   you cannot name the real value from the message, return extract:false instead.
-- "public"/"judgement_rules": present tense. Shape: "User <verb> <real detail>"
+- "user"/"judgement_rules": present tense. Shape: "User <verb> <real detail>"
   - e.g. for a message saying "I use Postgres", write "User uses Postgres".
 - "north_stars": goal-oriented. Shape: "User wants to <real goal> by <real
   horizon>" - only include the horizon if the user actually stated one.
@@ -329,7 +329,7 @@ class ExtractionPipeline:
         if not result.get("extract"):
             return False
 
-        doc_key = result.get("document", "public")
+        doc_key = result.get("document", "user")
         delta = str(result.get("delta", "")).strip()
         if not delta or doc_key not in _DOCUMENT_MAP:
             return False

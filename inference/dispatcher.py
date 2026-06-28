@@ -88,7 +88,6 @@ class ModelDispatcher(InferenceRouter):
         self._model_confidence: dict[_CooldownKey, tuple[float, int]] = (
             confidence_tracker.load_model_scores_sync() if confidence_tracker is not None else {}
         )
-        self._background_tasks: set[asyncio.Task] = set()
         # Scores changed since the last batched DB flush.
         self._dirty_scores: set[_CooldownKey] = set()
         self._flush_task: asyncio.Task | None = None

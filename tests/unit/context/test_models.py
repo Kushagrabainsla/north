@@ -6,17 +6,16 @@ from memory import ContextDocument
 
 
 def test_context_document_enum_matches_spec() -> None:
-    """The five document file names must match README Section 5.1 verbatim."""
+    """The document file names must match the memory layer spec verbatim."""
     expected = {
-        "public.md",
-        "private.md",
-        "privacy_rules.md",
+        "user.md",
         "judgement_rules.md",
         "north_stars.md",
+        "soul.md",
     }
     assert {d.value for d in ContextDocument} == expected
 
 
-def test_context_document_count_is_exactly_five() -> None:
-    """README Section 5 is explicit that there are five documents and only five."""
-    assert len(list(ContextDocument)) == 5
+def test_context_document_count_is_exactly_four() -> None:
+    """user, judgement_rules, north_stars, and soul - four documents, no more."""
+    assert len(list(ContextDocument)) == 4

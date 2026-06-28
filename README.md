@@ -40,6 +40,7 @@ NORTH_GEMINI_API_KEY=...
 | `north` | Open the TUI (starts server if needed) |
 | `north start` | Start server + TUI |
 | `north start --no-chat` | Start server only |
+| `north start --docker` | Start server via Docker Compose |
 | `north stop` | Stop the server |
 | `north reset` | Wipe data, keep API key |
 | `north reset --all` | Wipe everything |
@@ -49,6 +50,7 @@ NORTH_GEMINI_API_KEY=...
 | `north task cancel <id>` | Cancel a task |
 | `north tasks` | List active tasks |
 | `north stream <id>` | Stream raw events for a task |
+| `north dictate` | Push-to-talk voice input |
 | | |
 | `north ledger` | View the audit log |
 | `north jobs` | List scheduled jobs |

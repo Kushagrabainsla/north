@@ -16,13 +16,12 @@ import pytest
 from agents.models import AgentDependencies, AgentPayload
 from approval.store import ApprovalStore
 from approval.terminal import TerminalNotifier
-from memory import FileContextStore
-from memory.extraction import ExtractionPipeline
 from jobs import SQLiteJobProcessor
 from ledger import SQLiteLedgerWriter
 from ledger.base import LedgerFilters
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from memory import LocalMemoryGateway
+from memory import FileContextStore, LocalMemoryGateway
+from memory.extraction import ExtractionPipeline
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
@@ -108,7 +107,7 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
         notifier=TerminalNotifier(),
         stream_manager=stream,
         approval_store=approval,
-        synthesizer=ResultSynthesizer(inference_router=inference),
+        synthesizer=ResultSynthesizer(inference_router=inference, memory=LocalMemoryGateway(context_store)),
     )
     return orch, ledger, approval
 
@@ -133,8 +132,10 @@ async def test_submit_task_writes_pending_ledger_entry(tmp_path):
     orch, ledger, _ = _make_orchestrator(tmp_path)
     response = await orch.submit_task(TaskRequest(prompt="Hello", source=LedgerSource.PROMPT))
     entries = await ledger.query(LedgerFilters(task_id=response.task_id))
-    assert len(entries) >= 1
-    assert entries[0].action == "task_received"
+    # task_received is written synchronously by submit_task; the background
+    # pipeline may already have appended later entries, so assert presence
+    # rather than position (the query returns newest-first).
+    assert any(e.action == "task_received" for e in entries)
 
 
 @pytest.mark.asyncio
@@ -177,6 +178,37 @@ async def test_concurrent_task_cap_raises(tmp_path):
 
     with pytest.raises(OrchestratorError, match="Too many concurrent tasks"):
         await orch.submit_task(TaskRequest(prompt="one more", source=LedgerSource.PROMPT))
+
+
+@pytest.mark.asyncio
+async def test_list_active_tasks_reads_each_active_task(tmp_path):
+    """list_active_tasks() returns one response per in-flight task and skips ids
+    with no ledger entry yet (reads run concurrently, order preserved)."""
+    import unittest.mock as mock
+
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+
+    for task_id in ("task_a", "task_b"):
+        await ledger.write(
+            LedgerEntry.new(
+                source=LedgerSource.SYSTEM,
+                task_id=task_id,
+                action="task_received",
+                status=LedgerStatus.PENDING,
+            )
+        )
+
+    # task_missing is in flight but has not written a ledger entry yet.
+    orch._active_tasks = {  # type: ignore[assignment]
+        "task_a": mock.MagicMock(),
+        "task_b": mock.MagicMock(),
+        "task_missing": mock.MagicMock(),
+    }
+
+    responses = await orch.list_active_tasks()
+
+    assert {r.task_id for r in responses} == {"task_a", "task_b"}
+    assert all(r.status == LedgerStatus.PENDING.value for r in responses)
 
 
 @pytest.mark.asyncio
@@ -390,97 +422,6 @@ async def test_extraction_pipeline_advances_watermark(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Privacy enforcement
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_allowed_documents_defaults_without_rules(tmp_path):
-    """When privacy_rules.md is empty, _allowed_documents() returns the safe defaults."""
-    from agents.base import Agent
-    from agents.models import AgentConfig
-    from memory import ContextDocument
-
-    context_store = FileContextStore(tmp_path / "context")
-    inference = MockInferenceRouter()
-    tool_registry = ToolRegistry(graph={}, auto_register=False)
-    confidence_tracker = ConfidenceTracker(db_path=tmp_path / "tools.db")
-
-    agent_deps = AgentDependencies(
-        context_store=context_store,
-        inference_router=inference,
-        tool_registry=tool_registry,
-        confidence_tracker=confidence_tracker,
-    )
-
-    # Concrete subclass just enough to test _allowed_documents
-    class _TestAgent(Agent):
-        async def _execute(self, payload, context, scored_tools):
-            return {
-                "output": "",
-                "summary": "",
-                "data": {},
-                "requires_approval": False,
-                "has_question": False,
-                "question": None,
-                "question_options": [],
-                "cost_usd": 0.0,
-            }
-
-    config = AgentConfig(agent="health", domain="health", model_pool="fast_cheap")
-    agent = _TestAgent(config, agent_deps)
-
-    docs = await agent._allowed_documents()
-    assert ContextDocument.PUBLIC in docs
-    assert ContextDocument.JUDGEMENT_RULES in docs
-
-
-@pytest.mark.asyncio
-async def test_allowed_documents_respects_rules(tmp_path):
-    """When privacy_rules.md has a matching rule, _allowed_documents() returns only those docs."""
-    from agents.base import Agent
-    from agents.models import AgentConfig
-    from memory import ContextDocument
-
-    context_store = FileContextStore(tmp_path / "context")
-    # Write a rule that restricts 'coder' to only public.md
-    rules_path = tmp_path / "context" / "privacy_rules.md"
-    rules_path.parent.mkdir(parents=True, exist_ok=True)
-    rules_path.write_text("coder: can_read: public.md\n", encoding="utf-8")
-
-    inference = MockInferenceRouter()
-    tool_registry = ToolRegistry(graph={}, auto_register=False)
-    confidence_tracker = ConfidenceTracker(db_path=tmp_path / "tools.db")
-
-    agent_deps = AgentDependencies(
-        context_store=context_store,
-        inference_router=inference,
-        tool_registry=tool_registry,
-        confidence_tracker=confidence_tracker,
-    )
-
-    class _TestAgent(Agent):
-        async def _execute(self, payload, context, scored_tools):
-            return {
-                "output": "",
-                "summary": "",
-                "data": {},
-                "requires_approval": False,
-                "has_question": False,
-                "question": None,
-                "question_options": [],
-                "cost_usd": 0.0,
-            }
-
-    config = AgentConfig(agent="coder", domain="engineering", model_pool="fast_cheap")
-    agent = _TestAgent(config, agent_deps)
-
-    docs = await agent._allowed_documents()
-    assert docs == [ContextDocument.PUBLIC]
-    assert ContextDocument.JUDGEMENT_RULES not in docs
-
-
-# ---------------------------------------------------------------------------
 # Delegation depth guard
 # ---------------------------------------------------------------------------
 
@@ -563,6 +504,23 @@ async def test_episodic_store_prunes_old_entries(tmp_path):
     await store.record("new-task", "general", "new summary")
 
     assert await asyncio.to_thread(_count, "old-ep") == 0
+
+
+@pytest.mark.asyncio
+async def test_episodic_search_filters_by_domain(tmp_path):
+    """search(allowed_domains=...) returns only episodes from the allowed domains,
+    and an empty allow-list returns nothing (fail-closed)."""
+    from memory.episodic import EpisodicStore
+
+    store = EpisodicStore(db_path=tmp_path / "episodic.db")
+    await store.record("t-coder", "coder", "fixed a bug in the parser")
+    await store.record("t-finance", "finance", "reconciled the budget spreadsheet")
+
+    coder_only = await store.search("parser", allowed_domains=frozenset({"coder"}))
+    assert any("parser" in s for s in coder_only)
+    assert not any("budget" in s for s in coder_only)
+
+    assert await store.search("parser", allowed_domains=frozenset()) == []
 
 
 # ---------------------------------------------------------------------------

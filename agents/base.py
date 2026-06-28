@@ -8,7 +8,7 @@ from typing import Any
 
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context.repo_instructions import load_repo_instructions
-from memory import ContextDocument, LocalMemoryGateway, MemoryGateway
+from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
 from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 
@@ -100,11 +100,6 @@ class Agent(ABC):
         if rendered:
             parts.append(rendered)
         return "\n\n".join(p for p in parts if p)
-
-    async def _allowed_documents(self) -> list[ContextDocument]:
-        """Context documents this agent may read, resolved by the memory gateway."""
-        principal = await self._memory().principal_for(self.name, self.domain)
-        return list(principal.allowed_documents)
 
     async def _load_tools(self, task_prompt: str = "") -> list[tuple[Tool, float]]:
         """Return (tool, confidence_score) pairs for this agent, sorted by score descending.

@@ -48,7 +48,14 @@ def classify_error(exc: Exception) -> str:
         return "context_overflow"
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or "timeout" in msg:
         return "timeout"
-    if isinstance(exc, (ConnectionError, OSError)) or any(
+    # Deterministic filesystem failures (missing prompt file, permission denied)
+    # are config errors, not network: a retry cannot create the file or grant
+    # access, so they must stay out of the retryable network bucket.
+    if isinstance(exc, (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)):
+        return "config_error"
+    # Connection-level failures only. Matched as ConnectionError rather than the
+    # whole OSError family, which also covers the filesystem errors handled above.
+    if isinstance(exc, ConnectionError) or any(
         kw in msg for kw in ("connection", "network", "unreachable", "refused", "socket")
     ):
         return "network"

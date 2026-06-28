@@ -146,9 +146,7 @@ class EpisodicStore:
         Tries embedding cosine similarity first; falls back to keyword overlap
         scoring so retrieval always works.
         """
-        rows = await asyncio.to_thread(self._load_all_sync)
-        if allowed_domains is not None:
-            rows = [r for r in rows if r[4] in allowed_domains]
+        rows = await asyncio.to_thread(self._load_all_sync, allowed_domains)
         if not rows:
             return []
 
@@ -213,9 +211,20 @@ class EpisodicStore:
             conn.execute("DELETE FROM episodes WHERE timestamp < ?", (cutoff,))
             conn.commit()
 
-    def _load_all_sync(self) -> list[tuple[str, str, str | None, str, str]]:
+    def _load_all_sync(
+        self, allowed_domains: frozenset[str] | None = None
+    ) -> list[tuple[str, str, str | None, str, str]]:
+        sql = "SELECT id, summary, embedding, outcome, domain FROM episodes"
+        params: tuple[str, ...] = ()
+        if allowed_domains is not None:
+            if not allowed_domains:
+                return []
+            # Only "?" placeholders are interpolated here; the domain values are
+            # bound as parameters below, so this is not a SQL-injection vector.
+            placeholders = ",".join("?" for _ in allowed_domains)
+            sql += f" WHERE domain IN ({placeholders})"
+            params = tuple(allowed_domains)
+        sql += " ORDER BY timestamp DESC"
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute(
-                "SELECT id, summary, embedding, outcome, domain FROM episodes ORDER BY timestamp DESC"
-            ).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [(r["id"], r["summary"], r["embedding"], r["outcome"] or "success", r["domain"]) for r in rows]

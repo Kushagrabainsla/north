@@ -7,36 +7,35 @@ from enum import StrEnum
 
 
 class ContextDocument(StrEnum):
-    """The five markdown files that constitute north's context layer.
+    """The markdown documents that make up north's context layer.
 
     Members are the file names on disk. Using the enum at API boundaries means
     no caller can ask for an unknown document - the type system rejects it.
+
+    user/judgement_rules/north_stars hold the user's own data, decision
+    preferences, and goals; soul is north's persona. All are non-sensitive and
+    readable by every caller.
     """
 
-    PUBLIC = "public.md"
-    PRIVATE = "private.md"
-    PRIVACY_RULES = "privacy_rules.md"
+    USER = "user.md"
     JUDGEMENT_RULES = "judgement_rules.md"
     NORTH_STARS = "north_stars.md"
+    SOUL = "soul.md"
 
 
 @dataclass(frozen=True)
 class MemoryPrincipal:
-    """Who is asking for memory, and what they are permitted to see.
+    """Who is asking for memory, and which episode domains they may read.
 
-    Built once per caller (agent or tool) by the gateway from privacy_rules.md.
-    Every gated read filters against this, so permission lives in one place and
-    no caller can over-read by going around the gateway.
+    Every context document and fact is non-sensitive and readable by any caller,
+    so the only boundary left is episodic task history: an agent sees its own
+    domain's episodes plus a shared set, never another domain's.
     """
 
     name: str
     domain: str | None
-    allowed_documents: frozenset[ContextDocument]
-    # Fact categories this principal may read: public / judgement_rules / north_stars / private.
-    allowed_categories: frozenset[str]
     # Episode domains this principal may read (its own domain plus a shared set).
     allowed_domains: frozenset[str]
-    can_read_private: bool
 
 
 @dataclass(frozen=True)

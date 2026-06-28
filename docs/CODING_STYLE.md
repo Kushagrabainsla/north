@@ -1063,7 +1063,7 @@ class Agent(ABC):
         ...
 
     async def _load_context(self, payload: AgentPayload) -> str:
-        """Default: read public.md and judgement_rules.md. Override if needed."""
+        """Default: gated recall - facts (or user.md) plus episodic memory."""
         ...
 
     async def _load_tools(self) -> list[Tool]:

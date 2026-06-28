@@ -27,7 +27,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS context_facts (
     id          TEXT     NOT NULL PRIMARY KEY,
     content     TEXT     NOT NULL,
-    category    TEXT     NOT NULL DEFAULT 'public',
+    category    TEXT     NOT NULL DEFAULT 'user',
     embedding   TEXT,
     updated_at  DATETIME NOT NULL
 )
@@ -64,7 +64,7 @@ class FactStore:
         # must not interleave loads and clobber each other's cache.
         self._cache_lock = asyncio.Lock()
 
-    async def add_fact(self, content: str, category: str = "public") -> None:
+    async def add_fact(self, content: str, category: str = "user") -> None:
         """Embed and persist one fact. Silently skips empty content or embed failure.
 
         If a nearly-identical fact already exists in the same category (cosine

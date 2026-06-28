@@ -20,7 +20,7 @@ def _filter(decision: str, confidence: float = 0.95) -> JudgementFilter:
             text=json.dumps({"decision": decision, "chosen_option": "", "confidence": confidence, "rule": "r"})
         )
     )
-    return JudgementFilter(context_store=context_store, inference_router=router)
+    return JudgementFilter(memory=memory, inference_router=router)
 
 
 def _card(agent: str, card_type: CardType = CardType.APPROVAL) -> Card:

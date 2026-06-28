@@ -201,7 +201,7 @@ async with self._client.stream("POST", "/chat/completions", json=body) as resp:
 
 ## 8. Semantic Context Search with Cosine Similarity
 
-**What:** `memory/embeddings.py:EmbeddingIndex` stores paragraph-level embedding vectors for the five context documents. `FileContextStore.search()` uses cosine similarity to retrieve the top-k relevant paragraphs.
+**What:** `memory/embeddings.py:EmbeddingIndex` stores paragraph-level embedding vectors for the context documents. `FileContextStore.search()` uses cosine similarity to retrieve the top-k relevant paragraphs.
 
 **Architecture:**
 

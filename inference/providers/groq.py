@@ -15,7 +15,7 @@ import httpx
 
 from inference.capability import ModelCapability, ModelInfo, capabilities_from_model_id, quality_from_cost
 from inference.constants import GROQ_BASE_URL
-from inference.exceptions import ModelRateLimitedError, PoolRefreshError, TranscriptionError
+from inference.exceptions import PoolRefreshError, TranscriptionError
 from inference.models import TranscriptionRequest, TranscriptionResponse
 from inference.providers.openai_compat import OpenAICompatibleProvider
 
@@ -74,8 +74,7 @@ class GroqRouter(OpenAICompatibleProvider):
             resp = await self._client.post("/audio/transcriptions", files=files, data=data)
         except httpx.RequestError as e:
             raise TranscriptionError(f"Transcription request to Groq failed: {e}") from e
-        if resp.status_code in (429, 503):
-            raise ModelRateLimitedError(model_id, self.name)
+        self._raise_cooldown_status(resp, model_id)
         if resp.status_code >= 400:
             raise TranscriptionError(f"Groq returned {resp.status_code}: {resp.text[:200]}")
         try:

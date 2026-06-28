@@ -550,7 +550,15 @@ def context_edit(
     doc_path = settings.north_home / "context" / doc_name
     doc_path.parent.mkdir(parents=True, exist_ok=True)
     if not doc_path.exists():
-        doc_path.touch()
+        if doc_name == "soul.md":
+            from utils.prompts import load_prompt
+
+            try:
+                doc_path.write_text(load_prompt("prompts/soul.md"), encoding="utf-8")
+            except Exception:
+                doc_path.touch()
+        else:
+            doc_path.touch()
 
     editor = os.environ.get("EDITOR", "nano")
     rc = subprocess.call([editor, str(doc_path)])

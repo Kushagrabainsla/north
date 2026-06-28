@@ -64,11 +64,21 @@ class OpenAICompatibleProvider:
 
     # ---- status helpers ----
 
-    def _raise_for_status(self, response: httpx.Response, model_id: str) -> None:
+    def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
+        """Raise the cooldown-worthy errors for shared HTTP statuses.
+
+        402 (insufficient credits) and 429/404/503 (rate limited or model gone)
+        map to the same exceptions across completion and transcription, so a
+        single place owns the provider cooldown policy. Other statuses return
+        without raising so each caller can apply its own error type.
+        """
         if response.status_code == 402:
             raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")
         if response.status_code in (429, 404, 503):
             raise ModelRateLimitedError(model_id, self.name)
+
+    def _raise_for_status(self, response: httpx.Response, model_id: str) -> None:
+        self._raise_cooldown_status(response, model_id)
         if response.status_code >= 400:
             raise InferenceError(f"{self.name} returned {response.status_code} for {model_id}: {response.text[:200]}")
 

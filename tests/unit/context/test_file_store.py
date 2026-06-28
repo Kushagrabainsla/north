@@ -15,19 +15,19 @@ def store(tmp_path: Path) -> FileContextStore:
 
 
 async def test_read_missing_document_returns_empty_string(store: FileContextStore) -> None:
-    assert await store.read(ContextDocument.PUBLIC) == ""
+    assert await store.read(ContextDocument.USER) == ""
 
 
 async def test_write_then_read_round_trips(store: FileContextStore) -> None:
     content = "I'm a student.\nI like coffee."
-    await store.write(ContextDocument.PUBLIC, content)
-    assert await store.read(ContextDocument.PUBLIC) == content
+    await store.write(ContextDocument.USER, content)
+    assert await store.read(ContextDocument.USER) == content
 
 
 async def test_write_overwrites_existing_content(store: FileContextStore) -> None:
-    await store.write(ContextDocument.PRIVATE, "Old content")
-    await store.write(ContextDocument.PRIVATE, "New content")
-    assert await store.read(ContextDocument.PRIVATE) == "New content"
+    await store.write(ContextDocument.USER, "Old content")
+    await store.write(ContextDocument.USER, "New content")
+    assert await store.read(ContextDocument.USER) == "New content"
 
 
 async def test_append_separates_entries_with_single_newline(
@@ -47,10 +47,10 @@ async def test_append_to_missing_document_creates_it_without_leading_newline(
 
 
 async def test_documents_are_stored_independently(store: FileContextStore) -> None:
-    await store.write(ContextDocument.PUBLIC, "public content")
-    await store.write(ContextDocument.PRIVATE, "private content")
-    assert await store.read(ContextDocument.PUBLIC) == "public content"
-    assert await store.read(ContextDocument.PRIVATE) == "private content"
+    await store.write(ContextDocument.USER, "user content")
+    await store.write(ContextDocument.NORTH_STARS, "goals content")
+    assert await store.read(ContextDocument.USER) == "user content"
+    assert await store.read(ContextDocument.NORTH_STARS) == "goals content"
 
 
 async def test_search_returns_empty_string_when_no_docs_exist(tmp_path: Path) -> None:
@@ -70,9 +70,9 @@ def test_constructor_creates_missing_base_directory(tmp_path: Path) -> None:
 def test_constructor_is_idempotent_with_existing_directory(tmp_path: Path) -> None:
     base = tmp_path / "context"
     base.mkdir()
-    (base / "public.md").write_text("preexisting", encoding="utf-8")
+    (base / "user.md").write_text("preexisting", encoding="utf-8")
     store = FileContextStore(base)
     # the existing file survives construction
     import asyncio
 
-    assert asyncio.run(store.read(ContextDocument.PUBLIC)) == "preexisting"
+    assert asyncio.run(store.read(ContextDocument.USER)) == "preexisting"

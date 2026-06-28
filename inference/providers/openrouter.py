@@ -16,7 +16,6 @@ from inference.capability import ModelCapability, ModelInfo, capabilities_from_m
 from inference.constants import OPENROUTER_BASE_URL
 from inference.exceptions import (
     InferenceError,
-    ModelRateLimitedError,
     PoolRefreshError,
     TranscriptionError,
 )
@@ -139,8 +138,7 @@ class OpenRouterRouter(OpenAICompatibleProvider):
             response = await self._client.post("/audio/transcriptions", files=files, data=data)
         except httpx.RequestError as e:
             raise TranscriptionError(f"Transcription request to openrouter failed: {e}") from e
-        if response.status_code in (429, 503):
-            raise ModelRateLimitedError(model_id, self.name)
+        self._raise_cooldown_status(response, model_id)
         if response.status_code >= 400:
             raise TranscriptionError(f"OpenRouter returned {response.status_code}: {response.text[:200]}")
         try:

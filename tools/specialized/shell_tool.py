@@ -318,8 +318,8 @@ async def _spawn_session(command: str, cwd: str | None) -> _ShellSession:
     from utils.ids import generate_id
 
     master_fd, slave_fd = pty.openpty()
-    os.set_blocking(master_fd, False)
     try:
+        os.set_blocking(master_fd, False)
         proc = await asyncio.create_subprocess_shell(
             command,
             stdin=slave_fd,
@@ -328,6 +328,12 @@ async def _spawn_session(command: str, cwd: str | None) -> _ShellSession:
             cwd=cwd,
             start_new_session=True,
         )
+    except BaseException:
+        # The _ShellSession that would own master_fd is never created on failure,
+        # so close it here (slave_fd is closed by the finally) to avoid leaking
+        # pty fds. BaseException also covers cancellation of the spawn await.
+        os.close(master_fd)
+        raise
     finally:
         os.close(slave_fd)  # parent keeps only the master end
     return _ShellSession(generate_id(), command, proc, master_fd)

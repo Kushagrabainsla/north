@@ -223,20 +223,19 @@ The Context Layer is a structured, persistent model of the user: goals, preferen
 
 ### 5.1 Storage
 
-Five markdown files. Human-readable, directly editable, git-versioned.
+Four markdown files. Human-readable, directly editable, git-versioned.
 
 ```
 context/
-  public.md            <- who you are. read by all agents.
-  private.md           <- sensitive details. local only. never leaves machine.
-  privacy_rules.md     <- who can access what, and under what conditions.
+  user.md              <- who you are. facts, preferences, schedule, background.
   judgement_rules.md   <- how you decide. confidence-scored. self-updating.
   north_stars.md       <- what you are working toward, across all time horizons.
+  soul.md              <- north's own persona: voice, values, sense of humour.
 ```
 
 ### 5.2 The ContextStore Interface
 
-Nothing in the system reads or writes context files directly. Everything goes through the `ContextStore` interface (defined in `memory/base.py`). Agents, tools, and internal checks read through the gated `MemoryGateway`, which enforces per-agent permissions over facts, episodes, and documents. This makes the storage backend swappable: files today, database tomorrow, without changing any other layer.
+Nothing in the system reads or writes context files directly. Everything goes through the `ContextStore` interface (defined in `memory/base.py`). Agents, tools, and internal checks read through the `MemoryGateway`, the single read path over facts, episodes, and documents. Context documents and facts are non-sensitive and readable by every caller; the one boundary the gateway enforces is episodic task history, scoped to a caller's own domain plus a shared set. This makes the storage backend swappable: files today, database tomorrow, without changing any other layer.
 
 ```python
 from abc import ABC, abstractmethod
@@ -258,7 +257,7 @@ class ContextStore(ABC):
         ...
 
     async def search(self, query: str, max_results: int = 5) -> str:
-        """Semantic search across all five context documents.
+        """Semantic search across the context documents.
 
         Returns the top-k most relevant paragraphs, each labelled with its
         source document.  Uses cosine similarity when an EmbeddingIndex is
@@ -270,20 +269,10 @@ class ContextStore(ABC):
 
 `FileContextStore` is the concrete v1 implementation.  It optionally accepts an `EmbeddingIndex` at construction time (see Section 5.7).  When present, `write()` and `append()` schedule a background re-indexing task; `search()` uses cosine similarity.  When absent, `search()` uses paragraph-level keyword scoring.  The rest of the system is unaware of which mode is active.
 
-### 5.3 The Five Documents
+### 5.3 The Documents
 
-#### public.md
-General facts about the user freely available to all agents. Goals, preferences, schedule patterns, dietary habits, risk appetite, professional background. Updated continuously by the extraction pipeline.
-
-#### private.md
-Sensitive information agents cannot read automatically. Specific account numbers, medical details, relationship dynamics. **Stored locally only. Never leaves the machine.**
-
-`private.md` is excluded from every agent's context by default - only agents with an explicit `can_read: private.md` entry in `privacy_rules.md` can access it, and this is enforced at context-load time in `Agent._load_context()`.
-
-The dynamic flow described below (agent raises a runtime request → user approves → agent gets temporary access) is **not yet implemented**. Until it is, agents that need specific private facts should have them injected via `north context add --text "..."`, which routes through the extraction pipeline into the appropriate document.
-
-#### privacy_rules.md
-Edited directly by the user. Defines which agents can request private context, which have automatic access, and which topics always route to private context. Also defines trust thresholds per action category used by the Approval Layer.
+#### user.md
+Facts about the user, available to all agents. Goals, preferences, schedule patterns, dietary habits, risk appetite, professional background, the people they work with. Updated continuously by the extraction pipeline. north is a single, trusted assistant, so there is no separate "private" tier: anything shared with north is usable by north.
 
 #### judgement_rules.md
 A living document that writes itself entirely from watching the user make decisions. Never edited directly by the user or agents. Every approval, rejection, and answered question writes a delta to it. Confidence-scored.
@@ -312,6 +301,9 @@ This week:  Finish architecture spec, start Phase 2 of hallucination project
 ```
 
 When two north stars conflict, the Orchestrator surfaces the tension to the user rather than resolving it silently.
+
+#### soul.md
+north's persona: its voice, values, curiosity, and sense of humour. Unlike the other documents - which describe the *user* - `soul.md` describes *north itself*. It is read by `MemoryGateway.read_persona()` and injected as a stable preamble into every agent's system prompt and the response synthesizer, so north keeps one consistent character across every task. A shipped default lives in `prompts/soul.md`; editing `~/.north/context/soul.md` (via `north context edit soul`) overrides it.
 
 ### 5.4 Extraction Pipeline
 
@@ -347,7 +339,7 @@ The extraction pipeline decides which context document each piece of information
 ### 5.6 Context Viewer
 
 The context documents are plain markdown under `~/.north/context/`, so the user has full visibility and control directly:
-- Read all five context documents in any editor
+- Read all the context documents in any editor
 - Edit them in place (programmatic writes go through `ContextStore.write()`)
 - See what the extraction pipeline added and when (the ledger filtered by `source: system`)
 - Correct or delete wrong extractions by editing the files
@@ -368,7 +360,7 @@ Full visibility and control over what north knows.
 
 **Embedding model:** `openai/text-embedding-3-small` via OpenRouter's `POST /api/v1/embeddings` endpoint, same API key as inference.  Embedding calls are not tracked by the `CostTracker` - they are small enough that the noise is acceptable.
 
-**Scope:** the embedding index covers the five context documents only.  It does not index the Ledger or the job queue.  Episodic memories (Section 5.8) have their own separate embedding store.
+**Scope:** the embedding index covers the context documents only.  It does not index the Ledger or the job queue.  Episodic memories (Section 5.8) have their own separate embedding store.
 
 ### 5.8 Episodic Memory
 
@@ -403,7 +395,7 @@ CREATE TABLE episodes (
 )
 ```
 
-**Scope:** episodic search is over this table only.  The five context documents and the episodic store are complementary: context documents hold durable facts about you; the episodic store holds memories of specific past interactions.
+**Scope:** episodic search is over this table only.  The context documents and the episodic store are complementary: context documents hold durable facts about you; the episodic store holds memories of specific past interactions.
 
 ---
 
@@ -1094,7 +1086,7 @@ Before surfacing any card, the Orchestrator checks `judgement_rules.md`. If a ru
 
 ### 9.5 Trust Thresholds
 
-Configurable per action category in `privacy_rules.md`:
+Configurable per action category in `judgement_rules.md`:
 
 ```
 low_stakes_repeatable:    auto-approve  # grocery list, meal plan, article summary
@@ -1364,7 +1356,7 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
   ledger.db              <- all ledger entries (append-only)
   jobs.db                <- persistent job queue + user cron entries
   tools.db               <- tool confidence scores per agent (EMA-updated)
-  embeddings.db          <- paragraph embedding vectors for the five context documents
+  embeddings.db          <- paragraph embedding vectors for the context documents
   episodic.db            <- per-task summaries with embeddings for episodic retrieval
   tool_index.db          <- per-tool embedding vectors for semantic tool selection
   facts.db               <- per-fact embedding vectors for semantic context retrieval
@@ -1379,23 +1371,15 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
       implementation/    <-   coder: implementation_notes.md (code itself goes to the workspace)
       qa/                <-   tester: qa_report_v{N}.md
   context/
-    public.md
-    private.md           <- local only, never synced, never leaves machine
-    privacy_rules.md
+    user.md
     judgement_rules.md
     north_stars.md
+    soul.md              <- north's persona (shipped default in prompts/soul.md)
 ```
 
-### 12.2 Privacy Routing
+### 12.2 Data Locality
 
-Before any data is written anywhere, the privacy routing layer checks `privacy_rules.md` to determine where it goes. This is automatic and transparent.
-
-```
-content flagged as sensitive -> local files only (private.md, flagged ledger entries)
-everything else              -> standard local storage
-```
-
-`private.md` never leaves the machine under any circumstances. This is a hard, permanent design constraint.
+north stores everything locally under `~/.north/`: context documents, ledger, jobs, and embeddings. Nothing is synced or sent off the machine except inference requests to the configured providers (and voice audio in transit to transcription). There is no separate "private" tier - north is a single trusted assistant, so all context it holds is usable by its own agents, and all of it stays on the user's machine.
 
 ### 12.3 Embedding Storage
 
@@ -1427,7 +1411,7 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
    Proceed to routing.
 
 4. Routing (same plan_all call):
-   Reads agent registry and public.md.
+   Reads agent registry and user.md.
    Decides: job agent + university agent (check for schedule conflicts).
    parallel_groups: [["job", "university"]], no dependencies.
    Task Context Object rows created in ~/.north/tasks/tasks.db (task_id=abc123)
@@ -1436,7 +1420,7 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
 5. Job agent spins up (reasoning pool, high priority):
    Loads its tools (universal set + specialized) sorted by confidence: web_search [0.9], read_file [0.7], schedule_task [0.6]
    Loads those tool definitions into context (sorted by confidence).
-   Reads public.md: LinkedIn internship, distributed systems team, June 2nd start.
+   Reads user.md: LinkedIn internship, distributed systems team, June 2nd start.
    Reads judgement_rules.md: prefers mornings for deep work.
    Produces first-week prep plan: onboarding checklist, team research, tool setup.
    Writes to task_abc123: job.prep_plan = { full structured JSON }
@@ -1444,7 +1428,7 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
    Inference Router logs (async): source=inference_router, model=claude-sonnet, cost_usd=0.0031
 
 6. University agent spins up simultaneously (fast_cheap pool, medium priority):
-   Reads public.md: SJSU schedule, current courses.
+   Reads user.md: SJSU schedule, current courses.
    Checks calendar for June conflicts. Finds none.
    Writes to task_abc123: university.schedule_conflicts = []
    Ledger write (async): source=agent, agent=university, agent_output={full JSON}, output="no conflicts found"
@@ -1676,11 +1660,6 @@ Loading mental models of specific thinkers as advisory lenses on Orchestrator de
 
 **Offline Transcription Fallback**
 Voice input depends on OpenRouter being reachable. A local Whisper variant (`mlx-whisper`) behind the same `InferenceRouter` interface would close this gap, but the switching policy is not yet defined.
-
-**Private Context Request Flow**
-Static access control is enforced: `Agent._load_context()` calls `_allowed_documents()` which reads `privacy_rules.md` before injecting any context into an agent's prompt. `private.md` is never included by default - only agents with an explicit `can_read: private.md` rule in `privacy_rules.md` can access it.
-
-What is **not yet implemented** is the *dynamic* private context request described in §5.3: the flow where an agent mid-task raises a request through the Orchestrator, the user approves via an Approval card, and the agent gets temporary access to `private.md` for that session only. Until this is built, agents that need private data must have it pre-granted in `privacy_rules.md`, or the user must inject the relevant facts via `north context add`.
 
 ---
 

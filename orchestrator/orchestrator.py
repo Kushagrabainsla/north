@@ -267,14 +267,15 @@ class Orchestrator:
             },
         )
 
+    @property
+    def active_task_ids(self) -> frozenset[str]:
+        """Ids of tasks currently in flight (asyncio tasks still running)."""
+        return frozenset(self._active_tasks)
+
     async def list_active_tasks(self) -> list[TaskResponse]:
         """Returns tasks that are currently in-flight (asyncio tasks still running)."""
-        results = []
-        for task_id in list(self._active_tasks):
-            resp = await self.get_task(task_id)
-            if resp is not None:
-                results.append(resp)
-        return results
+        responses = await asyncio.gather(*(self.get_task(task_id) for task_id in list(self._active_tasks)))
+        return [resp for resp in responses if resp is not None]
 
     # ------------------------------------------------------------------ #
     #  Internal helpers                                                    #

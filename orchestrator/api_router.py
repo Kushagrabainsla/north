@@ -16,9 +16,6 @@ from pydantic import BaseModel
 
 from agents.registry import AgentRegistry
 from config.strategy import NorthSettings, StrategyMode
-from memory.base import ContextStore
-from memory.injection import ContextInjector
-from memory.models import ContextDocument
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, CostSummary, ModelEntry, PoolPriority, TranscriptionRequest
 from jobs.base import JobProcessor
@@ -26,6 +23,9 @@ from jobs.cron_store import UserCronStore
 from jobs.models import Job, JobPriority, JobStatus, JobType
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource
+from memory.base import ContextStore
+from memory.injection import ContextInjector
+from memory.models import ContextDocument
 from orchestrator.models import TaskRequest, TaskResponse
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager

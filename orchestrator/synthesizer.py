@@ -13,6 +13,7 @@ import logging
 
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
+from memory import MemoryGateway
 from utils.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,9 @@ logger = logging.getLogger(__name__)
 class ResultSynthesizer:
     """Merges multiple agent outputs into a single coherent markdown response."""
 
-    def __init__(self, inference_router: InferenceRouter) -> None:
+    def __init__(self, inference_router: InferenceRouter, memory: MemoryGateway) -> None:
         self._inference_router = inference_router
+        self._memory = memory
 
     async def synthesize(
         self,
@@ -53,7 +55,9 @@ class ResultSynthesizer:
             logger.warning("ResultSynthesizer: synthesizer prompt not found; skipping synthesis")
             return None
 
-        full_prompt = f"{system_prompt}\n\n---\n\n{sections}"
+        persona = await self._memory.read_persona()
+        preamble = f"{persona}\n\n" if persona else ""
+        full_prompt = f"{preamble}{system_prompt}\n\n---\n\n{sections}"
 
         try:
             response = await self._inference_router.complete(

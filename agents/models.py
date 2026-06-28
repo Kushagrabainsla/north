@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import yaml
 from pydantic import BaseModel, Field
 
-from memory.base import ContextStore
 from inference.base import InferenceRouter
+from memory.base import ContextStore
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
 
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
     from approval.base import Notifier
     from approval.judgement_filter import JudgementFilter
     from approval.store import ApprovalStore
-    from memory.facts import FactStore
     from ledger.base import LedgerWriter
     from memory import MemoryGateway
+    from memory.facts import FactStore
     from tools.tool_index import ToolIndex
 
 
