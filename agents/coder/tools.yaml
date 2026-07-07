@@ -4,3 +4,4 @@ tools:
   - git
   - gh
   - patch_file
+  - rename_symbol

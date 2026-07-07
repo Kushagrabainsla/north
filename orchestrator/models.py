@@ -29,6 +29,9 @@ class TaskRequest(BaseModel):
     source: LedgerSource = LedgerSource.PROMPT
     workspace: str = ""  # optional root directory for filesystem/shell tools
     context: str = ""  # optional pre-loaded context summary to inject into the agent's prompt
+    # Optional client-supplied key to dedupe re-deliveries (e.g. a webhook id).
+    # When omitted, the orchestrator derives one from source+prompt.
+    idempotency_key: str | None = None
 
 
 class TaskResponse(BaseModel):

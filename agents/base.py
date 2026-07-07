@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context.repo_instructions import load_repo_instructions
+from context.repo_map import build_repo_map
 from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
 from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 
 logger = logging.getLogger(__name__)
+
+# Tools an agent must never lose to semantic ranking - the read/search/edit/verify
+# core it needs to do real work. Force-included only when the agent actually has them.
+_CORE_TOOL_NAMES: frozenset[str] = frozenset(
+    {"read_file", "list_dir", "search_files", "glob", "write_file", "patch_file", "check_types", "bash"}
+)
 
 
 class Agent(ABC):
@@ -93,12 +101,34 @@ class Agent(ABC):
             except Exception as exc:
                 logger.warning("Repo instruction load failed for task %s: %s", payload.task_id, exc)
 
+        # Engineering agents get an up-front repo map (key files + symbols) so they
+        # reason from the real codebase instead of rediscovering it via tools (#2).
+        if payload.workspace and self.domain == "engineering":
+            try:
+                repo_map = await asyncio.to_thread(build_repo_map, payload.workspace)
+                if repo_map:
+                    parts.append(f"## Repository map (key files and their symbols)\n{repo_map}")
+            except Exception as exc:
+                logger.warning("Repo map build failed for task %s: %s", payload.task_id, exc)
+
         memory = self._memory()
         principal = await memory.principal_for(self.name, self.domain)
         recalled = await memory.recall(principal, payload.prompt)
         rendered = recalled.render()
         if rendered:
             parts.append(rendered)
+
+        # Surface the live task plan (#9) so a continued/resumed task re-enters with
+        # its checklist intact. During the loop the update_plan tool output keeps it
+        # fresh; this covers the first turn after a context reset.
+        plan_store = getattr(self._deps, "plan_store", None)
+        if plan_store is not None and payload.task_id:
+            try:
+                plan = plan_store.render(payload.task_id)
+                if plan:
+                    parts.append(f"## Current task plan (update it with update_plan)\n{plan}")
+            except Exception as exc:
+                logger.debug("Plan injection failed for task %s: %s", payload.task_id, exc)
         return "\n\n".join(p for p in parts if p)
 
     async def _load_tools(self, task_prompt: str = "") -> list[tuple[Tool, float]]:
@@ -115,6 +145,9 @@ class Agent(ABC):
         tool_index = self._deps.tool_index
         if task_prompt and tool_index is not None and len(registry_tools) > SEMANTIC_FILTER_MIN:
             top_names = set(await tool_index.search_tools(task_prompt, top_k=SEMANTIC_TOP_K))
+            # Never let semantic ranking hide the essential read/search/edit/verify
+            # core - only ever force-including tools the agent actually has (#8).
+            top_names |= {t.name for t in registry_tools if t.name in _CORE_TOOL_NAMES}
             if top_names:
                 scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools if t.name in top_names]
                 if not scored:

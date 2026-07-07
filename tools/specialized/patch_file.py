@@ -16,12 +16,22 @@ import asyncio
 import difflib
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from approval.mode import ApprovalMode
+from approval.unattended import UnattendedPolicy
 from tools._path import resolve_path
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import request_approval_decision
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from approval.base import Notifier
+    from approval.judgement_filter import JudgementFilter
+    from approval.store import ApprovalStore
+    from orchestrator.stream import EventStreamManager
 
 _BLOCK_RE = re.compile(r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE", re.DOTALL)
 _MAX_DIFF_CHARS = 8_000
@@ -80,6 +90,27 @@ class PatchFileTool(ApprovalGatedTool):
     def format_output(self, data: dict[str, Any]) -> str:
         return f"Patched `{data.get('path', '?')}` successfully."
 
+    def __init__(
+        self,
+        approval_store: ApprovalStore | None = None,
+        stream_manager: EventStreamManager | None = None,
+        approval_timeout_seconds: float = 300.0,
+        judgement_filter: JudgementFilter | None = None,
+        notifier: Notifier | None = None,
+        unattended: UnattendedPolicy | None = None,
+        mode_provider: Callable[[], ApprovalMode] | None = None,
+    ) -> None:
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter, notifier)
+        self._unattended = unattended or UnattendedPolicy()
+        self._mode_provider = mode_provider
+
+    def _auto_edits(self, resolved: Path, workspace: str | None) -> bool:
+        """True when the current mode auto-approves this in-workspace edit."""
+        mode = self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
+        return mode in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS) and self._unattended.approves_edit(
+            resolved, workspace
+        )
+
     async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")
         edits = input.params.get("edits")
@@ -103,7 +134,7 @@ class PatchFileTool(ApprovalGatedTool):
         if new_content == old_content:
             return ToolOutput(success=True, data={"path": str(resolved), "blocks_applied": 0, "unchanged": True})
 
-        if self._approval_store is not None:
+        if self._approval_store is not None and not self._auto_edits(resolved, input.params.get("workspace")):
             task_id = input.params.get("task_id")
             approved = await self._request_diff_approval(task_id, resolved, old_content, new_content)
             if not approved:

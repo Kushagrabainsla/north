@@ -114,7 +114,7 @@ async def test_metrics_success_rate_counts_genuinely_failed_task(writer: SQLiteL
         _entry(
             "f1",
             source=LedgerSource.AGENT,
-            agent="tester",
+            agent="reviewer",
             task_id="task-broken",
             action="agent_execution_failed",
             status=LedgerStatus.FAILED,
@@ -122,9 +122,9 @@ async def test_metrics_success_rate_counts_genuinely_failed_task(writer: SQLiteL
     )
 
     metrics = await writer.get_metrics(days=7)
-    tester = next(a for a in metrics["by_agent"] if a["agent"] == "tester")
-    assert tester["tasks"] == 1
-    assert tester["success_rate"] == 0.0
+    reviewer = next(a for a in metrics["by_agent"] if a["agent"] == "reviewer")
+    assert reviewer["tasks"] == 1
+    assert reviewer["success_rate"] == 0.0
 
 
 async def test_query_filters_by_task_id(writer: SQLiteLedgerWriter) -> None:

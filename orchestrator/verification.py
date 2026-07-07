@@ -38,8 +38,9 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
     (
         "creating or editing a file",
         re.compile(
-            r"\b(?:creat(?:e|ed|ing)|wr(?:o|i)te|add(?:ed)?|sav(?:e|ed)|"
-            r"generat(?:e|ed)|updat(?:e|ed)|modif(?:y|ied)|edit(?:ed)?)\b"
+            r"\b(?:creat(?:e|ed|ing)|wr(?:o|i)te|rewr(?:o|i)te|add(?:ed)?|sav(?:e|ed)|"
+            r"generat(?:e|ed)|updat(?:e|ed)|modif(?:y|ied)|edit(?:ed)?|"
+            r"implement(?:s|ed|ing)?|refactor(?:s|ed|ing)?|fix(?:es|ed|ing)?)\b"
             r"[^.\n]{0,60}"
             r"\b(?:file|script|module|unit\s+test|test\s+file|test_\w+|"
             r"\w+\.(?:py|ts|js|tsx|go|rs|java|md|json|txt|ya?ml|sh|sql))\b",
@@ -48,15 +49,18 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
         frozenset({"write_file", "patch_file", "create_tool"}),
     ),
     (
-        "running a command or test",
+        "running a check, test, or verification",
         re.compile(
             r"\btests?\s+(?:are\s+|now\s+)?(?:pass(?:ed|ing|es)?|green|succeed(?:ed|ing)?)\b"
             r"|\ball\s+tests?\s+pass"
             r"|\b(?:ran|executed|i\s+tested)\b[^.\n]{0,40}"
-            r"\b(?:test|tests|suite|pytest|unittest|npm|build|the\s+script|the\s+command)\b",
+            r"\b(?:test|tests|suite|pytest|unittest|npm|build|the\s+script|the\s+command)\b"
+            r"|\b(?:type[-\s]?check(?:s|ed|ing)?|types?)\s+(?:pass(?:ed|es)?|are\s+clean|clean)\b"
+            r"|\bno\s+type\s+errors?\b"
+            r"|\bi\s+verified\b|\bverified\s+(?:that|the|it|by)\b",
             re.IGNORECASE,
         ),
-        frozenset({"bash"}),
+        frozenset({"bash", "check_types"}),
     ),
     (
         "committing or pushing changes",
@@ -65,6 +69,18 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
             re.IGNORECASE,
         ),
         frozenset({"git", "gh"}),
+    ),
+    (
+        "citing external information",
+        re.compile(
+            r"\baccording to\b"
+            r"|\b(?:studies|research|reports?|data|surveys?)\s+(?:show|shows|indicate[sd]?|found|suggest[s]?)\b"
+            r"|\bas\s+reported\s+by\b"
+            r"|\bsources?\s*:"
+            r"|\bper\s+the\s+(?:latest|official)\b",
+            re.IGNORECASE,
+        ),
+        frozenset({"web_search", "fetch_url"}),
     ),
 )
 

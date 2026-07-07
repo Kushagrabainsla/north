@@ -30,8 +30,10 @@ _ACTIONS: dict[str, list[str]] = {
     "pr_view": ["pr", "view"],
     "pr_diff": ["pr", "diff"],
     "pr_list": ["pr", "list"],
+    "pr_status": ["pr", "status"],
     "pr_checks": ["pr", "checks"],
     "pr_create": ["pr", "create"],
+    "pr_ready": ["pr", "ready"],
     "pr_comment": ["pr", "comment"],
     "pr_merge": ["pr", "merge"],
     "pr_review": ["pr", "review"],
@@ -48,7 +50,7 @@ _ACTIONS: dict[str, list[str]] = {
 # (fail-closed when no ApprovalStore is wired). pr_merge in particular must
 # never execute silently.
 _MUTATING_ACTIONS: frozenset[str] = frozenset(
-    {"pr_create", "pr_comment", "pr_merge", "pr_review", "issue_create", "issue_comment"}
+    {"pr_create", "pr_ready", "pr_comment", "pr_merge", "pr_review", "issue_create", "issue_comment"}
 )
 
 
@@ -59,9 +61,10 @@ class GhTool(ApprovalGatedTool):
     is_mutating = True
     description = (
         "Run GitHub operations via the gh CLI. "
-        "Read-only actions (pr_view, pr_diff, pr_list, pr_checks, issue_view, issue_list, "
-        "repo_view, run_list, run_view) execute immediately. "
-        "Mutating actions (pr_create, pr_comment, pr_merge, pr_review, issue_create, "
+        "Read-only actions (pr_view, pr_diff, pr_list, pr_status, pr_checks, issue_view, "
+        "issue_list, repo_view, run_list, run_view) execute immediately. Use pr_checks to read "
+        "a PR's CI status and run_view (args='<run-id> --log-failed') to fetch failing CI logs. "
+        "Mutating actions (pr_create, pr_ready, pr_comment, pr_merge, pr_review, issue_create, "
         "issue_comment) automatically show the user an approval card before running - "
         "no separate request_approval call is needed. "
         "Pass extra flags via 'args', e.g. args='123 --body \"LGTM\"'."

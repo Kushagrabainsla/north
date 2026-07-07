@@ -1,6 +1,6 @@
 agent: researcher
 domain: engineering
-model_pool: fast_cheap
+model_pool: reasoning
 accepts:
   - "research"
   - "investigate"

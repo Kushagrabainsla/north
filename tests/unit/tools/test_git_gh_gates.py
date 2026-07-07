@@ -6,11 +6,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.mode import ApprovalMode
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import gh_tool as gh_module
 from tools.specialized import git_tool as git_module
 from tools.specialized.gh_tool import GhTool
 from tools.specialized.git_tool import GitTool
+
+_AUTONOMOUS = ApprovalMode.AUTONOMOUS
 
 
 @pytest.fixture
@@ -102,6 +105,13 @@ class TestGitGate:
         assert "blocked" in result.error.lower()
         assert not fake_run_capture
 
+    async def test_force_push_allowed_when_allow_dangerous(self, fake_run_capture) -> None:
+        """In autonomous mode (allow_dangerous), the force-push hard refusal is lifted."""
+        tool = GitTool(approval_store=_approving_store(), mode_provider=lambda: _AUTONOMOUS)
+        result = await tool.run(ToolInput(params={"action": "push", "args": "origin main --force"}))
+        assert result.success is True
+        assert fake_run_capture  # it actually ran (after approval), not pre-blocked
+
     async def test_reset_and_clean_are_not_offered(self, fake_run_capture) -> None:
         for action in ("reset", "clean"):
             result = await GitTool().run(ToolInput(params={"action": action, "args": "--hard"}))
@@ -137,3 +147,25 @@ class TestGhGate:
         result = await tool.run(ToolInput(params={"action": "pr_merge", "args": "123"}))
         assert result.success is False
         assert not fake_run_capture
+
+    async def test_pr_status_runs_without_approval(self, fake_run_capture) -> None:
+        result = await GhTool().run(ToolInput(params={"action": "pr_status"}))
+        assert result.success is True
+        assert fake_run_capture[0][:2] == ["gh", "pr"]
+
+    async def test_pr_checks_runs_without_approval(self, fake_run_capture) -> None:
+        result = await GhTool().run(ToolInput(params={"action": "pr_checks", "args": "123"}))
+        assert result.success is True
+        assert fake_run_capture[0][:3] == ["gh", "pr", "checks"]
+
+    async def test_pr_ready_fails_closed_without_gate(self, fake_run_capture) -> None:
+        result = await GhTool().run(ToolInput(params={"action": "pr_ready", "args": "123"}))
+        assert result.success is False
+        assert "fail closed" in result.error
+        assert not fake_run_capture
+
+    async def test_pr_ready_runs_only_after_approval(self, fake_run_capture) -> None:
+        tool = GhTool(approval_store=_approving_store())
+        result = await tool.run(ToolInput(params={"action": "pr_ready", "args": "123"}))
+        assert result.success is True
+        assert fake_run_capture[0][:3] == ["gh", "pr", "ready"]

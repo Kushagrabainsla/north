@@ -57,7 +57,7 @@ def _load_agent(name: str, tmp_path: Path, router: MockInferenceRouter | None = 
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["architect", "coder", "researcher", "tester"])
+@pytest.mark.parametrize("name", ["architect", "coder", "researcher", "reviewer"])
 async def test_agent_run_returns_valid_result(name: str, tmp_path: Path) -> None:
     """Each agent must return a valid AgentResult when LLM responds with a message."""
     from agents.models import AgentResult
@@ -165,7 +165,7 @@ async def test_tool_result_injected_into_next_request(tmp_path: Path) -> None:
                 tokens_out=5,
             )
 
-    agent = _load_agent("tester", tmp_path, InspectingRouter())
+    agent = _load_agent("reviewer", tmp_path, InspectingRouter())
     await agent.run(AgentPayload(task_id="t3", prompt="Run tests."))
 
     tool_messages = [m for m in received_messages_on_second_call if m.get("role") == "tool"]
@@ -285,7 +285,7 @@ async def test_unknown_tool_call_returns_error_and_loop_continues(tmp_path: Path
                 tokens_out=5,
             )
 
-    agent = _load_agent("tester", tmp_path, UnknownToolRouter())
+    agent = _load_agent("reviewer", tmp_path, UnknownToolRouter())
     result = await agent.run(AgentPayload(task_id="t6", prompt="Run tests."))
 
     assert result.output == "Recovered after error."
@@ -321,20 +321,12 @@ async def test_empty_tool_calls_list_breaks_loop(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["architect", "coder"])
+@pytest.mark.parametrize("name", ["architect", "coder", "researcher", "reviewer"])
 def test_reasoning_pool_agents_resolve_high_priority(name: str, tmp_path: Path) -> None:
     from inference.models import PoolPriority
 
     agent = _load_agent(name, tmp_path)
     assert agent._resolve_priority() == PoolPriority.HIGH
-
-
-@pytest.mark.parametrize("name", ["researcher", "tester"])
-def test_fast_cheap_agents_resolve_medium_priority(name: str, tmp_path: Path) -> None:
-    from inference.models import PoolPriority
-
-    agent = _load_agent(name, tmp_path)
-    assert agent._resolve_priority() == PoolPriority.MEDIUM
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +344,7 @@ def test_system_prompt_cached_on_first_access(tmp_path: Path) -> None:
 
 def test_system_prompt_includes_tool_creation_policy(tmp_path: Path) -> None:
     """Tool creation policy must be appended to every agent's system prompt."""
-    for name in ["architect", "coder", "researcher", "tester"]:
+    for name in ["architect", "coder", "researcher", "reviewer"]:
         agent = _load_agent(name, tmp_path)
         prompt = agent._load_system_prompt()
         assert "create_tool" in prompt, f"{name}'s prompt must include tool creation policy"
@@ -394,7 +386,95 @@ def test_task_message_includes_task_id(tmp_path: Path) -> None:
 
 
 def test_task_message_includes_prompt(tmp_path: Path) -> None:
-    agent = _load_agent("tester", tmp_path)
+    agent = _load_agent("reviewer", tmp_path)
     payload = AgentPayload(task_id="t1", prompt="Run the full test suite.")
     msg = agent._build_task_message(payload, context="", scored_tools=[])
     assert "Run the full test suite." in msg
+
+
+# ---------------------------------------------------------------------------
+# Side-effect marking for crash recovery (#3)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingStore:
+    def __init__(self) -> None:
+        self.marked: list[str] = []
+
+    async def mark_side_effect(self, task_id: str) -> None:
+        self.marked.append(task_id)
+
+
+def _tool_map():
+    import unittest.mock as mock
+
+    mutating = mock.MagicMock()
+    mutating.is_mutating = True
+    readonly = mock.MagicMock()
+    readonly.is_mutating = False
+    return {"write_file": mutating, "read_file": readonly}
+
+
+async def test_record_side_effects_marks_on_successful_mutation(tmp_path):
+    agent = _load_agent("coder", tmp_path)
+    store = _RecordingStore()
+    agent._deps.running_task_store = store
+
+    results = [
+        (ToolCall(name="read_file", call_id="1"), "data", True),
+        (ToolCall(name="write_file", call_id="2"), "ok", True),
+    ]
+    await agent._record_side_effects(AgentPayload(task_id="t1", prompt="p"), results, _tool_map())
+
+    assert store.marked == ["t1"]
+
+
+async def test_record_side_effects_ignores_readonly_and_failed_mutations(tmp_path):
+    agent = _load_agent("coder", tmp_path)
+    store = _RecordingStore()
+    agent._deps.running_task_store = store
+
+    results = [
+        (ToolCall(name="read_file", call_id="1"), "data", True),  # read-only success
+        (ToolCall(name="write_file", call_id="2"), "err", False),  # mutation FAILED
+    ]
+    await agent._record_side_effects(AgentPayload(task_id="t1", prompt="p"), results, _tool_map())
+
+    assert store.marked == []
+
+
+# ---------------------------------------------------------------------------
+# Core tools always survive semantic selection (#8)
+# ---------------------------------------------------------------------------
+
+
+async def test_core_tools_never_dropped_by_semantic_filter(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+
+    agent = _load_agent("coder", tmp_path)
+
+    def _tool(name: str):
+        t = MagicMock()
+        t.name = name
+        return t
+
+    # More than SEMANTIC_FILTER_MIN tools, mixing core and non-core.
+    names = [
+        "read_file", "patch_file", "check_types", "bash", "list_dir", "search_files",
+        "glob", "write_file", "web_search", "fetch_url", "kasa", "git",
+    ]
+    agent._deps.tool_registry = MagicMock()
+    agent._deps.tool_registry.tools_for_agent.return_value = [_tool(n) for n in names]
+    agent._deps.confidence_tracker = MagicMock()
+    agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=[])
+    # Semantic search returns only NON-core tools.
+    index = MagicMock()
+    index.search_tools = AsyncMock(return_value=["web_search", "kasa", "git"])
+    agent._deps.tool_index = index
+
+    selected = {t.name for t, _ in await agent._load_tools("do something with the code")}
+
+    # Core read/search/edit/verify tools are forced in despite ranking...
+    assert {"read_file", "patch_file", "check_types", "bash"} <= selected
+    # ...and the semantic picks are still present.
+    assert "web_search" in selected

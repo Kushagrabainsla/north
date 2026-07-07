@@ -30,25 +30,25 @@ Valid `domain` values are exactly the `domain` fields in the Available Agents bl
 
 **Special cases:**
 - `home`: simple single-device commands → `single_tool` with `kasa`; multi-step, scheduling, or unfamiliar platforms → `single_agent` with `home` agent
-- `engineering`: see entry-point rules below
+- `engineering`: see pipeline rules below
 
-#### Engineering entry point
-When `domain = engineering`, always use `single_agent` mode. The chain unfolds inside agents via `delegate_task` - the planner only picks the entry point. **Never use `hierarchical` mode for engineering tasks.**
+#### Engineering pipeline
+When `domain = engineering` you do NOT design the agent chain. The system builds a fixed
+`researcher → architect → coder → reviewer` pipeline from one field you provide: **`engineering_kind`**.
+Set `mode` to `single_agent` and leave `agents` empty for engineering tasks - both are ignored here.
 
-Choose the entry agent based on the task description:
+Classify `engineering_kind` as exactly one of:
 
-| Task description | Entry agent |
+| `engineering_kind` | Use when the task is… |
 |---|---|
-| "research", "investigate", "explore", "find out", "look into", "analyze" | `researcher` |
-| "design", "architect", "spec", "plan", "how should X be structured" | `architect` |
-| "build", "implement", "create", "develop", "ship", "make" a project/app/feature/system | `architect` |
-| "code", "write the code", "program" (the design is already clear) | `coder` |
-| "fix", "debug", "patch", "the bug in X", "X is broken" | `coder` |
-| "test", "verify", "validate", "does X work", "run QA" | `tester` |
+| `question` | understand or explain existing code/tech, no change ("how does X work") |
+| `research` | compare options, assess feasibility, gather prior art ("find out", "investigate X") |
+| `bugfix` | a localized fix to existing code ("fix", "debug", "the bug in X", "X is broken") |
+| `refactor` | restructure existing code without new behaviour ("clean up", "reorganize", "refactor") |
+| `feature` | new behaviour, module, or system ("build", "implement", "add", "create X") |
 
-**Building something new starts with the `architect`** - it clarifies unknowns with the user, designs the solution, pulls in `researcher` when it needs outside context, then delegates implementation to `coder`. Route to `researcher` directly only for pure information-gathering ("find out X"); it hands its findings to the architect afterwards. Route to `coder` directly only when the change is small and fully specified (a fix, a single named file).
-
-Use `engineering` for any task that involves code, specs, or technical investigation - regardless of complexity. Even a trivial single-line fix belongs in `coder`, which has the correct git workflow and verification steps.
+When torn between two, pick the larger scope (`feature` > `refactor` > `bugfix`; `research` > `question`).
+Use `engineering` for any task involving code, specs, or technical investigation - regardless of size.
 
 ### Is it consequential?
 Set `is_consequential: true` ONLY when the task **directly causes** an irreversible external action:
@@ -119,7 +119,7 @@ In hierarchical output, `parallel_groups` lists **sequential execution stages** 
 
 Return a valid JSON object only. No explanation outside the JSON block.
 
-All ten fields are required in every response: `is_consequential`, `confidence`, `domain`, `mode`, `direct_tool`, `direct_tool_params`, `agents`, `parallel_groups`, `dependencies`, `reasoning`.
+All ten fields are required in every response: `is_consequential`, `confidence`, `domain`, `mode`, `direct_tool`, `direct_tool_params`, `agents`, `parallel_groups`, `dependencies`, `reasoning`. For `engineering` tasks also include `engineering_kind` (one of `question`, `research`, `bugfix`, `refactor`, `feature`).
 
 **`single_tool` example:**
 ```json
@@ -143,13 +143,14 @@ All ten fields are required in every response: `is_consequential`, `confidence`,
   "is_consequential": false,
   "confidence": 0.95,
   "domain": "engineering",
+  "engineering_kind": "bugfix",
   "mode": "single_agent",
   "direct_tool": null,
   "direct_tool_params": {},
-  "agents": ["coder"],
-  "parallel_groups": [["coder"]],
+  "agents": [],
+  "parallel_groups": [],
   "dependencies": {},
-  "reasoning": "Targeted fix - route directly to coder. Not consequential - no external actions."
+  "reasoning": "Localized fix to existing code - a bugfix. The system runs coder→reviewer. Not consequential - no external actions."
 }
 ```
 

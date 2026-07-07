@@ -21,7 +21,7 @@ DELEGATE_TASK_SCHEMA: dict = {
                     "type": "string",
                     "description": (
                         "Name of the specialist agent "
-                        "(e.g. 'researcher', 'architect', 'coder', 'tester', "
+                        "(e.g. 'researcher', 'architect', 'coder', 'reviewer', "
                         "'finance', 'health', 'university', 'job', 'home', 'general')."
                     ),
                 },

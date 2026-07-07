@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
-ENGINEERING_AGENTS = ["architect", "coder", "researcher", "tester"]
+ENGINEERING_AGENTS = ["architect", "coder", "researcher", "reviewer"]
 
 
 # ---------------------------------------------------------------------------
@@ -31,22 +31,16 @@ def test_config_loads(name: str) -> None:
     assert config.domain == "engineering"
 
 
-@pytest.mark.parametrize("name", ["architect", "coder"])
+@pytest.mark.parametrize("name", ["architect", "coder", "researcher", "reviewer"])
 def test_implementation_agents_use_reasoning_pool(name: str) -> None:
-    """Design AND implementation run on the reasoning pool - code that auto-commits
-    must not come from the cheapest models (review finding R5#33)."""
+    """Design, implementation, research, AND review run on the reasoning pool - the
+    researcher's output gates the whole engineering chain (a bad spec -> bad code)
+    and the reviewer is the quality gate (it must reason about code as well as the
+    coder), so none of them may come from the cheapest models."""
     from agents.models import AgentConfig
 
     config = AgentConfig.from_yaml(AGENTS_DIR / name / "config.yaml")
     assert config.model_pool == "reasoning"
-
-
-@pytest.mark.parametrize("name", ["researcher", "tester"])
-def test_support_agents_use_fast_cheap_pool(name: str) -> None:
-    from agents.models import AgentConfig
-
-    config = AgentConfig.from_yaml(AGENTS_DIR / name / "config.yaml")
-    assert config.model_pool == "fast_cheap"
 
 
 @pytest.mark.parametrize("name", ENGINEERING_AGENTS)
@@ -87,11 +81,11 @@ def test_researcher_class_name() -> None:
     assert config.resolved_class_name == "ResearcherAgent"
 
 
-def test_tester_class_name() -> None:
+def test_reviewer_class_name() -> None:
     from agents.models import AgentConfig
 
-    config = AgentConfig.from_yaml(AGENTS_DIR / "tester" / "config.yaml")
-    assert config.resolved_class_name == "TesterAgent"
+    config = AgentConfig.from_yaml(AGENTS_DIR / "reviewer" / "config.yaml")
+    assert config.resolved_class_name == "ReviewerAgent"
 
 
 # ---------------------------------------------------------------------------
@@ -169,20 +163,20 @@ def test_researcher_prompt_produces_context_md_and_references_json() -> None:
     assert "references.json" in content
 
 
-def test_tester_prompt_produces_qa_reports() -> None:
-    content = (AGENTS_DIR / "tester" / "prompts" / "system.md").read_text(encoding="utf-8")
-    assert "qa_report_latest.md" in content
+def test_reviewer_prompt_produces_review_reports() -> None:
+    content = (AGENTS_DIR / "reviewer" / "prompts" / "system.md").read_text(encoding="utf-8")
+    assert "review_report_latest.md" in content
 
 
-def test_coder_prompt_always_delegates_to_tester() -> None:
-    """Coder must state it always hands off to tester - no exceptions."""
+def test_coder_prompt_always_delegates_to_reviewer() -> None:
+    """Coder must state it always hands off to reviewer - no exceptions."""
     content = (AGENTS_DIR / "coder" / "prompts" / "system.md").read_text(encoding="utf-8")
-    assert "tester" in content.lower()
+    assert "reviewer" in content.lower()
     assert "always" in content.lower()
 
 
-def test_tester_prompt_adversarial_posture() -> None:
-    content = (AGENTS_DIR / "tester" / "prompts" / "system.md").read_text(encoding="utf-8")
+def test_reviewer_prompt_adversarial_posture() -> None:
+    content = (AGENTS_DIR / "reviewer" / "prompts" / "system.md").read_text(encoding="utf-8")
     assert "adversarial" in content.lower()
 
 
@@ -203,14 +197,14 @@ def test_researcher_prompt_routes_based_on_task_verb() -> None:
     assert "delegate" in content.lower()
 
 
-def test_tester_prompt_routes_code_bugs_to_coder() -> None:
-    content = (AGENTS_DIR / "tester" / "prompts" / "system.md").read_text(encoding="utf-8")
+def test_reviewer_prompt_routes_code_bugs_to_coder() -> None:
+    content = (AGENTS_DIR / "reviewer" / "prompts" / "system.md").read_text(encoding="utf-8")
     assert "coder" in content.lower()
     assert "code bug" in content.lower() or "bug" in content.lower()
 
 
-def test_tester_prompt_routes_spec_gaps_to_architect() -> None:
-    content = (AGENTS_DIR / "tester" / "prompts" / "system.md").read_text(encoding="utf-8")
+def test_reviewer_prompt_routes_spec_gaps_to_architect() -> None:
+    content = (AGENTS_DIR / "reviewer" / "prompts" / "system.md").read_text(encoding="utf-8")
     assert "architect" in content.lower()
     assert "spec" in content.lower()
 
@@ -230,15 +224,17 @@ def test_coder_has_bash_git_patch_file() -> None:
     assert "patch_file" in names
 
 
-def test_tester_has_bash_only() -> None:
-    """Tester has bash (to run tests) but must NOT have git or patch_file."""
-    tools_path = AGENTS_DIR / "tester" / "tools.yaml"
+def test_reviewer_has_bash_and_gh_but_cannot_modify_code() -> None:
+    """Reviewer runs tests (bash) and inspects PR/CI status (gh, read-only actions),
+    but must NOT have git or patch_file - it reports, it never commits or edits code."""
+    tools_path = AGENTS_DIR / "reviewer" / "tools.yaml"
     assert tools_path.exists()
     data = yaml.safe_load(tools_path.read_text(encoding="utf-8"))
     names = data.get("tools", [])
     assert "bash" in names
-    assert "patch_file" not in names, "Tester must not modify production code"
-    assert "git" not in names, "Tester must not commit code"
+    assert "gh" in names, "Reviewer needs gh to read PR CI status (pr_checks / run_view)"
+    assert "patch_file" not in names, "Reviewer must not modify production code"
+    assert "git" not in names, "Reviewer must not commit code"
 
 
 def test_researcher_has_no_destructive_tools() -> None:

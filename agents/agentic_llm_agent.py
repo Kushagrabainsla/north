@@ -168,7 +168,7 @@ class AgenticLLMAgent(LLMAgent):
 
         Mutating tools (file writes, shell, git) are serialized under the
         per-WORKSPACE lock - not per agent instance - so a delegated coder and
-        tester working in the same tree cannot interleave mutations. Every call
+        reviewer working in the same tree cannot interleave mutations. Every call
         is wrapped so a raised exception becomes a failed tool result rather
         than cancelling its siblings (CODING_STYLE §10.5). Results preserve the
         original call order.
@@ -195,7 +195,35 @@ class AgenticLLMAgent(LLMAgent):
                     async with workspace_lock(payload.workspace):
                         results[index] = await self._safe_execute_call(call, payload, tool_map)
 
-        return [results[index] for index in range(len(calls))]
+        ordered = [results[index] for index in range(len(calls))]
+        await self._record_side_effects(payload, ordered, tool_map)
+        return ordered
+
+    async def _record_side_effects(
+        self,
+        payload: AgentPayload,
+        results: list[tuple[ToolCall, str, bool]],
+        tool_map: dict[str, Tool],
+    ) -> None:
+        """Flag the task as side-effecting when a mutating tool call succeeds.
+
+        Lets crash recovery avoid blindly re-running a task that already acted.
+        delegate_task is excluded: a delegated sub-agent runs under the same
+        task_id and marks its own mutations.
+        """
+        store = self._deps.running_task_store
+        if store is None or not payload.task_id:
+            return
+        mutated = any(
+            success and (tool_map.get(call.name) is not None and tool_map[call.name].is_mutating)
+            for call, _, success in results
+        )
+        if not mutated:
+            return
+        try:
+            await store.mark_side_effect(payload.task_id)
+        except Exception:
+            logger.debug("failed to mark side effect for task %s", payload.task_id, exc_info=True)
 
     async def _safe_execute_call(
         self,
@@ -289,8 +317,13 @@ class AgenticLLMAgent(LLMAgent):
                 # matches the streamed view and never feeds extraction/verification.
                 content = strip_reasoning(response.content or "")
                 return _final_answer(
-                    content, content[:120], total_cost_usd, tools_used, successful_tools,
-                    total_tokens_in, total_tokens_out,
+                    content,
+                    content[:120],
+                    total_cost_usd,
+                    tools_used,
+                    successful_tools,
+                    total_tokens_in,
+                    total_tokens_out,
                 )
 
             # Tool calls branch - execute the requested calls.
@@ -436,7 +469,7 @@ class AgenticLLMAgent(LLMAgent):
             return call, result_str, success
         # create_tool gates its own create/update actions behind an approval
         # card (see CreateToolTool._request_approval) - no special case here.
-        # Default the workspace but respect an explicit model-supplied value  - 
+        # Default the workspace but respect an explicit model-supplied value  -
         # same semantics as the orchestrator's direct-tool path.
         if payload.workspace and "workspace" not in params:
             params["workspace"] = payload.workspace
@@ -636,6 +669,13 @@ class AgenticLLMAgent(LLMAgent):
         )
         return card.status
 
+    def _is_autonomous(self) -> bool:
+        """True when the live approval mode is autonomous (no human to ask)."""
+        from approval.mode import ApprovalMode
+
+        ns = getattr(self._deps, "north_settings", None)
+        return ns is not None and getattr(ns, "approval_mode", None) == ApprovalMode.AUTONOMOUS
+
     async def _ask_user(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Ask the user a clarifying question mid-loop and block until they answer.
 
@@ -648,6 +688,22 @@ class AgenticLLMAgent(LLMAgent):
         if not question:
             return _failed_json("ask_user requires a non-empty 'question'.")
         options = [str(o) for o in params.get("options", []) if str(o).strip()]
+
+        # In autonomous mode no human is available to answer, and the operator has
+        # asked north to proceed on its own - so don't block on the question; tell
+        # the agent to decide with its best judgment (mirrors non-interactive CLIs).
+        if self._is_autonomous():
+            return json.dumps(
+                {
+                    "success": True,
+                    "answered": True,
+                    "answer": (
+                        "Autonomous mode is on and no user is available to answer. Proceed using "
+                        "your best judgment and reasonable defaults; state any assumption you make "
+                        "in your final answer, and do not ask again."
+                    ),
+                }
+            )
 
         card = await self._surface_card(
             payload,
@@ -686,7 +742,7 @@ def _cap_tool_result(data: dict[str, Any]) -> str:
 
     A single large tool response must not exhaust the model's context window.
     Truncation happens *inside* the data dict so the JSON returned to the model
-    is always syntactically valid: first each string field is capped, then  - 
+    is always syntactically valid: first each string field is capped, then  -
     when non-string fields (large lists/dicts) still blow the budget - the
     whole data block is replaced with a bounded summary.
     """

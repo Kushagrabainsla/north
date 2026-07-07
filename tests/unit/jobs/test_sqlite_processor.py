@@ -198,3 +198,72 @@ async def test_list_jobs_respects_limit(processor: SQLiteJobProcessor) -> None:
     results = await processor.list_jobs(limit=2)
 
     assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# reap_stale_running - recover jobs stranded in RUNNING by a dead worker
+# ---------------------------------------------------------------------------
+
+
+async def test_reap_requeues_stale_running_job(processor: SQLiteJobProcessor) -> None:
+    await processor.enqueue(_job("j1"))
+    claimed = await processor.claim_next()
+    assert claimed is not None and claimed.status is JobStatus.RUNNING
+
+    reaped = await processor.reap_stale_running(0)
+
+    assert reaped == 1
+    job = await processor.get("j1")
+    assert job is not None
+    assert job.status is JobStatus.PENDING
+    assert job.retry_count == 1
+    assert job.started_at is None  # eligible to be claimed again
+
+
+async def test_reap_respects_lease(processor: SQLiteJobProcessor) -> None:
+    await processor.enqueue(_job("j1"))
+    await processor.claim_next()  # -> RUNNING, started_at ~now
+
+    # Freshly-started job is within the lease, so it is left alone.
+    assert await processor.reap_stale_running(3600) == 0
+    assert (await processor.get("j1")).status is JobStatus.RUNNING
+
+    # With a zero lease it is considered abandoned and requeued.
+    assert await processor.reap_stale_running(0) == 1
+    assert (await processor.get("j1")).status is JobStatus.PENDING
+
+
+async def test_reap_fails_job_at_retry_ceiling(processor: SQLiteJobProcessor) -> None:
+    exhausted = Job(
+        job_id="j1",
+        type=JobType.CRON,
+        agent="health",
+        task="meal_plan",
+        scheduled_at=datetime.now(UTC),
+        retry_count=3,
+        max_retries=3,
+    )
+    await processor.enqueue(exhausted)
+    await processor.claim_next()  # -> RUNNING, retry_count still 3
+
+    reaped = await processor.reap_stale_running(0)
+
+    assert reaped == 1
+    job = await processor.get("j1")
+    assert job is not None
+    assert job.status is JobStatus.FAILED  # not requeued past the ceiling
+
+
+async def test_reap_ignores_pending_and_terminal_jobs(processor: SQLiteJobProcessor) -> None:
+    # A completed job (claimed then marked done).
+    await processor.enqueue(_job("done"))
+    claimed = await processor.claim_next()
+    await processor.mark_completed(claimed.job_id)
+    # A never-claimed pending job.
+    await processor.enqueue(_job("pending"))
+
+    reaped = await processor.reap_stale_running(0)
+
+    assert reaped == 0
+    assert (await processor.get("done")).status is JobStatus.COMPLETED
+    assert (await processor.get("pending")).status is JobStatus.PENDING

@@ -86,6 +86,17 @@ async def test_one_below_depth_limit_succeeds(tmp_path: Path) -> None:
     assert result["success"] is True
 
 
+async def test_registry_aliases_tester_to_reviewer(tmp_path: Path) -> None:
+    """The legacy 'tester' name must resolve to the reviewer agent (back-compat)."""
+    from agents.registry import AgentRegistry
+
+    deps = _make_deps(tmp_path)
+    registry = AgentRegistry(agents_dir=AGENTS_DIR, deps=deps)
+    aliased = registry.get("tester")
+    assert aliased.name == "reviewer"
+    assert registry.get("reviewer") is aliased
+
+
 # ---------------------------------------------------------------------------
 # Missing registry
 # ---------------------------------------------------------------------------
@@ -245,7 +256,7 @@ async def test_delegation_propagates_task_id(tmp_path: Path) -> None:
 
     await agent._delegate_task(
         AgentPayload(task_id="task-xyz-789", prompt="x"),
-        {"agent": "tester", "task": "run QA"},
+        {"agent": "reviewer", "task": "run QA"},
     )
     assert captured[0].task_id == "task-xyz-789"
 

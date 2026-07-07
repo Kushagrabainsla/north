@@ -64,18 +64,39 @@ class OpenAICompatibleProvider:
 
     # ---- status helpers ----
 
+    @staticmethod
+    def _parse_retry_after(response: httpx.Response) -> float | None:
+        """Return the Retry-After wait in seconds (int form or HTTP-date), if present."""
+        raw = response.headers.get("retry-after")
+        if not raw:
+            return None
+        raw = raw.strip()
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+        try:
+            from datetime import UTC, datetime
+            from email.utils import parsedate_to_datetime
+
+            when = parsedate_to_datetime(raw)
+            return max(0.0, (when - datetime.now(when.tzinfo or UTC)).total_seconds())
+        except Exception:
+            return None
+
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
         """Raise the cooldown-worthy errors for shared HTTP statuses.
 
-        402 (insufficient credits) and 429/404/503 (rate limited or model gone)
-        map to the same exceptions across completion and transcription, so a
-        single place owns the provider cooldown policy. Other statuses return
-        without raising so each caller can apply its own error type.
+        402 (insufficient credits) maps to a long payment cooldown. 429/404/503
+        (rate limited or model gone) and 413 (request/token-rate too large) map to
+        a short rate-limit cooldown that honours any Retry-After header, so the
+        dispatcher routes around the model instead of hammering it. Other statuses
+        return without raising so each caller can apply its own error type.
         """
         if response.status_code == 402:
             raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")
-        if response.status_code in (429, 404, 503):
-            raise ModelRateLimitedError(model_id, self.name)
+        if response.status_code in (429, 404, 503, 413):
+            raise ModelRateLimitedError(model_id, self.name, retry_after=self._parse_retry_after(response))
 
     def _raise_for_status(self, response: httpx.Response, model_id: str) -> None:
         self._raise_cooldown_status(response, model_id)
@@ -86,9 +107,9 @@ class OpenAICompatibleProvider:
         if resp.status_code == 402:
             await resp.aread()
             raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")
-        if resp.status_code in (429, 404, 503):
+        if resp.status_code in (429, 404, 503, 413):
             await resp.aread()
-            raise ModelRateLimitedError(model_id, self.name)
+            raise ModelRateLimitedError(model_id, self.name, retry_after=self._parse_retry_after(resp))
         if resp.status_code >= 400:
             body = (await resp.aread()).decode("utf-8", errors="replace")[:200]
             raise InferenceError(f"{self.name} returned {resp.status_code} for {model_id}: {body}")

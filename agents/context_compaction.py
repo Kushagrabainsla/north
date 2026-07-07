@@ -210,8 +210,9 @@ async def compact_if_needed(
     prompt = (
         "You are summarising intermediate steps of an ongoing AI agent task.\n"
         "Condense the following tool calls and results into a concise bullet-point summary.\n"
-        "Preserve: what was accomplished, key facts discovered, file paths, function names, "
-        "error messages, and any important data values.\n"
+        "Preserve: what was accomplished, the exact list of files created or modified, key facts "
+        "discovered, file paths, function names, the most recent error or failing test, important data "
+        "values, and what still remains to be done.\n"
         "Omit: raw file contents, verbose outputs, redundant retries.\n"
         f"Max {max_words} words.\n\n"
         f"<history>\n{history_text}\n</history>"

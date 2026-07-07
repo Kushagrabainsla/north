@@ -119,6 +119,36 @@ class TestBashToolApprovalBypass:
         tool._approval_store.add.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_unattended_mode_auto_approves_safe_command(self) -> None:
+        from approval.mode import ApprovalMode
+        from approval.unattended import UnattendedPolicy
+
+        tool = BashTool(
+            approval_store=MagicMock(), unattended=UnattendedPolicy(), mode_provider=lambda: ApprovalMode.AUTO
+        )
+        approved = await tool._request_approval("task-1", "pytest -q")
+        assert approved is True
+        tool._approval_store.add.assert_not_called()  # never surfaced a card
+
+    @pytest.mark.asyncio
+    async def test_unattended_mode_still_gates_unsafe_command(self) -> None:
+        from approval.mode import ApprovalMode
+        from approval.unattended import UnattendedPolicy
+
+        jf = MagicMock()
+        jf.check = AsyncMock(return_value=("rejected", "unsafe"))
+        tool = BashTool(
+            approval_store=MagicMock(),
+            judgement_filter=jf,
+            unattended=UnattendedPolicy(),
+            mode_provider=lambda: ApprovalMode.AUTO,
+        )
+        # not on the allowlist -> unattended does not bypass, falls through to the gate
+        approved = await tool._request_approval("task-1", "rm -rf /tmp/x")
+        assert approved is False
+        jf.check.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_judgement_filter_auto_rejects(self) -> None:
         jf = MagicMock()
         jf.check = AsyncMock(return_value=("rejected", "user rule"))
@@ -179,3 +209,45 @@ class TestBashToolDestructiveBlock:
         result = await tool.run(ToolInput(params={"command": "dd if=/dev/zero of=/dev/sda"}))
         assert result.success is False
         assert "Blocked pattern" in result.error
+
+
+# ---------------------------------------------------------------------------
+# allow_dangerous: autonomous mode lifts the hard-refusal of destructive patterns
+# ---------------------------------------------------------------------------
+
+
+class TestBashAllowDangerous:
+    @pytest.mark.asyncio
+    async def test_destructive_pattern_blocked_by_default(self) -> None:
+        tool = BashTool(approval_store=MagicMock())
+        out = await tool.run(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
+        assert out.success is False
+        assert "Blocked pattern" in (out.error or "")
+
+    @pytest.mark.asyncio
+    async def test_destructive_pattern_allowed_when_allow_dangerous(self, monkeypatch) -> None:
+        # With allow_dangerous the pre-approval hard block is lifted; the command
+        # proceeds (we stub execution so nothing actually runs).
+        import asyncio
+
+        async def fake_exec_shell(cmd, **kwargs):
+            class _P:
+                returncode = 0
+
+                async def communicate(self):
+                    return b"", b""
+
+                def kill(self):
+                    pass
+
+            return _P()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_exec_shell)
+        store = MagicMock()
+        resolved = MagicMock(status="approved", chosen_option="Run")
+        store.wait_for_decision = AsyncMock(return_value=resolved)
+        from approval.mode import ApprovalMode
+
+        tool = BashTool(approval_store=store, mode_provider=lambda: ApprovalMode.AUTONOMOUS)
+        out = await tool.run(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
+        assert out.success is True  # not pre-blocked; reached execution

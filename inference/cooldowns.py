@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 _CooldownKey = tuple[str, str]
 
 _RATE_LIMIT_SECS: float = 60.0
+# Cap on a provider-supplied Retry-After so a bogus/huge value can't sideline a
+# model for a long time; payment cooldowns have their own (much longer) constant.
+_MAX_RATE_LIMIT_SECS: float = 600.0
 _PAYMENT_EXHAUSTED_SECS: float = 86_400.0  # 24 h
 
 
@@ -52,9 +55,14 @@ class CooldownStore:
         """Return True if the model is currently under cooldown."""
         return self._expiry.get(key, 0.0) > time.monotonic()
 
-    def set_rate_limit(self, key: _CooldownKey) -> None:
-        """Apply a short rate-limit cooldown (60 s, memory-only)."""
-        self._expiry[key] = time.monotonic() + _RATE_LIMIT_SECS
+    def set_rate_limit(self, key: _CooldownKey, seconds: float | None = None) -> None:
+        """Apply a short rate-limit cooldown (memory-only).
+
+        Uses *seconds* when a provider supplied a Retry-After (clamped to
+        ``_MAX_RATE_LIMIT_SECS``), otherwise the default 60 s.
+        """
+        duration = _RATE_LIMIT_SECS if seconds is None else min(max(seconds, 0.0), _MAX_RATE_LIMIT_SECS)
+        self._expiry[key] = time.monotonic() + duration
 
     def set_payment_exhausted(self, key: _CooldownKey) -> None:
         """Apply a 24-hour payment cooldown and persist it to disk."""

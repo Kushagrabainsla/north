@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 
+from approval.approval_memory import ApprovalMemory
+from approval.mode import ApprovalMode, approve_option
 from approval.models import Card, CardType
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
@@ -85,21 +88,49 @@ class JudgementFilter:
         self,
         memory: MemoryGateway,
         inference_router: InferenceRouter,
+        approval_memory: ApprovalMemory | None = None,
+        mode_provider: Callable[[], ApprovalMode] | None = None,
     ) -> None:
         self._memory = memory
         self._inference_router = inference_router
+        self._approval_memory = approval_memory
+        self._mode_provider = mode_provider
+
+    def _mode(self) -> ApprovalMode:
+        return self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
 
     async def check(self, card: Card) -> tuple[str | None, str]:
         """Return (decision, chosen_option) or (None, '') if nothing fires.
 
-        APPROVAL cards are judged against learned rules only. QUESTION cards also
-        consider the user's known preferences (user.md), so a preference stated
-        once - by answering an earlier question - can answer the next one without
-        re-asking.
+        The approval mode decides how much is resolved without a human:
+        - ``autonomous``: every permission card is approved (the mode is the only
+          authority; the tools' own refusals are lifted separately).
+        - ``auto``: a card that reaches here is outside the deterministic safe
+          subset, so it is resolved from the user's *learned* prior decisions -
+          approve/reject what they decided before, otherwise surface it to ask
+          (and the answer is recorded, so ``auto`` learns over time).
+        - ``interactive``: no auto-resolution beyond the existing learned rules.
+
+        QUESTION cards are never auto-answered; only permission cards.
         """
         # INFORMATION cards never need filtering - they carry no decision.
         if card.type == CardType.INFORMATION:
             return None, ""
+
+        if card.type == CardType.APPROVAL:
+            mode = self._mode()
+            if mode == ApprovalMode.AUTONOMOUS:
+                logger.info("Autonomous: auto-approving card %s from %r", card.id, card.agent)
+                return "approved", approve_option(card.options)
+            if mode == ApprovalMode.AUTO and self._approval_memory is not None:
+                recalled = self._approval_memory.recall(card.agent, card.message)
+                if recalled == "approved":
+                    logger.info("Auto: replaying prior approval for card %s (%r)", card.id, card.agent)
+                    return "approved", approve_option(card.options)
+                if recalled == "rejected":
+                    logger.info("Auto: replaying prior rejection for card %s (%r)", card.id, card.agent)
+                    return "rejected", ""
+                # Unknown action in auto mode: fall through to surface it (ask).
 
         rules = await self._memory.read_document(ContextDocument.JUDGEMENT_RULES)
         preferences = ""

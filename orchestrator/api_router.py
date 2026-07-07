@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agents.registry import AgentRegistry
+from approval.mode import parse_approval_mode
 from config.strategy import NorthSettings, StrategyMode
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, CostSummary, ModelEntry, PoolPriority, TranscriptionRequest
@@ -672,32 +673,49 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
 
 class SettingsOut(BaseModel):
     strategy: str
+    approval_mode: str
 
 
 class SettingsUpdate(BaseModel):
-    strategy: str
+    strategy: str | None = None
+    approval_mode: str | None = None
 
 
 @router.get("/settings", response_model=SettingsOut)
 async def get_settings() -> SettingsOut:
     """Return current user settings."""
-    mode = _north_settings.strategy.value if _north_settings else "cruise"
-    return SettingsOut(strategy=mode)
+    strategy = _north_settings.strategy.value if _north_settings else "cruise"
+    approval_mode = _north_settings.approval_mode.value if _north_settings else "interactive"
+    return SettingsOut(strategy=strategy, approval_mode=approval_mode)
 
 
 @router.post("/settings", response_model=SettingsOut)
 async def update_settings(body: SettingsUpdate) -> SettingsOut:
-    """Update user settings directly (alternative to natural language)."""
-    try:
-        mode = StrategyMode(body.strategy)
-    except ValueError:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown strategy {body.strategy!r}. Valid: eco, cruise, sport",
-        ) from None
-    if _north_settings is not None:
-        _north_settings.set_strategy(mode)
-    return SettingsOut(strategy=mode.value)
+    """Update user settings live (strategy and/or approval mode). No restart needed."""
+    if body.strategy is not None:
+        try:
+            strategy = StrategyMode(body.strategy)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown strategy {body.strategy!r}. Valid: eco, cruise, sport",
+            ) from None
+        if _north_settings is not None:
+            _north_settings.set_strategy(strategy)
+
+    if body.approval_mode is not None:
+        mode = parse_approval_mode(body.approval_mode)
+        if mode is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown approval_mode {body.approval_mode!r}. Valid: interactive, auto, autonomous",
+            ) from None
+        if _north_settings is not None:
+            _north_settings.set_approval_mode(mode)
+
+    strategy_out = _north_settings.strategy.value if _north_settings else "cruise"
+    approval_out = _north_settings.approval_mode.value if _north_settings else "interactive"
+    return SettingsOut(strategy=strategy_out, approval_mode=approval_out)
 
 
 # ── Webhook endpoint ─────────────────────────────────────────────────────────

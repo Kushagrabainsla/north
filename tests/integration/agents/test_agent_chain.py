@@ -111,7 +111,7 @@ def _make_registry(tmp_path: Path, router: ChainRouter) -> tuple[AgentRegistry, 
 
 
 # ---------------------------------------------------------------------------
-# Full chain: researcher → architect → coder → tester
+# Full chain: researcher → architect → coder → reviewer
 # ---------------------------------------------------------------------------
 
 
@@ -130,10 +130,10 @@ async def test_full_chain_all_four_agents_called(tmp_path: Path) -> None:
                 _msg("Architecture complete."),
             ],
             "coder": [
-                _delegate("tester", f"Code done. Task ID: {task_id}.", "d3"),
+                _delegate("reviewer", f"Code done. Task ID: {task_id}.", "d3"),
                 _msg("Implementation complete."),
             ],
-            "tester": [
+            "reviewer": [
                 _msg("All tests pass. QA complete."),
             ],
         }
@@ -142,7 +142,7 @@ async def test_full_chain_all_four_agents_called(tmp_path: Path) -> None:
 
     result = await registry.get("researcher").run(AgentPayload(task_id=task_id, prompt="Build feature X."))
 
-    for name in ("researcher", "architect", "coder", "tester"):
+    for name in ("researcher", "architect", "coder", "reviewer"):
         assert router.call_counts.get(name, 0) >= 1, f"{name} was not called"
     assert isinstance(result.output, str)
     assert result.output  # non-empty
@@ -158,8 +158,8 @@ async def test_full_chain_result_is_valid_agentresult(tmp_path: Path) -> None:
                 _msg("Chain complete. Feature delivered."),
             ],
             "architect": [_delegate("coder", "Spec ready.", "d2"), _msg("ok")],
-            "coder": [_delegate("tester", "Code done.", "d3"), _msg("ok")],
-            "tester": [_msg("PASS - 42 tests passed.")],
+            "coder": [_delegate("reviewer", "Code done.", "d3"), _msg("ok")],
+            "reviewer": [_msg("PASS - 42 tests passed.")],
         }
     )
     registry, _ = _make_registry(tmp_path, router)
@@ -171,84 +171,84 @@ async def test_full_chain_result_is_valid_agentresult(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tester → coder fix cycle
+# Reviewer → coder fix cycle
 # ---------------------------------------------------------------------------
 
 
-async def test_tester_delegates_to_coder_on_code_bug(tmp_path: Path) -> None:
-    """Tester must route to coder when it classifies failures as code bugs."""
+async def test_reviewer_delegates_to_coder_on_code_bug(tmp_path: Path) -> None:
+    """Reviewer must route to coder when it classifies failures as code bugs."""
     task_id = "fix-001"
-    # Tester call 1: delegates to coder.
-    # Coder call 1: delegates back to tester.
-    # Sub-tester call 1: returns final pass message.
-    # Coder call 2 (after sub-tester): final message.
-    # Outer tester call 2 (after coder): final message.
+    # Reviewer call 1: delegates to coder.
+    # Coder call 1: delegates back to reviewer.
+    # Sub-reviewer call 1: returns final pass message.
+    # Coder call 2 (after sub-reviewer): final message.
+    # Outer reviewer call 2 (after coder): final message.
     router = ChainRouter(
         {
-            "tester": [
+            "reviewer": [
                 _delegate("coder", f"QA failed - code bug. Task ID: {task_id}. Fix test_x.", "d1"),
             ],
             "coder": [
-                _delegate("tester", f"Fix applied. Task ID: {task_id}. Re-run QA.", "d2"),
+                _delegate("reviewer", f"Fix applied. Task ID: {task_id}. Re-run QA.", "d2"),
             ],
         }
     )
     registry, _ = _make_registry(tmp_path, router)
 
-    await registry.get("tester").run(AgentPayload(task_id=task_id, prompt=f"Run QA for {task_id}."))
+    await registry.get("reviewer").run(AgentPayload(task_id=task_id, prompt=f"Run QA for {task_id}."))
 
     assert router.call_counts.get("coder", 0) >= 1, "coder must be called during fix cycle"
-    assert router.call_counts.get("tester", 0) >= 2, "tester must run at least twice (initial + re-run)"
+    assert router.call_counts.get("reviewer", 0) >= 2, "reviewer must run at least twice (initial + re-run)"
 
 
-async def test_tester_fix_cycle_terminates_with_pass(tmp_path: Path) -> None:
-    """After coder fixes the bugs, tester must reach a final answer."""
+async def test_reviewer_fix_cycle_terminates_with_pass(tmp_path: Path) -> None:
+    """After coder fixes the bugs, reviewer must reach a final answer."""
     task_id = "fix-002"
-    # Sub-tester gets the queued responses in order after outer tester consumes its first.
-    # Outer tester call 1: delegate to coder.
-    # Sub-tester call 1 (re-run after fix): "PASS" message.
-    # Outer tester call 2: default done message.
-    # Queue order for "tester":
-    #   [0] outer tester call 1 → delegates to coder
-    #   [1] sub-tester call 1   → final pass message (consumed by the inner tester instance)
-    #   [2] outer tester call 2 → final summary after delegation returns
+    # Sub-reviewer gets the queued responses in order after outer reviewer consumes its first.
+    # Outer reviewer call 1: delegate to coder.
+    # Sub-reviewer call 1 (re-run after fix): "PASS" message.
+    # Outer reviewer call 2: default done message.
+    # Queue order for "reviewer":
+    #   [0] outer reviewer call 1 → delegates to coder
+    #   [1] sub-reviewer call 1   → final pass message (consumed by the inner reviewer instance)
+    #   [2] outer reviewer call 2 → final summary after delegation returns
     router = ChainRouter(
         {
-            "tester": [
+            "reviewer": [
                 _delegate("coder", "QA failed. Fix.", "d1"),
                 _msg("PASS - sub-run all tests pass."),
                 _msg("PASS - all tests pass after fix."),
             ],
             "coder": [
-                _delegate("tester", "Fixed. Re-run.", "d2"),
+                _delegate("reviewer", "Fixed. Re-run.", "d2"),
                 _msg("coder done."),
             ],
         }
     )
     registry, _ = _make_registry(tmp_path, router)
 
-    result = await registry.get("tester").run(AgentPayload(task_id=task_id, prompt=f"Run QA for {task_id}."))
+    result = await registry.get("reviewer").run(AgentPayload(task_id=task_id, prompt=f"Run QA for {task_id}."))
     assert "PASS" in result.output
 
 
 # ---------------------------------------------------------------------------
-# Tester → architect spec gap cycle
+# Reviewer → architect spec gap cycle
 # ---------------------------------------------------------------------------
 
 
-async def test_tester_delegates_to_architect_on_spec_gap(tmp_path: Path) -> None:
-    """Tester must route to architect (not coder) when it finds a spec gap."""
+async def test_reviewer_delegates_to_architect_on_spec_gap(tmp_path: Path) -> None:
+    """Reviewer must route to architect (not coder) when it finds a spec gap."""
     task_id = "spec-001"
     router = ChainRouter(
         {
-            "tester": [
+            "reviewer": [
                 _delegate("architect", f"Spec gap found. Task ID: {task_id}. Update spec.", "d1"),
             ],
         }
     )
     registry, _ = _make_registry(tmp_path, router)
 
-    await registry.get("tester").run(AgentPayload(task_id=task_id, prompt=f"Run QA for {task_id}."))
+    await registry.get("reviewer").run(AgentPayload(task_id=task_id, prompt=f"Run QA for {task_id}."))
 
     assert router.call_counts.get("architect", 0) >= 1
     assert "coder" not in router.call_counts, "spec gaps must go to architect, not coder"
@@ -267,7 +267,7 @@ async def test_researcher_does_not_delegate_when_llm_returns_message(tmp_path: P
     await registry.get("researcher").run(AgentPayload(task_id="r1", prompt="Research existing auth patterns."))
 
     assert router.call_counts.get("researcher", 0) == 1
-    for name in ("architect", "coder", "tester"):
+    for name in ("architect", "coder", "reviewer"):
         assert name not in router.call_counts, f"{name} must not be called"
 
 
@@ -279,7 +279,7 @@ async def test_architect_does_not_delegate_when_llm_returns_message(tmp_path: Pa
     await registry.get("architect").run(AgentPayload(task_id="a1", prompt="Design the caching architecture."))
 
     assert router.call_counts.get("architect", 0) == 1
-    for name in ("coder", "tester"):
+    for name in ("coder", "reviewer"):
         assert name not in router.call_counts, f"{name} must not be called"
 
 
@@ -311,14 +311,14 @@ async def test_delegation_depth_increments_at_each_hop(tmp_path: Path) -> None:
         {
             "researcher": [_delegate("architect", "Research done.", "d1")],
             "architect": [_delegate("coder", "Spec ready.", "d2")],
-            "coder": [_delegate("tester", "Code done.", "d3")],
+            "coder": [_delegate("reviewer", "Code done.", "d3")],
         }
     )
     registry, deps = _make_registry(tmp_path, router)
     deps.agent_registry = DepthCapturingRegistry(registry)
 
     # Root researcher is called directly (not via capturing registry).
-    # Sub-agents (architect, coder, tester) go through DepthCapturingRegistry.
+    # Sub-agents (architect, coder, reviewer) go through DepthCapturingRegistry.
     await registry.get("researcher").run(
         AgentPayload(task_id="depth-test", prompt="Build feature.", delegation_depth=0)
     )
@@ -326,7 +326,7 @@ async def test_delegation_depth_increments_at_each_hop(tmp_path: Path) -> None:
     # Sub-agents are captured; each should be one level deeper than its parent.
     assert observed_depths.get("architect", -1) == 1, "architect must be at depth 1"
     assert observed_depths.get("coder", -1) == 2, "coder must be at depth 2"
-    assert observed_depths.get("tester", -1) == 3, "tester must be at depth 3"
+    assert observed_depths.get("reviewer", -1) == 3, "reviewer must be at depth 3"
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ async def test_workspace_propagated_to_sub_agents(tmp_path: Path) -> None:
         {
             "researcher": [_delegate("architect", "Research done.", "d1")],
             "architect": [_delegate("coder", "Spec ready.", "d2")],
-            "coder": [_delegate("tester", "Code done.", "d3")],
+            "coder": [_delegate("reviewer", "Code done.", "d3")],
         }
     )
     registry, deps = _make_registry(tmp_path, router)
@@ -367,7 +367,7 @@ async def test_workspace_propagated_to_sub_agents(tmp_path: Path) -> None:
     await registry.get("researcher").run(AgentPayload(task_id="ws-test", prompt="Build feature.", workspace=workspace))
 
     # Sub-agents must all receive the workspace from the root payload.
-    for name in ("architect", "coder", "tester"):
+    for name in ("architect", "coder", "reviewer"):
         assert observed.get(name) == workspace, f"{name} must receive workspace='{workspace}'"
 
 
@@ -400,7 +400,7 @@ async def test_task_id_consistent_through_sub_agents(tmp_path: Path) -> None:
         {
             "researcher": [_delegate("architect", "Research done.", "d1")],
             "architect": [_delegate("coder", "Spec ready.", "d2")],
-            "coder": [_delegate("tester", "Code done.", "d3")],
+            "coder": [_delegate("reviewer", "Code done.", "d3")],
         }
     )
     registry, deps = _make_registry(tmp_path, router)
@@ -408,7 +408,7 @@ async def test_task_id_consistent_through_sub_agents(tmp_path: Path) -> None:
 
     await registry.get("researcher").run(AgentPayload(task_id=task_id, prompt="Build feature."))
 
-    for name in ("architect", "coder", "tester"):
+    for name in ("architect", "coder", "reviewer"):
         assert observed.get(name) == task_id, f"{name} must use task_id='{task_id}'"
 
 
@@ -424,8 +424,8 @@ async def test_delegation_depth_limit_stops_infinite_chain(tmp_path: Path) -> No
         {
             "researcher": [_delegate("architect", "Keep going.", f"r{i}") for i in range(15)],
             "architect": [_delegate("coder", "Keep going.", f"a{i}") for i in range(15)],
-            "coder": [_delegate("tester", "Keep going.", f"c{i}") for i in range(15)],
-            "tester": [_delegate("coder", "Keep going.", f"t{i}") for i in range(15)],
+            "coder": [_delegate("reviewer", "Keep going.", f"c{i}") for i in range(15)],
+            "reviewer": [_delegate("coder", "Keep going.", f"t{i}") for i in range(15)],
         }
     )
     registry, deps = _make_registry(tmp_path, router)

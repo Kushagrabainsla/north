@@ -21,7 +21,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from config.strategy import NorthSettings, StrategyMode
 from inference.base import InferenceRouter
@@ -57,6 +57,7 @@ from inference.models import (
 )
 from inference.provider import Provider
 from inference.routing import _Candidate, shuffle_groups
+from utils.text import strip_code_fences
 
 if TYPE_CHECKING:
     from tools.confidence import ConfidenceTracker
@@ -66,6 +67,19 @@ logger = logging.getLogger(__name__)
 # Seconds to batch model-confidence DB writes. Scores change on every inference
 # call; writing each one individually doubles the DB traffic for no benefit.
 _SCORE_FLUSH_INTERVAL_SECONDS = 30.0
+
+
+def _completion_has_text(resp: Any) -> bool:
+    """A completion is only usable if it actually returned text."""
+    return bool(getattr(resp, "text", "") and resp.text.strip())
+
+
+def _toolcall_has_output(resp: Any) -> bool:
+    """A tool-call response is usable if it invoked tools or produced text."""
+    if getattr(resp, "calls", None):
+        return True
+    content = getattr(resp, "content", None)
+    return bool(content and content.strip())
 
 
 class ModelDispatcher(InferenceRouter):
@@ -128,7 +142,21 @@ class ModelDispatcher(InferenceRouter):
         async def _call(provider: Provider, model_id: str) -> CompletionResponse:
             return await provider.complete(model_id, request)
 
-        return await self._dispatch(candidates, _call)
+        def _valid(resp: Any) -> bool:
+            # A usable completion must have text, and - when JSON was requested -
+            # must actually be JSON. Models that ignore json_mode and return prose
+            # or a <thought> trace are treated as failures so the dispatcher falls
+            # through to a model that honours the request.
+            if not _completion_has_text(resp):
+                return False
+            if request.json_mode:
+                try:
+                    json.loads(strip_code_fences(resp.text))
+                except Exception:
+                    return False
+            return True
+
+        return await self._dispatch(candidates, _call, is_valid=_valid)
 
     async def complete_with_tools(
         self,
@@ -163,7 +191,7 @@ class ModelDispatcher(InferenceRouter):
                 forwarded = False
             return await provider.complete_with_tools(model_id, request, wrapped_cb)
 
-        return await self._dispatch(candidates, _call)
+        return await self._dispatch(candidates, _call, is_valid=_toolcall_has_output)
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         candidates = self._candidates(ModelCapability.EMBEDDING, PoolPriority.MEDIUM, 0)
@@ -360,6 +388,7 @@ class ModelDispatcher(InferenceRouter):
         self,
         candidates: list[_Candidate],
         call_fn: Callable[[Provider, str], Awaitable],
+        is_valid: Callable[[Any], bool] | None = None,
     ):
         if not candidates:
             raise AllModelsRateLimitedError("No models available for this request")
@@ -370,15 +399,30 @@ class ModelDispatcher(InferenceRouter):
                 continue
             try:
                 result = await call_fn(provider, info.model_id)
+                # A model that returns an empty/degenerate response (200 OK but no
+                # usable content) must not count as success - otherwise a single
+                # broken model in the pool silently breaks every caller. Treat it
+                # like a failure: deprioritise it and fall through to the next.
+                if is_valid is not None and not is_valid(result):
+                    self._record_model_outcome(key, False)
+                    self._persist_model_score(key)
+                    self._cooldowns.set_rate_limit(key, 120)
+                    logger.warning(
+                        "Empty/invalid response from %s/%s - trying next candidate",
+                        info.provider_name,
+                        info.model_id,
+                    )
+                    continue
                 self._record_model_outcome(key, True)
                 self._persist_model_score(key)
                 return result
-            except ModelRateLimitedError:
-                self._cooldowns.set_rate_limit(key)
+            except ModelRateLimitedError as e:
+                self._cooldowns.set_rate_limit(key, e.retry_after)
                 logger.info(
-                    "Rate limited: %s/%s - skipping for 60 s",
+                    "Rate limited: %s/%s - skipping for %s",
                     info.provider_name,
                     info.model_id,
+                    f"{e.retry_after:.0f}s (Retry-After)" if e.retry_after else "60 s",
                 )
             except PaymentRequiredError:
                 self._cooldowns.set_payment_exhausted(key)

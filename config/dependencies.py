@@ -1,7 +1,7 @@
 """Dependency injection wire-up.
 
 All components that can be constructed synchronously and do not have
-circular dependencies are built here.  The remaining pieces  - 
+circular dependencies are built here.  The remaining pieces  -
 ``AgentRegistry``, ``Orchestrator``, and friends - are assembled in
 ``orchestrator/app.py`` because they either require async initialisation
 or have circular construction order (agent_registry ↔ agent_deps).
@@ -26,11 +26,14 @@ from ledger import LedgerWriter, SQLiteLedgerWriter
 from memory import ContextStore, FileContextStore
 
 if TYPE_CHECKING:
+    from context.code_index import CodeIndex
     from inference.cost_tracker import CostTracker
     from jobs.cron_store import UserCronStore
     from memory import MemoryGateway
     from memory.episodic import EpisodicStore
     from memory.facts import FactStore
+    from orchestrator.plan_store import PlanStore
+    from orchestrator.running_tasks import RunningTaskStore
     from orchestrator.stream import EventStreamManager
     from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
@@ -59,28 +62,41 @@ class Dependencies:
     confidence_tracker: ConfidenceTracker
     episodic_store: EpisodicStore
     task_context_store: TaskContextStore
+    running_task_store: RunningTaskStore
+    plan_store: PlanStore
     north_settings: NorthSettings
     memory: MemoryGateway
     # Shared async callable used by EpisodicStore, EmbeddingIndex, ToolIndex,
     # and FactStore - guarantees a single embedding model and billing surface.
     embed_fn: EmbedFn | None = field(default=None)
     fact_store: FactStore | None = field(default=None)
+    # Semantic code index (#2 code RAG). Present only when embeddings are available;
+    # backs the search_code tool. None when no embed_fn is wired.
+    code_index: CodeIndex | None = field(default=None)
 
 
 def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
     """Build and wire all synchronously-constructable production dependencies."""
+    from context.code_index import CodeIndex
     from inference.cost_tracker import CostTracker
     from inference.models import EmbedRequest
     from jobs.cron_store import UserCronStore
     from memory import LocalMemoryGateway
     from memory.episodic import EpisodicStore
     from memory.facts import FactStore
+    from orchestrator.plan_store import PlanStore
+    from orchestrator.running_tasks import RunningTaskStore
     from orchestrator.stream import EventStreamManager
     from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
 
     if north_settings is None:
-        north_settings = NorthSettings(settings.north_home / "settings.json")
+        from approval.mode import resolve_approval_mode
+
+        north_settings = NorthSettings(
+            settings.north_home / "settings.json",
+            default_approval_mode=resolve_approval_mode(settings),
+        )
 
     context_dir = settings.north_home / "context"
     legacy_public = context_dir / "public.md"
@@ -108,6 +124,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
 
     episodic_store = EpisodicStore(db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn)
     fact_store = FactStore(db_path=settings.north_home / "facts.db", embed_fn=_embed_fn)
+    code_index = CodeIndex(db_path=settings.north_home / "code_index.db", embed_fn=_embed_fn)
     memory = LocalMemoryGateway(
         context_store=context_store,
         fact_store=fact_store,
@@ -127,8 +144,11 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         confidence_tracker=confidence_tracker,
         episodic_store=episodic_store,
         task_context_store=TaskContextStore(),
+        running_task_store=RunningTaskStore(settings.north_home / "running_tasks.db"),
+        plan_store=PlanStore(),
         north_settings=north_settings,
         memory=memory,
         embed_fn=_embed_fn,
         fact_store=fact_store,
+        code_index=code_index,
     )

@@ -700,7 +700,7 @@ Each agent is a self-contained folder dropped into `/agents`. The Orchestrator s
     tools.yaml            <- the specialized tools this agent gets (universal tools are implicit)
     prompts/
       system.md           <- system prompt defining the agent's expertise
-  /architect/  /tester/  /researcher/  /general/  /home/  /news_briefing/
+  /architect/  /reviewer/  /researcher/  /general/  /home/  /news_briefing/
   /health/  /job/  /finance/  /university/
 ```
 
@@ -782,8 +782,8 @@ finds. The agent→tool mapping is then a two-tier graph:
 ```
 Specialized tool edges (from each agent's tools.yaml):
 
-coder ───> bash, shell, git, gh, patch_file
-tester ──> bash, shell, git, gh
+coder ───> bash, shell, git, gh, patch_file, rename_symbol
+reviewer ─> bash, shell, gh
 home ────> kasa
 researcher ─> (universal only)
 
@@ -1369,7 +1369,7 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
       research/          <-   researcher: context.md, references.json
       architecture/      <-   architect: spec.md, decision_log.md
       implementation/    <-   coder: implementation_notes.md (code itself goes to the workspace)
-      qa/                <-   tester: qa_report_v{N}.md
+      qa/                <-   reviewer: review_report_v{N}.md
   context/
     user.md
     judgement_rules.md

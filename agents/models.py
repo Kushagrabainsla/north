@@ -140,3 +140,14 @@ class AgentDependencies:
     # Approval wait timeout injected from NorthSettings so it is configurable
     # without touching source code.
     approval_timeout_seconds: float = 300.0
+    # Optional in-flight registry. When set, the agent marks the task as having
+    # performed side effects the first time a mutating tool succeeds, so an
+    # interrupted task that already acted is not blindly re-run on restart.
+    running_task_store: Any | None = field(default=None)
+    # Optional task-scoped plan/TODO store (#9 plan-and-track). When set, agents
+    # can maintain a live checklist via the update_plan tool and the current plan
+    # is injected into their context so long tasks stay anchored on progress.
+    plan_store: Any | None = field(default=None)
+    # Live user settings (NorthSettings) - lets agents read the current approval mode
+    # so e.g. ask_user does not block in autonomous mode.
+    north_settings: Any | None = field(default=None)

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,6 +39,12 @@ CREATE TABLE IF NOT EXISTS job_queue (
 """
 
 _TERMINAL_STATUSES = (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
+
+# How often the poll loop requeues jobs stranded in RUNNING (their worker died),
+# and the lease past which a still-RUNNING job is considered abandoned. On
+# startup every RUNNING job is reaped immediately (its previous owner is gone).
+_REAP_INTERVAL_SECONDS: int = 300
+_STALE_LEASE_SECONDS: int = 3600
 
 # Exponential backoff before a failed job becomes eligible to retry.
 _RETRY_BASE_SECONDS: int = 30
@@ -230,12 +237,70 @@ class SQLiteJobProcessor(JobProcessor):
         rows = await asyncio.to_thread(self._list_sync, status, limit)
         return [self._row_to_job(r) for r in rows]
 
+    async def reap_stale_running(self, lease_seconds: int) -> int:
+        """Requeue jobs stuck in RUNNING past *lease_seconds* (0 = all RUNNING).
+
+        A RUNNING job whose worker died never reaches a terminal state and, via
+        has_active_job(), blocks its cron entry from ever scheduling again. Each
+        reaped job goes back to PENDING with an incremented retry_count (so a job
+        that keeps killing its worker is eventually FAILED, not requeued forever).
+        Returns the number of jobs reaped.
+        """
+        return await asyncio.to_thread(self._reap_stale_running_sync, lease_seconds)
+
+    def _reap_stale_running_sync(self, lease_seconds: int) -> int:
+        now = datetime.now(UTC)
+        cutoff = (now - timedelta(seconds=lease_seconds)).isoformat()
+        requeued = 0
+        failed = 0
+        with open_db_connection(self._db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    "SELECT job_id, retry_count, max_retries FROM job_queue "
+                    "WHERE status = ? AND (started_at IS NULL OR started_at <= ?)",
+                    (JobStatus.RUNNING.value, cutoff),
+                ).fetchall()
+                for row in rows:
+                    if row["retry_count"] >= row["max_retries"]:
+                        conn.execute(
+                            "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
+                            (JobStatus.FAILED.value, now.isoformat(), row["job_id"]),
+                        )
+                        failed += 1
+                    else:
+                        conn.execute(
+                            "UPDATE job_queue SET status = ?, started_at = NULL, "
+                            "retry_count = retry_count + 1 WHERE job_id = ?",
+                            (JobStatus.PENDING.value, row["job_id"]),
+                        )
+                        requeued += 1
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        if requeued or failed:
+            logger.warning(
+                "JobProcessor: reaped %d stale RUNNING job(s) - %d requeued, %d failed",
+                requeued + failed,
+                requeued,
+                failed,
+            )
+        return requeued + failed
+
     async def run(
         self,
         on_job: Callable[[Job], Awaitable[Any]] | None = None,
         poll_interval_seconds: int = 5,
     ) -> None:
         """Poll the queue and dispatch claimed jobs via `on_job`."""
+        # On startup every RUNNING job was abandoned by a dead worker - requeue now.
+        try:
+            await self.reap_stale_running(0)
+        except Exception:
+            logger.exception("JobProcessor: startup reap failed")
+        last_reap = time.monotonic()
+
         while True:
             try:
                 job = await self.claim_next()
@@ -249,6 +314,9 @@ class SQLiteJobProcessor(JobProcessor):
                         task.add_done_callback(self._running_jobs.discard)
                     else:
                         await self.mark_completed(job.job_id)
+                if time.monotonic() - last_reap >= _REAP_INTERVAL_SECONDS:
+                    last_reap = time.monotonic()
+                    await self.reap_stale_running(_STALE_LEASE_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception:

@@ -1,0 +1,19 @@
+agent: reviewer
+domain: engineering
+model_pool: reasoning
+accepts:
+  - "review"
+  - "test"
+  - "verify"
+  - "validate"
+  - "qa"
+  - "quality"
+  - "check"
+  - "audit"
+  - "diff"
+produces:
+  - "{handoff_dir}/qa/review_report_latest.md"
+  - "{handoff_dir}/qa/review_report_vN.md"
+output_format: structured_json
+version: 2.0.0
+class_name: ReviewerAgent

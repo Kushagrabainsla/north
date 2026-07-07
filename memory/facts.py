@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS context_facts (
 
 _MAX_FACTS_RETURNED: int = 15
 _DEDUP_SIMILARITY_THRESHOLD: float = 0.85
+# Recalled facts below this cosine similarity to the query are dropped as noise (#10).
+_RECALL_MIN_SIMILARITY: float = 0.25
 # Retention cap: the store holds at most this many facts (oldest evicted on
 # insert), which also bounds every cosine scan and the in-memory cache.
 _MAX_FACTS_STORED: int = 5_000
@@ -122,7 +124,8 @@ class FactStore:
             if emb and (allowed_categories is None or category in allowed_categories)
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
-        return [content for content, _ in scored[:max_results]]
+        # Drop weak matches so irrelevant facts never dilute the agent's context (#10).
+        return [content for content, score in scored[:max_results] if score >= _RECALL_MIN_SIMILARITY]
 
     async def count(self) -> int:
         return await asyncio.to_thread(self._count_sync)

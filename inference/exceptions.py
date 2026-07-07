@@ -20,10 +20,12 @@ class ModelRateLimitedError(InferenceError):
     the next candidate in the chain. Never surfaces to callers.
     """
 
-    def __init__(self, model_id: str, provider_name: str) -> None:
+    def __init__(self, model_id: str, provider_name: str, retry_after: float | None = None) -> None:
         super().__init__(f"Rate limited: {model_id} on {provider_name}")
         self.model_id = model_id
         self.provider_name = provider_name
+        # Seconds the provider asked us to wait (from a Retry-After header), if any.
+        self.retry_after = retry_after
 
 
 class PaymentRequiredError(InferenceError):

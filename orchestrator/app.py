@@ -20,9 +20,11 @@ from fastapi.responses import JSONResponse
 
 from agents.models import AgentDependencies
 from agents.registry import AgentRegistry
+from approval.approval_memory import ApprovalMemory
 from approval.callback_server import app as callback_app
 from approval.judgement_filter import JudgementFilter
 from approval.tui import TUIAwareNotifier
+from approval.unattended import UnattendedPolicy
 from config.dependencies import build_production_dependencies
 from config.settings import settings
 from jobs.models import Job
@@ -35,15 +37,20 @@ from memory.injection import ContextInjector
 from orchestrator.api_router import configure as configure_api
 from orchestrator.api_router import health_router, webhook_router
 from orchestrator.api_router import router as orchestrator_router
+from orchestrator.constants import WATCHDOG_POLL_INTERVAL_SECONDS
 from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.models import TaskRequest
 from orchestrator.north_star import NorthStarChecker
 from orchestrator.orchestrator import Orchestrator
+from orchestrator.reconcile import recover_interrupted_tasks
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
+from orchestrator.watchdog import watch_stuck_tasks
 from tools.confidence import RELIABLE_TOOLS
 from tools.registry import ToolRegistry
+from tools.semantic.search_code import SearchCodeTool
+from tools.specialized._sandbox import SandboxConfig
 from tools.specialized.bash import BashTool
 from tools.specialized.gh_tool import GhTool
 from tools.specialized.git_tool import GitTool
@@ -56,6 +63,7 @@ from tools.universal.create_tool import CreateToolTool
 from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
+from tools.universal.update_plan import UpdatePlanTool
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
 from utils.time import utcnow
@@ -111,6 +119,9 @@ def _build_tool_registry(
     deps, tool_graph, judgement_filter: JudgementFilter | None = None
 ) -> tuple[ToolRegistry, CreateAgentTool]:
     tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
+    # Live approval mode: read from NorthSettings at decision time so a runtime change
+    # (via the settings API) takes effect immediately, no restart.
+    mode_provider = lambda: deps.north_settings.approval_mode  # noqa: E731
     tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     tool_registry.make_universal("schedule_task")
     # create/update actions are gated behind a user approval card inside the
@@ -133,6 +144,12 @@ def _build_tool_registry(
     tool_registry.make_universal("query_metrics")
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))
     tool_registry.make_universal("get_task_status")
+    tool_registry.register(UpdatePlanTool(plan_store=deps.plan_store, stream_manager=deps.stream_manager))
+    tool_registry.make_universal("update_plan")
+    # Semantic code search (#2) - only when embeddings are available.
+    if deps.code_index is not None:
+        tool_registry.register(SearchCodeTool(code_index=deps.code_index))
+        tool_registry.make_universal("search_code")
     # BashTool and ShellTool gate every command behind user approval and cannot
     # be auto-discovered (they need the ApprovalStore injected at startup).
     tool_registry.register(
@@ -142,6 +159,9 @@ def _build_tool_registry(
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
             judgement_filter=judgement_filter,
             notifier=deps.notifier,
+            sandbox=SandboxConfig.from_settings(settings),
+            unattended=UnattendedPolicy.from_settings(settings),
+            mode_provider=mode_provider,
         )
     )
     tool_registry.register(
@@ -162,21 +182,28 @@ def _build_tool_registry(
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
             judgement_filter=judgement_filter,
             notifier=deps.notifier,
+            unattended=UnattendedPolicy.from_settings(settings),
+            mode_provider=mode_provider,
         )
     )
     # Override the auto-discovered (gate-less, fail-closed) GitTool/GhTool/KasaTool
     # with instances wired to the approval flow so their mutating actions surface
     # approval cards instead of being refused outright.
+    unattended_policy = UnattendedPolicy.from_settings(settings)
     for tool_cls in (GitTool, GhTool, KasaTool):
-        tool_registry.register(
-            tool_cls(
-                approval_store=deps.approval_store,
-                stream_manager=deps.stream_manager,
-                approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-                judgement_filter=judgement_filter,
-                notifier=deps.notifier,
-            )
-        )
+        kwargs: dict = {
+            "approval_store": deps.approval_store,
+            "stream_manager": deps.stream_manager,
+            "approval_timeout_seconds": deps.north_settings.approval_timeout_seconds,
+            "judgement_filter": judgement_filter,
+            "notifier": deps.notifier,
+        }
+        # Only the local git tool honours unattended auto-approval; gh (network) and
+        # kasa (device control) always require a human.
+        if tool_cls is GitTool:
+            kwargs["unattended"] = unattended_policy
+            kwargs["mode_provider"] = mode_provider
+        tool_registry.register(tool_cls(**kwargs))
     return tool_registry, create_agent_tool
 
 
@@ -211,6 +238,9 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
         agent_max_iterations=settings.agent_max_iterations,
         agent_history_keep_recent=settings.agent_history_keep_recent,
         approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+        running_task_store=deps.running_task_store,
+        plan_store=deps.plan_store,
+        north_settings=deps.north_settings,
     )
 
 
@@ -242,6 +272,7 @@ def _build_orchestrator(
     tool_registry: ToolRegistry,
     extraction_pipeline: ExtractionPipeline,
     judgement_filter: JudgementFilter,
+    approval_memory: ApprovalMemory,
 ) -> Orchestrator:
     return Orchestrator(
         ledger=deps.ledger,
@@ -273,6 +304,16 @@ def _build_orchestrator(
         tool_registry=tool_registry,
         default_workspace=settings.north_workspace,
         extraction_pipeline=extraction_pipeline,
+        worktree_isolation=settings.worktree_isolation_enabled,
+        worktree_root=settings.worktree_root,
+        best_of_n=settings.best_of_n,
+        best_of_n_test_command=settings.best_of_n_test_command,
+        running_task_store=deps.running_task_store,
+        stuck_task_max_age_seconds=settings.stuck_task_max_age_seconds,
+        self_repair=settings.self_repair_enabled,
+        idempotency_window_seconds=settings.idempotency_window_seconds,
+        critic=settings.critic_enabled,
+        approval_memory=approval_memory,
     )
 
 
@@ -282,35 +323,6 @@ def _build_context_injector(deps) -> ContextInjector:
         inference_router=deps.cost_tracker,
         ledger=deps.ledger,
     )
-
-
-async def _reconcile_pending_tasks(deps, orchestrator: Orchestrator) -> None:
-    try:
-        # Only tasks whose *latest* ledger entry is PENDING are orphans.
-        # Querying all PENDING entries would also match the initial
-        # task_received entry of every task that later completed.
-        pending_task_ids = set(await deps.ledger.pending_task_ids())
-        orphaned = pending_task_ids - orchestrator.active_task_ids
-        for orphaned_id in orphaned:
-            await deps.ledger.write(
-                LedgerEntry.new(
-                    source=LedgerSource.SYSTEM,
-                    task_id=orphaned_id,
-                    action="task_failed",
-                    output="Server restarted while task was pending - marked as failed.",
-                    status=LedgerStatus.FAILED,
-                )
-            )
-        if orphaned:
-            logger.warning(
-                "Reconciliation: marked %d orphaned PENDING task(s) as FAILED: %s",
-                len(orphaned),
-                list(orphaned),
-            )
-        else:
-            logger.info("Reconciliation: no orphaned PENDING tasks found.")
-    except Exception:
-        logger.exception("Startup reconciliation sweep failed")
 
 
 def _configure_routers(orchestrator, deps, agent_registry, context_injector) -> None:
@@ -410,11 +422,20 @@ def _launch_background_tasks(
         ),
         asyncio.create_task(_guarded(cron_scheduler.run(), "cron_scheduler"), name="cron_scheduler"),
         asyncio.create_task(_guarded(extraction_pipeline.run(), "extraction_pipeline"), name="extraction_pipeline"),
-        asyncio.create_task(
-            _guarded(episode_consolidator.run(), "episode_consolidator"), name="episode_consolidator"
-        ),
+        asyncio.create_task(_guarded(episode_consolidator.run(), "episode_consolidator"), name="episode_consolidator"),
         asyncio.create_task(_guarded(callback_server.serve(), "callback_server"), name="callback_server"),
         asyncio.create_task(_guarded(_pool_refresh_loop(deps), "pool_refresh"), name="pool_refresh"),
+        asyncio.create_task(
+            _guarded(
+                watch_stuck_tasks(
+                    orchestrator,
+                    poll_interval=WATCHDOG_POLL_INTERVAL_SECONDS,
+                    max_age_seconds=settings.stuck_task_max_age_seconds,
+                ),
+                "stuck_task_watchdog",
+            ),
+            name="stuck_task_watchdog",
+        ),
     ]
 
 
@@ -459,9 +480,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _step("building tool registry")
     tool_graph = AgentRegistry.build_tool_graph(_AGENTS_DIR)
+    approval_memory = ApprovalMemory(settings.north_home / "approval_memory.db")
     judgement_filter = JudgementFilter(
         memory=deps.memory,
         inference_router=deps.cost_tracker,
+        approval_memory=approval_memory,
+        mode_provider=lambda: deps.north_settings.approval_mode,
     )
     tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, judgement_filter)
 
@@ -485,14 +509,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _warn_unknown_cron_agents(agent_registry)
 
     extraction_pipeline = _build_extraction_pipeline(deps)
-    orchestrator = _build_orchestrator(deps, agent_registry, tool_registry, extraction_pipeline, judgement_filter)
+    orchestrator = _build_orchestrator(
+        deps, agent_registry, tool_registry, extraction_pipeline, judgement_filter, approval_memory
+    )
     # Share the orchestrator's JudgementFilter with agents so request_approval
     # calls skip the user prompt when a learned rule already covers the situation.
     agent_deps.judgement_filter = orchestrator._judgement_filter
     context_injector = _build_context_injector(deps)
 
-    _step("running startup reconciliation sweep")
-    await _reconcile_pending_tasks(deps, orchestrator)
+    _step("running startup recovery sweep")
+    await recover_interrupted_tasks(
+        deps,
+        orchestrator,
+        max_age_seconds=settings.stuck_task_max_age_seconds,
+        resume_side_effecting=settings.resume_side_effecting_tasks,
+    )
 
     _step("configuring API router")
     _configure_routers(orchestrator, deps, agent_registry, context_injector)

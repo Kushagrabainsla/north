@@ -1,7 +1,7 @@
 """Per-workspace mutation locks shared by every agent instance.
 
 The agent loop serializes mutating tool calls, but that ordering used to be
-per agent *instance* - a delegated coder and tester working in the same
+per agent *instance* - a delegated coder and reviewer working in the same
 workspace could interleave file/git mutations. These locks key on the resolved
 workspace path, so any two agents mutating the same tree take the same lock.
 """

@@ -14,6 +14,11 @@ from agents.models import AgentConfig, AgentDependencies
 
 logger = logging.getLogger(__name__)
 
+# Backward-compatibility aliases: map legacy agent names to their current name so
+# that delegations, plans, or LLM output using an old name still resolve. The
+# tester agent was broadened into the reviewer (QA + code review) in v1.4.
+_AGENT_ALIASES: dict[str, str] = {"tester": "reviewer"}
+
 
 class AgentRegistry:
     """Scans `agents_dir` for valid agent folders and constructs each agent.
@@ -144,6 +149,7 @@ class AgentRegistry:
         return new_names
 
     def get(self, name: str) -> Agent:
+        name = _AGENT_ALIASES.get(name, name)
         if name not in self._agents:
             # Trigger a live filesystem scan before raising - new agent folders
             # dropped at runtime are registered here without a server restart.

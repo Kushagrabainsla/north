@@ -85,6 +85,77 @@ class Settings(BaseSettings):
     agent_max_iterations: int = Field(default=40, ge=1)
     agent_history_keep_recent: int = Field(default=10, ge=1)
 
+    # Run mutating agents (see orchestrator.constants.WORKTREE_ISOLATION_AGENTS) in a
+    # dedicated git worktree when the workspace is a git repo, applying changes back
+    # on success. Off by default; opt in with NORTH_WORKTREE_ISOLATION_ENABLED=1.
+    worktree_isolation_enabled: bool = False
+
+    # Where isolated worktrees are created. Empty = a "north-worktrees" dir under the
+    # system temp dir. Never place this inside a workspace or under ~/.north.
+    worktree_root: str = ""
+
+    # Best-of-N (#11): run this many independent coder attempts in parallel isolated
+    # worktrees and integrate only the best one. 1 = off (a single attempt, no change
+    # in behaviour). Requires worktree isolation + a git repo. Costs N× the coder's
+    # inference, so raise deliberately (e.g. 2-3) for high-stakes changes.
+    best_of_n: int = 1
+
+    # Optional shell command used to score each best-of-N candidate (exit 0 = pass).
+    # Run inside each candidate's worktree. Empty = score by diff size only.
+    best_of_n_test_command: str = ""
+
+    # Sandboxed execution (#6): run bash-tool commands inside a Docker container that
+    # only sees the workspace, with the network off and memory/CPU/PID limits. Off by
+    # default; when enabled it FAILS CLOSED (refuses to run) if Docker is unavailable.
+    sandbox_enabled: bool = False
+    sandbox_image: str = "python:3.12-slim"
+    sandbox_network_disabled: bool = True
+    sandbox_memory: str = "512m"
+    sandbox_cpus: str = "1"
+    sandbox_pids_limit: int = 512
+
+    # Approval mode - one dial for how much north does without asking:
+    #   "interactive" (default): read-only runs free, every mutation asks
+    #   "auto":       + auto-approve the safe engineering subset (in-workspace edits,
+    #                   test/lint/build allowlist, local git); ask for the rest
+    #   "autonomous": auto-approve everything except a hard-danger floor
+    # Set via NORTH_APPROVAL_MODE. Empty = fall back to the legacy booleans below,
+    # then to "interactive". See approval/mode.py.
+    approval_mode: str = ""
+
+    # Legacy boolean toggles - still honoured as a fallback when approval_mode is
+    # left at its default, so older configs keep working. Prefer approval_mode.
+    # unattended -> "auto"; autonomous -> "autonomous".
+    unattended_mode: bool = False
+    unattended_extra_commands: tuple[str, ...] = ()
+    autonomous_mode: bool = False
+
+    # A task whose heartbeat has not advanced for this long is considered stuck and
+    # is cancelled/failed by the watchdog; the same age caps how old an interrupted
+    # task may be before startup fails it instead of resuming. Default 24 hours.
+    stuck_task_max_age_seconds: int = Field(default=86_400, ge=60)
+
+    # Auto-resume interrupted tasks that already performed a side effect (a mutating
+    # tool succeeded). Off by default: re-running could duplicate the action, so such
+    # tasks are failed with a note for the user to re-submit deliberately.
+    resume_side_effecting_tasks: bool = False
+
+    # When an agent's answer makes a claim with no tool evidence (see
+    # orchestrator/verification.py), give the agent one correction pass to either
+    # do the work or drop the claim before the answer is flagged. Adds one LLM
+    # call only when a violation is detected (rare). Opt out with =0.
+    self_repair_enabled: bool = True
+
+    # Duplicate submissions with the same idempotency key (or same source+prompt)
+    # within this window collapse to one task - mainly to absorb re-delivered
+    # webhooks. 0 disables deduplication.
+    idempotency_window_seconds: int = Field(default=60, ge=0)
+
+    # Run a fast LLM "reviewer" over each agent answer to catch answers that do
+    # not actually address the request, annotating a note when a gap is found.
+    # Off by default - it adds one LLM call per agent result.
+    critic_enabled: bool = False
+
     # Extraction pipeline tuning
     extraction_poll_interval_seconds: int = Field(default=120, ge=1)
     extraction_max_daily_cost_usd: float = Field(default=0.10, ge=0.0)

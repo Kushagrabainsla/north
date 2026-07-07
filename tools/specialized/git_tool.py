@@ -14,12 +14,22 @@ import asyncio
 import shlex
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from approval.mode import ApprovalMode
+from approval.unattended import UnattendedPolicy
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import gate_mutating_action
 from tools.specialized._subprocess import format_diff_output, run_capture
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from approval.base import Notifier
+    from approval.judgement_filter import JudgementFilter
+    from approval.store import ApprovalStore
+    from orchestrator.stream import EventStreamManager
 
 _TIMEOUT = 30
 
@@ -94,6 +104,23 @@ class GitTool(ApprovalGatedTool):
             return format_diff_output(stdout)
         return stdout
 
+    def __init__(
+        self,
+        approval_store: ApprovalStore | None = None,
+        stream_manager: EventStreamManager | None = None,
+        approval_timeout_seconds: float = 300.0,
+        judgement_filter: JudgementFilter | None = None,
+        notifier: Notifier | None = None,
+        unattended: UnattendedPolicy | None = None,
+        mode_provider: Callable[[], ApprovalMode] | None = None,
+    ) -> None:
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter, notifier)
+        self._unattended = unattended or UnattendedPolicy()
+        self._mode_provider = mode_provider
+
+    def _mode(self) -> ApprovalMode:
+        return self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
+
     async def run(self, input: ToolInput) -> ToolOutput:
         action = str(input.params.get("action", "")).strip()
         args = str(input.params.get("args", "")).strip()
@@ -114,15 +141,17 @@ class GitTool(ApprovalGatedTool):
                 f"Valid: status, diff, log, branch, show, add, commit, push, pull, checkout, stash, merge.",
             )
 
-        # Force pushes are permanently blocked - token-level so quoting or flag
-        # reordering cannot slip past a prefix match.
-        if action == "push" and any(_is_force_flag(t) for t in cmd[2:]):
+        # Force pushes are hard-refused - lifted in autonomous mode, where the
+        # operator has made the approval mode the only authority.
+        mode = self._mode()
+        if mode != ApprovalMode.AUTONOMOUS and action == "push" and any(_is_force_flag(t) for t in cmd[2:]):
             return ToolOutput(
                 success=False,
-                error="Force-push is permanently blocked - too destructive. Push to a new branch instead.",
+                error="Force-push is blocked - too destructive. Push to a new branch instead.",
             )
 
-        if _is_mutating(action, cmd):
+        auto_git = mode in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS) and self._unattended.approves_git(action, args)
+        if _is_mutating(action, cmd) and not auto_git:
             denial = await gate_mutating_action(
                 self._approval_store,
                 agent="git",

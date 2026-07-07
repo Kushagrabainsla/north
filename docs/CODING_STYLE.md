@@ -443,7 +443,7 @@ agents/
     config.yaml
     tools.yaml
     prompts/
-  architect/  tester/  researcher/  general/  home/  news_briefing/
+  architect/  reviewer/  researcher/  general/  home/  news_briefing/
   health/  job/  finance/  university/
 
 tools/

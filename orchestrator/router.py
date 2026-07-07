@@ -5,6 +5,7 @@ See docs/CODING_STYLE.md Sections 5.3, 6.5, 9.7, 13.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -29,6 +30,21 @@ _PLANNER_CONVERSATION_TAIL_CHARS: int = 2000
 
 def _normalize(text: str) -> str:
     return " ".join(_NORMALIZE_RE.sub("", text.lower().strip()).split())
+
+
+# Deterministic engineering pipeline (#4). The STRUCTURE - which agents run and in
+# what order - is fixed by code, not invented by the LLM per call. The canonical
+# order never changes; a task only selects a subset of it via `engineering_kind`.
+_ENGINEERING_ORDER: tuple[str, ...] = ("researcher", "architect", "coder", "reviewer")
+_ENGINEERING_STAGES: dict[str, tuple[str, ...]] = {
+    "question": ("researcher",),
+    "research": ("researcher", "architect"),
+    "bugfix": ("coder", "reviewer"),
+    "refactor": ("architect", "coder", "reviewer"),
+    "feature": ("researcher", "architect", "coder", "reviewer"),
+}
+# Below this planner confidence, run the full chain rather than trust a subset.
+_ENGINEERING_FULL_CHAIN_BELOW_CONFIDENCE: float = 0.6
 
 
 def _plan_cache_key(prompt: str, conversation: str = "") -> str:
@@ -62,9 +78,12 @@ def _recent_conversation(context: str) -> str:
 
 logger = logging.getLogger(__name__)
 
-_FALLBACK_CLASSIFICATION = IntentClassification(
-    is_consequential=False, domain="general", reasoning="planner fallback", confidence=1.0
-)
+# Planning gates the whole task, so a transient inference failure must not silently
+# degrade it to a no-op general run. Retry a few times, then fail loudly. Each
+# attempt is time-bounded so a hung model can't stall the task forever.
+_PLANNER_MAX_ATTEMPTS: int = 3
+_PLANNER_RETRY_DELAY_S: float = 2.0
+_PLANNER_ATTEMPT_TIMEOUT_S: float = 45.0
 
 if TYPE_CHECKING:
     from tools.registry import ToolRegistry
@@ -151,29 +170,10 @@ class ExecutionPlanner:
             f"=== User Task ===\n{prompt}"
         )
 
-        try:
-            response = await self._inference_router.complete(
-                CompletionRequest(
-                    prompt=full_prompt,
-                    priority=PoolPriority.HIGH,
-                    component="planner",
-                    task_id=task_id,
-                    json_mode=True,
-                    temperature=0.0,
-                )
-            )
-        except Exception as exc:
-            logger.warning("Planner LLM call failed - falling back to general single-agent plan: %s", exc)
-            return _FALLBACK_CLASSIFICATION, self.build_fallback_plan("general", task_id)
-
-        try:
-            data = json.loads(strip_code_fences(response.text))
-        except json.JSONDecodeError as exc:
-            logger.warning(
-                "Planner LLM response was not valid JSON - falling back to general single-agent plan: %s",
-                exc,
-            )
-            return _FALLBACK_CLASSIFICATION, self.build_fallback_plan("general", task_id)
+        # Planning gates the whole task: a transient inference failure is retried
+        # inside _complete_plan, and a hard failure raises RoutingError so the task
+        # fails honestly instead of silently running a no-op general fallback.
+        data = await self._complete_plan(full_prompt, task_id)
 
         raw_confidence = data.get("confidence", 0.9)
         try:
@@ -186,7 +186,13 @@ class ExecutionPlanner:
             reasoning=str(data.get("reasoning", "")),
             confidence=confidence,
         )
-        plan = self._build_plan_from_response(data, classification.domain, task_id)
+        if classification.domain == "engineering":
+            # Deterministic engineering chain (#4): ignore any LLM-invented agent
+            # graph and build a fixed researcher→architect→coder→reviewer subset.
+            engineering_kind = str(data.get("engineering_kind", "")).strip().lower()
+            plan = self._build_engineering_plan(engineering_kind, confidence, task_id)
+        else:
+            plan = self._build_plan_from_response(data, classification.domain, task_id)
 
         # Evict oldest entries when cache is full, then store.
         if len(self._plan_cache) >= _PLAN_CACHE_MAX_SIZE:
@@ -297,6 +303,74 @@ class ExecutionPlanner:
             dependencies=dependencies,
             mode=mode,
         )
+
+    def _build_engineering_plan(self, engineering_kind: str, confidence: float, task_id: str) -> ExecutionPlan:
+        """Deterministic researcher→architect→coder→reviewer pipeline (#4).
+
+        Code - not the LLM - fixes the structure. The canonical order is constant;
+        ``engineering_kind`` selects a subset of it. Two invariants: the reviewer
+        always follows the coder (verification is non-negotiable), and a
+        low-confidence classification runs the full chain. Agents can still
+        delegate_task to a skipped stage mid-run, so an under-selected subset
+        self-corrects.
+        """
+        if confidence < _ENGINEERING_FULL_CHAIN_BELOW_CONFIDENCE:
+            selected: tuple[str, ...] = _ENGINEERING_ORDER
+        else:
+            selected = _ENGINEERING_STAGES.get(engineering_kind, _ENGINEERING_ORDER)
+        if "coder" in selected and "reviewer" not in selected:
+            selected = (*selected, "reviewer")
+
+        registered = {a.name for a in self._agent_registry.all()}
+        ordered = [name for name in _ENGINEERING_ORDER if name in selected and name in registered]
+        if not ordered:
+            return self.build_fallback_plan("engineering", task_id)
+
+        # Linear dependencies along the canonical order: each stage waits for the
+        # previous selected one, so HIERARCHICAL runs them strictly in sequence.
+        dependencies: dict[str, list[str]] = {ordered[i]: [ordered[i - 1]] for i in range(1, len(ordered))}
+        mode = ExecutionMode.SINGLE_AGENT if len(ordered) == 1 else ExecutionMode.HIERARCHICAL
+        groups = self._compute_parallel_groups(ordered, dependencies)
+        return ExecutionPlan(
+            task_id=task_id,
+            agents=ordered,
+            parallel_groups=groups,
+            dependencies=dependencies,
+            mode=mode,
+        )
+
+    async def _complete_plan(self, full_prompt: str, task_id: str) -> dict[str, Any]:
+        """Call the planner LLM and parse its JSON, retrying transient failures.
+
+        Planning gates the whole task, so a transient inference failure (e.g. all
+        models briefly rate-limited) or a malformed response must not silently
+        degrade the task to a no-op general run. We retry a few times; if every
+        attempt fails we raise RoutingError so the task is marked FAILED and can be
+        retried - never reported as a false "completed".
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, _PLANNER_MAX_ATTEMPTS + 1):
+            try:
+                response = await asyncio.wait_for(
+                    self._inference_router.complete(
+                        CompletionRequest(
+                            prompt=full_prompt,
+                            priority=PoolPriority.HIGH,
+                            component="planner",
+                            task_id=task_id,
+                            json_mode=True,
+                            temperature=0.0,
+                        )
+                    ),
+                    timeout=_PLANNER_ATTEMPT_TIMEOUT_S,
+                )
+                return json.loads(strip_code_fences(response.text))
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("Planner attempt %d/%d failed: %s", attempt, _PLANNER_MAX_ATTEMPTS, exc)
+                if attempt < _PLANNER_MAX_ATTEMPTS:
+                    await asyncio.sleep(_PLANNER_RETRY_DELAY_S)
+        raise RoutingError(f"planner failed after {_PLANNER_MAX_ATTEMPTS} attempts: {last_exc}")
 
     def build_fallback_plan(self, domain: str, task_id: str) -> ExecutionPlan:
         """Simple fallback: single agent matching the classified domain."""

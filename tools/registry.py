@@ -3,7 +3,7 @@
 Universal tools are given to every agent automatically. tools/universal/,
 tools/analysis/, and tools/semantic/ are all universal directories - the
 analysis/semantic helpers (check_types, search_symbols, find_references) are
-read-only and the coder/tester workflows depend on them, so they must always
+read-only and the coder/reviewer workflows depend on them, so they must always
 resolve in the registry.
 Specialized tools (tools/specialized/) are available to agents that declare
 them in tools.yaml.
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _TOOLS_ROOT = Path(__file__).parent
 # Directories whose tools every agent receives. analysis/ and semantic/ hold
-# the read-only coding helpers the coder/tester prompts are built around.
+# the read-only coding helpers the coder/reviewer prompts are built around.
 _UNIVERSAL_DIRS: tuple[tuple[str, str], ...] = (
     ("universal", "tools.universal"),
     ("analysis", "tools.analysis"),
