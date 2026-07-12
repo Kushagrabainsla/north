@@ -12,6 +12,7 @@ from typing import Any
 from tools._path import resolve_path
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from utils.text import normalize_dashes, should_normalize_prose
 
 
 class WriteFileTool(Tool):
@@ -19,12 +20,22 @@ class WriteFileTool(Tool):
 
     name = "write_file"
     is_mutating = True
-    description = "Write or overwrite a file with the given content (creates parent dirs as needed)."
+    description = (
+        "Create a new file, or completely OVERWRITE an existing one, with the given "
+        "content (parent directories are created automatically). This replaces the whole "
+        "file - it does not append or merge - so always pass the ENTIRE intended content, "
+        "never a fragment. Use it for brand-new files or a deliberate full rewrite; to "
+        "change part of an existing file, prefer patch_file, which edits in place without "
+        "clobbering the rest. The path must be inside the workspace."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Destination file path"},
-            "content": {"type": "string", "description": "Text content to write"},
+            "path": {"type": "string", "description": "Destination file path, e.g. 'src/utils/helpers.py'"},
+            "content": {
+                "type": "string",
+                "description": "The complete text content of the file (replaces the entire file)",
+            },
             "workspace": {"type": "string", "description": "Workspace root (optional)"},
         },
         "required": ["path", "content"],
@@ -44,6 +55,11 @@ class WriteFileTool(Tool):
         resolved = resolve_path(path_str, input.params.get("workspace"))
         if resolved is None:
             return ToolOutput(success=False, error="Path escapes workspace root.")
+
+        # Strip em/en dashes from prose north writes (reports, notes, briefings), but
+        # never from code/data files, whose dashes may be literal, test-verified bytes.
+        if should_normalize_prose(resolved):
+            content = normalize_dashes(content)
 
         return await asyncio.to_thread(_write_sync, resolved, content)
 

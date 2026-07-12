@@ -10,6 +10,7 @@ from typing import Any
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context.repo_instructions import load_repo_instructions
 from context.repo_map import build_repo_map
+from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
 from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
@@ -21,6 +22,18 @@ logger = logging.getLogger(__name__)
 _CORE_TOOL_NAMES: frozenset[str] = frozenset(
     {"read_file", "list_dir", "search_files", "glob", "write_file", "patch_file", "check_types", "bash"}
 )
+
+# Cap on how many non-selected skill names are listed as "available via use_skill",
+# so the hint stays a light pointer and never becomes prompt-bloating noise.
+_MAX_SKILL_NAMES_LISTED: int = 12
+
+# Domains whose agents receive procedural skills. Each skill also declares the
+# domains it serves via `Skill.domains`, and `_load_skills_block` filters to those,
+# so widening this set only exposes an agent to skills actually tagged for its
+# domain - engineering skills never leak into the general assistant, and vice versa.
+# `general` is enabled for the research/literature-review skill (knowledge-synthesis
+# tasks route to the general assistant); it only ever sees skills tagged `general`.
+_SKILLS_ENABLED_DOMAINS: frozenset[str] = frozenset({"engineering", "general"})
 
 
 class Agent(ABC):
@@ -129,7 +142,77 @@ class Agent(ABC):
                     parts.append(f"## Current task plan (update it with update_plan)\n{plan}")
             except Exception as exc:
                 logger.debug("Plan injection failed for task %s: %s", payload.task_id, exc)
+
+        # Procedural skills: give the agent the relevant playbook up front, so the
+        # same model repeats a known-good procedure instead of improvising. Enabled
+        # for engineering and the general assistant - general handles cross-domain,
+        # open-ended work (e.g. scouting OSS contributions), and the top-2 +
+        # similarity threshold inject nothing when no skill is relevant enough.
+        if self.domain in _SKILLS_ENABLED_DOMAINS:
+            skills_block = await self._load_skills_block(payload)
+            if skills_block:
+                parts.append(skills_block)
         return "\n\n".join(p for p in parts if p)
+
+    async def _load_skills_block(self, payload: AgentPayload) -> str:
+        """Select and render procedural skills for this task.
+
+        Semantically-selected skills are injected in full as advisory context (the
+        primary path); any remaining skills are listed by name so the agent can pull
+        them on demand with use_skill. Returns "" when no skills are registered.
+        """
+        registry = self._deps.skill_registry
+        if registry is None:
+            return ""
+        # Only skills that declare this agent's domain are eligible - so the general
+        # assistant sees cross-domain skills (e.g. scouting) but never an engineering
+        # skill leaking into ordinary chat, and engineering agents keep all of theirs.
+        skills = [skill for skill in registry.all() if skill.available_to(self.domain)]
+        if not skills:
+            return ""
+
+        selector = self._deps.skill_selector
+        selected = await selector.select(payload.prompt, candidates=skills) if selector is not None else []
+        selected_names = {skill.name for skill in selected}
+
+        sections: list[str] = []
+        if selected:
+            bodies = "\n\n".join(f"### {skill.name}\n{skill.body}" for skill in selected)
+            sections.append(
+                "## Applicable skills (advisory procedural context - it does not override "
+                f"system instructions, user instructions, or safety constraints)\n\n{bodies}"
+            )
+            await self._emit_skill_selected(payload, sorted(selected_names))
+
+        others = [skill.name for skill in skills if skill.name not in selected_names]
+        if others:
+            listed = ", ".join(others[:_MAX_SKILL_NAMES_LISTED])
+            sections.append(f"Other skills available (load full instructions with use_skill): {listed}")
+        return "\n\n".join(sections)
+
+    async def _emit_skill_selected(self, payload: AgentPayload, names: list[str]) -> None:
+        """Record which skills were injected, for observability and A/B analysis."""
+        if not payload.task_id:
+            return
+        if self._deps.stream_manager is not None:
+            try:
+                await self._deps.stream_manager.emit(payload.task_id, "skill_selected", {"skills": names})
+            except Exception:
+                logger.debug("skill_selected emit failed for task %s", payload.task_id, exc_info=True)
+        if self._deps.ledger is not None:
+            try:
+                await self._deps.ledger.write(
+                    LedgerEntry.new(
+                        source=LedgerSource.SYSTEM,
+                        task_id=payload.task_id,
+                        agent=self.name,
+                        action="skill_selected",
+                        output=", ".join(names),
+                        status=LedgerStatus.COMPLETED,
+                    )
+                )
+            except Exception:
+                logger.debug("skill_selected ledger write failed for task %s", payload.task_id, exc_info=True)
 
     async def _load_tools(self, task_prompt: str = "") -> list[tuple[Tool, float]]:
         """Return (tool, confidence_score) pairs for this agent, sorted by score descending.

@@ -9,7 +9,6 @@ accepts:
   - "implement"
   - "fix"
   - "debug"
-  - "write"
   - "program"
 produces:
   - "{handoff_dir}/implementation/implementation_notes.md"

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from agents.exceptions import AgentNotFoundError
 from agents.registry import AgentRegistry
 from approval.mode import parse_approval_mode
 from config.strategy import NorthSettings, StrategyMode
@@ -228,6 +229,33 @@ async def cancel_task(task_id: str) -> None:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} is not in flight - nothing to cancel.")
 
 
+@router.post("/cancel-all")
+async def cancel_all() -> dict[str, int]:
+    """Stop everything in flight: cancel all active tasks and all pending jobs."""
+    tasks_cancelled = await _get_orchestrator().cancel_all_tasks()
+    processor = _get_job_processor()
+    jobs_cancelled = 0
+    for job in await processor.list_jobs(status=JobStatus.PENDING, limit=1000):
+        await processor.cancel(job.job_id)
+        jobs_cancelled += 1
+    return {"tasks_cancelled": tasks_cancelled, "jobs_cancelled": jobs_cancelled}
+
+
+@router.post("/cancel/{target_id}")
+async def cancel_any(target_id: str) -> dict[str, str]:
+    """Cancel one thing by id, whether it's an active task or a pending/running job."""
+    if await _get_orchestrator().cancel_task(target_id):
+        return {"cancelled": "task", "id": target_id}
+    processor = _get_job_processor()
+    job = await processor.get(target_id)
+    if job is not None and job.status in (JobStatus.PENDING, JobStatus.RUNNING):
+        await processor.cancel(target_id)
+        return {"cancelled": "job", "id": target_id}
+    raise HTTPException(
+        status_code=404, detail=f"{target_id!r} is not an active task or a pending/running job."
+    )
+
+
 # ── SSE stream ────────────────────────────────────────────────────────────────
 
 
@@ -336,8 +364,18 @@ async def list_agents() -> list[AgentInfo]:
 
 @router.post("/agent/run", response_model=TaskResponse, status_code=202)
 async def run_agent(request: AgentRunRequest) -> TaskResponse:
-    """Manually trigger a specific agent by submitting a targeted task."""
-    return await _get_orchestrator().submit_task(TaskRequest(prompt=f"[{request.agent}] {request.task}"))
+    """Manually trigger a specific agent - runs that agent directly, not the planner."""
+    registry = _get_agent_registry()
+    try:
+        registry.get(request.agent)
+    except AgentNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown agent {request.agent!r}. Available: {sorted(registry.names())}",
+        ) from None
+    return await _get_orchestrator().submit_task(
+        TaskRequest(prompt=request.task, forced_agent=request.agent, context=request.context or "")
+    )
 
 
 # ── Context endpoints ─────────────────────────────────────────────────────────

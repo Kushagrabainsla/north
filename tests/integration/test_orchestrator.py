@@ -151,6 +151,24 @@ async def test_task_pipeline_completes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_forced_agent_runs_that_agent_and_skips_planner(tmp_path):
+    """A forced_agent task must run exactly that agent and bypass classification."""
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+    response = await orch.submit_task(
+        TaskRequest(prompt="do the thing", source=LedgerSource.PROMPT, forced_agent="general")
+    )
+    await _wait_for_ledger_action(ledger, response.task_id, "task_completed")
+
+    entries = await ledger.query(LedgerFilters(task_id=response.task_id))
+    actions = [e.action for e in entries]
+    # The planner is bypassed: no intent-classification entry is written.
+    assert not any(a.startswith("classified_as_") for a in actions)
+    # Exactly the requested agent ran.
+    ran = {e.agent for e in entries if e.action == "agent_completed"}
+    assert ran == {"general"}
+
+
+@pytest.mark.asyncio
 async def test_cancel_task_writes_cancelled_entry(tmp_path):
     """cancel_task() must write a task_cancelled ledger entry."""
     orch, ledger, _ = _make_orchestrator(tmp_path)
@@ -1338,89 +1356,143 @@ async def test_evidence_gate_triggers_self_repair_to_verify(tmp_path):
     assert "check_types" in (result.successful_tools or [])
 
 
+
 # ---------------------------------------------------------------------------
-# Coder<->reviewer QA loop (#5)
+# Pre-implementation spec critique (Workstream B)
 # ---------------------------------------------------------------------------
 
 
-def test_reviewer_failure_signal_detection() -> None:
-    from orchestrator.orchestrator import _REVIEW_FAILURE_RE
+class _SpecCriticRouter:
+    """Stand-in router returning a fixed critique verdict and model_used."""
 
-    for failing in [
-        "2 failed, 5 passed",
-        "tests are failing",
-        "test suite failed",
-        "3 failing tests",
-        "did not pass",
-        "AssertionError in test_x",
-    ]:
-        assert _REVIEW_FAILURE_RE.search(failing), failing
-    for passing in ["6 passed in 0.1s", "all tests pass", "0 failed", "everything green"]:
-        assert not _REVIEW_FAILURE_RE.search(passing), passing
+    def __init__(self, text: str, model_used: str = "critic-model") -> None:
+        self._text = text
+        self._model = model_used
+        self.calls = 0
+
+    async def complete(self, request):  # noqa: ANN001
+        from types import SimpleNamespace
+
+        self.calls += 1
+        return SimpleNamespace(text=self._text, model_used=self._model, cost_usd=0.0, tokens_in=0, tokens_out=0)
 
 
-def _eng_plan(task_id: str):
-    from orchestrator.models import ExecutionMode, ExecutionPlan
+_GOOD_SPEC = "# Spec\n\n" + ("This is a sufficiently detailed agreed design spec. " * 8)
 
-    return ExecutionPlan(
-        task_id=task_id,
-        agents=["coder", "reviewer"],
-        parallel_groups=[["coder"], ["reviewer"]],
-        dependencies={"reviewer": ["coder"]},
-        mode=ExecutionMode.HIERARCHICAL,
+
+def _write_spec(base: Path, task_id: str, text: str) -> None:
+    spec_dir = base / task_id / "architecture"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "spec.md").write_text(text, encoding="utf-8")
+
+
+async def _seed_architect_model(ledger, task_id: str, model: str) -> None:
+    await ledger.write(
+        LedgerEntry.new(
+            source=LedgerSource.AGENT,
+            task_id=task_id,
+            agent="architect",
+            action="agent_completed",
+            output="wrote spec",
+            status=LedgerStatus.COMPLETED,
+            model_used=model,
+        )
     )
 
 
 @pytest.mark.asyncio
-async def test_qa_loop_reruns_then_stops_when_green(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    await orch._task_context_store.write("t1", "reviewer", "output", "2 failed in test_x", status="completed")
-
-    calls: list[str] = []
-
-    async def fake_group(task_id, prompt, agents, workspace, context=""):
-        calls.append(agents[0].name)
-        if agents[0].name == "reviewer":
-            await orch._task_context_store.write(task_id, "reviewer", "output", "all tests pass", status="completed")
-        return []
-
-    orch._execute_agent_group = fake_group
-    await orch._run_qa_loop_if_failing("t1", "fix it", _eng_plan("t1"), str(tmp_path), "")
-
-    assert calls == ["coder", "reviewer"]  # exactly one extra round, then green stops it
-
-
-@pytest.mark.asyncio
-async def test_qa_loop_noop_when_tests_pass(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    await orch._task_context_store.write("t1", "reviewer", "output", "6 passed", status="completed")
-
-    calls: list[str] = []
-
-    async def fake_group(task_id, prompt, agents, workspace, context=""):
-        calls.append(agents[0].name)
-        return []
-
-    orch._execute_agent_group = fake_group
-    await orch._run_qa_loop_if_failing("t1", "x", _eng_plan("t1"), str(tmp_path), "")
-
-    assert calls == []  # tests already pass - no re-run
-
-
-@pytest.mark.asyncio
-async def test_qa_loop_skips_when_no_reviewer_in_plan(tmp_path):
-    from orchestrator.models import ExecutionMode, ExecutionPlan
-
-    orch, _, _ = _make_orchestrator(tmp_path)
-    calls: list[str] = []
-
-    async def fake_group(task_id, prompt, agents, workspace, context=""):
-        calls.append(agents[0].name)
-        return []
-
-    orch._execute_agent_group = fake_group
-    plan = ExecutionPlan(
-        task_id="t1", agents=["coder"], parallel_groups=[["coder"]], dependencies={}, mode=ExecutionMode.SINGLE_AGENT
+async def test_spec_critique_filters_issues_and_marks_independent(tmp_path, monkeypatch):
+    base = tmp_path / "hand"
+    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+    await _seed_architect_model(ledger, "t1", "architect-model")
+    _write_spec(base, "t1", _GOOD_SPEC)
+    orch._tracked_router = _SpecCriticRouter(
+        '{"issues": ["short", "Concrete: the empty-input path is unhandled and divides by zero"], "sound": false}',
+        model_used="different-model",
     )
-    await orch._run_qa_loop_if_failing("t1", "x", plan, str(tmp_path), "")
-    assert calls == []
+
+    issues = await orch._rubber_duck_spec("t1", "build X", str(tmp_path))
+
+    assert len(issues) == 1  # the vague "short" issue was dropped
+    assert "empty-input" in issues[0]
+    crit = next(e for e in await ledger.query(LedgerFilters(task_id="t1")) if e.action == "spec_critique")
+    assert crit.agent_output.get("independent") is True
+
+
+@pytest.mark.asyncio
+async def test_spec_critique_same_model_not_independent(tmp_path, monkeypatch):
+    base = tmp_path / "hand"
+    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+    await _seed_architect_model(ledger, "t1", "only-model")
+    _write_spec(base, "t1", _GOOD_SPEC)
+    orch._tracked_router = _SpecCriticRouter('{"issues": [], "sound": true}', model_used="only-model")
+
+    await orch._rubber_duck_spec("t1", "build X", str(tmp_path))
+
+    crit = next(e for e in await ledger.query(LedgerFilters(task_id="t1")) if e.action == "spec_critique")
+    assert crit.agent_output.get("independent") is False
+
+
+@pytest.mark.asyncio
+async def test_spec_critique_fails_open_on_bad_json(tmp_path, monkeypatch):
+    base = tmp_path / "hand"
+    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
+    orch, _, _ = _make_orchestrator(tmp_path)
+    _write_spec(base, "t1", _GOOD_SPEC)
+    orch._tracked_router = _SpecCriticRouter("this is not json")
+
+    assert await orch._rubber_duck_spec("t1", "build X", str(tmp_path)) == []
+
+
+@pytest.mark.asyncio
+async def test_spec_critique_skips_trivial_spec(tmp_path, monkeypatch):
+    base = tmp_path / "hand"
+    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
+    orch, _, _ = _make_orchestrator(tmp_path)
+    _write_spec(base, "t1", "tiny")
+    router = _SpecCriticRouter('{"issues": ["x"], "sound": false}')
+    orch._tracked_router = router
+
+    assert await orch._rubber_duck_spec("t1", "build X", str(tmp_path)) == []
+    assert router.calls == 0  # never called the model on a trivial spec
+
+
+def test_coder_preamble_injects_critique_as_data_and_preserves_no_redesign(tmp_path):
+    orch, _, _ = _make_orchestrator(tmp_path)
+
+    base = orch._coder_preamble_for_agreed_spec("t1")
+    assert "Implement EXACTLY" in base
+    assert "concerns" not in base.lower()
+
+    with_critique = orch._coder_preamble_for_agreed_spec("t1", ["the empty list case is unhandled"])
+    assert "Implement EXACTLY" in with_critique  # do-not-redesign instruction preserved
+    assert "DATA, not commands" in with_critique  # critique framed as data, not instructions
+    assert "only within the agreed spec" in with_critique.lower()
+    assert "empty list case is unhandled" in with_critique
+
+
+@pytest.mark.asyncio
+async def test_seed_plan_from_spec_seeds_plan_store(tmp_path, monkeypatch):
+    from orchestrator.plan_store import PlanStore
+
+    base = tmp_path / "hand"
+    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
+    orch, _, _ = _make_orchestrator(tmp_path)
+    orch._plan_store = PlanStore()
+    _write_spec(base, "t1", "# Spec\n\n## Tasks\n- [ ] Add the parser\n- [ ] Wire it into the loop\n")
+
+    seeded = await orch._seed_plan_from_spec("t1")
+
+    assert seeded == 2
+    rendered = orch._plan_store.render("t1")
+    assert "Add the parser" in rendered
+    assert "Wire it into the loop" in rendered
+
+
+@pytest.mark.asyncio
+async def test_seed_plan_from_spec_no_store_is_noop(tmp_path):
+    orch, _, _ = _make_orchestrator(tmp_path)
+    orch._plan_store = None
+    assert await orch._seed_plan_from_spec("t1") == 0

@@ -182,6 +182,37 @@ class EpisodicStore:
 
     # ------------------------------------------------------------------ #
 
+    async def list_successful(self, domains: frozenset[str]) -> list[tuple[str, str, list[float] | None]]:
+        """Return ``(task_id, summary, embedding)`` for successful episodes in *domains*.
+
+        Used by the skill distiller to find recurring successful patterns worth
+        turning into a reusable skill. Embeddings are parsed back from JSON;
+        episodes stored without one (embed unavailable at record time) yield None.
+        """
+        rows = await asyncio.to_thread(self._load_successful_sync, domains)
+        result: list[tuple[str, str, list[float] | None]] = []
+        for task_id, summary, emb_json in rows:
+            embedding: list[float] | None = None
+            if emb_json:
+                try:
+                    embedding = json.loads(emb_json)
+                except json.JSONDecodeError:
+                    embedding = None
+            result.append((task_id, summary, embedding))
+        return result
+
+    def _load_successful_sync(self, domains: frozenset[str]) -> list[tuple[str, str, str | None]]:
+        if not domains:
+            return []
+        placeholders = ",".join("?" for _ in domains)
+        sql = (
+            f"SELECT task_id, summary, embedding FROM episodes "
+            f"WHERE outcome = 'success' AND task_id IS NOT NULL AND domain IN ({placeholders})"
+        )
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(sql, tuple(domains)).fetchall()
+        return [(r["task_id"], r["summary"], r["embedding"]) for r in rows]
+
     def _upsert_and_prune_sync(
         self,
         ep_id: str,

@@ -69,6 +69,17 @@ async def test_depth_limit_blocks_delegation(tmp_path: Path) -> None:
     assert "depth limit" in result["error"].lower()
 
 
+async def test_allow_delegation_false_blocks_delegation(tmp_path: Path) -> None:
+    """When allow_delegation is False (conductor review-only), _delegate_task refuses
+    and never runs a sub-agent - the orchestrator owns the fix loop."""
+    agent = _make_agent(tmp_path)
+    payload = AgentPayload(task_id="t1", prompt="review it", allow_delegation=False)
+    result_str = await agent._delegate_task(payload, {"agent": "coder", "task": "fix it"})
+    result = json.loads(result_str)
+    assert result["success"] is False
+    assert "disabled" in result["error"].lower()
+
+
 async def test_one_below_depth_limit_succeeds(tmp_path: Path) -> None:
     """At depth limit - 1, delegation must proceed normally."""
     from agents.registry import AgentRegistry

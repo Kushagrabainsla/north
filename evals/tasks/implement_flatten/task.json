@@ -1,0 +1,6 @@
+{
+  "id": "implement_flatten",
+  "kind": "feature",
+  "timeout_s": 480,
+  "prompt": "Implement flatten(nested) in flatten.py: given a list that may contain nested lists to any depth, return a single flat list with all elements in order. E.g. flatten([1, [2, [3, 4]], 5]) == [1, 2, 3, 4, 5]. Non-list elements (including strings) are kept whole. Add tests."
+}

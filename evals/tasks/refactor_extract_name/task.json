@@ -1,0 +1,6 @@
+{
+  "id": "refactor_extract_name",
+  "kind": "refactor",
+  "timeout_s": 480,
+  "prompt": "greeting.py formats a person's name as 'Last, First' inline in two functions. Refactor to remove the duplication by extracting a helper full_name(first, last) that returns 'Last, First' and is importable from greeting.py, and use it in both functions. Keep all existing behaviour identical. Add a test for full_name."
+}

@@ -1,14 +1,18 @@
 agent: reviewer
 domain: engineering
 model_pool: reasoning
+# The reviewer must be a genuine second opinion, so the orchestrator runs it on a
+# different model than the coder used for this task (Copilot /subagents style).
+distinct_from:
+  - coder
 accepts:
-  - "review"
+  - "code review"
+  - "review the code"
   - "test"
   - "verify"
   - "validate"
   - "qa"
-  - "quality"
-  - "check"
+  - "check the code"
   - "audit"
   - "diff"
 produces:

@@ -18,7 +18,9 @@ def idempotency_key(request: TaskRequest) -> str:
     """Return the dedup key for *request*: its explicit key, else a source+prompt hash."""
     if request.idempotency_key:
         return request.idempotency_key
-    digest = hashlib.sha256(f"{request.source.value}\x00{request.prompt}".encode()).hexdigest()
+    digest = hashlib.sha256(
+        f"{request.source.value}\x00{request.forced_agent or ''}\x00{request.prompt}".encode()
+    ).hexdigest()
     return f"auto:{digest}"
 
 

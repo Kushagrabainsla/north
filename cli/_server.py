@@ -15,6 +15,19 @@ from pathlib import Path
 import httpx
 
 
+def _detached_process_kwargs() -> dict:
+    """Popen kwargs that fully detach a child so it outlives the launching shell.
+
+    Without this, the server shares the CLI's session/process group and is killed
+    by SIGHUP when the terminal closes. Cross-platform: POSIX starts a new session
+    (setsid); Windows creates a detached, new-process-group child.
+    """
+    if os.name == "nt":
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        return {"creationflags": flags}
+    return {"start_new_session": True}
+
+
 def _port_in_use(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
@@ -201,7 +214,7 @@ def _start_server_process(port: int, project_root: Path | None = None) -> subpro
     server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": workspace}
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
-    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
+    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
     pid_path.write_text(str(proc.pid), encoding="utf-8")
     return proc
 

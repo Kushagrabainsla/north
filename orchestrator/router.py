@@ -40,11 +40,21 @@ _ENGINEERING_STAGES: dict[str, tuple[str, ...]] = {
     "question": ("researcher",),
     "research": ("researcher", "architect"),
     "bugfix": ("coder", "reviewer"),
+    "debug": ("coder", "reviewer"),
+    "test": ("coder", "reviewer"),
     "refactor": ("architect", "coder", "reviewer"),
     "feature": ("researcher", "architect", "coder", "reviewer"),
 }
 # Below this planner confidence, run the full chain rather than trust a subset.
 _ENGINEERING_FULL_CHAIN_BELOW_CONFIDENCE: float = 0.6
+# Read-only engineering kinds. These must NEVER be escalated into a code-writing
+# task, even at low confidence: a vague "how does X work?" stays an investigation
+# and must not silently add the coder (which would turn it into a write task).
+_NO_CODE_KINDS: frozenset[str] = frozenset({"question", "research"})
+# Shipping kinds: take already-completed work and ship it (branch/commit/push/PR/CI).
+# Handled by the orchestrator's single-agent, human-gated deploy flow - not the
+# researcher→architect→coder→reviewer pipeline - so they map to a coder-only plan.
+_DEPLOY_KINDS: frozenset[str] = frozenset({"deploy", "ship"})
 
 
 def _plan_cache_key(prompt: str, conversation: str = "") -> str:
@@ -308,20 +318,36 @@ class ExecutionPlanner:
         """Deterministic researcher→architect→coder→reviewer pipeline (#4).
 
         Code - not the LLM - fixes the structure. The canonical order is constant;
-        ``engineering_kind`` selects a subset of it. Two invariants: the reviewer
-        always follows the coder (verification is non-negotiable), and a
-        low-confidence classification runs the full chain. Agents can still
-        delegate_task to a skipped stage mid-run, so an under-selected subset
-        self-corrects.
+        ``engineering_kind`` selects a subset of it. Invariants: the reviewer always
+        follows the coder (verification is non-negotiable); a low-confidence *code*
+        classification runs the full chain; and a read-only kind (question/research)
+        is NEVER escalated into a write task by adding the coder, even at low
+        confidence. Agents can still delegate_task to a skipped stage mid-run, so an
+        under-selected subset self-corrects.
         """
-        if confidence < _ENGINEERING_FULL_CHAIN_BELOW_CONFIDENCE:
-            selected: tuple[str, ...] = _ENGINEERING_ORDER
-        else:
-            selected = _ENGINEERING_STAGES.get(engineering_kind, _ENGINEERING_ORDER)
+        registered = {a.name for a in self._agent_registry.all()}
+        # Deploy/ship: a single git/gh-capable agent, human-gated by the orchestrator's
+        # deploy flow. No reviewer, no full-chain escalation - there is no new code to
+        # review here, only work to ship.
+        if engineering_kind in _DEPLOY_KINDS:
+            if "coder" not in registered:
+                return self.build_fallback_plan("engineering", task_id)
+            return ExecutionPlan(
+                task_id=task_id,
+                agents=["coder"],
+                parallel_groups=[["coder"]],
+                dependencies={},
+                mode=ExecutionMode.SINGLE_AGENT,
+                engineering_kind=engineering_kind,
+            )
+        selected: tuple[str, ...] = _ENGINEERING_STAGES.get(engineering_kind, _ENGINEERING_ORDER)
+        # Low confidence broadens a code task to the full chain, but a read-only kind
+        # must stay read-only - never turn "how does X work?" into a code edit.
+        if confidence < _ENGINEERING_FULL_CHAIN_BELOW_CONFIDENCE and engineering_kind not in _NO_CODE_KINDS:
+            selected = _ENGINEERING_ORDER
         if "coder" in selected and "reviewer" not in selected:
             selected = (*selected, "reviewer")
 
-        registered = {a.name for a in self._agent_registry.all()}
         ordered = [name for name in _ENGINEERING_ORDER if name in selected and name in registered]
         if not ordered:
             return self.build_fallback_plan("engineering", task_id)
@@ -337,6 +363,7 @@ class ExecutionPlanner:
             parallel_groups=groups,
             dependencies=dependencies,
             mode=mode,
+            engineering_kind=engineering_kind,
         )
 
     async def _complete_plan(self, full_prompt: str, task_id: str) -> dict[str, Any]:

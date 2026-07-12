@@ -1,0 +1,6 @@
+{
+  "id": "fix_fizzbuzz",
+  "kind": "bugfix",
+  "timeout_s": 420,
+  "prompt": "fizzbuzz(n) in fizzbuzz.py should return 'FizzBuzz' for multiples of 15, 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, and the number as a string otherwise. It currently returns 'Fizz' for 15 because it checks divisibility by 3 before 15. Fix it and add a regression test."
+}

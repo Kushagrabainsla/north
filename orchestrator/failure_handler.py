@@ -9,6 +9,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from inference.exceptions import AllModelsRateLimitedError, PaymentRequiredError
 from ledger import LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.exceptions import OrchestratorError
 from orchestrator.task_context import TaskContextStore
@@ -18,9 +19,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Exceptions meaning "no model is available right now" (the whole pool is rate
+# limited or a provider quota is dead) - an availability condition, not a north
+# bug. The dispatcher already walked the pool before raising these.
+_MODEL_UNAVAILABLE_EXCEPTIONS = (AllModelsRateLimitedError, PaymentRequiredError)
+
 # Error types where a retry cannot succeed: the failure is deterministic
-# (missing prompt file, bad pool name), so retrying just burns time and cost.
-_NON_RETRYABLE_ERROR_TYPES = frozenset({"config_error"})
+# (missing prompt file, bad pool name) or the model pool is exhausted, so
+# retrying just burns time and cost.
+_NON_RETRYABLE_ERROR_TYPES = frozenset({"config_error", "model_unavailable"})
 
 
 def classify_error(exc: Exception) -> str:
@@ -31,6 +38,7 @@ def classify_error(exc: Exception) -> str:
     free-form error strings.
 
     Categories (mutually exclusive, checked in priority order):
+      model_unavailable - the whole model pool is exhausted / quota dead
       rate_limit      - provider returned HTTP 429 or equivalent
       context_overflow - model context window exceeded
       timeout         - network or asyncio timeout
@@ -39,6 +47,18 @@ def classify_error(exc: Exception) -> str:
       config_error    - misconfigured agent (missing prompt, bad pool name)
       logic_error     - everything else (programming error, assertion, etc.)
     """
+    # Model scarcity first: the dispatcher exhausted the pool (or hit a dead
+    # quota). Walk the cause/context chain so a wrapped scarcity error - one
+    # re-raised inside OrchestratorError, NorthStarConflictError, etc. - is still
+    # recognised rather than falling through to logic_error.
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, _MODEL_UNAVAILABLE_EXCEPTIONS):
+            return "model_unavailable"
+        cur = cur.__cause__ or cur.__context__
+
     msg = str(exc).lower()
     name = type(exc).__name__
 

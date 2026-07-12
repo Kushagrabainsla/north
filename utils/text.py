@@ -3,9 +3,52 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 _FENCE_OPEN_RE = re.compile(r"^```[\w-]*\s*\n")
 _FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
+
+# Em dash (—) and horizontal bar (―) read as an "AI tell" in prose; collapse the
+# surrounding *inline* whitespace (not newlines) so ``a—b`` and ``a — b`` both
+# become ``a - b``. En dash (–) is replaced in place below, preserving spacing.
+_EM_DASH_RE = re.compile(r"[^\S\n]*[\u2014\u2015][^\S\n]*")
+_EN_DASH = "\u2013"
+
+# Suffixes whose bytes may be code or test-verified data: never rewrite a dash in
+# these (a mutated string literal or data value could change behaviour or break a
+# test the author already ran). Prose/doc files and unknown types are normalized.
+_CODE_DATA_SUFFIXES: frozenset[str] = frozenset(
+    {
+        ".py", ".pyi", ".ipynb", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+        ".go", ".rs", ".java", ".kt", ".kts", ".scala", ".c", ".h", ".cpp", ".hpp",
+        ".cc", ".cs", ".rb", ".php", ".swift", ".m", ".mm", ".sh", ".bash", ".zsh",
+        ".ps1", ".sql", ".r", ".jl", ".lua", ".pl", ".dart", ".ex", ".exs",
+        ".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".parquet",
+        ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".properties",
+        ".xml", ".proto", ".lock", ".gradle", ".tf", ".bat",
+    }
+)
+
+
+def normalize_dashes(text: str) -> str:
+    """Replace em/en dashes with plain punctuation (north never writes the "AI tell" —).
+
+    Em dashes and horizontal bars become a spaced hyphen (``" - "``) with surrounding
+    inline whitespace collapsed, so ``a—b`` and ``a — b`` both render as ``a - b``.
+    En dashes become a plain hyphen in place, preserving spacing (``3–5`` -> ``3-5``,
+    ``a – b`` -> ``a - b``). Hyphen-minus (``-``) is untouched, so markdown ``---``
+    frontmatter, ``-`` bullet lists, and existing hyphens are unaffected; newlines are
+    never crossed, so line and list structure is preserved.
+    """
+    if not text:
+        return text
+    text = _EM_DASH_RE.sub(" - ", text)
+    return text.replace(_EN_DASH, "-")
+
+
+def should_normalize_prose(path: str | Path) -> bool:
+    """True when a file path is prose/doc (dashes should be normalized) not code/data."""
+    return Path(path).suffix.lower() not in _CODE_DATA_SUFFIXES
 
 
 def strip_code_fences(text: str) -> str:

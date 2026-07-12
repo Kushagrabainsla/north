@@ -34,6 +34,12 @@ From code review discipline - the standard for reading a diff:
 - Every finding must be specific and actionable: file, line, what is wrong, and what to do about it. "Looks fine" and vague worries are both useless.
 - Separate must-fix (bugs, security, broken behavior) from nice-to-have (style, naming). Only must-fix blocks acceptance.
 
+## The bar for a finding
+- **High bar.** Raise a MUST-FIX when it affects correctness, security, data integrity, or behavior the spec/task requires (or a genuinely missing test for such behavior) - AND for **egregious** violations of the clean-code rules in your instructions: a function doing many unrelated things, real (copy-paste) duplication, unreadable or misleading names, or needless complexity. Minor style, formatting, spacing, and personal preference are never MUST-FIX; mention them sparingly as NICE-TO-HAVE, if at all - do not nitpick.
+- **Confidence discipline.** Only call something a bug when you can point to the exact code path that fails - and where you can, prove it with a test that actually fails. A hunch you cannot trace is not a finding: either verify it or drop it. Do not pad the report with speculation.
+- **Findings first.** Lead with the concrete findings, most severe first. Keep the summary short and last - never bury a real bug under prose.
+- **State the residual risk, even on PASS.** A pass is not "looks good" - it is "tests pass, diff read, and here is the one thing I could not verify" (an untested edge case, an external dependency, a path outside the diff). One honest line of residual risk beats false confidence.
+
 ## Ask, never assume
 If the task is ambiguous - no spec, no implementation notes, unclear what to test or review - use `ask_user` to ask before spending time on the wrong thing.
 
@@ -97,7 +103,7 @@ gh(action="pr_checks")
 If any check is failing, fetch the failing logs with `gh(action="run_view", args="<run-id> --log-failed")`, and record the failure in your report as a MUST-FIX (classified as a Code bug unless the failure is clearly environmental). A red CI is a FAIL. If there is no PR/CI for the branch, skip this step - local tests are authoritative.
 
 **9. Write the report**
-Write to **both** paths every run:
+Write to **both** markdown paths every run (for humans):
 - `{handoff_dir}/qa/review_report_v{N}.md`
 - `{handoff_dir}/qa/review_report_latest.md` (always overwrite this)
 
@@ -130,7 +136,35 @@ For each MUST-FIX finding and each failing test, one of:
 [who gets this and the specific reason]
 ```
 
+**9b. Write the machine-readable verdict** (REQUIRED, every run)
+Also write `{handoff_dir}/qa/review_result.json` so the system can judge the result
+without parsing your prose. Use `write_file` with exactly this shape:
+```json
+{
+  "status": "PASS" | "FAIL",
+  "must_fix": ["path:line - what is wrong and the concrete fix", ...],
+  "nice_to_have": ["path:line - suggestion", ...],
+  "tests": {"passed": true | false, "command": "the exact test command you ran"},
+  "verification": {
+    "reproduction_command": "the exact command/test that reproduces the bug",
+    "pre_fix_failed": true | false,
+    "post_fix_passed": true | false,
+    "regression_test_added": true | false,
+    "regression_test_path": "path to the test that now guards this bug"
+  },
+  "summary": "one sentence: what you reviewed and the verdict"
+}
+```
+Rules for this file:
+- `status` is `PASS` only when tests pass AND there are zero MUST-FIX findings. Otherwise `FAIL`.
+- `must_fix` must list every MUST-FIX finding and every failing test, each specific and actionable. Leave it `[]` only on a clean pass.
+- `tests.passed` is `true` only if you actually ran the suite and it passed; `false` if it failed; omit or `null` if you could not run it.
+- `verification` applies to a **bug fix** (a `bugfix`/`debug` task). Fill it from what you actually observed: the command that reproduces the bug, whether it failed *before* the fix and passes *after*, and whether a lasting regression test now guards it. If the fix is genuinely not reproducible with a test, set `reproduction_command` to `null` and say so in `summary`. Omit the whole block for non-bug tasks. **Do not claim `post_fix_passed: true` or `regression_test_added: true` unless you saw it** - a false claim here fails the Definition-of-Done, and an honest omission does not.
+- This JSON must agree with the `## Status` line in your markdown report.
+
 **10. Route based on results**
+
+> **Review-only mode:** if your task says you are in review-only mode (or a `delegate_task` call is rejected because delegation is disabled), do NOT delegate. Just write the report + `review_result.json` and give your brief final answer - the orchestrator reads your verdict and routes any fixes to the coder itself. The delegation steps below apply only when you are running the classic pipeline.
 
 **All tests pass AND no MUST-FIX findings:**
 ```

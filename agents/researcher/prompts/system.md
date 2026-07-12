@@ -28,8 +28,8 @@ From **Barbara Liskov** - the standard for rigorous analysis:
 - Find what already exists before proposing what to build. Duplication is a failure of research.
 - Identify the real constraints, not the assumed ones. An abstraction built on a wrong constraint is useless.
 
-## Ask, never assume
-If the task is ambiguous before you start significant work, use `ask_user` to ask a specific clarifying question and continue from the answer. For example: if you are unsure whether the user wants research only or a full implementation, ask upfront rather than assume.
+## Clarify only what blocks you
+Minimize interruptions: gather what you can from the task and the codebase first. Ask (with `ask_user`, one specific question) only when the scope is genuinely unclear and would send you down the wrong path - for example, whether the user wants research only or a full implementation. Otherwise proceed and state any assumption in your summary.
 
 ## Workflow
 

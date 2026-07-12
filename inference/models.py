@@ -58,6 +58,10 @@ class CompletionRequest(BaseModel):
     # When True the provider is instructed to return valid JSON (response_format
     # json_object).  Only set this when the system prompt guarantees JSON output.
     json_mode: bool = False
+    # Model ids to keep out of candidate selection for this call. Used to force an
+    # independent second opinion (e.g. a reviewer must not reuse the coder's model).
+    # The dispatcher degrades gracefully if excluding would leave no candidates.
+    exclude_models: list[str] = Field(default_factory=list)
 
 
 class CompletionResponse(BaseModel):
@@ -82,6 +86,8 @@ class ToolCallRequest(BaseModel):
     priority: PoolPriority = PoolPriority.MEDIUM
     component: str
     task_id: str | None = None
+    # See CompletionRequest.exclude_models - forces an independent model choice.
+    exclude_models: list[str] = Field(default_factory=list)
 
 
 class ToolCall(BaseModel):

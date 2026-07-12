@@ -1,0 +1,6 @@
+{
+  "id": "implement_signup_validators",
+  "kind": "feature",
+  "timeout_s": 600,
+  "prompt": "signup.py calls helpers in validators.py to validate a signup, but those helpers are unimplemented stubs. Implement is_valid_email(s) and is_strong_password(s) in validators.py so that validate_signup(email, password) returns True only when the email has exactly one '@' with non-empty parts on each side, and the password is at least 8 characters and contains a digit. Do not change signup.py. Add tests."
+}

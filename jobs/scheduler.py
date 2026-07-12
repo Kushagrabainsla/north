@@ -60,6 +60,21 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
     return candidate + timedelta(days=days_ahead)
 
 
+def previous_firing(entry: CronEntry, at: datetime) -> datetime:
+    """Return the most recent firing time at or before `at` for `entry`.
+
+    The inverse of `next_firing`: used on startup to find the slot a cron should
+    have run in, so a firing missed while north was down can be caught up.
+    """
+    candidate = at.replace(hour=entry.hour, minute=entry.minute, second=0, microsecond=0)
+    if candidate > at:
+        candidate = candidate - timedelta(days=1)
+    if entry.weekday is None:
+        return candidate
+    days_back = (candidate.weekday() - entry.weekday) % 7
+    return candidate - timedelta(days=days_back)
+
+
 def next_due_entry(entries: list[CronEntry], after: datetime) -> tuple[CronEntry, datetime] | None:
     """Return the earliest-firing entry across `entries`, or None if empty."""
     if not entries:
@@ -121,17 +136,42 @@ class CronScheduler:
             scheduled_at=scheduled_at,
         )
 
-    # How far back to look on startup for missed firings (e.g. process restart
-    # after a scheduled time had already passed).
-    _STARTUP_CATCHUP_MINUTES: int = 15
+    # On startup, catch up any firing missed while north was down within this
+    # window - so e.g. the morning briefing runs when you next open north, even
+    # hours late. Deduped per slot (see _already_fired) so a restart never re-runs
+    # a job that already fired for its scheduled slot.
+    _STARTUP_CATCHUP: timedelta = timedelta(hours=24)
 
     def _cannot_schedule(self) -> bool:
         return not self._builtin_entries and self._cron_store is None
 
-    def _get_reference_time(self, now: datetime, first_tick: bool) -> datetime:
-        if first_tick:
-            return now - timedelta(minutes=self._STARTUP_CATCHUP_MINUTES)
-        return now
+    async def _already_fired(self, entry: CronEntry, slot: datetime) -> bool:
+        """True if a job for this entry's slot was already enqueued (any status).
+
+        Keeps the wide catch-up window idempotent: a given scheduled slot fires at
+        most once, no matter how often north restarts within the window.
+        """
+        try:
+            jobs = await self._processor.list_jobs(limit=200)
+        except Exception:
+            logger.warning("CronScheduler: could not read job history for catch-up dedup")
+            return False
+        return any(
+            (job.payload or {}).get("cron_entry") == entry.name
+            and job.scheduled_at is not None
+            and job.scheduled_at >= slot
+            for job in jobs
+        )
+
+    async def _catch_up(self, entries: list[CronEntry], now: datetime) -> None:
+        """On startup, enqueue any firing missed while north was down (within window)."""
+        window_start = now - self._STARTUP_CATCHUP
+        for entry in entries:
+            slot = previous_firing(entry, now)
+            if slot < window_start or await self._already_fired(entry, slot):
+                continue
+            logger.info("CronScheduler: catching up missed firing %s (slot %s)", entry.name, slot.isoformat())
+            await self._processor.enqueue(self.build_job(entry, slot))
 
     async def _is_already_running(self, entry: CronEntry) -> bool:
         """Return True if a prior firing of this entry is still pending or running."""
@@ -156,10 +196,9 @@ class CronScheduler:
         """Loop forever: pick the next due entry, sleep, enqueue, repeat.
 
         Sleep is capped at 60 s so user-added entries take effect within a minute.
-        On the first iteration a catch-up window is applied so firings missed
-        during a brief outage (≤ _STARTUP_CATCHUP_MINUTES) are enqueued
-        immediately rather than skipped until the next scheduled cycle.
-        Returns only on cancellation.
+        On the first iteration, firings missed while north was down (within
+        _STARTUP_CATCHUP) are caught up - each missed slot enqueued once, deduped so
+        restarts never double-fire. Returns only on cancellation.
         """
         if self._cannot_schedule():
             return
@@ -170,9 +209,10 @@ class CronScheduler:
                 await asyncio.sleep(60)
                 continue
             now = self._clock()
-            reference = self._get_reference_time(now, first_tick)
-            first_tick = False
-            due = next_due_entry(entries, reference)
+            if first_tick:
+                await self._catch_up(entries, now)
+                first_tick = False
+            due = next_due_entry(entries, now)
             if due is None:
                 await asyncio.sleep(60)
                 continue
@@ -191,37 +231,6 @@ V1_CRON_ENTRIES: list[CronEntry] = [
         hour=8,
         minute=0,
     ),
-    CronEntry(name="health_daily_meal_plan", agent="health", task="Generate today's meal plan", hour=7, minute=0),
-    CronEntry(
-        name="university_canvas_check",
-        agent="university",
-        task="Check Canvas for new assignments and deadlines",
-        hour=8,
-        minute=0,
-    ),
-    CronEntry(
-        name="job_internship_update",
-        agent="job",
-        task="Review internship prep progress and next steps",
-        hour=9,
-        minute=0,
-    ),
-    CronEntry(name="finance_expense_summary", agent="finance", task="Summarise today's expenses", hour=22, minute=0),
-    CronEntry(
-        name="university_weekly_summary",
-        agent="university",
-        task="Weekly academic summary and upcoming deadlines",
-        hour=8,
-        minute=0,
-        weekday=0,
-    ),
-    CronEntry(
-        name="finance_weekly_budget",
-        agent="finance",
-        task="Weekly budget check and savings progress",
-        hour=18,
-        minute=0,
-        weekday=6,
-    ),
+    CronEntry(name="wellness_daily_meal_plan", agent="wellness", task="Generate today's meal plan", hour=7, minute=0),
     CronEntry(name="task_context_cleanup", agent="system", task="task_context_cleanup", hour=3, minute=0),
 ]

@@ -1,0 +1,6 @@
+{
+  "id": "implement_lru_cache",
+  "kind": "feature",
+  "timeout_s": 600,
+  "prompt": "Implement the LRUCache class in lru.py per its docstring: a cache with a fixed capacity supporting get(key) and put(key, value). get returns the stored value or None if absent and marks the key most-recently-used. put inserts or updates and, when the number of entries exceeds capacity, evicts the least-recently-used key. Add tests."
+}

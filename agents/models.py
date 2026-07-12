@@ -40,6 +40,15 @@ class AgentPayload(BaseModel):
     workspace: str = ""  # root directory for filesystem/shell tools
     delegation_depth: int = 0  # incremented on each delegate_task call; capped at MAX_DELEGATION_DEPTH
     delegation_chain: list[str] = Field(default_factory=list)  # ordered agent names in this call chain
+    # Model ids this run must avoid, so the agent is forced onto a different model
+    # (e.g. a reviewer excluding the coder's model). Threaded into every inference
+    # call the agent makes. Empty = no constraint.
+    exclude_models: list[str] = Field(default_factory=list)
+    # When False, delegate_task is neither offered to the model nor executed for this
+    # run. The conductor sets this on the reviewer so it reports only and never
+    # delegates a fix back to the coder - the orchestrator owns that fix loop, and a
+    # second delegation path would duplicate work and bypass the bounded cap.
+    allow_delegation: bool = True
 
 
 class AgentResult(BaseModel):
@@ -61,6 +70,11 @@ class AgentResult(BaseModel):
     # Evidence for claims-vs-output verification (orchestrator/verification.py).
     # None means the agent has no tool loop, so its output is not verifiable this way.
     successful_tools: list[str] | None = None
+    # Model id(s) the agent actually used across its run, in first-seen order.
+    # Recorded so downstream logic can prove/audit which model produced this result
+    # (e.g. enforcing that a reviewer used a different model than the coder) and so
+    # the ledger's model_used column reflects reality. Empty when unknown.
+    models_used: list[str] = Field(default_factory=list)
 
 
 class AgentConfig(BaseModel):
@@ -79,6 +93,10 @@ class AgentConfig(BaseModel):
     output_format: str = "structured_json"
     version: str = "1.0.0"
     class_name: str | None = None
+    # Agent names this agent must NOT share a model with (Copilot /subagents style).
+    # The orchestrator translates this into per-run exclude_models so, e.g., the
+    # reviewer is a genuine second opinion on a different model than the coder.
+    distinct_from: list[str] = Field(default_factory=list)
 
     @property
     def resolved_class_name(self) -> str:
@@ -151,3 +169,8 @@ class AgentDependencies:
     # Live user settings (NorthSettings) - lets agents read the current approval mode
     # so e.g. ask_user does not block in autonomous mode.
     north_settings: Any | None = field(default=None)
+    # Skills subsystem (procedural memory). When set, engineering agents get the
+    # most relevant skill(s) injected into context and can pull others via use_skill.
+    # Both are optional so non-engineering setups and tests need not wire them.
+    skill_registry: Any | None = field(default=None)
+    skill_selector: Any | None = field(default=None)

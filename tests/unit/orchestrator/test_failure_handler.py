@@ -22,7 +22,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from orchestrator.failure_handler import FailureHandler, classify_error
+from orchestrator.failure_handler import (
+    _NON_RETRYABLE_ERROR_TYPES,
+    FailureHandler,
+    classify_error,
+)
 from orchestrator.task_context import TaskContextStore
 from utils.db import open_db_connection
 from utils.ids import generate_id
@@ -347,3 +351,49 @@ async def test_handle_failure_does_not_retry_filesystem_errors(tmp_path: Path) -
     should_retry = await handler.handle_failure("t1", "coder", FileNotFoundError("prompts/system.md"))
 
     assert should_retry is False
+
+
+# ---------------------------------------------------------------------------
+# Model scarcity: honest classification + no pointless retry
+# ---------------------------------------------------------------------------
+
+
+def test_classify_error_tags_model_pool_exhaustion_as_model_unavailable() -> None:
+    """A fully-exhausted pool / dead quota is an availability condition, not a
+    north bug - even when wrapped by an outer error (its message has no '429')."""
+    from inference.exceptions import AllModelsRateLimitedError, PaymentRequiredError
+    from orchestrator.exceptions import OrchestratorError
+
+    assert classify_error(AllModelsRateLimitedError("No completion models are available")) == "model_unavailable"
+    assert classify_error(PaymentRequiredError("quota exhausted")) == "model_unavailable"
+
+    try:
+        try:
+            raise AllModelsRateLimitedError("No models available for this request")
+        except AllModelsRateLimitedError as inner:
+            raise OrchestratorError("planner stage failed") from inner
+    except OrchestratorError as wrapped:
+        assert classify_error(wrapped) == "model_unavailable"
+
+    # Unrelated errors are untouched.
+    assert classify_error(ValueError("boom")) == "logic_error"
+    assert classify_error(TimeoutError("slow")) == "timeout"
+
+
+def test_model_unavailable_is_non_retryable() -> None:
+    assert "model_unavailable" in _NON_RETRYABLE_ERROR_TYPES
+
+
+@pytest.mark.asyncio
+async def test_handle_failure_does_not_retry_model_unavailable(tmp_path: Path) -> None:
+    """The dispatcher already walked the whole pool; re-running the agent just
+    hits the same wall, so a model-unavailable failure must not be retried."""
+    from inference.exceptions import AllModelsRateLimitedError
+
+    handler, store, _ = _make_handler(tmp_path, max_retries=3, base_cooldown_seconds=0.0)
+    await store.initialize_task("t1", ["reviewer"])
+
+    should_retry = await handler.handle_failure(
+        "t1", "reviewer", AllModelsRateLimitedError("No completion models are available")
+    )
+    assert should_retry is False, "model-unavailable must be terminal on the first attempt (no retry)"

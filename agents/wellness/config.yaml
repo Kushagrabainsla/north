@@ -1,0 +1,38 @@
+agent: wellness
+domain: wellness
+model_pool: fast_cheap
+accepts:
+  - "workout"
+  - "nutrition"
+  - "fitness"
+  - "diet"
+  - "exercise"
+  - "meal"
+  - "calories"
+  - "calorie"
+  - "macro"
+  - "macros"
+  - "protein"
+  - "muscle"
+  - "cardio"
+  - "gym"
+  - "weight"
+  - "sleep"
+  - "wellness"
+  - "wellbeing"
+  - "health"
+  - "habit"
+  - "habits"
+  - "routine"
+  - "meditation"
+  - "mindfulness"
+  - "stress"
+  - "mental health"
+  - "mood"
+  - "focus"
+  - "energy"
+  - "recovery"
+  - "supplement"
+output_format: structured_json
+version: 2.0.0
+class_name: WellnessAgent

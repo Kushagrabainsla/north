@@ -104,6 +104,13 @@ class Settings(BaseSettings):
     # Run inside each candidate's worktree. Empty = score by diff size only.
     best_of_n_test_command: str = ""
 
+    # Optional shell command the orchestrator runs itself after a conductor coding
+    # task, as an independent executable oracle feeding the Definition-of-Done (exit
+    # 0 = pass). Run once in the task workspace. Empty = auto-detect a safe, fixed
+    # test command (pytest -q / go test ./... / cargo test) from the project, or skip
+    # if none is detected. A failed run fails the DoD; a missing/errored run never does.
+    verify_command: str = ""
+
     # Sandboxed execution (#6): run bash-tool commands inside a Docker container that
     # only sees the workspace, with the network off and memory/CPU/PID limits. Off by
     # default; when enabled it FAILS CLOSED (refuses to run) if Docker is unavailable.
@@ -129,6 +136,13 @@ class Settings(BaseSettings):
     unattended_mode: bool = False
     unattended_extra_commands: tuple[str, ...] = ()
     autonomous_mode: bool = False
+
+    # Curated preferred models per pool, as a JSON object string, e.g.
+    #   NORTH_PREFERRED_MODELS='{"reasoning": ["anthropic/claude-sonnet", "openai/gpt-4.1"]}'
+    # This is the startup default; a "preferred_models" key in ~/.north/settings.json
+    # overrides it live. Empty = use the built-in DEFAULT_PREFERRED_MODELS. See
+    # inference/model_policy.py. Entries are family-matched against the live catalog.
+    preferred_models: str = ""
 
     # A task whose heartbeat has not advanced for this long is considered stuck and
     # is cancelled/failed by the watchdog; the same age caps how old an interrupted

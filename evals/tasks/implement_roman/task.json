@@ -1,0 +1,6 @@
+{
+  "id": "implement_roman",
+  "kind": "feature",
+  "timeout_s": 600,
+  "prompt": "Implement to_roman(n) in roman.py per its docstring: convert an integer in 1..3999 to its Roman-numeral string (e.g. 4 -> 'IV', 1994 -> 'MCMXCIV'). Add tests."
+}

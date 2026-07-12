@@ -1,0 +1,6 @@
+{
+  "id": "implement_moving_average",
+  "kind": "feature",
+  "timeout_s": 480,
+  "prompt": "Implement moving_average(nums, k) in stats.py: return a list of the averages of each consecutive window of size k in nums. E.g. moving_average([1, 2, 3, 4], 2) == [1.5, 2.5, 3.5]. If k is larger than len(nums), return []. Assume k >= 1. Add tests."
+}

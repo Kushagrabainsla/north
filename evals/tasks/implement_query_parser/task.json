@@ -1,0 +1,6 @@
+{
+  "id": "implement_query_parser",
+  "kind": "feature",
+  "timeout_s": 600,
+  "prompt": "Implement parse_query(qs) in querystring.py: parse a URL query string like 'a=1&b=2&a=3' into a dict. A key seen once maps to its single string value; a key seen more than once maps to a list of its values in order; an empty string returns {}. E.g. parse_query('a=1&b=2&a=3') == {'a': ['1', '3'], 'b': '2'}. Add tests."
+}

@@ -16,9 +16,13 @@ _WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 class ScheduleTaskTool(Tool):
     name = "schedule_task"
     description = (
-        "Schedule a task to run in the future. "
-        "One-shot: provide run_at (ISO 8601 UTC). "
-        "Recurring: provide hour (0-23) and optional minute/weekday."
+        "Schedule a task for north to run later in the background, even when the user is "
+        "not chatting. Give the work as a natural-language prompt in 'task'; it runs at the "
+        "scheduled time under the named agent. For a single future run, pass run_at as an "
+        "ISO-8601 UTC timestamp (e.g. '2026-07-15T14:30:00Z'). For a repeating run, pass hour "
+        "(0-23) plus optional minute (0-59) and weekday (0=Mon … 6=Sun; omit for daily). All "
+        "times are UTC - convert from the user's local time first. Good for reminders, "
+        "digests, and check-ins; the user can review or stop scheduled tasks with 'north cancel'."
     )
     parameters_schema = {
         "type": "object",

@@ -26,7 +26,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.suggester import Suggester
-from textual.widgets import Input, Markdown, RichLog, Static
+from textual.widgets import Input, RichLog, Static
 
 from cli.constants import (
     _REASONING_PREVIEW_CHARS,
@@ -113,7 +113,7 @@ class NorthApp(App[None]):
 
     /* Scrollable wrapper: caps the live area at half the screen and lets the
        user scroll through output longer than that while it streams. The inner
-       Markdown sizes to its content; this container provides the scrollbar. */
+       Static sizes to its content; this container provides the scrollbar. */
     #streaming-wrap {
         width: 100%;
         height: auto;
@@ -132,32 +132,15 @@ class NorthApp(App[None]):
         scrollbar-corner-color: $background;
     }
 
+    /* The live stream renders the growing buffer through the *same* rich
+       Markdown engine used for the finalized message in #log, so the view does
+       not re-flow or change chrome when the stream ends (see _finish_streaming). */
     #streaming {
         width: 100%;
         height: auto;
         padding: 0 0 0 4;
         background: $background;
         color: $text;
-    }
-
-    /* Markdown renders paragraph / fence / list block sub-widgets with
-       $panel by default - flatten them all to $background so there is
-       no lighter-shade box inside the streaming area. */
-    #streaming MarkdownBlock,
-    #streaming MarkdownParagraph,
-    #streaming MarkdownH1,
-    #streaming MarkdownH2,
-    #streaming MarkdownH3,
-    #streaming MarkdownH4,
-    #streaming MarkdownFence,
-    #streaming MarkdownBulletList,
-    #streaming MarkdownBulletListItem,
-    #streaming MarkdownOrderedList,
-    #streaming MarkdownOrderedListItem {
-        background: $background;
-        border: none;
-        padding: 0;
-        margin: 0;
     }
 
     /* ── footer: status · top-sep · input · bot-sep · pad ── */
@@ -331,8 +314,11 @@ class NorthApp(App[None]):
         # Double-Ctrl+C-to-exit: monotonic timestamp of the last single Ctrl+C.
         self._last_interrupt: float = 0.0
         # Paste-preview: large pastes are stashed here and shown as a placeholder
-        # until the user presses Enter, keeping the scrollback clean.
+        # until the user presses Enter, keeping the scrollback clean. The exact
+        # placeholder text is tracked so that if the user edits the line (types,
+        # history, editor) the stale paste is discarded rather than sent.
         self._pending_paste: str | None = None
+        self._paste_placeholder: str | None = None
 
     @contextlib.asynccontextmanager
     async def _http(self) -> AsyncIterator[httpx.AsyncClient]:
@@ -348,7 +334,7 @@ class NorthApp(App[None]):
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
         with VerticalScroll(id="streaming-wrap"):
-            yield Markdown("", id="streaming")
+            yield Static("", id="streaming")
         yield Static("", id="status")
         yield Static("", id="statusbar")
         with Horizontal(id="input-row"):
@@ -373,6 +359,12 @@ class NorthApp(App[None]):
         self.set_interval(0.08, self._tick)
         self.run_worker(self._listen(), exclusive=False)
         self.query_one("#prompt", Input).focus()
+        # The chat log and live-stream panes are read-only: keep them out of the
+        # focus chain so Tab (or a click) can never move focus off the input and
+        # strand the user with keystrokes that go nowhere. Mouse-wheel scrolling
+        # still works without focus.
+        self.query_one("#log", RichLog).can_focus = False
+        self.query_one("#streaming-wrap", VerticalScroll).can_focus = False
         # Defer so the log's width is known before drawing the banner rule.
         self.call_after_refresh(self._draw_banner)
 
@@ -513,29 +505,29 @@ class NorthApp(App[None]):
 
     def _start_streaming(self) -> None:
         self.query_one("#streaming-wrap", VerticalScroll).display = True
-        self.query_one("#streaming", Markdown).update("")
+        self.query_one("#streaming", Static).update("")
 
     def _update_streaming(self, task_id: str) -> None:
-        self.query_one("#streaming", Markdown).update(self._token_buffer.get(task_id, ""))
+        # Render the growing buffer through the same rich Markdown engine used for
+        # the finalized message, so the view does not change when the stream ends.
+        # (The #streaming CSS supplies the left indent, matching the RichPadding
+        # applied to the final message in _finish_streaming.)
+        buffer = self._token_buffer.get(task_id, "")
+        self.query_one("#streaming", Static).update(RichMarkdown(buffer) if buffer else "")
         # Keep the newest tokens in view as they stream; the user can still
         # scroll up through the live area (it's a VerticalScroll now).
         self.query_one("#streaming-wrap", VerticalScroll).scroll_end(animate=False)
 
     def _finish_streaming(self, task_id: str, final_output: str) -> None:
         self.query_one("#streaming-wrap", VerticalScroll).display = False
-        self.query_one("#streaming", Markdown).update("")
+        self.query_one("#streaming", Static).update("")
         if final_output:
-            # Render the finalized message through a real markdown engine so the
-            # scrollback matches what was shown live in the streaming Markdown
-            # widget - tables, lists, and inline styling survive the handoff.
-            # (Do NOT flatten with _to_prose here: it has no table support and
-            # forks rendering from the streaming path, which is what produced the
-            # "table un-renders when the stream finishes" bug.)
-            # TODO(tier-2): for byte-identical fidelity, mount a Textual Markdown
-            # widget into the log instead of writing a rich.markdown renderable  - 
-            # rich's table/heading chrome differs subtly from Textual's. Deferred
-            # because #log is a RichLog and that conversion touches every _log()
-            # call site.
+            # Identical renderer to the live stream (rich Markdown), so the message
+            # simply moves from the capped live area into the scrollback with no
+            # re-flow or chrome change - tables, lists, and inline styling included.
+            # (Do NOT flatten with _to_prose here: it has no table support and would
+            # fork rendering from the streaming path, the original "table un-renders
+            # when the stream finishes" bug.)
             self._log_rich(RichPadding(RichMarkdown(final_output), (0, 0, 0, 4)))
 
     # ── SSE event handler ────────────────────────────────────────────────────
@@ -888,6 +880,7 @@ class NorthApp(App[None]):
         self._pending_paste = text
         prompt = self.query_one("#prompt", Input)
         prompt.value = f"[pasted: {n_lines} lines, {len(text)} chars - press Enter to send]"
+        self._paste_placeholder = prompt.value
         prompt.cursor_position = len(prompt.value)
         event.prevent_default()
         event.stop()
@@ -895,10 +888,14 @@ class NorthApp(App[None]):
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.clear()
-        # A pending paste replaces the placeholder text with the real content.
+        # A pending paste is sent only if the placeholder is still intact; if the
+        # user edited the line (typed over it, used history, or the editor), send
+        # what they see and drop the stale paste so input and action never diverge.
         if self._pending_paste is not None:
-            text = self._pending_paste.strip()
+            if event.value == self._paste_placeholder:
+                text = self._pending_paste.strip()
             self._pending_paste = None
+            self._paste_placeholder = None
         if not text:
             return
 

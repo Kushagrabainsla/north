@@ -1,0 +1,6 @@
+{
+  "id": "fix_mutable_default_cart",
+  "kind": "bugfix",
+  "timeout_s": 420,
+  "prompt": "add_item(item, cart) in cart.py uses a mutable default argument, so items leak between separate calls that don't pass a cart. Fix it so each call made without an explicit cart starts empty: add_item('a') then add_item('b') should each return a one-item list. Add a regression test."
+}

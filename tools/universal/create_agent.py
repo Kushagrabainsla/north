@@ -95,7 +95,7 @@ class CreateAgentTool(Tool):
             },
             "domain": {
                 "type": "string",
-                "description": "Agent domain: general, health, engineering, finance, news, etc. Default: general.",
+                "description": "Agent domain: general, wellness, engineering, news, home, etc. Default: general.",
             },
             "model_pool": {
                 "type": "string",

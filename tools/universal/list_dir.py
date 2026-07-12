@@ -20,7 +20,14 @@ class ListDirTool(Tool):
     """Lists directory entries sorted dirs-first then files alphabetically."""
 
     name = "list_dir"
-    description = "List directory contents, sorted dirs-first then files alphabetically."
+    description = (
+        "List the entries in one directory - subdirectories first, then files, "
+        "alphabetically. Use it to get your bearings in an unfamiliar project or to "
+        "see what a folder contains before reading or writing files. It lists a single "
+        "level only (not recursive): use glob for a recursive name pattern (e.g. "
+        "'**/*.py') or search_files to match file contents. Do not use it just to "
+        "confirm a file you wrote exists - the write tool already reports that."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {

@@ -33,9 +33,9 @@ def _make_tool(tool_name: str) -> Tool:
 # TOOL_GRAPH coverage
 
 
-def test_tool_graph_has_v1_agents() -> None:
-    """The four v1 domain agents must each appear in the graph (README Section 7.1)."""
-    assert {"health", "university", "job", "finance"}.issubset(set(TOOL_GRAPH.keys()))
+def test_tool_graph_has_domain_agents() -> None:
+    """The domain agents (plus the general assistant) each appear in the graph."""
+    assert {"wellness", "home", "news_briefing", "general"}.issubset(set(TOOL_GRAPH.keys()))
 
 
 def test_tool_graph_has_cross_domain_tools() -> None:

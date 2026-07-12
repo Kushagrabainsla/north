@@ -31,13 +31,33 @@ def describe(mode: StrategyMode) -> str:
     return _DESCRIPTIONS[mode]
 
 
+def _coerce_preferred(raw: object) -> dict[str, list[str]]:
+    """Coerce a settings.json value into a ``{pool: [specs]}`` map, dropping junk.
+
+    Kept dependency-free (no inference import) so the config layer stays
+    independent; the wiring layer parses env/defaults via
+    ``inference.model_policy.parse_preferred``.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for pool, val in raw.items():
+        if not isinstance(pool, str) or not isinstance(val, list):
+            continue
+        specs = [str(s).strip() for s in val if str(s).strip()]
+        if specs:
+            out[pool] = specs
+    return out
+
+
 class NorthSettings:
     """Persistent user settings stored at ~/.north/settings.json."""
 
     _DEFAULT_STRATEGY = StrategyMode.CRUISE
     _DEFAULT_APPROVAL_TIMEOUT = 300.0
 
-    def __init__(self, path: Path, default_approval_mode: ApprovalMode | None = None) -> None:
+    def __init__(self, path: Path, default_approval_mode: ApprovalMode | None = None,
+                 default_preferred_models: dict[str, list[str]] | None = None) -> None:
         from approval.mode import ApprovalMode
 
         self._path = path
@@ -45,6 +65,16 @@ class NorthSettings:
         self._approval_timeout_seconds: float = self._DEFAULT_APPROVAL_TIMEOUT
         # Startup default (e.g. from NORTH_APPROVAL_MODE); settings.json overrides it.
         self._approval_mode: ApprovalMode = default_approval_mode or ApprovalMode.INTERACTIVE
+        # Curated preferred models per pool (see inference/model_policy.py). The
+        # startup default comes from env/DEFAULT_PREFERRED_MODELS via the wiring
+        # layer; a "preferred_models" key in settings.json overrides it live.
+        # `_preferred_explicit` tracks whether the value was *deliberately* chosen
+        # (loaded from a file that had the key, or set via set_preferred_models) so
+        # a routine _save (e.g. changing strategy) never freezes the built-in
+        # default into settings.json - which would otherwise stop future default
+        # improvements from ever reaching the user.
+        self._preferred_models: dict[str, list[str]] = dict(default_preferred_models or {})
+        self._preferred_explicit: bool = False
         self._load()
 
     def _load(self) -> None:
@@ -57,6 +87,9 @@ class NorthSettings:
             self._strategy = StrategyMode(data.get("strategy", self._DEFAULT_STRATEGY.value))
             self._approval_timeout_seconds = float(data.get("approval_timeout_seconds", self._DEFAULT_APPROVAL_TIMEOUT))
             self._approval_mode = parse_approval_mode(data.get("approval_mode")) or self._approval_mode
+            if "preferred_models" in data:
+                self._preferred_models = _coerce_preferred(data.get("preferred_models"))
+                self._preferred_explicit = True
         except Exception as exc:
             logger.warning(
                 "settings.json is unreadable - resetting to defaults (%s): %s",
@@ -76,8 +109,18 @@ class NorthSettings:
     def approval_mode(self) -> ApprovalMode:
         return self._approval_mode
 
+    @property
+    def preferred_models(self) -> dict[str, list[str]]:
+        """Curated preferred models per pool. Empty pools fall back to price ranking."""
+        return self._preferred_models
+
     def set_strategy(self, mode: StrategyMode) -> None:
         self._strategy = mode
+        self._save()
+
+    def set_preferred_models(self, mapping: dict[str, list[str]]) -> None:
+        self._preferred_models = _coerce_preferred(mapping)
+        self._preferred_explicit = True
         self._save()
 
     def set_approval_timeout(self, seconds: float) -> None:
@@ -91,16 +134,16 @@ class NorthSettings:
     def _save(self) -> None:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(
-                json.dumps(
-                    {
-                        "strategy": self._strategy.value,
-                        "approval_timeout_seconds": self._approval_timeout_seconds,
-                        "approval_mode": self._approval_mode.value,
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+            data: dict[str, object] = {
+                "strategy": self._strategy.value,
+                "approval_timeout_seconds": self._approval_timeout_seconds,
+                "approval_mode": self._approval_mode.value,
+            }
+            # Only persist preferred_models when the user deliberately chose it, so
+            # a routine save never freezes the built-in default and block future
+            # default improvements from reaching this install.
+            if self._preferred_explicit:
+                data["preferred_models"] = self._preferred_models
+            self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning("Failed to persist strategy settings to %s: %s", self._path, exc)

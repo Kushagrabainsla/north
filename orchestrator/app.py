@@ -47,6 +47,8 @@ from orchestrator.reconcile import recover_interrupted_tasks
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.watchdog import watch_stuck_tasks
+from skills import SkillRegistry, SkillSelector
+from skills.distiller import SkillDistiller
 from tools.confidence import RELIABLE_TOOLS
 from tools.registry import ToolRegistry
 from tools.semantic.search_code import SearchCodeTool
@@ -64,6 +66,7 @@ from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from tools.universal.update_plan import UpdatePlanTool
+from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
 from utils.time import utcnow
@@ -72,6 +75,9 @@ from utils.version import NORTH_VERSION
 logger = logging.getLogger(__name__)
 
 _AGENTS_DIR = Path(__file__).parent.parent / "agents"
+# Built-in skills ship as content under the skills package; learned skills are
+# distilled at runtime into the user's north_home (kept out of the repo).
+_BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills" / "builtin"
 
 # ---------------------------------------------------------------------------
 # Startup helpers
@@ -207,6 +213,21 @@ def _build_tool_registry(
     return tool_registry, create_agent_tool
 
 
+def _build_skills(deps) -> tuple[SkillRegistry, SkillSelector]:
+    """Load built-in + learned skills and build the semantic selector.
+
+    Learned skills live under north_home so runtime-distilled procedures are the
+    user's own data, never committed to the repo alongside the built-in ones.
+    NORTH_BUILTIN_SKILLS_DIR overrides the built-in location; it exists only so the
+    eval harness can A/B skills-on vs skills-off by pointing at an empty directory.
+    """
+    builtin_dir = Path(os.environ.get("NORTH_BUILTIN_SKILLS_DIR") or _BUILTIN_SKILLS_DIR)
+    registry = SkillRegistry(
+        builtin_dir=builtin_dir,
+        learned_dir=settings.north_home / "skills",
+    )
+    selector = SkillSelector(registry, embed_fn=deps.embed_fn)
+    return registry, selector
 def _build_tool_index(deps) -> ToolIndex | None:
     if deps.embed_fn is None:
         return None
@@ -308,12 +329,14 @@ def _build_orchestrator(
         worktree_root=settings.worktree_root,
         best_of_n=settings.best_of_n,
         best_of_n_test_command=settings.best_of_n_test_command,
+        verify_command=settings.verify_command,
         running_task_store=deps.running_task_store,
         stuck_task_max_age_seconds=settings.stuck_task_max_age_seconds,
         self_repair=settings.self_repair_enabled,
         idempotency_window_seconds=settings.idempotency_window_seconds,
         critic=settings.critic_enabled,
         approval_memory=approval_memory,
+        plan_store=deps.plan_store,
     )
 
 
@@ -375,7 +398,11 @@ async def _pool_refresh_loop(deps) -> None:
 
 
 def _launch_background_tasks(
-    deps, orchestrator: Orchestrator, extraction_pipeline: ExtractionPipeline, callback_server: uvicorn.Server
+    deps,
+    orchestrator: Orchestrator,
+    extraction_pipeline: ExtractionPipeline,
+    skill_distiller: SkillDistiller,
+    callback_server: uvicorn.Server,
 ) -> list[asyncio.Task]:
     async def _dispatch_job(job: Job) -> None:
         if job.task == "task_context_cleanup":
@@ -423,6 +450,7 @@ def _launch_background_tasks(
         asyncio.create_task(_guarded(cron_scheduler.run(), "cron_scheduler"), name="cron_scheduler"),
         asyncio.create_task(_guarded(extraction_pipeline.run(), "extraction_pipeline"), name="extraction_pipeline"),
         asyncio.create_task(_guarded(episode_consolidator.run(), "episode_consolidator"), name="episode_consolidator"),
+        asyncio.create_task(_guarded(skill_distiller.run(), "skill_distiller"), name="skill_distiller"),
         asyncio.create_task(_guarded(callback_server.serve(), "callback_server"), name="callback_server"),
         asyncio.create_task(_guarded(_pool_refresh_loop(deps), "pool_refresh"), name="pool_refresh"),
         asyncio.create_task(
@@ -489,6 +517,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, judgement_filter)
 
+    _step("loading skills")
+    skill_registry, skill_selector = _build_skills(deps)
+    tool_registry.register(UseSkillTool(skill_registry))
+    tool_registry.make_universal("use_skill")
+
     _step("seeding confidence defaults")
     await deps.confidence_tracker.seed_defaults(tool_graph, RELIABLE_TOOLS)
 
@@ -503,6 +536,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("scanning agent registry")
     agent_deps = _build_agent_deps(deps, tool_registry)
     agent_deps.tool_index = tool_index
+    agent_deps.skill_registry = skill_registry
+    agent_deps.skill_selector = skill_selector
     agent_registry = _build_agent_registry(agent_deps)
     create_agent_tool._agent_registry = agent_registry  # late-wire after registry is built
     _step(f"registered agents: {agent_registry.names()}")
@@ -532,7 +567,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     callback_server = _build_callback_server()
 
     _step("scheduling background tasks")
-    background_tasks = _launch_background_tasks(deps, orchestrator, extraction_pipeline, callback_server)
+    skill_distiller = SkillDistiller(
+        episodic_store=deps.episodic_store,
+        inference_router=deps.cost_tracker,
+        skill_registry=skill_registry,
+        skill_selector=skill_selector,
+        learned_dir=settings.north_home / "skills",
+    )
+    background_tasks = _launch_background_tasks(
+        deps, orchestrator, extraction_pipeline, skill_distiller, callback_server
+    )
 
     _step("startup complete - yielding to server")
     try:

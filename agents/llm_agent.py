@@ -10,6 +10,7 @@ from typing import Any
 from agents.base import Agent
 from agents.exceptions import AgentConfigError, AgentOutputParseError
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
+from agents.policy import load_policies, render_policies
 from inference.models import (
     POOL_TO_PRIORITY,
     CompletionRequest,
@@ -18,6 +19,11 @@ from inference.models import (
 from tools.base import Tool
 from utils.text import strip_code_fences
 from utils.time import localnow
+
+# Built-in policies (authoritative, always-on operating rules) loaded once at import.
+# Fails closed: a malformed/empty policy raises here rather than silently leaving
+# agents without their safety guardrails. See agents/policy.py.
+_POLICIES = load_policies(Path(__file__).resolve().parent.parent / "policies")
 
 
 class LLMAgent(Agent):
@@ -38,9 +44,12 @@ class LLMAgent(Agent):
         path = self._prompts_dir() / "system.md"
         if not path.exists():
             raise AgentConfigError(f"Missing system prompt at {path}. Every LLMAgent needs one.")
-        self._system_prompt_cache: str = (
-            path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY + _DELIVERABLE_POLICY
-        )
+        prompt = path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY + _DELIVERABLE_POLICY
+        # Authoritative operating policies (safety for every agent; clean-code for
+        # coder+reviewer) are appended to the system-prompt tier, activated by agent
+        # name. See policies/ and agents/policy.py.
+        prompt += render_policies(_POLICIES, self.name)
+        self._system_prompt_cache: str = prompt
 
     def _prompts_dir(self) -> Path:
         """Resolve the agent's `prompts/` folder relative to its module file."""

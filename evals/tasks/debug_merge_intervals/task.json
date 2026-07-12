@@ -1,0 +1,6 @@
+{
+  "id": "debug_merge_intervals",
+  "kind": "debug",
+  "timeout_s": 600,
+  "prompt": "The test suite for interval.py is failing. merge_overlapping(intervals) should merge overlapping or touching intervals, but touching intervals like [1, 4] and [4, 5] are not being merged. Find the root cause, fix it, and make the tests pass."
+}

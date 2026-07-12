@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -31,8 +32,11 @@ from inference.constants import (
     _MODEL_CONFIDENCE_ALPHA,
     _MODEL_CONFIDENCE_FULL_USES,
     _MODEL_CONFIDENCE_MAX_WEIGHT,
+    _PREFERRED_HEALTH_FLOOR,
+    _PREFERRED_MIN_USES,
     _QUALITY_TIER_HIGH,
     _QUALITY_TIER_MEDIUM,
+    _STICKY_MAX_ENTRIES,
 )
 from inference.cooldowns import CooldownStore, _CooldownKey
 from inference.exceptions import (
@@ -42,7 +46,9 @@ from inference.exceptions import (
     ModelRateLimitedError,
     PaymentRequiredError,
 )
+from inference.model_policy import model_matches
 from inference.models import (
+    PRIORITY_TO_POOL,
     CompletionRequest,
     CompletionResponse,
     EmbedRequest,
@@ -105,8 +111,13 @@ class ModelDispatcher(InferenceRouter):
         # Scores changed since the last batched DB flush.
         self._dirty_scores: set[_CooldownKey] = set()
         self._flush_task: asyncio.Task | None = None
+        # Per-task model stickiness: (task_id, component, capability, priority) →
+        # (model_id, provider_name) of the first model that succeeded, reused for
+        # that task's later steps. Bounded LRU (see _remember_sticky).
+        self._sticky: OrderedDict[tuple[str, str, str, str], tuple[str, str]] = OrderedDict()
         self._build_registry()
         self._cooldowns.load()
+        self._validate_preferred()
 
     def _build_registry(self) -> None:
         """Merge models from all providers. Each entry is keyed by (provider_name, model_id)."""
@@ -137,7 +148,9 @@ class ModelDispatcher(InferenceRouter):
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         estimated = len(request.prompt) // 4
-        candidates = self._candidates(ModelCapability.COMPLETION, self._effective_priority(request.priority), estimated)
+        priority = self._effective_priority(request.priority)
+        candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated)
+        candidates = self._apply_exclusions(candidates, request.exclude_models)
 
         async def _call(provider: Provider, model_id: str) -> CompletionResponse:
             return await provider.complete(model_id, request)
@@ -156,7 +169,8 @@ class ModelDispatcher(InferenceRouter):
                     return False
             return True
 
-        return await self._dispatch(candidates, _call, is_valid=_valid)
+        sticky = self._sticky_key(request, ModelCapability.COMPLETION, priority)
+        return await self._dispatch(candidates, _call, is_valid=_valid, sticky_key=sticky)
 
     async def complete_with_tools(
         self,
@@ -168,7 +182,9 @@ class ModelDispatcher(InferenceRouter):
         # conversations - include them or the context-fit check undercounts.
         tools_chars = sum(len(json.dumps(t)) for t in request.tools) if request.tools else 0
         estimated = (len(text) + tools_chars) // 4
-        candidates = self._candidates(ModelCapability.TOOL_CALLS, self._effective_priority(request.priority), estimated)
+        priority = self._effective_priority(request.priority)
+        candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated)
+        candidates = self._apply_exclusions(candidates, request.exclude_models)
 
         forwarded = False
         wrapped_cb: Callable[[str], Awaitable[None]] | None = None
@@ -191,7 +207,8 @@ class ModelDispatcher(InferenceRouter):
                 forwarded = False
             return await provider.complete_with_tools(model_id, request, wrapped_cb)
 
-        return await self._dispatch(candidates, _call, is_valid=_toolcall_has_output)
+        sticky = self._sticky_key(request, ModelCapability.TOOL_CALLS, priority)
+        return await self._dispatch(candidates, _call, is_valid=_toolcall_has_output, sticky_key=sticky)
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         candidates = self._candidates(ModelCapability.EMBEDDING, PoolPriority.MEDIUM, 0)
@@ -236,6 +253,7 @@ class ModelDispatcher(InferenceRouter):
             except Exception:
                 logger.warning("Pool refresh failed for provider %s", provider.name, exc_info=True)
         self._build_registry()
+        self._validate_preferred()
 
     def current_pools(self) -> dict[str, ModelPool]:
         """Build a pool snapshot from the dispatcher's own registry for CLI display."""
@@ -380,7 +398,165 @@ class ModelDispatcher(InferenceRouter):
                 key=lambda x: (not x[0].is_free, round(quality[(x[0].model_id, x[0].provider_name)], 6)),
             )
 
-        return available
+        return self._promote_preferred(available, capability, priority)
+
+    # ---- Preferred-model promotion ----
+
+    def _apply_exclusions(self, candidates: list[_Candidate], exclude_models: list[str]) -> list[_Candidate]:
+        """Drop excluded model ids from candidates, degrading gracefully.
+
+        Used to force an independent model choice (e.g. a reviewer that must not
+        reuse the coder's model). If excluding would leave no candidates - the
+        excluded model is the only one available - the exclusion is skipped and a
+        warning logged, so a task is never blocked on model scarcity (the DoD gate
+        then honestly flags the review as non-independent).
+        """
+        if not exclude_models:
+            return candidates
+        excluded = {m.strip().lower() for m in exclude_models if m.strip()}
+        if not excluded:
+            return candidates
+        filtered = [(i, p) for i, p in candidates if i.model_id.lower() not in excluded]
+        if not filtered:
+            logger.warning(
+                "exclude_models %s left no candidates - proceeding without exclusion "
+                "(an independent second opinion is not possible right now)",
+                sorted(excluded),
+            )
+            return candidates
+        return filtered
+
+    def _preferred_specs(self, pool: str | None) -> list[str]:
+        """Curated preferred specs for a pool, from live settings (empty if unset)."""
+        if self._north_settings is None or not pool:
+            return []
+        try:
+            return self._north_settings.preferred_models.get(pool, [])
+        except Exception:
+            return []
+
+    def _preferred_healthy(self, key: _CooldownKey) -> bool:
+        """False once a preferred model has enough failed history to stop promoting it.
+
+        A preferred model that keeps failing (EMA below the floor after enough
+        uses) drops back to its normal price position instead of being retried
+        first on every call - so a bad preference can't pin errors/latency to the
+        front of the queue. Its cooldown/fallback handling is otherwise unchanged.
+        """
+        score, uses = self._model_confidence.get(key, (_DEFAULT_MODEL_CONFIDENCE, 0))
+        return not (uses >= _PREFERRED_MIN_USES and score < _PREFERRED_HEALTH_FLOOR)
+
+    def _promote_preferred(
+        self, available: list[_Candidate], capability: ModelCapability, priority: PoolPriority
+    ) -> list[_Candidate]:
+        """Move available, healthy preferred models to the front in curated order.
+
+        The price-ranked remainder is kept behind as a resilient fallback, so a
+        stale/unavailable preference never blocks a call - it simply degrades to
+        today's behaviour. Only applies to chat/tool-call routing; embeddings and
+        transcription are unaffected. The preferred front is deterministic (not
+        shuffled) so a coding task is done by a consistent model.
+        """
+        if capability not in (ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS):
+            return available
+        specs = self._preferred_specs(PRIORITY_TO_POOL.get(priority))
+        if not specs:
+            return available
+
+        front: list[_Candidate] = []
+        seen: set[_CooldownKey] = set()
+        for spec in specs:
+            for info, provider in available:
+                key: _CooldownKey = (info.model_id, info.provider_name)
+                if key in seen:
+                    continue
+                if model_matches(spec, info.provider_name, info.model_id) and self._preferred_healthy(key):
+                    front.append((info, provider))
+                    seen.add(key)
+        if not front:
+            # Preferred configured but none available/healthy right now: fall back
+            # to price ranking. Kept at debug so a busy pool doesn't spam logs.
+            logger.debug("preferred: no preferred model available for priority %s - using price fallback", priority)
+            return available
+        rest = [(i, p) for i, p in available if (i.model_id, i.provider_name) not in seen]
+        return front + rest
+
+    def _validate_preferred(self) -> None:
+        """Warn when a curated preferred spec matches no model in the live catalog.
+
+        Runs at startup and after every pool refresh so a stale/renamed model id
+        is surfaced (and then silently falls back to price ranking) instead of
+        appearing configured while actually routing by price.
+        """
+        if self._north_settings is None:
+            return
+        try:
+            preferred = self._north_settings.preferred_models
+        except Exception:
+            return
+        registry = list(self._registry.values())
+        if not registry:
+            # Catalog not fetched yet (providers populate on the first async
+            # refresh_pools()); skip now to avoid warning about every spec, and
+            # re-validate once the live catalog is loaded.
+            return
+        for pool, specs in preferred.items():
+            for spec in specs:
+                if not any(model_matches(spec, info.provider_name, info.model_id) for info, _ in registry):
+                    logger.warning(
+                        "preferred model %r (pool %s) matches no model in the live catalog - "
+                        "it will be skipped until it appears; check the id or your provider keys",
+                        spec,
+                        pool,
+                    )
+
+    # ---- Per-task model stickiness ----
+
+    @staticmethod
+    def _sticky_key(
+        request: CompletionRequest | ToolCallRequest, capability: ModelCapability, priority: PoolPriority
+    ) -> tuple[str, str, str, str] | None:
+        """Stickiness key for a request, or None when there is no task to scope to."""
+        task_id = getattr(request, "task_id", None)
+        if not task_id:
+            return None
+        component = getattr(request, "component", "") or ""
+        return (task_id, component, capability.value, priority.value)
+
+    def _apply_stickiness(
+        self, sticky_key: tuple[str, str, str, str], candidates: list[_Candidate]
+    ) -> list[_Candidate]:
+        """Move this task's already-chosen model to the front if it's still a candidate.
+
+        If the pinned model is absent now (on cooldown, dropped from the catalog,
+        or no longer fits the context) the list is returned unchanged and normal
+        preferred/price ordering applies - the pin is refreshed on the next success.
+        """
+        pinned = self._sticky.get(sticky_key)
+        if pinned is None:
+            return candidates
+        for idx, (info, _) in enumerate(candidates):
+            if (info.model_id, info.provider_name) == pinned:
+                if idx == 0:
+                    return candidates
+                return [candidates[idx], *candidates[:idx], *candidates[idx + 1 :]]
+        return candidates
+
+    def _remember_sticky(self, sticky_key: tuple[str, str, str, str], key: _CooldownKey) -> None:
+        """Record the model that just succeeded for this task; bounded LRU eviction."""
+        prev = self._sticky.get(sticky_key)
+        if prev is not None and prev != key:
+            logger.info(
+                "model switched for task %s/%s: %s → %s",
+                sticky_key[0],
+                sticky_key[1],
+                prev[0],
+                key[0],
+            )
+        self._sticky[sticky_key] = key
+        self._sticky.move_to_end(sticky_key)
+        while len(self._sticky) > _STICKY_MAX_ENTRIES:
+            self._sticky.popitem(last=False)
 
     # ---- Dispatch ----
 
@@ -389,9 +565,13 @@ class ModelDispatcher(InferenceRouter):
         candidates: list[_Candidate],
         call_fn: Callable[[Provider, str], Awaitable],
         is_valid: Callable[[Any], bool] | None = None,
+        sticky_key: tuple[str, str, str, str] | None = None,
     ):
         if not candidates:
             raise AllModelsRateLimitedError("No models available for this request")
+
+        if sticky_key is not None:
+            candidates = self._apply_stickiness(sticky_key, candidates)
 
         for info, provider in candidates:
             key: _CooldownKey = (info.model_id, info.provider_name)
@@ -415,6 +595,8 @@ class ModelDispatcher(InferenceRouter):
                     continue
                 self._record_model_outcome(key, True)
                 self._persist_model_score(key)
+                if sticky_key is not None:
+                    self._remember_sticky(sticky_key, key)
                 return result
             except ModelRateLimitedError as e:
                 self._cooldowns.set_rate_limit(key, e.retry_after)

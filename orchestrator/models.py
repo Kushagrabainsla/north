@@ -32,6 +32,10 @@ class TaskRequest(BaseModel):
     # Optional client-supplied key to dedupe re-deliveries (e.g. a webhook id).
     # When omitted, the orchestrator derives one from source+prompt.
     idempotency_key: str | None = None
+    # When set, run this specific agent directly, bypassing intent classification
+    # and the planner. Backs `north agent run <name>` so a manual agent trigger
+    # invokes exactly that agent instead of being re-routed by the planner.
+    forced_agent: str | None = None
 
 
 class TaskResponse(BaseModel):
@@ -61,6 +65,10 @@ class ExecutionPlan(BaseModel):
     mode: ExecutionMode = ExecutionMode.SINGLE_AGENT
     direct_tool: str | None = None
     direct_tool_params: dict[str, Any] = Field(default_factory=dict)
+    # For engineering tasks: the classified kind (question/research/bugfix/refactor/
+    # feature). Empty for non-engineering plans. Lets the DoD gate apply kind-specific
+    # evidence checks (e.g. a bugfix should carry reproduction + regression evidence).
+    engineering_kind: str = ""
 
     def with_task_id(self, new_task_id: str) -> ExecutionPlan:
         """Return a copy of this plan with task_id replaced."""

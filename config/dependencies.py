@@ -11,6 +11,7 @@ See docs/CODING_STYLE.md Section 6.3.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
     from tools.confidence import ConfidenceTracker
 
 EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,6 +78,28 @@ class Dependencies:
     code_index: CodeIndex | None = field(default=None)
 
 
+def _resolve_preferred_models() -> dict[str, list[str]]:
+    """Resolve the startup preferred-models default: env override, else built-in.
+
+    ``NORTH_PREFERRED_MODELS`` (a JSON object string) overrides the curated
+    ``DEFAULT_PREFERRED_MODELS``. A malformed value falls back to the default so
+    a bad env var can never break startup. settings.json overrides this at runtime.
+    """
+    import json
+
+    from inference.model_policy import DEFAULT_PREFERRED_MODELS, parse_preferred
+
+    raw = settings.preferred_models.strip()
+    if not raw:
+        return {k: list(v) for k, v in DEFAULT_PREFERRED_MODELS.items()}
+    try:
+        parsed = parse_preferred(json.loads(raw))
+    except Exception:
+        logger.warning("NORTH_PREFERRED_MODELS is not valid JSON - using built-in defaults")
+        return {k: list(v) for k, v in DEFAULT_PREFERRED_MODELS.items()}
+    return parsed or {k: list(v) for k, v in DEFAULT_PREFERRED_MODELS.items()}
+
+
 def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
     """Build and wire all synchronously-constructable production dependencies."""
     from context.code_index import CodeIndex
@@ -96,6 +121,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         north_settings = NorthSettings(
             settings.north_home / "settings.json",
             default_approval_mode=resolve_approval_mode(settings),
+            default_preferred_models=_resolve_preferred_models(),
         )
 
     context_dir = settings.north_home / "context"

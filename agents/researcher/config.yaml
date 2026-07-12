@@ -2,11 +2,8 @@ agent: researcher
 domain: engineering
 model_pool: reasoning
 accepts:
-  - "research"
   - "investigate"
   - "explore"
-  - "analyze"
-  - "find"
   - "build"
   - "implement"
   - "create"

@@ -48,6 +48,7 @@ from rich.text import Text
 
 from cli._client import _api, _headers
 from cli._server import (
+    _detached_process_kwargs,
     _docker_available,
     _find_compose_file,
     _find_project_root,
@@ -242,7 +243,7 @@ def _launch_tui(
         ]
         server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
         log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
-        proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
+        proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
         log_file.close()  # child holds its own dup; close the parent's copy so the fd isn't leaked
         pid_path.write_text(str(proc.pid), encoding="utf-8")
         _wait_for_server(host, port, proc=proc)
@@ -700,6 +701,30 @@ def cancel_job(
     typer.secho(f"✓ Job {job_id} cancelled.", fg=typer.colors.YELLOW)
 
 
+@app.command("cancel")
+def cancel_any(
+    target: str = typer.Argument("", help="Task or job ID to stop. Omit and pass --all to stop everything."),
+    all_: bool = typer.Option(False, "--all", help="Stop ALL active tasks and pending/scheduled jobs."),
+) -> None:
+    """Stop anything: a task or job by ID, or everything in flight with --all.
+
+    A running scheduled (cron) job is just an active task/job, so this stops it too.
+    To stop *future* recurring runs, use `north stop` (halts the scheduler).
+    """
+    if all_:
+        data = _api("POST", "/orchestrator/cancel-all").json()
+        typer.secho(
+            f"✓ Stopped {data['tasks_cancelled']} active task(s) and {data['jobs_cancelled']} pending job(s).",
+            fg=typer.colors.YELLOW,
+        )
+        return
+    if not target:
+        typer.secho("Provide a task/job ID, or use --all to stop everything.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    data = _api("POST", f"/orchestrator/cancel/{target}").json()
+    typer.secho(f"✓ Cancelled {data['cancelled']} {data['id']}.", fg=typer.colors.YELLOW)
+
+
 # ── agents ────────────────────────────────────────────────────────────────────
 
 agent_app = typer.Typer(help="Agent management.", no_args_is_help=True)
@@ -971,10 +996,10 @@ def _update_planner_routing(domain: str, description: str, output_dir: Path) -> 
 
 @agent_app.command("run")
 def run_agent(
-    name: str = typer.Argument(..., help="Agent name (health, finance, job, university)."),
+    name: str = typer.Argument(..., help="Agent name (run `north agents` to list; e.g. coder, researcher, reviewer)."),
     task: str = typer.Argument(..., help="Task description for the agent."),
 ) -> None:
-    """Manually trigger a specific agent."""
+    """Manually trigger a specific agent (runs that agent directly, not the planner)."""
     response = _api("POST", "/orchestrator/agent/run", json={"agent": name, "task": task})
     data = response.json()
     typer.secho(f"✓ Task submitted: {data['task_id']}", fg=typer.colors.GREEN)
@@ -1455,7 +1480,7 @@ def start(
     workspace_path.write_text(resolved_workspace, encoding="utf-8")
 
     log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
-    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env)
+    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
     log_file.close()  # child holds its own dup; close the parent's copy so the fd isn't leaked
     pid_path.write_text(str(proc.pid), encoding="utf-8")
 

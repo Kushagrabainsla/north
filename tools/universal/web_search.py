@@ -16,13 +16,21 @@ class WebSearchTool(Tool):
 
     name = "web_search"
     description = (
-        "Searches the web for up-to-date information. "
-        "Use for current events, facts, prices, or anything requiring real-time data."
+        "Search the web and get back a ranked list of results (title, snippet, and URL). "
+        "Use it for current events, real-time facts, prices, or anything outside your "
+        "training data or the local workspace. Phrase the query as plain natural-language "
+        "keywords; do NOT use operators like site:, quotes, or AND/OR, which many search "
+        "backends ignore. Results are short snippets only - to read a page in full, follow "
+        "up with fetch_url on its URL. To find code or files in the user's own project, use "
+        "search_files, search_code, or glob instead."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "The search query"},
+            "query": {
+                "type": "string",
+                "description": "Plain-language search keywords, e.g. 'python-kasa energy monitoring'",
+            },
             "max_results": {
                 "type": "integer",
                 "description": "Number of results to return (1–10)",

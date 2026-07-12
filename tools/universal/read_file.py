@@ -21,13 +21,17 @@ class ReadFileTool(Tool):
 
     name = "read_file"
     description = (
-        "Read a file's text contents. Pass start_line and/or end_line (1-based, "
-        "inclusive) to read only a slice of a large file instead of the whole thing."
+        "Read a file's text contents from the workspace, returned with line numbers. "
+        "Use it to inspect code, config, or documentation before editing, or whenever "
+        "you need the exact current content. For a large file, pass start_line and/or "
+        "end_line (1-based, inclusive) to read just a slice instead of the whole thing. "
+        "Reads UTF-8 text only - binary files, missing files, and paths outside the "
+        "workspace return a clear error rather than empty content."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path to the file"},
+            "path": {"type": "string", "description": "Path to the file, e.g. 'src/app.py'"},
             "start_line": {
                 "type": "integer",
                 "description": "First line to read, 1-based inclusive (optional)",

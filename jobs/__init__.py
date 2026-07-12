@@ -4,7 +4,7 @@ from jobs.base import JobProcessor
 from jobs.cron_store import UserCronStore
 from jobs.exceptions import JobError, JobNotFoundError, JobProcessingError
 from jobs.models import Job, JobPriority, JobStatus, JobType
-from jobs.scheduler import V1_CRON_ENTRIES, CronEntry, CronScheduler, next_due_entry, next_firing
+from jobs.scheduler import V1_CRON_ENTRIES, CronEntry, CronScheduler, next_due_entry, next_firing, previous_firing
 from jobs.sqlite_processor import SQLiteJobProcessor
 
 __all__ = [
@@ -22,5 +22,6 @@ __all__ = [
     "UserCronStore",
     "next_due_entry",
     "next_firing",
+    "previous_firing",
     "V1_CRON_ENTRIES",
 ]

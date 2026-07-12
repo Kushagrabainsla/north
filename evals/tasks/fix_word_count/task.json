@@ -1,0 +1,6 @@
+{
+  "id": "fix_word_count",
+  "kind": "bugfix",
+  "timeout_s": 480,
+  "prompt": "count_occurrences(text, word) in wordcount.py should count how many times word appears in text as a whole word, case-insensitively. It is currently case-sensitive and also counts substrings. Fix it so count_occurrences('The cat sat on the CAT mat', 'cat') == 2 and 'category' is not counted as 'cat'. Add a regression test."
+}

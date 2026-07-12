@@ -1,0 +1,6 @@
+{
+  "id": "fix_pagination_offset",
+  "kind": "bugfix",
+  "timeout_s": 420,
+  "prompt": "paginate(items, page, per_page) in pagination.py should return the slice of items for the given 1-based page: page 1 is items[0:per_page], page 2 the next per_page, and so on. It is off by one page. Fix it so paginate(list(range(10)), 2, 3) == [3, 4, 5]. Add a regression test."
+}

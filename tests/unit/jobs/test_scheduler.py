@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from jobs import CronEntry, CronScheduler, JobType, next_due_entry, next_firing
+from jobs import CronEntry, CronScheduler, JobType, next_due_entry, next_firing, previous_firing
 from jobs.sqlite_processor import SQLiteJobProcessor
 
 # CronEntry validation
@@ -141,3 +141,49 @@ async def test_scheduler_run_returns_when_no_entries(tmp_path) -> None:
 
     # No infinite loop with empty entries - returns immediately.
     await scheduler.run()
+
+
+# previous_firing - the inverse of next_firing, used for startup catch-up
+
+
+def test_previous_firing_daily_returns_today_when_time_passed() -> None:
+    entry = CronEntry(name="m", agent="a", task="t", hour=7, minute=0)
+    at = datetime(2026, 5, 21, 10, 0, tzinfo=UTC)  # 10am, after the 7am slot
+    assert previous_firing(entry, at) == datetime(2026, 5, 21, 7, 0, tzinfo=UTC)
+
+
+def test_previous_firing_daily_returns_yesterday_when_time_not_yet() -> None:
+    entry = CronEntry(name="m", agent="a", task="t", hour=7, minute=0)
+    at = datetime(2026, 5, 21, 6, 0, tzinfo=UTC)  # 6am, before the 7am slot
+    assert previous_firing(entry, at) == datetime(2026, 5, 20, 7, 0, tzinfo=UTC)
+
+
+# CronScheduler startup catch-up
+
+
+async def test_catch_up_enqueues_missed_slot_once_and_dedups(tmp_path) -> None:
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    now = datetime(2026, 5, 22, 10, 0, tzinfo=UTC)  # 10am; the 8am slot was missed 2h ago
+    entry = CronEntry(name="news", agent="news_briefing", task="brief", hour=8, minute=0)
+    scheduler = CronScheduler(processor, [entry], clock=lambda: now)
+
+    await scheduler._catch_up([entry], now)
+    news = [j for j in await processor.list_jobs() if (j.payload or {}).get("cron_entry") == "news"]
+    assert len(news) == 1
+    assert news[0].scheduled_at == datetime(2026, 5, 22, 8, 0, tzinfo=UTC)
+
+    # A restart within the window must NOT re-run the same slot.
+    await scheduler._catch_up([entry], now)
+    news_again = [j for j in await processor.list_jobs() if (j.payload or {}).get("cron_entry") == "news"]
+    assert len(news_again) == 1
+
+
+async def test_catch_up_skips_slot_older_than_window(tmp_path, monkeypatch) -> None:
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    now = datetime(2026, 5, 22, 10, 0, tzinfo=UTC)  # the 8am slot is 2h ago
+    entry = CronEntry(name="news", agent="a", task="t", hour=8, minute=0)
+    scheduler = CronScheduler(processor, [entry], clock=lambda: now)
+    monkeypatch.setattr(scheduler, "_STARTUP_CATCHUP", timedelta(hours=1))  # window shorter than the 2h gap
+
+    await scheduler._catch_up([entry], now)
+    assert not [j for j in await processor.list_jobs() if (j.payload or {}).get("cron_entry") == "news"]

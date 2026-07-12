@@ -1,4 +1,4 @@
-"""KasaTool - control TP-Link Kasa smart bulbs over the local network.
+"""KasaTool - control TP-Link Kasa smart-home devices over the local network.
 
 Uses python-kasa for device control. Discovery runs the `kasa discover` CLI
 as a subprocess (the only reliable method inside uvicorn's event loop, since
@@ -237,16 +237,19 @@ def _summarize_action(
 
 
 class KasaTool(ApprovalGatedTool):
-    """Discover and control TP-Link Kasa smart bulbs on the local network."""
+    """Discover and control TP-Link Kasa smart-home devices on the local network."""
 
     name = "kasa"
     is_mutating = True
     description = (
-        "Control TP-Link Kasa smart bulbs over the local network. "
-        "Supports on/off/toggle, brightness, colour (by name or hue), "
-        "colour temperature, and listing devices. "
-        "Every control action requires an explicit 'device' (alias or IP) and user approval; "
-        "only action='list' works without a device."
+        "Control TP-Link Kasa smart-home devices - plugs, wall switches, bulbs, and light "
+        "strips - on the local network, and list what is discovered. Every device supports "
+        "on/off/toggle; brightness needs a dimmer or bulb, and colour or colour-temperature "
+        "needs a colour/tunable-white bulb (the tool reports if a device lacks a feature). "
+        "Identify the target by its alias/name (e.g. 'Desk lamp') or IP; if you do not know "
+        "it, run action='list' first. Every control action requires an explicit 'device' and "
+        "user approval - there is no implicit 'all devices' target - and only action='list' "
+        "works without a device."
     )
     parameters_schema = {
         "type": "object",

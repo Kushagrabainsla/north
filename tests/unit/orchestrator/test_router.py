@@ -95,6 +95,25 @@ def test_bugfix_runs_coder_then_reviewer() -> None:
     assert plan.dependencies == {"reviewer": ["coder"]}
 
 
+def test_debug_and_test_route_through_coder_reviewer() -> None:
+    # debug and test are conductor task-framings: coder→reviewer, and the plan
+    # carries the kind so the conductor and DoD can specialise.
+    for kind in ("debug", "test"):
+        plan = _engineering_planner()._build_engineering_plan(kind, 0.9, "t1")
+        assert plan.agents == ["coder", "reviewer"], kind
+        assert plan.engineering_kind == kind
+
+
+def test_deploy_is_single_coder_no_reviewer() -> None:
+    # Deploy/ship is a single git/gh-capable agent - no reviewer, and never escalated
+    # to the full chain even at low confidence (there is no new code to review).
+    for kind in ("deploy", "ship"):
+        plan = _engineering_planner()._build_engineering_plan(kind, 0.9, "t1")
+        assert plan.agents == ["coder"], kind
+        assert plan.engineering_kind == kind
+    assert _engineering_planner()._build_engineering_plan("deploy", 0.2, "t1").agents == ["coder"]
+
+
 def test_refactor_runs_architect_coder_reviewer() -> None:
     plan = _engineering_planner()._build_engineering_plan("refactor", 0.9, "t1")
     assert plan.agents == ["architect", "coder", "reviewer"]
@@ -114,9 +133,29 @@ def test_question_is_single_researcher() -> None:
 
 
 def test_low_confidence_forces_full_chain() -> None:
-    # bugfix would be coder→reviewer, but low confidence runs the full chain.
+    # bugfix would be coder→reviewer, but low confidence broadens a *code* task
+    # to the full chain (a read-only kind is NOT broadened this way - see below).
     plan = _engineering_planner()._build_engineering_plan("bugfix", 0.4, "t1")
     assert plan.agents == ["researcher", "architect", "coder", "reviewer"]
+
+
+def test_low_confidence_no_code_kinds_never_add_coder() -> None:
+    # Regression: a low-confidence read-only kind must stay read-only. A vague
+    # "how does X work?" (question) or "investigate Y" (research) must never be
+    # escalated into a write task by adding the coder.
+    assert _engineering_planner()._build_engineering_plan("question", 0.4, "t1").agents == ["researcher"]
+    assert _engineering_planner()._build_engineering_plan("research", 0.4, "t1").agents == [
+        "researcher",
+        "architect",
+    ]
+
+
+def test_no_code_kinds_are_read_only_at_every_confidence() -> None:
+    for kind in ("question", "research"):
+        for confidence in (0.95, 0.6, 0.59, 0.4, 0.05):
+            plan = _engineering_planner()._build_engineering_plan(kind, confidence, "t1")
+            assert "coder" not in plan.agents, f"{kind}@{confidence} leaked coder"
+            assert "reviewer" not in plan.agents, f"{kind}@{confidence} leaked reviewer"
 
 
 def test_unknown_kind_defaults_to_full_chain() -> None:
@@ -125,8 +164,9 @@ def test_unknown_kind_defaults_to_full_chain() -> None:
 
 
 def test_coder_is_always_followed_by_reviewer() -> None:
-    for kind in ("bugfix", "refactor", "feature"):
+    for kind in ("bugfix", "debug", "test", "refactor", "feature"):
         plan = _engineering_planner()._build_engineering_plan(kind, 0.9, "t1")
+        assert "coder" in plan.agents, kind
         assert "reviewer" in plan.agents
         assert plan.agents.index("coder") < plan.agents.index("reviewer")
 

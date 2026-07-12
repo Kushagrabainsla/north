@@ -44,6 +44,7 @@ from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
 from utils.tasks import spawn
+from utils.text import normalize_dashes
 from utils.time import localnow
 
 logger = logging.getLogger(__name__)
@@ -262,6 +263,8 @@ class AgenticLLMAgent(LLMAgent):
         tools_used: list[str] = []
         _seen_success: set[str] = set()
         successful_tools: list[str] = []
+        _seen_models: set[str] = set()
+        models_used: list[str] = []
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
@@ -272,16 +275,17 @@ class AgenticLLMAgent(LLMAgent):
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
             _sync_hot_loaded_tools(self._deps, self.name, tool_map)
-            tools = [t.schema() for t in tool_map.values()] + [
-                DELEGATE_TASK_SCHEMA,
-                REQUEST_APPROVAL_SCHEMA,
-                ASK_USER_SCHEMA,
-            ]
+            internal_schemas = [REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
+            if payload.allow_delegation:
+                internal_schemas.insert(0, DELEGATE_TASK_SCHEMA)
+            tools = [t.schema() for t in tool_map.values()] + internal_schemas
 
             token_cb = self._make_token_callback(payload.task_id)
 
             try:
-                response = await self._complete_with_tools(messages, tools, payload.task_id, token_cb)
+                response = await self._complete_with_tools(
+                    messages, tools, payload.task_id, token_cb, payload.exclude_models
+                )
             except ContextTooLargeError:
                 compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
                 # Discard whatever the failed attempt streamed before re-streaming
@@ -289,7 +293,9 @@ class AgenticLLMAgent(LLMAgent):
                 if token_cb is not None:
                     await token_cb.reset()
                 try:
-                    response = await self._complete_with_tools(messages, tools, payload.task_id, token_cb)
+                    response = await self._complete_with_tools(
+                        messages, tools, payload.task_id, token_cb, payload.exclude_models
+                    )
                 except ContextTooLargeError:
                     return _final_answer(
                         "Context window exceeded - the conversation is too long to continue.",
@@ -299,6 +305,7 @@ class AgenticLLMAgent(LLMAgent):
                         successful_tools,
                         total_tokens_in,
                         total_tokens_out,
+                        models_used=models_used,
                     )
             # Stream finished - release any reasoning/answer fragment the splitter
             # withheld in case it began a tag that never completed.
@@ -309,13 +316,16 @@ class AgenticLLMAgent(LLMAgent):
             total_tokens_out += response.tokens_out
             last_tokens_in = response.tokens_in
             last_model_used = response.model_used
+            if last_model_used and last_model_used not in _seen_models:
+                _seen_models.add(last_model_used)
+                models_used.append(last_model_used)
             emitted_model = await self._maybe_emit_model(response, emitted_model, payload.task_id)
 
             if response.type == "message":
                 # Final answer - answer tokens were already streamed via token_cb;
                 # strip the model's private reasoning from the stored copy so it
                 # matches the streamed view and never feeds extraction/verification.
-                content = strip_reasoning(response.content or "")
+                content = normalize_dashes(strip_reasoning(response.content or ""))
                 return _final_answer(
                     content,
                     content[:120],
@@ -324,18 +334,21 @@ class AgenticLLMAgent(LLMAgent):
                     successful_tools,
                     total_tokens_in,
                     total_tokens_out,
+                    models_used=models_used,
                 )
 
             # Tool calls branch - execute the requested calls.
             if not response.calls:
                 return _final_answer(
-                    strip_reasoning(response.content or "") or "The model returned no tool calls and no message.",
+                    normalize_dashes(strip_reasoning(response.content or ""))
+                    or "The model returned no tool calls and no message.",
                     "No actionable response",
                     total_cost_usd,
                     tools_used,
                     successful_tools,
                     total_tokens_in,
                     total_tokens_out,
+                    models_used=models_used,
                 )
 
             for call in response.calls:
@@ -356,6 +369,7 @@ class AgenticLLMAgent(LLMAgent):
             successful_tools,
             total_tokens_in,
             total_tokens_out,
+            models_used=models_used,
         )
 
     def _init_conversation(
@@ -435,6 +449,7 @@ class AgenticLLMAgent(LLMAgent):
         tools: list[dict],
         task_id: str,
         token_callback: Callable[[str], Awaitable[None]] | None,
+        exclude_models: list[str] | None = None,
     ) -> Any:
         return await self._deps.inference_router.complete_with_tools(
             ToolCallRequest(
@@ -443,6 +458,7 @@ class AgenticLLMAgent(LLMAgent):
                 priority=self._resolve_priority(),
                 component=self.name,
                 task_id=task_id,
+                exclude_models=exclude_models or [],
             ),
             token_callback=token_callback,
         )
@@ -490,6 +506,17 @@ class AgenticLLMAgent(LLMAgent):
         system_lines = [f"- current date/time: {now}"]
         if payload.workspace:
             system_lines.append(f"- workspace: {payload.workspace}")
+        if self._is_autonomous():
+            system_lines.append(
+                "- interaction: AUTONOMOUS - no user is available to answer. Do NOT ask questions; "
+                "decide using the user's known preferences (see Context) and sound engineering "
+                "defaults, and note any key assumption in your final answer."
+            )
+        else:
+            system_lines.append(
+                "- interaction: INTERACTIVE - when a requirement or a design decision is genuinely "
+                "ambiguous, use ask_user to confirm with the user rather than guessing."
+            )
         system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n"
 
         # Split context: recent conversation goes before the task so the model
@@ -524,6 +551,11 @@ class AgenticLLMAgent(LLMAgent):
 
     async def _delegate_task(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Run a specialist sub-agent and return its output as a tool result."""
+        if not payload.allow_delegation:
+            return _failed_json(
+                "Delegation is disabled for this run. Write your PASS/FAIL verdict, the "
+                "report, and review_result.json, then stop - the system routes any fixes."
+            )
         if payload.delegation_depth >= MAX_DELEGATION_DEPTH:
             return _failed_json(
                 f"Delegation depth limit ({MAX_DELEGATION_DEPTH}) reached - "
@@ -794,7 +826,7 @@ class _TokenRelay:
     async def _emit(self, segments: list[tuple[str, str]]) -> None:
         for channel, fragment in segments:
             event = "token" if channel == "answer" else "reasoning"
-            await self._stream_manager.emit(self._task_id, event, {"text": fragment})
+            await self._stream_manager.emit(self._task_id, event, {"text": normalize_dashes(fragment)})
 
     async def __call__(self, token: str) -> None:
         await self._emit(self._splitter.feed(token))
@@ -860,6 +892,7 @@ def _final_answer(
     successful_tools: list[str] | None = None,
     tokens_in: int = 0,
     tokens_out: int = 0,
+    models_used: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "output": output,
@@ -876,4 +909,5 @@ def _final_answer(
         # Always a list for agentic agents (even when empty) so the orchestrator
         # treats the output as verifiable; None would skip verification.
         "successful_tools": successful_tools if successful_tools is not None else [],
+        "models_used": models_used or [],
     }

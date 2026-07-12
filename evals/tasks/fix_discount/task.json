@@ -1,0 +1,6 @@
+{
+  "id": "fix_discount",
+  "kind": "bugfix",
+  "timeout_s": 420,
+  "prompt": "apply_discount() in pricing.py returns the wrong value: it returns the discount amount instead of the price after the discount. It should return price minus the discount, so apply_discount(100, 20) == 80. Fix it and add a regression test."
+}

@@ -25,3 +25,18 @@ _DEFAULT_MODEL_CONFIDENCE: float = 0.5
 _MODEL_CONFIDENCE_ALPHA: float = 0.15
 _MODEL_CONFIDENCE_MAX_WEIGHT: float = 0.30
 _MODEL_CONFIDENCE_FULL_USES: int = 20
+
+# Preferred-model promotion (see inference/model_policy.py). A curated model is
+# only promoted ahead of the price-ranked catalog while it is healthy: once it
+# has been tried at least _PREFERRED_MIN_USES times and its success EMA has
+# fallen below _PREFERRED_HEALTH_FLOOR, it drops back to its normal price
+# position instead of being retried first on every call (so a persistently
+# failing preference cannot pin latency/errors to the front of the queue).
+_PREFERRED_MIN_USES: int = 5
+_PREFERRED_HEALTH_FLOOR: float = 0.35
+
+# Per-task model stickiness: the first model that succeeds for a given
+# (task_id, component, capability, priority) is reused for that task's later
+# steps so a multi-step coding task is done by one consistent model. Bounded
+# LRU so a long-lived server never grows this map without limit.
+_STICKY_MAX_ENTRIES: int = 512

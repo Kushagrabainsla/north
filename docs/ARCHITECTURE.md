@@ -68,7 +68,7 @@ north is built from six distinct layers - Perception, Orchestrator, Agent, Appro
 +-------+------------------+------------------+-------+
         |                  |                  |
 +-------v------+  +--------v-----+  +---------v----+  +---------+
-|    Health    |  | University   |  |     Job      |  | Finance |
+|   Wellness   |  |     Home     |  |     News     |  | General |
 +--------------+  +--------------+  +--------------+  +---------+
         |                  |                  |              |
         +------------------+------------------+--------------+
@@ -100,6 +100,19 @@ north is built from six distinct layers - Perception, Orchestrator, Agent, Appro
 ```
 
 **Critical data flow note:** Input goes directly from the Perception Layer to the Orchestrator. The Ledger is not in the request path. Every layer writes to the Ledger asynchronously as a side effect. The Ledger feeds the Context Layer via the extraction pipeline, which runs as a background job. The Orchestrator reads from the Context Layer at the start of each task, not from the Ledger directly.
+
+### 2.1 Capability primitives: tool, skill, policy, agent
+
+north extends itself through exactly four primitives. Choosing the right one is the core design decision, so the boundaries are fixed:
+
+| Primitive | What it is | Authority | Activation | Cost | Use when |
+|---|---|---|---|---|---|
+| **Tool** | Deterministic code the model calls (`read_file`, `git`, `web_search`) | n/a (it just runs) | The model decides to call it | one function call | the work is deterministic - never make a model do what code can do reliably |
+| **Skill** | Advisory procedural *knowledge* (a `SKILL.md`) | advisory - never overrides instructions | semantically selected per task, injected low (in the user-message `## Context`) | no extra model call | there's a known-good *procedure* for a *some* tasks ("how to debug a flaky test") |
+| **Policy** | An authoritative *rule* (a `policies/*.md`) | binding - overrides task/skill/user on conflict | deterministic, by agent name (`applies_to`), injected high (system prompt), always on | no extra model call | a cross-cutting rule must *always* hold (safety guardrails, clean-code) |
+| **Agent** | A separate model call with its own persona/tools | its own instructions | chosen by the planner | a full model call + handoff | the work needs a *different model*, *context isolation*, *unique tools*, or is a distinct autonomous *mission* - not merely a different persona (that's a skill/policy) |
+
+Skills teach; policies bind. A policy is only as strong as the model that reads it, so the critical ones are also backed by deterministic enforcement (approval-gated mutating tools, the Definition-of-Done gate) - see `policies/` and `agents/policy.py`. Some authoritative rules still live as per-agent prose or Python constants (e.g. tool-creation and deliverable policies); those may migrate into `policies/` over time.
 
 ---
 

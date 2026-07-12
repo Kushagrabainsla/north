@@ -1,0 +1,6 @@
+{
+  "id": "implement_titlecase",
+  "kind": "feature",
+  "timeout_s": 420,
+  "prompt": "Implement the title_case() function in textutils.py per its docstring (capitalise the first letter of each space-separated word and lowercase the rest). Add tests."
+}
