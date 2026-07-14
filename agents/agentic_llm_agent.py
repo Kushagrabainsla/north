@@ -77,7 +77,11 @@ class AgenticLLMAgent(LLMAgent):
                 name=f"record_confidence:{self.name}/{tool_name}",
             )
 
-    def _append_tool_call_exchange(self, messages: list[dict], results: list[tuple[ToolCall, str, bool]]) -> None:
+    def _append_tool_call_exchange(
+        self,
+        messages: list[dict],
+        results: list[tuple[ToolCall, str, bool, list[tuple[str, str]]] | tuple[ToolCall, str, bool]],
+    ) -> None:
         """Format and append assistant tool_calls message and the respective tool outputs."""
         messages.append(
             {
@@ -85,18 +89,21 @@ class AgenticLLMAgent(LLMAgent):
                 "content": None,
                 "tool_calls": [
                     {
-                        "id": call.call_id,
+                        "id": item[0].call_id,
                         "type": "function",
                         "function": {
-                            "name": call.name,
-                            "arguments": json.dumps(call.params),
+                            "name": item[0].name,
+                            "arguments": json.dumps(item[0].params),
                         },
                     }
-                    for call, _, _ in results
+                    for item in results
                 ],
             }
         )
-        for call, result_str, _ in results:
+        for item in results:
+            call = item[0]
+            result_str = item[1]
+            images = item[3] if len(item) > 3 else []
             content = result_str
             # A genuine delegation failure must never be paraphrased into success.
             # Inject a hard instruction into the tool result the model reads next
@@ -117,6 +124,21 @@ class AgenticLLMAgent(LLMAgent):
                     "content": content,
                 }
             )
+            if images:
+                content_blocks: list[dict[str, Any]] = [
+                    {"type": "text", "text": f"[Visual context from tool '{call.name}']"}
+                ]
+                for b64, mime in images:
+                    content_blocks.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": content_blocks,
+                    }
+                )
 
     async def _handle_tool_calls_response(
         self,
@@ -142,7 +164,7 @@ class AgenticLLMAgent(LLMAgent):
 
         results = await self._execute_calls_ordered(calls, payload, tool_map)
 
-        for call, result_str, success in results:
+        for call, result_str, success, _ in results:
             if self._deps.stream_manager and payload.task_id:
                 event_data: dict[str, Any] = {"tool": call.name, "success": success}
                 try:
@@ -157,14 +179,14 @@ class AgenticLLMAgent(LLMAgent):
             await self._record_tool_call_confidence(call.name, success)
 
         self._append_tool_call_exchange(messages, results)
-        return [(call.name, success) for call, _, success in results]
+        return [(call.name, success) for call, _, success, _ in results]
 
     async def _execute_calls_ordered(
         self,
         calls: list[ToolCall],
         payload: AgentPayload,
         tool_map: dict[str, Tool],
-    ) -> list[tuple[ToolCall, str, bool]]:
+    ) -> list[tuple[ToolCall, str, bool, list[tuple[str, str]]]]:
         """Run read-only calls concurrently and mutating calls sequentially.
 
         Mutating tools (file writes, shell, git) are serialized under the
@@ -174,7 +196,7 @@ class AgenticLLMAgent(LLMAgent):
         than cancelling its siblings (CODING_STYLE §10.5). Results preserve the
         original call order.
         """
-        results: dict[int, tuple[ToolCall, str, bool]] = {}
+        results: dict[int, tuple[ToolCall, str, bool, list[tuple[str, str]]]] = {}
 
         concurrent = [(i, c) for i, c in enumerate(calls) if not self._is_mutating_call(c, tool_map)]
         if concurrent:
@@ -203,7 +225,7 @@ class AgenticLLMAgent(LLMAgent):
     async def _record_side_effects(
         self,
         payload: AgentPayload,
-        results: list[tuple[ToolCall, str, bool]],
+        results: list[tuple[ToolCall, str, bool, list[tuple[str, str]]] | tuple[ToolCall, str, bool]],
         tool_map: dict[str, Tool],
     ) -> None:
         """Flag the task as side-effecting when a mutating tool call succeeds.
@@ -216,8 +238,8 @@ class AgenticLLMAgent(LLMAgent):
         if store is None or not payload.task_id:
             return
         mutated = any(
-            success and (tool_map.get(call.name) is not None and tool_map[call.name].is_mutating)
-            for call, _, success in results
+            item[2] and (tool_map.get(item[0].name) is not None and tool_map[item[0].name].is_mutating)
+            for item in results
         )
         if not mutated:
             return
@@ -231,7 +253,7 @@ class AgenticLLMAgent(LLMAgent):
         call: ToolCall,
         payload: AgentPayload,
         tool_map: dict[str, Tool],
-    ) -> tuple[ToolCall, str, bool]:
+    ) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
         """Execute one call, turning any unexpected exception into a failed result."""
         try:
             return await self._execute_call(call, payload, tool_map)
@@ -468,21 +490,21 @@ class AgenticLLMAgent(LLMAgent):
         call: ToolCall,
         payload: AgentPayload,
         tool_map: dict[str, Tool],
-    ) -> tuple[ToolCall, str, bool]:
-        """Execute one tool call and return (call, result_json, success)."""
+    ) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
+        """Execute one tool call and return (call, result_json, success, images)."""
         params = dict(call.params)
         if call.name == "delegate_task":
             result_str = await self._delegate_task(payload, params)
             success = json.loads(result_str).get("success", False)
-            return call, result_str, success
+            return call, result_str, success, []
         if call.name == "request_approval":
             decision = await self._request_approval(payload, params)
             result_str = json.dumps({"decision": decision})
-            return call, result_str, not _is_rejection(decision)
+            return call, result_str, not _is_rejection(decision), []
         if call.name == "ask_user":
             result_str = await self._ask_user(payload, params)
             success = json.loads(result_str).get("success", False)
-            return call, result_str, success
+            return call, result_str, success, []
         # create_tool gates its own create/update actions behind an approval
         # card (see CreateToolTool._request_approval) - no special case here.
         # Default the workspace but respect an explicit model-supplied value  -
@@ -491,8 +513,8 @@ class AgenticLLMAgent(LLMAgent):
             params["workspace"] = payload.workspace
         if payload.task_id and "task_id" not in params:
             params["task_id"] = payload.task_id
-        result_str = await self._call_tool(tool_map, call.name, params)
-        return call, result_str, _extract_success(result_str)
+        result_str, images = await self._call_tool(tool_map, call.name, params)
+        return call, result_str, _extract_success(result_str), images
 
     def _build_task_message(
         self,
@@ -755,18 +777,30 @@ class AgenticLLMAgent(LLMAgent):
         tool_map: dict[str, Tool],
         tool_name: str,
         params: dict[str, Any],
-    ) -> str:
+    ) -> tuple[str, list[tuple[str, str]]]:
         if tool_name not in tool_map:
-            return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}")
+            return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}"), []
         try:
             result = await tool_map[tool_name].run(ToolInput(params=params))
-            data = result.model_dump()
+            images: list[tuple[str, str]] = []
             if result.success:
+                if result.data and "base64_image" in result.data and "mime_type" in result.data:
+                    b64 = result.data.pop("base64_image")
+                    mime = result.data.pop("mime_type")
+                    if b64 and mime:
+                        images.append((b64, mime))
+                data = result.model_dump()
+                # Ensure they are also popped from the serialized data dict
+                if data.get("data"):
+                    data["data"].pop("base64_image", None)
+                    data["data"].pop("mime_type", None)
                 data["formatted"] = tool_map[tool_name].format_output(result.data or {})
+            else:
+                data = result.model_dump()
         except Exception as exc:
             logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
-            return _failed_json(str(exc))
-        return _cap_tool_result(data)
+            return _failed_json(str(exc)), []
+        return _cap_tool_result(data), images
 
 
 def _cap_tool_result(data: dict[str, Any]) -> str:
@@ -856,9 +890,9 @@ def _is_delegation_failure(tool_result_str: str) -> bool:
         return False
 
 
-def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool]:
+def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
     """Build a failed tool-call result from an exception raised during execution."""
-    return call, _failed_json(str(exc)), False
+    return call, _failed_json(str(exc)), False, []
 
 
 def _failed_json(msg: str) -> str:

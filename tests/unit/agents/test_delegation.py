@@ -382,7 +382,7 @@ async def test_request_approval_resolved_reject_returns_status(tmp_path: Path) -
 async def test_unknown_tool_returns_error_json(tmp_path: Path) -> None:
     """_call_tool must return structured error JSON for a tool not in tool_map."""
     agent = _make_agent(tmp_path)
-    result_str = await agent._call_tool({}, "nonexistent", {})
+    result_str, _ = await agent._call_tool({}, "nonexistent", {})
     result = json.loads(result_str)
     assert result["success"] is False
     assert "nonexistent" in result["error"]
@@ -404,7 +404,7 @@ async def test_tool_exception_returns_error_json(tmp_path: Path) -> None:
             raise RuntimeError("Kaboom!")
 
     agent = _make_agent(tmp_path)
-    result_str = await agent._call_tool({"exploding": ExplodingTool()}, "exploding", {})
+    result_str, _ = await agent._call_tool({"exploding": ExplodingTool()}, "exploding", {})
     result = json.loads(result_str)
     assert result["success"] is False
     assert "Kaboom" in result["error"]

@@ -62,6 +62,8 @@ class CompletionRequest(BaseModel):
     # independent second opinion (e.g. a reviewer must not reuse the coder's model).
     # The dispatcher degrades gracefully if excluding would leave no candidates.
     exclude_models: list[str] = Field(default_factory=list)
+    # Multimodal image input support: list of (base64_string, mime_type)
+    images: list[tuple[str, str]] = Field(default_factory=list)
 
 
 class CompletionResponse(BaseModel):

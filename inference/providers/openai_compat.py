@@ -129,9 +129,20 @@ class OpenAICompatibleProvider:
     # ---- completion ----
 
     async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
+        if request.images:
+            content: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
+            for b64, mime in request.images:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                })
+            messages = [{"role": "user", "content": content}]
+        else:
+            messages = [{"role": "user", "content": request.prompt}]
+
         body: dict = {
             "model": model_id,
-            "messages": [{"role": "user", "content": request.prompt}],
+            "messages": messages,
             **self._extra_body_fields(),
         }
         if request.max_tokens is not None:

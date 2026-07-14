@@ -240,6 +240,7 @@ class NorthApp(App[None]):
 
     BINDINGS = [
         Binding("ctrl+c", "interrupt", "Interrupt", priority=True),
+        Binding("ctrl+d", "toggle_dictation", "Dictate", priority=True),
         Binding("ctrl+g", "edit_in_editor", "Editor", show=False),
         Binding("up", "history_prev", "Previous", show=False),
         Binding("down", "history_next", "Next", show=False),
@@ -319,6 +320,12 @@ class NorthApp(App[None]):
         # history, editor) the stale paste is discarded rather than sent.
         self._pending_paste: str | None = None
         self._paste_placeholder: str | None = None
+
+        # ── dictation state ───────────────────────────────────────────────────
+        self._recording: bool = False
+        self._audio_frames: list = []
+        self._audio_stream: object | None = None  # sounddevice.InputStream
+        self._sample_rate: int = 16000
 
     @contextlib.asynccontextmanager
     async def _http(self) -> AsyncIterator[httpx.AsyncClient]:
@@ -418,7 +425,7 @@ class NorthApp(App[None]):
     # ── rendering helpers ────────────────────────────────────────────────────
 
     def _refresh_hint(self) -> None:
-        hint = f"  {self._strategy}  ·  ↑↓ history  ·  /commands  ·  ctrl+g editor  ·  ctrl+c interrupt"
+        hint = f"  {self._strategy}  ·  ↑↓ history  ·  /commands  ·  ctrl+d dictate  ·  ctrl+g editor  ·  ctrl+c interrupt"
         self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
 
     def _render_status_bar(self) -> None:
@@ -1081,6 +1088,163 @@ class NorthApp(App[None]):
             return text
         except Exception:
             return None
+
+    # ── push-to-talk dictation (Ctrl+D) ────────────────────────────────────
+
+    def action_toggle_dictation(self) -> None:
+        """Toggle push-to-talk recording. First press starts; second stops and transcribes."""
+        if self._recording:
+            self._stop_recording()
+        else:
+            self._start_recording()
+
+    def _start_recording(self) -> None:
+        """Begin capturing audio from the microphone."""
+        try:
+            import numpy as np  # noqa: F401
+            import sounddevice as sd
+        except ImportError:
+            self._log("  [red]◆[/red]  [red]Missing dependency: sounddevice. Install with: uv add sounddevice[/red]")
+            return
+
+        self._audio_frames = []
+        self._recording = True
+
+        def _callback(indata, frame_count, time_info, status):  # type: ignore[no-untyped-def]
+            if self._recording:
+                self._audio_frames.append(indata.copy())
+
+        try:
+            self._audio_stream = sd.InputStream(
+                samplerate=self._sample_rate,
+                channels=1,
+                dtype="int16",
+                callback=_callback,
+            )
+            self._audio_stream.start()  # type: ignore[union-attr]
+        except Exception as exc:
+            self._recording = False
+            self._log(f"  [red]◆[/red]  [red]Microphone error: {exc}[/red]")
+            return
+
+        self._log("  [red]● Recording…[/red]  [bright_black](press ctrl+d to stop)[/bright_black]")
+        prompt = self.query_one("#prompt", Input)
+        prompt.value = ""
+        prompt.placeholder = "🎙 Recording… press Ctrl+D to stop"
+
+    def _stop_recording(self) -> None:
+        """Stop recording, transcribe, and submit the result as a prompt."""
+        self._recording = False
+        if self._audio_stream is not None:
+            try:
+                self._audio_stream.stop()  # type: ignore[union-attr]
+                self._audio_stream.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self._audio_stream = None
+
+        prompt = self.query_one("#prompt", Input)
+        prompt.placeholder = ""
+
+        if not self._audio_frames:
+            self._log("  [dim](nothing recorded)[/dim]")
+            return
+
+        self._log("  [yellow]■ Transcribing…[/yellow]")
+        self.run_worker(self._transcribe_and_submit(), exclusive=False)
+
+    async def _transcribe_and_submit(self) -> None:
+        """Encode captured audio to WAV, send to the server for transcription,
+        and submit the resulting text as a chat prompt."""
+        import io
+        import wave
+
+        import numpy as np
+
+        frames = self._audio_frames
+        self._audio_frames = []
+
+        audio_np = np.concatenate(frames, axis=0)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 16-bit
+            wf.setframerate(self._sample_rate)
+            wf.writeframes(audio_np.tobytes())
+        wav_bytes = buf.getvalue()
+
+        # Transcribe via the server endpoint
+        try:
+            async with self._http() as c:
+                resp = await c.post(
+                    f"{self.base_url}/orchestrator/transcribe",
+                    content=wav_bytes,
+                    headers={**self.headers, "Content-Type": "audio/wav"},
+                    timeout=60.0,
+                )
+                resp.raise_for_status()
+                text = resp.json().get("text", "").strip()
+        except Exception as exc:
+            self._log(f"  [red]◆[/red]  [red]Transcription error: {exc}[/red]")
+            return
+
+        if not text:
+            self._log("  [dim](empty transcript)[/dim]")
+            return
+
+        self._log(f"  [cyan]✎ {text}[/cyan]")
+
+        # Submit as a prompt (reuse the same submission logic as typed input)
+        if not self._input_history or self._input_history[-1] != text:
+            self._input_history.append(text)
+        self._history_index = -1
+        self._current_input = ""
+
+        self._log(f"  [bright_black]>[/bright_black]  {text}")
+
+        body: dict = {"prompt": text}
+        if self.workspace:
+            body["workspace"] = self.workspace
+        if self._conversation_history:
+            turns: list[str] = []
+            for turn in self._conversation_history:
+                parts = [f"User: {turn['user']}"]
+                if turn.get("tools"):
+                    summaries = [
+                        f"{e['tool']}({e['params']}) → {e['result']}"
+                        if e.get("params")
+                        else f"{e['tool']} → {e['result']}"
+                        for e in turn["tools"]
+                        if e.get("result")
+                    ]
+                    if summaries:
+                        parts.append("[actions: " + "; ".join(summaries) + "]")
+                parts.append(f"north: {turn['north']}")
+                turns.append("\n".join(parts))
+            body["context"] = "## Recent conversation\n" + "\n\n".join(turns)
+
+        self._set_status("…")
+        try:
+            async with self._http() as c:
+                resp = await c.post(
+                    f"{self.base_url}/orchestrator/task",
+                    headers=self.headers,
+                    json=body,
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+                task_id = resp.json().get("task_id", "")
+                if task_id:
+                    self._user_task_ids.add(task_id)
+                    self._pending_user_messages[task_id] = text
+                    self._session_tokens += max(1, len(text) // 4)
+                    self._render_status_bar()
+        except httpx.ConnectError:
+            self._set_status("")
+            self._log("  [red]◆[/red]  [red]cannot reach north server[/red]")
+        except Exception as exc:
+            self._set_status("")
+            self._log(f"  [red]◆[/red]  [red]error: {exc}[/red]")
 
 
 async def run(

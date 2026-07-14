@@ -478,3 +478,63 @@ async def test_core_tools_never_dropped_by_semantic_filter(tmp_path):
     assert {"read_file", "patch_file", "check_types", "bash"} <= selected
     # ...and the semantic picks are still present.
     assert "web_search" in selected
+
+
+async def test_multimodal_tool_image_context(tmp_path: Path) -> None:
+    """If a tool returns image data on success, the agent loop appends a subsequent user message with the image."""
+    import json
+    from tools.base import Tool
+    from tools.models import ToolInput, ToolOutput
+
+    class MockVisionTool(Tool):
+        name = "mock_vision"
+        description = "takes a photo"
+
+        def schema(self) -> dict:
+            return {}
+
+        async def run(self, inp: ToolInput) -> ToolOutput:
+            return ToolOutput(
+                success=True,
+                data={
+                    "path": "test.png",
+                    "base64_image": "abcdef",
+                    "mime_type": "image/png",
+                },
+            )
+
+    agent = _load_agent("coder", tmp_path)
+    tool_map = {"mock_vision": MockVisionTool()}
+
+    # 1. Verify _call_tool extracts base64_image and mime_type from result.data
+    res_str, images = await agent._call_tool(tool_map, "mock_vision", {})
+    assert images == [("abcdef", "image/png")]
+    parsed = json.loads(res_str)
+    assert parsed["success"] is True
+    # Ensure they are not in the serialized json to prevent context truncation
+    assert "base64_image" not in parsed["data"]
+    assert "mime_type" not in parsed["data"]
+
+    # 2. Verify _execute_call yields the 4-tuple including images
+    call = ToolCall(name="mock_vision", call_id="call_v1", params={})
+    c, r_str, succ, imgs = await agent._execute_call(call, AgentPayload(prompt="p", task_id="t1"), tool_map)
+    assert succ is True
+    assert imgs == [("abcdef", "image/png")]
+
+    # 3. Verify _append_tool_call_exchange appends the tool message AND subsequent user message with the image
+    messages = []
+    agent._append_tool_call_exchange(messages, [(call, r_str, succ, imgs)])
+
+    assert len(messages) == 3
+    # First: assistant tool calls
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["tool_calls"][0]["function"]["name"] == "mock_vision"
+    # Second: tool message containing metadata JSON
+    assert messages[1]["role"] == "tool"
+    assert "test.png" in messages[1]["content"]
+    assert "abcdef" not in messages[1]["content"]  # kept out of tool string
+    # Third: user message containing base64 image block
+    assert messages[2]["role"] == "user"
+    assert messages[2]["content"][0]["type"] == "text"
+    assert messages[2]["content"][1]["type"] == "image_url"
+    assert messages[2]["content"][1]["image_url"]["url"] == "data:image/png;base64,abcdef"
