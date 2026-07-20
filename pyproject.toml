@@ -25,6 +25,7 @@ dependencies = [
     "textual>=0.80.0",
     "ddgs>=1.0.0",
     "python-kasa>=0.7.0",
+    "playwright>=1.40.0",
     # Bundled ripgrep binary for fast .gitignore-aware search_files. Wheels only
     # exist for these two platforms; everywhere else search_files falls back to
     # its pure-Python engine (or finds a system rg on PATH / via NORTH_RIPGREP).

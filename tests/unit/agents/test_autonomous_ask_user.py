@@ -26,7 +26,7 @@ def _agent(tmp_path: Path, mode: ApprovalMode | None) -> AgenticLLMAgent:
         inference_router=MockInferenceRouter(),
         tool_registry=ToolRegistry(graph={}, auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
-        north_settings=SimpleNamespace(approval_mode=mode) if mode is not None else None,
+        north_settings=SimpleNamespace(autonomy=mode) if mode is not None else None,
     )
     config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
     return GeneralAgent(config, deps)

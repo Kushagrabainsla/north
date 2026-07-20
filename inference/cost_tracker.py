@@ -46,6 +46,10 @@ class CostTracker(InferenceRouter):
         self._inner = inner
         self._task_costs: dict[str, float] = {}
 
+    def get_inner(self) -> InferenceRouter:
+        """Return the wrapped router (e.g. for live reload hooks)."""
+        return self._inner
+
     def pop_task_cost(self, task_id: str) -> float:
         """Return accumulated cost for task_id and remove it from the store."""
         return self._task_costs.pop(task_id, 0.0)
@@ -90,3 +94,12 @@ class CostTracker(InferenceRouter):
     async def aclose(self) -> None:
         if hasattr(self._inner, "aclose"):
             await self._inner.aclose()
+
+    def set_inner(self, inner: InferenceRouter) -> None:
+        """Swap the wrapped router in place (runtime config reload).
+
+        Used when a north_config set changes inference keys: the new
+        ModelDispatcher is built and assigned here so every component holding
+        the CostTracker reference sees the update with no restart.
+        """
+        self._inner = inner

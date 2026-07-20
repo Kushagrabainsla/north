@@ -1,3 +1,7 @@
 # Specialized tools for this agent. Universal tools are
 # automatically available to all agents and do not need to be listed here.
+# `north_config` is intentionally excluded: it is a self-config/meta tool
+# surfaced via slash commands (/power, /autonomy) and `north config`,
+# not the general chat agent, so free-text tasks mentioning dial names
+# (e.g. "switch to sport") are answered, not interpreted as config edits.
 tools: []

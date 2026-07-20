@@ -25,11 +25,11 @@ def test_default_preferred_models_not_frozen_on_routine_save(tmp_path):
     # could never reach an install that ever saved a setting.
     path = tmp_path / "settings.json"
     ns = NorthSettings(path, default_preferred_models={"reasoning": ["old-default"]})
-    ns.set_strategy(StrategyMode.SPORT)
+    ns.set_power(StrategyMode.SPORT)
 
     data = json.loads(path.read_text())
     assert "preferred_models" not in data  # default was not persisted
-    assert data["strategy"] == "sport"
+    assert data["power"] == "sport"
 
     # A newer version with an improved default picks it up (not frozen).
     reloaded = NorthSettings(path, default_preferred_models={"reasoning": ["new-default"]})

@@ -142,7 +142,7 @@ def test_design_phase_skipped_in_autonomous_mode():
     from approval.mode import ApprovalMode
 
     orch = _orch(names=("researcher", "architect", "coder", "reviewer"))
-    orch._north_settings = type("S", (), {"approval_mode": ApprovalMode.AUTONOMOUS})()
+    orch._north_settings = type("S", (), {"autonomy": ApprovalMode.AUTONOMOUS})()
     assert orch._human_available() is False
     assert orch._use_design_phase(_plan("feature")) is False
 

@@ -846,7 +846,7 @@ class Orchestrator:
         if mode is None:
             return False
 
-        self._north_settings.set_strategy(mode)
+        self._north_settings.set_power(mode)
         msg = f"Strategy set to **{mode.value}**. {describe(mode)}"
         await self._write_ledger(
             LedgerEntry.new(

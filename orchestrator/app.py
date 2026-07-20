@@ -27,6 +27,7 @@ from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
 from config.dependencies import build_production_dependencies
 from config.settings import settings
+from gateways.telegram import TelegramGateway
 from jobs.models import Job
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
@@ -127,7 +128,7 @@ def _build_tool_registry(
     tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
     # Live approval mode: read from NorthSettings at decision time so a runtime change
     # (via the settings API) takes effect immediately, no restart.
-    mode_provider = lambda: deps.north_settings.approval_mode  # noqa: E731
+    mode_provider = lambda: deps.north_settings.autonomy  # noqa: E731
     tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     tool_registry.make_universal("schedule_task")
     # create/update actions are gated behind a user approval card inside the
@@ -403,6 +404,7 @@ def _launch_background_tasks(
     extraction_pipeline: ExtractionPipeline,
     skill_distiller: SkillDistiller,
     callback_server: uvicorn.Server,
+    telegram_gateway: TelegramGateway | None = None,
 ) -> list[asyncio.Task]:
     async def _dispatch_job(job: Job) -> None:
         if job.task == "task_context_cleanup":
@@ -436,7 +438,7 @@ def _launch_background_tasks(
         north_home=settings.north_home,
     )
 
-    return [
+    tasks = [
         asyncio.create_task(
             _guarded(
                 deps.job_processor.run(
@@ -465,6 +467,17 @@ def _launch_background_tasks(
             name="stuck_task_watchdog",
         ),
     ]
+
+    # Telegram gateway — only if a bot token is configured
+    if telegram_gateway is not None:
+        tasks.append(
+            asyncio.create_task(
+                _guarded(telegram_gateway.run(), "telegram_gateway"),
+                name="telegram_gateway",
+            )
+        )
+
+    return tasks
 
 
 async def _shutdown(deps, callback_server: uvicorn.Server, background_tasks: list[asyncio.Task]) -> None:
@@ -502,6 +515,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("building dependencies")
     deps = build_production_dependencies()
     _attach_tui_notifier(deps)
+    # Expose the live container so runtime config changes (north_config set)
+    # can rebuild the inference router in place without a restart.
+    from config.runtime import set_runtime
+
+    set_runtime(deps)
 
     _step("building embedding index")
     _attach_embedding_index(deps)
@@ -513,7 +531,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         memory=deps.memory,
         inference_router=deps.cost_tracker,
         approval_memory=approval_memory,
-        mode_provider=lambda: deps.north_settings.approval_mode,
+        mode_provider=lambda: deps.north_settings.autonomy,
     )
     tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, judgement_filter)
 
@@ -574,8 +592,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         skill_selector=skill_selector,
         learned_dir=settings.north_home / "skills",
     )
+    telegram_gateway = TelegramGateway()
     background_tasks = _launch_background_tasks(
-        deps, orchestrator, extraction_pipeline, skill_distiller, callback_server
+        deps, orchestrator, extraction_pipeline, skill_distiller, callback_server,
+        telegram_gateway=telegram_gateway,
     )
 
     _step("startup complete - yielding to server")

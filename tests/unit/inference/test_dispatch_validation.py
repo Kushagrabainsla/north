@@ -66,22 +66,28 @@ class _FakeProvider:
 @pytest.mark.asyncio
 async def test_json_ignoring_model_is_skipped(tmp_path):
     # 'bad' ranks first but returns a <thought> trace instead of JSON; 'good' returns JSON.
-    bad = _FakeProvider("p", "bad", quality=0.99, responder=lambda m, r: _resp("<thought>not json</thought>", m))
-    good = _FakeProvider("p", "good", quality=0.5, responder=lambda m, r: _resp('{"ok": true}', m))
+    bad = _FakeProvider(
+        "p", "claude-opus-4-8", quality=0.99,
+        responder=lambda m, r: _resp("<thought>not json</thought>", m),
+    )
+    good = _FakeProvider(
+        "p", "gpt-oss-20b", quality=0.5,
+        responder=lambda m, r: _resp('{"ok": true}', m),
+    )
     disp = ModelDispatcher(providers=[bad, good], cooldowns_path=tmp_path / "cd.json")
 
     resp = await disp.complete(
         CompletionRequest(prompt="classify", priority=PoolPriority.HIGH, component="planner", json_mode=True)
     )
     assert resp.text == '{"ok": true}'
-    assert bad.calls == ["bad"]  # tried the top model, found it invalid
-    assert good.calls == ["good"]  # fell through to the JSON-honouring one
+    assert bad.calls == ["claude-opus-4-8"]  # tried the top model, found it invalid
+    assert good.calls == ["gpt-oss-20b"]  # fell through to the JSON-honouring one
 
 
 @pytest.mark.asyncio
 async def test_empty_completion_is_skipped(tmp_path):
-    empty = _FakeProvider("p", "empty", quality=0.99, responder=lambda m, r: _resp("   ", m))
-    good = _FakeProvider("p", "good", quality=0.5, responder=lambda m, r: _resp("hello", m))
+    empty = _FakeProvider("p", "claude-opus-4-8", quality=0.99, responder=lambda m, r: _resp("   ", m))
+    good = _FakeProvider("p", "gpt-oss-20b", quality=0.5, responder=lambda m, r: _resp("hello", m))
     disp = ModelDispatcher(providers=[empty, good], cooldowns_path=tmp_path / "cd.json")
 
     resp = await disp.complete(CompletionRequest(prompt="hi", priority=PoolPriority.HIGH, component="planner"))

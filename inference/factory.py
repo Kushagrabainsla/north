@@ -25,14 +25,15 @@ def build_router(
     north_settings: NorthSettings | None = None,
     groq_api_key: str = "",
     gemini_api_key: str = "",
+    opencode_zen_api_key: str = "",
     confidence_tracker: ConfidenceTracker | None = None,
     cooldowns_path: Path | None = None,
 ) -> InferenceRouter:
     """Assemble a ModelDispatcher from available provider keys.
 
-    Direct providers (Groq, Gemini) are prepended when their keys are present
-    so they are preferred over OpenRouter for their own models.  OpenRouter
-    is always included as the broadest fallback.
+    Direct providers (Groq, Gemini, OpenCode Zen) are prepended when their keys
+    are present so they are preferred over OpenRouter for their own models.
+    OpenRouter is always included as the broadest fallback.
     """
     providers: list[Provider] = []
 
@@ -45,6 +46,11 @@ def build_router(
         from inference.providers.gemini import GeminiRouter
 
         providers.append(GeminiRouter(gemini_api_key))
+
+    if opencode_zen_api_key:
+        from inference.providers.opencode_zen import OpenCodeZenRouter
+
+        providers.append(OpenCodeZenRouter(opencode_zen_api_key))
 
     if openrouter_api_key:
         from inference.providers.openrouter import OpenRouterRouter

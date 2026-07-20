@@ -68,10 +68,13 @@ def approve_option(options: list[str]) -> str:
 def resolve_approval_mode(settings: object) -> ApprovalMode:
     """Determine the effective approval mode from settings.
 
-    ``approval_mode`` wins when set; otherwise the legacy ``autonomous_mode`` /
-    ``unattended_mode`` booleans are honoured; otherwise the default (interactive).
+    ``autonomy`` (new name) wins when set; ``approval_mode`` is honoured as a
+    legacy fallback; otherwise the legacy ``autonomous_mode`` / ``unattended_mode``
+    booleans are honoured; otherwise the default (interactive).
     """
-    explicit = parse_approval_mode(getattr(settings, "approval_mode", None))
+    explicit = parse_approval_mode(getattr(settings, "autonomy", None))
+    if explicit is None:
+        explicit = parse_approval_mode(getattr(settings, "approval_mode", None))
     if explicit is not None:
         return explicit
     if bool(getattr(settings, "autonomous_mode", False)):

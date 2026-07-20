@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from agents.exceptions import AgentNotFoundError
 from agents.registry import AgentRegistry
@@ -332,6 +332,33 @@ async def query_ledger(
     return await _get_ledger().query(LedgerFilters(task_id=task_id, agent=agent, source=src, limit=limit))
 
 
+class SearchOut(BaseModel):
+    entry: LedgerEntry
+    rank: float
+    snippet: str
+
+
+@router.get("/ledger/search", response_model=list[SearchOut])
+async def search_ledger(
+    q: str,
+    limit: int = 20,
+    agent: str | None = None,
+    source: str | None = None,
+) -> list[SearchOut]:
+    """Full-text search over ledger entries."""
+    src: LedgerSource | None = None
+    if source is not None:
+        try:
+            src = LedgerSource(source)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown source {source!r}. Valid: {[s.value for s in LedgerSource]}",
+            ) from None
+    results = await _get_ledger().search(query=q, limit=limit, agent=agent, source=src)
+    return [SearchOut(entry=r.entry, rank=r.rank, snippet=r.snippet) for r in results]
+
+
 # ── Agent endpoints ───────────────────────────────────────────────────────────
 
 
@@ -346,6 +373,13 @@ class AgentRunRequest(BaseModel):
     agent: str
     task: str
     context: str | None = None
+
+    @field_validator("task")
+    @classmethod
+    def _non_empty_task(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("task must be a non-empty string")
+        return v
 
 
 @router.get("/agents", response_model=list[AgentInfo])
@@ -710,50 +744,51 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
 
 
 class SettingsOut(BaseModel):
-    strategy: str
-    approval_mode: str
+    power: str
+    autonomy: str
 
 
 class SettingsUpdate(BaseModel):
-    strategy: str | None = None
-    approval_mode: str | None = None
+    # Preferred dial names.
+    power: str | None = None
+    autonomy: str | None = None
 
 
 @router.get("/settings", response_model=SettingsOut)
 async def get_settings() -> SettingsOut:
     """Return current user settings."""
-    strategy = _north_settings.strategy.value if _north_settings else "cruise"
-    approval_mode = _north_settings.approval_mode.value if _north_settings else "interactive"
-    return SettingsOut(strategy=strategy, approval_mode=approval_mode)
+    power = _north_settings.power.value if _north_settings else "cruise"
+    autonomy = _north_settings.autonomy.value if _north_settings else "interactive"
+    return SettingsOut(power=power, autonomy=autonomy)
 
 
 @router.post("/settings", response_model=SettingsOut)
 async def update_settings(body: SettingsUpdate) -> SettingsOut:
-    """Update user settings live (strategy and/or approval mode). No restart needed."""
-    if body.strategy is not None:
+    """Update user settings live (power and/or autonomy). No restart needed."""
+    if body.power is not None:
         try:
-            strategy = StrategyMode(body.strategy)
+            mode = StrategyMode(body.power)
         except ValueError:
             raise HTTPException(
                 status_code=422,
-                detail=f"Unknown strategy {body.strategy!r}. Valid: eco, cruise, sport",
+                detail=f"Unknown power {body.power!r}. Valid: eco, cruise, sport",
             ) from None
         if _north_settings is not None:
-            _north_settings.set_strategy(strategy)
+            _north_settings.set_power(mode)
 
-    if body.approval_mode is not None:
-        mode = parse_approval_mode(body.approval_mode)
+    if body.autonomy is not None:
+        mode = parse_approval_mode(body.autonomy)
         if mode is None:
             raise HTTPException(
                 status_code=422,
-                detail=f"Unknown approval_mode {body.approval_mode!r}. Valid: interactive, auto, autonomous",
+                detail=f"Unknown autonomy {body.autonomy!r}. Valid: interactive, auto, autonomous",
             ) from None
         if _north_settings is not None:
-            _north_settings.set_approval_mode(mode)
+            _north_settings.set_autonomy(mode)
 
-    strategy_out = _north_settings.strategy.value if _north_settings else "cruise"
-    approval_out = _north_settings.approval_mode.value if _north_settings else "interactive"
-    return SettingsOut(strategy=strategy_out, approval_mode=approval_out)
+    power_out = _north_settings.power.value if _north_settings else "cruise"
+    autonomy_out = _north_settings.autonomy.value if _north_settings else "interactive"
+    return SettingsOut(power=power_out, autonomy=autonomy_out)
 
 
 # ── Webhook endpoint ─────────────────────────────────────────────────────────

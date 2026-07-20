@@ -728,7 +728,7 @@ class AgenticLLMAgent(LLMAgent):
         from approval.mode import ApprovalMode
 
         ns = getattr(self._deps, "north_settings", None)
-        return ns is not None and getattr(ns, "approval_mode", None) == ApprovalMode.AUTONOMOUS
+        return ns is not None and getattr(ns, "autonomy", None) == ApprovalMode.AUTONOMOUS
 
     async def _ask_user(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Ask the user a clarifying question mid-loop and block until they answer.

@@ -139,18 +139,19 @@ async def test_preferred_model_promoted_over_higher_priced(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_no_matching_preferred_falls_back_to_price(tmp_path, caplog):
+async def test_no_matching_preferred_falls_back_to_ranking(tmp_path, caplog):
     cat = _Catalog(
         "p",
-        [_mi("expensive", quality=0.9), _mi("cheap", quality=0.2)],
+        [_mi("claude-opus-4-8", quality=0.9), _mi("gpt-oss-20b", quality=0.2)],
         lambda m, r: _resp(m),
     )
     with caplog.at_level(logging.WARNING):
         disp = _disp(cat, tmp_path, preferred={"reasoning": ["nonexistent-model"]})
-    # Stale spec is surfaced at construction, then price ranking is used.
+    # Stale spec is surfaced at construction, then family-tier ranking is used.
     assert any("matches no model" in rec.message for rec in caplog.records)
     resp = await disp.complete(CompletionRequest(prompt="code", priority=PoolPriority.HIGH, component="coder"))
-    assert resp.model_used == "expensive"
+    # claude-opus-4-8 (family tier 0.96) beats gpt-oss-20b (0.42) - not price.
+    assert resp.model_used == "claude-opus-4-8"
 
 
 @pytest.mark.asyncio
@@ -170,26 +171,26 @@ async def test_preferred_not_applied_to_low_priority(tmp_path):
 @pytest.mark.asyncio
 async def test_unhealthy_preferred_is_demoted(tmp_path):
     # A preferred model that keeps failing stops being tried first after enough
-    # failures; the reliable price-fallback model then leads the queue.
+    # failures; the reliable family-tier-best model then leads the queue.
     def responder(model_id, request):
-        if model_id == "cheap-preferred":
+        if model_id == "llama-3.1-8b-instant":
             raise InferenceError("boom")
         return _resp(model_id)
 
-    cat = _Catalog("p", [_mi("expensive", quality=0.9), _mi("cheap-preferred", quality=0.2)], responder)
-    disp = _disp(cat, tmp_path, preferred={"reasoning": ["cheap-preferred"]})
+    cat = _Catalog("p", [_mi("claude-opus-4-8", quality=0.9), _mi("llama-3.1-8b-instant", quality=0.2)], responder)
+    disp = _disp(cat, tmp_path, preferred={"reasoning": ["llama-3.1-8b-instant"]})
 
     # 5 calls: the failing preferred model is tried first each time, then falls
-    # through to 'expensive'. That is enough failures to drop it below the floor.
+    # through to 'claude-opus-4-8'. That is enough failures to drop it below the floor.
     for _ in range(5):
         resp = await disp.complete(CompletionRequest(prompt="c", priority=PoolPriority.HIGH, component="coder"))
-        assert resp.model_used == "expensive"
-    assert cat.calls.count("cheap-preferred") == 5
+        assert resp.model_used == "claude-opus-4-8"
+    assert cat.calls.count("llama-3.1-8b-instant") == 5
 
-    # 6th call: no longer promoted, so 'expensive' (higher price-quality) leads and
+    # 6th call: no longer promoted, so 'claude-opus-4-8' (higher family tier) leads and
     # the demoted model is not tried first anymore.
     await disp.complete(CompletionRequest(prompt="c", priority=PoolPriority.HIGH, component="coder"))
-    assert cat.calls.count("cheap-preferred") == 5  # unchanged - it was not tried again
+    assert cat.calls.count("llama-3.1-8b-instant") == 5  # unchanged - it was not tried again
 
 
 # ---------------------------------------------------------------- stickiness
@@ -212,14 +213,15 @@ async def test_task_sticky_model_reused(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sticky_recorded_then_refreshed_on_failure(tmp_path):
-    state = {"m1_fails": False}
+    state = {"strong_fails": False}
 
     def responder(model_id, request):
-        if model_id == "m1" and state["m1_fails"]:
-            raise InferenceError("m1 down")
+        if model_id == "claude-opus-4-8" and state["strong_fails"]:
+            raise InferenceError("opus down")
         return _resp(model_id)
 
-    cat = _Catalog("p", [_mi("m1", quality=0.9), _mi("m2", quality=0.5)], responder)
+    # claude-opus-4-8 (family tier 0.96) must rank first; gpt-oss-20b is the fallback.
+    cat = _Catalog("p", [_mi("claude-opus-4-8", quality=0.9), _mi("gpt-oss-20b", quality=0.5)], responder)
     disp = _disp(cat, tmp_path)
     key = ("t1", "coder", ModelCapability.COMPLETION.value, PoolPriority.HIGH.value)
 
@@ -227,16 +229,16 @@ async def test_sticky_recorded_then_refreshed_on_failure(tmp_path):
     r1 = await disp.complete(
         CompletionRequest(prompt="c", priority=PoolPriority.HIGH, component="coder", task_id="t1")
     )
-    assert r1.model_used == "m1"
-    assert disp._sticky[key] == ("m1", "p")
+    assert r1.model_used == "claude-opus-4-8"
+    assert disp._sticky[key] == ("claude-opus-4-8", "p")
 
-    # m1 goes down: the task falls through to m2 and the pin is refreshed to m2.
-    state["m1_fails"] = True
+    # opus goes down: the task falls through to gpt-oss-20b and the pin is refreshed.
+    state["strong_fails"] = True
     r2 = await disp.complete(
         CompletionRequest(prompt="c", priority=PoolPriority.HIGH, component="coder", task_id="t1")
     )
-    assert r2.model_used == "m2"
-    assert disp._sticky[key] == ("m2", "p")
+    assert r2.model_used == "gpt-oss-20b"
+    assert disp._sticky[key] == ("gpt-oss-20b", "p")
 
 
 @pytest.mark.asyncio
@@ -261,10 +263,10 @@ async def test_sticky_map_is_bounded(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_no_north_settings_keeps_price_behaviour(tmp_path):
-    # A dispatcher built without NorthSettings has no preferred lists and behaves
-    # exactly as before (highest price-quality first). Guards test/prod parity.
-    cat = _Catalog("p", [_mi("expensive", quality=0.9), _mi("cheap", quality=0.2)], lambda m, r: _resp(m))
+async def test_no_north_settings_uses_family_tier_ranking(tmp_path):
+    # A dispatcher built without NorthSettings has no preferred lists and ranks by
+    # family tier (not price) - the new default behaviour. Guards test/prod parity.
+    cat = _Catalog("p", [_mi("claude-opus-4-8", quality=0.9), _mi("gpt-oss-20b", quality=0.2)], lambda m, r: _resp(m))
     disp = ModelDispatcher(providers=[cat], cooldowns_path=tmp_path / "cd.json")
     resp = await disp.complete(CompletionRequest(prompt="c", priority=PoolPriority.HIGH, component="coder"))
-    assert resp.model_used == "expensive"
+    assert resp.model_used == "claude-opus-4-8"

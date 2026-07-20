@@ -598,15 +598,21 @@ def context_add(
 
 # ── ledger ───────────────────────────────────────────────────────────────────
 
+ledger_app = typer.Typer(help="Ledger operations.", no_args_is_help=True)
+app.add_typer(ledger_app, name="ledger")
 
-@app.command("ledger")
+
+@ledger_app.callback(invoke_without_command=True)
 def show_ledger(
+    ctx: typer.Context,
     limit: int = typer.Option(20, "--limit", "-n", help="Number of entries to show."),
     task_id: str | None = typer.Option(None, "--task", help="Filter by task ID."),
     agent: str | None = typer.Option(None, "--agent", help="Filter by agent name."),
     source: str | None = typer.Option(None, "--source", help="Filter by source type."),
 ) -> None:
     """Show recent ledger entries."""
+    if ctx.invoked_subcommand is not None:
+        return
     params: dict[str, object] = {"limit": limit}
     if task_id:
         params["task_id"] = task_id
@@ -647,6 +653,47 @@ def show_ledger(
     _console.print()
     _console.print(table)
     _console.print()
+
+
+@ledger_app.command("search")
+def search_ledger(
+    query: str = typer.Argument(..., help="Search query."),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max results."),
+    agent: str | None = typer.Option(None, "--agent", help="Filter by agent."),
+    source: str | None = typer.Option(None, "--source", help="Filter by source."),
+) -> None:
+    """Full-text search ledger entries (FTS5)."""
+    params: dict[str, object] = {"q": query, "limit": limit}
+    if agent:
+        params["agent"] = agent
+    if source:
+        params["source"] = source
+
+    response = _api("GET", "/orchestrator/ledger/search", params=params)
+    results = response.json()
+    if not results:
+        _console.print("  [dim]no matches[/dim]")
+        return
+
+    _console.print()
+    for r in results:
+        entry = r["entry"]
+        ts = datetime.datetime.fromisoformat(entry["timestamp"]).astimezone().strftime("%Y-%m-%d %H:%M")
+        status = entry.get("status") or ""
+        status_fmt = (
+            f"[green]{status}[/green]"
+            if status == "completed"
+            else f"[red]{status}[/red]"
+            if status == "failed"
+            else f"[dim]{status}[/dim]"
+        )
+        _console.print(
+            f"  [bright_black]{ts}[/bright_black]"
+            f"  [{status_fmt}]{status}[/{status_fmt}]"
+            f"  [dim]{entry.get('agent', '')}[/dim]"
+        )
+        _console.print(f"  [dim]{r['snippet']}[/dim]")
+        _console.print()
 
 
 # ── jobs ──────────────────────────────────────────────────────────────────────
@@ -1104,6 +1151,87 @@ def metrics(
         _console.print("\n  [dim]top errors[/dim]")
         for err, count in data["top_errors"].items():
             _console.print(f"    [dim]{err:<30}[/dim]  {count}")
+
+    _console.print()
+
+
+@app.command("status")
+def status() -> None:
+    """Show a live snapshot of the running north instance.
+
+    Aggregates server health, configured inference providers, model-pool
+    sizes, registered agents, and the active strategy into one view.
+    """
+    # Server health
+    try:
+        health = _api("GET", "/health").json()
+        server_ok = health.get("status") == "ok"
+    except Exception:
+        server_ok = False
+        health = {}
+
+    _console.print()
+    _console.print("  [bold white]north status[/bold white]")
+
+    # ── Server ──
+    health_icon = "[green]●[/green]" if server_ok else "[red]●[/red]"
+    uptime = health.get("uptime_seconds")
+    uptime_str = f"  [dim]uptime {int(uptime)}s[/dim]" if uptime is not None else ""
+    status_text = "healthy" if server_ok else "down"
+    _console.print(f"  {health_icon} server  [bright_black]{status_text}[/bright_black]{uptime_str}")
+
+    if not server_ok:
+        _console.print()
+        return
+
+    # ── Strategy ──
+    try:
+        settings = _api("GET", "/orchestrator/settings").json()
+        strategy = settings.get("strategy", "cruise")
+        approval = settings.get("approval_mode", "interactive")
+    except Exception:
+        strategy, approval = "?", "?"
+    _console.print(f"  [dim]strategy  [/dim] {strategy}   [bright_black](approval: {approval})[/bright_black]")
+
+    # ── Inference models per pool ──
+    try:
+        pools = _api("GET", "/orchestrator/inference/models").json()
+    except Exception:
+        pools = {}
+    if pools:
+        parts = []
+        for pool_name, pool_data in pools.items():
+            count = len(pool_data.get("models", []))
+            style = "white" if count else "bright_black"
+            parts.append(f"[{style}]{pool_name}={count}[/{style}]")
+        _console.print("  [dim]models    [/dim] " + "  ".join(parts))
+
+    # ── Providers (from settings, which keys are present) ──
+    try:
+        from config.settings import settings as cfg
+        providers = []
+        for key, label in (
+            ("openrouter_api_key", "openrouter"),
+            ("groq_api_key", "groq"),
+            ("gemini_api_key", "gemini"),
+            ("opencode_zen_api_key", "opencode_zen"),
+        ):
+            if getattr(cfg, key, "").strip():
+                providers.append(f"[green]{label}[/green]")
+            else:
+                providers.append(f"[bright_black]{label}[/bright_black]")
+        _console.print("  [dim]providers [/dim] " + "  ".join(providers))
+    except Exception:
+        pass
+
+    # ── Agents ──
+    try:
+        agents = _api("GET", "/orchestrator/agents").json()
+        names = ", ".join(a["name"] for a in agents)
+        _console.print(f"  [dim]agents    [/dim] [white]{len(agents)}[/white]")
+        _console.print(f"             [bright_black]{names}[/bright_black]")
+    except Exception:
+        pass
 
     _console.print()
 

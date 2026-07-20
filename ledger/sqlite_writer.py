@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ledger.base import LedgerFilters, LedgerWriter
+from ledger.base import LedgerFilters, LedgerWriter, SearchResult
 from ledger.exceptions import LedgerReadError, LedgerWriteError
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from utils.db import open_db_connection
@@ -38,6 +38,53 @@ CREATE TABLE IF NOT EXISTS ledger (
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 """
+
+_FTS5_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS ledger_fts USING fts5(
+    input,
+    output,
+    action,
+    agent,
+    source,
+    error_type,
+    task_id,
+    content='ledger',
+    content_rowid='rowid',
+    tokenize='porter unicode61',
+    prefix='2 3'
+)
+"""
+
+_FTS5_TRIGGERS = [
+    """
+    CREATE TRIGGER IF NOT EXISTS ledger_fts_insert AFTER INSERT ON ledger BEGIN
+        INSERT INTO ledger_fts(rowid, input, output, action, agent, source,
+                               error_type, task_id)
+        VALUES (new.rowid, new.input, new.output, new.action, new.agent,
+                new.source, new.error_type, new.task_id);
+    END;
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS ledger_fts_delete AFTER DELETE ON ledger BEGIN
+        INSERT INTO ledger_fts(ledger_fts, rowid, input, output, action, agent,
+                               source, error_type, task_id)
+        VALUES ('delete', old.rowid, old.input, old.output, old.action,
+                old.agent, old.source, old.error_type, old.task_id);
+    END;
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS ledger_fts_update AFTER UPDATE ON ledger BEGIN
+        INSERT INTO ledger_fts(ledger_fts, rowid, input, output, action, agent,
+                               source, error_type, task_id)
+        VALUES ('delete', old.rowid, old.input, old.output, old.action,
+                old.agent, old.source, old.error_type, old.task_id);
+        INSERT INTO ledger_fts(rowid, input, output, action, agent, source,
+                               error_type, task_id)
+        VALUES (new.rowid, new.input, new.output, new.action, new.agent,
+                new.source, new.error_type, new.task_id);
+    END;
+    """,
+]
 
 # Columns added after the initial schema release; applied as migrations to
 # existing databases so the writer works against both old and new files.
@@ -90,6 +137,13 @@ class SQLiteLedgerWriter(LedgerWriter):
             for migration in _MIGRATIONS:
                 with contextlib.suppress(sqlite3.OperationalError):
                     conn.execute(migration)
+            # FTS5 — best-effort (some platforms may not have FTS5 enabled).
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(_FTS5_SCHEMA)
+                for trigger in _FTS5_TRIGGERS:
+                    conn.execute(trigger)
+                # Rebuild index from existing data so existing ledgers get FTS5 too.
+                conn.execute("INSERT INTO ledger_fts(ledger_fts) VALUES('rebuild')")
 
     async def write(self, entry: LedgerEntry) -> str:
         try:
@@ -374,6 +428,66 @@ class SQLiteLedgerWriter(LedgerWriter):
                 ),
             )
             return cur.rowcount
+
+    async def search(
+        self,
+        query: str,
+        limit: int = 20,
+        agent: str | None = None,
+        source: LedgerSource | None = None,
+    ) -> list[SearchResult]:
+        """Full-text search over ledger entries using FTS5.
+
+        Returns ranked results with highlighted snippets. Falls back to
+        the base class LIKE-based search if FTS5 is not available.
+        """
+        try:
+            return await asyncio.to_thread(self._search_fts5_sync, query, limit, agent, source)
+        except sqlite3.OperationalError:
+            return await super().search(query=query, limit=limit, agent=agent, source=source)
+
+    def _search_fts5_sync(
+        self,
+        query: str,
+        limit: int,
+        agent: str | None,
+        source: LedgerSource | None,
+    ) -> list[SearchResult]:
+        # Sanitise FTS5 query: replace whitespace with AND, escape special chars
+        fts_query = " AND ".join(
+            f'"{t}"' for t in query.replace("'", "").replace('"', "").replace("(", "").replace(")", "").split()
+        )
+        if not fts_query:
+            fts_query = f'"{query}"'
+
+        clauses = ["ledger_fts MATCH ?"]
+        params: list = [fts_query]
+        join_clauses: list[str] = []
+        join_params: list = []
+
+        if agent is not None:
+            join_clauses.append("l.agent = ?")
+            join_params.append(agent)
+        if source is not None:
+            join_clauses.append("l.source = ?")
+            join_params.append(source.value)
+
+        where = " AND ".join(clauses)
+        join_where = f" AND {' AND '.join(join_clauses)}" if join_clauses else ""
+
+        sql = f"""
+            SELECT l.*, rank, snippet(ledger_fts, 1, '<b>', '</b>', '…', 48) AS snippet
+            FROM ledger l
+            JOIN ledger_fts ON l.rowid = ledger_fts.rowid
+            WHERE {where} {join_where}
+            ORDER BY rank
+            LIMIT ?
+        """
+
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(sql, params + join_params + [limit]).fetchall()
+
+        return [SearchResult(entry=self._row_to_entry(r), rank=r["rank"], snippet=r["snippet"]) for r in rows]
 
     @staticmethod
     def _row_to_entry(row: sqlite3.Row) -> LedgerEntry:

@@ -30,8 +30,6 @@ from inference.capability import ModelCapability, ModelInfo
 from inference.constants import (
     _DEFAULT_MODEL_CONFIDENCE,
     _MODEL_CONFIDENCE_ALPHA,
-    _MODEL_CONFIDENCE_FULL_USES,
-    _MODEL_CONFIDENCE_MAX_WEIGHT,
     _PREFERRED_HEALTH_FLOOR,
     _PREFERRED_MIN_USES,
     _QUALITY_TIER_HIGH,
@@ -47,6 +45,7 @@ from inference.exceptions import (
     PaymentRequiredError,
 )
 from inference.model_policy import model_matches
+from inference.model_scorer import ModelScorer, ScoringConfig
 from inference.models import (
     PRIORITY_TO_POOL,
     CompletionRequest,
@@ -117,6 +116,14 @@ class ModelDispatcher(InferenceRouter):
         self._sticky: OrderedDict[tuple[str, str, str, str], tuple[str, str]] = OrderedDict()
         self._build_registry()
         self._cooldowns.load()
+        # Price-free quality scorer (family tier + live EMA + curation). Built
+        # from the live NorthSettings so weight edits apply without a restart.
+        _nh = getattr(self._north_settings, "_path", None)
+        _tiers = (_nh.parent / "model_tiers.json") if _nh is not None else (Path.home() / ".north" / "model_tiers.json")
+        self._scorer = ModelScorer(
+            config=self._north_settings.scoring if self._north_settings is not None else ScoringConfig(),
+            tiers_path=_tiers,
+        )
         self._validate_preferred()
 
     def _build_registry(self) -> None:
@@ -137,7 +144,7 @@ class ModelDispatcher(InferenceRouter):
         """
         if self._north_settings is None:
             return requested
-        strategy = self._north_settings.strategy
+        strategy = self._north_settings.power
         if strategy == StrategyMode.SPORT:
             return PoolPriority.HIGH
         if strategy == StrategyMode.ECO:
@@ -255,6 +262,26 @@ class ModelDispatcher(InferenceRouter):
         self._build_registry()
         self._validate_preferred()
 
+    def rebuild(self, providers: list[Provider]) -> None:
+        """Swap in a fresh provider list in place (no restart needed).
+
+        Used by runtime config changes (e.g. north_config set NORTH_*_API_KEY)
+        so the dispatcher picks up new providers without rebuilding the whole
+        dependency graph. The existing registry/cooldowns/confidence state are
+        preserved; only the provider set and derived registry are replaced.
+        """
+        # Close outgoing provider HTTPX clients to avoid socket leaks.
+        for provider in self._providers:
+            close = getattr(provider, "aclose", None)
+            if close is not None:
+                try:
+                    _ = close()
+                except Exception:
+                    logger.warning("Failed to close provider %s on rebuild", provider.name, exc_info=True)
+        self._providers = providers
+        self._build_registry()
+        self._validate_preferred()
+
     def current_pools(self) -> dict[str, ModelPool]:
         """Build a pool snapshot from the dispatcher's own registry for CLI display."""
         high: list[ModelInfo] = []
@@ -328,11 +355,34 @@ class ModelDispatcher(InferenceRouter):
                 logger.warning("Failed to persist model score for %s/%s", key[1], key[0], exc_info=True)
 
     def _effective_quality(self, info: ModelInfo) -> float:
-        """Blend price-based base_quality with live call success rate."""
+        """Price-free quality score: family tier + live EMA + curation boost.
+
+        Replaces the old price-derived base_quality blend. When all providers
+        are free, price carries no signal; this scorer uses a static family
+        prior plus the live per-model success EMA so a 7B and a 200B model are
+        no longer treated as equals.
+        """
         key: _CooldownKey = (info.model_id, info.provider_name)
         score, uses = self._model_confidence.get(key, (_DEFAULT_MODEL_CONFIDENCE, 0))
-        w = min(uses / _MODEL_CONFIDENCE_FULL_USES, 1.0) * _MODEL_CONFIDENCE_MAX_WEIGHT
-        return info.base_quality * (1 - w) + score * w
+        is_preferred = self._is_preferred(info, key)
+        power_mode = self._north_settings.power if self._north_settings is not None else StrategyMode.CRUISE
+        return self._scorer.score(
+            model_id=info.model_id,
+            ema_score=score,
+            is_preferred=is_preferred,
+            power=power_mode,
+        )
+
+    def reload_scoring(self) -> None:
+        """Re-read scoring weights + family-tier overrides without a restart.
+
+        Called by the live-config-reload path (north_config tool / _apply_runtime)
+        so weight edits in settings.json and ~/.north/model_tiers.json take effect
+        on the running dispatcher immediately.
+        """
+        if self._north_settings is not None:
+            self._scorer.set_config(self._north_settings.scoring)
+        self._scorer.reload()
 
     # ---- Candidate selection ----
 
@@ -425,6 +475,20 @@ class ModelDispatcher(InferenceRouter):
             )
             return candidates
         return filtered
+
+    def _is_preferred(self, info: ModelInfo, key: _CooldownKey) -> bool:
+        """True if the model matches any curated preferred spec.
+
+        Used as a light ranking nudge by the scorer; health-gated promotion is
+        handled separately in _promote_preferred.
+        """
+        if self._north_settings is None:
+            return False
+        for specs in self._north_settings.preferred_models.values():
+            for spec in specs:
+                if model_matches(spec, info.provider_name, info.model_id):
+                    return True
+        return False
 
     def _preferred_specs(self, pool: str | None) -> list[str]:
         """Curated preferred specs for a pool, from live settings (empty if unset)."""

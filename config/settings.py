@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     gemini_api_key: str = ""
 
+    # OpenCode Zen API key for inference.
+    # Set NORTH_OPENCODE_ZEN_API_KEY in environment or .env.
+    opencode_zen_api_key: str = ""
+
     # Paths - NORTH_HOME env var is the canonical override (used in Docker)
     north_home: Path = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
 
@@ -137,6 +141,10 @@ class Settings(BaseSettings):
     unattended_extra_commands: tuple[str, ...] = ()
     autonomous_mode: bool = False
 
+    # Telegram bot token for the Telegram gateway.
+    # Set NORTH_TELEGRAM_BOT_TOKEN in environment or .env.
+    telegram_bot_token: str = ""
+
     # Curated preferred models per pool, as a JSON object string, e.g.
     #   NORTH_PREFERRED_MODELS='{"reasoning": ["anthropic/claude-sonnet", "openai/gpt-4.1"]}'
     # This is the startup default; a "preferred_models" key in ~/.north/settings.json
@@ -210,6 +218,22 @@ class Settings(BaseSettings):
         "env_prefix": "NORTH_",
         "extra": "ignore",
     }
+
+
+def reload_settings() -> Settings:
+    """Re-read ~/.north/.env and return a fresh Settings instance.
+
+    Import sites that captured the old `settings` singleton (e.g.
+    `from config.settings import settings`) keep their reference, so callers
+    that need live values must re-import or use this function. The module-level
+    `settings` object below is updated in place so existing references stay
+    valid without restart.
+    """
+    fresh = Settings()
+    # Update the singleton in place so pre-existing references see new values.
+    for field_name in fresh.model_fields:
+        setattr(settings, field_name, getattr(fresh, field_name))
+    return settings
 
 
 settings = Settings()

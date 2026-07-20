@@ -10,6 +10,15 @@ from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 
 
 @dataclass
+class SearchResult:
+    """One FTS5 match from a ledger search."""
+
+    entry: LedgerEntry
+    rank: float  # lower = better match
+    snippet: str  # highlighted context around the match
+
+
+@dataclass
 class LedgerFilters:
     """Query filters for the ledger. `None` means "no filter on that field"."""
 
@@ -71,6 +80,35 @@ class LedgerWriter(ABC):
         so in-memory or read-only stores don't need to override it.
         """
         return 0
+
+    async def search(
+        self,
+        query: str,
+        limit: int = 20,
+        agent: str | None = None,
+        source: LedgerSource | None = None,
+    ) -> list[SearchResult]:
+        """Full-text search over ledger entries using FTS5.
+
+        Returns ranked results with highlighted snippets. The default
+        implementation performs a naive LIKE scan (slow, no ranking);
+        SQLite-backed stores override this with FTS5 for proper ranked
+        full-text search.
+        """
+        entries = await self.query(LedgerFilters(agent=agent, source=source, limit=limit * 5))
+        results: list[SearchResult] = []
+        lowered = query.lower()
+        for entry in entries:
+            text = f"{entry.input or ''} {entry.output or ''} {entry.action or ''}"
+            if lowered in text.lower():
+                idx = text.lower().index(lowered)
+                start = max(0, idx - 60)
+                end = min(len(text), idx + len(lowered) + 60)
+                snippet = ("..." if start > 0 else "") + text[start:end] + ("..." if end < len(text) else "")
+                results.append(SearchResult(entry=entry, rank=float(len(results)), snippet=snippet))
+                if len(results) >= limit:
+                    break
+        return results
 
     async def cost_breakdown(
         self,

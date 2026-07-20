@@ -34,6 +34,6 @@ POOL_REFRESH_COOLDOWN = 60.0
 # ("I was in sport mode") never accidentally mutate the running strategy.
 STRATEGY_CMD_RE = re.compile(
     r"^(?:(?:set|switch|use|change|enable|activate)\s+(?:to\s+)?)?(?:the\s+)?"
-    r"(eco|cruise|sport)\s*(?:mode|strategy)?$",
+    r"(eco|cruise|sport)\s*(?:mode|power|strategy|autonomy)?$",
     re.IGNORECASE,
 )

@@ -58,15 +58,16 @@ class _NorthSuggester(Suggester):
         return _compute_suggestion(value, self._history_getter())
 
 
-def _read_strategy(settings_path: Path) -> str:
-    """Read the current strategy from the north settings file.
+def _read_power(settings_path: Path) -> str:
+    """Read the current power dial from the north settings file.
 
     Falls back to 'cruise' if the file is absent or unreadable so the info bar
-    always shows something meaningful without crashing the TUI.
+    always shows something meaningful without crashing the TUI. Reads the new
+    'power' key, falling back to the legacy 'strategy' key for older files.
     """
     try:
         data = json.loads(settings_path.read_text(encoding="utf-8"))
-        return str(data.get("strategy", "cruise"))
+        return str(data.get("power", data.get("strategy", "cruise")))
     except Exception:
         return "cruise"
 
@@ -358,7 +359,7 @@ class NorthApp(App[None]):
             with contextlib.suppress(Exception):
                 self._input_history = [line for line in history_file.read_text().splitlines() if line.strip()]
 
-        self._strategy = _read_strategy(self._settings_path)
+        self._strategy = _read_power(self._settings_path)
         self._refresh_hint()
         self._render_status_bar()
         self._set_status("")
@@ -421,6 +422,38 @@ class NorthApp(App[None]):
                 return sorted(n for n in names if n)
         except Exception:
             return []
+
+    async def _set_dial(self, url: str, key: str, value: str | None, ok: str = "") -> None:
+        """Set a live dial (power/autonomy) via the settings endpoint.
+
+        Called from slash commands. With no value, just shows the current value
+        by re-reading the settings file. Accepts the legacy names too.
+        """
+        full_url = f"{self.base_url}{url}"
+        try:
+            async with self._http() as c:
+                if value:
+                    body = {key: value}
+                    r = await c.post(
+                        full_url, headers=self.headers, json=body, timeout=5.0,
+                    )
+                    if r.status_code >= 400:
+                        self._log(f"  [red]failed: {r.status_code} {r.text[:120]}[/red]")
+                        return
+                    data = r.json()
+                    shown = data.get("power") if key in ("power", "strategy") \
+                        else data.get("autonomy")
+                    self._log(f"{ok}`{shown}`")
+                else:
+                    r = await c.get(full_url, headers=self.headers, timeout=5.0)
+                    data = r.json()
+                    shown = data.get("power") if key in ("power", "strategy") \
+                        else data.get("autonomy")
+                    self._log(f"{ok}`{shown}` (current)")
+                self._strategy = _read_power(self._settings_path)
+                self._render_status_bar()
+        except Exception as exc:
+            self._log(f"  [red]error setting {key}: {exc}[/red]")
 
     # ── rendering helpers ────────────────────────────────────────────────────
 
@@ -678,7 +711,7 @@ class NorthApp(App[None]):
             self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
 
         # Refresh strategy in case the user issued a strategy command.
-        self._strategy = _read_strategy(self._settings_path)
+        self._strategy = _read_power(self._settings_path)
         self._refresh_hint()
         self._set_status("")
         self._user_task_ids.discard(task_id)
@@ -992,10 +1025,16 @@ class NorthApp(App[None]):
                 f"[bright_black]cost[/bright_black] ${self._session_cost:.4f}  ·  "
                 f"[bright_black]compactions[/bright_black] {self._compactions}"
             )
-        elif cmd == "/strategy":
-            self._strategy = _read_strategy(self._settings_path)
-            self._log(f"  [bright_black]strategy[/bright_black] {self._strategy}")
-            self._render_status_bar()
+        elif cmd == "/power":
+            parts = text.split()
+            val = parts[1] if len(parts) > 1 else None
+            await self._set_dial("/orchestrator/settings", "power", val,
+                           ok="  [bright_black]power[/bright_black] ")
+        elif cmd == "/autonomy":
+            parts = text.split()
+            val = parts[1] if len(parts) > 1 else None
+            await self._set_dial("/orchestrator/settings", "autonomy", val,
+                           ok="  [bright_black]autonomy[/bright_black] ")
         elif cmd == "/agents":
             agents = await self._fetch_agents()
             self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))
