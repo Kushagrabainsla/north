@@ -16,10 +16,15 @@ import httpx
 
 from inference.capability import ModelInfo, capabilities_from_model_id, quality_from_cost
 from inference.constants import OPENCODE_ZEN_BASE_URL
-from inference.exceptions import PoolRefreshError
+from inference.exceptions import PaymentRequiredError, PoolRefreshError
 from inference.providers.openai_compat import OpenAICompatibleProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _is_free_opencode_model(model_id: str) -> bool:
+    """True if model_id is a known free-tier model on OpenCode Zen."""
+    return model_id.endswith("-free") or "-free" in model_id
 
 
 class OpenCodeZenRouter(OpenAICompatibleProvider):
@@ -31,6 +36,13 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
 
     def get_models(self) -> dict[str, ModelInfo]:
         return dict(self._models)
+
+    def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
+        if response.status_code in (401, 403) and not _is_free_opencode_model(model_id):
+            raise PaymentRequiredError(
+                f"OpenCode Zen model {model_id} requires paid tier or credits (status {response.status_code})"
+            )
+        super()._raise_cooldown_status(response, model_id)
 
     async def refresh(self) -> None:
         """Fetch the live model list from OpenCode Zen."""
@@ -54,13 +66,15 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
                 continue
             caps = capabilities_from_model_id(model_id)
             ctx = int(m.get("context_window") or 128_000)
+            is_free = _is_free_opencode_model(model_id)
+            cost = 0.0 if is_free else 0.002
             live[model_id] = ModelInfo(
                 model_id=model_id,
                 provider_name="opencode_zen",
                 capabilities=caps,
                 context_window=ctx,
-                cost_per_token=0.0,
-                base_quality=quality_from_cost(0.0),
+                cost_per_token=cost,
+                base_quality=quality_from_cost(cost),
             )
 
         if live:
