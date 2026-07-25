@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     inference_pool_refresh_interval_hours: int = Field(default=6, ge=1)
     agent_max_iterations: int = Field(default=40, ge=1)
     agent_history_keep_recent: int = Field(default=10, ge=1)
+    planner_max_attempts: int = Field(default=3, ge=1)
+    planner_retry_delay_seconds: float = Field(default=6.0, ge=0.5)
+    planner_retry_backoff_factor: float = Field(default=1.5, ge=1.0)
 
     # Run mutating agents (see orchestrator.constants.WORKTREE_ISOLATION_AGENTS) in a
     # dedicated git worktree when the workspace is a git repo, applying changes back

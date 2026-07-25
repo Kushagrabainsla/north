@@ -13,6 +13,9 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from config.strategy import NorthSettings
+
 from agents import AgentRegistry
 from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import RoutingError
@@ -108,11 +111,13 @@ class ExecutionPlanner:
         inference_router: InferenceRouter,
         tool_registry: ToolRegistry | None = None,
         workspace: str = "",
+        north_settings: NorthSettings | None = None,
     ) -> None:
         self._agent_registry = agent_registry
         self._inference_router = inference_router
         self._tool_registry = tool_registry
         self._workspace = workspace
+        self._north_settings = north_settings
         # Cache: normalized_hash → (insert_ts, classification, plan)
         self._plan_cache: dict[str, tuple[float, IntentClassification, ExecutionPlan]] = {}
 
@@ -384,7 +389,23 @@ class ExecutionPlanner:
         retried - never reported as a false "completed".
         """
         last_exc: Exception | None = None
-        for attempt in range(1, _PLANNER_MAX_ATTEMPTS + 1):
+        max_attempts = (
+            self._north_settings.planner_max_attempts
+            if self._north_settings is not None
+            else _PLANNER_MAX_ATTEMPTS
+        )
+        base_delay = (
+            self._north_settings.planner_retry_delay_seconds
+            if self._north_settings is not None
+            else _PLANNER_RETRY_DELAY_S
+        )
+        backoff_factor = (
+            self._north_settings.planner_retry_backoff_factor
+            if self._north_settings is not None
+            else 1.5
+        )
+
+        for attempt in range(1, max_attempts + 1):
             try:
                 response = await asyncio.wait_for(
                     self._inference_router.complete(
@@ -402,10 +423,11 @@ class ExecutionPlanner:
                 return json.loads(strip_code_fences(response.text))
             except Exception as exc:
                 last_exc = exc
-                logger.warning("Planner attempt %d/%d failed: %s", attempt, _PLANNER_MAX_ATTEMPTS, exc)
-                if attempt < _PLANNER_MAX_ATTEMPTS:
-                    await asyncio.sleep(_PLANNER_RETRY_DELAY_S)
-        raise RoutingError(f"planner failed after {_PLANNER_MAX_ATTEMPTS} attempts: {last_exc}")
+                logger.warning("Planner attempt %d/%d failed: %s", attempt, max_attempts, exc)
+                if attempt < max_attempts:
+                    sleep_s = base_delay * (backoff_factor ** (attempt - 1))
+                    await asyncio.sleep(sleep_s)
+        raise RoutingError(f"planner failed after {max_attempts} attempts: {last_exc}")
 
     def build_fallback_plan(self, domain: str, task_id: str) -> ExecutionPlan:
         """Simple fallback: single agent matching the classified domain."""

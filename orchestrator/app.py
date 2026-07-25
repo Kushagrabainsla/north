@@ -308,6 +308,7 @@ def _build_orchestrator(
             inference_router=deps.cost_tracker,
             tool_registry=tool_registry,
             workspace=settings.north_workspace,
+            north_settings=north_settings,
         ),
         task_context_store=deps.task_context_store,
         failure_handler=FailureHandler(

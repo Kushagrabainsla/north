@@ -679,7 +679,6 @@ class ModelDispatcher(InferenceRouter):
                 )
             except PaymentRequiredError:
                 self._cooldowns.set_payment_exhausted(key)
-                self._provider_health.mark_down(info.provider_name, "payment required")
                 logger.warning(
                     "Payment required: %s/%s - skipping for 24 h",
                     info.provider_name,
