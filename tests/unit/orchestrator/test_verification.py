@@ -13,7 +13,7 @@ def test_empty_output_has_no_violations() -> None:
 def test_file_claim_without_evidence_flagged() -> None:
     violations = verify_claims("I created the file config.py for you.", [])
     assert len(violations) == 1
-    assert "creating or editing a file" in violations[0]
+    assert "creating or editing a file or briefing" in violations[0]
 
 
 def test_file_claim_with_write_evidence_ok() -> None:
@@ -71,7 +71,7 @@ def test_multiple_independent_violations() -> None:
     output = "I created app.py, all tests pass, and I pushed to main."
     violations = verify_claims(output, [])
     labels = " ".join(violations)
-    assert "creating or editing a file" in labels
+    assert "creating or editing a file or briefing" in labels
     assert "running a check, test, or verification" in labels
     assert "committing or pushing changes" in labels
 
@@ -87,7 +87,7 @@ def test_no_actionable_claims_no_violations() -> None:
 
 def test_fixed_file_claim_without_evidence_flagged() -> None:
     violations = verify_claims("I fixed the off-by-one in parser.py.", [])
-    assert any("creating or editing a file" in v for v in violations)
+    assert any("creating or editing a file or briefing" in v for v in violations)
 
 
 def test_implemented_claim_with_evidence_ok() -> None:
@@ -96,7 +96,7 @@ def test_implemented_claim_with_evidence_ok() -> None:
 
 def test_refactored_claim_without_evidence_flagged() -> None:
     violations = verify_claims("I refactored the module utils.py.", [])
-    assert any("creating or editing a file" in v for v in violations)
+    assert any("creating or editing a file or briefing" in v for v in violations)
 
 
 def test_typecheck_claim_without_evidence_flagged() -> None:
@@ -116,3 +116,58 @@ def test_verified_claim_without_evidence_flagged() -> None:
 def test_generic_fix_without_file_noun_not_flagged() -> None:
     # No file/code noun -> conservative, not a completion claim.
     assert verify_claims("I fixed the misunderstanding.", []) == []
+
+
+# ---------------------------------------------------------------------------
+# Briefing / digest / report / summary claims (#8)
+# ---------------------------------------------------------------------------
+
+
+def test_compiled_briefing_without_write_flagged() -> None:
+    violations = verify_claims("I compiled a daily briefing.", [])
+    assert any("file or briefing" in v for v in violations)
+
+
+def test_briefing_saved_without_write_flagged() -> None:
+    violations = verify_claims("Briefing saved to ~/.north/news/2026-07-25.md", [])
+    assert any("file or briefing" in v for v in violations)
+
+
+def test_compiled_briefing_with_write_ok() -> None:
+    assert verify_claims("I compiled a daily briefing.", ["write_file"]) == []
+
+
+def test_generated_report_without_write_flagged() -> None:
+    violations = verify_claims("The summary report was generated.", [])
+    assert any("file or briefing" in v for v in violations)
+
+
+def test_produced_digest_without_write_flagged() -> None:
+    violations = verify_claims("I produced a news digest for you.", [])
+    assert any("file or briefing" in v for v in violations)
+
+
+def test_planning_to_compile_is_not_a_claim() -> None:
+    assert verify_claims("I am planning to compile a briefing.", []) == []
+
+
+# ---------------------------------------------------------------------------
+# Physical file existence verification (deterministic ground-truth)
+# ---------------------------------------------------------------------------
+
+
+def test_claimed_nonexistent_file_path_flagged_physically(tmp_path) -> None:
+    missing_file = tmp_path / "never_created.md"
+    output = f"Briefing saved to {missing_file}"
+    # Even if write_file was recorded as a tool call, if the physical file doesn't exist, it's flagged!
+    violations = verify_claims(output, ["write_file"])
+    assert any("no such file exists on disk" in v for v in violations)
+
+
+def test_claimed_existing_file_path_with_write_tool_ok(tmp_path) -> None:
+    real_file = tmp_path / "actual_briefing.md"
+    real_file.write_text("Daily briefing content")
+    output = f"Briefing saved to {real_file}"
+    violations = verify_claims(output, ["write_file"])
+    assert violations == []
+
