@@ -659,6 +659,72 @@ class Orchestrator:
                 cancelled += 1
         return cancelled
 
+    async def pause_task(self, task_id: str) -> bool:
+        """Pause a running task: cancel its async pipeline but keep it resumable.
+
+        Unlike cancel_task, the task is NOT cleared from the running-task store
+        and gets a ``task_paused`` ledger entry instead of ``task_cancelled``.
+        The task can later be re-run via resume_paused_task().
+        """
+        running = self._active_tasks.pop(task_id, None)
+        if running is None:
+            return False
+        if not running.done():
+            running.cancel()
+        if self._tracked_router:
+            self._tracked_router.pop_task_cost(task_id)
+        # Keep the row in the store but mark it paused so reconcile won't
+        # auto-resume it — only an explicit resume_paused_task() call should.
+        if self._running_task_store is not None:
+            await self._running_task_store.mark_paused(task_id)
+        await self._write_ledger(
+            LedgerEntry.new(
+                source=LedgerSource.SYSTEM,
+                task_id=task_id,
+                action="task_paused",
+                status=LedgerStatus.PENDING,
+            )
+        )
+        await self._stream_manager.emit(task_id, "task_paused", {})
+        await self._stream_manager.emit_done(task_id)
+        return True
+
+    async def resume_paused_task(self, task_id: str) -> bool:
+        """Re-run a paused task under its original id.
+
+        The task must exist in the running-task store with status='paused'.
+        Returns False if the task is not paused or already in flight.
+        """
+        async with self._submit_lock:
+            if task_id in self._active_tasks:
+                return False
+            if self._running_task_store is None:
+                return False
+            if not await self._running_task_store.mark_running_from_paused(task_id):
+                return False
+            # Reconstruct the request from the store.
+            all_tasks = await self._running_task_store.list_all()
+            rt = next((t for t in all_tasks if t.task_id == task_id), None)
+            if rt is None:
+                return False
+            if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
+                logger.warning("resume_paused_task: at capacity, leaving task %s paused", task_id)
+                await self._running_task_store.mark_paused(task_id)
+                return False
+            await self._write_ledger(
+                LedgerEntry.new(
+                    source=LedgerSource.SYSTEM,
+                    task_id=task_id,
+                    input=rt.request.prompt,
+                    action="task_resumed",
+                    status=LedgerStatus.PENDING,
+                )
+            )
+            task = asyncio.create_task(self._process_task(task_id, rt.request))
+            self._active_tasks[task_id] = task
+            task.add_done_callback(lambda _: self._active_tasks.pop(task_id, None))
+        return True
+
     async def respond_approval(
         self,
         card_id: str,

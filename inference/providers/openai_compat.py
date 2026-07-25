@@ -230,7 +230,7 @@ class OpenAICompatibleProvider:
                         # that is then discarded.
                         if token_callback is not None and not saw_tool_call:
                             await token_callback(text_token)
-                    for tc in delta.get("tool_calls", []):
+                    for tc in (delta.get("tool_calls") or []):
                         saw_tool_call = True
                         idx = tc.get("index", 0)
                         if idx not in tool_calls_acc:

@@ -64,6 +64,9 @@ async def recover_interrupted_tasks(
         for rt in interrupted:
             if rt.task_id in orchestrator.active_task_ids:
                 continue  # already picked back up (shouldn't happen this early)
+            # Paused tasks are user-initiated — only resume via explicit resume_paused_task().
+            if rt.status == "paused":
+                continue
             age = (now - rt.started_at).total_seconds()
             if rt.has_side_effects and not resume_side_effecting:
                 await _fail_task(

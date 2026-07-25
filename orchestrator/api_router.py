@@ -229,6 +229,24 @@ async def cancel_task(task_id: str) -> None:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} is not in flight - nothing to cancel.")
 
 
+@router.post("/task/{task_id}/pause")
+async def pause_task(task_id: str) -> dict[str, str]:
+    """Pause a running task. The task stops but can be resumed later."""
+    paused = await _get_orchestrator().pause_task(task_id)
+    if not paused:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} is not in flight - nothing to pause.")
+    return {"status": "paused", "task_id": task_id}
+
+
+@router.post("/task/{task_id}/resume")
+async def resume_task(task_id: str) -> dict[str, str]:
+    """Resume a previously paused task."""
+    resumed = await _get_orchestrator().resume_paused_task(task_id)
+    if not resumed:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} is not paused or already in flight.")
+    return {"status": "resumed", "task_id": task_id}
+
+
 @router.post("/cancel-all")
 async def cancel_all() -> dict[str, int]:
     """Stop everything in flight: cancel all active tasks and all pending jobs."""

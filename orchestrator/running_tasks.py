@@ -36,12 +36,14 @@ CREATE TABLE IF NOT EXISTS running_tasks (
     attempt          INTEGER NOT NULL DEFAULT 0,
     started_at       TEXT NOT NULL,
     heartbeat_at     TEXT NOT NULL,
-    has_side_effects INTEGER NOT NULL DEFAULT 0
+    has_side_effects INTEGER NOT NULL DEFAULT 0,
+    status           TEXT NOT NULL DEFAULT 'running'
 )
 """
 
-# Added after the initial release; applied idempotently for existing DBs.
+# Applied idempotently for existing DBs.
 _MIGRATION_ADD_SIDE_EFFECTS = "ALTER TABLE running_tasks ADD COLUMN has_side_effects INTEGER NOT NULL DEFAULT 0"
+_MIGRATION_ADD_STATUS = "ALTER TABLE running_tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'running'"
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class RunningTask:
     started_at: datetime
     heartbeat_at: datetime
     has_side_effects: bool = False
+    status: str = "running"  # "running" | "paused"
 
 
 class RunningTaskStore:
@@ -67,6 +70,8 @@ class RunningTaskStore:
 
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(_MIGRATION_ADD_SIDE_EFFECTS)
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(_MIGRATION_ADD_STATUS)
 
     async def mark_running(self, task_id: str, request: TaskRequest, *, attempt: int = 0) -> None:
         """Record (or refresh) a task as in-flight. ``started_at`` is set once."""
@@ -78,15 +83,16 @@ class RunningTaskStore:
             conn.execute(
                 """
                 INSERT INTO running_tasks
-                    (task_id, prompt, source, workspace, context, attempt, started_at, heartbeat_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (task_id, prompt, source, workspace, context, attempt, started_at, heartbeat_at, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running')
                 ON CONFLICT(task_id) DO UPDATE SET
                     prompt=excluded.prompt,
                     source=excluded.source,
                     workspace=excluded.workspace,
                     context=excluded.context,
                     attempt=excluded.attempt,
-                    heartbeat_at=excluded.heartbeat_at
+                    heartbeat_at=excluded.heartbeat_at,
+                    status='running'
                 """,
                 (task_id, request.prompt, request.source.value, request.workspace, request.context, attempt, now, now),
             )
@@ -107,6 +113,31 @@ class RunningTaskStore:
     def _mark_side_effect_sync(self, task_id: str) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute("UPDATE running_tasks SET has_side_effects = 1 WHERE task_id = ?", (task_id,))
+
+    async def mark_paused(self, task_id: str) -> bool:
+        """Mark a task as paused. Returns True if the task existed and was running."""
+        return await asyncio.to_thread(self._mark_paused_sync, task_id)
+
+    def _mark_paused_sync(self, task_id: str) -> bool:
+        with open_db_connection(self._db_path) as conn:
+            cur = conn.execute(
+                "UPDATE running_tasks SET status = 'paused' WHERE task_id = ? AND status = 'running'",
+                (task_id,),
+            )
+            return cur.rowcount > 0
+
+    async def mark_running_from_paused(self, task_id: str) -> bool:
+        """Transition a paused task back to running. Returns True if found and paused."""
+        return await asyncio.to_thread(self._mark_running_from_paused_sync, task_id)
+
+    def _mark_running_from_paused_sync(self, task_id: str) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            cur = conn.execute(
+                "UPDATE running_tasks SET status = 'running', heartbeat_at = ? WHERE task_id = ? AND status = 'paused'",
+                (now, task_id),
+            )
+            return cur.rowcount > 0
 
     async def clear(self, task_id: str) -> None:
         """Remove a task from the registry once it reaches a terminal state."""
@@ -149,4 +180,5 @@ class RunningTaskStore:
             started_at=datetime.fromisoformat(row["started_at"]),
             heartbeat_at=datetime.fromisoformat(row["heartbeat_at"]),
             has_side_effects=bool(row["has_side_effects"]),
+            status=str(row["status"]),
         )

@@ -149,11 +149,67 @@ class TelegramGateway:
             await asyncio.sleep(_TASK_POLL_INTERVAL)
         return "Response timed out — check north for details."
 
+    async def _download_file(self, file_id: str) -> bytes | None:
+        """Download a file from Telegram by its file_id."""
+        try:
+            resp = await self._http.get(_bot_url("getFile"), params={"file_id": file_id})
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                return None
+            file_path = data["result"]["file_path"]
+            file_url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
+            resp = await self._http.get(file_url)
+            resp.raise_for_status()
+            return resp.content
+        except httpx.RequestError as exc:
+            logger.error("Failed to download Telegram file %s: %s", file_id, exc)
+            return None
+
+    async def _transcribe_audio(self, audio_bytes: bytes) -> str | None:
+        """Send audio bytes to north's /transcribe endpoint and return the text."""
+        url = f"{self._orchestrator_base}/orchestrator/transcribe"
+        try:
+            resp = await self._http.post(
+                url,
+                content=audio_bytes,
+                headers={
+                    "Content-Type": "audio/ogg",
+                    **_headers(),
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("text", "")
+        except httpx.RequestError as exc:
+            logger.error("Failed to transcribe audio: %s", exc)
+            return None
+
     async def _process_message(self, msg: dict) -> None:
         """Process one incoming Telegram message."""
         chat_id = msg["chat"]["id"]
         message_id = msg["message_id"]
         text = msg.get("text", "").strip()
+        voice = msg.get("voice")
+
+        # Handle voice messages: download → transcribe → submit as text task
+        if voice:
+            await self._send_chat_action(chat_id, "record_voice")
+            file_id = voice.get("file_id")
+            if not file_id:
+                await self._send_message(chat_id, "❌ Could not read voice message.", reply_to=message_id)
+                return
+            audio_bytes = await self._download_file(file_id)
+            if not audio_bytes:
+                await self._send_message(chat_id, "❌ Failed to download voice message.", reply_to=message_id)
+                return
+            await self._send_chat_action(chat_id, "typing")
+            transcribed = await self._transcribe_audio(audio_bytes)
+            if not transcribed:
+                await self._send_message(chat_id, "❌ Could not transcribe voice message.", reply_to=message_id)
+                return
+            # Submit transcribed text as a normal task
+            text = transcribed
 
         if not text:
             return
@@ -165,10 +221,12 @@ class TelegramGateway:
                     chat_id,
                     "👋 Hello! I'm **north** — your personal life operating system.\n\n"
                     "Just send me a message and I'll process it through my agents.\n"
+                    "You can also send **voice messages** — I'll transcribe and handle them.\n\n"
                     "Examples:\n"
-                    "  • \"What's on my calendar today?\"\n"
-                    "  • \"Check my budget for groceries\"\n"
-                    "  • \"Remind me about the dentist appointment\"",
+                    '  • "What\'s on my calendar today?"\n'
+                    '  • "Check my budget for groceries"\n'
+                    '  • "Remind me about the dentist appointment"\n'
+                    "  • 🎤 Send a voice note with any request",
                     reply_to=message_id,
                 )
             return
