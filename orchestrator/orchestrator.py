@@ -958,13 +958,15 @@ class Orchestrator:
             raise
         except NorthStarConflictError as e:
             logger.warning("Task %s rejected: conflicts with North Star goals", task_id)
-            await self._task_context_store.update_task_status(task_id, "failed")
+            with contextlib.suppress(Exception):
+                await self._task_context_store.update_task_status(task_id, "failed")
             await self._stream_manager.emit(task_id, "task_rejected", {"reason": str(e)})
             await self._record_task_failure(task_id, task_start, str(e), LedgerStatus.CANCELLED, "north_star_conflict")
             await self._stream_manager.emit_done(task_id)
         except Exception as e:
             error_type = classify_error(e)
-            await self._task_context_store.update_task_status(task_id, "failed")
+            with contextlib.suppress(Exception):
+                await self._task_context_store.update_task_status(task_id, "failed")
             if error_type == "model_unavailable":
                 # Not a north failure: the whole model pool was unavailable, so the
                 # work could not proceed. Skip honestly (autonomous mode just moves

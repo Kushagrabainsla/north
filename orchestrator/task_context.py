@@ -200,6 +200,10 @@ class TaskContextStore:
         """Convenience: set an agent's run status."""
         await self.write(task_id, agent, "_status", None, status)
 
+    async def update_task_status(self, task_id: str, status: str) -> None:
+        """Convenience: set top-level task status."""
+        await self.update_agent_status(task_id, "orchestrator", status)
+
     async def get_all(self, task_id: str) -> dict[str, dict[str, Any]]:
         """Return all completed key-value pairs (excluding _status) grouped by agent."""
 
