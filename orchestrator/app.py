@@ -67,6 +67,7 @@ from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from tools.universal.update_plan import UpdatePlanTool
+from tools.universal.create_skill import CreateSkillTool
 from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
@@ -540,6 +541,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     skill_registry, skill_selector = _build_skills(deps)
     tool_registry.register(UseSkillTool(skill_registry))
     tool_registry.make_universal("use_skill")
+    tool_registry.register(CreateSkillTool(skill_registry))
+    tool_registry.make_universal("create_skill")
 
     _step("seeding confidence defaults")
     await deps.confidence_tracker.seed_defaults(tool_graph, RELIABLE_TOOLS)

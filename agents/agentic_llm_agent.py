@@ -16,6 +16,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from agents.capabilities import build_platform_capabilities_summary
 from agents.constants import (
     _TOOL_RESULT_MIN_FIELD_CHARS,
     ENGINEERING_AGENTS,
@@ -409,6 +410,8 @@ class AgenticLLMAgent(LLMAgent):
         now = localnow().strftime("%Y-%m-%d %H:%M %Z")
         preamble = f"{persona}\n\n" if persona else ""
         system_prompt = f"{preamble}Current date/time: {now}\n\n" + self._load_system_prompt()
+        if capabilities := build_platform_capabilities_summary(self._deps):
+            system_prompt = f"{system_prompt}\n\n{capabilities}"
         user_text = self._build_task_message(payload, context, scored_tools)
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
