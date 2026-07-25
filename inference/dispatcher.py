@@ -43,9 +43,11 @@ from inference.exceptions import (
     InferenceError,
     ModelRateLimitedError,
     PaymentRequiredError,
+    ProviderAuthError,
 )
 from inference.model_policy import model_matches
 from inference.model_scorer import ModelScorer, ScoringConfig
+from inference.provider_health import ProviderHealthTracker
 from inference.models import (
     PRIORITY_TO_POOL,
     CompletionRequest,
@@ -103,6 +105,7 @@ class ModelDispatcher(InferenceRouter):
         # (provider_name, model_id) → (ModelInfo, Provider)
         self._registry: dict[tuple[str, str], tuple[ModelInfo, Provider]] = {}
         self._cooldowns = CooldownStore(cooldowns_path)
+        self._provider_health = ProviderHealthTracker()
         # (model_id, provider_name) → (ema_score, uses_count); seeded from DB at startup.
         self._model_confidence: dict[_CooldownKey, tuple[float, int]] = (
             confidence_tracker.load_model_scores_sync() if confidence_tracker is not None else {}
@@ -416,6 +419,7 @@ class ModelDispatcher(InferenceRouter):
             (info, provider)
             for info, provider in fitting
             if not self._cooldowns.is_active((info.model_id, info.provider_name))
+            and self._provider_health.is_available(info.provider_name)
         ]
 
         # Precompute quality scores once to avoid repeated EMA calculations during sort/shuffle.
@@ -641,6 +645,8 @@ class ModelDispatcher(InferenceRouter):
             key: _CooldownKey = (info.model_id, info.provider_name)
             if self._cooldowns.is_active(key):
                 continue
+            if not self._provider_health.is_available(info.provider_name):
+                continue
             try:
                 result = await call_fn(provider, info.model_id)
                 # A model that returns an empty/degenerate response (200 OK but no
@@ -659,6 +665,7 @@ class ModelDispatcher(InferenceRouter):
                     continue
                 self._record_model_outcome(key, True)
                 self._persist_model_score(key)
+                self._provider_health.record_success(info.provider_name)
                 if sticky_key is not None:
                     self._remember_sticky(sticky_key, key)
                 return result
@@ -672,14 +679,30 @@ class ModelDispatcher(InferenceRouter):
                 )
             except PaymentRequiredError:
                 self._cooldowns.set_payment_exhausted(key)
+                self._provider_health.mark_down(info.provider_name, "payment required")
                 logger.warning(
                     "Payment required: %s/%s - skipping for 24 h",
+                    info.provider_name,
+                    info.model_id,
+                )
+            except ProviderAuthError:
+                self._provider_health.mark_down(info.provider_name, "provider auth failed")
+                logger.warning(
+                    "Provider auth failed: %s/%s - skipping provider for 24 h",
                     info.provider_name,
                     info.model_id,
                 )
             except InferenceError:
                 self._record_model_outcome(key, False)
                 self._persist_model_score(key)
+                state = self._provider_health.mark_degraded(info.provider_name, "inference error")
+                if state != "healthy":
+                    logger.warning(
+                        "Provider degraded: %s/%s - circuit %s",
+                        info.provider_name,
+                        info.model_id,
+                        state,
+                    )
                 logger.warning(
                     "Inference error on %s/%s - trying next candidate",
                     info.provider_name,

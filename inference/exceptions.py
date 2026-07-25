@@ -36,6 +36,14 @@ class PaymentRequiredError(InferenceError):
     """
 
 
+class ProviderAuthError(InferenceError):
+    """A provider rejected the request with a hard auth/billing failure.
+
+    ModelDispatcher treats this as a provider-level circuit-breaker event and
+    stops routing new models to that provider until the breaker expires.
+    """
+
+
 class ContextTooLargeError(InferenceError):
     """Input exceeds every available model's context window.
 

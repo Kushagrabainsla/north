@@ -19,6 +19,7 @@ from inference.exceptions import (
     InferenceError,
     ModelRateLimitedError,
     PaymentRequiredError,
+    ProviderAuthError,
     TranscriptionError,
 )
 from inference.models import (
@@ -87,12 +88,18 @@ class OpenAICompatibleProvider:
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
         """Raise the cooldown-worthy errors for shared HTTP statuses.
 
+        401/403 are treated as provider-level auth/billing failures so the
+        dispatcher can open a provider circuit breaker and stop thrashing every
+        model behind the same invalid key or workspace.
+
         402 (insufficient credits) maps to a long payment cooldown. 429/404/503
         (rate limited or model gone) and 413 (request/token-rate too large) map to
         a short rate-limit cooldown that honours any Retry-After header, so the
         dispatcher routes around the model instead of hammering it. Other statuses
         return without raising so each caller can apply its own error type.
         """
+        if response.status_code in (401, 403):
+            raise ProviderAuthError(f"{self.name} returned {response.status_code} - provider auth failed")
         if response.status_code == 402:
             raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")
         if response.status_code in (429, 404, 503, 413):
@@ -104,6 +111,9 @@ class OpenAICompatibleProvider:
             raise InferenceError(f"{self.name} returned {response.status_code} for {model_id}: {response.text[:200]}")
 
     async def _raise_for_stream_status(self, resp: httpx.Response, model_id: str) -> None:
+        if resp.status_code in (401, 403):
+            await resp.aread()
+            raise ProviderAuthError(f"{self.name} returned {resp.status_code} - provider auth failed")
         if resp.status_code == 402:
             await resp.aread()
             raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")

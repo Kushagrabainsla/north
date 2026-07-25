@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from inference.exceptions import ModelRateLimitedError, PaymentRequiredError
+from inference.exceptions import ProviderAuthError
 from inference.models import TranscriptionRequest
 from inference.providers.groq import GroqRouter
 from inference.providers.openai_compat import OpenAICompatibleProvider
@@ -36,6 +37,11 @@ class TestRaiseCooldownStatus:
     def test_402_raises_payment_required(self) -> None:
         with pytest.raises(PaymentRequiredError):
             self._provider()._raise_cooldown_status(httpx.Response(402), "model")
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_auth_statuses_raise_provider_auth_error(self, status: int) -> None:
+        with pytest.raises(ProviderAuthError):
+            self._provider()._raise_cooldown_status(httpx.Response(status), "model")
 
     @pytest.mark.parametrize("status", [429, 404, 503, 413])
     def test_rate_limited_statuses_raise(self, status: int) -> None:

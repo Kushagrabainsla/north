@@ -247,3 +247,10 @@ class ConfidenceTracker:
                 "FROM tool_confidence WHERE agent = ?",
                 (new_agent, now, source_agent),
             )
+
+    async def record_task_outcome(
+        self, agent: str, tools_used: list[str], was_successful: bool
+    ) -> None:
+        """Closed-loop learning: update confidence for tools used in a task based on overall task outcome."""
+        for tool in set(tools_used):
+            await self.record_use(agent, tool, was_successful)

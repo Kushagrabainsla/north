@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from inference.exceptions import AllModelsRateLimitedError, PaymentRequiredError
+from inference.exceptions import AllModelsRateLimitedError, PaymentRequiredError, ProviderAuthError
 from ledger import LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.exceptions import OrchestratorError
 from orchestrator.task_context import TaskContextStore
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Exceptions meaning "no model is available right now" (the whole pool is rate
 # limited or a provider quota is dead) - an availability condition, not a north
 # bug. The dispatcher already walked the pool before raising these.
-_MODEL_UNAVAILABLE_EXCEPTIONS = (AllModelsRateLimitedError, PaymentRequiredError)
+_MODEL_UNAVAILABLE_EXCEPTIONS = (AllModelsRateLimitedError, PaymentRequiredError, ProviderAuthError)
 
 # Error types where a retry cannot succeed: the failure is deterministic
 # (missing prompt file, bad pool name) or the model pool is exhausted, so

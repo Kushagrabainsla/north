@@ -12,6 +12,7 @@ from inference.exceptions import (
     InferenceError,
     ModelRateLimitedError,
     PaymentRequiredError,
+    ProviderAuthError,
     PoolRefreshError,
     TranscriptionError,
 )
@@ -65,6 +66,7 @@ __all__ = [
     "POOL_TO_PRIORITY",
     "PRIORITY_TO_POOL",
     "PaymentRequiredError",
+    "ProviderAuthError",
     "PoolPriority",
     "PoolRefreshError",
     "Provider",

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from agents import AgentRegistry
 from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import RoutingError
-from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
+from orchestrator.models import ExecutionMode, ExecutionPath, ExecutionPlan, IntentClassification
 from utils.prompts import load_prompt
 from utils.text import strip_code_fences
 
@@ -203,6 +203,14 @@ class ExecutionPlanner:
             plan = self._build_engineering_plan(engineering_kind, confidence, task_id)
         else:
             plan = self._build_plan_from_response(data, classification.domain, task_id)
+
+        path = (
+            ExecutionPath.DEEP
+            if (len(plan.agents) > 1 or plan.mode in (ExecutionMode.PARALLEL, ExecutionMode.HIERARCHICAL))
+            else ExecutionPath.FAST
+        )
+        classification = classification.model_copy(update={"execution_path": path})
+        plan = plan.model_copy(update={"execution_path": path})
 
         # Evict oldest entries when cache is full, then store.
         if len(self._plan_cache) >= _PLAN_CACHE_MAX_SIZE:

@@ -13,6 +13,13 @@ from pydantic import BaseModel, Field
 from ledger.models import LedgerSource
 
 
+class ExecutionPath(StrEnum):
+    """Routing path tier: FAST for simple/single-stage tasks; DEEP for multi-stage pipelines."""
+
+    FAST = "fast"
+    DEEP = "deep"
+
+
 class ExecutionMode(StrEnum):
     """Execution structure chosen by the router for a given task."""
 
@@ -53,6 +60,7 @@ class IntentClassification(BaseModel):
     domain: str
     reasoning: str
     confidence: float = 1.0  # 0–1; below 0.7 skips the north star check to avoid false interruptions
+    execution_path: ExecutionPath = ExecutionPath.FAST
 
 
 class ExecutionPlan(BaseModel):
@@ -63,6 +71,7 @@ class ExecutionPlan(BaseModel):
     parallel_groups: list[list[str]]
     dependencies: dict[str, list[str]]
     mode: ExecutionMode = ExecutionMode.SINGLE_AGENT
+    execution_path: ExecutionPath = ExecutionPath.FAST
     direct_tool: str | None = None
     direct_tool_params: dict[str, Any] = Field(default_factory=dict)
     # For engineering tasks: the classified kind (question/research/bugfix/refactor/
