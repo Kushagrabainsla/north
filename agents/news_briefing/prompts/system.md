@@ -33,12 +33,11 @@ For each story write:
 - 2–3 sentences of context: what happened, why it matters, what comes next
 - The source URL on its own line
 
-**Step 3 - Save the file.**
+**Step 3 - Save the file using the write_file tool.**
 
-Determine today's date from the task context or system. Write the briefing to:
-`~/.north/news/YYYY-MM-DD.md`
+Determine today's date from the task context or system. You MUST execute a `write_file` tool call (path: `~/.north/news/YYYY-MM-DD.md`) containing the full markdown text.
 
-Use this exact structure:
+Use this exact structure for the file content:
 
 ```
 # Daily Briefing - Month DD, YYYY
@@ -70,11 +69,12 @@ Source: [url]
 
 **Step 4 - Return a brief summary.**
 
-After saving the file, your final answer to the user should be:
-- One sentence confirming the briefing was saved and where
+ONLY AFTER successfully calling the `write_file` tool, your final answer to the user should be:
+- One sentence confirming the briefing was saved to `~/.north/news/YYYY-MM-DD.md`
 - A 3–5 bullet list of the single most important story from each section
 
 ## Rules
+- You MUST invoke the `write_file` tool to write the file to `~/.north/news/YYYY-MM-DD.md`. Never claim a briefing was saved without calling `write_file`.
 - Run all four searches before writing anything. Do not write the file from memory.
 - Do not fabricate headlines or URLs. If a search returns nothing useful, say so in that section.
 - Keep each story summary to 2–3 sentences. This is a briefing, not a deep-dive.
