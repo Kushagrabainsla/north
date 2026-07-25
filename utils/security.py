@@ -40,7 +40,20 @@ def verify_secret(secret_to_verify: str) -> bool:
     stored_secret = settings.secret
     if not stored_secret:
         stored_secret = load_secret()
-    return secrets.compare_digest(secret_to_verify, stored_secret)
+    if secrets.compare_digest(secret_to_verify, stored_secret):
+        return True
+
+    # The server caches file-backed secrets for performance. If the key file was
+    # rotated while this process stayed alive, retry once from disk and refresh
+    # the cache so running servers accept the new key without a restart.
+    if settings.north_secret:
+        return False
+    secret_file = settings.north_home / "secret.key"
+    if not secret_file.exists():
+        return False
+    refreshed_secret = read_secret_file(secret_file)
+    settings._secret_cache = refreshed_secret
+    return secrets.compare_digest(secret_to_verify, refreshed_secret)
 
 
 async def verify_request_secret(
