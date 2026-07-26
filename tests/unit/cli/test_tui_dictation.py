@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip("sounddevice", reason="dictation tests need sounddevice")
+
 from cli.tui import NorthApp
 
 
