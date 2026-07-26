@@ -24,6 +24,7 @@ async def test_photo_creates_file(tmp_path: Path) -> None:
         return result
 
     with (
+        patch.object(sys, "platform", "darwin"),
         patch("tools.universal.take_photo._ensure_binary", return_value=Path("/tmp/north_camera/capture")),
         patch("tools.universal.take_photo.subprocess.run", side_effect=_fake_run),
     ):
@@ -48,6 +49,7 @@ async def test_photo_default_filename(tmp_path: Path) -> None:
         return result
 
     with (
+        patch.object(sys, "platform", "darwin"),
         patch("tools.universal.take_photo._ensure_binary", return_value=Path("/tmp/north_camera/capture")),
         patch("tools.universal.take_photo.subprocess.run", side_effect=_fake_run),
     ):
@@ -60,7 +62,8 @@ async def test_photo_default_filename(tmp_path: Path) -> None:
 async def test_photo_blocked_path(tmp_path: Path) -> None:
     """Path that escapes the workspace is rejected."""
     tool = TakePhotoTool()
-    out = await tool.run(ToolInput(params={"path": "/etc/photo.jpg", "workspace": str(tmp_path)}))
+    with patch.object(sys, "platform", "darwin"):
+        out = await tool.run(ToolInput(params={"path": "/etc/photo.jpg", "workspace": str(tmp_path)}))
     assert not out.success
     assert "escapes" in out.error.lower() or "blocked" in out.error.lower()
 
@@ -76,6 +79,7 @@ async def test_photo_camera_fails(tmp_path: Path) -> None:
         return result
 
     with (
+        patch.object(sys, "platform", "darwin"),
         patch("tools.universal.take_photo._ensure_binary", return_value=Path("/tmp/north_camera/capture")),
         patch("tools.universal.take_photo.subprocess.run", side_effect=_fake_run),
     ):
