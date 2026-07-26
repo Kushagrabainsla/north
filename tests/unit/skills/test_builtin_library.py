@@ -57,7 +57,9 @@ def test_cut_skills_absent():
     # These were cut as pure prompt-duplication; they must not reappear as skills.
     names = set(_REGISTRY.names())
     assert "minimal-surgical-change" not in names
-    assert "incremental-implementation" not in names
+    # Note: incremental-implementation was previously cut but is now re-added as a
+    # substantially richer skill (slicing strategies, implementation rules 0-5,
+    # rollback-friendly patterns) that goes well beyond the coder prompt.
 
 
 def test_research_skill_serves_general_not_engineering():
