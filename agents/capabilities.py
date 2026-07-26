@@ -20,7 +20,8 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
     """
     lines: list[str] = [
         "## Platform Capabilities & Ecosystem Overview",
-        "North is an autonomous personal operating system with dynamic tools, specialized agents, and procedural skills:",
+        "North is an autonomous personal operating system with dynamic"
+        " tools, specialized agents, and procedural skills:",
     ]
 
     # 1. Specialized Agents

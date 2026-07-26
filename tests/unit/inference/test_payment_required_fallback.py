@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from inference.exceptions import PaymentRequiredError
 from inference.capability import ModelInfo
-from inference.models import CompletionRequest, CompletionResponse, PoolPriority
 from inference.dispatcher import ModelDispatcher
+from inference.exceptions import PaymentRequiredError
+from inference.models import CompletionRequest, CompletionResponse, PoolPriority
 
 
 class MockProvider:

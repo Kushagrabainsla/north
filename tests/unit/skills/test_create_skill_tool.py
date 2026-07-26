@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from skills.registry import SkillRegistry
 from tools.models import ToolInput
 from tools.universal.create_skill import CreateSkillTool

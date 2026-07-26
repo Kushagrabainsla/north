@@ -458,7 +458,10 @@ class NorthApp(App[None]):
     # ── rendering helpers ────────────────────────────────────────────────────
 
     def _refresh_hint(self) -> None:
-        hint = f"  {self._strategy}  ·  ↑↓ history  ·  /commands  ·  ctrl+d dictate  ·  ctrl+g editor  ·  ctrl+c interrupt"
+        hint = (
+            f"  {self._strategy}  ·  ↑↓ history  ·  /commands"
+            f"  ·  ctrl+d dictate  ·  ctrl+g editor  ·  ctrl+c interrupt"
+        )
         self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
 
     def _render_status_bar(self) -> None:

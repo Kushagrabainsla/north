@@ -47,7 +47,6 @@ from inference.exceptions import (
 )
 from inference.model_policy import model_matches
 from inference.model_scorer import ModelScorer, ScoringConfig
-from inference.provider_health import ProviderHealthTracker
 from inference.models import (
     PRIORITY_TO_POOL,
     CompletionRequest,
@@ -63,6 +62,7 @@ from inference.models import (
     TranscriptionResponse,
 )
 from inference.provider import Provider
+from inference.provider_health import ProviderHealthTracker
 from inference.routing import _Candidate, shuffle_groups
 from utils.text import strip_code_fences
 

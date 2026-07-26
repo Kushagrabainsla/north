@@ -12,8 +12,8 @@ from inference.exceptions import (
     InferenceError,
     ModelRateLimitedError,
     PaymentRequiredError,
-    ProviderAuthError,
     PoolRefreshError,
+    ProviderAuthError,
     TranscriptionError,
 )
 from inference.factory import build_router

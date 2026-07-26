@@ -47,7 +47,10 @@ class CreateSkillTool(Tool):
             },
             "description": {
                 "type": "string",
-                "description": "Trigger condition starting with 'Use when...'. E.g. 'Use when building and deploying a Docker container.'",
+                "description": (
+                    "Trigger condition starting with 'Use when...'. "
+                    "E.g. 'Use when building and deploying a Docker container.'"
+                ),
             },
             "instructions": {
                 "type": "string",

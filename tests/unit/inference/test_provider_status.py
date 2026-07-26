@@ -11,8 +11,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from inference.exceptions import ModelRateLimitedError, PaymentRequiredError
-from inference.exceptions import ProviderAuthError
+from inference.exceptions import ModelRateLimitedError, PaymentRequiredError, ProviderAuthError
 from inference.models import TranscriptionRequest
 from inference.providers.groq import GroqRouter
 from inference.providers.openai_compat import OpenAICompatibleProvider

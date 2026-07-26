@@ -483,6 +483,7 @@ async def test_core_tools_never_dropped_by_semantic_filter(tmp_path):
 async def test_multimodal_tool_image_context(tmp_path: Path) -> None:
     """If a tool returns image data on success, the agent loop appends a subsequent user message with the image."""
     import json
+
     from tools.base import Tool
     from tools.models import ToolInput, ToolOutput
 

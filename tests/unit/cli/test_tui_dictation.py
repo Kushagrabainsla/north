@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from textual.widgets import Input
 
 from cli.tui import NorthApp
 
@@ -53,7 +51,7 @@ async def test_toggle_dictation_starts_stops_transcribes() -> None:
         with (
             patch("sounddevice.InputStream", return_value=mock_sd),
             patch("numpy.concatenate", return_value=mock_np.concatenate.return_value),
-            patch("wave.open") as mock_wave,
+            patch("wave.open"),
         ):
             # 1. Start recording
             app._start_recording()
