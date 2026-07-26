@@ -23,7 +23,10 @@ async def test_screenshot_creates_file(tmp_path: Path) -> None:
         result.stderr = ""
         return result
 
-    with patch("tools.universal.take_screenshot.subprocess.run", side_effect=_fake_run):
+    with (
+        patch.object(sys, "platform", "darwin"),
+        patch("tools.universal.take_screenshot.subprocess.run", side_effect=_fake_run),
+    ):
         out = await tool.run(ToolInput(params={"path": "shot.png", "workspace": str(tmp_path)}))
 
     assert out.success, out.error
@@ -44,7 +47,10 @@ async def test_screenshot_default_filename(tmp_path: Path) -> None:
         result.stderr = ""
         return result
 
-    with patch("tools.universal.take_screenshot.subprocess.run", side_effect=_fake_run):
+    with (
+        patch.object(sys, "platform", "darwin"),
+        patch("tools.universal.take_screenshot.subprocess.run", side_effect=_fake_run),
+    ):
         out = await tool.run(ToolInput(params={"workspace": str(tmp_path)}))
 
     assert out.success, out.error
@@ -55,7 +61,8 @@ async def test_screenshot_default_filename(tmp_path: Path) -> None:
 async def test_screenshot_blocked_path(tmp_path: Path) -> None:
     """Path that escapes the workspace is rejected."""
     tool = TakeScreenshotTool()
-    out = await tool.run(ToolInput(params={"path": "/etc/screenshot.png", "workspace": str(tmp_path)}))
+    with patch.object(sys, "platform", "darwin"):
+        out = await tool.run(ToolInput(params={"path": "/etc/screenshot.png", "workspace": str(tmp_path)}))
     assert not out.success
     assert "escapes" in out.error.lower() or "blocked" in out.error.lower()
 
@@ -70,7 +77,10 @@ async def test_screenshot_screencapture_fails(tmp_path: Path) -> None:
         result.stderr = "screen recording permission denied"
         return result
 
-    with patch("tools.universal.take_screenshot.subprocess.run", side_effect=_fake_run):
+    with (
+        patch.object(sys, "platform", "darwin"),
+        patch("tools.universal.take_screenshot.subprocess.run", side_effect=_fake_run),
+    ):
         out = await tool.run(ToolInput(params={"path": "shot.png", "workspace": str(tmp_path)}))
 
     assert not out.success
