@@ -378,6 +378,7 @@ def _detect_verify_command(workspace: str) -> str | None:
         return command
     return None
 
+
 # Ledger status recorded for each approval-card decision. Answers to questions are
 # handled separately (recorded as learnable clarifications), so they are absent here.
 _APPROVAL_DECISION_STATUS: dict[str, LedgerStatus] = {
@@ -607,13 +608,9 @@ class Orchestrator:
         for entry in entries:  # query() returns most-recent-first
             terminal = _TERMINAL_TASK_ACTIONS.get(entry.action)
             if terminal is not None:
-                return TaskResponse(
-                    task_id=task_id, status=terminal, created_at=format_timestamp(entry.timestamp)
-                )
+                return TaskResponse(task_id=task_id, status=terminal, created_at=format_timestamp(entry.timestamp))
         # No terminal entry yet - the task is still running.
-        return TaskResponse(
-            task_id=task_id, status="pending", created_at=format_timestamp(entries[-1].timestamp)
-        )
+        return TaskResponse(task_id=task_id, status="pending", created_at=format_timestamp(entries[-1].timestamp))
 
     async def cancel_task(self, task_id: str) -> bool:
         """Cancel a running task: stop its pipeline and write a terminal ledger entry.
@@ -750,7 +747,7 @@ class Orchestrator:
         if not self._approval_store.resolve(card_id, decision, chosen_option=chosen_option):
             raise ValueError(f"Approval card {card_id!r} could not be resolved.")
 
-        # An answered question is a durable preference in the user's own words  - 
+        # An answered question is a durable preference in the user's own words  -
         # record it from a *learnable* source (the extraction pipeline reads it),
         # phrased so the fact comes from the answer, not north's question. Every
         # other decision is an audit-only APPROVAL entry.
@@ -821,10 +818,7 @@ class Orchestrator:
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
                 action="task_stuck",
-                output=(
-                    f"No progress for over {self._stuck_task_max_age_seconds}s - "
-                    "cancelling as stuck (watchdog)."
-                ),
+                output=(f"No progress for over {self._stuck_task_max_age_seconds}s - cancelling as stuck (watchdog)."),
                 status=LedgerStatus.FAILED,
                 error_type="stuck_timeout",
             )
@@ -944,6 +938,10 @@ class Orchestrator:
                 return
 
             classification, plan = await self._stage_plan(task_id, request.prompt, request.context)
+            # Stamp the domain on the running_task row so other agents
+            # can see which domain this session belongs to.
+            if self._running_task_store is not None:
+                await self._running_task_store.update_domain(task_id, classification.domain)
             await self._stage_north_star(task_id, request.prompt, classification)
             await self._stage_execute(
                 task_id,
@@ -1048,9 +1046,7 @@ class Orchestrator:
         workspace = request.workspace or self._default_workspace
         await self._task_context_store.initialize_task(task_id, [agent.name])
         await self._stream_manager.emit(task_id, "executing", {"agents": [agent.name]})
-        failures = await self._execute_agent_group(
-            task_id, request.prompt, [agent], workspace, context=request.context
-        )
+        failures = await self._execute_agent_group(task_id, request.prompt, [agent], workspace, context=request.context)
         if failures:
             await self._report_execution_failures(task_id, failures)
         await self._finish_task(task_id, failures=failures, total_agents=1)
@@ -1427,9 +1423,7 @@ class Orchestrator:
 
             # review present and FAILED with must-fix items.
             if fix_round >= _CONDUCTOR_MAX_FIX_ROUNDS:
-                await self._stream_manager.emit(
-                    task_id, "conductor_review_unresolved", {"must_fix": review.must_fix}
-                )
+                await self._stream_manager.emit(task_id, "conductor_review_unresolved", {"must_fix": review.must_fix})
                 return []
 
             items = "\n".join(f"- {m}" for m in review.must_fix) or "(see the review report)"
@@ -1501,9 +1495,7 @@ class Orchestrator:
         resolved = produces[0].replace("{handoff_dir}", handoff_dir_for(task_id))
         return Path(resolved)
 
-    async def _collect_handoff_artifacts(
-        self, task_id: str, agent_names: list[str]
-    ) -> tuple[list[str], list[str]]:
+    async def _collect_handoff_artifacts(self, task_id: str, agent_names: list[str]) -> tuple[list[str], list[str]]:
         """Read each stage's primary artifact; return (context snippets, names missing it)."""
         snippets: list[str] = []
         missing: list[str] = []
@@ -1692,9 +1684,7 @@ class Orchestrator:
                 error_type=None if result.passed else "dod_unmet",
             )
         )
-        await self._stream_manager.emit(
-            task_id, "dod_evaluated", {"passed": result.passed, "reasons": result.reasons}
-        )
+        await self._stream_manager.emit(task_id, "dod_evaluated", {"passed": result.passed, "reasons": result.reasons})
         if not result.passed:
             logger.warning("DoD not met for task %s: %s", task_id, "; ".join(result.reasons))
 
@@ -1900,10 +1890,7 @@ class Orchestrator:
     async def _report_dod_unmet(self, task_id: str, reasons: list[str]) -> None:
         """Surface an unmet Definition of Done in the streamed answer (visible note)."""
         bullets = "; ".join(reasons)
-        note = (
-            f"\n\n> ⚠️ **Definition of Done not met:** {bullets}. "
-            "Treat this as not fully done until confirmed."
-        )
+        note = f"\n\n> ⚠️ **Definition of Done not met:** {bullets}. Treat this as not fully done until confirmed."
         await self._stream_manager.emit(task_id, "token", {"text": note})
 
     async def _finish_task(
@@ -1995,7 +1982,7 @@ class Orchestrator:
         self._task_context_store.release_conditions(task_id)
         # Trigger extraction immediately after agent tasks so preferences stated
         # mid-task land in judgement_rules.md before the next task starts.
-        # Single-tool tasks (deterministic, no agent reasoning) are skipped  - 
+        # Single-tool tasks (deterministic, no agent reasoning) are skipped  -
         # they produce no signal worth extracting.
         if self._extraction_pipeline is not None and not skip_extraction:
             spawn(self._extraction_pipeline.run_once(), name="extraction_run_once")
@@ -2195,9 +2182,7 @@ class Orchestrator:
         await self._emit_integration(payload.task_id, agent.name, integration)
         return result
 
-    async def _run_best_of_n(
-        self, agent: Agent, payload: AgentPayload, manager: GitWorktreeManager
-    ) -> AgentResult:
+    async def _run_best_of_n(self, agent: Agent, payload: AgentPayload, manager: GitWorktreeManager) -> AgentResult:
         """Run N isolated coder attempts in parallel; integrate only the best (#11).
 
         Each attempt runs in its own worktree. Candidates are scored deterministically
@@ -2355,9 +2340,7 @@ class Orchestrator:
                 await self._stream_manager.emit(task_id, "stream_reset", {"agent": agent.name})
                 self._maybe_refresh_pools_background()
 
-    def _add_evidence_gate_violations(
-        self, agent: Agent, result: AgentResult, violations: list[str]
-    ) -> list[str]:
+    def _add_evidence_gate_violations(self, agent: Agent, result: AgentResult, violations: list[str]) -> list[str]:
         """Engineering evidence gate (#1): flag code changed with no verification,
         or a code edit that was attempted but never landed.
 
@@ -2426,9 +2409,7 @@ class Orchestrator:
                 error_type="unverified_claims",
             )
         )
-        await self._stream_manager.emit(
-            task_id, "claims_unverified", {"agent": agent.name, "violations": violations}
-        )
+        await self._stream_manager.emit(task_id, "claims_unverified", {"agent": agent.name, "violations": violations})
 
     async def _attempt_self_repair(
         self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload, violations: list[str]

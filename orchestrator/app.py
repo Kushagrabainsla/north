@@ -64,6 +64,7 @@ from tools.tool_index import ToolIndex
 from tools.universal.create_agent import CreateAgentTool
 from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
+from tools.universal.get_active_sessions import GetActiveSessionsTool
 from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
@@ -152,6 +153,8 @@ def _build_tool_registry(
     tool_registry.make_universal("query_metrics")
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))
     tool_registry.make_universal("get_task_status")
+    tool_registry.register(GetActiveSessionsTool(running_task_store=deps.running_task_store))
+    tool_registry.make_universal("get_active_sessions")
     tool_registry.register(UpdatePlanTool(plan_store=deps.plan_store, stream_manager=deps.stream_manager))
     tool_registry.make_universal("update_plan")
     # Semantic code search (#2) - only when embeddings are available.
@@ -230,6 +233,8 @@ def _build_skills(deps) -> tuple[SkillRegistry, SkillSelector]:
     )
     selector = SkillSelector(registry, embed_fn=deps.embed_fn)
     return registry, selector
+
+
 def _build_tool_index(deps) -> ToolIndex | None:
     if deps.embed_fn is None:
         return None
@@ -598,7 +603,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     telegram_gateway = TelegramGateway()
     background_tasks = _launch_background_tasks(
-        deps, orchestrator, extraction_pipeline, skill_distiller, callback_server,
+        deps,
+        orchestrator,
+        extraction_pipeline,
+        skill_distiller,
+        callback_server,
         telegram_gateway=telegram_gateway,
     )
 

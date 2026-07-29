@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _TELEGRAM_API = "https://api.telegram.org/bot"
 _POLL_INTERVAL = 2.0  # seconds between long-poll requests
 _TASK_POLL_INTERVAL = 1.0  # seconds between checking task status
+_TASK_POLL_MAX_ATTEMPTS = 90  # 90 × 1s = 90s max wait for task completion
 _MAX_RETRIES = 3
 _HTTP_TIMEOUT = 30.0
 
@@ -125,28 +126,31 @@ class TelegramGateway:
         """Poll the ledger for the completed agent's output."""
         url = f"{self._orchestrator_base}/orchestrator/ledger"
         params = {"task_id": task_id, "limit": 50}
-        for _ in range(30):
+        for i in range(_TASK_POLL_MAX_ATTEMPTS):
             try:
                 resp = await self._http.get(url, params=params, headers=_headers())
                 if resp.status_code == 200:
                     entries = resp.json()
                     # Scan for the agent's actual response (agent_completed
-                    # carries the output; task_completed, classified_as_*,
+                    # carries the output; task_completed, classified_as_*, 
                     # skill_selected etc are just pipeline bookkeeping).
                     for entry in entries:  # most-recent-first
                         action = entry.get("action", "")
                         if action in ("agent_completed",) and entry.get("output"):
+                            logger.info("Task %s found agent_completed output at poll %d", task_id, i)
                             return entry["output"]
                     # If the terminal entry says failed/cancelled, report that.
                     for entry in entries:
                         status = (entry.get("status") or "").lower()
                         if status in ("failed", "cancelled") and entry.get("output"):
+                            logger.warning("Task %s terminal status=%s at poll %d", task_id, status, i)
                             return f"Task {status}: {entry['output']}"
                 elif resp.status_code == 404:
                     return "Task not found."
             except httpx.RequestError:
                 pass
             await asyncio.sleep(_TASK_POLL_INTERVAL)
+        logger.error("Task %s timed out after %d polls (%ds)", task_id, _TASK_POLL_MAX_ATTEMPTS, _TASK_POLL_MAX_ATTEMPTS)
         return "Response timed out — check north for details."
 
     async def _download_file(self, file_id: str) -> bytes | None:
