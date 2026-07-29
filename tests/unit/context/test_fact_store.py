@@ -44,8 +44,91 @@ async def test_dedup_updates_in_place_within_scan_window(db_path: Path) -> None:
     assert await store.count() == 1
 
 
+async def test_exact_match_dedup_works_without_embeddings(db_path: Path) -> None:
+    """Identical content is collapsed even when the embedder is down (429s)."""
+    store = FactStore(db_path=db_path, embed_fn=_embedder(default=[]))
+
+    assert await store.add_fact("User bought groceries") is True
+    assert await store.add_fact("User bought groceries") is False  # exact dup → no new row
+    assert await store.add_fact("User bought groceries", category="bootstrap") is True  # different category
+
+    assert await store.count() == 2
+    # The duplicate call did not insert a row.
+    assert await store.count(category="user") == 1
+
+
+async def test_exact_match_dedup_precedes_cosine(db_path: Path) -> None:
+    """Exact match wins even when embeddings WOULD have matched: no embed call
+    is made for a duplicate, so identical facts never churn rate-limit budget."""
+    calls: list[list[str]] = []
+
+    async def counting_embed(texts: list[str]) -> list[list[float]]:
+        calls.append(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+    store = FactStore(db_path=db_path, embed_fn=counting_embed)
+    assert await store.add_fact("first") is True
+    assert await store.add_fact("first") is False
+    assert len(calls) == 1, "exact duplicate must not call the embedder"
+
+
+async def test_embed_failure_still_stores_distinct_facts(db_path: Path) -> None:
+    """Embedder down (raises, like a 429) → distinct facts still store, and
+    search falls back to recency order; only exact duplicates are collapsed."""
+
+    async def down_embed(texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("embedder rate-limited")
+
+    store = FactStore(db_path=db_path, embed_fn=down_embed)
+
+    await store.add_fact("fact one")
+    await store.add_fact("fact two")
+    await store.add_fact("fact one")
+
+    assert await store.count() == 2
+    recents = await store.search("anything")  # embed raises → recency fallback
+    assert set(recents) == {"fact one", "fact two"}
+
+
+async def test_search_falls_back_when_query_embed_is_empty(db_path: Path) -> None:
+    """Embedder returns degenerate empty vectors (not raising) → search still
+    returns facts via recency instead of silently returning nothing."""
+
+    async def empty_embed(texts: list[str]) -> list[list[float]]:
+        return [[] for _ in texts]
+
+    store = FactStore(db_path=db_path, embed_fn=empty_embed)
+    await store.add_fact("fact one")
+    await store.add_fact("fact two")
+
+    assert set(await store.search("anything")) == {"fact one", "fact two"}
+
+
+async def test_search_falls_back_when_no_facts_embedded(db_path: Path) -> None:
+    """Facts written while the embedder was down have no embeddings; a later
+    query with a WORKING embedder must not return [] — recency fallback."""
+    store = FactStore(db_path=db_path, embed_fn=_embedder(default=[]))
+    await store.add_fact("fact one")  # stored without embedding (429 era)
+
+    # Query time: embedder works again, but the store has no embedded facts.
+    store._embed_fn = _embedder(default=[1.0, 0.0])  # type: ignore[method-assign]
+
+    assert await store.search("anything") == ["fact one"]
+
+
+async def test_count_filters_by_category(db_path: Path) -> None:
+    store = FactStore(db_path=db_path, embed_fn=_embedder(default=[]))
+    await store.add_fact("budget fact", category="bootstrap")
+    await store.add_fact("another budget fact", category="bootstrap")
+    await store.add_fact("learned fact", category="user")
+    assert await store.count() == 3
+    assert await store.count(category="bootstrap") == 2
+    assert await store.count(category="user") == 1
+    assert await store.count(category="health") == 0
+
+
 async def test_dedup_only_scans_recent_rows(db_path: Path, monkeypatch) -> None:
-    """An old near-duplicate outside the scan window no longer blocks an insert  - 
+    """An old near-duplicate outside the scan window no longer blocks an insert  -
     the dedup scan is bounded instead of O(all rows)."""
     monkeypatch.setattr(fact_store_module, "_DEDUP_SCAN_LIMIT", 1)
     vectors = {

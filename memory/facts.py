@@ -40,7 +40,7 @@ _RECALL_MIN_SIMILARITY: float = 0.25
 # Retention cap: the store holds at most this many facts (oldest evicted on
 # insert), which also bounds every cosine scan and the in-memory cache.
 _MAX_FACTS_STORED: int = 5_000
-# Dedup-on-insert only compares against the most recent rows per category  - 
+# Dedup-on-insert only compares against the most recent rows per category  -
 # an O(all rows) scan per insert does not scale and recent facts are the
 # plausible duplicates anyway.
 _DEDUP_SCAN_LIMIT: int = 500
@@ -66,16 +66,33 @@ class FactStore:
         # must not interleave loads and clobber each other's cache.
         self._cache_lock = asyncio.Lock()
 
-    async def add_fact(self, content: str, category: str = "user") -> None:
-        """Embed and persist one fact. Silently skips empty content or embed failure.
+    async def add_fact(self, content: str, category: str = "user") -> bool:
+        """Embed and persist one fact. Returns True when a new row was inserted.
 
-        If a nearly-identical fact already exists in the same category (cosine
-        similarity >= _DEDUP_SIMILARITY_THRESHOLD), the existing row is updated
-        in-place rather than a duplicate being inserted.
+        Dedup is two-layered and lives entirely in the store (bootstrap and the
+        normal pipeline share this exact path):
+
+        1. Exact match — deterministic, needs no embeddings. If an identical
+           fact already exists in the same category, its ``updated_at`` is
+           refreshed (recency bump) and False is returned. This is the defense
+           that keeps identical facts from flooding the store even while the
+           embedding provider is rate-limited or down (e.g. 429s).
+        2. Cosine similarity — semantic. When an embedding was produced and a
+           recent fact in the same category scores >= _DEDUP_SIMILARITY_THRESHOLD,
+           the existing row is updated in-place rather than a duplicate being
+           inserted (catches paraphrases the exact check misses).
+
+        Silently skips empty content.
         """
         content = content.strip()
         if not content:
-            return
+            return False
+        # Exact-match dedup runs BEFORE any embedding call: identical content
+        # is a duplicate by definition, and skipping the embed for it saves
+        # rate-limit budget as well as rows.
+        if await asyncio.to_thread(self._find_exact_sync, category, content):
+            await asyncio.to_thread(self._touch_sync, category, content)
+            return False
         new_emb: list[float] = []
         try:
             embeddings = await self._embed_fn([content])
@@ -91,8 +108,9 @@ class FactStore:
                 self._find_similar_sync, category, new_emb, _DEDUP_SIMILARITY_THRESHOLD
             )
 
-        await asyncio.to_thread(self._insert_or_replace_sync, content, category, emb_json, replace_id)
+        inserted = await asyncio.to_thread(self._insert_or_replace_sync, content, category, emb_json, replace_id)
         self._cache = None
+        return inserted
 
     async def search(
         self,
@@ -110,13 +128,18 @@ class FactStore:
             q_embs = await self._embed_fn([query])
         except Exception:
             return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
-        if not q_embs:
+        # Empty query vectors (rate-limited embedder returning degenerate
+        # results) mean semantic ranking is impossible — fall back to recency.
+        if not q_embs or not q_embs[0]:
             return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
         qvec = q_embs[0]
 
         cache = await self._get_cache()
         if not cache:
-            return []
+            # No stored fact has a usable embedding (they were written while
+            # the embedder was down): cosine ranking would match nothing.
+            # Return the most recent facts so recall still answers.
+            return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
 
         scored = [
             (content, cosine_similarity(qvec, emb))
@@ -127,8 +150,9 @@ class FactStore:
         # Drop weak matches so irrelevant facts never dilute the agent's context (#10).
         return [content for content, score in scored[:max_results] if score >= _RECALL_MIN_SIMILARITY]
 
-    async def count(self) -> int:
-        return await asyncio.to_thread(self._count_sync)
+    async def count(self, category: str | None = None) -> int:
+        """Total facts, or only those in *category* when given."""
+        return await asyncio.to_thread(self._count_sync, category)
 
     async def all_facts(self, category: str | None = None) -> list[dict]:
         """Return all facts for web UI display, optionally filtered by category."""
@@ -163,6 +187,23 @@ class FactStore:
                 self._cache = parsed
             return self._cache
 
+    def _find_exact_sync(self, category: str, content: str) -> bool:
+        """True if an identical fact already exists in *category*."""
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM context_facts WHERE category = ? AND content = ? LIMIT 1",
+                (category, content),
+            ).fetchone()
+        return row is not None
+
+    def _touch_sync(self, category: str, content: str) -> None:
+        """Refresh recency of an existing fact (exact-match dedup path)."""
+        with open_db_connection(self._db_path) as conn:
+            conn.execute(
+                "UPDATE context_facts SET updated_at = ? WHERE category = ? AND content = ?",
+                (datetime.now(UTC).isoformat(), category, content),
+            )
+
     def _find_similar_sync(self, category: str, emb: list[float], threshold: float) -> str | None:
         """Return the id of a recent fact in *category* with similarity >= threshold, or None.
 
@@ -185,7 +226,12 @@ class FactStore:
                 pass
         return None
 
-    def _insert_or_replace_sync(self, content: str, category: str, emb_json: str, replace_id: str | None) -> None:
+    def _insert_or_replace_sync(self, content: str, category: str, emb_json: str, replace_id: str | None) -> bool:
+        """Insert *content*; returns True when a new row was created.
+
+        When *replace_id* is set the existing row is updated in place (cosine
+        dedup path) and False is returned.
+        """
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
             if replace_id:
@@ -193,18 +239,19 @@ class FactStore:
                     "UPDATE context_facts SET content = ?, embedding = ?, updated_at = ? WHERE id = ?",
                     (content, emb_json, now, replace_id),
                 )
-            else:
-                conn.execute(
-                    "INSERT INTO context_facts (id, content, category, embedding, updated_at) VALUES (?, ?, ?, ?, ?)",
-                    (generate_id(), content, category, emb_json, now),
-                )
-                # Retention: evict the oldest facts beyond the cap so the store
-                # (and every scan over it) stays bounded.
-                conn.execute(
-                    "DELETE FROM context_facts WHERE id NOT IN "
-                    "(SELECT id FROM context_facts ORDER BY updated_at DESC LIMIT ?)",
-                    (_MAX_FACTS_STORED,),
-                )
+                return False
+            conn.execute(
+                "INSERT INTO context_facts (id, content, category, embedding, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (generate_id(), content, category, emb_json, now),
+            )
+            # Retention: evict the oldest facts beyond the cap so the store
+            # (and every scan over it) stays bounded.
+            conn.execute(
+                "DELETE FROM context_facts WHERE id NOT IN "
+                "(SELECT id FROM context_facts ORDER BY updated_at DESC LIMIT ?)",
+                (_MAX_FACTS_STORED,),
+            )
+            return True
 
     def _load_all_sync(self) -> list[tuple[str, str, str, str]]:
         with open_db_connection(self._db_path) as conn:
@@ -229,8 +276,10 @@ class FactStore:
                 ).fetchall()
         return [r["content"] for r in rows]
 
-    def _count_sync(self) -> int:
+    def _count_sync(self, category: str | None = None) -> int:
         with open_db_connection(self._db_path) as conn:
+            if category:
+                return conn.execute("SELECT COUNT(*) FROM context_facts WHERE category = ?", (category,)).fetchone()[0]
             return conn.execute("SELECT COUNT(*) FROM context_facts").fetchone()[0]
 
     def _all_facts_sync(self, category: str | None) -> list[dict]:
