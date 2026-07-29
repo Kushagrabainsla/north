@@ -20,8 +20,8 @@ from memory.facts import FactStore
 logger = logging.getLogger(__name__)
 
 _BOOTSTRAPPED_MARKER = ".bootstrapped"
-_MAX_FILES = 50
-_MAX_FILE_BYTES = 100_000  # skip anything larger than 100 KB
+_MAX_FILES = 200
+_MAX_FILE_BYTES = 500_000  # skip anything larger than 500 KB
 _SOURCE_DIRS = ("Downloads", "Documents", "Desktop")
 _SKIP_DIRS = frozenset(
     {
