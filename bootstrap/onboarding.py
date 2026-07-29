@@ -20,7 +20,28 @@ from memory.facts import FactStore
 logger = logging.getLogger(__name__)
 
 _BOOTSTRAPPED_MARKER = ".bootstrapped"
-_MAX_FILES = 10
+_MAX_FILES = 50
+_MAX_FILE_BYTES = 100_000  # skip anything larger than 100 KB
+_SOURCE_DIRS = ("Downloads", "Documents", "Desktop")
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".config",
+        ".ssh",
+        ".aws",
+        ".cache",
+        ".npm",
+        ".cargo",
+        ".rustup",
+        ".local",
+        ".Trash",
+    }
+)
+_EXTENSIONS = frozenset({".csv", ".txt", ".md", ".json", ".yaml", ".yml"})
 _EXTRACT_PROMPT = """\
 You are a personal assistant extracting facts about a person from their files.
 Return a JSON array of fact strings (max 5 per file). Facts are short, specific
@@ -92,30 +113,64 @@ async def run_bootstrap_if_needed(
 
 
 def _discover_files() -> list[Path]:
-    """Return newest ``_MAX_FILES`` user files: csv/txt in homedir.
+    """Walk user dirs for up to ``_MAX_FILES`` personal text files.
 
-    Skips hidden files (dotfiles), system directories, and anything
-    inside ``.config`` / ``.ssh`` / ``.aws``.
+    Scans ``~/Downloads``, ``~/Documents``, ``~/Desktop`` (non-project),
+    plus homedir csv/txt and project READMEs.  Skips junk dirs, dotfiles,
+    and anything over ``_MAX_FILE_BYTES``.  Returns newest first.
     """
     home = Path.home()
     candidates: list[Path] = []
-    # Homedir: csv and txt only (avoids huge logs, dotfiles)
-    for glob_pat in ("*.csv", "*.txt"):
-        for p in home.glob(glob_pat):
-            if p.name.startswith("."):
-                continue
-            if any(part.startswith(".") for part in p.relative_to(home).parts):
-                continue
+
+    def _walk(root: Path) -> None:
+        """Recursively walk *root*, collecting matching files."""
+        if not root.is_dir():
+            return
+        try:
+            for entry in root.iterdir():
+                name = entry.name
+                if name.startswith(".") or name in _SKIP_DIRS:
+                    continue
+                if entry.is_dir():
+                    _walk(entry)
+                elif entry.is_file() and entry.suffix.lower() in _EXTENSIONS:
+                    if entry.stat().st_size > _MAX_FILE_BYTES:
+                        continue
+                    candidates.append(entry)
+        except PermissionError:
+            pass
+
+    # Source directories: Downloads, Documents, Desktop (skip projects/)
+    for rel in _SOURCE_DIRS:
+        d = home / rel
+        if d.is_dir():
+            _walk(d)
+
+    # Homedir: flat csv/txt only (not recursive — avoids .config, .ssh etc.)
+    for p in home.glob("*.csv"):
+        if p.is_file() and p.stat().st_size <= _MAX_FILE_BYTES:
             candidates.append(p)
+    for p in home.glob("*.txt"):
+        if p.is_file() and p.stat().st_size <= _MAX_FILE_BYTES:
+            candidates.append(p)
+
     # Project READMEs
     projects = home / "Desktop" / "projects"
-    if projects.exists():
+    if projects.is_dir():
         for p in projects.glob("*/README.md"):
-            if p.is_file():
+            if p.is_file() and p.stat().st_size <= _MAX_FILE_BYTES:
                 candidates.append(p)
 
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[:_MAX_FILES]
+    # Dedup and sort newest-first
+    seen: set[Path] = set()
+    deduped: list[Path] = []
+    for p in candidates:
+        resolved = p.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            deduped.append(p)
+    deduped.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return deduped[:_MAX_FILES]
 
 
 async def _extract_facts(path: Path, router: InferenceRouter) -> list[str]:
