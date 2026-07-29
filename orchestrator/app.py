@@ -25,6 +25,7 @@ from approval.callback_server import app as callback_app
 from approval.judgement_filter import JudgementFilter
 from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
+from bootstrap.onboarding import run_bootstrap_if_needed
 from config.dependencies import build_production_dependencies
 from config.settings import settings
 from gateways.telegram import TelegramGateway
@@ -483,6 +484,22 @@ def _launch_background_tasks(
                 name="telegram_gateway",
             )
         )
+
+    # Async first-run bootstrap — scans user files and seeds fact store.
+    # Runs in the background so it never delays the user's first prompt.
+    tasks.append(
+        asyncio.create_task(
+            _guarded(
+                run_bootstrap_if_needed(
+                    fact_store=deps.fact_store,
+                    inference_router=deps.inference_router,
+                    north_home=settings.north_home,
+                ),
+                "bootstrap",
+            ),
+            name="bootstrap",
+        )
+    )
 
     return tasks
 
