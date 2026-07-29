@@ -25,6 +25,7 @@ from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
+from textual.css.query import NoMatches
 from textual.suggester import Suggester
 from textual.widgets import Input, RichLog, Static
 
@@ -435,20 +436,21 @@ class NorthApp(App[None]):
                 if value:
                     body = {key: value}
                     r = await c.post(
-                        full_url, headers=self.headers, json=body, timeout=5.0,
+                        full_url,
+                        headers=self.headers,
+                        json=body,
+                        timeout=5.0,
                     )
                     if r.status_code >= 400:
                         self._log(f"  [red]failed: {r.status_code} {r.text[:120]}[/red]")
                         return
                     data = r.json()
-                    shown = data.get("power") if key in ("power", "strategy") \
-                        else data.get("autonomy")
+                    shown = data.get("power") if key in ("power", "strategy") else data.get("autonomy")
                     self._log(f"{ok}`{shown}`")
                 else:
                     r = await c.get(full_url, headers=self.headers, timeout=5.0)
                     data = r.json()
-                    shown = data.get("power") if key in ("power", "strategy") \
-                        else data.get("autonomy")
+                    shown = data.get("power") if key in ("power", "strategy") else data.get("autonomy")
                     self._log(f"{ok}`{shown}` (current)")
                 self._strategy = _read_power(self._settings_path)
                 self._render_status_bar()
@@ -459,8 +461,7 @@ class NorthApp(App[None]):
 
     def _refresh_hint(self) -> None:
         hint = (
-            f"  {self._strategy}  ·  ↑↓ history  ·  /commands"
-            f"  ·  ctrl+d dictate  ·  ctrl+g editor  ·  ctrl+c interrupt"
+            f"  {self._strategy}  ·  ↑↓ history  ·  /commands  ·  ctrl+d dictate  ·  ctrl+g editor  ·  ctrl+c interrupt"
         )
         self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
 
@@ -520,7 +521,8 @@ class NorthApp(App[None]):
         self._spin_frame += 1
         if self._status_text:
             f = _SPIN[self._spin_frame % len(_SPIN)]
-            self.query_one("#status", Static).update(f"[bright_black]  {f}  {self._status_text}[/bright_black]")
+            with contextlib.suppress(NoMatches):
+                self.query_one("#status", Static).update(f"[bright_black]  {f}  {self._status_text}[/bright_black]")
         # Refresh the bar roughly once a second so elapsed time ticks live
         # without redrawing on every 80ms animation frame.
         if self._spin_frame % 12 == 0:
@@ -851,7 +853,7 @@ class NorthApp(App[None]):
         self._approval_pending = None
         if data is None:
             return
-        # A question card carries "question" and has no Approve/Reject semantics  - 
+        # A question card carries "question" and has no Approve/Reject semantics  -
         # any selection (numbered option or free text) is an "answered" decision.
         is_question = bool(data.get("question"))
         options = data.get("options") or ([] if is_question else ["Approve", "Reject"])
@@ -1031,13 +1033,13 @@ class NorthApp(App[None]):
         elif cmd == "/power":
             parts = text.split()
             val = parts[1] if len(parts) > 1 else None
-            await self._set_dial("/orchestrator/settings", "power", val,
-                           ok="  [bright_black]power[/bright_black] ")
+            await self._set_dial("/orchestrator/settings", "power", val, ok="  [bright_black]power[/bright_black] ")
         elif cmd == "/autonomy":
             parts = text.split()
             val = parts[1] if len(parts) > 1 else None
-            await self._set_dial("/orchestrator/settings", "autonomy", val,
-                           ok="  [bright_black]autonomy[/bright_black] ")
+            await self._set_dial(
+                "/orchestrator/settings", "autonomy", val, ok="  [bright_black]autonomy[/bright_black] "
+            )
         elif cmd == "/agents":
             agents = await self._fetch_agents()
             self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))

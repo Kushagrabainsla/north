@@ -132,7 +132,7 @@ class TelegramGateway:
                 if resp.status_code == 200:
                     entries = resp.json()
                     # Scan for the agent's actual response (agent_completed
-                    # carries the output; task_completed, classified_as_*, 
+                    # carries the output; task_completed, classified_as_*,
                     # skill_selected etc are just pipeline bookkeeping).
                     for entry in entries:  # most-recent-first
                         action = entry.get("action", "")
@@ -150,7 +150,12 @@ class TelegramGateway:
             except httpx.RequestError:
                 pass
             await asyncio.sleep(_TASK_POLL_INTERVAL)
-        logger.error("Task %s timed out after %d polls (%ds)", task_id, _TASK_POLL_MAX_ATTEMPTS, _TASK_POLL_MAX_ATTEMPTS)
+        logger.error(
+            "Task %s timed out after %d polls (%ds)",
+            task_id,
+            _TASK_POLL_MAX_ATTEMPTS,
+            _TASK_POLL_MAX_ATTEMPTS,
+        )
         return "Response timed out — check north for details."
 
     async def _download_file(self, file_id: str) -> bytes | None:
@@ -266,10 +271,7 @@ class TelegramGateway:
                 output = output[:3900] + "\n\n[truncated — see north for full response]"
             await self._send_message(chat_id, output, reply_to=message_id)
         else:
-            msg = (
-                f"✅ Task submitted (ID: `{task_id}`)."
-                " Check north for results."
-            )
+            msg = f"✅ Task submitted (ID: `{task_id}`). Check north for results."
             await self._send_message(chat_id, msg, reply_to=message_id)
 
         # Remove from pending
