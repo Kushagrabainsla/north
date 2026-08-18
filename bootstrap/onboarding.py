@@ -16,10 +16,10 @@ import logging
 import re
 from pathlib import Path
 
+from bootstrap.schema import EXTRACTED_FACTS_JSON_SCHEMA
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from memory.facts import FactStore
-from bootstrap.schema import EXTRACTED_FACTS_JSON_SCHEMA
 
 logger = logging.getLogger(__name__)
 

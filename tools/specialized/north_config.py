@@ -96,10 +96,13 @@ class NorthConfigTool(Tool):
                 "description": "scoring action: weight for the curated preferred-model boost (0..1+)",
             },
             "family_tiers": {
-                "type": "object",
-                "additionalProperties": {"type": "number"},
-                "description": "scoring action: per-family quality overrides (substring -> 0..1). E.g. {\"opus\": 0.97, \"custom-model\": 0.85}",
-            },
+                            "type": "object",
+                            "additionalProperties": {"type": "number"},
+                            "description": (
+                                "scoring action: per-family quality overrides (substring -> 0..1). "
+                                "E.g. {\"opus\": 0.97, \"custom-model\": 0.85}"
+                            ),
+                        },
         },
         "required": ["action"],
     }
