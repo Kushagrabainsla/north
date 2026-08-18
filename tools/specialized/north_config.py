@@ -300,15 +300,18 @@ class NorthConfigTool(Tool):
         # ── scoring ─────────────────────────────────────────────────────────
         if action == "scoring":
             from config.runtime import get_runtime
-            from config.settings import reload_settings, settings
+            from config.settings import reload_settings
+            from config.strategy import NorthSettings
             from inference.model_scorer import ScoringConfig
 
-            reload_settings()
+            # Use NorthSettings (which has the scoring property) not config.settings
+            ns = NorthSettings(self._settings_path())
+            reload_settings()  # still reload .env for any API key changes
             if any(
                 k in input.params
                 for k in ("family_weight", "ema_weight", "curation_weight", "family_tiers")
             ):
-                cur = settings.scoring
+                cur = ns.scoring
                 new = ScoringConfig(
                     family_weight=float(input.params.get("family_weight", cur.family_weight)),
                     ema_weight=float(input.params.get("ema_weight", cur.ema_weight)),
@@ -316,7 +319,7 @@ class NorthConfigTool(Tool):
                     unknown_family_quality=cur.unknown_family_quality,
                     family_tiers=dict(input.params.get("family_tiers", cur.family_tiers)),
                 )
-                settings.set_scoring(new)
+                ns.set_scoring(new)
                 # Push live to the running router (no restart).
                 deps = get_runtime()
                 applied = False
@@ -331,7 +334,7 @@ class NorthConfigTool(Tool):
                     data={"action": "scoring", "config": new.to_dict(), "note": note},
                 )
             # Getter
-            cfg = settings.scoring.to_dict()
+            cfg = ns.scoring.to_dict()
             return ToolOutput(success=True, data={"action": "scoring", "config": cfg})
 
         # ── power ──────────────────────────────────────────────────────────
