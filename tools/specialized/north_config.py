@@ -95,6 +95,11 @@ class NorthConfigTool(Tool):
                 "type": "number",
                 "description": "scoring action: weight for the curated preferred-model boost (0..1+)",
             },
+            "family_tiers": {
+                "type": "object",
+                "additionalProperties": {"type": "number"},
+                "description": "scoring action: per-family quality overrides (substring -> 0..1). E.g. {\"opus\": 0.97, \"custom-model\": 0.85}",
+            },
         },
         "required": ["action"],
     }
@@ -189,14 +194,18 @@ class NorthConfigTool(Tool):
         elif action == "scoring":
             cfg = data.get("config", {})
             note = data.get("note", "")
-            return (
-                "Model scoring weights:\n"
-                f"  family_weight={cfg.get('family_weight')}\n"
-                f"  ema_weight={cfg.get('ema_weight')}\n"
-                f"  curation_weight={cfg.get('curation_weight')}\n"
-                f"  unknown_family_quality={cfg.get('unknown_family_quality')}"
-                f"{note}"
-            )
+            lines = [
+                "Model scoring weights:",
+                f"  family_weight={cfg.get('family_weight')}",
+                f"  ema_weight={cfg.get('ema_weight')}",
+                f"  curation_weight={cfg.get('curation_weight')}",
+                f"  unknown_family_quality={cfg.get('unknown_family_quality')}",
+            ]
+            if "family_tiers" in cfg and cfg["family_tiers"]:
+                lines.append("  family_tiers:")
+                for k, v in sorted(cfg["family_tiers"].items()):
+                    lines.append(f"    {k}={v}")
+            return "\n".join(lines) + f"{note}"
         elif action in ("power", "autonomy"):
             value = data.get("value", "")
             note = data.get("note", "")
@@ -297,7 +306,7 @@ class NorthConfigTool(Tool):
             reload_settings()
             if any(
                 k in input.params
-                for k in ("family_weight", "ema_weight", "curation_weight")
+                for k in ("family_weight", "ema_weight", "curation_weight", "family_tiers")
             ):
                 cur = settings.scoring
                 new = ScoringConfig(
@@ -305,6 +314,7 @@ class NorthConfigTool(Tool):
                     ema_weight=float(input.params.get("ema_weight", cur.ema_weight)),
                     curation_weight=float(input.params.get("curation_weight", cur.curation_weight)),
                     unknown_family_quality=cur.unknown_family_quality,
+                    family_tiers=dict(input.params.get("family_tiers", cur.family_tiers)),
                 )
                 settings.set_scoring(new)
                 # Push live to the running router (no restart).
