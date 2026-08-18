@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,15 +24,83 @@ from utils.math import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
+# Secret detection patterns
+_SECRET_RE = re.compile(
+    r"""(?ix)
+    (?:^|[\s\W])
+    (?:
+        (?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token)
+        |(?:password|passwd|pwd)
+        |(?:private[_-]?key|ssh[_-]?key)
+        |(?:aws[_-]?access[_-]?key|aws[_-]?secret[_-]?key)
+        |(?:github[_-]?token|gh[_-]?token|ghp_)
+        |(?:slack[_-]?token|xox[baprs]-)
+        |(?:stripe[_-]?key|sk_live_|pk_live_)
+        |(?:jwt[_-]?token|eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*)
+        |(?:credit[_-]?card|cc[_-]?num)
+        |(?:seed[_-]?phrase|mnemonic)
+    )
+    [\s:=]+
+    [A-Za-z0-9_\-+/=]{8,}
+    """,
+)
+
+_CC_RE = re.compile(
+    r"\b(?:\d[ -]*?){13,19}\b"
+)
+
+def _contains_secret(text: str) -> bool:
+    """Check if text contains secrets, API keys, passwords, credit cards, etc."""
+    return bool(_SECRET_RE.search(text) or _CC_RE.search(text))
+
+def _normalize_for_dedup(text: str) -> str:
+    """Normalize text for deduplication comparison.
+    
+    Lowercases, removes punctuation, normalizes whitespace, removes common filler words.
+    """
+    # Lowercase
+    text = text.lower()
+    # Remove punctuation
+    text = re.sub(r'[^\w\s]', ' ', text)
+    # Normalize whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    # Remove common filler words that don't affect meaning
+    filler_words = {'the', 'a', 'an', 'is', 'was', 'were', 'am', 'are', 'be', 'been', 'being',
+                    'has', 'have', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+                    'my', 'your', 'his', 'her', 'their', 'our', 'its', 'this', 'that', 'these', 'those',
+                    'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'or', 'and', 'but'}
+    words = [w for w in text.split() if w not in filler_words]
+    return ' '.join(words)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS context_facts (
-    id          TEXT     NOT NULL PRIMARY KEY,
-    content     TEXT     NOT NULL,
-    category    TEXT     NOT NULL DEFAULT 'user',
-    embedding   TEXT,
-    updated_at  DATETIME NOT NULL
+    id              TEXT     NOT NULL PRIMARY KEY,
+    content         TEXT     NOT NULL,
+    category        TEXT     NOT NULL DEFAULT 'user',
+    embedding       TEXT,
+    updated_at      DATETIME NOT NULL,
+    subject         TEXT     NOT NULL DEFAULT 'user',
+    confidence      REAL     NOT NULL DEFAULT 0.8,
+    status          TEXT     NOT NULL DEFAULT 'active',
+    source_path     TEXT,
+    source_hash     TEXT,
+    source_mtime    REAL,
+    evidence        TEXT,
+    observed_at     DATETIME
 )
 """
+
+# Migration: add new columns if they don't exist (for existing databases)
+_MIGRATION_STATEMENTS = [
+    "ALTER TABLE context_facts ADD COLUMN subject TEXT NOT NULL DEFAULT 'user'",
+    "ALTER TABLE context_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 0.8",
+    "ALTER TABLE context_facts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+    "ALTER TABLE context_facts ADD COLUMN source_path TEXT",
+    "ALTER TABLE context_facts ADD COLUMN source_hash TEXT",
+    "ALTER TABLE context_facts ADD COLUMN source_mtime REAL",
+    "ALTER TABLE context_facts ADD COLUMN evidence TEXT",
+    "ALTER TABLE context_facts ADD COLUMN observed_at DATETIME",
+]
 
 _MAX_FACTS_RETURNED: int = 15
 _DEDUP_SIMILARITY_THRESHOLD: float = 0.85
@@ -60,11 +129,21 @@ class FactStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
-        # (id, content, embedding_vector, category) - rebuilt lazily, invalidated on insert.
-        self._cache: list[tuple[str, str, list[float], str]] | None = None
+            self._run_migrations(conn)
+        # (id, content, embedding_vector, category, subject, status) - rebuilt lazily, invalidated on insert.
+        self._cache: list[tuple[str, str, list[float], str, str, str]] | None = None
         # Serializes cache rebuilds: concurrent searches after an invalidation
         # must not interleave loads and clobber each other's cache.
         self._cache_lock = asyncio.Lock()
+
+    def _run_migrations(self, conn) -> None:
+        """Run schema migrations for existing databases."""
+        for stmt in _MIGRATION_STATEMENTS:
+            try:
+                conn.execute(stmt)
+            except Exception:
+                # Column may already exist; ignore
+                pass
 
     async def add_fact(self, content: str, category: str = "user") -> bool:
         """Embed and persist one fact. Returns True when a new row was inserted.
@@ -84,13 +163,42 @@ class FactStore:
 
         Silently skips empty content.
         """
+        return await self.add_fact_with_provenance(content, category)
+
+    async def add_fact_with_provenance(
+        self,
+        content: str,
+        category: str = "user",
+        subject: str = "user",
+        confidence: float = 0.8,
+        status: str = "active",
+        source_path: str | None = None,
+        source_hash: str | None = None,
+        source_mtime: float | None = None,
+        evidence: str | None = None,
+    ) -> bool:
+        """Embed and persist one fact with full provenance. Returns True when a new row was inserted.
+
+        This is the extended version used by bootstrap and other provenance-aware writers.
+        """
         content = content.strip()
         if not content:
             return False
+        
+        # Filter secrets before persistence - defense in depth
+        if _contains_secret(content):
+            logger.warning("FactStore: rejected fact containing secret/credential")
+            return False
+        
         # Exact-match dedup runs BEFORE any embedding call: identical content
         # is a duplicate by definition, and skipping the embed for it saves
         # rate-limit budget as well as rows.
         if await asyncio.to_thread(self._find_exact_sync, category, content):
+            await asyncio.to_thread(self._touch_sync, category, content)
+            return False
+        
+        # Normalized text dedup (catches paraphrases like "User studies CS at SJSU" vs "User studies computer science at San Jose State University")
+        if await asyncio.to_thread(self._find_normalized_sync, category, content):
             await asyncio.to_thread(self._touch_sync, category, content)
             return False
         new_emb: list[float] = []
@@ -108,7 +216,12 @@ class FactStore:
                 self._find_similar_sync, category, new_emb, _DEDUP_SIMILARITY_THRESHOLD
             )
 
-        inserted = await asyncio.to_thread(self._insert_or_replace_sync, content, category, emb_json, replace_id)
+        inserted = await asyncio.to_thread(
+            self._insert_or_replace_sync,
+            content, category, emb_json, replace_id,
+            subject, confidence, status,
+            source_path, source_hash, source_mtime, evidence
+        )
         self._cache = None
         return inserted
 
@@ -143,7 +256,7 @@ class FactStore:
 
         scored = [
             (content, cosine_similarity(qvec, emb))
-            for _, content, emb, category in cache
+            for _, content, emb, category, _, _ in cache
             if emb and (allowed_categories is None or category in allowed_categories)
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -161,7 +274,7 @@ class FactStore:
     def invalidate_cache(self) -> None:
         self._cache = None
 
-    async def _get_cache(self) -> list[tuple[str, str, list[float], str]]:
+    async def _get_cache(self) -> list[tuple[str, str, list[float], str, str, str]]:
         """Return the embedding cache, rebuilding it at most once concurrently.
 
         The lock prevents the rebuild race: two coroutines that both observe an
@@ -175,13 +288,13 @@ class FactStore:
         async with self._cache_lock:
             if self._cache is None:
                 rows = await asyncio.to_thread(self._load_all_sync)
-                parsed: list[tuple[str, str, list[float], str]] = []
-                for row_id, content, emb_json, category in rows:
+                parsed: list[tuple[str, str, list[float], str, str, str]] = []
+                for row_id, content, emb_json, category, subject, status in rows:
                     if emb_json:
                         try:
                             emb = json.loads(emb_json)
                             if emb:
-                                parsed.append((row_id, content, emb, category))
+                                parsed.append((row_id, content, emb, category, subject, status))
                         except (json.JSONDecodeError, ValueError):
                             pass
                 self._cache = parsed
@@ -195,6 +308,25 @@ class FactStore:
                 (category, content),
             ).fetchone()
         return row is not None
+
+    def _find_normalized_sync(self, category: str, content: str) -> str | None:
+        """Find existing fact with normalized text match in *category*.
+        
+        Returns the id of the matching fact if found, else None.
+        """
+        normalized = _normalize_for_dedup(content)
+        if not normalized:
+            return None
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM context_facts WHERE category = ? ORDER BY updated_at DESC LIMIT ?",
+                (category, _DEDUP_SCAN_LIMIT),
+            ).fetchall()
+        for row in rows:
+            existing_normalized = _normalize_for_dedup(row["content"])
+            if existing_normalized == normalized:
+                return row["id"]
+        return None
 
     def _touch_sync(self, category: str, content: str) -> None:
         """Refresh recency of an existing fact (exact-match dedup path)."""
@@ -226,7 +358,10 @@ class FactStore:
                 pass
         return None
 
-    def _insert_or_replace_sync(self, content: str, category: str, emb_json: str, replace_id: str | None) -> bool:
+    def _insert_or_replace_sync(self, content: str, category: str, emb_json: str, replace_id: str | None,
+                             subject: str = "user", confidence: float = 0.8, status: str = "active",
+                             source_path: str | None = None, source_hash: str | None = None,
+                             source_mtime: float | None = None, evidence: str | None = None) -> bool:
         """Insert *content*; returns True when a new row was created.
 
         When *replace_id* is set the existing row is updated in place (cosine
@@ -241,8 +376,12 @@ class FactStore:
                 )
                 return False
             conn.execute(
-                "INSERT INTO context_facts (id, content, category, embedding, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (generate_id(), content, category, emb_json, now),
+                """INSERT INTO context_facts
+                (id, content, category, embedding, updated_at, subject, confidence, status,
+                 source_path, source_hash, source_mtime, evidence, observed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (generate_id(), content, category, emb_json, now, subject, confidence, status,
+                 source_path, source_hash, source_mtime, evidence, now),
             )
             # Retention: evict the oldest facts beyond the cap so the store
             # (and every scan over it) stays bounded.
@@ -253,10 +392,10 @@ class FactStore:
             )
             return True
 
-    def _load_all_sync(self) -> list[tuple[str, str, str, str]]:
+    def _load_all_sync(self) -> list[tuple[str, str, str, str, str, str]]:
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute("SELECT id, content, embedding, category FROM context_facts").fetchall()
-        return [(r["id"], r["content"], r["embedding"] or "", r["category"]) for r in rows]
+            rows = conn.execute("SELECT id, content, embedding, category, subject, status FROM context_facts").fetchall()
+        return [(r["id"], r["content"], r["embedding"] or "", r["category"], r["subject"] or "user", r["status"] or "active") for r in rows]
 
     def _recent_facts_sync(self, limit: int, allowed_categories: frozenset[str] | None = None) -> list[str]:
         if allowed_categories is not None and not allowed_categories:

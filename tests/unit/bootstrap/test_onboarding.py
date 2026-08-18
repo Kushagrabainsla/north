@@ -84,6 +84,9 @@ class _FakeFactStore(FactStore):
         self._other_count = other_count
         self.added: list[tuple[str, str]] = []
         self._seen: set[tuple[str, str]] = set()
+        # Minimal setup for parent class
+        self._db_path = Path(":memory:")
+        self._embed_fn = lambda x: []
 
     async def count(self, category: str | None = None) -> int:
         if category == "bootstrap":
@@ -99,6 +102,21 @@ class _FakeFactStore(FactStore):
         self._seen.add(key)
         self.added.append((content, category))
         return True
+
+    async def add_fact_with_provenance(
+        self,
+        content: str,
+        category: str = "user",
+        subject: str = "user",
+        confidence: float = 0.8,
+        status: str = "active",
+        source_path: str | None = None,
+        source_hash: str | None = None,
+        source_mtime: float | None = None,
+        evidence: str | None = None,
+    ) -> bool:
+        # Delegate to add_fact for testing
+        return await self.add_fact(content, category)
 
 
 def _fake_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
@@ -158,9 +176,23 @@ async def test_extract_facts_cleans_dict_payload(tmp_path: Path) -> None:
     path = tmp_path / "notes.txt"
     path.write_text("content", encoding="utf-8")
     router = _FakeRouter(
-        {"facts": [{"content": "User A"}, {"content": "User B"}, {"content": "User C"}]}
+        {"facts": [
+            {"content": "User A", "subject": "user", "confidence": 0.9},
+            {"content": "User B", "subject": "user", "confidence": 0.8},
+            {"content": "User C", "subject": "user", "confidence": 0.7},
+        ]}
     )
-    assert await _extract_facts(path, router) == ["User A", "User B", "User C"]
+    result = await _extract_facts(path, router)
+    assert len(result) == 3
+    assert result[0]["content"] == "User A"
+    assert result[1]["content"] == "User B"
+    assert result[2]["content"] == "User C"
+    # Check provenance fields
+    for cand in result:
+        assert cand["subject"] == "user"
+        assert "source_path" in cand
+        assert "source_hash" in cand
+        assert "source_mtime" in cand
 
 
 async def test_extract_facts_strips_markdown_fences(tmp_path: Path) -> None:
@@ -169,11 +201,14 @@ async def test_extract_facts_strips_markdown_fences(tmp_path: Path) -> None:
 
     # With structured output (response_schema), providers don't wrap in markdown fences.
     # This test verifies the new behavior works correctly - no fence stripping needed.
-    router = _FakeRouter({"facts": [{"content": "User fact one"}, {"content": "User fact two"}]})
-    assert await _extract_facts(path, router) == [
-        "User fact one",
-        "User fact two",
-    ]
+    router = _FakeRouter({"facts": [
+        {"content": "User fact one", "subject": "user", "confidence": 0.9},
+        {"content": "User fact two", "subject": "user", "confidence": 0.8},
+    ]})
+    result = await _extract_facts(path, router)
+    assert len(result) == 2
+    assert result[0]["content"] == "User fact one"
+    assert result[1]["content"] == "User fact two"
 
 
 async def test_extract_facts_non_json_returns_empty(tmp_path: Path) -> None:
@@ -332,7 +367,7 @@ async def test_bootstrap_runs_when_only_user_facts_exist(monkeypatch: pytest.Mon
     north_home = tmp_path / "north_home"
     north_home.mkdir()
     store = _FakeFactStore(bootstrap_count=0, other_count=12)
-    router = _FakeRouter({"facts": [{"content": "User fact A"}]})
+    router = _FakeRouter({"facts": [{"content": "User fact A", "subject": "user", "confidence": 0.9}]})
     await run_bootstrap_if_needed(store, router, north_home)
     assert len(store.added) == 1
     assert (north_home / ".bootstrapped").exists()
@@ -349,9 +384,11 @@ async def test_bootstrap_resumes_interrupted_run(monkeypatch: pytest.MonkeyPatch
     # Simulate an interrupted run: a.txt already checkpointed, b.txt pending.
     _save_progress(north_home, [str((home / "Documents" / "a.txt").resolve())])
     store = _FakeFactStore(bootstrap_count=3)
-    router = _FakeRouter({"facts": [{"content": "User likes B"}]})
+    router = _FakeRouter({"facts": [{"content": "User likes B", "subject": "user", "confidence": 0.9}]})
     await run_bootstrap_if_needed(store, router, north_home)
-    assert store.added == [("User likes B", "bootstrap")]
+    assert len(store.added) == 1
+    assert store.added[0][0] == "User likes B"
+    assert store.added[0][1] == "bootstrap"
     assert (north_home / ".bootstrapped").exists()
     assert not (north_home / ".bootstrap_progress.json").exists()
 
@@ -365,7 +402,7 @@ async def test_bootstrap_fresh_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     north_home = tmp_path / "north_home"
     north_home.mkdir()
     store = _FakeFactStore(bootstrap_count=0)
-    router = _FakeRouter(payloads=[{"facts": [{"content": "User fact A"}]}, {"facts": [{"content": "User fact B"}]}])
+    router = _FakeRouter(payloads=[{"facts": [{"content": "User fact A", "subject": "user", "confidence": 0.9}]}, {"facts": [{"content": "User fact B", "subject": "user", "confidence": 0.8}]}])
     await run_bootstrap_if_needed(store, router, north_home)
     assert len(store.added) == 2
     assert all(category == "bootstrap" for _, category in store.added)
@@ -386,9 +423,11 @@ async def test_bootstrap_dedups_identical_facts_within_run(monkeypatch: pytest.M
     north_home = tmp_path / "north_home"
     north_home.mkdir()
     store = _FakeFactStore(bootstrap_count=0)
-    router = _FakeRouter({"facts": [{"content": "User fact A"}]})
+    router = _FakeRouter({"facts": [{"content": "User fact A", "subject": "user", "confidence": 0.9}]})
     await run_bootstrap_if_needed(store, router, north_home)
-    assert store.added == [("User fact A", "bootstrap")]
+    assert len(store.added) == 1
+    assert store.added[0][0] == "User fact A"
+    assert store.added[0][1] == "bootstrap"
 
 
 async def test_bootstrap_no_candidate_files_marks_done(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -415,7 +454,11 @@ async def test_bootstrap_none_fact_store(tmp_path: Path) -> None:
 def test_progress_roundtrip(tmp_path: Path) -> None:
     north_home = tmp_path / "north_home"
     north_home.mkdir()
-    completed = ["/a", "/b", "/c"]
+    completed = [
+        {"path": "/a", "hash": "h1", "mtime": 1.0, "status": "completed"},
+        {"path": "/b", "hash": "h2", "mtime": 2.0, "status": "completed"},
+        {"path": "/c", "hash": "h3", "mtime": 3.0, "status": "completed"},
+    ]
     _save_progress(north_home, completed)
     assert _load_progress(north_home) == completed
 
