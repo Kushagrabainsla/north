@@ -160,7 +160,14 @@ class OpenAICompatibleProvider:
             body["max_tokens"] = request.max_tokens
         if request.temperature is not None:
             body["temperature"] = request.temperature
-        if request.json_mode:
+        if request.response_schema is not None:
+            # Structured output with JSON Schema (takes precedence over json_mode)
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": request.response_schema,
+            }
+        elif request.json_mode:
+            # Legacy JSON object mode
             body["response_format"] = {"type": "json_object"}
 
         try:

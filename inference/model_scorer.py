@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from config.strategy import StrategyMode
@@ -30,9 +30,12 @@ from inference.constants import _FREE_MODEL_QUALITY, MODEL_FAMILY_TIERS
 
 logger = logging.getLogger(__name__)
 
-# Built-in family tiers; a per-install ~/.north/model_tiers.json (substring->0..1)
-# is merged on top of these at reload time.
+# Built-in family tiers; used as default for ScoringConfig.family_tiers.
+# User overrides live in settings.json (ScoringConfig.family_tiers).
 _DEFAULT_TIERS = dict(MODEL_FAMILY_TIERS)
+
+# Legacy file path for one-time migration
+_LEGACY_TIERS_PATH = Path.home() / ".north" / "model_tiers.json"
 
 
 @dataclass
@@ -47,11 +50,41 @@ class ScoringConfig:
     ema_weight: float = 0.3
     curation_weight: float = 0.2
     unknown_family_quality: float = _FREE_MODEL_QUALITY
+    # Per-family quality overrides (substring -> 0..1). Longest match wins.
+    # Merged on top of _DEFAULT_TIERS at scoring time.
+    family_tiers: dict[str, float] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, raw: object) -> ScoringConfig:
         if not isinstance(raw, dict):
             return cls()
+        # Start with built-in defaults
+        family_tiers = dict(_DEFAULT_TIERS)
+        # User-provided family_tiers in settings.json take precedence
+        if "family_tiers" in raw and isinstance(raw["family_tiers"], dict):
+            for k, v in raw["family_tiers"].items():
+                try:
+                    family_tiers[str(k).lower()] = float(v)
+                except (TypeError, ValueError):
+                    logger.warning("Bad family-tier entry %r=%r; skipped", k, v)
+        # One-time migration: if user didn't explicitly set family_tiers in settings
+        # but legacy file exists, load it (will be persisted to settings.json on next save).
+        elif "family_tiers" not in raw and _LEGACY_TIERS_PATH.exists():
+            try:
+                overrides = json.loads(_LEGACY_TIERS_PATH.read_text(encoding="utf-8"))
+                if isinstance(overrides, dict):
+                    for k, v in overrides.items():
+                        try:
+                            family_tiers[str(k).lower()] = float(v)
+                        except (TypeError, ValueError):
+                            logger.warning("Bad legacy family-tier entry %r=%r; skipped", k, v)
+                    logger.info("Migrated family tiers from %s", _LEGACY_TIERS_PATH)
+                    # Rename legacy file so we don't re-migrate on next load
+                    migrated_path = _LEGACY_TIERS_PATH.with_suffix(".json.migrated")
+                    _LEGACY_TIERS_PATH.rename(migrated_path)
+                    logger.info("Renamed legacy file to %s", migrated_path)
+            except Exception as exc:
+                logger.warning("Could not read legacy %s: %s", _LEGACY_TIERS_PATH, exc)
         return cls(
             family_weight=float(raw.get("family_weight", cls.family_weight)),
             ema_weight=float(raw.get("ema_weight", cls.ema_weight)),
@@ -59,22 +92,25 @@ class ScoringConfig:
             unknown_family_quality=float(
                 raw.get("unknown_family_quality", cls.unknown_family_quality)
             ),
+            family_tiers=family_tiers,
         )
 
-    def to_dict(self) -> dict[str, float]:
+    def to_dict(self) -> dict[str, float | dict[str, float]]:
         return {
             "family_weight": self.family_weight,
             "ema_weight": self.ema_weight,
             "curation_weight": self.curation_weight,
             "unknown_family_quality": self.unknown_family_quality,
+            "family_tiers": self.family_tiers,
         }
 
 
 class ModelScorer:
     """Computes a 0..1 quality score for a candidate model.
 
-    Constructed once per dispatcher. ``reload()`` re-reads the family-tier
-    override file and the scoring config so edits take effect without a restart.
+    Constructed once per dispatcher. ``reload()`` re-reads the scoring config
+    so edits take effect without a restart. Family tiers now live in
+    ScoringConfig.family_tiers (merged with built-in defaults at config load time).
     """
 
     def __init__(
@@ -83,29 +119,25 @@ class ModelScorer:
         tiers_path: Path | None = None,
     ) -> None:
         self._config = config or ScoringConfig()
+        # tiers_path kept for backward compatibility but no longer used.
+        # Family tiers are read from self._config.family_tiers (with built-in defaults).
         self._tiers_path = tiers_path or (Path.home() / ".north" / "model_tiers.json")
+        # Pre-merge built-in defaults + config overrides once at init.
         self._tiers: dict[str, float] = dict(_DEFAULT_TIERS)
-        self.reload()
+        self._tiers.update(self._config.family_tiers)
 
     # ---- live reloading ----
 
     def reload(self) -> None:
-        """Re-read the family-tier override file. Keeps built-in defaults as base."""
+        """Re-read scoring config family_tiers (merged with built-in defaults)."""
         self._tiers = dict(_DEFAULT_TIERS)
-        if self._tiers_path and self._tiers_path.exists():
-            try:
-                overrides = json.loads(self._tiers_path.read_text(encoding="utf-8"))
-                if isinstance(overrides, dict):
-                    for k, v in overrides.items():
-                        try:
-                            self._tiers[str(k).lower()] = float(v)
-                        except (TypeError, ValueError):
-                            logger.warning("Bad family-tier entry %r=%r; skipped", k, v)
-            except Exception as exc:  # corrupt override file -> keep defaults
-                logger.warning("Could not read %s: %s", self._tiers_path, exc)
+        self._tiers.update(self._config.family_tiers)
 
     def set_config(self, config: ScoringConfig) -> None:
         self._config = config
+        # Immediately update merged tiers so scoring reflects new config.
+        self._tiers = dict(_DEFAULT_TIERS)
+        self._tiers.update(self._config.family_tiers)
 
     # ---- scoring ----
 

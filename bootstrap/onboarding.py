@@ -19,6 +19,7 @@ from pathlib import Path
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from memory.facts import FactStore
+from bootstrap.schema import EXTRACTED_FACTS_JSON_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -330,28 +331,17 @@ async def _extract_facts(path: Path, router: InferenceRouter) -> list[str]:
         component="bootstrap",
         max_tokens=2000,
         temperature=0.1,
-        json_mode=True,
+        response_schema=EXTRACTED_FACTS_JSON_SCHEMA,
     )
     resp = await router.complete(req)
     raw = resp.text.strip()
 
-    # Strip markdown code fences if present
-    if raw.startswith("```"):
-        first_nl = raw.find("\n")
-        if first_nl != -1:
-            raw = raw[first_nl + 1 :]
-    if raw.endswith("```"):
-        raw = raw[:-3]
-    raw = raw.strip()
-
+    # Structured output guarantees valid JSON matching the schema
     try:
-        facts = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("bootstrap: LLM returned non-JSON for %s — %r", path.name, raw[:200])
-        return []
-
-    if not isinstance(facts, list):
-        logger.warning("bootstrap: LLM returned non-list for %s", path.name)
+        extracted = json.loads(raw)
+        facts = [item["content"] for item in extracted.get("facts", [])]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        logger.warning("bootstrap: LLM returned invalid structured output for %s — %r", path.name, raw[:200])
         return []
 
     cleaned: list[str] = []

@@ -158,14 +158,7 @@ async def test_extract_facts_cleans_dict_payload(tmp_path: Path) -> None:
     path = tmp_path / "notes.txt"
     path.write_text("content", encoding="utf-8")
     router = _FakeRouter(
-        [
-            {"fact": "User A", "source": "s"},
-            {"fact": "User B"},
-            {"source": "only-source"},
-            "User C",
-            "",
-            None,
-        ]
+        {"facts": [{"content": "User A"}, {"content": "User B"}, {"content": "User C"}]}
     )
     assert await _extract_facts(path, router) == ["User A", "User B", "User C"]
 
@@ -174,11 +167,10 @@ async def test_extract_facts_strips_markdown_fences(tmp_path: Path) -> None:
     path = tmp_path / "notes.txt"
     path.write_text("content", encoding="utf-8")
 
-    class _FencedRouter(_FakeRouter):
-        def _render(self) -> str:
-            return "```json\n" + json.dumps(self._payload) + "\n```"
-
-    assert await _extract_facts(path, _FencedRouter(["User fact one", "User fact two"])) == [
+    # With structured output (response_schema), providers don't wrap in markdown fences.
+    # This test verifies the new behavior works correctly - no fence stripping needed.
+    router = _FakeRouter({"facts": [{"content": "User fact one"}, {"content": "User fact two"}]})
+    assert await _extract_facts(path, router) == [
         "User fact one",
         "User fact two",
     ]
@@ -192,7 +184,7 @@ async def test_extract_facts_non_json_returns_empty(tmp_path: Path) -> None:
         def _render(self) -> str:
             return "not json at all"
 
-    assert await _extract_facts(path, _GarbageRouter([])) == []
+    assert await _extract_facts(path, _GarbageRouter({"facts": []})) == []
 
 
 async def test_extract_facts_empty_file_returns_empty(tmp_path: Path) -> None:
@@ -340,7 +332,7 @@ async def test_bootstrap_runs_when_only_user_facts_exist(monkeypatch: pytest.Mon
     north_home = tmp_path / "north_home"
     north_home.mkdir()
     store = _FakeFactStore(bootstrap_count=0, other_count=12)
-    router = _FakeRouter(["User fact A"])
+    router = _FakeRouter({"facts": [{"content": "User fact A"}]})
     await run_bootstrap_if_needed(store, router, north_home)
     assert len(store.added) == 1
     assert (north_home / ".bootstrapped").exists()
@@ -357,7 +349,7 @@ async def test_bootstrap_resumes_interrupted_run(monkeypatch: pytest.MonkeyPatch
     # Simulate an interrupted run: a.txt already checkpointed, b.txt pending.
     _save_progress(north_home, [str((home / "Documents" / "a.txt").resolve())])
     store = _FakeFactStore(bootstrap_count=3)
-    router = _FakeRouter([{"fact": "User likes B"}])
+    router = _FakeRouter({"facts": [{"content": "User likes B"}]})
     await run_bootstrap_if_needed(store, router, north_home)
     assert store.added == [("User likes B", "bootstrap")]
     assert (north_home / ".bootstrapped").exists()
@@ -373,7 +365,7 @@ async def test_bootstrap_fresh_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     north_home = tmp_path / "north_home"
     north_home.mkdir()
     store = _FakeFactStore(bootstrap_count=0)
-    router = _FakeRouter(payloads=[["User fact A"], ["User fact B"]])
+    router = _FakeRouter(payloads=[{"facts": [{"content": "User fact A"}]}, {"facts": [{"content": "User fact B"}]}])
     await run_bootstrap_if_needed(store, router, north_home)
     assert len(store.added) == 2
     assert all(category == "bootstrap" for _, category in store.added)
@@ -394,7 +386,7 @@ async def test_bootstrap_dedups_identical_facts_within_run(monkeypatch: pytest.M
     north_home = tmp_path / "north_home"
     north_home.mkdir()
     store = _FakeFactStore(bootstrap_count=0)
-    router = _FakeRouter(["User fact A"])
+    router = _FakeRouter({"facts": [{"content": "User fact A"}]})
     await run_bootstrap_if_needed(store, router, north_home)
     assert store.added == [("User fact A", "bootstrap")]
 

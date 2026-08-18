@@ -58,6 +58,11 @@ class CompletionRequest(BaseModel):
     # When True the provider is instructed to return valid JSON (response_format
     # json_object).  Only set this when the system prompt guarantees JSON output.
     json_mode: bool = False
+    # Optional JSON Schema for structured output (response_format json_schema).
+    # When provided, takes precedence over json_mode and enforces the schema at
+    # the provider level. Schema must be a valid JSON Schema object with
+    # {"name": "...", "schema": {...}, "strict": true}.
+    response_schema: dict | None = None
     # Model ids to keep out of candidate selection for this call. Used to force an
     # independent second opinion (e.g. a reviewer must not reuse the coder's model).
     # The dispatcher degrades gracefully if excluding would leave no candidates.

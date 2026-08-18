@@ -61,9 +61,9 @@ def test_sport_emphasises_capability():
 
 
 def test_tiers_override_file_merges(tmp_path):
-    override = tmp_path / "model_tiers.json"
-    override.write_text('{"custom-strong": 0.99}')
-    s = ModelScorer(config=ScoringConfig(), tiers_path=override)
+    # Test that ScoringConfig.family_tiers merges with built-in defaults
+    cfg = ScoringConfig(family_tiers={"custom-strong": 0.99})
+    s = ModelScorer(config=cfg, tiers_path=Path("/nonexistent/model_tiers.json"))
     assert s.family_tier("provider/custom-strong-model") == 0.99
     # built-in still present
     assert s.family_tier("claude-opus-4-8") == 0.96
@@ -72,4 +72,12 @@ def test_tiers_override_file_merges(tmp_path):
 def test_scoring_config_roundtrip():
     raw = {"family_weight": 0.6, "ema_weight": 0.3, "curation_weight": 0.1, "unknown_family_quality": 0.4}
     cfg = ScoringConfig.from_dict(raw)
-    assert cfg.to_dict() == raw
+    # to_dict() now includes family_tiers (merged with built-in defaults)
+    result = cfg.to_dict()
+    assert result["family_weight"] == 0.6
+    assert result["ema_weight"] == 0.3
+    assert result["curation_weight"] == 0.1
+    assert result["unknown_family_quality"] == 0.4
+    assert "family_tiers" in result
+    # Should contain built-in defaults
+    assert "claude-opus-4" in result["family_tiers"]
