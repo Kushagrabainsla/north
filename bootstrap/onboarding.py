@@ -11,6 +11,7 @@ north's own checkout.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -25,8 +26,9 @@ logger = logging.getLogger(__name__)
 
 _BOOTSTRAPPED_MARKER = ".bootstrapped"
 _PROGRESS_FILE = ".bootstrap_progress.json"
-_MAX_FILES = 200
+_MAX_FILES = 50  # Reduced from 200 to avoid exhausting rate limits on startup
 _MAX_FILE_BYTES = 500_000  # skip anything larger than 500 KB
+_BOOTSTRAP_DELAY_SECONDS = 2.0  # Delay between file extractions to respect rate limits
 _SOURCE_DIRS = ("Downloads", "Documents", "Desktop")
 _SKIP_DIRS = frozenset(
     {
@@ -177,6 +179,8 @@ async def run_bootstrap_if_needed(
                 logger.warning("bootstrap: failed to store fact from %s", path, exc_info=True)
         completed.add(str(path.resolve()))
         _save_progress(north_home, sorted(completed))
+        # Respect rate limits by delaying between file extractions
+        await asyncio.sleep(_BOOTSTRAP_DELAY_SECONDS)
 
     marker.touch()
     (north_home / _PROGRESS_FILE).unlink(missing_ok=True)
