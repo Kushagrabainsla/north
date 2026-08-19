@@ -280,29 +280,20 @@ class OpenAICompatibleProvider:
         else:
             messages = [{"role": "user", "content": request.prompt}]
 
-        body: dict = {
-            "model": model_id,
-            "messages": messages,
-            **self._extra_body_fields(),
-        }
-        if request.max_tokens is not None:
-            body["max_tokens"] = request.max_tokens
-        if request.temperature is not None:
-            body["temperature"] = request.temperature
-        if request.response_schema is not None:
-            # Structured output with JSON Schema (takes precedence over json_mode)
-            body["response_format"] = {
-                "type": "json_schema",
-                "json_schema": request.response_schema,
-            }
-        elif request.json_mode:
-            # Legacy JSON object mode
-            body["response_format"] = {"type": "json_object"}
+        body = self._build_chat_body(model_id, messages, request)
 
         try:
             response = await self._client.post("/chat/completions", json=body)
         except httpx.RequestError as e:
             raise InferenceError(f"Request to {self.name} failed: {e}") from e
+
+        # Graceful degradation: some models (especially free/small ones) reject a
+        # requested response_format (json_schema / json_object) with HTTP 400. Retry
+        # once without it so a working model isn't needlessly discarded - this is what
+        # lets free models serve plain chat even when they can't do structured output.
+        if response.status_code == 400 and self._is_response_format_rejected(response):
+            body.pop("response_format", None)
+            response = await self._client.post("/chat/completions", json=body)
 
         self._raise_for_status(response, model_id)
 
@@ -323,6 +314,37 @@ class OpenAICompatibleProvider:
             tokens_out=usage.get("completion_tokens", 0),
             cost_usd=float(usage.get("cost", 0.0)),
         )
+
+    def _build_chat_body(self, model_id: str, messages: list[dict], request: CompletionRequest) -> dict:
+        body: dict = {
+            "model": model_id,
+            "messages": messages,
+            **self._extra_body_fields(),
+        }
+        if request.max_tokens is not None:
+            body["max_tokens"] = request.max_tokens
+        if request.temperature is not None:
+            body["temperature"] = request.temperature
+        if request.response_schema is not None:
+            # Structured output with JSON Schema (takes precedence over json_mode)
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": request.response_schema,
+            }
+        elif request.json_mode:
+            # Legacy JSON object mode
+            body["response_format"] = {"type": "json_object"}
+        return body
+
+    @staticmethod
+    def _is_response_format_rejected(response: httpx.Response) -> bool:
+        """Heuristic: did this 400 fail because the model rejects response_format?"""
+        try:
+            body = response.json()
+        except ValueError:
+            return False
+        text = json.dumps(body).lower()
+        return "response format" in text or "response_format" in text or "jsonschema" in text or "json_schema" in text
 
     # ---- tool calls ----
 

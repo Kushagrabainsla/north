@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from inference.exceptions import ModelRateLimitedError, PaymentRequiredError, ProviderAuthError
-from inference.models import TranscriptionRequest
+from inference.models import CompletionRequest, TranscriptionRequest
 from inference.providers.groq import GroqRouter
 from inference.providers.openai_compat import OpenAICompatibleProvider
 from inference.providers.openrouter import OpenRouterRouter
@@ -153,3 +153,56 @@ async def test_groq_transcribe_maps_cooldown_statuses(
             await provider.transcribe("whisper", TranscriptionRequest(audio=b"x"))
     finally:
         await provider.aclose()
+
+
+async def test_completion_retries_without_response_format_on_400() -> None:
+    """Free/small models reject a requested response_format (json_schema) with HTTP 400.
+    The provider must retry once WITHOUT response_format so a working free model isn't
+    discarded - this is what lets free models serve plain chat. Regression for the
+    'No models available' outage where every free model 400'd on json_schema.
+    """
+    from inference.providers.openai_compat import OpenAICompatibleProvider
+
+    class _RecordingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.last_body: dict | None = None
+
+        async def post(self, path: str, json: dict | None = None) -> httpx.Response:
+            self.calls += 1
+            self.last_body = json
+            if self.calls == 1:
+                return httpx.Response(
+                    400,
+                    json={"error": {"message": "This model does not support response format `json_schema`"}},
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "model": "fake",
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+                },
+            )
+
+    provider = OpenAICompatibleProvider.__new__(OpenAICompatibleProvider)
+    provider._client = _RecordingClient()
+    provider.name = "fake"
+    req = CompletionRequest(
+        prompt="hi", component="test", response_schema={"name": "x", "schema": {"type": "object"}}
+    )
+    resp = await provider.complete("fake-model", req)
+    assert resp.text == "ok"
+    assert provider._client.calls == 2
+    assert "response_format" not in (provider._client.last_body or {})
+
+
+async def test_response_format_rejection_heuristic() -> None:
+    from inference.providers.openai_compat import OpenAICompatibleProvider
+
+    yes = httpx.Response(400, json={"error": {"message": "does not support response format json_schema"}})
+    no_500 = httpx.Response(500, json={"error": {"message": "internal"}})
+    no_key = httpx.Response(400, json={"error": {"message": "invalid api key"}})
+    assert OpenAICompatibleProvider._is_response_format_rejected(yes) is True
+    assert OpenAICompatibleProvider._is_response_format_rejected(no_500) is False
+    assert OpenAICompatibleProvider._is_response_format_rejected(no_key) is False
