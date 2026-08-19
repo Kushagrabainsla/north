@@ -172,6 +172,10 @@ class ModelDispatcher(InferenceRouter):
         estimated = len(request.prompt) // 4
         priority = self._effective_priority(request.priority)
         candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated)
+        if not candidates:
+            # Primary pool exhausted (out of credits / all rate-limited / down) -
+            # fall back to the free tier so the request still completes.
+            candidates = self._free_fallback_candidates(ModelCapability.COMPLETION, estimated)
         candidates = self._apply_exclusions(candidates, request.exclude_models)
 
         async def _call(provider: Provider, model_id: str) -> CompletionResponse:
@@ -206,6 +210,8 @@ class ModelDispatcher(InferenceRouter):
         estimated = (len(text) + tools_chars) // 4
         priority = self._effective_priority(request.priority)
         candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated)
+        if not candidates:
+            candidates = self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated)
         candidates = self._apply_exclusions(candidates, request.exclude_models)
 
         forwarded = False
@@ -255,6 +261,8 @@ class ModelDispatcher(InferenceRouter):
 
     async def get_model(self, priority: PoolPriority) -> str:
         candidates = self._candidates(ModelCapability.COMPLETION, priority, 0)
+        if not candidates:
+            candidates = self._free_fallback_candidates(ModelCapability.COMPLETION, 0)
         if not candidates:
             raise AllModelsRateLimitedError("No completion models are available")
         return candidates[0][0].model_id
@@ -500,7 +508,52 @@ class ModelDispatcher(InferenceRouter):
 
         return self._promote_preferred(available, capability, priority)
 
-    # ---- Preferred-model promotion ----
+    def _free_fallback_candidates(
+        self, capability: ModelCapability, estimated_tokens: int
+    ) -> list[_Candidate]:
+        """All free, healthy, context-fitting models - the safety net.
+
+        Used when a priority pool (e.g. reasoning/fast_cheap) is entirely
+        unavailable (out of credits, rate-limited, down). Returns the same kind of
+        candidate list as ``_candidates`` but drawn from free models only, so a
+        request can still complete on the free tier instead of failing with
+        "No models available". Excludes models in cooldown or behind a dead
+        provider breaker, and respects the payload-size cap.
+        """
+        capable = [pair for pair in self._registry.values() if pair[0].supports(capability)]
+        if estimated_tokens > 0:
+            capable = [
+                (info, provider)
+                for info, provider in capable
+                if info.context_window == 0 or info.context_window >= estimated_tokens
+            ]
+        free: list[_Candidate] = [
+            (info, provider)
+            for info, provider in capable
+            if info.is_free
+            and not self._cooldowns.is_active((info.model_id, info.provider_name))
+            and self._provider_health.is_available(info.provider_name)
+            and (
+                info.max_payload_chars is None
+                or estimated_tokens <= 0
+                or (estimated_tokens * 4 + _SYSTEM_PROMPT_CHARS) <= info.max_payload_chars
+            )
+        ]
+        if not free:
+            return []
+        # Free-first ranking (best quality first within the free tier).
+        quality: dict[_CooldownKey, float] = {
+            (info.model_id, info.provider_name): self._effective_quality(info) for info, _ in free
+        }
+        free.sort(key=lambda x: (not x[0].is_free, -quality[(x[0].model_id, x[0].provider_name)]))
+        return self._promote_preferred(
+            shuffle_groups(
+                free,
+                key=lambda x: (not x[0].is_free, round(quality[(x[0].model_id, x[0].provider_name)], 6)),
+            ),
+            capability,
+            PoolPriority.LOW,
+        )
 
     def _apply_exclusions(self, candidates: list[_Candidate], exclude_models: list[str]) -> list[_Candidate]:
         """Drop excluded model ids from candidates, degrading gracefully.
