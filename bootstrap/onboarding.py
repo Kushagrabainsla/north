@@ -22,6 +22,7 @@ from bootstrap.schema import EXTRACTED_FACTS_JSON_SCHEMA, USER_PROFILE_JSON_SCHE
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from memory.facts import FactStore
+from utils.text import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -566,8 +567,7 @@ async def _extract_profile(path: Path, router: InferenceRouter) -> tuple[list[di
     )
     try:
         resp = await router.complete(req)
-        raw = resp.text.strip()
-        parsed = json.loads(raw)
+        parsed = _parse_json_lenient(resp.text)
     except Exception as exc:
         logger.warning("bootstrap: profile extraction failed for %s — %r", path.name, exc)
         return [], ""
@@ -607,6 +607,22 @@ def _synthesize_profile(profile_sections: list[str]) -> str:
     return f"# User Profile (synthesized from local files)\n\n{joined}"
 
 
+def _parse_json_lenient(raw: str) -> dict:
+    """Parse JSON from model output, tolerating wrapped/prose responses.
+
+    Free-tier models often reject ``response_format`` and return the JSON as
+    plain text (possibly with a leading sentence or fenced). ``json.loads`` fails
+    on that, so we fall back to a lenient balanced-brace scan — same approach the
+    planner uses, so structured extraction works on the free tier.
+    """
+    if not raw:
+        raise ValueError("empty model output")
+    try:
+        return json.loads(raw.strip())
+    except (ValueError, TypeError):
+        return extract_json(raw)
+
+
 async def _extract_facts(path: Path, router: InferenceRouter) -> list[dict]:
     """Read *path* (text, PDF, or DOCX), prompt an LLM for facts, return list of FactCandidates."""
     content = _read_text(path)
@@ -622,15 +638,16 @@ async def _extract_facts(path: Path, router: InferenceRouter) -> list[dict]:
         temperature=0.1,
         response_schema=EXTRACTED_FACTS_JSON_SCHEMA,
     )
-    resp = await router.complete(req)
-    raw = resp.text.strip()
-
-    # Structured output guarantees valid JSON matching the schema
     try:
-        extracted = json.loads(raw)
-        fact_items = extracted.get("facts", [])
-    except (json.JSONDecodeError, KeyError, TypeError):
-        logger.warning("bootstrap: LLM returned invalid structured output for %s — %r", path.name, raw[:200])
+        resp = await router.complete(req)
+    except Exception as exc:
+        logger.warning("bootstrap: completion failed for %s — %r", path.name, exc)
+        return []
+    try:
+        parsed = _parse_json_lenient(resp.text)
+        fact_items = parsed.get("facts", [])
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        logger.warning("bootstrap: LLM returned invalid structured output for %s — %r", path.name, resp.text[:200])
         return []
 
     candidates = []
