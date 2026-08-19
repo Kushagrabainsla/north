@@ -92,6 +92,29 @@ async def test_fallback_to_free_when_paid_exhausted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_free_model_prose_json_accepted_for_json_mode() -> None:
+    """A free model that can't do response_format returns prose-with-JSON.
+    The dispatcher must accept it (lenient extract_json), not reject it."""
+    d = _make_dispatcher()
+    # free provider returns a leading sentence + a JSON object (no response_format)
+    provider = _FakeProvider("openrouter", "ok")
+
+    async def _fake_complete(model_id, request):
+        return type("R", (), {"text": 'Here is the plan: {"agents": ["general"]}', "model_used": model_id})()
+
+    provider.complete = _fake_complete
+    d._registry[("free-model", "openrouter")] = (
+        d._registry[("free-model", "openrouter")][0],
+        provider,
+    )
+    req = CompletionRequest(
+        prompt="plan my week", component="planner", priority=PoolPriority.HIGH, json_mode=True
+    )
+    resp = await d.complete(req)
+    assert "general" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_no_fallback_when_free_also_down() -> None:
     """If even the free fallback is exhausted, the original error surfaces."""
     from inference.exceptions import AllModelsRateLimitedError
