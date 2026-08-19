@@ -66,7 +66,7 @@ from inference.provider import Provider
 from inference.provider_health import ProviderHealthTracker
 from inference.rate_limit_status import _PAYLOAD_TOO_LARGE_SECS, RateLimitStatusStore
 from inference.routing import _Candidate, shuffle_groups
-from utils.text import strip_code_fences
+from utils.text import extract_json
 
 # Allowance (chars) for north's system prompt when estimating total request size
 # for the max_payload_chars fit check. Keeps providers with tiny request caps
@@ -190,8 +190,11 @@ class ModelDispatcher(InferenceRouter):
                 return False
             if request.json_mode:
                 try:
-                    json.loads(strip_code_fences(resp.text))
+                    extract_json(resp.text)
                 except Exception:
+                    # Free-tier models that can't honour response_format often
+                    # still return the JSON as plain text. Accept it (Hermes-style
+                    # lenient parse) rather than discarding a working model.
                     return False
             return True
 

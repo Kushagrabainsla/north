@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
+from typing import Any
 
 _FENCE_OPEN_RE = re.compile(r"^```[\w-]*\s*\n")
 _FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
@@ -63,6 +65,63 @@ def strip_code_fences(text: str) -> str:
     cleaned = _FENCE_OPEN_RE.sub("", cleaned)
     cleaned = _FENCE_CLOSE_RE.sub("", cleaned)
     return cleaned.strip()
+
+
+def extract_json(text: str) -> Any:
+    """Leniently extract a JSON value from arbitrary model output.
+
+    Models that can't honour ``response_format`` (many free-tier models) return
+    the JSON as plain text - possibly wrapped in prose, fenced, or with a
+    trailing comma. Rather than hard-failing, find the first balanced
+    ``{...}`` or ``[...]`` span and parse that. Mirrors how Hermes tolerates
+    non-API-enforced JSON so free models can serve structured requests.
+
+    Raises ValueError if no balanced JSON span is found.
+    """
+    if text is None:
+        raise ValueError("no text to parse")
+    candidate = strip_code_fences(text).strip()
+    # Fast path: the whole thing is JSON.
+    try:
+        return json.loads(candidate)
+    except (ValueError, TypeError):
+        pass
+    # Scan for the first balanced object/array. Free models sometimes emit a
+    # leading sentence ("Here is the plan:") before the JSON.
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start = candidate.find(opener)
+        while start != -1:
+            depth = 0
+            in_str = False
+            esc = False
+            end = -1
+            for i in range(start, len(candidate)):
+                ch = candidate[i]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == opener:
+                    depth += 1
+                elif ch == closer:
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+            if end != -1:
+                span = candidate[start : end + 1]
+                try:
+                    return json.loads(span)
+                except (ValueError, TypeError):
+                    pass
+            start = candidate.find(opener, start + 1)
+    raise ValueError("no JSON object/array found in model output")
 
 
 STOPWORDS: frozenset[str] = frozenset(

@@ -21,7 +21,7 @@ from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPath, ExecutionPlan, IntentClassification
 from utils.prompts import load_prompt
-from utils.text import strip_code_fences
+from utils.text import extract_json
 
 _PLAN_CACHE_TTL_SECONDS: int = 3600  # 1 hour
 _PLAN_CACHE_MAX_SIZE: int = 256
@@ -471,7 +471,7 @@ class ExecutionPlanner:
                     ),
                     timeout=_PLANNER_ATTEMPT_TIMEOUT_S,
                 )
-                parsed = json.loads(strip_code_fences(response.text))
+                parsed = extract_json(response.text)
                 return _normalize_plan_json(parsed)
             except Exception as exc:
                 last_exc = exc
