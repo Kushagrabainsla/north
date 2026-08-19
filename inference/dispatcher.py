@@ -63,6 +63,7 @@ from inference.models import (
 )
 from inference.provider import Provider
 from inference.provider_health import ProviderHealthTracker
+from inference.rate_limit_status import RateLimitStatusStore
 from inference.routing import _Candidate, shuffle_groups
 from utils.text import strip_code_fences
 
@@ -105,6 +106,10 @@ class ModelDispatcher(InferenceRouter):
         # (provider_name, model_id) → (ModelInfo, Provider)
         self._registry: dict[tuple[str, str], tuple[ModelInfo, Provider]] = {}
         self._cooldowns = CooldownStore(cooldowns_path)
+        # Precise, provider-aware rate-limit status (persisted alongside cooldowns).
+        self._rate_limit_status = RateLimitStatusStore(
+            (cooldowns_path.parent / "rate_limit_status.json") if cooldowns_path is not None else None
+        )
         self._provider_health = ProviderHealthTracker()
         # (model_id, provider_name) → (ema_score, uses_count); seeded from DB at startup.
         self._model_confidence: dict[_CooldownKey, tuple[float, int]] = (
@@ -119,6 +124,7 @@ class ModelDispatcher(InferenceRouter):
         self._sticky: OrderedDict[tuple[str, str, str, str], tuple[str, str]] = OrderedDict()
         self._build_registry()
         self._cooldowns.load()
+        self._rate_limit_status.load()
         # Price-free quality scorer (family tier + live EMA + curation). Built
         # from the live NorthSettings so weight edits apply without a restart.
         _nh = getattr(self._north_settings, "_path", None)
@@ -284,6 +290,15 @@ class ModelDispatcher(InferenceRouter):
         self._providers = providers
         self._build_registry()
         self._validate_preferred()
+
+    def rate_limit_status(self) -> list[dict]:
+        """Snapshot of currently-unavailable (provider, model) pairs.
+
+        Each entry has the precise reset time, the provider's own wait signal,
+        the tier (free/paid), and the limit/remaining when the provider sent
+        them. Used by ``north limits`` and the status API.
+        """
+        return [r.to_dict() for r in self._rate_limit_status.snapshot()]
 
     def current_pools(self) -> dict[str, ModelPool]:
         """Build a pool snapshot from the dispatcher's own registry for CLI display."""
@@ -671,14 +686,28 @@ class ModelDispatcher(InferenceRouter):
                 return result
             except ModelRateLimitedError as e:
                 self._cooldowns.set_rate_limit(key, e.retry_after)
+                self._rate_limit_status.record_rate_limit(
+                    info.provider_name,
+                    info.model_id,
+                    status_code=e.status_code,
+                    headers=e.headers,
+                    body=e.body,
+                    retry_after=e.retry_after,
+                    is_free=info.is_free,
+                )
                 logger.info(
                     "Rate limited: %s/%s - skipping for %s",
                     info.provider_name,
                     info.model_id,
                     f"{e.retry_after:.0f}s (Retry-After)" if e.retry_after else "60 s",
                 )
-            except PaymentRequiredError:
+            except PaymentRequiredError as e:
                 self._cooldowns.set_payment_exhausted(key)
+                self._rate_limit_status.record_payment_required(
+                    info.provider_name,
+                    info.model_id,
+                    is_free=info.is_free,
+                )
                 logger.warning(
                     "Payment required: %s/%s - skipping for 24 h",
                     info.provider_name,
@@ -686,6 +715,9 @@ class ModelDispatcher(InferenceRouter):
                 )
             except ProviderAuthError:
                 self._provider_health.mark_down(info.provider_name, "provider auth failed")
+                self._rate_limit_status.record_provider_down(
+                    info.provider_name, "provider auth failed"
+                )
                 logger.warning(
                     "Provider auth failed: %s/%s - skipping provider for 24 h",
                     info.provider_name,

@@ -1103,6 +1103,26 @@ def inference_models() -> None:
         _console.print()
 
 
+@app.command("limits")
+def limits() -> None:
+    """Show provider/model rate-limit & cooldown status with precise reset times.
+
+    Reads the on-disk status file (~/.north/rate_limit_status.json) directly, so
+    it works even when the server is offline. Shows, for every provider/model
+    that is currently rate-limited or billing-exhausted, exactly when it will be
+    usable again and which signal the provider gave (retry-after, X-RateLimit-Reset,
+    etc.), plus the tier (free/paid) and request limit/remaining when reported.
+    """
+    from config.settings import settings
+    from inference.rate_limit_status import format_status_markdown
+
+    text = format_status_markdown(settings.north_home / "rate_limit_status.json")
+    _console.print()
+    # Render the same Markdown the Telegram /status command shows.
+    _console.print(Markdown(text))
+    _console.print()
+
+
 # ── metrics ──────────────────────────────────────────────────────────────────
 
 

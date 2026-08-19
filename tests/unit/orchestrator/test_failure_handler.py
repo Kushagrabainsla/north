@@ -365,7 +365,7 @@ def test_classify_error_tags_model_pool_exhaustion_as_model_unavailable() -> Non
     from orchestrator.exceptions import OrchestratorError
 
     assert classify_error(AllModelsRateLimitedError("No completion models are available")) == "model_unavailable"
-    assert classify_error(PaymentRequiredError("quota exhausted")) == "model_unavailable"
+    assert classify_error(PaymentRequiredError("openrouter/paid", "openrouter")) == "model_unavailable"
 
     try:
         try:

@@ -40,7 +40,11 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
         if response.status_code in (401, 403) and not _is_free_opencode_model(model_id):
             raise PaymentRequiredError(
-                f"OpenCode Zen model {model_id} requires paid tier or credits (status {response.status_code})"
+                model_id,
+                self.name,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                body=self._safe_json(response),
             )
         super()._raise_cooldown_status(response, model_id)
 

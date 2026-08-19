@@ -102,9 +102,30 @@ class OpenAICompatibleProvider:
         if response.status_code in (401, 403):
             raise ProviderAuthError(f"{self.name} returned {response.status_code} - provider auth failed")
         if response.status_code == 402:
-            raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")
+            raise PaymentRequiredError(
+                model_id,
+                self.name,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                body=self._safe_json(response),
+            )
         if response.status_code in (429, 404, 503, 413):
-            raise ModelRateLimitedError(model_id, self.name, retry_after=self._parse_retry_after(response))
+            raise ModelRateLimitedError(
+                model_id,
+                self.name,
+                retry_after=self._parse_retry_after(response),
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                body=self._safe_json(response),
+            )
+
+    @staticmethod
+    def _safe_json(response: httpx.Response) -> dict | None:
+        """Best-effort JSON parse of the response body; returns None if not JSON."""
+        try:
+            return response.json()
+        except Exception:
+            return None
 
     def _raise_for_status(self, response: httpx.Response, model_id: str) -> None:
         self._raise_cooldown_status(response, model_id)
@@ -117,10 +138,23 @@ class OpenAICompatibleProvider:
             raise ProviderAuthError(f"{self.name} returned {resp.status_code} - provider auth failed")
         if resp.status_code == 402:
             await resp.aread()
-            raise PaymentRequiredError(f"{self.name} returned 402 - insufficient credits")
+            raise PaymentRequiredError(
+                model_id,
+                self.name,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+                body=self._safe_json(resp),
+            )
         if resp.status_code in (429, 404, 503, 413):
             await resp.aread()
-            raise ModelRateLimitedError(model_id, self.name, retry_after=self._parse_retry_after(resp))
+            raise ModelRateLimitedError(
+                model_id,
+                self.name,
+                retry_after=self._parse_retry_after(resp),
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+                body=self._safe_json(resp),
+            )
         if resp.status_code >= 400:
             body = (await resp.aread()).decode("utf-8", errors="replace")[:200]
             raise InferenceError(f"{self.name} returned {resp.status_code} for {model_id}: {body}")

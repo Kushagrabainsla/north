@@ -20,7 +20,7 @@ class MockProvider:
 
     async def complete(self, model_id: str, request: CompletionRequest):
         if "paid" in model_id:
-            raise PaymentRequiredError("0 credits")
+            raise PaymentRequiredError(model_id, self.name)
         return CompletionResponse(text="free success", model_used=model_id, tokens_in=1, tokens_out=1, cost_usd=0.0)
 
 

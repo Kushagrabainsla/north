@@ -20,12 +20,26 @@ class ModelRateLimitedError(InferenceError):
     the next candidate in the chain. Never surfaces to callers.
     """
 
-    def __init__(self, model_id: str, provider_name: str, retry_after: float | None = None) -> None:
+    def __init__(
+        self,
+        model_id: str,
+        provider_name: str,
+        retry_after: float | None = None,
+        *,
+        status_code: int | None = None,
+        headers: dict[str, str] | None = None,
+        body: dict | None = None,
+    ) -> None:
         super().__init__(f"Rate limited: {model_id} on {provider_name}")
         self.model_id = model_id
         self.provider_name = provider_name
         # Seconds the provider asked us to wait (from a Retry-After header), if any.
         self.retry_after = retry_after
+        # Raw response context, used to compute a precise reset time
+        # (X-RateLimit-Reset, retry-after-ms, OpenRouter metadata.headers, etc.).
+        self.status_code = status_code
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self.body = body
 
 
 class PaymentRequiredError(InferenceError):
@@ -34,6 +48,22 @@ class PaymentRequiredError(InferenceError):
     ModelDispatcher applies a long cooldown to that (model, provider) pair
     and continues to the next candidate.
     """
+
+    def __init__(
+        self,
+        model_id: str,
+        provider_name: str,
+        *,
+        status_code: int | None = None,
+        headers: dict[str, str] | None = None,
+        body: dict | None = None,
+    ) -> None:
+        super().__init__(f"Payment required: {model_id} on {provider_name}")
+        self.model_id = model_id
+        self.provider_name = provider_name
+        self.status_code = status_code
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self.body = body
 
 
 class ProviderAuthError(InferenceError):

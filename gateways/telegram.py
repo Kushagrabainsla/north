@@ -102,6 +102,17 @@ class TelegramGateway:
         except httpx.RequestError as exc:
             logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
 
+    async def _send_limits(self, chat_id: int, reply_to: int | None = None) -> None:
+        """Send the current rate-limit / cooldown status as Markdown.
+
+        Reads the on-disk status file directly (same source as ``north limits``),
+        so it works whether or not the orchestrator is actively dispatching.
+        """
+        from inference.rate_limit_status import format_status_markdown
+
+        text = format_status_markdown(settings.north_home / "rate_limit_status.json")
+        await self._send_message(chat_id, text, reply_to=reply_to)
+
     async def _send_chat_action(self, chat_id: int, action: str = "typing") -> None:
         """Show a typing indicator in the chat."""
         with contextlib.suppress(httpx.RequestError):
@@ -235,9 +246,14 @@ class TelegramGateway:
                     '  • "What\'s on my calendar today?"\n'
                     '  • "Check my budget for groceries"\n'
                     '  • "Remind me about the dentist appointment"\n'
-                    "  • 🎤 Send a voice note with any request",
+                    "  • 🎤 Send a voice note with any request\n\n"
+                    "Commands:\n"
+                    "  • /limits — show provider/model rate-limit & cooldown status",
                     reply_to=message_id,
                 )
+            elif text.split()[0] == "/limits":
+                # Show precise rate-limit status (same data as `north limits`).
+                await self._send_limits(chat_id, reply_to=message_id)
             return
 
         # Show typing indicator
