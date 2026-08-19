@@ -102,6 +102,57 @@ if TYPE_CHECKING:
     from tools.registry import ToolRegistry
 
 
+# Keys a well-formed planner object can carry. Used to recognize a plan dict
+# that was accidentally wrapped in a JSON list by the model.
+_PLAN_OBJECT_KEYS = frozenset(
+    {
+        "agents",
+        "mode",
+        "domain",
+        "direct_tool",
+        "direct_tool_params",
+        "dependencies",
+        "parallel_groups",
+        "confidence",
+        "reasoning",
+        "is_consequential",
+        "engineering_kind",
+    }
+)
+
+
+def _normalize_plan_json(parsed: Any) -> dict[str, Any]:
+    """Coerce the planner LLM JSON into the dict shape the parser expects.
+
+    The model is asked for a single JSON object, but it sometimes emits a JSON
+    *list* instead (e.g. ``[{"agents": [...], ...}]`` or a bare list of agent
+    names). Earlier code assumed a dict and called ``.get()`` on the result, so a
+    list response blew up with ``'list' object has no attribute 'get'`` and the
+    whole task failed after retries. We unwrap the common list shapes here so the
+    planner degrades to the fallback plan instead of crashing, and raise a clear
+    RoutingError only for genuinely unusable responses.
+    """
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list):
+        # Common case: a single-element list wrapping the object we wanted.
+        if len(parsed) == 1 and isinstance(parsed[0], dict):
+            return parsed[0]
+        # A list of object candidates - take the first that looks like a plan.
+        for item in parsed:
+            if isinstance(item, dict) and _PLAN_OBJECT_KEYS & item.keys():
+                return item
+        # A bare list of agent-name strings -> treat as the agent list.
+        if parsed and all(isinstance(item, str) for item in parsed):
+            return {"agents": list(parsed)}
+        raise RoutingError(
+            "planner returned a JSON list with no plan object: "
+            f"{parsed[:3]!r}{'...' if len(parsed) > 3 else ''}"
+        )
+    # Scalars / None are not a usable plan.
+    raise RoutingError(f"planner returned a non-object JSON value: {parsed!r}")
+
+
 class ExecutionPlanner:
     """Stage 3 orchestrator module that constructs the Agent ExecutionPlan."""
 
@@ -420,7 +471,8 @@ class ExecutionPlanner:
                     ),
                     timeout=_PLANNER_ATTEMPT_TIMEOUT_S,
                 )
-                return json.loads(strip_code_fences(response.text))
+                parsed = json.loads(strip_code_fences(response.text))
+                return _normalize_plan_json(parsed)
             except Exception as exc:
                 last_exc = exc
                 logger.warning("Planner attempt %d/%d failed: %s", attempt, max_attempts, exc)

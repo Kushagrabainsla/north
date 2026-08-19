@@ -257,3 +257,61 @@ async def test_planner_recovers_on_retry(monkeypatch) -> None:
     classification, plan = await planner.plan_all(prompt="list files", task_id="t1")
     assert classification.domain == "general"
     assert inference.complete.await_count == 2
+
+
+def test_normalize_plan_json_unwraps_list_responses() -> None:
+    """The planner LLM sometimes emits a list instead of an object; _normalize_plan_json
+    must unwrap the common shapes so downstream .get() calls don't crash.
+
+    This is the exact failure behind 'planner failed after 3 attempts: list object
+    has no attribute get' in the ledger.
+    """
+    from orchestrator.router import _normalize_plan_json
+
+    # Plain object passthrough.
+    obj = {"agents": ["general"], "mode": "single_agent"}
+    assert _normalize_plan_json(obj) is obj
+
+    # Single-element list wrapping the object we wanted.
+    assert _normalize_plan_json([obj]) == obj
+
+    # List of candidates: pick the first plan-like dict.
+    assert _normalize_plan_json([{"foo": 1}, {"agents": ["home"], "mode": "x"}]) == {
+        "agents": ["home"],
+        "mode": "x",
+    }
+
+    # Bare list of agent-name strings -> agent list.
+    assert _normalize_plan_json(["researcher", "coder"]) == {"agents": ["researcher", "coder"]}
+
+
+@pytest.mark.asyncio
+async def test_planner_handles_list_json_response(monkeypatch) -> None:
+    """A planner response wrapped in a JSON list must still produce a plan, not the
+    historic ''list' object has no attribute 'get'' crash.
+    """
+    from orchestrator import router as router_mod
+
+    monkeypatch.setattr(router_mod, "_PLANNER_RETRY_DELAY_S", 0)
+
+    reg = MagicMock()
+    agent = MagicMock()
+    agent.name = "general"
+    agent.domain = "general"
+    agent.config.accepts = ""
+    reg.all.return_value = [agent]
+    reg.names.return_value = ["general"]
+
+    # Model returns a single-element list instead of an object.
+    good = MagicMock(spec=CompletionResponse)
+    good.text = (
+        '[{"confidence": 0.9, "is_consequential": false, "domain": "general",'
+        ' "reasoning": "ok", "mode": "single_agent", "agents": ["general"]}]'
+    )
+    inference = MagicMock()
+    inference.complete = AsyncMock(return_value=good)
+
+    planner = ExecutionPlanner(agent_registry=reg, inference_router=inference, tool_registry=None)
+    classification, plan = await planner.plan_all(prompt="list files", task_id="t1")
+    assert classification.domain == "general"
+    assert plan.agents == ["general"]
