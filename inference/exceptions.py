@@ -66,6 +66,33 @@ class PaymentRequiredError(InferenceError):
         self.body = body
 
 
+class PayloadTooLargeError(InferenceError):
+    """The provider rejected the request as too large (HTTP 413).
+
+    This is permanent for the current prompt - retrying with backoff never helps
+    (unlike a 429 rate limit). The dispatcher records a cooldown and routes to the
+    next candidate. Some free-tier providers (e.g. Groq free) cap total request size
+    far below north's system-prompt + context, so they simply cannot serve normal
+    prompts and should be skipped in favour of models that accept the payload.
+    """
+
+    def __init__(
+        self,
+        model_id: str,
+        provider_name: str,
+        *,
+        status_code: int | None = None,
+        headers: dict[str, str] | None = None,
+        body: dict | None = None,
+    ) -> None:
+        super().__init__(f"Payload too large: {model_id} on {provider_name}")
+        self.model_id = model_id
+        self.provider_name = provider_name
+        self.status_code = status_code
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self.body = body
+
+
 class ProviderAuthError(InferenceError):
     """A provider rejected the request with a hard auth/billing failure.
 

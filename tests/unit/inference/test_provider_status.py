@@ -8,6 +8,8 @@ generic failure.
 
 from __future__ import annotations
 
+import types
+
 import httpx
 import pytest
 
@@ -42,15 +44,18 @@ class TestRaiseCooldownStatus:
         with pytest.raises(ProviderAuthError):
             self._provider()._raise_cooldown_status(httpx.Response(status), "model")
 
-    @pytest.mark.parametrize("status", [429, 404, 503, 413])
+    @pytest.mark.parametrize("status", [429, 404, 503])
     def test_rate_limited_statuses_raise(self, status: int) -> None:
         with pytest.raises(ModelRateLimitedError):
             self._provider()._raise_cooldown_status(httpx.Response(status), "model")
 
-    def test_413_is_treated_as_rate_limit(self) -> None:
-        # 413 (request/token-rate too large, e.g. groq TPM) must cool the model down
-        # instead of falling through to a generic error that keeps hammering it.
-        with pytest.raises(ModelRateLimitedError):
+    def test_413_is_treated_as_payload_too_large(self) -> None:
+        # 413 (request too large, e.g. groq free-tier request cap) is permanent for
+        # this prompt - surface as PayloadTooLargeError so the dispatcher skips the
+        # model instead of retrying with backoff.
+        from inference.exceptions import PayloadTooLargeError
+
+        with pytest.raises(PayloadTooLargeError):
             self._provider()._raise_cooldown_status(httpx.Response(413), "model")
 
     def test_retry_after_seconds_parsed_onto_exception(self) -> None:
@@ -206,3 +211,58 @@ async def test_response_format_rejection_heuristic() -> None:
     assert OpenAICompatibleProvider._is_response_format_rejected(yes) is True
     assert OpenAICompatibleProvider._is_response_format_rejected(no_500) is False
     assert OpenAICompatibleProvider._is_response_format_rejected(no_key) is False
+
+
+async def test_413_raises_payload_too_large() -> None:
+    """HTTP 413 must surface as PayloadTooLargeError (not a rate limit), so the
+    dispatcher skips the model instead of retrying with backoff forever."""
+    from inference.exceptions import PayloadTooLargeError
+    from inference.providers.openai_compat import OpenAICompatibleProvider
+
+    class _C:
+        async def post(self, path, json=None):
+            return httpx.Response(413, json={"error": {"message": "Payload Too Large"}})
+
+    provider = OpenAICompatibleProvider.__new__(OpenAICompatibleProvider)
+    provider._client = _C()
+    provider.name = "groq"
+    req = CompletionRequest(prompt="hi", component="test")
+    with pytest.raises(PayloadTooLargeError):
+        await provider.complete("groq/model", req)
+
+
+def test_groq_free_models_have_payload_cap() -> None:
+    """Groq chat models get a max_payload_chars cap so large north prompts route
+    elsewhere instead of 413ing."""
+    from inference.providers.groq import GroqRouter
+
+    # Build a minimal GroqRouter without network by injecting a fake client.
+    p = GroqRouter.__new__(GroqRouter)
+    p._models = {}
+    p._client = types.SimpleNamespace(
+        get=lambda: _FakeResp()
+    )
+    # Simulate refresh by populating _models directly via the same ModelInfo path.
+    from inference.capability import ModelCapability, ModelInfo, quality_from_cost
+
+    p._models = {
+        "llama-3.1-8b-instant": ModelInfo(
+            model_id="llama-3.1-8b-instant",
+            provider_name="groq",
+            capabilities=frozenset([ModelCapability.COMPLETION]),
+            context_window=131072,
+            cost_per_token=0.0,
+            base_quality=quality_from_cost(0.0),
+            max_payload_chars=32_000,
+        )
+    }
+    info = p.get_models()["llama-3.1-8b-instant"]
+    assert info.max_payload_chars == 32_000
+
+
+class _FakeResp:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"data": []}

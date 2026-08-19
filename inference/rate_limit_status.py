@@ -48,6 +48,7 @@ _PAYMENT_REQUIRED = "payment_required"
 _PROVIDER_AUTH = "provider_auth"
 _PROVIDER_DOWN = "provider_down"
 _PROVIDER_ERROR = "error"  # transient hard failure (5xx, timeout, JSON parse, transcription)
+_PAYLOAD_TOO_LARGE = "payload_too_large"  # 413 - model can't accept north's request size
 
 # Default functional windows (mirror cooldowns.py so the displayed ETA matches
 # the actual skip window when no provider hint is present).
@@ -55,6 +56,9 @@ _DEFAULT_RATE_LIMIT_SECS = 60.0
 _MAX_RATE_LIMIT_SECS = 600.0
 _PAYMENT_EXHAUSTED_SECS = 86_400.0
 _PROVIDER_DOWN_SECS = 86_400.0
+# 413 is permanent for the current prompt but may clear if the provider raises
+# its limit or north shrinks its payload - use a moderate window, not 24h.
+_PAYLOAD_TOO_LARGE_SECS = 3_600.0
 
 # Epoch thresholds used to tell ms apart from seconds in X-RateLimit-Reset.
 _MS_EPOCH_FLOOR = 1_000_000_000_000  # 2001-09 in ms
@@ -425,6 +429,26 @@ class RateLimitStatusStore:
             is_free=is_free,
         )
 
+    def record_payload_too_large(
+        self, provider: str, model: str, *, reason: str = "", is_free: bool | None = None
+    ) -> RateLimitRecord:
+        """Record a 413 (request/payload too large) for a (provider, model).
+
+        Distinct from rate_limit: a 413 won't clear with a Retry-After, so the
+        model is skipped for a moderate window (1h) rather than hammered. Free-tier
+        models with tiny request caps (e.g. Groq free) land here so north routes
+        normal prompts to models that accept the payload size.
+        """
+        return self._upsert(
+            provider,
+            model,
+            kind=_PAYLOAD_TOO_LARGE,
+            wait_seconds=_PAYLOAD_TOO_LARGE_SECS,
+            source="413",
+            reason=reason or "payload too large (413)",
+            is_free=is_free,
+        )
+
     def mark_ok(self, provider: str, model: str) -> None:
         """Note that a model completed successfully this session (used for the
         'unknown vs verified-available' distinction). In-memory only."""
@@ -543,6 +567,7 @@ _KIND_LABEL = {
     "provider_auth": "AUTH",
     "provider_down": "DOWN",
     "error": "ERR",
+    "payload_too_large": "BIG",
 }
 _TIER_LABEL = {True: "free", False: "paid", None: "?"}
 

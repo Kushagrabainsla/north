@@ -42,6 +42,7 @@ from inference.exceptions import (
     ContextTooLargeError,
     InferenceError,
     ModelRateLimitedError,
+    PayloadTooLargeError,
     PaymentRequiredError,
     ProviderAuthError,
 )
@@ -63,9 +64,14 @@ from inference.models import (
 )
 from inference.provider import Provider
 from inference.provider_health import ProviderHealthTracker
-from inference.rate_limit_status import RateLimitStatusStore
+from inference.rate_limit_status import _PAYLOAD_TOO_LARGE_SECS, RateLimitStatusStore
 from inference.routing import _Candidate, shuffle_groups
 from utils.text import strip_code_fences
+
+# Allowance (chars) for north's system prompt when estimating total request size
+# for the max_payload_chars fit check. Keeps providers with tiny request caps
+# (e.g. Groq free) out of candidate selection for large prompts that would 413.
+_SYSTEM_PROMPT_CHARS = 8_000
 
 if TYPE_CHECKING:
     from tools.confidence import ConfidenceTracker
@@ -442,6 +448,19 @@ class ModelDispatcher(InferenceRouter):
         else:
             fitting = capable
 
+        # Payload-size fit: a model with a max_payload_chars cap is skipped when the
+        # estimated total request (user prompt + a system-prompt allowance) exceeds it.
+        # This routes large north prompts (planner system prompt + context) away from
+        # providers with tiny request caps (e.g. Groq free, which 413s) toward models
+        # that accept the payload. request_chars is None when the prompt is empty.
+        if estimated_tokens > 0:
+            estimated_payload_chars = estimated_tokens * 4 + _SYSTEM_PROMPT_CHARS
+            fitting = [
+                (info, provider)
+                for info, provider in fitting
+                if info.max_payload_chars is None or estimated_payload_chars <= info.max_payload_chars
+            ]
+
         available: list[_Candidate] = [
             (info, provider)
             for info, provider in fitting
@@ -723,6 +742,20 @@ class ModelDispatcher(InferenceRouter):
                 )
                 logger.warning(
                     "Payment required: %s/%s - skipping for 24 h",
+                    info.provider_name,
+                    info.model_id,
+                )
+            except PayloadTooLargeError:
+                # 413: this model can't accept north's request size. Skip it (1h) and
+                # route to a model that accepts the payload, rather than retrying.
+                self._cooldowns.set_rate_limit(key, _PAYLOAD_TOO_LARGE_SECS)
+                self._rate_limit_status.record_payload_too_large(
+                    info.provider_name,
+                    info.model_id,
+                    is_free=info.is_free,
+                )
+                logger.warning(
+                    "Payload too large: %s/%s - skipping for 1h",
                     info.provider_name,
                     info.model_id,
                 )

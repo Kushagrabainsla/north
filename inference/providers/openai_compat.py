@@ -19,6 +19,7 @@ from inference.constants import DEFAULT_TIMEOUT_SECONDS, SSE_CHUNK_TIMEOUT_SECON
 from inference.exceptions import (
     InferenceError,
     ModelRateLimitedError,
+    PayloadTooLargeError,
     PaymentRequiredError,
     ProviderAuthError,
     TranscriptionError,
@@ -178,7 +179,18 @@ class OpenAICompatibleProvider:
                 headers=dict(response.headers),
                 body=self._safe_json(response),
             )
-        if response.status_code in (429, 404, 503, 413):
+        if response.status_code == 413:
+            # Request/payload too large. Permanent for this prompt - no Retry-After
+            # applies, so surface as PayloadTooLargeError (not a rate limit) so the
+            # dispatcher skips this model instead of hammering it with backoff.
+            raise PayloadTooLargeError(
+                model_id,
+                self.name,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                body=self._safe_json(response),
+            )
+        if response.status_code in (429, 404, 503):
             headers = dict(response.headers)
             body = self._safe_json(response)
             # Gemini (and other Google-fronted providers) return 429 with

@@ -78,6 +78,11 @@ class ModelInfo:
     context_window: int  # max tokens (input + output combined)
     cost_per_token: float  # USD per output token; 0.0 for free models
     base_quality: float  # 0.0–1.0 quality estimate
+    # Max total request size (chars) this model accepts. None = unlimited.
+    # Free-tier providers (e.g. Groq free) cap request size far below north's
+    # system-prompt + context, so they 413 on normal prompts; marking a low cap
+    # here lets the dispatcher route large prompts to models that accept them.
+    max_payload_chars: int | None = None
 
     @property
     def is_free(self) -> bool:
