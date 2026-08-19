@@ -169,6 +169,21 @@ def _parse_groq_reset(value: str) -> float | None:
         return None
 
 
+def _parse_duration_seconds(value: str) -> float | None:
+    """Parse a protobuf Duration string (e.g. ``"12s"``, ``"0.5s"``, ``"1500ms"``)."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        if value.endswith("ms"):
+            return max(0.0, float(value[:-2]) / 1000.0)
+        if value.endswith("s"):
+            return max(0.0, float(value[:-1]))
+        return max(0.0, float(value))
+    except ValueError:
+        return None
+
+
 def _parse_epoch_reset(value: str) -> float | None:
     """Parse an ``X-RateLimit-Reset`` value (epoch seconds or epoch ms)."""
     value = (value or "").strip()
@@ -239,6 +254,15 @@ def compute_wait_seconds(
                 if lk in ("x-ratelimit-reset", "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"):
                     _consider(_parse_epoch_reset(str(v)), f"{lk}(body)")
                     _consider(_parse_groq_reset(str(v)), f"{lk}(body,dur)")
+        # Google / Gemini RPC error: error.details[].retryDelay (Duration string).
+        err = body.get("error") if isinstance(body, dict) else None
+        details = err.get("details") if isinstance(err, dict) else None
+        if isinstance(details, list):
+            for detail in details:
+                if isinstance(detail, dict) and detail.get("@type", "").endswith("RetryInfo"):
+                    delay = detail.get("retryDelay")
+                    if isinstance(delay, str):
+                        _consider(_parse_duration_seconds(delay), "retryinfo(dur)")
 
     if not candidates:
         return default, "default"

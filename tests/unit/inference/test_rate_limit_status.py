@@ -133,6 +133,23 @@ def test_payment_required_records_24h(tmp_path) -> None:
     assert rec.is_free is False
 
 
+def test_compute_wait_seconds_picks_up_gemini_retryinfo() -> None:
+    """Gemini's OpenAI-compat 429 carries the precise reset in the body's
+    error.details RetryInfo.retryDelay (Duration string) - that must win over
+    the guessed default so north retries exactly when Google says.
+    """
+    body = {
+        "error": {
+            "code": 429,
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "12s"}],
+        }
+    }
+    wait, source = compute_wait_seconds(status_code=429, headers={}, body=body)
+    assert wait == 12.0
+    assert source == "retryinfo(dur)"
+
+
 def test_provider_down_is_provider_wide(tmp_path) -> None:
     store = RateLimitStatusStore(tmp_path / "rls.json")
     store.record_provider_down("groq", "provider auth failed")

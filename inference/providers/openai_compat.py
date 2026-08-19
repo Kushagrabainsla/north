@@ -86,6 +86,75 @@ class OpenAICompatibleProvider:
         except Exception:
             return None
 
+    @staticmethod
+    def _parse_duration_seconds(value: str) -> float | None:
+        """Parse a protobuf Duration string (e.g. ``"12s"``, ``"0.5s"``, ``"1500ms"``)."""
+        value = (value or "").strip()
+        if not value:
+            return None
+        try:
+            if value.endswith("ms"):
+                return max(0.0, float(value[:-2]) / 1000.0)
+            if value.endswith("s"):
+                return max(0.0, float(value[:-1]))
+            return max(0.0, float(value))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_gemini_retry_delay(body: dict | None) -> float | None:
+        """Extract Google's precise retry signal from a 429 error body.
+
+        Gemini's OpenAI-compatible endpoint returns a standard Google RPC error:
+        error.details may carry a RetryInfo with ``retryDelay`` (a Duration string
+        like "12s" or "0.5s"). When present this is the authoritative "try again
+        at" time and should win over a guessed cooldown.
+        """
+        if not isinstance(body, dict):
+            return None
+        error = body.get("error")
+        if not isinstance(error, dict):
+            return None
+        details = error.get("details")
+        if not isinstance(details, list):
+            return None
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            if detail.get("@type", "").endswith("RetryInfo"):
+                delay = detail.get("retryDelay")
+                if isinstance(delay, str):
+                    return OpenAICompatibleProvider._parse_duration_seconds(delay)
+        return None
+
+    @staticmethod
+    def _is_billing_exhausted(status_code: int, body: dict | None, headers: dict) -> bool:
+        """True when a 429/403 is permanent billing exhaustion, not a rate limit.
+
+        Gemini (and some other Google-fronted providers) return 429 with
+        ``status: RESOURCE_EXHAUSTED`` and a body like "Your prepayment credits are
+        depleted" when the project's credits run out. There is no Retry-After and no
+        reset window - retrying after a guessed 60s never helps. Treat these as
+        PaymentRequiredError (long cooldown + surfaced as "credits needed") so
+        ``north limits`` shows an honest "needs billing", not a fake countdown.
+        """
+        if status_code not in (429, 402, 403):
+            return False
+        # An explicit reset signal means it IS a transient rate limit.
+        if headers.get("retry-after") or OpenAICompatibleProvider._parse_gemini_retry_delay(body) is not None:
+            return False
+        msg = ""
+        status = ""
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                msg = (error.get("message") or "").lower()
+                status = (error.get("status") or "").upper()
+        billing_markers = ("credit", "billing", "prepay", "quota", "exhausted", "insufficient")
+        if status == "RESOURCE_EXHAUSTED" and not msg:
+            return True
+        return any(marker in msg for marker in billing_markers)
+
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
         """Raise the cooldown-worthy errors for shared HTTP statuses.
 
@@ -110,13 +179,28 @@ class OpenAICompatibleProvider:
                 body=self._safe_json(response),
             )
         if response.status_code in (429, 404, 503, 413):
+            headers = dict(response.headers)
+            body = self._safe_json(response)
+            # Gemini (and other Google-fronted providers) return 429 with
+            # RESOURCE_EXHAUSTED + "credits depleted" when billing is empty - that is
+            # permanent, not a rate limit, so surface it as PaymentRequiredError
+            # (24h cooldown, shown as "needs billing") instead of a fake 60s countdown.
+            if self._is_billing_exhausted(response.status_code, body, headers):
+                raise PaymentRequiredError(
+                    model_id,
+                    self.name,
+                    status_code=response.status_code,
+                    headers=headers,
+                    body=body,
+                )
+            retry_after = self._parse_retry_after(response) or self._parse_gemini_retry_delay(body)
             raise ModelRateLimitedError(
                 model_id,
                 self.name,
-                retry_after=self._parse_retry_after(response),
+                retry_after=retry_after,
                 status_code=response.status_code,
-                headers=dict(response.headers),
-                body=self._safe_json(response),
+                headers=headers,
+                body=body,
             )
 
     @staticmethod
@@ -147,13 +231,24 @@ class OpenAICompatibleProvider:
             )
         if resp.status_code in (429, 404, 503, 413):
             await resp.aread()
+            headers = dict(resp.headers)
+            body = self._safe_json(resp)
+            if self._is_billing_exhausted(resp.status_code, body, headers):
+                raise PaymentRequiredError(
+                    model_id,
+                    self.name,
+                    status_code=resp.status_code,
+                    headers=headers,
+                    body=body,
+                )
+            retry_after = self._parse_retry_after(resp) or self._parse_gemini_retry_delay(body)
             raise ModelRateLimitedError(
                 model_id,
                 self.name,
-                retry_after=self._parse_retry_after(resp),
+                retry_after=retry_after,
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
-                body=self._safe_json(resp),
+                headers=headers,
+                body=body,
             )
         if resp.status_code >= 400:
             body = (await resp.aread()).decode("utf-8", errors="replace")[:200]

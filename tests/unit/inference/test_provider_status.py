@@ -75,6 +75,49 @@ class TestRaiseCooldownStatus:
         secs = OpenAICompatibleProvider._parse_retry_after(httpx.Response(503, headers={"retry-after": future}))
         assert secs is not None and 0 < secs <= 31
 
+    # ---- Gemini 429: distinguish billing exhaustion from a real rate limit ----
+
+    def test_gemini_billing_exhausted_429_is_payment_required(self) -> None:
+        body = {
+            "error": {
+                "code": 429,
+                "message": "Your prepayment credits are depleted. Please go to AI Studio to manage billing.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        }
+        resp = httpx.Response(429, json=body)
+        with pytest.raises(PaymentRequiredError) as exc:
+            self._provider()._raise_cooldown_status(resp, "models/gemini-embedding-001")
+        assert exc.value.status_code == 429
+        assert exc.value.body == body
+
+    def test_gemini_ratelimit_429_with_retrydelay_is_rate_limited(self) -> None:
+        body = {
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota).",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "12s"}],
+            }
+        }
+        resp = httpx.Response(429, json=body)
+        with pytest.raises(ModelRateLimitedError) as exc:
+            self._provider()._raise_cooldown_status(resp, "models/gemini-flash")
+        assert exc.value.retry_after == 12.0
+
+    def test_gemini_429_with_retry_after_header_wins_over_body(self) -> None:
+        body = {
+            "error": {
+                "code": 429,
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "12s"}],
+            }
+        }
+        resp = httpx.Response(429, headers={"retry-after": "5"}, json=body)
+        with pytest.raises(ModelRateLimitedError) as exc:
+            self._provider()._raise_cooldown_status(resp, "m")
+        assert exc.value.retry_after == 5.0
+
     @pytest.mark.parametrize("status", [200, 400, 500])
     def test_other_statuses_pass_through(self, status: int) -> None:
         # Returns without raising so each caller applies its own error type.
