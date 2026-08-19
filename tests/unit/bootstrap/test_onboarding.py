@@ -476,3 +476,66 @@ def test_progress_corrupt_is_none(tmp_path: Path) -> None:
     path = tmp_path / ".bootstrap_progress.json"
     path.write_text("{not json", encoding="utf-8")
     assert _load_progress(tmp_path) is None
+
+
+def test_rank_prefers_dense_small_files_over_huge_labs() -> None:
+    """A small resume (.md) must outrank a huge lab dump (.pdf) within the same group."""
+    from pathlib import Path as _P
+
+    from bootstrap.onboarding import _rank_file
+
+    home = _P.home()
+    resume = home / "Documents" / "resume.md"
+    lab = home / "Documents" / "lab05_complex.pdf"
+    # Use monkeypatched-free comparison via stub files' attributes only.
+    class _Stub:
+        def __init__(self, p: _P, size: int) -> None:
+            self._p = p
+            self._size = size
+        def resolve(self): return self._p
+        @property
+        def suffix(self): return self._p.suffix
+        @property
+        def stem(self): return self._p.stem
+        def stat(self): 
+            import os
+            return os.stat_result((0,0,0,0,0,0,self._size,0,0,0))
+        def relative_to(self, other): return self._p.relative_to(other)
+    r_resume = _rank_file(_Stub(resume, 200), "documents")
+    r_lab = _rank_file(_Stub(lab, 3_000_000), "documents")
+    # Lower tuple = higher priority.
+    assert r_resume < r_lab
+
+
+def test_denylist_skips_lab_and_key_files() -> None:
+    """Files whose names contain noisy fragments must be excluded from discovery."""
+    from bootstrap.onboarding import _DENY_PATH_FRAGMENTS
+
+    bad = ["lab05_notes.txt", "alicePriv.txt", "complex.json", "system_prompts_leaks.md"]
+    for name in bad:
+        assert any(frag in name.lower() for frag in _DENY_PATH_FRAGMENTS), name
+
+
+async def test_extract_profile_parses_sections(tmp_path: Path) -> None:
+    """_extract_profile returns domain-grouped facts + a markdown summary."""
+    from bootstrap.onboarding import _extract_profile
+
+    payload = {
+        "education": ["The user is a student at San Jose State University"],
+        "jobs": ["The user is seeking software engineering roles"],
+        "skills": ["Python", "SQL"],
+        "finances": [],
+        "health": [],
+        "schedule": [],
+        "preferences": [],
+        "projects": ["The user maintains the north agent framework"],
+    }
+    router = _FakeRouter(payload=payload)
+    src = tmp_path / "resume.md"
+    src.write_text("Kushagra Bainsla")
+    facts, md = await _extract_profile(src, router)
+    contents = {f["content"] for f in facts}
+    assert "The user is a student at San Jose State University" in contents
+    assert "The user maintains the north agent framework" in contents
+    assert "## Education" in md
+    assert "## Projects" in md

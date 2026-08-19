@@ -77,7 +77,28 @@ class FactCandidate:
     evidence: str | None = None
 
 
+class UserProfile(BaseModel):
+    """Structured user profile extracted from a single file.
+
+    Each section is a list of short, specific facts. Empty sections are fine —
+    a resume yields education/jobs/skills; a meal plan yields health/preferences.
+    """
+
+    education: list[str] = Field(default_factory=list, description="Schools, degrees, courses, enrollment.")
+    jobs: list[str] = Field(default_factory=list, description="Roles, employers, internships, job searches.")
+    skills: list[str] = Field(default_factory=list, description="Technical and soft skills, languages, tools.")
+    finances: list[str] = Field(default_factory=list, description="Budget, income, expenses, savings, subscriptions.")
+    health: list[str] = Field(default_factory=list, description="Diet, exercise, sleep, medical, meals.")
+    schedule: list[str] = Field(default_factory=list, description="Recurring meetings, deadlines, routines, timezone.")
+    preferences: list[str] = Field(default_factory=list, description="Likes, dislikes, communication style, defaults.")
+    projects: list[str] = Field(default_factory=list, description="Active projects, repos, hackathons, coursework.")
+
+
 # JSON Schema for OpenAI-compatible structured output (response_format)
 EXTRACTED_FACTS_JSON_SCHEMA = ExtractedFacts.model_json_schema()
 EXTRACTED_FACTS_JSON_SCHEMA["name"] = "extracted_facts"
 EXTRACTED_FACTS_JSON_SCHEMA["strict"] = True
+
+USER_PROFILE_JSON_SCHEMA = UserProfile.model_json_schema()
+USER_PROFILE_JSON_SCHEMA["name"] = "user_profile"
+USER_PROFILE_JSON_SCHEMA["strict"] = True
