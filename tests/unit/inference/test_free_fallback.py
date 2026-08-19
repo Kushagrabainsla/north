@@ -1,0 +1,107 @@
+"""Free-tier fallback: when the primary (paid) pool is exhausted, the dispatcher
+must try free models instead of failing with "No models available".
+
+See README 8.x - this is the safety net behind the 413 / out-of-credits handling.
+"""
+from __future__ import annotations
+
+import pytest
+
+from inference.capability import ModelCapability, ModelInfo
+from inference.cooldowns import CooldownStore
+from inference.dispatcher import ModelDispatcher
+from inference.exceptions import PaymentRequiredError
+from inference.model_scorer import ModelScorer, ScoringConfig
+from inference.models import CompletionRequest, PoolPriority
+from inference.provider import Provider
+from inference.provider_health import ProviderHealthTracker
+from inference.rate_limit_status import RateLimitStatusStore
+
+
+class _FakeProvider(Provider):
+    def __init__(self, name: str, behaviour: str) -> None:
+        self._name = name
+        self._behaviour = behaviour  # "pay" | "ok"
+        self.called = False
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def priority(self):  # not used in this test
+        return PoolPriority.MEDIUM
+
+    async def complete(self, model_id: str, request: CompletionRequest):
+        self.called = True
+        if self._behaviour == "pay":
+            raise PaymentRequiredError(model_id, self._name)
+        return type("R", (), {"text": "ok", "model_used": model_id})()
+
+    async def complete_with_tools(self, model_id, request, token_callback=None):
+        return self.complete(model_id, request)
+
+    async def transcribe(self, model_id, request):
+        raise NotImplementedError
+
+    async def embed(self, model_id, request):
+        raise NotImplementedError
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _make_dispatcher() -> ModelDispatcher:
+    d = ModelDispatcher.__new__(ModelDispatcher)
+    paid = ModelInfo(
+        model_id="paid-model", provider_name="opencode_zen",
+        capabilities=frozenset({ModelCapability.COMPLETION}),
+        context_window=200_000, cost_per_token=0.01, base_quality=0.9,
+    )
+    free = ModelInfo(
+        model_id="free-model", provider_name="openrouter",
+        capabilities=frozenset({ModelCapability.COMPLETION}),
+        context_window=200_000, cost_per_token=0.0, base_quality=0.5,
+    )
+    d._registry = {
+        ("paid-model", "opencode_zen"): (paid, _FakeProvider("opencode_zen", "pay")),
+        ("free-model", "openrouter"): (free, _FakeProvider("openrouter", "ok")),
+    }
+    d._cooldowns = CooldownStore()
+    d._provider_health = ProviderHealthTracker()
+    d._rate_limit_status = RateLimitStatusStore()
+    d._north_settings = None
+    d._confidence_tracker = None
+    d._model_confidence = {}
+    d._dirty_scores = set()
+    d._flush_task = None
+    d._providers = []
+    d._scorer = ModelScorer(config=ScoringConfig())
+    d._sticky = {}
+    return d
+
+
+@pytest.mark.asyncio
+async def test_fallback_to_free_when_paid_exhausted() -> None:
+    """All paid candidates fail with PaymentRequiredError; free fallback must serve."""
+    d = _make_dispatcher()
+    req = CompletionRequest(prompt="hi", component="planner", priority=PoolPriority.HIGH)
+    resp = await d.complete(req)
+    assert resp.text == "ok"
+    assert resp.model_used == "free-model"
+
+
+@pytest.mark.asyncio
+async def test_no_fallback_when_free_also_down() -> None:
+    """If even the free fallback is exhausted, the original error surfaces."""
+    from inference.exceptions import AllModelsRateLimitedError
+
+    d = _make_dispatcher()
+    # Make the free provider also "pay" so both pools fail.
+    d._registry[("free-model", "openrouter")] = (
+        d._registry[("free-model", "openrouter")][0],
+        _FakeProvider("openrouter", "pay"),
+    )
+    req = CompletionRequest(prompt="hi", component="planner", priority=PoolPriority.HIGH)
+    with pytest.raises(AllModelsRateLimitedError):
+        await d.complete(req)

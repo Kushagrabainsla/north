@@ -196,7 +196,13 @@ class ModelDispatcher(InferenceRouter):
             return True
 
         sticky = self._sticky_key(request, ModelCapability.COMPLETION, priority)
-        return await self._dispatch(candidates, _call, is_valid=_valid, sticky_key=sticky)
+        return await self._dispatch(
+            candidates,
+            _call,
+            is_valid=_valid,
+            sticky_key=sticky,
+            fallback_candidates=self._free_fallback_candidates(ModelCapability.COMPLETION, estimated),
+        )
 
     async def complete_with_tools(
         self,
@@ -236,7 +242,13 @@ class ModelDispatcher(InferenceRouter):
             return await provider.complete_with_tools(model_id, request, wrapped_cb)
 
         sticky = self._sticky_key(request, ModelCapability.TOOL_CALLS, priority)
-        return await self._dispatch(candidates, _call, is_valid=_toolcall_has_output, sticky_key=sticky)
+        return await self._dispatch(
+            candidates,
+            _call,
+            is_valid=_toolcall_has_output,
+            sticky_key=sticky,
+            fallback_candidates=self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated),
+        )
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         candidates = self._candidates(ModelCapability.EMBEDDING, PoolPriority.MEDIUM, 0)
@@ -733,9 +745,15 @@ class ModelDispatcher(InferenceRouter):
         call_fn: Callable[[Provider, str], Awaitable],
         is_valid: Callable[[Any], bool] | None = None,
         sticky_key: tuple[str, str, str, str] | None = None,
+        fallback_candidates: list[_Candidate] | None = None,
     ):
         if not candidates:
-            raise AllModelsRateLimitedError("No models available for this request")
+            # Nothing in the primary pool - go straight to the fallback (free tier)
+            # if one was supplied, otherwise fail fast.
+            if fallback_candidates:
+                candidates = fallback_candidates
+            else:
+                raise AllModelsRateLimitedError("No models available for this request")
 
         if sticky_key is not None:
             candidates = self._apply_stickiness(sticky_key, candidates)
@@ -852,6 +870,18 @@ class ModelDispatcher(InferenceRouter):
                 self._record_model_outcome(key, False)
                 self._persist_model_score(key)
                 raise
+
+        # Primary pool exhausted (all paid models out of credits / rate-limited /
+        # down). If a free-tier fallback was supplied, try it before giving up.
+        if fallback_candidates and candidates is not fallback_candidates:
+            logger.info("Primary pool exhausted - falling back to free-tier models")
+            return await self._dispatch(
+                fallback_candidates,
+                call_fn,
+                is_valid=is_valid,
+                sticky_key=sticky_key,
+                fallback_candidates=None,
+            )
 
         raise AllModelsRateLimitedError(
             f"All {len(candidates)} candidate(s) exhausted - every model is rate-limited or has insufficient credits"
