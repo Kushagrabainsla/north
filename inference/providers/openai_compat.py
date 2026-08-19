@@ -303,7 +303,9 @@ class OpenAICompatibleProvider:
         # requested response_format (json_schema / json_object) with HTTP 400. Retry
         # once without it so a working model isn't needlessly discarded - this is what
         # lets free models serve plain chat even when they can't do structured output.
-        if response.status_code == 400 and self._is_response_format_rejected(response):
+        # We retry on ANY 400 for a structured request: providers (e.g. opencode_zen)
+        # wrap the real error so the body rarely names response_format explicitly.
+        if response.status_code == 400 and self._should_retry_without_format(response, request):
             body.pop("response_format", None)
             response = await self._client.post("/chat/completions", json=body)
 
@@ -349,14 +351,18 @@ class OpenAICompatibleProvider:
         return body
 
     @staticmethod
-    def _is_response_format_rejected(response: httpx.Response) -> bool:
-        """Heuristic: did this 400 fail because the model rejects response_format?"""
-        try:
-            body = response.json()
-        except ValueError:
+    def _should_retry_without_format(response: httpx.Response, request: CompletionRequest) -> bool:
+        """True if a 400 on this request should be retried without response_format.
+
+        We retry on ANY 400 for a structured request (json_mode / response_schema):
+        providers (e.g. opencode_zen) wrap the underlying rejection so the body rarely
+        names response_format explicitly, and a working free model is discarded if we
+        wait for an exact keyword match. Non-structured 400s are real errors (bad key,
+        etc.) and must NOT be retried this way.
+        """
+        if response.status_code != 400:
             return False
-        text = json.dumps(body).lower()
-        return "response format" in text or "response_format" in text or "jsonschema" in text or "json_schema" in text
+        return request.response_schema is not None or request.json_mode
 
     # ---- tool calls ----
 

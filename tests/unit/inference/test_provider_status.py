@@ -202,15 +202,30 @@ async def test_completion_retries_without_response_format_on_400() -> None:
     assert "response_format" not in (provider._client.last_body or {})
 
 
-async def test_response_format_rejection_heuristic() -> None:
+async def test_structured_400_retries_without_response_format() -> None:
+    """A 400 on a structured (json_mode/schema) request must retry once without
+    response_format - even when the provider wraps the error opaquely (e.g.
+    opencode_zen's "Upstream request failed: [400] Provider returned error"),
+    which the old keyword heuristic could not detect."""
     from inference.providers.openai_compat import OpenAICompatibleProvider
 
-    yes = httpx.Response(400, json={"error": {"message": "does not support response format json_schema"}})
-    no_500 = httpx.Response(500, json={"error": {"message": "internal"}})
-    no_key = httpx.Response(400, json={"error": {"message": "invalid api key"}})
-    assert OpenAICompatibleProvider._is_response_format_rejected(yes) is True
-    assert OpenAICompatibleProvider._is_response_format_rejected(no_500) is False
-    assert OpenAICompatibleProvider._is_response_format_rejected(no_key) is False
+    # Opaque 400 like opencode_zen returns - no "response_format" in the body.
+    opaque = httpx.Response(
+        400, json={"error": {"message": "Error from provider: Upstream request failed: [400] Provider returned error"}}
+    )
+    plain = httpx.Response(400, json={"error": {"message": "invalid api key"}})
+
+    # Opaque 400 on a structured request should be treated as a format rejection.
+    provider = OpenAICompatibleProvider.__new__(OpenAICompatibleProvider)
+    req_struct = CompletionRequest(prompt="hi", component="test", json_mode=True)
+    assert provider._should_retry_without_format(opaque, req_struct) is True
+    # A plain-key 400 on a structured request also retries (any 400 = retry without format).
+    assert provider._should_retry_without_format(plain, req_struct) is True
+
+    # A 400 on a plain (no format) request must not trigger a format retry.
+    req_plain = CompletionRequest(prompt="hi", component="test")
+    assert provider._should_retry_without_format(plain, req_plain) is False
+    assert provider._should_retry_without_format(opaque, req_plain) is False
 
 
 async def test_413_raises_payload_too_large() -> None:
