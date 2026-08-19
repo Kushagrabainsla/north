@@ -47,6 +47,7 @@ _RATE_LIMIT = "rate_limit"
 _PAYMENT_REQUIRED = "payment_required"
 _PROVIDER_AUTH = "provider_auth"
 _PROVIDER_DOWN = "provider_down"
+_PROVIDER_ERROR = "error"  # transient hard failure (5xx, timeout, JSON parse, transcription)
 
 # Default functional windows (mirror cooldowns.py so the displayed ETA matches
 # the actual skip window when no provider hint is present).
@@ -245,7 +246,7 @@ def compute_wait_seconds(
         _consider(_parse_epoch_reset(value), hdr_name)
         _consider(_parse_groq_reset(value), f"{hdr_name}(dur)")
 
-    if body:
+    if isinstance(body, dict):
         meta = body.get("metadata") or body.get("error", {}).get("metadata") or {}
         meta_headers = meta.get("headers") if isinstance(meta, dict) else None
         if isinstance(meta_headers, dict):
@@ -276,6 +277,9 @@ class RateLimitStatusStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path
         self._records: dict[_Key, RateLimitRecord] = {}
+        # Models successfully used this session. In-memory only (not persisted) so a
+        # restart honestly reports un-tried models as "unknown" rather than "ok".
+        self._checked: set[_Key] = set()
 
     # ---- load / persist ----
 
@@ -396,6 +400,39 @@ class RateLimitStatusStore:
             is_free=None,
         )
 
+    def record_error(
+        self,
+        provider: str,
+        model: str,
+        *,
+        reason: str = "",
+        is_free: bool | None = None,
+    ) -> RateLimitRecord:
+        """Record a transient hard failure (5xx, timeout, bad JSON, transcription).
+
+        Unlike rate_limit/payment, this is a short 60s window: if the model recovers
+        it clears on its own, and it re-records on the next failure. This makes
+        generic InferenceError/TranscriptionError failures visible in ``north limits``
+        instead of looking "all available".
+        """
+        return self._upsert(
+            provider,
+            model,
+            kind=_PROVIDER_ERROR,
+            wait_seconds=_DEFAULT_RATE_LIMIT_SECS,
+            source="error",
+            reason=reason or "inference error",
+            is_free=is_free,
+        )
+
+    def mark_ok(self, provider: str, model: str) -> None:
+        """Note that a model completed successfully this session (used for the
+        'unknown vs verified-available' distinction). In-memory only."""
+        self._checked.add((provider, model))
+
+    def checked_count(self) -> int:
+        return len(self._checked)
+
     def _upsert(
         self,
         provider: str,
@@ -505,6 +542,7 @@ _KIND_LABEL = {
     "payment_required": "PAY",
     "provider_auth": "AUTH",
     "provider_down": "DOWN",
+    "error": "ERR",
 }
 _TIER_LABEL = {True: "free", False: "paid", None: "?"}
 
@@ -525,17 +563,35 @@ def _format_markdown(rec: RateLimitRecord) -> str:
     if remaining is not None and cap is not None:
         limit_str = f" — {int(remaining)}/{int(cap)} left"
     label = _KIND_LABEL.get(rec.kind, rec.kind)
+    reason = f" — {rec.reason}" if rec.reason else ""
     return (
-        f"*{label}* `{scope}` @{rec.provider} ({tier})\n"
+        f"*{label}* `{scope}` @{rec.provider} ({tier}){reason}\n"
         f"  back at {when} (in {wait}) via `{rec.source}`{limit_str}"
     )
 
 
-def format_status_markdown(path: Path) -> str:
-    """Render active rate-limit status as Markdown (used by ``north limits`` and Telegram)."""
+def format_status_markdown(
+    path: Path,
+    *,
+    checked: int | None = None,
+    pool_total: int | None = None,
+) -> str:
+    """Render active rate-limit status as Markdown (used by ``north limits`` and Telegram).
+
+    ``checked`` / ``pool_total`` (when provided) let the caller surface how many
+    models have actually been probed this session vs how many exist in the pool, so
+    un-tried models are shown as *unknown* rather than falsely "available".
+    """
     records = load_active_records(path)
     if not records:
-        return "_all providers/models available_ (no active cooldowns)"
+        if checked is not None and pool_total is not None and pool_total > 0:
+            unverified = max(0, pool_total - checked)
+            if unverified:
+                return (
+                    f"_no active cooldowns_ — {checked}/{pool_total} model(s) probed this session; "
+                    f"{unverified} not yet tried (status unknown)"
+                )
+        return "_no active cooldowns recorded_ (no failures seen this session)"
     lines = [f"*rate-limit status* — {len(records)} unavailable", ""]
     lines.extend(_format_markdown(r) for r in records)
     return "\n".join(lines)

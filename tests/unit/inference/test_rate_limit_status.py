@@ -20,6 +20,7 @@ from inference.rate_limit_status import (
     _parse_epoch_reset,
     _parse_groq_reset,
     compute_wait_seconds,
+    format_status_markdown,
 )
 
 # ── header parsing helpers ──────────────────────────────────────────────────
@@ -133,6 +134,19 @@ def test_payment_required_records_24h(tmp_path) -> None:
     assert rec.is_free is False
 
 
+def test_compute_wait_seconds_handles_list_body() -> None:
+    """A provider may return a JSON *list* as the error body (some OpenAI-compatible
+    proxies do). compute_wait_seconds must not crash on body.get(...) - it should
+    just fall back to the default rather than raising AttributeError mid-dispatch.
+    """
+    wait, source = compute_wait_seconds(status_code=429, headers={}, body=[{"error": "x"}])
+    assert wait == 60.0
+    assert source == "default"
+    # And a totally non-dict body is fine too.
+    wait2, _ = compute_wait_seconds(status_code=429, headers={}, body="rate limited")
+    assert wait2 == 60.0
+
+
 def test_compute_wait_seconds_picks_up_gemini_retryinfo() -> None:
     """Gemini's OpenAI-compat 429 carries the precise reset in the body's
     error.details RetryInfo.retryDelay (Duration string) - that must win over
@@ -157,6 +171,38 @@ def test_provider_down_is_provider_wide(tmp_path) -> None:
     assert store.is_active("groq", "any-model")
 
 
+def test_record_error_captures_transient_failure(tmp_path) -> None:
+    store = RateLimitStatusStore(tmp_path / "rls.json")
+    rec = store.record_error("gemini", "gemini-flash", reason="JSON parse failed")
+    assert rec.kind == "error"
+    assert rec.source == "error"
+    assert rec.wait_seconds == 60.0  # short window, auto-clears if it recovers
+    assert store.is_active("gemini", "gemini-flash")
+    md = format_status_markdown(tmp_path / "rls.json")
+    assert "ERR" in md
+    assert "JSON parse failed" in md
+
+
+def test_mark_ok_tracks_checked_count(tmp_path) -> None:
+    store = RateLimitStatusStore(tmp_path / "rls.json")
+    assert store.checked_count() == 0
+    store.mark_ok("openrouter", "anthropic/claude")
+    store.mark_ok("gemini", "gemini-flash")
+    assert store.checked_count() == 2
+    # mark_ok does NOT create an unavailable record
+    assert not store.is_active("openrouter", "anthropic/claude")
+
+
+def test_format_status_unknown_footer(tmp_path) -> None:
+    # No failures but pool only partially probed -> honest "unknown" note.
+    text = format_status_markdown(
+        tmp_path / "missing.json", checked=3, pool_total=10
+    )
+    assert "no active cooldowns" in text
+    assert "3/10" in text
+    assert "not yet tried" in text
+
+
 def test_expired_records_dropped_on_load(tmp_path) -> None:
     path = tmp_path / "rls.json"
     store = RateLimitStatusStore(path)
@@ -171,8 +217,8 @@ def test_expired_records_dropped_on_load(tmp_path) -> None:
 def test_format_status_markdown_renders_active_and_empty(tmp_path) -> None:
     from inference.rate_limit_status import format_status_markdown
 
-    # No file -> "all available"
-    assert "all providers/models available" in format_status_markdown(tmp_path / "missing.json")
+    # No file -> "no failures recorded"
+    assert "no active cooldowns recorded" in format_status_markdown(tmp_path / "missing.json")
 
     path = tmp_path / "rls.json"
     store = RateLimitStatusStore(path)

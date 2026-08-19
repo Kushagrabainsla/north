@@ -300,6 +300,18 @@ class ModelDispatcher(InferenceRouter):
         """
         return [r.to_dict() for r in self._rate_limit_status.snapshot()]
 
+    def rate_limit_status_summary(self) -> dict[str, int | None]:
+        """Counts for the status formatter's 'unknown vs verified' distinction.
+
+        ``checked`` = models used successfully this session; ``pool_total`` = total
+        completion-capable models in the registry. Lets the UI report how many models
+        have never been probed (and are therefore 'unknown', not 'available').
+        """
+        pool_total = sum(
+            1 for info, _ in self._registry.values() if info.supports(ModelCapability.COMPLETION)
+        )
+        return {"checked": self._rate_limit_status.checked_count(), "pool_total": pool_total}
+
     def current_pools(self) -> dict[str, ModelPool]:
         """Build a pool snapshot from the dispatcher's own registry for CLI display."""
         high: list[ModelInfo] = []
@@ -681,6 +693,7 @@ class ModelDispatcher(InferenceRouter):
                 self._record_model_outcome(key, True)
                 self._persist_model_score(key)
                 self._provider_health.record_success(info.provider_name)
+                self._rate_limit_status.mark_ok(info.provider_name, info.model_id)
                 if sticky_key is not None:
                     self._remember_sticky(sticky_key, key)
                 return result
@@ -723,7 +736,7 @@ class ModelDispatcher(InferenceRouter):
                     info.provider_name,
                     info.model_id,
                 )
-            except InferenceError:
+            except InferenceError as e:
                 self._record_model_outcome(key, False)
                 self._persist_model_score(key)
                 state = self._provider_health.mark_degraded(info.provider_name, "inference error")
@@ -734,6 +747,15 @@ class ModelDispatcher(InferenceRouter):
                         info.model_id,
                         state,
                     )
+                # Surface the failure in the status store so 'north limits' / '/limits'
+                # show it instead of a false "all available" (covers 5xx, timeouts,
+                # bad-JSON, transcription failures - anything raising InferenceError).
+                self._rate_limit_status.record_error(
+                    info.provider_name,
+                    info.model_id,
+                    reason=str(e)[:160] or "inference error",
+                    is_free=info.is_free,
+                )
                 logger.warning(
                     "Inference error on %s/%s - trying next candidate",
                     info.provider_name,
