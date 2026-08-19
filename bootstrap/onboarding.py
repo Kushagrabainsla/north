@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 _BOOTSTRAPPED_MARKER = ".bootstrapped"
 _PROGRESS_FILE = ".bootstrap_progress.json"
 _BOOTSTRAP_VERSION = 2
-_MAX_FILES = 50
+_MAX_FILES = 150
 _SOURCE_QUOTAS = {
-    "documents": 15,
-    "desktop": 10,
-    "downloads": 10,
-    "project_readmes": 10,
-    "home_root": 5,
+    "documents": 40,
+    "desktop": 30,
+    "downloads": 30,
+    "project_readmes": 20,
+    "home_root": 10,
 }
 _MAX_SOURCE_FILE_BYTES = 15 * 1024 * 1024
 _MAX_EXTRACTED_TEXT_CHARS = 100_000
