@@ -68,9 +68,12 @@ NORTH_GEMINI_API_KEY=...
 | | |
 | `north inference costs` | Show inference cost summary |
 | `north inference models` | Show model pool state |
+| `north limits` | Show per-provider/model rate-limit & cooldown status with precise reset times (reads on-disk state, works offline) |
 | `north tools confidence` | Show tool confidence scores |
 | `north config set <key> <value>` | Set a config value |
 | `north metrics` | Show system performance metrics |
+
+In Telegram: send `/limits` to get the same rate-limit status in chat.
 
 
 

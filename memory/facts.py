@@ -11,6 +11,7 @@ are written to both, so the web UI and existing backup/trim logic stay intact.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -139,11 +140,9 @@ class FactStore:
     def _run_migrations(self, conn) -> None:
         """Run schema migrations for existing databases."""
         for stmt in _MIGRATION_STATEMENTS:
-            try:
-                conn.execute(stmt)
-            except Exception:
+            with contextlib.suppress(Exception):
                 # Column may already exist; ignore
-                pass
+                conn.execute(stmt)
 
     async def add_fact(self, content: str, category: str = "user") -> bool:
         """Embed and persist one fact. Returns True when a new row was inserted.
@@ -197,7 +196,8 @@ class FactStore:
             await asyncio.to_thread(self._touch_sync, category, content)
             return False
         
-        # Normalized text dedup (catches paraphrases like "User studies CS at SJSU" vs "User studies computer science at San Jose State University")
+        # Normalized text dedup (catches paraphrases like
+        # "User studies CS at SJSU" vs "User studies computer science at San Jose State University")
         if await asyncio.to_thread(self._find_normalized_sync, category, content):
             await asyncio.to_thread(self._touch_sync, category, content)
             return False
@@ -394,8 +394,20 @@ class FactStore:
 
     def _load_all_sync(self) -> list[tuple[str, str, str, str, str, str]]:
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute("SELECT id, content, embedding, category, subject, status FROM context_facts").fetchall()
-        return [(r["id"], r["content"], r["embedding"] or "", r["category"], r["subject"] or "user", r["status"] or "active") for r in rows]
+            rows = conn.execute(
+                "SELECT id, content, embedding, category, subject, status FROM context_facts"
+            ).fetchall()
+        return [
+            (
+                r["id"],
+                r["content"],
+                r["embedding"] or "",
+                r["category"],
+                r["subject"] or "user",
+                r["status"] or "active",
+            )
+            for r in rows
+        ]
 
     def _recent_facts_sync(self, limit: int, allowed_categories: frozenset[str] | None = None) -> list[str]:
         if allowed_categories is not None and not allowed_categories:

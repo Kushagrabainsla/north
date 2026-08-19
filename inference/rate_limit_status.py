@@ -34,7 +34,7 @@ import contextlib
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -217,10 +217,8 @@ def compute_wait_seconds(
     # OpenAI: ``retry-after-ms`` (ms) takes precedence over ``retry-after``.
     ra_ms = raw_headers.get("retry-after-ms")
     if ra_ms:
-        try:
+        with contextlib.suppress(ValueError):
             _consider(max(0.0, float(ra_ms) / 1000.0), "retry-after-ms")
-        except ValueError:
-            pass
 
     # OpenRouter / generic X-RateLimit-Reset - can live in headers OR in the
     # error body under metadata.headers (OpenRouter puts it there as a string).
@@ -490,15 +488,22 @@ _TIER_LABEL = {True: "free", False: "paid", None: "?"}
 def _format_markdown(rec: RateLimitRecord) -> str:
     """One line per record, precise + tier-aware. Suitable for Telegram."""
     rem = rec.remaining_seconds
-    when = rec.available_at_epoch and datetime.fromtimestamp(rec.available_at_epoch, UTC).astimezone().strftime("%H:%M:%S") or "?"
+    if rec.available_at_epoch:
+        when = datetime.fromtimestamp(rec.available_at_epoch, UTC).astimezone().strftime("%H:%M:%S")
+    else:
+        when = "?"
     wait = f"{rem:,.0f}s" if rem >= 1 else f"{rem * 1000:,.0f}ms"
     tier = _TIER_LABEL[rec.is_free]
     scope = rec.model or f"{rec.provider} (provider-wide)"
-    limit = f" — {int(rec.remaining)}/{int(rec.limit)} left" if rec.limit is not None and rec.remaining is not None else ""
+    limit_str = ""
+    remaining = rec.remaining
+    cap = rec.limit
+    if remaining is not None and cap is not None:
+        limit_str = f" — {int(remaining)}/{int(cap)} left"
     label = _KIND_LABEL.get(rec.kind, rec.kind)
     return (
         f"*{label}* `{scope}` @{rec.provider} ({tier})\n"
-        f"  back at {when} (in {wait}) via `{rec.source}`{limit}"
+        f"  back at {when} (in {wait}) via `{rec.source}`{limit_str}"
     )
 
 

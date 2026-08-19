@@ -9,20 +9,18 @@ with the exact provider signal rather than a guessed constant.
 
 from __future__ import annotations
 
-import json
 import time
 
 import httpx
 import pytest
 
-from inference.exceptions import ModelRateLimitedError, PaymentRequiredError
+from inference.exceptions import AllModelsRateLimitedError, ModelRateLimitedError
 from inference.rate_limit_status import (
     RateLimitStatusStore,
-    compute_wait_seconds,
     _parse_epoch_reset,
     _parse_groq_reset,
+    compute_wait_seconds,
 )
-
 
 # ── header parsing helpers ──────────────────────────────────────────────────
 
@@ -194,10 +192,10 @@ def test_provider_attaches_status_and_headers_to_exception() -> None:
 
 def test_dispatcher_records_status_with_precise_wait(tmp_path) -> None:
     """A 429 in the dispatch chain is recorded with the provider's real wait."""
+    from config.strategy import NorthSettings
     from inference.capability import ModelCapability, ModelInfo
     from inference.dispatcher import ModelDispatcher
     from inference.provider import Provider
-    from config.strategy import NorthSettings
 
     class _Bad(Provider):
         name = "bad"
@@ -215,8 +213,6 @@ def test_dispatcher_records_status_with_precise_wait(tmp_path) -> None:
             }
 
         async def complete(self, model_id, request):
-            from inference.exceptions import ModelRateLimitedError
-
             raise ModelRateLimitedError(
                 model_id,
                 "bad",
@@ -248,7 +244,7 @@ def test_dispatcher_records_status_with_precise_wait(tmp_path) -> None:
     )
     from inference.models import CompletionRequest
 
-    with pytest.raises(Exception):
+    with pytest.raises(AllModelsRateLimitedError):
         # No healthy candidate -> AllModelsRateLimitedError after recording.
         import asyncio
 

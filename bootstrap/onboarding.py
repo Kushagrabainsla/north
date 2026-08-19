@@ -221,7 +221,10 @@ async def run_bootstrap_if_needed(
         await asyncio.sleep(_BOOTSTRAP_DELAY_SECONDS)
 
     # Write versioned marker
-    marker.write_text(json.dumps({"bootstrap_version": _BOOTSTRAP_VERSION, "completed_at": datetime.now(UTC).isoformat()}), encoding="utf-8")
+    marker.write_text(
+        json.dumps({"bootstrap_version": _BOOTSTRAP_VERSION, "completed_at": datetime.now(UTC).isoformat()}),
+        encoding="utf-8",
+    )
     (north_home / _PROGRESS_FILE).unlink(missing_ok=True)
     logger.info("bootstrap: done — stored %d facts from %d files", total_facts, len(pending))
 
@@ -369,21 +372,23 @@ def _discover_files() -> list[Path]:
 
     # Homedir: flat csv/txt only (not recursive — avoids .config, .ssh etc.)
     for p in home.glob("*.csv"):
-        if p.is_file() and p.stat().st_size <= _MAX_SOURCE_FILE_BYTES:
-            if _is_safe_path(p, allowed_roots):
-                candidates_by_group["home_root"].append(p)
+        if p.is_file() and p.stat().st_size <= _MAX_SOURCE_FILE_BYTES and _is_safe_path(p, allowed_roots):
+            candidates_by_group["home_root"].append(p)
     for p in home.glob("*.txt"):
-        if p.is_file() and p.stat().st_size <= _MAX_SOURCE_FILE_BYTES:
-            if _is_safe_path(p, allowed_roots):
-                candidates_by_group["home_root"].append(p)
+        if p.is_file() and p.stat().st_size <= _MAX_SOURCE_FILE_BYTES and _is_safe_path(p, allowed_roots):
+            candidates_by_group["home_root"].append(p)
 
     # Project READMEs (north's own repo excluded — see _is_under_north_repo)
     projects = home / "Desktop" / "projects"
     if projects.is_dir():
         for p in projects.glob("*/README.md"):
-            if p.is_file() and p.stat().st_size <= _MAX_SOURCE_FILE_BYTES and not _is_under_north_repo(p, home):
-                if _is_safe_path(p, allowed_roots):
-                    candidates_by_group["project_readmes"].append(p)
+            if (
+                p.is_file()
+                and p.stat().st_size <= _MAX_SOURCE_FILE_BYTES
+                and not _is_under_north_repo(p, home)
+                and _is_safe_path(p, allowed_roots)
+            ):
+                candidates_by_group["project_readmes"].append(p)
 
     # Rank and select per quota
     selected: list[Path] = []
@@ -582,7 +587,9 @@ _USER_REF_RE = re.compile(
 
 
 def _is_usable_fact(text: str) -> bool:
-    return not (_ABSENCE_RE.search(text) or _PII_RE.search(text) or _SECRET_RE.search(text) or _CC_RE.search(text) or not _USER_REF_RE.search(text))
+    if not _USER_REF_RE.search(text):
+        return False
+    return not (_ABSENCE_RE.search(text) or _PII_RE.search(text) or _SECRET_RE.search(text) or _CC_RE.search(text))
 
 
 def _load_progress(north_home: Path) -> list[dict] | None:

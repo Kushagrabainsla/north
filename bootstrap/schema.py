@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
-from pathlib import Path
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class FactSubject(str, Enum):
+class FactSubject(StrEnum):
     """Subject classification for extracted facts."""
 
     USER = "user"
@@ -19,7 +17,7 @@ class FactSubject(str, Enum):
     UNKNOWN = "unknown"
 
 
-class FactStatus(str, Enum):
+class FactStatus(StrEnum):
     """Status of a stored fact."""
 
     ACTIVE = "active"

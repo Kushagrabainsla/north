@@ -402,7 +402,12 @@ async def test_bootstrap_fresh_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     north_home = tmp_path / "north_home"
     north_home.mkdir()
     store = _FakeFactStore(bootstrap_count=0)
-    router = _FakeRouter(payloads=[{"facts": [{"content": "User fact A", "subject": "user", "confidence": 0.9}]}, {"facts": [{"content": "User fact B", "subject": "user", "confidence": 0.8}]}])
+    router = _FakeRouter(
+        payloads=[
+            {"facts": [{"content": "User fact A", "subject": "user", "confidence": 0.9}]},
+            {"facts": [{"content": "User fact B", "subject": "user", "confidence": 0.8}]},
+        ]
+    )
     await run_bootstrap_if_needed(store, router, north_home)
     assert len(store.added) == 2
     assert all(category == "bootstrap" for _, category in store.added)

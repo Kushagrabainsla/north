@@ -701,7 +701,7 @@ class ModelDispatcher(InferenceRouter):
                     info.model_id,
                     f"{e.retry_after:.0f}s (Retry-After)" if e.retry_after else "60 s",
                 )
-            except PaymentRequiredError as e:
+            except PaymentRequiredError:
                 self._cooldowns.set_payment_exhausted(key)
                 self._rate_limit_status.record_payment_required(
                     info.provider_name,
