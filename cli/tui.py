@@ -269,6 +269,12 @@ class NorthApp(App[None]):
         self._reasoning_buffer: dict[str, str] = {}  # model's private chain-of-thought, shown dimmed
         self._streaming_active: set[str] = set()
         self._approval_pending: dict | None = None
+        # Guards against a duplicate prompt for the same card. If two SSE
+        # clients are connected (e.g. TUI + a `north "prompt"` shell, or a
+        # stale reconnect), the server fans the event out to both, which would
+        # otherwise make the user answer twice. Tracking the card_id collapses
+        # repeats of the same pending card into a single prompt.
+        self._pending_card_id: str | None = None
         self._user_task_ids: set[str] = set()
         self._conversation_history: deque[dict] = deque(maxlen=5)
         self._pending_user_messages: dict[str, str] = {}
@@ -774,7 +780,14 @@ class NorthApp(App[None]):
         self._write_rule()
 
     async def _on_approval_required(self, task_id: str, data: dict) -> None:
+        card_id = data.get("card_id", "")
+        # Ignore a repeat of a card we're already prompting for (see
+        # self._pending_card_id). Prevents double-prompting when the event is
+        # delivered more than once (multiple SSE clients / reconnects).
+        if self._pending_card_id == card_id and self._approval_pending is not None:
+            return
         self._approval_pending = data
+        self._pending_card_id = card_id
         self._set_status("")
         options = data.get("options") or ["Approve", "Reject"]
         if self.yolo:
@@ -788,9 +801,13 @@ class NorthApp(App[None]):
             self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
 
     async def _on_question_required(self, task_id: str, data: dict) -> None:
-        # The agent is asking a clarifying question and is blocked until we answer.
         # Reuses the pending-card input path; a free-form answer is allowed.
+        card_id = data.get("card_id", "")
+        if self._pending_card_id == card_id and self._approval_pending is not None:
+            return
+        # The agent is asking a clarifying question and is blocked until we answer.
         self._approval_pending = data
+        self._pending_card_id = card_id
         self._set_status("")
         options = data.get("options") or []
         if self.yolo:
@@ -851,6 +868,7 @@ class NorthApp(App[None]):
     async def _submit_approval(self, raw: str) -> None:
         data = self._approval_pending
         self._approval_pending = None
+        self._pending_card_id = None
         if data is None:
             return
         # A question card carries "question" and has no Approve/Reject semantics  -
