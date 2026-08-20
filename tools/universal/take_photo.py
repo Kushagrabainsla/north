@@ -26,30 +26,44 @@ from tools.models import ToolInput, ToolOutput
 # Compiled once into /tmp and reused for subsequent calls within the same
 # server lifetime.  AVFoundation requires a brief run-loop spin to warm
 # the camera; 1.5 s is generous for a built-in FaceTime camera.
-_SWIFT_SOURCE = """\
-import AVFoundation
+_SWIFT_SOURCE = """import AVFoundation
 import AppKit
+import CoreMedia
+import CoreVideo
 
-class Delegate: NSObject, AVCapturePhotoCaptureDelegate {
-    let path: String
+// Capture a single still frame using AVCaptureVideoDataOutput (sample-buffer
+// delegate) instead of AVCapturePhotoOutput. The photo-output path internally
+// builds a KVO proxy class (NSKVONotifying_AVCapturePhotoOutput) that is not
+// linked when this binary runs as a detached subprocess, which fails with
+// "class NSKVONotifying_AVCapturePhotoOutput not linked into application".
+// The video-data path avoids that KVO subclass entirely and is reliable for a
+// CLI grab.
+class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     let sema = DispatchSemaphore(value: 0)
-    var error: String?
+    let outPath: String
+    var errMsg: String?
+    var gotFrame = false
 
-    init(path: String) { self.path = path }
+    init(path: String) { self.outPath = path }
 
-    func photoOutput(
-        _ output: AVCapturePhotoOutput,
-        didFinishProcessingPhoto photo: AVCapturePhoto,
-        error: Error?
-    ) {
-        defer { sema.signal() }
-        if let error = error { self.error = error.localizedDescription; return }
-        guard let data = photo.fileDataRepresentation() else {
-            self.error = "No image data"
-            return
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        if gotFrame { return }
+        gotFrame = true
+        autoreleasepool {
+            guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                errMsg = "no image buffer"; sema.signal(); return
+            }
+            let ciImage = CIImage(cvImageBuffer: imageBuffer)
+            let rep = NSBitmapImageRep(ciImage: ciImage)
+            guard let data = rep.representation(using: .jpeg, properties: [:]) else {
+                errMsg = "encode failed"; sema.signal(); return
+            }
+            do { try data.write(to: URL(fileURLWithPath: outPath)) }
+            catch { errMsg = "write failed: \\(error)" }
         }
-        let url = URL(fileURLWithPath: path)
-        do { try data.write(to: url) } catch { self.error = error.localizedDescription }
+        sema.signal()
     }
 }
 
@@ -67,22 +81,27 @@ guard let input = try? AVCaptureDeviceInput(device: device) else {
     fputs("ERROR: Cannot open camera input\\n", stderr); exit(3)
 }
 session.addInput(input)
-let photoOutput = AVCapturePhotoOutput()
-session.addOutput(photoOutput)
+
+let output = AVCaptureVideoDataOutput()
+output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+let grabber = Grabber(path: outPath)
+let queue = DispatchQueue(label: "capture.queue")
+output.setSampleBufferDelegate(grabber, queue: queue)
+guard session.canAddOutput(output) else {
+    fputs("ERROR: Cannot add output\\n", stderr); exit(3)
+}
+session.addOutput(output)
 session.startRunning()
 
-// Give the camera sensor time to auto-expose.
-Thread.sleep(forTimeInterval: 0.8)
-
-let delegate = Delegate(path: outPath)
-let settings = AVCapturePhotoSettings()
-photoOutput.capturePhoto(with: settings, delegate: delegate)
-
-// Wait up to 5 s for the capture callback.
-let result = delegate.sema.wait(timeout: .now() + 5)
+// Spin the run loop briefly so the first frame arrives.
+let start = Date()
+while !grabber.gotFrame && Date().timeIntervalSince(start) < 8.0 {
+    RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+}
 session.stopRunning()
-if result == .timedOut { fputs("ERROR: Capture timed out\\n", stderr); exit(4) }
-if let err = delegate.error { fputs("ERROR: \\(err)\\n", stderr); exit(5) }
+
+if let err = grabber.errMsg { fputs("ERROR: \\(err)\\n", stderr); exit(5) }
+if !grabber.gotFrame { fputs("ERROR: Capture timed out\\n", stderr); exit(4) }
 """
 
 _COMPILED_BINARY: Path | None = None
@@ -143,7 +162,17 @@ def _ensure_binary() -> Path:
     src.write_text(_SWIFT_SOURCE, encoding="utf-8")
 
     res = subprocess.run(
-        ["swiftc", "-O", "-o", str(binary), str(src)],
+        [
+            "swiftc",
+            "-O",
+            "-framework",
+            "AVFoundation",
+            "-framework",
+            "AppKit",
+            "-o",
+            str(binary),
+            str(src),
+        ],
         capture_output=True,
         text=True,
         timeout=30,
