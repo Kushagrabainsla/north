@@ -120,6 +120,49 @@ def handoff_dir_for(task_id: str) -> str:
     return f"{_handoff_root()}/{task_id}"
 
 
+# Personal-data subdirectories inside NORTH_HOME that agents are allowed to
+# write to (news digests, wellness logs, general notes). The rest of ~/.north
+# stays blocked (secret.key, .env, ledger/jobs/facts DBs). Kept in sync with
+# agent prompts so output never lands in the CWD/workspace.
+_PERSONAL_SUBDIRS: tuple[str, ...] = ("news", "notes", "wellness")
+
+
+def _personal_root() -> str:
+    """Absolute path of NORTH_HOME (the personal-data parent)."""
+    base = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
+    try:
+        return str(base.resolve())
+    except Exception:
+        return str(base)
+
+
+def _in_personal_subdir(resolved: str) -> bool:
+    """True when *resolved* is one of the writable personal-data subdirs.
+
+    Matches ``<NORTH_HOME>/news``, ``<NORTH_HOME>/notes``,
+    ``<NORTH_HOME>/wellness`` or a path strictly under one of them - but never
+    the NORTH_HOME root itself or any sibling (e.g. ``<NORTH_HOME>/tasks`` is
+    handled separately by the handoff carve-out).
+    """
+    root = _personal_root()
+    for sub in _PERSONAL_SUBDIRS:
+        prefix = f"{root}/{sub}"
+        if resolved == prefix or resolved.startswith(prefix + "/"):
+            return True
+    return False
+
+
+def personal_dir(subdir: str) -> str:
+    """Absolute path of a writable personal-data subdir (``<NORTH_HOME>/<subdir>``).
+
+    Used to inject concrete output dirs into agent prompts so they never write
+    to the CWD/workspace. *subdir* must be one of the allowed names.
+    """
+    if subdir not in _PERSONAL_SUBDIRS:
+        raise ValueError(f"unknown personal subdir: {subdir!r}")
+    return f"{_personal_root()}/{subdir}"
+
+
 def _is_blocked_path(resolved: str) -> bool:
     """True when *resolved* (an absolute path string) sits under a blocked prefix."""
     if Path(resolved).name in _BLOCKED_FILENAMES:
@@ -130,6 +173,11 @@ def _is_blocked_path(resolved: str) -> bool:
     # DBs share ~/.north/tasks/ with this carve-out, so DB files stay blocked.
     if _in_handoff_root(resolved):
         return resolved.endswith(_DB_SUFFIXES)
+    # Carve-out: the personal-data subdirs (news/notes/wellness) are the only
+    # other writable part of ~/.north. The home root and every other sibling
+    # (secret.key, .env, ledger/jobs/facts DBs) stay blocked.
+    if _in_personal_subdir(resolved):
+        return False
     return any(resolved == prefix or resolved.startswith(prefix + "/") for prefix in _resolved_blocked_prefixes())
 
 
@@ -146,6 +194,12 @@ def is_sensitive_path(path: Path) -> bool:
     except (OSError, ValueError):
         return True  # unresolvable - treat as sensitive (fail closed)
     if any(part in SENSITIVE_DIR_NAMES for part in resolved.parts):
+        # A path inside a sensitive-named dir is blocked by default - but the
+        # personal-data subdirs under ~/.north (news/notes/wellness) are the
+        # intended, readable output of agents, so carve them out. Everything
+        # else under ~/.north (secret.key, .env, DBs) stays sensitive.
+        if _in_personal_subdir(str(resolved)):
+            return False
         return True
     return _is_blocked_path(str(resolved))
 
@@ -205,7 +259,7 @@ def resolve_path(path_str: str, workspace: str | None) -> Path | None:
     # The per-task handoff area is an always-allowed write zone (internal agent
     # scratch) regardless of the active workspace, so it must not be rejected by
     # the workspace-containment check. The blocklist below still applies.
-    if workspace and not _in_handoff_root(str(candidate)):
+    if workspace and not (_in_handoff_root(str(candidate)) or _in_personal_subdir(str(candidate))):
         root = Path(workspace).resolve()
         if not str(candidate).startswith(str(root) + "/") and candidate != root:
             return None

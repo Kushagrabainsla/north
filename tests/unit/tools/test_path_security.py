@@ -51,6 +51,48 @@ class TestResolvePathBlocklist:
         assert resolve_path("secret.key", str(tmp_path)) is None
 
 
+class TestPersonalDataCarveOut:
+    """news/notes/wellness subdirs under NORTH_HOME are writable, but the
+    rest of ~/.north (secret.key, .env, DBs) stays blocked (R-bootstrap fix).
+
+    Uses explicit tmp_path-based absolute paths so the NORTH_HOME override and
+    the path under test stay in sync (``~`` expands to $HOME, not NORTH_HOME).
+    """
+
+    def test_allows_news_subdir_write(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+        target = tmp_path / "news" / "2026-08-20.md"
+        resolved = resolve_path(str(target), None)
+        assert resolved == target
+
+    def test_allows_wellness_subdir_write_inside_workspace(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        # Even when the agent runs scoped to a project workspace, personal dirs
+        # must be reachable - otherwise output silently falls back to CWD.
+        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+        target = tmp_path / "wellness" / "meal-plans" / "x.md"
+        resolved = resolve_path(str(target), "/srv/project")
+        assert resolved == target
+
+    def test_blocks_north_home_root(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        # The blocked prefix is the *real* ~/.north (~/.ssh/.aws/.config etc.),
+        # not an arbitrary NORTH_HOME override. The carve-out must not have
+        # opened the real home root or its secrets/DBs.
+        monkeypatch.delenv("NORTH_HOME", raising=False)
+        assert resolve_path("~/.north/secret.key", None) is None
+        assert resolve_path("~/.north/.env", None) is None
+        assert resolve_path("~/.north/ledger.db", None) is None
+        # The override path's secret is still blocked by the filename policy.
+        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+        assert resolve_path(str(tmp_path / "secret.key"), None) is None
+
+    def test_personal_subdir_readable_not_sensitive(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+        assert is_sensitive_path(tmp_path / "news") is False
+        assert is_sensitive_path(tmp_path / "notes" / "plan.md") is False
+        # Sibling secret stays sensitive even though it bears the .north parent.
+        assert is_sensitive_path(tmp_path / "secret.key") is True
+
+
 class TestReferencesSensitivePath:
     def test_detects_north_env(self) -> None:
         assert references_sensitive_path("cat ~/.north/.env") is True
