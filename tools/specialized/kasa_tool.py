@@ -66,31 +66,45 @@ class _ActionParams:
     brightness: int | None = None
 
 
-def _run_kasa_discover() -> list[tuple[str, str]]:
-    """Run `kasa discover` as a subprocess. Returns [(ip, alias), ...]."""
-    kasa_bin = shutil.which("kasa") or f"{sys.executable.rsplit('/', 1)[0]}/kasa"
-    try:
-        result = subprocess.run(
-            [kasa_bin, "discover"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        output = result.stdout
-    except FileNotFoundError:
-        result = subprocess.run(
-            [sys.executable, "-m", "kasa", "discover"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        output = result.stdout
-    except subprocess.TimeoutExpired:
-        return []
+def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
+    """Run `kasa discover` as a subprocess. Returns (pairs, diagnostic).
 
-    hosts = re.findall(r"Host:\s+(\d+\.\d+\.\d+\.\d+)", output)
-    aliases = re.findall(r"==\s+(.+?)\s+-\s+\w+\s+==", output)
-    return [(host, aliases[i] if i < len(aliases) else host) for i, host in enumerate(hosts)]
+    *pairs* is [(ip, alias), ...]. *diagnostic* is an empty string on success,
+    or a human-readable reason when discovery produced nothing (binary missing,
+    permission error, timeout, no network) so the caller can surface it instead
+    of a silent "no devices found".
+    """
+    kasa_bin = shutil.which("kasa") or f"{sys.executable.rsplit('/', 1)[0]}/kasa"
+    last_err = ""
+    for attempt in ("binary", "module"):
+        try:
+            if attempt == "binary":
+                cmd = [kasa_bin, "discover"]
+            else:
+                cmd = [sys.executable, "-m", "kasa", "discover"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            output = result.stdout
+            last_err = (result.stderr or "").strip()
+            if result.returncode != 0 and not output.strip():
+                # Surface the failure rather than pretend the network is empty.
+                return [], f"`{' '.join(cmd)}` exited {result.returncode}: {last_err or 'no output'}"
+        except FileNotFoundError:
+            last_err = f"kasa executable not found at {kasa_bin}"
+            continue  # try the `-m kasa` fallback
+        except subprocess.TimeoutExpired:
+            return [], "kasa discover timed out (UDP broadcast did not complete in 20s - check network/firewall)"
+        except Exception as exc:  # noqa: BLE001
+            return [], f"kasa discover raised: {exc}"
+
+        hosts = re.findall(r"Host:\s+(\d+\.\d+\.\d+\.\d+)", output)
+        aliases = re.findall(r"==\s+(.+?)\s+-\s+\w+\s+==", output)
+        pairs = [(host, aliases[i] if i < len(aliases) else host) for i, host in enumerate(hosts)]
+        if not pairs and output.strip():
+            # Discovery ran but parsed nothing - report the raw signal.
+            return [], f"kasa discover produced output but no devices parsed; stderr: {last_err or '(none)'}"
+        return pairs, ""
+
+    return [], last_err or "kasa discovery produced no output"
 
 
 async def _connect_devices(pairs: list[tuple[str, str]]) -> dict[str, Any]:
@@ -408,16 +422,19 @@ class KasaTool(ApprovalGatedTool):
         the caller should return it directly (no devices, or a discovery error).
         """
         try:
-            pairs = await asyncio.to_thread(_run_kasa_discover)
+            pairs, diagnostic = await asyncio.to_thread(_run_kasa_discover)
         except Exception as exc:
             return {}, {}, ToolOutput(success=False, error=f"Discovery subprocess failed: {exc}")
         if not pairs:
+            message = "No Kasa devices found on the network."
+            if diagnostic:
+                message = f"No Kasa devices found. {diagnostic}"
             return (
                 {},
                 {},
                 ToolOutput(
                     success=True,
-                    data={"devices": [], "message": "No Kasa devices found on the network."},
+                    data={"devices": [], "message": message},
                 ),
             )
         try:
