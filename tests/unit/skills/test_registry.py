@@ -34,10 +34,18 @@ def test_skips_skill_with_empty_body(tmp_path):
     assert SkillRegistry(builtin_dir=tmp_path).names() == []
 
 
-def test_skips_oversized_body(tmp_path):
+def test_skips_oversized_body_for_learned_skills(tmp_path):
+    # The length cap guards learned (auto-distilled) skills only. Built-ins are
+    # curated and must never be dropped for size, so a too-long built-in loads.
     body = "x" * (MAX_BODY_CHARS + 1)
+    from skills.registry import rejection_reason
+
+    assert rejection_reason("s1", "Use when foo", body, source=SkillSource.LEARNED)
+    assert not rejection_reason("s1", "Use when foo", body, source=SkillSource.BUILTIN)
+
+    # And the registry honours that split: a built-in of that size still loads.
     _write_skill(tmp_path, "s1", f"---\nname: s1\ndescription: Use when foo\n---\n{body}")
-    assert SkillRegistry(builtin_dir=tmp_path).names() == []
+    assert SkillRegistry(builtin_dir=tmp_path).names() == ["s1"]
 
 
 def test_malformed_skill_is_skipped_not_fatal(tmp_path):

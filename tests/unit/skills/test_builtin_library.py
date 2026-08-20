@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from skills.registry import MAX_BODY_CHARS, SkillRegistry
+from skills.registry import SkillRegistry
 
 BUILTIN_DIR = Path(__file__).resolve().parents[3] / "skills" / "builtin"
 _REGISTRY = SkillRegistry(builtin_dir=BUILTIN_DIR)
@@ -29,7 +29,9 @@ def test_every_skill_is_well_formed():
         assert skill.description.startswith("Use "), f"{skill.name}: description must be a trigger ('Use when ...')"
         assert len(skill.description) <= _MAX_DESCRIPTION_CHARS, f"{skill.name}: description too long"
         assert skill.body.strip(), f"{skill.name}: empty body"
-        assert len(skill.body) <= MAX_BODY_CHARS, f"{skill.name}: body exceeds cap"
+        # Built-in skills are curated and may exceed the learned-skill length cap
+        # (the cap guards auto-distilled skills, not hand-authored ones), so no
+        # MAX_BODY_CHARS assertion here.
         assert "1." in skill.body, f"{skill.name}: body must contain a numbered procedure"
 
 

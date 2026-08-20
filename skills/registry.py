@@ -17,16 +17,22 @@ from skills.parser import parse_skill_document
 
 logger = logging.getLogger(__name__)
 
-# A skill body longer than this is rejected: skills are injected into context, so
-# an oversized one would blow the budget and degrade the model rather than help it.
+# A learned (auto-distilled) skill body longer than this is rejected: learned
+# skills are injected into context automatically, so an oversized one would blow
+# the budget and degrade the model rather than help it. Built-in skills are
+# hand-authored and curated, so they are NOT subject to this cap - a too-long
+# built-in is a review problem, not a load-time failure, and must never be
+# silently dropped (every shipped skill should be usable).
 MAX_BODY_CHARS = 8_000
 
 
-def rejection_reason(name: str, description: str, body: str) -> str:
+def rejection_reason(name: str, description: str, body: str, *, source: SkillSource = SkillSource.LEARNED) -> str:
     """Return why a skill is invalid, or "" when it is valid.
 
     Shared by the registry (loading skills) and the distiller (before writing a
-    learned skill) so both apply exactly the same acceptance bar.
+    learned skill) so both apply exactly the same acceptance bar. The length cap
+    applies only to LEARNED skills; built-ins bypass it but still must have a
+    name, description, and non-empty body.
     """
     if not name:
         return "missing name"
@@ -34,7 +40,7 @@ def rejection_reason(name: str, description: str, body: str) -> str:
         return "missing description"
     if not body:
         return "empty body"
-    if len(body) > MAX_BODY_CHARS:
+    if source is SkillSource.LEARNED and len(body) > MAX_BODY_CHARS:
         return f"body exceeds {MAX_BODY_CHARS} chars"
     return ""
 
@@ -81,7 +87,7 @@ class SkillRegistry:
 
         name = str(frontmatter.get("name") or directory.name).strip()
         description = str(frontmatter.get("description") or "").strip()
-        reason = rejection_reason(name, description, body)
+        reason = rejection_reason(name, description, body, source=source)
         if reason:
             logger.warning("SkillRegistry: skipping skill %r - %s", name or directory.name, reason)
             return None
