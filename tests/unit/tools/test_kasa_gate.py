@@ -13,34 +13,24 @@ def test_kasa_is_marked_mutating() -> None:
     assert KasaTool.is_mutating is True
 
 
+async def test_control_action_proceeds_without_approval() -> None:
+    """A named control action runs immediately - no approval prompt, no
+    fail-closed refusal when no approval store is wired."""
+    result = await KasaTool().run(ToolInput(params={"action": "off", "device": "lamp"}))
+    # No approval gate anymore: it proceeds to discovery/connect rather than
+    # refusing with a "fail closed" message.
+    err = result.error or ""
+    assert "fail closed" not in err.lower()
+
+
 async def test_control_action_requires_explicit_device() -> None:
+    """Without a named device the action is refused (no implicit broadcast),
+    but there is no approval prompt."""
     result = await KasaTool().run(ToolInput(params={"action": "on"}))
     assert result.success is False
-    assert "device" in result.error
-
-
-async def test_control_action_fails_closed_without_gate() -> None:
-    result = await KasaTool().run(ToolInput(params={"action": "off", "device": "lamp"}))
-    assert result.success is False
-    assert "fail closed" in result.error
-
-
-async def test_control_action_refused_on_reject(monkeypatch) -> None:
-    # Discovery returns no devices (empty pairs + empty diagnostic).
-    def _fake_discover():
-        return [], ""
-
-    monkeypatch.setattr(kasa_module, "_run_kasa_discover", _fake_discover)
-    store = MagicMock()
-    resolved = MagicMock()
-    resolved.chosen_option = "Reject"
-    resolved.status = "rejected"
-    store.wait_for_decision = AsyncMock(return_value=resolved)
-
-    tool = KasaTool(approval_store=store)
-    result = await tool.run(ToolInput(params={"action": "on", "device": "lamp"}))
-    assert result.success is False
-    assert "rejected" in result.error.lower()
+    err = result.error or ""
+    assert "device" in err
+    assert "approval" not in err.lower()
 
 
 async def test_list_works_without_device_or_gate(monkeypatch) -> None:

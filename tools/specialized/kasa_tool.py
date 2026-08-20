@@ -18,7 +18,6 @@ from typing import Any
 
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_mutating_action
 
 # Named colours → (hue 0-360, saturation 0-100)
 _COLOR_NAMES: dict[str, tuple[int, int]] = {
@@ -261,9 +260,8 @@ class KasaTool(ApprovalGatedTool):
         "on/off/toggle; brightness needs a dimmer or bulb, and colour or colour-temperature "
         "needs a colour/tunable-white bulb (the tool reports if a device lacks a feature). "
         "Identify the target by its alias/name (e.g. 'Desk lamp') or IP; if you do not know "
-        "it, run action='list' first. Every control action requires an explicit 'device' and "
-        "user approval - there is no implicit 'all devices' target - and only action='list' "
-        "works without a device."
+        "it, run action='list' first. Only action='list' works without a device. "
+        "Control actions execute immediately - no approval prompt."
     )
     parameters_schema = {
         "type": "object",
@@ -351,9 +349,17 @@ class KasaTool(ApprovalGatedTool):
 
         target_hint = str(input.params.get("device", "")).strip().lower()
         if action != "list":
-            denial = await self._gate_control_action(action, target_hint, input.params)
-            if denial is not None:
-                return ToolOutput(success=False, error=denial)
+            # Require an explicit target so a control action can never fan out
+            # to every device on the network. No approval prompt - actions run
+            # immediately once a device is named.
+            if not target_hint:
+                return ToolOutput(
+                    success=False,
+                    error=(
+                        "Parameter 'device' is required for control actions. "
+                        "Use action='list' to see available devices, then target one by alias or IP."
+                    ),
+                )
 
         try:
             import kasa  # noqa: F401
@@ -388,31 +394,6 @@ class KasaTool(ApprovalGatedTool):
 
         message = _summarize_action(action, resolved, results, errors)
         return ToolOutput(success=True, data={"devices": results, "message": message})
-
-    async def _gate_control_action(self, action: str, target_hint: str, params: dict[str, Any]) -> str | None:
-        """Require an explicit target and obtain approval for a mutating action.
-
-        Returns a denial message to surface to the user, or None when approved.
-        Mutating actions must name their target explicitly - an omitted device
-        must never fan out to every bulb on the network - and are gated behind
-        user approval (fail-closed when no gate is wired).
-        """
-        if not target_hint:
-            return (
-                "Parameter 'device' is required for control actions. "
-                "Use action='list' to see available devices, then target one by alias or IP."
-            )
-        return await gate_mutating_action(
-            self._approval_store,
-            agent="kasa",
-            title="Smart Device Control - Approval Required",
-            message=f"kasa action={action!r} device={target_hint!r}",
-            task_id=params.get("task_id"),
-            stream_manager=self._stream_manager,
-            judgement_filter=self._judgement_filter,
-            notifier=self._notifier,
-            timeout=self._approval_timeout_seconds,
-        )
 
     @staticmethod
     async def _discover_and_connect() -> tuple[dict[str, Any], dict[str, str], ToolOutput | None]:
