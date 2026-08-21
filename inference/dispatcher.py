@@ -171,7 +171,7 @@ class ModelDispatcher(InferenceRouter):
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         estimated = len(request.prompt) // 4
         priority = self._effective_priority(request.priority)
-        candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated)
+        candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated, pool=request.pool)
         if not candidates:
             # Primary pool exhausted (out of credits / all rate-limited / down) -
             # fall back to the free tier so the request still completes.
@@ -218,7 +218,7 @@ class ModelDispatcher(InferenceRouter):
         tools_chars = sum(len(json.dumps(t)) for t in request.tools) if request.tools else 0
         estimated = (len(text) + tools_chars) // 4
         priority = self._effective_priority(request.priority)
-        candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated)
+        candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated, pool=request.pool)
         if not candidates:
             candidates = self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated)
         candidates = self._apply_exclusions(candidates, request.exclude_models)
@@ -292,11 +292,18 @@ class ModelDispatcher(InferenceRouter):
                 await provider.aclose()
 
     async def refresh_pools(self) -> None:
-        for provider in self._providers:
-            try:
-                await provider.refresh()
-            except Exception:
-                logger.warning("Pool refresh failed for provider %s", provider.name, exc_info=True)
+        """Concurrently fetch model lists from all providers and atomically rebuild registry."""
+        results = await asyncio.gather(
+            *(provider.refresh() for provider in self._providers),
+            return_exceptions=True,
+        )
+        for provider, res in zip(self._providers, results, strict=False):
+            if isinstance(res, Exception):
+                logger.warning(
+                    "Pool refresh failed for provider %s: %s (retaining existing catalog)",
+                    provider.name,
+                    res,
+                )
         self._build_registry()
         self._validate_preferred()
 
@@ -342,22 +349,32 @@ class ModelDispatcher(InferenceRouter):
         return {"checked": self._rate_limit_status.checked_count(), "pool_total": pool_total}
 
     def current_pools(self) -> dict[str, ModelPool]:
-        """Build a pool snapshot from the dispatcher's own registry for CLI display."""
-        high: list[ModelInfo] = []
-        medium: list[ModelInfo] = []
-        low: list[ModelInfo] = []
+        """Build a pool snapshot from the dispatcher's own registry across capability pools."""
+        reasoning: list[ModelInfo] = []
+        speed: list[ModelInfo] = []
+        tools: list[ModelInfo] = []
+        vision: list[ModelInfo] = []
+        audio: list[ModelInfo] = []
+        embeddings: list[ModelInfo] = []
         free: list[ModelInfo] = []
+        low: list[ModelInfo] = []
 
         for info, _ in self._registry.values():
-            if not info.supports(ModelCapability.COMPLETION):
-                continue
             if info.is_free:
                 free.append(info)
-            if info.base_quality >= _QUALITY_TIER_HIGH:
-                high.append(info)
-            elif info.base_quality >= _QUALITY_TIER_MEDIUM:
-                medium.append(info)
-            else:
+            if info.supports(ModelCapability.REASONING) or info.base_quality >= _QUALITY_TIER_HIGH:
+                reasoning.append(info)
+            if info.supports(ModelCapability.SPEED) or (info.base_quality >= _QUALITY_TIER_MEDIUM and info.base_quality < _QUALITY_TIER_HIGH):
+                speed.append(info)
+            if info.supports(ModelCapability.TOOL_CALLS):
+                tools.append(info)
+            if info.supports(ModelCapability.VISION):
+                vision.append(info)
+            if info.supports(ModelCapability.AUDIO) or info.supports(ModelCapability.TRANSCRIPTION):
+                audio.append(info)
+            if info.supports(ModelCapability.EMBEDDING):
+                embeddings.append(info)
+            if info.base_quality < _QUALITY_TIER_MEDIUM:
                 low.append(info)
 
         def _entries(infos: list[ModelInfo]) -> list[ModelEntry]:
@@ -367,8 +384,13 @@ class ModelDispatcher(InferenceRouter):
             ]
 
         return {
-            "reasoning": ModelPool(name="reasoning", models=_entries(high)),
-            "fast_cheap": ModelPool(name="fast_cheap", models=_entries(medium)),
+            "reasoning": ModelPool(name="reasoning", models=_entries(reasoning)),
+            "speed": ModelPool(name="speed", models=_entries(speed)),
+            "tool_calling": ModelPool(name="tool_calling", models=_entries(tools)),
+            "vision": ModelPool(name="vision", models=_entries(vision)),
+            "audio": ModelPool(name="audio", models=_entries(audio)),
+            "embeddings": ModelPool(name="embeddings", models=_entries(embeddings)),
+            "fast_cheap": ModelPool(name="fast_cheap", models=_entries(speed)),
             "high_volume": ModelPool(name="high_volume", models=_entries(low)),
             "free_fallback": ModelPool(name="free_fallback", models=_entries(free)),
         }
@@ -450,8 +472,26 @@ class ModelDispatcher(InferenceRouter):
         capability: ModelCapability,
         priority: PoolPriority,
         estimated_tokens: int,
+        pool: str | None = None,
     ) -> list[_Candidate]:
-        capable = [pair for pair in self._registry.values() if pair[0].supports(capability)]
+        target_pool = (pool or PRIORITY_TO_POOL.get(priority, "speed")).lower()
+        if target_pool == "reasoning":
+            req_cap = ModelCapability.REASONING
+        elif target_pool in ("speed", "fast_cheap"):
+            req_cap = ModelCapability.SPEED
+        elif target_pool == "vision":
+            req_cap = ModelCapability.VISION
+        elif target_pool in ("transcription", "audio"):
+            req_cap = capability
+        elif target_pool in ("embeddings", "embedding"):
+            req_cap = ModelCapability.EMBEDDING
+        else:
+            req_cap = capability
+
+        # Filter by capability; fall back to base capability if specific pool has no candidates
+        capable = [pair for pair in self._registry.values() if pair[0].supports(req_cap) and pair[0].supports(capability)]
+        if not capable:
+            capable = [pair for pair in self._registry.values() if pair[0].supports(capability)]
         if not capable:
             return []
 
@@ -491,15 +531,26 @@ class ModelDispatcher(InferenceRouter):
             and self._provider_health.is_available(info.provider_name)
         ]
 
+        if not available:
+            # Fallback to any healthy model supporting the base capability
+            available = [
+                (info, provider)
+                for info, provider in self._registry.values()
+                if info.supports(capability)
+                and (info.context_window == 0 or estimated_tokens <= 0 or info.context_window >= estimated_tokens)
+                and not self._cooldowns.is_active((info.model_id, info.provider_name))
+                and self._provider_health.is_available(info.provider_name)
+            ]
+
         # Precompute quality scores once to avoid repeated EMA calculations during sort/shuffle.
         quality: dict[_CooldownKey, float] = {
             (info.model_id, info.provider_name): self._effective_quality(info) for info, _ in available
         }
 
-        if priority == PoolPriority.HIGH:
+        if target_pool == "reasoning" or priority == PoolPriority.HIGH:
             available.sort(key=lambda x: quality[(x[0].model_id, x[0].provider_name)], reverse=True)
             available = shuffle_groups(available, key=lambda x: round(quality[(x[0].model_id, x[0].provider_name)], 6))
-        elif priority == PoolPriority.LOW:
+        elif priority == PoolPriority.LOW or target_pool == "high_volume":
             available.sort(
                 key=lambda x: (
                     x[0].cost_per_token,
@@ -514,7 +565,7 @@ class ModelDispatcher(InferenceRouter):
                     x[0].context_window if x[0].context_window > 0 else float("inf"),
                 ),
             )
-        else:  # MEDIUM: free models first, shuffle within each free/paid tier.
+        else:  # SPEED / MEDIUM: free models first, shuffle within each free/paid tier.
             available.sort(key=lambda x: (not x[0].is_free, -quality[(x[0].model_id, x[0].provider_name)]))
             available = shuffle_groups(
                 available,

@@ -33,18 +33,15 @@ logger = logging.getLogger(__name__)
 def _capabilities_from_api(model_id: str, model: dict) -> frozenset[ModelCapability]:
     """Extract capability flags from OpenRouter's model record.
 
-    Name-based inference takes precedence for embedding and transcription models
-    whose supported_parameters field is absent or misleading. For chat models,
-    supported_parameters determines whether tool calls are available.
+    Name-based inference classifies reasoning, speed, vision, audio, embedding,
+    and transcription. For chat models, supported_parameters additionally determines
+    whether native tool calls are available.
     """
-    name_caps = capabilities_from_model_id(model_id)
-    if ModelCapability.EMBEDDING in name_caps or ModelCapability.TRANSCRIPTION in name_caps:
-        return name_caps
+    name_caps = set(capabilities_from_model_id(model_id, "openrouter"))
     params = set(model.get("supported_parameters") or [])
-    caps = {ModelCapability.COMPLETION}
     if "tools" in params or "tool_choice" in params:
-        caps.add(ModelCapability.TOOL_CALLS)
-    return frozenset(caps)
+        name_caps.add(ModelCapability.TOOL_CALLS)
+    return frozenset(name_caps)
 
 
 def _cost_from_api(model: dict) -> float:

@@ -372,13 +372,31 @@ class OpenAICompatibleProvider:
         request: ToolCallRequest,
         token_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> ToolCallResponse:
+        formatted_tools = []
+        for t in request.tools:
+            if "type" in t and "function" in t:
+                formatted_tools.append(t)
+            elif "name" in t:
+                formatted_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t.get("name"),
+                        "description": t.get("description", ""),
+                        "parameters": t.get("parameters") or t.get("parameters_schema") or {"type": "object"},
+                    },
+                })
+            else:
+                formatted_tools.append(t)
+
         body: dict = {
             "model": model_id,
             "messages": request.messages,
-            "tools": request.tools,
             "stream": True,
             **self._extra_body_fields(),
         }
+        if formatted_tools:
+            body["tools"] = formatted_tools
+
         content_parts: list[str] = []
         tool_calls_acc: dict[int, dict] = {}
         tokens_in = 0

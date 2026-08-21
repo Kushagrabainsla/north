@@ -19,17 +19,44 @@ class PoolPriority(StrEnum):
     LOW = "low"  # high_volume pool
 
 
+class PoolName(StrEnum):
+    REASONING = "reasoning"
+    SPEED = "speed"
+    TOOL_CALLING = "tool_calling"
+    VISION = "vision"
+    TRANSCRIPTION = "transcription"
+    AUDIO = "audio"
+    EMBEDDINGS = "embeddings"
+    FAST_CHEAP = "fast_cheap"
+    HIGH_VOLUME = "high_volume"
+
+
 # Canonical pool names. PoolPriority maps onto these one-to-one.
-POOL_NAMES = ("reasoning", "fast_cheap", "high_volume")
+POOL_NAMES = (
+    "reasoning",
+    "speed",
+    "tool_calling",
+    "vision",
+    "transcription",
+    "audio",
+    "embeddings",
+    "fast_cheap",
+    "high_volume",
+)
 
 PRIORITY_TO_POOL: dict[PoolPriority, str] = {
     PoolPriority.HIGH: "reasoning",
-    PoolPriority.MEDIUM: "fast_cheap",
+    PoolPriority.MEDIUM: "speed",
     PoolPriority.LOW: "high_volume",
 }
 
 # Reverse map: agent config.yaml uses pool names; the router takes priorities.
-POOL_TO_PRIORITY: dict[str, PoolPriority] = {v: k for k, v in PRIORITY_TO_POOL.items()}
+POOL_TO_PRIORITY: dict[str, PoolPriority] = {
+    "reasoning": PoolPriority.HIGH,
+    "speed": PoolPriority.MEDIUM,
+    "fast_cheap": PoolPriority.MEDIUM,
+    "high_volume": PoolPriority.LOW,
+}
 
 
 class ModelEntry(BaseModel):
@@ -51,6 +78,7 @@ class CompletionRequest(BaseModel):
 
     prompt: str
     priority: PoolPriority = PoolPriority.MEDIUM
+    pool: str | None = None  # Explicit capability pool override (e.g. reasoning, speed, vision)
     component: str
     task_id: str | None = None
     max_tokens: int | None = None
@@ -91,6 +119,7 @@ class ToolCallRequest(BaseModel):
     messages: list[dict]
     tools: list[dict]
     priority: PoolPriority = PoolPriority.MEDIUM
+    pool: str | None = None
     component: str
     task_id: str | None = None
     # See CompletionRequest.exclude_models - forces an independent model choice.

@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     confidence_decrease_per_unhelpful_use: float = Field(default=0.03, ge=0.0, le=1.0)
     confidence_auto_approve_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
     inference_pool_refresh_interval_hours: int = Field(default=6, ge=1)
+    inference_pool_refresh_interval_seconds: int = Field(default=180, ge=10)
     agent_max_iterations: int = Field(default=40, ge=1)
     agent_history_keep_recent: int = Field(default=10, ge=1)
     planner_max_attempts: int = Field(default=3, ge=1)

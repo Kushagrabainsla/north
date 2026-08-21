@@ -24,43 +24,92 @@ def quality_from_cost(cost_per_token: float) -> float:
     return max(0.0, min(normalised, 1.0))
 
 
+class ModelState(StrEnum):
+    ACTIVE = "active"
+    RATE_LIMITED = "rate_limited"
+    DEPLETED = "depleted"
+    DEGRADED = "degraded"
+
+
 class ModelCapability(StrEnum):
     COMPLETION = "completion"
     TOOL_CALLS = "tool_calls"
     EMBEDDING = "embedding"
     TRANSCRIPTION = "transcription"
+    VISION = "vision"
+    AUDIO = "audio"
+    REASONING = "reasoning"
+    SPEED = "speed"
 
 
-def capabilities_from_model_id(model_id: str) -> frozenset[ModelCapability]:
-    """Infer capabilities from naming conventions in the model ID.
+def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozenset[ModelCapability]:
+    """Infer capabilities from naming conventions in the model ID and provider context.
 
-    Used by providers whose API responses carry no structured capability flags.
-    OpenRouter supplements this with its supported_parameters field.
+    Categorizes models into completion, tool calling, embeddings, transcription,
+    vision/multimodal, deep reasoning, and high-speed tiers.
     """
     lower = model_id.lower()
-    if "whisper" in lower:
-        return frozenset({ModelCapability.TRANSCRIPTION})
+    caps: set[ModelCapability] = set()
+
+    if "whisper" in lower or "transcri" in lower:
+        caps.add(ModelCapability.TRANSCRIPTION)
+        caps.add(ModelCapability.AUDIO)
+        return frozenset(caps)
+
+    if "tts" in lower or "audio" in lower:
+        caps.add(ModelCapability.AUDIO)
+        return frozenset(caps)
+
     if "embed" in lower:
-        return frozenset({ModelCapability.EMBEDDING})
-    # Guard/safety classifiers and non-text (TTS/image/audio/embedding-ish) models
-    # use the chat completions wire format but return classification scores, audio,
-    # or images, not chat text. Exclude them from COMPLETION so they are never tried
-    # as general-purpose chat candidates.
+        caps.add(ModelCapability.EMBEDDING)
+        return frozenset(caps)
+
     _NON_CHAT_PATTERNS = (
         "prompt-guard",
         "llama-guard",
         "orpheus",
         "-guard-",
-        "-tts",
-        "tts-",
-        "-image",
-        "image-",
         "imagen",
-        "-audio",
     )
     if any(kw in lower for kw in _NON_CHAT_PATTERNS):
         return frozenset()
-    return frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS})
+
+    import re
+
+    tokens = set(re.split(r"[-_./: ]+", lower))
+
+    # Core completion and tool calling
+    caps.add(ModelCapability.COMPLETION)
+    caps.add(ModelCapability.TOOL_CALLS)
+
+    # Multimodal / Vision
+    if any(k in lower for k in ["vision", "-vl", "image", "ox-alpha", "oxalpha"]) or any(t in tokens for t in ["gemini", "gpt-4o", "gpt-4.1", "gpt-5", "claude-3", "sonnet", "opus", "haiku"]):
+        caps.add(ModelCapability.VISION)
+
+    # Deep Reasoning / Complex Coding
+    is_reasoning = (
+        any(t in tokens for t in ["sonnet", "opus", "gpt-5", "gpt-4o", "gpt-4.1", "pro", "r1", "coder", "70b", "405b", "120b"])
+        or any(k in lower for k in ["deepseek-r1", "deepseek-chat", "deepseek-v3", "qwen3-coder", "qwen-2.5-coder", "qwen3.6-27b", "ox-alpha", "oxalpha"])
+    )
+    is_mini_nano = ("mini" in tokens and "gemini" not in tokens) or "nano" in tokens or "flash-lite" in lower or "guard" in lower
+    if is_reasoning and not is_mini_nano:
+        caps.add(ModelCapability.REASONING)
+
+    # High-Speed / Ultra-Fast TTFT
+    is_speed = (
+        any(t in tokens for t in ["flash", "haiku", "nano", "8b", "lite", "turbo"])
+        or ("mini" in tokens and "gemini" not in tokens)
+        or "compound-mini" in lower
+        or (provider_name == "groq" and "70b" in tokens)
+    )
+    if is_speed and not any(t in tokens for t in ["guard", "embed", "whisper"]):
+        caps.add(ModelCapability.SPEED)
+
+    # Models without function/tool calling support
+    if "compound" in lower:
+        caps.discard(ModelCapability.TOOL_CALLS)
+
+    return frozenset(caps)
 
 
 @dataclass(frozen=True)

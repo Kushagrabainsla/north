@@ -35,28 +35,9 @@ import re
 # is intentionally absent: the cheapest-first pool (and the ECO strategy that
 # maps onto it) must never be overridden by a preference for a pricier model.
 DEFAULT_PREFERRED_MODELS: dict[str, list[str]] = {
-    "reasoning": [
-        "claude-sonnet",
-        "claude-opus",
-        "gpt-5",
-        "gpt-4.1",
-        "gemini-2.5-pro",
-        "deepseek-chat",
-        "qwen3-coder",
-        "qwen-2.5-coder",
-        "llama-4-scout",
-    ],
-    "fast_cheap": [
-        "llama-3.3-70b",
-        "llama-3.3",
-        "claude-haiku",
-        "gpt-5-mini",
-        "gpt-4.1-mini",
-        "gpt-4o-mini",
-        "gemini-2.5-flash",
-        "gemini-flash",
-        "llama-3.1-8b",
-    ],
+    "reasoning": [],
+    "speed": [],
+    "fast_cheap": [],
 }
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9.]+")

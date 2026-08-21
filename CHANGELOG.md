@@ -3,6 +3,14 @@
 All notable changes to north are documented here.
 
 ## [Unreleased]
+### Added
+- **Dynamic Capability Model Pools & Multi-Provider Discovery** (`inference/capability.py`, `inference/dispatcher.py`, `inference/model_policy.py`, `inference/models.py`, `inference/providers/groq.py`, `inference/providers/openai_compat.py`, `inference/providers/openrouter.py`, `config/settings.py`, `orchestrator/app.py`, `tests/unit/inference/test_capability_pools.py`):
+  - **Dynamic Multi-Provider Discovery & Co-Equality**: Direct providers (Groq, Gemini, OpenCode Zen) and OpenRouter now participate as co-equal catalog sources in a unified registry via concurrent `asyncio.gather(..., return_exceptions=True)` polling of free `/models` endpoints, eliminating static fallback cascades.
+  - **Automated Modality & Capability Segregation**: Replaced hardcoded model lists with automated token-based capability classification across 7 semantic pools (`reasoning`, `speed`, `tool_calling`, `vision`, `transcription`, `audio`, `embeddings`, `free_fallback`, `high_volume`), allowing multi-capability models (e.g. `stealth/ox-alpha`, `gemini-2.5-flash`, `qwen3.6-27b`) to serve across all eligible capability pools simultaneously.
+  - **Objective Best-to-Worst Ranking**: Emptied `DEFAULT_PREFERRED_MODELS` to enforce unbiased selection dynamically ranked by capability match, price-derived quality prior, and live task success rate EMA, with resilient fallback to any healthy candidate upon pool exhaustion.
+  - **Periodic Background Catalog Synchronization**: Background refresh loop now updates every 180 seconds (`inference_pool_refresh_interval_seconds = 180`) with atomic catalog swapping.
+  - **OpenAI Tool Schema Normalization**: Auto-formats function calling payloads across all OpenAI-compatible endpoints to guarantee schema compliance.
+
 ### Performance
 - **Tier 1 prompt-to-response latency optimizations (~75% faster, 7.7s → 1.9s pre-execution)** (`config/dependencies.py`, `context/repo_map.py`, `orchestrator/router.py`, `orchestrator/models.py`, `orchestrator/orchestrator.py`, `memory/gateway.py`, `agents/base.py`, `inference/model_policy.py`, `inference/providers/openai_compat.py`):
   - **In-memory embedding LRU cache & concurrent memory retrieval**: Added bounded in-memory caching for `_embed_fn` across `FactStore`, `EpisodicStore`, and `SkillSelector`, and parallelized fact/episode recall and context/tool loading with `asyncio.gather()`, dropping memory retrieval latency from ~4.6ms down to `1.0ms` (mean).

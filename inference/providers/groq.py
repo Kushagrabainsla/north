@@ -52,15 +52,13 @@ class GroqRouter(OpenAICompatibleProvider):
             model_id = m.get("id")
             if not isinstance(model_id, str):
                 continue
-            caps = capabilities_from_model_id(model_id)
+            caps = capabilities_from_model_id(model_id, "groq")
             # Transcription models are not token-based; context_window is not meaningful.
             ctx = 0 if ModelCapability.TRANSCRIPTION in caps else int(m.get("context_window") or 131_072)
-            # Groq's free tier caps total request size well below north's planner
-            # system-prompt + context, so it 413s on normal (especially planner) prompts.
-            # Cap chat models so large prompts route to providers that accept them.
+            # Modern Groq models support up to 128k tokens; allow up to 128k chars payload
             payload_cap = None
             if ModelCapability.COMPLETION in caps:
-                payload_cap = 32_000
+                payload_cap = 128_000
             live[model_id] = ModelInfo(
                 model_id=model_id,
                 provider_name="groq",

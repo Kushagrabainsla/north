@@ -396,7 +396,7 @@ async def _guarded(coro, name: str) -> None:
 
 
 async def _pool_refresh_loop(deps) -> None:
-    interval = settings.inference_pool_refresh_interval_hours * 3600
+    interval = settings.inference_pool_refresh_interval_seconds
     while True:
         await asyncio.sleep(interval)
         try:
