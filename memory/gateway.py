@@ -70,10 +70,12 @@ class LocalMemoryGateway(MemoryGateway):
         fact_limit: int = 15,
         episode_limit: int = 3,
     ) -> MemoryContext:
-        facts = await self._recall_facts(query, fact_limit)
+        facts, episodes = await asyncio.gather(
+            self._recall_facts(query, fact_limit),
+            self._recall_episodes(principal, query, episode_limit),
+        )
         # Whole-document fallback only when no atomic facts are available.
         documents = [] if facts else await self._read_documents()
-        episodes = await self._recall_episodes(principal, query, episode_limit)
         return MemoryContext(facts=facts, episodes=episodes, documents=documents)
 
     async def read_document(self, doc: ContextDocument) -> str:

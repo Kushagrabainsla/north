@@ -61,6 +61,8 @@ class IntentClassification(BaseModel):
     reasoning: str
     confidence: float = 1.0  # 0–1; below 0.7 skips the north star check to avoid false interruptions
     execution_path: ExecutionPath = ExecutionPath.FAST
+    north_star_aligned: bool = True
+    north_star_tension: str | None = None
 
 
 class ExecutionPlan(BaseModel):

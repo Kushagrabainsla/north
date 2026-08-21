@@ -47,6 +47,8 @@ DEFAULT_PREFERRED_MODELS: dict[str, list[str]] = {
         "llama-4-scout",
     ],
     "fast_cheap": [
+        "llama-3.3-70b",
+        "llama-3.3",
         "claude-haiku",
         "gpt-5-mini",
         "gpt-4.1-mini",

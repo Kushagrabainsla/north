@@ -64,8 +64,10 @@ class Agent(ABC):
 
     async def run(self, payload: AgentPayload) -> AgentResult:
         """Template method. Do not override. Implement `_execute()` instead."""
-        context = await self._load_context(payload)
-        scored_tools = await self._load_tools(payload.prompt)
+        context, scored_tools = await asyncio.gather(
+            self._load_context(payload),
+            self._load_tools(payload.prompt),
+        )
         raw = await self._execute(payload, context, scored_tools)
         return self._format_result(raw)
 

@@ -1110,9 +1110,6 @@ class Orchestrator:
         try:
             aligned, tension, reasoning = await self._north_star_checker.check_alignment(prompt, task_id=task_id)
         except OrchestratorError as e:
-            # Fail CLOSED: a consequential task whose alignment cannot be
-            # evaluated is blocked, not waved through. The user can resubmit
-            # once inference is available again.
             logger.warning("North Star check failed - blocking task (fail closed): %s", e)
             await self._write_ledger(
                 LedgerEntry.new(
@@ -1140,7 +1137,7 @@ class Orchestrator:
         )
 
         if not aligned:
-            await self._handle_alignment_conflict(task_id, tension)
+            await self._handle_alignment_conflict(task_id, tension or "Goal conflict detected")
 
         await self._stream_manager.emit(task_id, "north_star_aligned", {"reasoning": reasoning})
 

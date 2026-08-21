@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import time
 from pathlib import Path
 
 from tools._path import PRUNED_DIRS, is_sensitive_path
@@ -29,11 +30,26 @@ _DECL_RE = re.compile(
     r"(class|function|func|interface|type|def)\s+([A-Za-z_]\w*)"
 )
 
+_REPO_MAP_CACHE: dict[tuple[str, int, int], tuple[float, str]] = {}
+_REPO_MAP_CACHE_TTL: float = 60.0  # seconds
+
+
+def clear_repo_map_cache() -> None:
+    """Clear in-memory repo map cache."""
+    _REPO_MAP_CACHE.clear()
+
 
 def build_repo_map(workspace: str, *, max_files: int = 40, max_chars: int = 4000) -> str:
     """Return a compact map of *workspace* (files + key symbols), within budgets."""
     if not workspace:
         return ""
+    now = time.monotonic()
+    cache_key = (workspace, max_files, max_chars)
+    if cache_key in _REPO_MAP_CACHE:
+        cached_time, cached_val = _REPO_MAP_CACHE[cache_key]
+        if now - cached_time < _REPO_MAP_CACHE_TTL:
+            return cached_val
+
     root = Path(workspace)
     if not root.is_dir():
         return ""
@@ -50,7 +66,9 @@ def build_repo_map(workspace: str, *, max_files: int = 40, max_chars: int = 4000
             break
         blocks.append(block)
         used += len(block) + 1
-    return "\n".join(blocks)
+    result = "\n".join(blocks)
+    _REPO_MAP_CACHE[cache_key] = (now, result)
+    return result
 
 
 def _collect_source_files(root: Path, max_files: int) -> list[tuple[str, Path]]:

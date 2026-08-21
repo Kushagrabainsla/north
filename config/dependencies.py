@@ -145,9 +145,32 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     )
     cost_tracker = CostTracker(base_router)
 
+    _embed_cache: dict[str, list[float]] = {}
+    _EMBED_CACHE_MAX_SIZE = 512
+
     async def _embed_fn(texts: list[str]) -> list[list[float]]:
-        resp = await cost_tracker.embed(EmbedRequest(texts=texts, component="embed"))
-        return resp.embeddings
+        missing_indices: list[int] = []
+        missing_texts: list[str] = []
+        results: list[list[float] | None] = [None] * len(texts)
+
+        for i, text in enumerate(texts):
+            cached = _embed_cache.get(text)
+            if cached is not None:
+                results[i] = cached
+            else:
+                missing_indices.append(i)
+                missing_texts.append(text)
+
+        if missing_texts:
+            resp = await cost_tracker.embed(EmbedRequest(texts=missing_texts, component="embed"))
+            for idx, emb in zip(missing_indices, resp.embeddings, strict=False):
+                results[idx] = emb
+                if len(_embed_cache) >= _EMBED_CACHE_MAX_SIZE:
+                    first_key = next(iter(_embed_cache))
+                    del _embed_cache[first_key]
+                _embed_cache[texts[idx]] = emb
+
+        return [r for r in results if r is not None]
 
     episodic_store = EpisodicStore(db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn)
     fact_store = FactStore(db_path=settings.north_home / "facts.db", embed_fn=_embed_fn)

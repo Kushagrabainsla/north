@@ -61,7 +61,7 @@ class OpenAICompatibleProvider:
         self.name = name
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            timeout=DEFAULT_TIMEOUT_SECONDS,
+            timeout=httpx.Timeout(timeout=DEFAULT_TIMEOUT_SECONDS, connect=5.0),
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
