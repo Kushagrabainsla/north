@@ -24,7 +24,13 @@ logger = logging.getLogger(__name__)
 
 def _is_free_opencode_model(model_id: str) -> bool:
     """True if model_id is a known free-tier model on OpenCode Zen."""
-    return model_id.endswith("-free") or "-free" in model_id
+    lower = model_id.lower()
+    return (
+        lower.endswith("-free")
+        or "-free" in lower
+        or "free" in lower
+        or any(k in lower for k in ["ox-alpha", "0x-alpha", "oxalpha", "0xalpha", "stealth"])
+    )
 
 
 class OpenCodeZenRouter(OpenAICompatibleProvider):

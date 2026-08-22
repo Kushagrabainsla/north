@@ -364,7 +364,9 @@ class ModelDispatcher(InferenceRouter):
                 free.append(info)
             if info.supports(ModelCapability.REASONING) or info.base_quality >= _QUALITY_TIER_HIGH:
                 reasoning.append(info)
-            if info.supports(ModelCapability.SPEED) or (info.base_quality >= _QUALITY_TIER_MEDIUM and info.base_quality < _QUALITY_TIER_HIGH):
+            if info.supports(ModelCapability.SPEED) or (
+                _QUALITY_TIER_MEDIUM <= info.base_quality < _QUALITY_TIER_HIGH
+            ):
                 speed.append(info)
             if info.supports(ModelCapability.TOOL_CALLS):
                 tools.append(info)
@@ -489,7 +491,10 @@ class ModelDispatcher(InferenceRouter):
             req_cap = capability
 
         # Filter by capability; fall back to base capability if specific pool has no candidates
-        capable = [pair for pair in self._registry.values() if pair[0].supports(req_cap) and pair[0].supports(capability)]
+        capable = [
+            pair for pair in self._registry.values()
+            if pair[0].supports(req_cap) and pair[0].supports(capability)
+        ]
         if not capable:
             capable = [pair for pair in self._registry.values() if pair[0].supports(capability)]
         if not capable:

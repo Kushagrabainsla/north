@@ -83,15 +83,27 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
     caps.add(ModelCapability.TOOL_CALLS)
 
     # Multimodal / Vision
-    if any(k in lower for k in ["vision", "-vl", "image", "ox-alpha", "oxalpha"]) or any(t in tokens for t in ["gemini", "gpt-4o", "gpt-4.1", "gpt-5", "claude-3", "sonnet", "opus", "haiku"]):
+    alpha_variants = ["ox-alpha", "oxalpha", "0x-alpha", "0xalpha", "0x_alpha", "ox_alpha", "stealth"]
+    vision_models = ["gemini", "gpt-4o", "gpt-4.1", "gpt-5", "claude-3", "sonnet", "opus", "haiku"]
+    if (
+        any(k in lower for k in ["vision", "-vl", "image", *alpha_variants])
+        or any(t in tokens for t in vision_models)
+    ):
         caps.add(ModelCapability.VISION)
 
     # Deep Reasoning / Complex Coding
-    is_reasoning = (
-        any(t in tokens for t in ["sonnet", "opus", "gpt-5", "gpt-4o", "gpt-4.1", "pro", "r1", "coder", "70b", "405b", "120b"])
-        or any(k in lower for k in ["deepseek-r1", "deepseek-chat", "deepseek-v3", "qwen3-coder", "qwen-2.5-coder", "qwen3.6-27b", "ox-alpha", "oxalpha"])
+    reasoning_tokens = ["sonnet", "opus", "gpt-5", "gpt-4o", "gpt-4.1", "pro", "r1", "coder", "70b", "405b", "120b"]
+    reasoning_keywords = [
+        "deepseek-r1", "deepseek-chat", "deepseek-v3", "qwen3-coder", "qwen-2.5-coder",
+        "qwen3.6-27b", *alpha_variants,
+    ]
+    is_reasoning = any(t in tokens for t in reasoning_tokens) or any(k in lower for k in reasoning_keywords)
+    is_mini_nano = (
+        ("mini" in tokens and "gemini" not in tokens)
+        or "nano" in tokens
+        or "flash-lite" in lower
+        or "guard" in lower
     )
-    is_mini_nano = ("mini" in tokens and "gemini" not in tokens) or "nano" in tokens or "flash-lite" in lower or "guard" in lower
     if is_reasoning and not is_mini_nano:
         caps.add(ModelCapability.REASONING)
 
