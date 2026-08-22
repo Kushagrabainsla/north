@@ -47,7 +47,9 @@ def _capabilities_from_api(model_id: str, model: dict) -> frozenset[ModelCapabil
 def _cost_from_api(model: dict) -> float:
     pricing = model.get("pricing") or {}
     try:
-        return float(pricing.get("completion", 0))
+        comp = float(pricing.get("completion", 0) or 0)
+        prompt = float(pricing.get("prompt", 0) or 0)
+        return max(comp, prompt)
     except (TypeError, ValueError):
         return 0.0
 

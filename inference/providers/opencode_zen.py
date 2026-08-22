@@ -76,8 +76,21 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
                 continue
             caps = capabilities_from_model_id(model_id)
             ctx = int(m.get("context_window") or 128_000)
-            is_free = _is_free_opencode_model(model_id)
-            cost = 0.0 if is_free else 0.002
+            pricing = m.get("pricing") if isinstance(m.get("pricing"), dict) else {}
+            if pricing:
+                try:
+                    comp = float(pricing.get("completion", 0) or 0)
+                    prompt = float(pricing.get("prompt", 0) or 0)
+                    cost = max(comp, prompt)
+                except (TypeError, ValueError):
+                    cost = 0.0 if _is_free_opencode_model(model_id) else 0.002
+            elif "cost" in m:
+                try:
+                    cost = float(m["cost"])
+                except (TypeError, ValueError):
+                    cost = 0.0 if _is_free_opencode_model(model_id) else 0.002
+            else:
+                cost = 0.0 if _is_free_opencode_model(model_id) else 0.002
             live[model_id] = ModelInfo(
                 model_id=model_id,
                 provider_name="opencode_zen",
