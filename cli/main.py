@@ -1114,12 +1114,11 @@ def limits() -> None:
     etc.), plus the tier (free/paid) and request limit/remaining when reported.
     """
     from config.settings import settings
-    from inference.rate_limit_status import format_status_markdown
+    from inference.rate_limit_status import format_status_table
 
-    text = format_status_markdown(settings.north_home / "rate_limit_status.json")
+    table = format_status_table(settings.north_home / "rate_limit_status.json")
     _console.print()
-    # Render the same Markdown the Telegram /status command shows.
-    _console.print(Markdown(text))
+    _console.print(table)
     _console.print()
 
 

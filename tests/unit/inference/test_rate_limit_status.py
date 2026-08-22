@@ -321,3 +321,25 @@ def test_dispatcher_records_status_with_precise_wait(tmp_path) -> None:
     assert rec["wait_seconds"] == pytest.approx(7.0)
     assert rec["source"] == "retry-after"
     assert rec["is_free"] is True
+
+
+def test_format_status_table_empty_and_populated(tmp_path) -> None:
+    from inference.rate_limit_status import format_status_table
+
+    p = tmp_path / "rate_limit_status.json"
+    # Empty
+    t_empty = format_status_table(p)
+    assert t_empty.title == "Inference Rate Limits & Cooldowns"
+    assert len(t_empty.rows) == 1
+
+    # Populated
+    store = RateLimitStatusStore(p)
+    store.record_rate_limit(
+        provider="openrouter",
+        model="meta-llama/llama-3.3-70b",
+        retry_after=45.0,
+        is_free=True,
+    )
+    t_pop = format_status_table(p)
+    assert len(t_pop.rows) == 1
+    assert "openrouter" in str(t_pop.columns[0]._cells[0])

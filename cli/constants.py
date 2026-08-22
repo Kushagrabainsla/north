@@ -108,6 +108,7 @@ _FILL_COLOURS = (
 # Slash commands handled locally by the TUI (never sent to the orchestrator).
 _SLASH_COMMANDS: dict[str, str] = {
     "/help": "show available commands",
+    "/limits": "inspect active rate limits and cooldowns",
     "/jobs": "inspect active and scheduled background jobs",
     "/context": "inspect active context and goal documents",
     "/clear": "clear the conversation log",

@@ -1263,6 +1263,11 @@ class NorthApp(App[None]):
                         )
                 except Exception as exc:
                     self._log(f"  [red]error fetching context: {exc}[/red]")
+        elif cmd == "/limits":
+            from config.settings import settings
+            from inference.rate_limit_status import format_status_table
+
+            self._log_rich(format_status_table(settings.north_home / "rate_limit_status.json"))
         elif cmd == "/help":
             self._log_rich(_format_help_table(_SLASH_COMMANDS))
         else:

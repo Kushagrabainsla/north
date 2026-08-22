@@ -39,6 +39,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from rich.box import ROUNDED
+from rich.table import Table
+from rich.text import Text
+
 logger = logging.getLogger(__name__)
 
 
@@ -620,3 +624,77 @@ def format_status_markdown(
     lines = [f"*rate-limit status* — {len(records)} unavailable", ""]
     lines.extend(_format_markdown(r) for r in records)
     return "\n".join(lines)
+
+
+def format_status_table(
+    path: Path,
+    *,
+    checked: int | None = None,
+    pool_total: int | None = None,
+) -> Table:
+    """Render active rate-limit status as a Rich Table."""
+    records = load_active_records(path)
+    t = Table(title="Inference Rate Limits & Cooldowns", box=ROUNDED, header_style="bold cyan")
+    t.add_column("Provider", style="cyan")
+    t.add_column("Model / Scope", style="white")
+    t.add_column("Tier", justify="center")
+    t.add_column("Kind", justify="center")
+    t.add_column("Reset ETA", style="dim")
+    t.add_column("Remaining", justify="right")
+    t.add_column("Signal Source / Reason", style="bright_black")
+
+    if not records:
+        if checked is not None and pool_total is not None and pool_total > 0:
+            unverified = max(0, pool_total - checked)
+            status_desc = f"{checked}/{pool_total} probed, {unverified} not yet tried"
+        else:
+            status_desc = "All model pools are operational"
+        t.add_row(
+            "All",
+            "No active rate limits or cooldowns",
+            Text("all", style="dim"),
+            Text("READY", style="bold green"),
+            "-",
+            "-",
+            status_desc,
+        )
+        return t
+
+    for rec in records:
+        rem = rec.remaining_seconds
+        if rec.available_at_epoch:
+            when = datetime.fromtimestamp(rec.available_at_epoch, UTC).astimezone().strftime("%H:%M:%S")
+            wait = f"{rem:,.0f}s" if rem >= 1 else f"{rem * 1000:,.0f}ms"
+            eta_str = f"{when} (in {wait})"
+        else:
+            eta_str = "unknown"
+
+        tier_style = "cyan" if rec.is_free else "yellow" if rec.is_free is False else "dim"
+        tier_text = Text(_TIER_LABEL.get(rec.is_free, "?"), style=tier_style)
+
+        kind_code = _KIND_LABEL.get(rec.kind, rec.kind.upper())
+        kind_style = "bold red" if rec.kind in ("rate_limit", "provider_auth", "provider_down") else "bold yellow"
+        kind_text = Text(kind_code, style=kind_style)
+
+        rem_val = rec.remaining
+        cap_val = rec.limit
+        if rem_val is not None and cap_val is not None:
+            quota_str = f"{int(rem_val)}/{int(cap_val)}"
+        elif rem_val is not None:
+            quota_str = f"{int(rem_val)}"
+        else:
+            quota_str = "-"
+
+        reason_str = f"via {rec.source}" + (f": {rec.reason}" if rec.reason else "")
+
+        t.add_row(
+            rec.provider,
+            rec.model or "(provider-wide)",
+            tier_text,
+            kind_text,
+            eta_str,
+            quota_str,
+            reason_str[:60],
+        )
+
+    return t
