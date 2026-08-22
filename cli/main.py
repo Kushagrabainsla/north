@@ -1256,6 +1256,12 @@ def status() -> None:
     _console.print()
 
 
+@app.command("doctor")
+def doctor() -> None:
+    """Run health and connectivity diagnostics on north and inference providers."""
+    status()
+
+
 # ── dictate ───────────────────────────────────────────────────────────────────
 
 
