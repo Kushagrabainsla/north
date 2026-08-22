@@ -187,3 +187,21 @@ async def test_catch_up_skips_slot_older_than_window(tmp_path, monkeypatch) -> N
 
     await scheduler._catch_up([entry], now)
     assert not [j for j in await processor.list_jobs() if (j.payload or {}).get("cron_entry") == "news"]
+
+
+async def test_same_minute_multiple_entries_both_fire(tmp_path) -> None:
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    now = datetime(2026, 5, 22, 7, 59, 50, tzinfo=UTC)  # 10s before 8:00
+    e1 = CronEntry(name="job_1", agent="a1", task="t1", hour=8, minute=0)
+    e2 = CronEntry(name="job_2", agent="a2", task="t2", hour=8, minute=0)
+    scheduler = CronScheduler(processor, [e1, e2], clock=lambda: datetime(2026, 5, 22, 8, 0, 1, tzinfo=UTC))
+
+    due = next_due_entry([e1, e2], now)
+    assert due is not None
+    await scheduler._execute_due_entry(due, now, [e1, e2])
+
+    jobs = await processor.list_jobs()
+    entries_fired = {j.payload.get("cron_entry") for j in jobs if j.payload}
+    assert "job_1" in entries_fired
+    assert "job_2" in entries_fired
+    assert len(jobs) == 2

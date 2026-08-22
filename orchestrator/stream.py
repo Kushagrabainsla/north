@@ -23,9 +23,7 @@ logger = logging.getLogger(__name__)
 # SSE message format (WHATWG)
 _SSE_TEMPLATE = "event: {event}\ndata: {data}\n\n"
 
-# Replay buffer bounds: events kept per task, and finished/active tasks tracked
-# before the oldest task's history is evicted.
-_HISTORY_MAX_EVENTS = 512
+_HISTORY_MAX_EVENTS = 2048
 _HISTORY_MAX_TASKS = 500
 
 
@@ -101,14 +99,23 @@ class EventStreamManager:
             try:
                 q.put_nowait(message)
             except asyncio.QueueFull:
-                logger.warning("SSE queue full for task %s - dropping event '%s'.", task_id, event)
+                if event != "token":
+                    with contextlib.suppress(asyncio.QueueEmpty):
+                        q.get_nowait()
+                    with contextlib.suppress(asyncio.QueueFull):
+                        q.put_nowait(message)
+                else:
+                    logger.warning("SSE queue full for task %s - dropping event '%s'.", task_id, event)
 
         # Mirror every event to the global stream (TUI / watch clients).
         for q in self._global_subs:
             try:
                 q.put_nowait(message)
             except asyncio.QueueFull:
-                logger.warning("Global SSE queue full - dropping event '%s'.", event)
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    q.get_nowait()
+                with contextlib.suppress(asyncio.QueueFull):
+                    q.put_nowait(message)
 
     async def emit_done(self, task_id: str) -> None:
         """Signal the end of a task stream, causing subscribers to close.
@@ -133,7 +140,7 @@ class EventStreamManager:
                 logger.warning("SSE queue was full for task %s; drained to deliver done sentinel.", task_id)
                 q.put_nowait(None)
 
-    async def subscribe(self, task_id: str, max_queue_size: int = 256) -> AsyncIterator[str]:
+    async def subscribe(self, task_id: str, max_queue_size: int = 2048) -> AsyncIterator[str]:
         """Async generator that yields raw SSE-formatted text for task_id.
 
         Replays buffered history first (events emitted before the client
@@ -168,7 +175,7 @@ class EventStreamManager:
             if not self._subscribers.get(task_id):
                 self._subscribers.pop(task_id, None)
 
-    async def subscribe_global(self, max_queue_size: int = 512) -> AsyncIterator[str]:
+    async def subscribe_global(self, max_queue_size: int = 2048) -> AsyncIterator[str]:
         """Async generator that yields all task events across the system.
 
         Stays open indefinitely - callers disconnect by cancelling the task or

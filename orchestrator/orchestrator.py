@@ -988,6 +988,10 @@ class Orchestrator:
             # leak in CostTracker._task_costs on a long-lived server.
             if self._tracked_router is not None:
                 self._tracked_router.pop_task_cost(task_id)
+            if self._plan_store is not None and hasattr(self._plan_store, "clear"):
+                self._plan_store.clear(task_id)
+            if self._failure_handler is not None and hasattr(self._failure_handler, "clear_all"):
+                self._failure_handler.clear_all(task_id)
             # The task has reached a terminal state (success/failure/cancel), so it
             # is no longer in-flight: drop it from the crash-recovery registry.
             if self._running_task_store is not None:

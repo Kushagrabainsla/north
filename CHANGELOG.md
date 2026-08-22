@@ -3,6 +3,28 @@
 All notable changes to north are documented here.
 
 ## [Unreleased]
+### Performance & Reliability (6 Fundamental Architectural Fixes)
+- **Reactive Slot-Based Batch Scheduling & Drain Queue** (`jobs/scheduler.py`, `jobs/sqlite_processor.py`):
+  - Replaced single-item candidate searching in `CronScheduler` with batch slot matching across all due entries, preventing same-minute cron starvation and 24-hour skips.
+  - Added reactive `_wake_event` signalling and batch queue draining in `SQLiteJobProcessor`, draining queued bursts in milliseconds rather than sleeping 5 seconds per job.
+- **Dual-Tier Event Bus & Turn-Gated Streaming Buffer** (`inference/providers/openai_compat.py`, `orchestrator/stream.py`):
+  - Increased SSE subscriber queue capacity to 2048 and added priority eviction for non-token lifecycle events (`task_completed`, `agent_completed`) to guarantee they are never dropped under high-frequency token generation.
+  - Added stream reset invocation on tool call detection, ensuring pre-tool reasoning fragments are not leaked into the user-facing output stream.
+- **Pooled WAL Persistence, Schema Migration Guards & Atomic Pagination** (`ledger/sqlite_writer.py`, `memory/consolidator.py`, `utils/db.py`):
+  - Guarded FTS5 table rebuilds to only run if the FTS index is empty and existing ledger rows need indexing, eliminating multi-second startup latencies and exclusive locks.
+  - Standardized `EpisodeConsolidator` on $+1\,\mu\text{s}$ pagination and atomic file writes (`tempfile` + `os.replace`).
+- **Non-Blocking Subprocess & Early-Pruned I/O Engine** (`context/code_index.py`, `tools/universal/search_files.py`, `context/lsp_client.py`):
+  - Offloaded `CodeIndex` file scanning, reads, and SHA256 computations to `asyncio.to_thread`, keeping the async event loop completely unblocked.
+  - Replaced `Path.rglob()` with top-down `os.walk(topdown=True)` in `SearchFilesTool` to prune `node_modules`, `.venv`, and `.git` at the root directory level.
+  - Added process exit checks in `lsp_client.py` (`self._proc.poll() is not None`) to fail fast with `LspError` immediately upon server crash rather than busy-waiting for 20 seconds.
+- **Optimistic CAS File Locking & Granular Mutation Concurrency** (`tools/specialized/patch_file.py`, `orchestrator/task_context.py`):
+  - Added Compare-And-Swap (CAS) validation in `PatchFileTool._write` that verifies the file on disk matches the planned content before writing, aborting with conflict errors if modified during user approval waits.
+  - Reduced `TaskContextStore.read()` fallback poll interval from 10.0s to 0.25s.
+- **Unified Task Lifecycle Manager & Terminal State Contract** (`orchestrator/orchestrator.py`, `orchestrator/failure_handler.py`, `gateways/telegram.py`):
+  - Centralized task cleanup in `Orchestrator._process_task`'s `finally:` block to purge `PlanStore`, `FailureHandler`, `CostTracker`, and `RunningTaskStore` memory on every exit path.
+  - Added `clear_all(task_id)` to `FailureHandler`.
+  - Updated `TelegramGateway._get_task_result` to prioritize terminal records (`task_synthesis`, `task_completed`) over intermediate agent logs.
+
 ### Added
 - **Dynamic Capability Model Pools & Multi-Provider Discovery** (`inference/capability.py`, `inference/dispatcher.py`, `inference/model_policy.py`, `inference/models.py`, `inference/providers/groq.py`, `inference/providers/openai_compat.py`, `inference/providers/openrouter.py`, `config/settings.py`, `orchestrator/app.py`, `tests/unit/inference/test_capability_pools.py`):
   - **Dynamic Multi-Provider Discovery & Co-Equality**: Direct providers (Groq, Gemini, OpenCode Zen) and OpenRouter now participate as co-equal catalog sources in a unified registry via concurrent `asyncio.gather(..., return_exceptions=True)` polling of free `/models` endpoints, eliminating static fallback cascades.

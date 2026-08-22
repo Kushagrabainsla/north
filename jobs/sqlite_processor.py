@@ -71,6 +71,7 @@ class SQLiteJobProcessor(JobProcessor):
         # weak refs, so without this a dispatched job can be garbage-collected
         # mid-run and silently stay RUNNING forever (CODING_STYLE §10.5).
         self._running_jobs: set[asyncio.Task] = set()
+        self._wake_event = asyncio.Event()
 
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
@@ -87,6 +88,7 @@ class SQLiteJobProcessor(JobProcessor):
     async def enqueue(self, job: Job) -> str:
         try:
             await asyncio.to_thread(self._enqueue_sync, job)
+            self._wake_event.set()
         except sqlite3.Error as e:
             raise JobProcessingError(f"Failed to enqueue {job.job_id}: {e}") from e
         return job.job_id
@@ -303,8 +305,11 @@ class SQLiteJobProcessor(JobProcessor):
 
         while True:
             try:
-                job = await self.claim_next()
-                if job is not None:
+                # Drain queue: claim all pending jobs in a loop before sleeping
+                while True:
+                    job = await self.claim_next()
+                    if job is None:
+                        break
                     if on_job is not None:
                         task = asyncio.create_task(
                             self._run_job(job, on_job),
@@ -321,7 +326,11 @@ class SQLiteJobProcessor(JobProcessor):
                 raise
             except Exception:
                 logger.exception("JobProcessor: error in poll loop")
-            await asyncio.sleep(poll_interval_seconds)
+            try:
+                await asyncio.wait_for(self._wake_event.wait(), timeout=poll_interval_seconds)
+                self._wake_event.clear()
+            except TimeoutError:
+                pass
 
     async def _run_job(self, job: Job, on_job: Callable[[Job], Awaitable[Any]]) -> None:
         """Execute one job; mark completed, or schedule a retry / fail on error."""

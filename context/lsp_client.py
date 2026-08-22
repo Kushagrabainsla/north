@@ -116,6 +116,8 @@ class _Connection:
         assert self._proc.stdout is not None
         end = time.time() + max(0.0, timeout)
         while b"\r\n\r\n" not in self._buf:
+            if self._proc.poll() is not None:
+                raise LspError(f"Language server exited unexpectedly with code {self._proc.returncode}")
             if time.time() >= end:
                 return None
             chunk = self._proc.stdout.read1(4096)
@@ -129,6 +131,8 @@ class _Connection:
             if line.lower().startswith(b"content-length:"):
                 length = int(line.split(b":", 1)[1].strip())
         while len(rest) < length:
+            if self._proc.poll() is not None:
+                raise LspError(f"Language server exited unexpectedly with code {self._proc.returncode}")
             chunk = self._proc.stdout.read1(4096)
             if not chunk:
                 if time.time() >= end:

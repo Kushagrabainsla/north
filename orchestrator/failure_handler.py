@@ -119,6 +119,12 @@ class FailureHandler:
         """Remove the retry counter for a completed agent to prevent memory leaks."""
         self._retry_counts.pop((task_id, agent_name), None)
 
+    def clear_all(self, task_id: str) -> None:
+        """Remove all retry counters for a task once it completes."""
+        keys = [k for k in self._retry_counts if k[0] == task_id]
+        for k in keys:
+            self._retry_counts.pop(k, None)
+
     async def handle_failure(self, task_id: str, agent_name: str, exception: Exception) -> bool:
         """Processes an agent failure.
 

@@ -181,16 +181,23 @@ class CronScheduler:
             logger.warning("CronScheduler: could not check for running jobs, proceeding")
         return False
 
-    async def _execute_due_entry(self, due: tuple[CronEntry, datetime], now: datetime) -> None:
+    async def _execute_due_entry(
+        self, due: tuple[CronEntry, datetime], now: datetime, entries: list[CronEntry]
+    ) -> None:
         entry, firing = due
         delay = max(0.0, (firing - now).total_seconds())
         await asyncio.sleep(min(delay, 60.0))
         now_after_sleep = self._clock()
         if firing <= now_after_sleep:
-            if await self._is_already_running(entry):
-                logger.info("CronScheduler: skipping %s - prior run still active", entry.name)
-                return
-            await self._processor.enqueue(self.build_job(entry, firing))
+            for e in entries:
+                slot = previous_firing(e, now_after_sleep)
+                if slot == firing or (0 <= (now_after_sleep - slot).total_seconds() < 60):
+                    if await self._already_fired(e, slot):
+                        continue
+                    if await self._is_already_running(e):
+                        logger.info("CronScheduler: skipping %s - prior run still active", e.name)
+                        continue
+                    await self._processor.enqueue(self.build_job(e, slot))
 
     async def run(self) -> None:
         """Loop forever: pick the next due entry, sleep, enqueue, repeat.
@@ -216,7 +223,7 @@ class CronScheduler:
             if due is None:
                 await asyncio.sleep(60)
                 continue
-            await self._execute_due_entry(due, now)
+            await self._execute_due_entry(due, now, entries)
 
 
 # V1 schedule - see README Section 11.3.

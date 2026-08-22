@@ -174,27 +174,16 @@ class CodeIndex:
             root = Path(ws)
             if not root.is_dir():
                 return
-            files = _collect_source_files(root, _MAX_FILES)
-            current = {rel for rel, _ in files}
             stored = await asyncio.to_thread(self._stored_hashes_sync, ws)
+            removed, to_process = await asyncio.to_thread(self._scan_files_sync, root, stored)
 
-            removed = set(stored) - current
             if removed:
-                await asyncio.to_thread(self._delete_files_sync, ws, sorted(removed))
+                await asyncio.to_thread(self._delete_files_sync, ws, removed)
                 self._cache.pop(ws, None)
 
             changed_any = False
-            for rel, path in files:
-                try:
-                    text = path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                digest = _hash(text)
-                if stored.get(rel) == digest:
-                    continue
-                chunks = _chunk_file(rel, text)
+            for rel, _text, digest, chunks in to_process:
                 if not chunks:
-                    # still record the hash so an unparseable file isn't re-read every search
                     await asyncio.to_thread(self._upsert_file_sync, ws, rel, digest, [])
                     continue
                 embedded = await self._embed_chunks([c[3] for c in chunks], rel)
@@ -209,6 +198,26 @@ class CodeIndex:
 
             if changed_any:
                 self._cache.pop(ws, None)
+
+    def _scan_files_sync(
+        self, root: Path, stored: dict[str, str]
+    ) -> tuple[list[str], list[tuple[str, str, str, list[tuple[int, int, str, str]]]]]:
+        """Scan workspace files, return (removed_paths, [(rel, text, digest, chunks)])."""
+        files = _collect_source_files(root, _MAX_FILES)
+        current = {rel for rel, _ in files}
+        removed = sorted(set(stored) - current)
+        to_embed = []
+        for rel, path in files:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            digest = _hash(text)
+            if stored.get(rel) == digest:
+                continue
+            chunks = _chunk_file(rel, text)
+            to_embed.append((rel, text, digest, chunks))
+        return removed, to_embed
 
     async def _embed_chunks(self, texts: list[str], rel: str) -> list[list[float]] | None:
         """Embed chunk texts (batched). Returns None if embedding is unavailable."""

@@ -142,8 +142,10 @@ class SQLiteLedgerWriter(LedgerWriter):
                 conn.execute(_FTS5_SCHEMA)
                 for trigger in _FTS5_TRIGGERS:
                     conn.execute(trigger)
-                # Rebuild index from existing data so existing ledgers get FTS5 too.
-                conn.execute("INSERT INTO ledger_fts(ledger_fts) VALUES('rebuild')")
+                has_fts = conn.execute("SELECT 1 FROM ledger_fts LIMIT 1").fetchone()
+                has_ledger = conn.execute("SELECT 1 FROM ledger LIMIT 1").fetchone()
+                if has_fts is None and has_ledger is not None:
+                    conn.execute("INSERT INTO ledger_fts(ledger_fts) VALUES('rebuild')")
 
     async def write(self, entry: LedgerEntry) -> str:
         try:

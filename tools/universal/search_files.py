@@ -311,14 +311,15 @@ def _iter_files(base: Path, globs: tuple[str, ...]):
             yield base
         return
     seen: set[Path] = set()
-    for glob in globs:
-        for file in base.rglob(glob):
-            if file in seen or not file.is_file():
+    for dirpath, dirnames, filenames in os.walk(base, topdown=True):
+        dirnames[:] = [d for d in dirnames if d not in _SKIPPED_DIR_NAMES and not d.startswith(".")]
+        for fname in filenames:
+            p = Path(dirpath) / fname
+            if p in seen or not p.is_file() or is_sensitive_path(p):
                 continue
-            if any(part in _SKIPPED_DIR_NAMES for part in file.relative_to(base).parts):
-                continue
-            seen.add(file)
-            yield file
+            if any(p.match(g) for g in globs):
+                seen.add(p)
+                yield p
 
 
 def _search_sync(base: Path, pattern: str, options: SearchOptions) -> ToolOutput:

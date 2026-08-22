@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -193,7 +194,10 @@ class EpisodeConsolidator:
 
     def _save_watermark(self, timestamp: datetime.datetime) -> None:
         try:
+            advanced = timestamp + datetime.timedelta(microseconds=1)
             self._watermark_path.parent.mkdir(parents=True, exist_ok=True)
-            self._watermark_path.write_text(timestamp.isoformat(), encoding="utf-8")
+            tmp = self._watermark_path.with_suffix(".tmp")
+            tmp.write_text(advanced.isoformat(), encoding="utf-8")
+            os.replace(tmp, self._watermark_path)
         except OSError:
             logger.warning("EpisodeConsolidator: failed to persist watermark", exc_info=True)

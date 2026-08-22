@@ -257,6 +257,18 @@ def _plan_blocks_or_legacy(content: str, old_string: str | None, new_string: str
 
 def _write(path: Path, old_content: str, new_content: str, blocks_applied: int) -> ToolOutput:
     try:
+        current_content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return ToolOutput(success=False, error=str(exc))
+    if current_content != old_content:
+        return ToolOutput(
+            success=False,
+            error=(
+                f"File `{path.name}` was modified concurrently on disk while awaiting approval. "
+                "Edit aborted to prevent data loss."
+            ),
+        )
+    try:
         path.write_text(new_content, encoding="utf-8")
     except OSError as exc:
         return ToolOutput(success=False, error=str(exc))

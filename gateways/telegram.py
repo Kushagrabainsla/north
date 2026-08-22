@@ -142,20 +142,31 @@ class TelegramGateway:
                 resp = await self._http.get(url, params=params, headers=_headers())
                 if resp.status_code == 200:
                     entries = resp.json()
-                    # Scan for the agent's actual response (agent_completed
-                    # carries the output; task_completed, classified_as_*,
-                    # skill_selected etc are just pipeline bookkeeping).
+                    # Scan for the final synthesized or completed task output first
                     for entry in entries:  # most-recent-first
                         action = entry.get("action", "")
-                        if action in ("agent_completed",) and entry.get("output"):
-                            logger.info("Task %s found agent_completed output at poll %d", task_id, i)
+                        is_completed_action = action in (
+                            "task_synthesis",
+                            "task_completed",
+                            "task_completed_with_failures",
+                        )
+                        if is_completed_action and entry.get("output"):
+                            logger.info("Task %s found %s output at poll %d", task_id, action, i)
                             return entry["output"]
+
                     # If the terminal entry says failed/cancelled, report that.
                     for entry in entries:
                         status = (entry.get("status") or "").lower()
                         if status in ("failed", "cancelled") and entry.get("output"):
                             logger.warning("Task %s terminal status=%s at poll %d", task_id, status, i)
                             return f"Task {status}: {entry['output']}"
+
+                    # Fallback to single agent completion
+                    for entry in entries:
+                        action = entry.get("action", "")
+                        if action in ("agent_completed",) and entry.get("output"):
+                            logger.info("Task %s found agent_completed output at poll %d", task_id, i)
+                            return entry["output"]
                 elif resp.status_code == 404:
                     return "Task not found."
             except httpx.RequestError:

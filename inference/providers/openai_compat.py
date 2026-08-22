@@ -436,7 +436,10 @@ class OpenAICompatibleProvider:
                         if token_callback is not None and not saw_tool_call:
                             await token_callback(text_token)
                     for tc in (delta.get("tool_calls") or []):
-                        saw_tool_call = True
+                        if not saw_tool_call:
+                            saw_tool_call = True
+                            if token_callback is not None and hasattr(token_callback, "reset") and content_parts:
+                                await token_callback.reset()
                         idx = tc.get("index", 0)
                         if idx not in tool_calls_acc:
                             tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}

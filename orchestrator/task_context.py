@@ -103,7 +103,7 @@ class TaskContextStore:
         # The poll is only a safety net for a missed notification (e.g. the
         # Condition was replaced by release_conditions mid-wait) - keep it slow
         # so waiting readers don't hammer the DB.
-        poll_interval = 10.0
+        poll_interval = 0.25
         condition = self._get_condition(task_id)
 
         while True:
