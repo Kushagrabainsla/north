@@ -7,8 +7,12 @@ values and return strings or Rich renderables. Kept out of `cli/main.py` and
 
 from __future__ import annotations
 
+import base64
 import re
+import subprocess
+import sys
 
+from rich.box import ROUNDED
 from rich.table import Table
 from rich.text import Text
 
@@ -132,3 +136,77 @@ def _build_steps_table(steps: list[tuple[str, str, bool]]) -> Table:
                 Text(label, style="dim"),
             )
     return t
+
+
+def _format_jobs_table(jobs: list[dict]) -> Table:
+    """Render a styled table of background and scheduled jobs."""
+    t = Table(title="Scheduled & Background Jobs", box=ROUNDED, header_style="bold cyan")
+    t.add_column("ID", style="dim", width=12)
+    t.add_column("Agent", style="white")
+    t.add_column("Task", style="bright_black", max_width=32)
+    t.add_column("Status", style="green")
+    t.add_column("Priority", justify="right")
+    t.add_column("Scheduled / Created", style="dim")
+    if not jobs:
+        t.add_row("-", "none", "No active or scheduled jobs", "-", "-", "-")
+        return t
+    for j in jobs:
+        status = j.get("status", "pending")
+        status_style = "green" if status == "completed" else "yellow" if status == "running" else "dim"
+        t.add_row(
+            str(j.get("job_id", ""))[:10],
+            str(j.get("agent", "")),
+            str(j.get("task", ""))[:30],
+            Text(status, style=status_style),
+            str(j.get("priority", 0)),
+            str(j.get("scheduled_at") or j.get("created_at") or "")[:19].replace("T", " "),
+        )
+    return t
+
+
+def _format_help_table(commands: dict[str, str]) -> Table:
+    """Render a styled help command palette table."""
+    t = Table(title="Available Slash Commands & Keybindings", box=ROUNDED, header_style="bold cyan")
+    t.add_column("Command / Key", style="cyan", width=18)
+    t.add_column("Description", style="white")
+    for cmd, desc in commands.items():
+        t.add_row(cmd, desc)
+    t.add_section()
+    t.add_row("Ctrl+D", "Toggle push-to-talk voice dictation (Whisper)")
+    t.add_row("Ctrl+G", "Open full prompt in external $EDITOR (vi/nano)")
+    t.add_row("Ctrl+Y", "Copy last assistant response to clipboard")
+    t.add_row("Ctrl+C", "Interrupt running task (press twice to exit)")
+    t.add_row("Tab", "Accept ghost-text autocomplete suggestion")
+    t.add_row("Up / Down", "Navigate prompt input history")
+    return t
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Copy text to the system clipboard via OSC 52 or platform utilities."""
+    if not text:
+        return False
+    # Attempt OSC 52 escape sequence for modern terminals
+    try:
+        encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        osc52 = f"\033]52;c;{encoded}\a"
+        sys.stdout.write(osc52)
+        sys.stdout.flush()
+    except Exception:
+        pass
+    # Also attempt platform CLI tool
+    if sys.platform == "darwin":
+        try:
+            p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+            p.communicate(input=text.encode("utf-8"))
+            return True
+        except Exception:
+            pass
+    elif sys.platform.startswith("linux"):
+        for tool in (["wl-copy"], ["xclip", "-selection", "clipboard"]):
+            try:
+                p = subprocess.Popen(tool, stdin=subprocess.PIPE)
+                p.communicate(input=text.encode("utf-8"))
+                return True
+            except Exception:
+                continue
+    return True

@@ -21,6 +21,7 @@ from pathlib import Path
 import httpx
 from rich.markdown import Markdown as RichMarkdown
 from rich.padding import Padding as RichPadding
+from rich.syntax import Syntax as RichSyntax
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -38,10 +39,13 @@ from cli.constants import (
 )
 from cli.formatting import (
     _compute_suggestion,
+    _copy_to_clipboard,
     _fill_bar,
     _fmt_elapsed,
     _fmt_params,
     _fmt_tokens,
+    _format_help_table,
+    _format_jobs_table,
     _reconstruct_task_output,
     _short_model,
     _strip_markup,
@@ -243,6 +247,7 @@ class NorthApp(App[None]):
     BINDINGS = [
         Binding("ctrl+c", "interrupt", "Interrupt", priority=True),
         Binding("ctrl+d", "toggle_dictation", "Dictate", priority=True),
+        Binding("ctrl+y", "copy_last_response", "Copy", priority=True),
         Binding("ctrl+g", "edit_in_editor", "Editor", show=False),
         Binding("up", "history_prev", "Previous", show=False),
         Binding("down", "history_next", "Next", show=False),
@@ -268,6 +273,10 @@ class NorthApp(App[None]):
         self._token_buffer: dict[str, str] = {}
         self._reasoning_buffer: dict[str, str] = {}  # model's private chain-of-thought, shown dimmed
         self._streaming_active: set[str] = set()
+        self._last_assistant_response: str = ""
+        self._stream_start_times: dict[str, float] = {}
+        self._stream_token_counts: dict[str, int] = {}
+        self._streaming_tok_per_sec: float = 0.0
         self._approval_pending: dict | None = None
         # Guards against a duplicate prompt for the same card. If two SSE
         # clients are connected (e.g. TUI + a `north "prompt"` shell, or a
@@ -313,6 +322,13 @@ class NorthApp(App[None]):
             "task_cancelled": self._on_task_cancelled,
             "approval_required": self._on_approval_required,
             "question_required": self._on_question_required,
+            "design_phase": self._on_design_phase,
+            "plan_seeded": self._on_plan_seeded,
+            "conductor_fix_round": self._on_conductor_fix_round,
+            "auto_verify_started": self._on_auto_verify_started,
+            "auto_verify": self._on_auto_verify,
+            "dod_evaluated": self._on_dod_evaluated,
+            "stream_reset": self._on_stream_reset,
         }
 
         # ── session metrics (drive the live status bar) ──────────────────────
@@ -467,7 +483,8 @@ class NorthApp(App[None]):
 
     def _refresh_hint(self) -> None:
         hint = (
-            f"  {self._strategy}  ·  ↑↓ history  ·  /commands  ·  ctrl+d dictate  ·  ctrl+g editor  ·  ctrl+c interrupt"
+            f"  {self._strategy}  ·  ↑↓ history  ·  /commands  ·  ctrl+y copy"
+            "  ·  ctrl+d dictate  ·  ctrl+g editor  ·  ctrl+c interrupt"
         )
         self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
 
@@ -484,6 +501,7 @@ class NorthApp(App[None]):
         model = _short_model(self._model) if self._model else " - "
         tokens = f"{_fmt_tokens(self._session_tokens)}/{_fmt_tokens(ctx_max)}" if ctx_max else ""
         bar = _fill_bar(fraction) if ctx_max else ""
+        speed = f"⚡ {int(self._streaming_tok_per_sec)} t/s" if self._streaming_tok_per_sec >= 1.0 else ""
         cost = f"${self._session_cost:.4f}"
         compactions = f"⊕{self._compactions}" if self._compactions else ""
         active = sum(1 for _ in self._user_task_ids)
@@ -495,6 +513,7 @@ class NorthApp(App[None]):
         segments: list[tuple[str, int]] = [
             (f"[#6cb6ff]{model}[/#6cb6ff]", 5),
             (f"{tokens} {bar}".strip(), 4),
+            (f"[cyan]{speed}[/cyan]" if speed else "", 4),
             (cost, 3),
             (tasks, 3),
             (compactions, 1),
@@ -674,6 +693,15 @@ class NorthApp(App[None]):
         text = data.get("text", "")
         if not text:
             return
+        now = time.monotonic()
+        if task_id not in self._stream_start_times:
+            self._stream_start_times[task_id] = now
+            self._stream_token_counts[task_id] = 0
+        self._stream_token_counts[task_id] += max(1, len(text) // 4)
+        elapsed = now - self._stream_start_times[task_id]
+        if elapsed > 0.2:
+            self._streaming_tok_per_sec = self._stream_token_counts[task_id] / elapsed
+
         self._token_buffer[task_id] = self._token_buffer.get(task_id, "") + text
         # Rough running token estimate (≈4 chars/token) for the status bar.
         self._session_tokens += max(1, len(text) // 4)
@@ -684,6 +712,7 @@ class NorthApp(App[None]):
             self._log("  [cyan]◆[/cyan]  [white]north[/white]")
             self._start_streaming()
         self._update_streaming(task_id)
+        self._render_status_bar()
 
     async def _on_reasoning(self, task_id: str, data: dict) -> None:
         # The model's private chain-of-thought. Show only a dim, single-line tail
@@ -706,6 +735,9 @@ class NorthApp(App[None]):
         self._session_cost += float(data.get("cost_usd", 0.0) or 0.0)
         output = self._token_buffer.pop(task_id, "")
         self._reasoning_buffer.pop(task_id, None)
+        self._stream_start_times.pop(task_id, None)
+        self._stream_token_counts.pop(task_id, None)
+        self._streaming_tok_per_sec = 0.0
         was_streaming = task_id in self._streaming_active
         self._streaming_active.discard(task_id)
 
@@ -720,6 +752,9 @@ class NorthApp(App[None]):
             # branch (output fetched whole from the ledger) rendering tables
             # and lists identically rather than flattening to prose.
             self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
+
+        if output:
+            self._last_assistant_response = output
 
         # Refresh strategy in case the user issued a strategy command.
         self._strategy = _read_power(self._settings_path)
@@ -757,6 +792,9 @@ class NorthApp(App[None]):
         self._streaming_active.discard(task_id)
         self._token_buffer.pop(task_id, None)
         self._reasoning_buffer.pop(task_id, None)
+        self._stream_start_times.pop(task_id, None)
+        self._stream_token_counts.pop(task_id, None)
+        self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
         error = data.get("error", "Task failed.")
         self._set_status("")
@@ -772,6 +810,9 @@ class NorthApp(App[None]):
         self._streaming_active.discard(task_id)
         self._token_buffer.pop(task_id, None)
         self._reasoning_buffer.pop(task_id, None)
+        self._stream_start_times.pop(task_id, None)
+        self._stream_token_counts.pop(task_id, None)
+        self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
         self._set_status("")
         self._user_task_ids.discard(task_id)
@@ -796,9 +837,68 @@ class NorthApp(App[None]):
             await self._submit_approval("1")
             return
         self._log("  [yellow]◆[/yellow]  [yellow]approval required[/yellow]")
-        self._log_rich(RichText("    " + data.get("message", ""), style="white"))
+        msg = data.get("message", "")
+        # Check if the message contains a unified diff code block
+        if "```diff" in msg:
+            pre, _, rest = msg.partition("```diff\n")
+            diff_body, _, post = rest.partition("```")
+            if pre.strip():
+                self._log_rich(RichText("    " + pre.strip(), style="white"))
+            self._log_rich(
+                RichPadding(
+                    RichSyntax(diff_body.strip(), "diff", background_color="default", line_numbers=True),
+                    (0, 0, 0, 4),
+                )
+            )
+            if post.strip():
+                self._log_rich(RichText("    " + post.strip(), style="white"))
+        else:
+            self._log_rich(RichText("    " + msg, style="white"))
+
         for i, opt in enumerate(options, 1):
             self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
+
+    async def _on_design_phase(self, task_id: str, data: dict) -> None:
+        step = data.get("step", "")
+        self._set_status(f"design phase: {step}…")
+        self._log(f"  [cyan]◆[/cyan]  [white]design phase[/white]  [bright_black]{step}[/bright_black]")
+
+    async def _on_plan_seeded(self, task_id: str, data: dict) -> None:
+        tasks = data.get("tasks", 0)
+        self._log(f"  [cyan]◆[/cyan]  [white]plan seeded[/white]  [bright_black]{tasks} task steps[/bright_black]")
+
+    async def _on_conductor_fix_round(self, task_id: str, data: dict) -> None:
+        round_num = data.get("round", 1)
+        self._set_status(f"reviewer fix round {round_num}…")
+        self._log(f"  [yellow]◆[/yellow]  [yellow]reviewer fix round {round_num}[/yellow]")
+
+    async def _on_auto_verify_started(self, task_id: str, data: dict) -> None:
+        cmd = data.get("command", "")
+        self._set_status(f"verifying ({cmd})…")
+        self._log(f"    [bright_black]→[/bright_black]  [cyan]auto-verify[/cyan] [bright_black]({cmd})[/bright_black]")
+
+    async def _on_auto_verify(self, task_id: str, data: dict) -> None:
+        cmd = data.get("command", "")
+        passed = data.get("passed", False)
+        if passed:
+            self._log(f"    [dim green]✓  auto-verify passed ({cmd})[/dim green]")
+        else:
+            self._log(f"    [dim red]✗  auto-verify failed ({cmd})[/dim red]")
+
+    async def _on_dod_evaluated(self, task_id: str, data: dict) -> None:
+        passed = data.get("passed", False)
+        reasons = data.get("reasons") or []
+        summary = ", ".join(reasons) if reasons else ("met" if passed else "unmet")
+        style = "dim green" if passed else "dim yellow"
+        icon = "✓" if passed else "!"
+        self._log(f"    [{style}]{icon}  Definition of Done: {summary}[/{style}]")
+
+    async def _on_stream_reset(self, task_id: str, data: dict) -> None:
+        # Reset token buffer when tool calling is engaged mid-thought
+        self._token_buffer.pop(task_id, None)
+        self._reasoning_buffer.pop(task_id, None)
+        if task_id in self._streaming_active:
+            self.query_one("#streaming", Static).update("")
 
     async def _on_question_required(self, task_id: str, data: dict) -> None:
         # Reuses the pending-card input path; a free-form answer is allowed.
@@ -1061,11 +1161,43 @@ class NorthApp(App[None]):
         elif cmd == "/agents":
             agents = await self._fetch_agents()
             self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))
+        elif cmd == "/jobs":
+            try:
+                async with self._http() as c:
+                    r = await c.get(f"{self.base_url}/orchestrator/jobs", headers=self.headers, timeout=5.0)
+                    jobs = r.json() if r.status_code == 200 else []
+                    self._log_rich(_format_jobs_table(jobs))
+            except Exception as exc:
+                self._log(f"  [red]error fetching jobs: {exc}[/red]")
+        elif cmd == "/context":
+            try:
+                async with self._http() as c:
+                    r = await c.get(f"{self.base_url}/orchestrator/context/user", headers=self.headers, timeout=5.0)
+                    user_doc = r.text if r.status_code == 200 else ""
+                    self._log("  [cyan]◆[/cyan]  [white]context documents[/white]")
+                    self._log(f"    [bright_black]user.md[/bright_black] ({len(user_doc)} chars)")
+                    self._log(
+                        "    [bright_black]Use 'north context show <doc>' or 'north context edit <doc>'[/bright_black]"
+                    )
+            except Exception as exc:
+                self._log(f"  [red]error fetching context: {exc}[/red]")
         elif cmd == "/help":
-            for name, desc in _SLASH_COMMANDS.items():
-                self._log(f"  [cyan]{name}[/cyan]  [bright_black]{desc}[/bright_black]")
+            self._log_rich(_format_help_table(_SLASH_COMMANDS))
         else:
             self._log(f"  [bright_black]unknown command: {cmd} - try /help[/bright_black]")
+
+    # ── clipboard copy (Ctrl+Y) ──────────────────────────────────────────────
+
+    def action_copy_last_response(self) -> None:
+        """Copy the last assistant response to the clipboard."""
+        if not self._last_assistant_response:
+            self._log("  [dim]no previous response to copy[/dim]")
+            return
+        ok = _copy_to_clipboard(self._last_assistant_response)
+        if ok:
+            self._log("  [bright_black]✓ copied response to clipboard[/bright_black]")
+        else:
+            self._log("  [dim]failed to copy to clipboard[/dim]")
 
     # ── history navigation ────────────────────────────────────────────────────
 

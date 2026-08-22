@@ -25,6 +25,16 @@ All notable changes to north are documented here.
   - Added `clear_all(task_id)` to `FailureHandler`.
   - Updated `TelegramGateway._get_task_result` to prioritize terminal records (`task_synthesis`, `task_completed`) over intermediate agent logs.
 
+### North TUI Modernization & Cockpit Upgrades
+- **Syntax-Highlighted Unified Diff Approval Cards** (`cli/tui.py`): Automatically parses diff blocks in approval prompts and renders them using `rich.syntax.Syntax` with additions, deletions, line numbers, and clean margins.
+- **Real-Time Streaming Throughput & Latency Meter** (`cli/tui.py`, `cli/formatting.py`): Computes tokens/sec (`tok/s`) dynamically during generation and surfaces it in the live `#statusbar` (`⚡ 65 t/s`).
+- **Lifecycle & Execution Plan Progress Tracking** (`cli/tui.py`): Added reactive listeners for `design_phase`, `plan_seeded`, `conductor_fix_round`, `auto_verify_started`, `auto_verify`, `dod_evaluated`, and `stream_reset`.
+- **Interactive Tabular Slash Commands** (`cli/tui.py`, `cli/formatting.py`, `cli/constants.py`):
+  - `/jobs`: Queries background/scheduled jobs and formats them into a styled Rich table.
+  - `/context`: Inspects active context files (`user.md`, etc.).
+  - `/help`: Displays a complete command and hotkey reference palette.
+- **Quick-Copy Shortcut (`Ctrl+Y`)** (`cli/tui.py`, `cli/formatting.py`): One-key copy of the latest assistant response directly to system clipboard via OSC 52 escape sequences with platform fallbacks.
+
 ### Added
 - **Dynamic Capability Model Pools & Multi-Provider Discovery** (`inference/capability.py`, `inference/dispatcher.py`, `inference/model_policy.py`, `inference/models.py`, `inference/providers/groq.py`, `inference/providers/openai_compat.py`, `inference/providers/openrouter.py`, `config/settings.py`, `orchestrator/app.py`, `tests/unit/inference/test_capability_pools.py`):
   - **Dynamic Multi-Provider Discovery & Co-Equality**: Direct providers (Groq, Gemini, OpenCode Zen) and OpenRouter now participate as co-equal catalog sources in a unified registry via concurrent `asyncio.gather(..., return_exceptions=True)` polling of free `/models` endpoints, eliminating static fallback cascades.

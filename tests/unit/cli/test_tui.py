@@ -178,3 +178,88 @@ async def test_live_stream_uses_same_markdown_engine_as_final_message():
         await app._handle_event("task_completed", {"task_id": tid, "cost_usd": 0.0})
         await pilot.pause()
         assert app.query_one("#streaming-wrap").display is False  # handed off to the log
+
+
+async def test_approval_diff_syntax_highlighted():
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        tid = "t1"
+        app._user_task_ids.add(tid)
+        diff_msg = "Apply changes?\n```diff\n--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-old\n+new\n```"
+        await app._handle_event(
+            "approval_required",
+            {"task_id": tid, "card_id": "c1", "message": diff_msg, "options": ["Approve", "Reject"]},
+        )
+        await pilot.pause()
+        assert app._approval_pending is not None
+        assert app._pending_card_id == "c1"
+
+
+async def test_slash_jobs_and_context_and_help():
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        # Test /help
+        await app._handle_slash("/help")
+        await pilot.pause()
+        # Test /jobs
+        await app._handle_slash("/jobs")
+        await pilot.pause()
+        # Test /context
+        await app._handle_slash("/context")
+        await pilot.pause()
+
+
+async def test_streaming_tok_per_sec_throughput():
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        tid = "t_speed"
+        app._user_task_ids.add(tid)
+        # First token registers start time
+        await app._handle_event("token", {"task_id": tid, "text": "hello "})
+        await pilot.pause()
+        assert tid in app._stream_start_times
+        # Subsequent tokens update token count
+        await app._handle_event("token", {"task_id": tid, "text": "world this is a live test "})
+        await pilot.pause()
+        assert app._stream_token_counts[tid] > 0
+        # Complete task cleans up speed tracking
+        await app._handle_event("task_completed", {"task_id": tid, "cost_usd": 0.0})
+        await pilot.pause()
+        assert tid not in app._stream_start_times
+        assert app._streaming_tok_per_sec == 0.0
+        assert app._last_assistant_response != ""
+
+
+async def test_copy_last_response_action():
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        # With no response yet
+        app.action_copy_last_response()
+        # With a completed response
+        app._last_assistant_response = "Here is the response code"
+        app.action_copy_last_response()
+        await pilot.pause()
+
+
+async def test_lifecycle_extended_events_render():
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        tid = "t_life"
+        app._user_task_ids.add(tid)
+        events = [
+            ("design_phase", {"step": "research"}),
+            ("plan_seeded", {"tasks": 4}),
+            ("conductor_fix_round", {"round": 1}),
+            ("auto_verify_started", {"command": "pytest -q"}),
+            ("auto_verify", {"command": "pytest -q", "passed": True}),
+            ("dod_evaluated", {"passed": True, "reasons": ["Tests passed"]}),
+            ("stream_reset", {}),
+        ]
+        for ev, extra in events:
+            await app._handle_event(ev, {"task_id": tid, **extra})
+            await pilot.pause()
