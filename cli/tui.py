@@ -320,6 +320,9 @@ class NorthApp(App[None]):
             "task_completed": self._on_task_completed,
             "task_failed": self._on_task_failed,
             "task_cancelled": self._on_task_cancelled,
+            "task_skipped": self._on_task_skipped,
+            "task_rejected": self._on_task_rejected,
+            "task_paused": self._on_task_paused,
             "approval_required": self._on_approval_required,
             "question_required": self._on_question_required,
             "design_phase": self._on_design_phase,
@@ -820,6 +823,47 @@ class NorthApp(App[None]):
         self._render_status_bar()
         self._write_rule()
 
+    async def _on_task_skipped(self, task_id: str, data: dict) -> None:
+        if task_id in self._streaming_active:
+            self._finish_streaming(task_id, "")
+        self._streaming_active.discard(task_id)
+        self._token_buffer.pop(task_id, None)
+        self._reasoning_buffer.pop(task_id, None)
+        self._stream_start_times.pop(task_id, None)
+        self._stream_token_counts.pop(task_id, None)
+        self._streaming_tok_per_sec = 0.0
+        self._task_tool_activity.pop(task_id, None)
+        reason = data.get("reason", "Task skipped.")
+        self._set_status("")
+        self._user_task_ids.discard(task_id)
+        self._log("  [yellow]◆[/yellow]  [yellow]task skipped[/yellow]")
+        self._log_rich(RichText("    " + reason, style="yellow"))
+        self._render_status_bar()
+        self._write_rule()
+
+    async def _on_task_rejected(self, task_id: str, data: dict) -> None:
+        if task_id in self._streaming_active:
+            self._finish_streaming(task_id, "")
+        self._streaming_active.discard(task_id)
+        self._token_buffer.pop(task_id, None)
+        self._reasoning_buffer.pop(task_id, None)
+        self._stream_start_times.pop(task_id, None)
+        self._stream_token_counts.pop(task_id, None)
+        self._streaming_tok_per_sec = 0.0
+        self._task_tool_activity.pop(task_id, None)
+        reason = data.get("reason", "Task rejected.")
+        self._set_status("")
+        self._user_task_ids.discard(task_id)
+        self._log("  [yellow]◆[/yellow]  [yellow]task rejected[/yellow]")
+        self._log_rich(RichText("    " + reason, style="yellow"))
+        self._render_status_bar()
+        self._write_rule()
+
+    async def _on_task_paused(self, task_id: str, data: dict) -> None:
+        self._set_status("paused")
+        self._log("  [dim]task paused[/dim]")
+        self._render_status_bar()
+
     async def _on_approval_required(self, task_id: str, data: dict) -> None:
         card_id = data.get("card_id", "")
         # Ignore a repeat of a card we're already prompting for (see
@@ -1062,6 +1106,9 @@ class NorthApp(App[None]):
         if not text:
             return
 
+        if text.startswith("north ") and not self._approval_pending:
+            text = "/" + text[6:].strip()
+
         if text.startswith("/") and not self._approval_pending:
             await self._handle_slash(text)
             return
@@ -1170,17 +1217,52 @@ class NorthApp(App[None]):
             except Exception as exc:
                 self._log(f"  [red]error fetching jobs: {exc}[/red]")
         elif cmd == "/context":
-            try:
-                async with self._http() as c:
-                    r = await c.get(f"{self.base_url}/orchestrator/context/user", headers=self.headers, timeout=5.0)
-                    user_doc = r.text if r.status_code == 200 else ""
-                    self._log("  [cyan]◆[/cyan]  [white]context documents[/white]")
-                    self._log(f"    [bright_black]user.md[/bright_black] ({len(user_doc)} chars)")
-                    self._log(
-                        "    [bright_black]Use 'north context show <doc>' or 'north context edit <doc>'[/bright_black]"
-                    )
-            except Exception as exc:
-                self._log(f"  [red]error fetching context: {exc}[/red]")
+            parts = text.split()
+            target_doc = None
+            if len(parts) == 2 and parts[1] not in ("show", "edit"):
+                target_doc = parts[1].removesuffix(".md")
+            elif len(parts) >= 3 and parts[1] == "show":
+                target_doc = parts[2].removesuffix(".md")
+
+            if target_doc:
+                try:
+                    async with self._http() as c:
+                        r = await c.get(
+                            f"{self.base_url}/orchestrator/context/{target_doc}",
+                            headers=self.headers,
+                            timeout=5.0,
+                        )
+                        if r.status_code == 200:
+                            content = r.text.strip()
+                            self._log(f"  [cyan]◆[/cyan]  [white]{target_doc}.md[/white]")
+                            if content:
+                                self._log_rich(RichPadding(RichMarkdown(content), (0, 0, 0, 4)))
+                            else:
+                                self._log("    [dim](empty document)[/dim]")
+                        else:
+                            self._log(f"  [yellow]context document '{target_doc}' not found[/yellow]")
+                except Exception as exc:
+                    self._log(f"  [red]error fetching context '{target_doc}': {exc}[/red]")
+            else:
+                try:
+                    async with self._http() as c:
+                        docs = ["user", "judgement_rules", "north_stars", "soul"]
+                        self._log("  [cyan]◆[/cyan]  [white]context documents[/white]")
+                        for doc in docs:
+                            r = await c.get(
+                                f"{self.base_url}/orchestrator/context/{doc}",
+                                headers=self.headers,
+                                timeout=5.0,
+                            )
+                            if r.status_code == 200 and r.text.strip():
+                                self._log(
+                                    f"    [white]{doc}.md[/white] [bright_black]({len(r.text)} chars)[/bright_black]"
+                                )
+                        self._log(
+                            "    [bright_black]Type '/context <doc>' or '/context show <doc>' to inspect[/bright_black]"
+                        )
+                except Exception as exc:
+                    self._log(f"  [red]error fetching context: {exc}[/red]")
         elif cmd == "/help":
             self._log_rich(_format_help_table(_SLASH_COMMANDS))
         else:
