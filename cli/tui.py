@@ -1263,6 +1263,27 @@ class NorthApp(App[None]):
                         )
                 except Exception as exc:
                     self._log(f"  [red]error fetching context: {exc}[/red]")
+        elif cmd == "/models":
+            try:
+                async with self._http() as c:
+                    r = await c.get(
+                        f"{self.base_url}/orchestrator/inference/models",
+                        headers=self.headers,
+                        timeout=5.0,
+                    )
+                    pools = r.json() if r.status_code == 200 else {}
+                    self._log("  [cyan]◆[/cyan]  [white]discovered models per pool[/white]")
+                    for pool_name, pool_data in pools.items():
+                        models = pool_data.get("models", [])
+                        if models:
+                            sample = ", ".join(m["id"] for m in models[:4])
+                            more = f" (+{len(models) - 4} more)" if len(models) > 4 else ""
+                            self._log(
+                                f"    [white]{pool_name}[/white] "
+                                f"[bright_black]({len(models)}): {sample}{more}[/bright_black]"
+                            )
+            except Exception as exc:
+                self._log(f"  [red]error fetching models: {exc}[/red]")
         elif cmd == "/limits":
             from config.settings import settings
             from inference.rate_limit_status import format_status_table

@@ -1089,9 +1089,10 @@ def inference_costs(
     _console.print()
 
 
+@app.command("models")
 @inference_app.command("models")
 def inference_models() -> None:
-    """Show current model pool state."""
+    """Show current model pool state and discovered models."""
     response = _api("GET", "/orchestrator/inference/models")
     pools = response.json()
     _console.print()
