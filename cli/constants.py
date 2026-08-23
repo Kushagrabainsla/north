@@ -114,6 +114,11 @@ _FILL_COLOURS = (
 # Slash commands handled locally by the TUI (never sent to the orchestrator).
 _SLASH_COMMANDS: dict[str, str] = {
     "/help": "show available commands",
+    "/thoughts": "toggle live reasoning and thoughts drawer (Ctrl+T)",
+    "/tools": "inspect recent tool calls, arguments, and diffs (Ctrl+D)",
+    "/inspect": "alias for /tools (Ctrl+D)",
+    "/plan": "inspect execution plan and DoD criteria (Ctrl+P)",
+    "/steer": "steer active agent with guidance, e.g. '/steer use asyncpg'",
     "/models": "list discovered models across capability pools",
     "/limits": "inspect active rate limits and cooldowns",
     "/queue": "inspect active tasks and queued background jobs",

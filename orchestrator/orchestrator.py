@@ -873,6 +873,24 @@ class Orchestrator:
             },
         )
 
+    async def emit_steer(self, task_id: str, instruction: str) -> None:
+        """Publish an in-flight steering directive to an active task."""
+        await self._stream_manager.emit(
+            task_id,
+            "task_steered",
+            {"task_id": task_id, "instruction": instruction, "timestamp": format_timestamp(utcnow())},
+        )
+        await self._write_ledger(
+            LedgerEntry.new(
+                source=LedgerSource.CLARIFICATION,
+                task_id=task_id,
+                agent="user",
+                action="task_steered",
+                output=instruction,
+                status=LedgerStatus.COMPLETED,
+            )
+        )
+
     @property
     def active_task_ids(self) -> frozenset[str]:
         """Ids of tasks currently in flight (asyncio tasks still running)."""

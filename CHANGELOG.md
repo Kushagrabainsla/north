@@ -4,6 +4,11 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **Interactive TUI Cockpit & Live Observability Upgrades** (`cli/tui.py`, `cli/constants.py`, `cli/formatting.py`, `orchestrator/orchestrator.py`, `orchestrator/api_router.py`, `tests/unit/cli/test_tui_interactive_features.py`):
+  - **Collapsible Live Thinking & Reasoning Drawer (`Ctrl+T` / `/thoughts`)**: Real-time token streaming and un-truncated model chain-of-thought display with live token count, elapsed duration, and toggleable view. Thought history is preserved across turns in a rolling buffer.
+  - **Interactive Tool & Diff Inspector Modal (`Ctrl+I` / `/tools` / `/inspect`)**: Two-pane modal screen listing recent tool calls with status indicators, execution timings, full argument JSON, syntax-highlighted diffs, and stdout/stderr output.
+  - **Execution Plan & Step Tree Cockpit Modal (`Ctrl+P` / `/plan`)**: Live subtask step cockpit rendering real-time execution progress, assigned agents, conductor fix rounds, and Definition of Done (DoD) evaluations.
+  - **In-Flight Steering & Quick Action Menu (`Esc` / `/steer <directive>`)**: Instant task steering dialog allowing users to inject runtime guidance into active agents without killing or restarting tasks. Supports `POST /orchestrator/steer` with audit-trail ledger recording.
 - **Adversarial Hardening & Architectural Reliability (4 Fundamental Fix Buckets)**:
   - **Bucket 1: State Representation & Context Continuity** (`agents/context_compaction.py`, `memory/facts.py`, `memory/injection.py`, `orchestrator/orchestrator.py`):
     - Multi-round compaction now preserves previous auto-compacted summaries (`## Earlier context (auto-compacted)`) in full, eliminating long-task amnesia.

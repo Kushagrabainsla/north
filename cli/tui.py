@@ -25,10 +25,11 @@ from rich.syntax import Syntax as RichSyntax
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
+from textual.screen import ModalScreen
 from textual.suggester import Suggester
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Button, Input, Label, ListItem, ListView, RichLog, Static
 
 from cli.constants import (
     _REASONING_PREVIEW_CHARS,
@@ -46,10 +47,365 @@ from cli.formatting import (
     _fmt_tokens,
     _format_help_table,
     _format_jobs_table,
+    _format_plan_table,
     _reconstruct_task_output,
     _short_model,
     _strip_markup,
 )
+
+
+class ToolInspectorModal(ModalScreen[None]):
+    """Interactive modal to inspect recent tool calls, parameters, stdout, and diffs."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close", priority=True),
+        Binding("q", "dismiss", "Close", show=False),
+    ]
+
+    CSS = """
+    ToolInspectorModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+
+    #tool-modal-box {
+        width: 90%;
+        height: 85%;
+        background: #0d1117;
+        border: thick #58a6ff;
+        layout: vertical;
+        padding: 1 2;
+    }
+
+    #tool-modal-title {
+        width: 100%;
+        height: 2;
+        color: #58a6ff;
+        text-style: bold;
+        border-bottom: solid #30363d;
+    }
+
+    #tool-modal-body {
+        width: 100%;
+        height: 1fr;
+        layout: horizontal;
+    }
+
+    #tool-modal-list {
+        width: 32%;
+        height: 100%;
+        border-right: solid #30363d;
+        scrollbar-size: 1 1;
+    }
+
+    #tool-modal-detail {
+        width: 68%;
+        height: 100%;
+        padding: 0 1;
+        scrollbar-size: 1 1;
+    }
+
+    #tool-modal-footer {
+        width: 100%;
+        height: 2;
+        color: #8b949e;
+        border-top: solid #30363d;
+    }
+    """
+
+    def __init__(self, tool_history: list[dict]) -> None:
+        super().__init__()
+        self._history = tool_history
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="tool-modal-box"):
+            yield Static("  [bold #58a6ff]🔍 Tool & Diff Inspector[/bold #58a6ff] [bright_black](Esc/q to close)[/bright_black]", id="tool-modal-title")
+            with Horizontal(id="tool-modal-body"):
+                yield ListView(id="tool-modal-list")
+                with VerticalScroll(id="tool-modal-detail"):
+                    yield Static("Select a tool call from the left to inspect its parameters, output, and diffs.", id="tool-detail-content")
+            yield Static("  [dim]↑/↓ Navigate list · Enter to select · Esc to close[/dim]", id="tool-modal-footer")
+
+    def on_mount(self) -> None:
+        list_view = self.query_one("#tool-modal-list", ListView)
+        if not self._history:
+            list_view.append(ListItem(Label("  No tool calls recorded yet.")))
+            return
+        for i, item in enumerate(reversed(self._history)):
+            tool = item.get("tool", "unknown")
+            success = item.get("success", True)
+            icon = "[green]✓[/green]" if success else "[red]✗[/red]"
+            dur = item.get("duration")
+            dur_str = f" ({dur:.2f}s)" if dur is not None else ""
+            list_view.append(ListItem(Label(f" {icon} [bold white]{tool}[/bold white][bright_black]{dur_str}[/bright_black]"), name=str(len(self._history) - 1 - i)))
+        if self._history:
+            self._render_tool_detail(self._history[-1])
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.item and event.item.name:
+            try:
+                idx = int(event.item.name)
+                if 0 <= idx < len(self._history):
+                    self._render_tool_detail(self._history[idx])
+            except ValueError:
+                pass
+
+    def _render_tool_detail(self, item: dict) -> None:
+        detail = self.query_one("#tool-detail-content", Static)
+        tool = item.get("tool", "unknown")
+        success = item.get("success", True)
+        params = item.get("params", {})
+        result = item.get("result") or item.get("formatted") or item.get("output") or ""
+        error = item.get("error") or ""
+        dur = item.get("duration")
+        dur_str = f"{dur:.3f}s" if dur is not None else "n/a"
+
+        header_color = "#3fb950" if success else "#f85149"
+        status_text = "SUCCESS" if success else "FAILED"
+
+        lines = [
+            f"[bold {header_color}]▶ Tool: {tool}[/bold {header_color}]  [bright_black]({status_text} · {dur_str})[/bright_black]",
+            "",
+            "[bold white]Parameters:[/bold white]",
+        ]
+        formatted_params = json.dumps(params, indent=2, ensure_ascii=False) if params else "{}"
+        lines.append(f"[bright_black]{formatted_params}[/bright_black]")
+        lines.append("")
+
+        old_string = params.get("old_string")
+        new_string = params.get("new_string")
+        if old_string is not None and new_string is not None:
+            lines.append("[bold cyan]Planned Replacement / Diff:[/bold cyan]")
+            lines.append(f"[red]- {old_string}[/red]")
+            lines.append(f"[green]+ {new_string}[/green]")
+            lines.append("")
+        elif new_string and "<<<<<<< SEARCH" in new_string:
+            lines.append("[bold cyan]SEARCH / REPLACE Blocks:[/bold cyan]")
+            lines.append(f"[bright_black]{new_string}[/bright_black]")
+            lines.append("")
+
+        if error:
+            lines.append("[bold red]Error / Traceback:[/bold red]")
+            lines.append(f"[red]{error}[/red]")
+            lines.append("")
+
+        if result:
+            lines.append("[bold white]Output / Result:[/bold white]")
+            lines.append(f"[bright_black]{result}[/bright_black]")
+
+        detail.update("\n".join(lines))
+
+
+class PlanCockpitModal(ModalScreen[None]):
+    """Interactive modal to inspect the task execution plan, subtasks, and DoD criteria."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close", priority=True),
+        Binding("q", "dismiss", "Close", show=False),
+    ]
+
+    CSS = """
+    PlanCockpitModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+
+    #plan-modal-box {
+        width: 85%;
+        height: 80%;
+        background: #0d1117;
+        border: thick #3fb950;
+        layout: vertical;
+        padding: 1 2;
+    }
+
+    #plan-modal-title {
+        width: 100%;
+        height: 2;
+        color: #3fb950;
+        text-style: bold;
+        border-bottom: solid #30363d;
+    }
+
+    #plan-modal-body {
+        width: 100%;
+        height: 1fr;
+        scrollbar-size: 1 1;
+        padding: 1 0;
+    }
+
+    #plan-modal-footer {
+        width: 100%;
+        height: 2;
+        color: #8b949e;
+        border-top: solid #30363d;
+    }
+    """
+
+    def __init__(self, plan_steps: list[dict], dod_results: list[dict], active_phase: str = "") -> None:
+        super().__init__()
+        self._plan_steps = plan_steps
+        self._dod_results = dod_results
+        self._active_phase = active_phase
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="plan-modal-box"):
+            yield Static("  [bold #3fb950]📋 Execution Plan & DoD Cockpit[/bold #3fb950] [bright_black](Esc/q to close)[/bright_black]", id="plan-modal-title")
+            with VerticalScroll(id="plan-modal-body"):
+                yield Static(id="plan-modal-content")
+            yield Static("  [dim]Press Esc or q to return to chat[/dim]", id="plan-modal-footer")
+
+    def on_mount(self) -> None:
+        content = self.query_one("#plan-modal-content", Static)
+        table = _format_plan_table(self._plan_steps, self._dod_results)
+        content.update(table)
+
+
+class ActionMenuModal(ModalScreen[str | None]):
+    """Modal menu to steer, inspect, or control an active task."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close", priority=True),
+        Binding("q", "dismiss", "Close", show=False),
+        Binding("1", "select_1", "Steer", show=False),
+        Binding("2", "select_2", "Tools", show=False),
+        Binding("3", "select_3", "Thoughts", show=False),
+        Binding("4", "select_4", "Plan", show=False),
+        Binding("5", "select_5", "Cancel", show=False),
+    ]
+
+    CSS = """
+    ActionMenuModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+
+    #action-menu-box {
+        width: 60;
+        height: auto;
+        background: #0d1117;
+        border: thick #d29922;
+        layout: vertical;
+        padding: 1 2;
+    }
+
+    #action-menu-title {
+        width: 100%;
+        height: 2;
+        color: #d29922;
+        text-style: bold;
+        border-bottom: solid #30363d;
+    }
+
+    #action-menu-options {
+        width: 100%;
+        height: auto;
+        padding: 1 0;
+    }
+
+    #action-menu-footer {
+        width: 100%;
+        height: 1;
+        color: #8b949e;
+        border-top: solid #30363d;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="action-menu-box"):
+            yield Static("  [bold #d29922]⚡ Task Action & Steering Menu[/bold #d29922]", id="action-menu-title")
+            with Vertical(id="action-menu-options"):
+                yield Button(" [1] 🎯 Steer Agent (/steer)", id="btn-steer", variant="primary")
+                yield Button(" [2] 🔍 Inspect Tool Calls & Diffs (Ctrl+I)", id="btn-tools")
+                yield Button(" [3] 🧠 View Full Chain of Thought (Ctrl+T)", id="btn-thoughts")
+                yield Button(" [4] 📋 View Plan & DoD Status (Ctrl+P)", id="btn-plan")
+                yield Button(" [5] 🛑 Cancel Task (/cancel)", id="btn-cancel", variant="error")
+            yield Static("  [dim]Press [1-5] or click · Esc to return[/dim]", id="action-menu-footer")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id
+        if bid == "btn-steer":
+            self.dismiss("steer")
+        elif bid == "btn-tools":
+            self.dismiss("inspect_tools")
+        elif bid == "btn-thoughts":
+            self.dismiss("view_thoughts")
+        elif bid == "btn-plan":
+            self.dismiss("view_plan")
+        elif bid == "btn-cancel":
+            self.dismiss("cancel")
+
+    def action_select_1(self) -> None:
+        self.dismiss("steer")
+
+    def action_select_2(self) -> None:
+        self.dismiss("inspect_tools")
+
+    def action_select_3(self) -> None:
+        self.dismiss("view_thoughts")
+
+    def action_select_4(self) -> None:
+        self.dismiss("view_plan")
+
+    def action_select_5(self) -> None:
+        self.dismiss("cancel")
+
+
+class SteerModal(ModalScreen[str | None]):
+    """Modal prompt to input an in-flight steering directive."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Cancel", priority=True),
+    ]
+
+    CSS = """
+    SteerModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+
+    #steer-box {
+        width: 70;
+        height: auto;
+        background: #0d1117;
+        border: thick #a371f7;
+        layout: vertical;
+        padding: 1 2;
+    }
+
+    #steer-title {
+        width: 100%;
+        height: 2;
+        color: #a371f7;
+        text-style: bold;
+        border-bottom: solid #30363d;
+    }
+
+    #steer-input {
+        width: 100%;
+        margin: 1 0;
+        border: round #a371f7;
+    }
+
+    #steer-footer {
+        width: 100%;
+        height: 1;
+        color: #8b949e;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="steer-box"):
+            yield Static("  [bold #a371f7]🎯 In-Flight Steering Guidance[/bold #a371f7]", id="steer-title")
+            yield Input(placeholder="e.g. use asyncpg instead of psycopg2, or focus on tests...", id="steer-input")
+            yield Static("  [dim]Enter to submit directive · Esc to cancel[/dim]", id="steer-footer")
+
+    def on_mount(self) -> None:
+        self.query_one("#steer-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        val = event.value.strip()
+        self.dismiss(val if val else None)
 
 
 class _NorthSuggester(Suggester):
@@ -113,6 +469,41 @@ class NorthApp(App[None]):
         scrollbar-color-hover: $background;
         scrollbar-color-active: $background;
         scrollbar-corner-color: $background;
+    }
+
+    /* ── live reasoning drawer (Ctrl+T) ───────────────────── */
+
+    #reasoning-wrap {
+        width: 100%;
+        height: auto;
+        max-height: 40%;
+        display: none;
+        overflow-y: auto;
+        overflow-x: hidden;
+        border-top: solid #1f6feb;
+        border-bottom: solid #30363d;
+        background: #0d1117;
+        padding: 0 1;
+        scrollbar-size: 1 1;
+        scrollbar-background: #0d1117;
+        scrollbar-color: #30363d;
+    }
+
+    #reasoning-header {
+        width: 100%;
+        height: 1;
+        color: #58a6ff;
+        background: #0d1117;
+        text-style: bold;
+        padding: 0;
+    }
+
+    #reasoning {
+        width: 100%;
+        height: auto;
+        padding: 0 0 0 2;
+        background: #0d1117;
+        color: #8b949e;
     }
 
     /* ── live streaming area ──────────────────────────────── */
@@ -221,6 +612,9 @@ class NorthApp(App[None]):
     #log:focus,
     #log:focus-within,
     #log:hover,
+    #reasoning-wrap:focus,
+    #reasoning-wrap:focus-within,
+    #reasoning-wrap:hover,
     #streaming-wrap:focus,
     #streaming-wrap:focus-within,
     #streaming-wrap:hover,
@@ -246,6 +640,10 @@ class NorthApp(App[None]):
 
     BINDINGS = [
         Binding("ctrl+c", "interrupt", "Interrupt", priority=True),
+        Binding("ctrl+t", "toggle_reasoning", "Thoughts", priority=True),
+        Binding("ctrl+i", "inspect_tools", "Tools", priority=True),
+        Binding("ctrl+p", "inspect_plan", "Plan", priority=True),
+        Binding("escape", "action_menu", "Action Menu", show=False),
         Binding("ctrl+d", "toggle_dictation", "Dictate", priority=True),
         Binding("ctrl+y", "copy_last_response", "Copy", priority=True),
         Binding("ctrl+g", "edit_in_editor", "Editor", show=False),
@@ -271,7 +669,14 @@ class NorthApp(App[None]):
         self._client: httpx.AsyncClient | None = None
 
         self._token_buffer: dict[str, str] = {}
-        self._reasoning_buffer: dict[str, str] = {}  # model's private chain-of-thought, shown dimmed
+        self._reasoning_buffer: dict[str, str] = {}  # model's private chain-of-thought, shown in drawer
+        self._reasoning_visible: bool = False
+        self._reasoning_start_times: dict[str, float] = {}
+        self._recent_thoughts: deque[dict] = deque(maxlen=20)
+        self._tool_history: deque[dict] = deque(maxlen=50)
+        self._plan_steps: list[dict] = []
+        self._dod_results: list[dict] = []
+        self._active_phase: str = ""
         self._streaming_active: set[str] = set()
         self._last_assistant_response: str = ""
         self._stream_start_times: dict[str, float] = {}
@@ -328,6 +733,7 @@ class NorthApp(App[None]):
             "waiting_for_model": self._on_waiting_for_model,
             "task_queued": self._on_task_queued,
             "task_resumed": self._on_task_resumed,
+            "task_steered": self._on_task_steered,
             "design_phase": self._on_design_phase,
             "plan_seeded": self._on_plan_seeded,
             "conductor_fix_round": self._on_conductor_fix_round,
@@ -370,6 +776,9 @@ class NorthApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
+        with VerticalScroll(id="reasoning-wrap"):
+            yield Static("", id="reasoning-header")
+            yield Static("", id="reasoning")
         with VerticalScroll(id="streaming-wrap"):
             yield Static("", id="streaming")
         yield Static("", id="status")
@@ -401,6 +810,7 @@ class NorthApp(App[None]):
         # strand the user with keystrokes that go nowhere. Mouse-wheel scrolling
         # still works without focus.
         self.query_one("#log", RichLog).can_focus = False
+        self.query_one("#reasoning-wrap", VerticalScroll).can_focus = False
         self.query_one("#streaming-wrap", VerticalScroll).can_focus = False
         # Defer so the log's width is known before drawing the banner rule.
         self.call_after_refresh(self._draw_banner)
@@ -488,9 +898,10 @@ class NorthApp(App[None]):
     # ── rendering helpers ────────────────────────────────────────────────────
 
     def _refresh_hint(self) -> None:
+        thoughts_label = "ctrl+t hide thoughts" if self._reasoning_visible else "ctrl+t thoughts"
         hint = (
-            f"  {self._strategy}  ·  ↑↓ history  ·  /commands  ·  ctrl+y copy"
-            "  ·  ctrl+d dictate  ·  ctrl+g editor  ·  ctrl+c interrupt"
+            f"  {self._strategy}  ·  {thoughts_label}  ·  ctrl+i tools  ·  ctrl+p plan"
+            "  ·  esc menu  ·  /commands  ·  ctrl+y copy  ·  ctrl+d dictate"
         )
         self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
 
@@ -670,6 +1081,18 @@ class NorthApp(App[None]):
         suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
         self._log(f"    [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
         self._set_status(f"{tool}…")
+        entry = {
+            "task_id": task_id,
+            "tool": tool,
+            "params": params,
+            "params_str": params_str,
+            "result": None,
+            "success": True,
+            "error": None,
+            "start_time": time.monotonic(),
+            "duration": None,
+        }
+        self._tool_history.append(entry)
         if task_id:
             self._task_tool_activity.setdefault(task_id, []).append(
                 {"tool": tool, "params": params_str, "result": None}
@@ -679,16 +1102,26 @@ class NorthApp(App[None]):
         tool = data.get("tool", "")
         success = data.get("success", True)
         self._log(f"    [dim green]✓  {tool}[/dim green]" if success else f"    [dim red]✗  {tool}[/dim red]")
+        formatted = data.get("formatted", "")
+        error = data.get("error", "")
+        result = (
+            formatted[:200].replace("\n", " ")
+            if formatted
+            else f"failed: {error[:100]}"
+            if error
+            else ("ok" if success else "failed")
+        )
+        now = time.monotonic()
+        for item in reversed(self._tool_history):
+            if item.get("tool") == tool and item.get("result") is None:
+                item["result"] = result
+                item["formatted"] = formatted
+                item["error"] = error
+                item["success"] = success
+                if item.get("start_time"):
+                    item["duration"] = now - item["start_time"]
+                break
         if task_id:
-            formatted = data.get("formatted", "")
-            error = data.get("error", "")
-            result = (
-                formatted[:200].replace("\n", " ")
-                if formatted
-                else f"failed: {error[:100]}"
-                if error
-                else ("ok" if success else "failed")
-            )
             for entry in self._task_tool_activity.get(task_id, []):
                 if entry["tool"] == tool and entry["result"] is None:
                     entry["result"] = result
@@ -713,7 +1146,17 @@ class NorthApp(App[None]):
         self._session_tokens += max(1, len(text) // 4)
         if task_id not in self._streaming_active:
             self._streaming_active.add(task_id)
-            self._reasoning_buffer.pop(task_id, None)  # answer has started; drop the thinking preview
+            thoughts = self._reasoning_buffer.get(task_id, "")
+            if thoughts:
+                toks = max(1, len(thoughts) // 4)
+                dur = now - self._reasoning_start_times.get(task_id, now)
+                self._recent_thoughts.append({
+                    "task_id": task_id,
+                    "thoughts": thoughts,
+                    "tokens": toks,
+                    "duration": dur,
+                })
+                self._log(f"  [dim cyan]🧠 Thought for {dur:.1f}s ({toks} tokens · Ctrl+T to view)[/dim cyan]")
             self._set_status("")
             self._log("  [cyan]◆[/cyan]  [white]north[/white]")
             self._start_streaming()
@@ -721,16 +1164,23 @@ class NorthApp(App[None]):
         self._render_status_bar()
 
     async def _on_reasoning(self, task_id: str, data: dict) -> None:
-        # The model's private chain-of-thought. Show only a dim, single-line tail
-        # as a "thinking" preview - never in the answer log - and only until the
-        # answer itself begins streaming.
         text = data.get("text", "")
         if not text or task_id in self._streaming_active:
             return
+        if task_id not in self._reasoning_start_times:
+            self._reasoning_start_times[task_id] = time.monotonic()
         buf = self._reasoning_buffer.get(task_id, "") + text
         self._reasoning_buffer[task_id] = buf
         preview = " ".join(buf.split())[-_REASONING_PREVIEW_CHARS:]
         self._set_status(f"thinking… {preview}")
+
+        toks = max(1, len(buf) // 4)
+        elapsed = time.monotonic() - self._reasoning_start_times[task_id]
+        with contextlib.suppress(Exception):
+            self.query_one("#reasoning-header", Static).update(
+                f"  [bold #58a6ff]🧠 Thinking…[/bold #58a6ff] [bright_black]({toks} tokens · {elapsed:.1f}s · Ctrl+T to toggle)[/bright_black]"
+            )
+            self.query_one("#reasoning", Static).update(buf)
 
     async def _on_task_synthesis(self, task_id: str, data: dict) -> None:
         self._set_status("synthesising…")
@@ -925,15 +1375,19 @@ class NorthApp(App[None]):
 
     async def _on_design_phase(self, task_id: str, data: dict) -> None:
         step = data.get("step", "")
+        self._active_phase = f"design phase: {step}"
         self._set_status(f"design phase: {step}…")
         self._log(f"  [cyan]◆[/cyan]  [white]design phase[/white]  [bright_black]{step}[/bright_black]")
 
     async def _on_plan_seeded(self, task_id: str, data: dict) -> None:
         tasks = data.get("tasks", 0)
-        self._log(f"  [cyan]◆[/cyan]  [white]plan seeded[/white]  [bright_black]{tasks} task steps[/bright_black]")
+        steps = data.get("steps") or [{"step_id": i + 1, "task": f"Task Step {i+1}", "agent": "coder", "status": "pending"} for i in range(tasks)]
+        self._plan_steps = steps
+        self._log(f"  [cyan]◆[/cyan]  [white]plan seeded[/white]  [bright_black]{tasks} task steps · Ctrl+P to inspect[/bright_black]")
 
     async def _on_conductor_fix_round(self, task_id: str, data: dict) -> None:
         round_num = data.get("round", 1)
+        self._active_phase = f"reviewer fix round {round_num}"
         self._set_status(f"reviewer fix round {round_num}…")
         self._log(f"  [yellow]◆[/yellow]  [yellow]reviewer fix round {round_num}[/yellow]")
 
@@ -953,10 +1407,15 @@ class NorthApp(App[None]):
     async def _on_dod_evaluated(self, task_id: str, data: dict) -> None:
         passed = data.get("passed", False)
         reasons = data.get("reasons") or []
+        self._dod_results.append(data)
         summary = ", ".join(reasons) if reasons else ("met" if passed else "unmet")
         style = "dim green" if passed else "dim yellow"
         icon = "✓" if passed else "!"
         self._log(f"    [{style}]{icon}  Definition of Done: {summary}[/{style}]")
+
+    async def _on_task_steered(self, task_id: str, data: dict) -> None:
+        instruction = data.get("instruction", "")
+        self._log(f"  [magenta]🎯 steered[/magenta]  [bright_black]{instruction}[/bright_black]")
 
     async def _on_stream_reset(self, task_id: str, data: dict) -> None:
         # Reset token buffer when tool calling is engaged mid-thought
@@ -1364,10 +1823,92 @@ class NorthApp(App[None]):
             from inference.rate_limit_status import format_status_table
 
             self._log_rich(format_status_table(settings.north_home / "rate_limit_status.json"))
+        elif cmd == "/thoughts":
+            self.action_toggle_reasoning()
+            state = "expanded" if self._reasoning_visible else "collapsed"
+            self._log(f"  [bright_black]Live reasoning drawer {state} (Ctrl+T)[/bright_black]")
+        elif cmd in ("/tools", "/inspect"):
+            self.action_inspect_tools()
+        elif cmd == "/plan":
+            self.action_inspect_plan()
+        elif cmd.startswith("/steer"):
+            feedback = text.partition(" ")[2].strip()
+            if feedback:
+                await self._send_steer(feedback)
+            else:
+                self.push_screen(SteerModal(), self._handle_steer_submit)
         elif cmd == "/help":
             self._log_rich(_format_help_table(_SLASH_COMMANDS))
         else:
             self._log(f"  [bright_black]unknown command: {cmd} - try /help[/bright_black]")
+
+    # ── interactive cockpit actions ──────────────────────────────────────────
+
+    def action_toggle_reasoning(self) -> None:
+        """Toggle the live Chain-of-Thought reasoning drawer."""
+        self._reasoning_visible = not self._reasoning_visible
+        with contextlib.suppress(Exception):
+            wrap = self.query_one("#reasoning-wrap", VerticalScroll)
+            wrap.styles.display = "block" if self._reasoning_visible else "none"
+        self._refresh_hint()
+
+    def action_inspect_tools(self) -> None:
+        """Open the interactive Tool & Diff Inspector modal."""
+        self.push_screen(ToolInspectorModal(list(self._tool_history)))
+
+    def action_inspect_plan(self) -> None:
+        """Open the execution plan cockpit modal."""
+        self.push_screen(PlanCockpitModal(list(self._plan_steps), list(self._dod_results), self._active_phase))
+
+    def action_action_menu(self) -> None:
+        """Open in-flight action and steer menu when tasks are active."""
+        if len(self.screen_stack) > 1:
+            return
+        if not self._user_task_ids and not self._streaming_active:
+            return
+        self.push_screen(ActionMenuModal(), self._handle_action_menu_result)
+
+    def _handle_action_menu_result(self, result: str | None) -> None:
+        if not result:
+            return
+        if result == "steer":
+            self.push_screen(SteerModal(), self._handle_steer_submit)
+        elif result == "inspect_tools":
+            self.action_inspect_tools()
+        elif result == "view_thoughts":
+            self.action_toggle_reasoning()
+        elif result == "view_plan":
+            self.action_inspect_plan()
+        elif result == "cancel":
+            self.run_worker(self._cancel_active_tasks())
+
+    def _handle_steer_submit(self, feedback: str | None) -> None:
+        if feedback:
+            self.run_worker(self._send_steer(feedback))
+
+    async def _send_steer(self, feedback: str) -> None:
+        try:
+            async with self._http() as c:
+                r = await c.post(
+                    f"{self.base_url}/orchestrator/steer",
+                    headers=self.headers,
+                    json={"instruction": feedback},
+                    timeout=5.0,
+                )
+                if r.status_code == 200:
+                    self._log(f"  [magenta]🎯 steering sent:[/magenta] [white]{feedback}[/white]")
+                else:
+                    self._log(f"  [red]failed to send steer directive (HTTP {r.status_code})[/red]")
+        except Exception as exc:
+            self._log(f"  [red]error sending steer directive: {exc}[/red]")
+
+    async def _cancel_active_tasks(self) -> None:
+        try:
+            async with self._http() as c:
+                await c.post(f"{self.base_url}/orchestrator/cancel-all", headers=self.headers, timeout=10.0)
+                self._log("  [yellow]✓ cancelled in-flight tasks[/yellow]")
+        except Exception as exc:
+            self._log(f"  [red]error cancelling tasks: {exc}[/red]")
 
     # ── clipboard copy (Ctrl+Y) ──────────────────────────────────────────────
 

@@ -889,3 +889,23 @@ async def respond_approval(body: ApprovalResponse) -> None:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+class SteerRequest(BaseModel):
+    task_id: str = ""
+    instruction: str
+
+
+@router.post("/steer")
+async def steer_task(body: SteerRequest) -> dict:
+    """Submit an in-flight steering directive to an active task."""
+    orch = _get_orchestrator()
+    task_id = body.task_id
+    if not task_id:
+        active = list(orch._active_tasks.keys())
+        if not active:
+            raise HTTPException(status_code=404, detail="No active task to steer.")
+        task_id = active[-1]
+
+    await orch.emit_steer(task_id, body.instruction)
+    return {"status": "ok", "task_id": task_id, "instruction": body.instruction}
