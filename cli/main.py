@@ -1818,7 +1818,16 @@ def update(
             err=True,
         )
         raise typer.Exit(1) from None
-    _console.print("  [dim green]✓[/dim green]  updated")
+    _console.print("  [dim green]✓[/dim green]  updated python dependencies and cli")
+
+    # Update/install optional helper binaries (e.g. chrome-agent)
+    if not shutil.which("chrome-agent"):
+        if shutil.which("cargo"):
+            _console.print("  [dim]→[/dim]  installing chrome-agent via cargo…")
+            subprocess.run(["cargo", "install", "chrome-agent", "-q"], capture_output=True)
+        elif shutil.which("npm"):
+            _console.print("  [dim]→[/dim]  installing chrome-agent via npm…")
+            subprocess.run(["npm", "install", "-g", "chrome-agent", "-q"], capture_output=True)
 
     _console.print()
     if restart and (was_running or typer.confirm("Start north now?", default=True)):
