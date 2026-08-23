@@ -52,9 +52,19 @@ if [[ ":$PATH:" != *":$UV_TOOL_BIN:"* ]]; then
     export PATH="$UV_TOOL_BIN:$PATH"
 fi
 
-# ── 4. Set up ~/.north/ ───────────────────────────────────────────────────────
+# ── 4. Set up ~/.north/ and optional tools ───────────────────────────────────
 
-mkdir -p "$NORTH_HOME"
+mkdir -p "$NORTH_HOME/bin"
+
+if ! command -v chrome-agent &>/dev/null && [[ ! -f "$NORTH_HOME/bin/chrome-agent" ]]; then
+    if command -v cargo &>/dev/null; then
+        info "Installing chrome-agent via cargo..."
+        cargo install chrome-agent -q 2>/dev/null && success "chrome-agent installed" || true
+    elif command -v npm &>/dev/null; then
+        info "Installing chrome-agent via npm..."
+        npm install -g chrome-agent -q 2>/dev/null && success "chrome-agent installed" || true
+    fi
+fi
 
 # ── 5. OpenRouter API key ─────────────────────────────────────────────────────
 
