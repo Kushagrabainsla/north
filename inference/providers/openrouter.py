@@ -159,7 +159,7 @@ class OpenRouterRouter(OpenAICompatibleProvider):
         result: dict[str, ModelInfo] = {}
         for m in raw_models:
             model_id = m.get("id")
-            if not isinstance(model_id, str):
+            if not isinstance(model_id, str) or ":batch" in model_id:
                 continue
             cost = _cost_from_api(m)
             caps = _capabilities_from_api(model_id, m)

@@ -75,6 +75,8 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
         "robotics",
         "deep-research",
         "live-translate",
+        ":batch",
+        ":nitro",
     )
     if any(kw in lower for kw in _NON_CHAT_PATTERNS):
         return frozenset()
