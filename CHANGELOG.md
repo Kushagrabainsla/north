@@ -4,6 +4,14 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **`chrome_agent` Specialized Tool & Browser Research Skill** (`tools/specialized/chrome_agent.py`, `skills/builtin/browser-research-and-extraction/SKILL.md`, `agents/researcher/tools.yaml`, `agents/coder/tools.yaml`, `agents/news_briefing/tools.yaml`, `tests/unit/tools/test_chrome_agent.py`):
+  - Added high-performance browser automation and structured web extraction tool wrapping `chrome-agent` (3 MB Rust CDP binary).
+  - **Autonomous Record Extraction (`extract`)**: Uses MDR/DEPTA heuristic pattern recognition to extract structured tables/lists directly into JSON records without CSS selectors or LLM DOM parsing, saving 80% prompt tokens.
+  - **Reader Mode (`read`)**: Clean article and doc scraping using Readability heuristics, stripped of navigation, ads, and sidebars.
+  - **Accessibility Tree Element Addressing (`inspect`, `click`, `fill`)**: Stable numeric node UIDs (`n12`) from Chrome's `backendNodeId`, preventing CSS selector hallucinations.
+  - **Parallel Concurrency Isolation**: Injects `--browser <task_id>` to ensure isolated Chromium profiles and CDP sockets per concurrent task.
+  - **Deterministic UI Assertions (`assert`)**: Evaluates `assert value/text/state/exists` with exit codes (0 = pass, 2 = unmet, 1 = error) for fast verification in Conductor and Verifier loops.
+  - **Multi-Tier Binary Discovery & Self-Healing**: Resolves system `$PATH`, Cargo bin, Homebrew, global npm bin, or falls back to `npx -y chrome-agent`, decorating errors with actionable hints.
 - **Interactive TUI Cockpit & Live Observability Upgrades** (`cli/tui.py`, `cli/constants.py`, `cli/formatting.py`, `orchestrator/orchestrator.py`, `orchestrator/api_router.py`, `tests/unit/cli/test_tui_interactive_features.py`):
   - **Collapsible Live Thinking & Reasoning Drawer (`Ctrl+T` / `/thoughts`)**: Real-time token streaming and un-truncated model chain-of-thought display with live token count, elapsed duration, and toggleable view. Thought history is preserved across turns in a rolling buffer.
   - **Interactive Tool & Diff Inspector Modal (`Ctrl+I` / `/tools` / `/inspect`)**: Two-pane modal screen listing recent tool calls with status indicators, execution timings, full argument JSON, syntax-highlighted diffs, and stdout/stderr output.
