@@ -1644,6 +1644,7 @@ def start(
 @app.command("stop")
 def stop(
     port: int = typer.Option(8000, "--port", "-p", help="Port to stop."),
+    all: bool = typer.Option(False, "--all", "-a", help="Kill all running north processes and background jobs."),
     docker: bool = typer.Option(False, "--docker", help="Stop Docker Compose deployment instead of a local process."),
 ) -> None:
     """Stop north."""
@@ -1657,6 +1658,12 @@ def stop(
             ["docker", "compose", "-f", str(compose_file), "down"],
             check=False,
         )
+        return
+
+    if all:
+        count = _stop_all_north_processes()
+        _stop_server(port)
+        typer.secho(f"✓ Stopped all north processes ({count} process(es) terminated).", fg=typer.colors.GREEN)
         return
 
     from config.settings import settings
@@ -1821,6 +1828,49 @@ def update(
         typer.secho(f"✓ north updated and restarted (pid {proc.pid}).", fg=typer.colors.GREEN)
     else:
         typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
+
+
+def _stop_all_north_processes() -> int:
+    """Find and terminate all running north / uvicorn orchestrator processes."""
+    import signal
+
+    import psutil
+
+    from config.settings import settings
+
+    stopped = 0
+    current_pid = os.getpid()
+    procs_to_kill = []
+
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if proc.pid == current_pid:
+                continue
+            cmdline = " ".join(proc.info.get("cmdline") or []).lower()
+            if any(k in cmdline for k in ("north start", "orchestrator.app:app", "bin/north")):
+                procs_to_kill.append(proc)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    for proc in procs_to_kill:
+        try:
+            proc.send_signal(signal.SIGTERM)
+            stopped += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    if procs_to_kill:
+        time.sleep(1)
+        for proc in procs_to_kill:
+            try:
+                if proc.is_running():
+                    proc.send_signal(signal.SIGKILL)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+    pid_path = settings.north_home / "north.pid"
+    pid_path.unlink(missing_ok=True)
+    return stopped
 
 
 def _stop_server(port: int) -> None:

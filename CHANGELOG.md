@@ -15,6 +15,8 @@ All notable changes to north are documented here.
   - Removed static `model_pool` definitions from all agent `config.yaml` files, cleanly separating agent domain tools from task compute allocation.
   - Added dynamic `model_pool` to `AgentPayload` resolved by the orchestrator per task based on task complexity (`FAST` vs `DEEP`), domain requirements, and user power modes (`SPORT`, `CRUISE`, `ECO`).
   - Enabled high-capability free models (like `0xalpha`) to serve across all agents without being artificially pre-filtered by static agent configs.
+- **Full Process Cleanup with `north stop --all` (`-a`)** (`cli/main.py`, `tests/unit/cli/test_stop_command.py`):
+  - Added `--all` (`-a`) flag to `north stop` to discover and terminate all running North CLI wrappers, background jobs, and uvicorn servers using `psutil` process iteration and signal cleanup.
 - **Model Family Prior for `ox-alpha`** (`inference/constants.py`, `tests/unit/inference/test_model_scorer.py`):
   - Added `ox-alpha`, `0x-alpha`, `0xalpha`, and `stealth` with priority tier `0.88` in `MODEL_FAMILY_TIERS` to ensure high-capability free models on OpenRouter are prioritized during model selection.
 
