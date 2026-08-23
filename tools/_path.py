@@ -198,9 +198,7 @@ def is_sensitive_path(path: Path) -> bool:
         # personal-data subdirs under ~/.north (news/notes/wellness) are the
         # intended, readable output of agents, so carve them out. Everything
         # else under ~/.north (secret.key, .env, DBs) stays sensitive.
-        if _in_personal_subdir(str(resolved)):
-            return False
-        return True
+        return not _in_personal_subdir(str(resolved))
     return _is_blocked_path(str(resolved))
 
 

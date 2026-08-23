@@ -38,6 +38,7 @@ class AgentPayload(BaseModel):
     prompt: str
     context: str = ""  # optional pre-loaded context summary
     workspace: str = ""  # root directory for filesystem/shell tools
+    model_pool: str = "reasoning"  # task-scoped model pool (reasoning, speed, fast_cheap, vision)
     delegation_depth: int = 0  # incremented on each delegate_task call; capped at MAX_DELEGATION_DEPTH
     delegation_chain: list[str] = Field(default_factory=list)  # ordered agent names in this call chain
     # Model ids this run must avoid, so the agent is forced onto a different model
@@ -86,7 +87,7 @@ class AgentConfig(BaseModel):
 
     agent: str
     domain: str
-    model_pool: str = "fast_cheap"
+    model_pool: str | None = None
     similar_to: str | None = None
     accepts: list[str] = Field(default_factory=list)
     produces: list[str] = Field(default_factory=list)

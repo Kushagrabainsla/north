@@ -1,6 +1,5 @@
 agent: wellness
 domain: wellness
-model_pool: fast_cheap
 accepts:
   - "workout"
   - "nutrition"

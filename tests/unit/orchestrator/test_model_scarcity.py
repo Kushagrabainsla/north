@@ -151,7 +151,7 @@ async def test_reviewer_scarcity_does_not_sink_the_task():
     # coder succeeds ([]), then the reviewer can't get any model (scarcity).
     seq = [[], [AgentFailure("reviewer", "model_unavailable")]]
 
-    async def fake_group(task_id, prompt, agents, workspace="", context="", allow_delegation=True):
+    async def fake_group(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
         return seq.pop(0)
 
     orch._execute_agent_group = fake_group
@@ -168,7 +168,7 @@ async def test_genuine_reviewer_failure_still_returns():
     # coder ok, then a REAL reviewer failure (not scarcity) - unchanged behaviour.
     seq = [[], [AgentFailure("reviewer", "logic_error")]]
 
-    async def fake_group(task_id, prompt, agents, workspace="", context="", allow_delegation=True):
+    async def fake_group(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
         return seq.pop(0)
 
     orch._execute_agent_group = fake_group

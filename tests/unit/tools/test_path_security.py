@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tools._path import (
     find_project_root,
     is_sensitive_path,
@@ -65,7 +67,9 @@ class TestPersonalDataCarveOut:
         resolved = resolve_path(str(target), None)
         assert resolved == target
 
-    def test_allows_wellness_subdir_write_inside_workspace(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_allows_wellness_subdir_write_inside_workspace(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         # Even when the agent runs scoped to a project workspace, personal dirs
         # must be reachable - otherwise output silently falls back to CWD.
         monkeypatch.setenv("NORTH_HOME", str(tmp_path))

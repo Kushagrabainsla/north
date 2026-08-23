@@ -1,6 +1,5 @@
 agent: reviewer
 domain: engineering
-model_pool: reasoning
 # The reviewer must be a genuine second opinion, so the orchestrator runs it on a
 # different model than the coder used for this task (Copilot /subagents style).
 distinct_from:

@@ -41,7 +41,7 @@ def _script_group(orch, returns: list[list[str]]):
     calls: list[str] = []
     seq = list(returns)
 
-    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True):
+    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
         calls.append(agents[0].name)
         return seq.pop(0) if seq else []
 
@@ -101,7 +101,7 @@ def test_deploy_uses_deploy_flow_not_conductor():
 async def test_run_deploy_flow_runs_coder_with_ship_framing():
     prompts: dict[str, str] = {}
 
-    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True):
+    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
         prompts[agents[0].name] = prompt
         return []
 
@@ -150,7 +150,7 @@ def test_design_phase_skipped_in_autonomous_mode():
 async def test_run_design_phase_runs_researcher_then_architect(tmp_path, monkeypatch):
     calls: list[str] = []
 
-    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True):
+    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
         calls.append(agents[0].name)
         return []
 
@@ -173,7 +173,7 @@ async def test_run_design_phase_fails_when_architect_writes_no_spec(tmp_path, mo
     """A 'successful' architect that produced no usable spec must fail the design
     phase, so the coder is never sent to implement a spec that doesn't exist."""
 
-    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True):
+    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
         return []  # both agents "succeed"
 
     orch = _orch(names=("researcher", "architect", "coder", "reviewer"))
@@ -242,7 +242,7 @@ async def test_reviewer_runs_in_report_only_mode(monkeypatch):
     orch = _orch()
     recorded: list[tuple[str, bool]] = []
 
-    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True):
+    async def fake(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
         recorded.append((agents[0].name, allow_delegation))
         return []
 

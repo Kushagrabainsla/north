@@ -1,6 +1,5 @@
 agent: general
 domain: general
-model_pool: fast_cheap
 accepts:
   - "general"
   - "chat"

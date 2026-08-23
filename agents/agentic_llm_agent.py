@@ -307,7 +307,12 @@ class AgenticLLMAgent(LLMAgent):
 
             try:
                 response = await self._complete_with_tools(
-                    messages, tools, payload.task_id, token_cb, payload.exclude_models
+                    messages,
+                    tools,
+                    payload.task_id,
+                    token_cb,
+                    payload.exclude_models,
+                    model_pool=payload.model_pool,
                 )
             except ContextTooLargeError:
                 compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
@@ -317,7 +322,12 @@ class AgenticLLMAgent(LLMAgent):
                     await token_cb.reset()
                 try:
                     response = await self._complete_with_tools(
-                        messages, tools, payload.task_id, token_cb, payload.exclude_models
+                        messages,
+                        tools,
+                        payload.task_id,
+                        token_cb,
+                        payload.exclude_models,
+                        model_pool=payload.model_pool,
                     )
                 except ContextTooLargeError:
                     return _final_answer(
@@ -475,12 +485,13 @@ class AgenticLLMAgent(LLMAgent):
         task_id: str,
         token_callback: Callable[[str], Awaitable[None]] | None,
         exclude_models: list[str] | None = None,
+        model_pool: str | None = None,
     ) -> Any:
         return await self._deps.inference_router.complete_with_tools(
             ToolCallRequest(
                 messages=messages,
                 tools=tools,
-                priority=self._resolve_priority(),
+                priority=self._resolve_priority(model_pool),
                 component=self.name,
                 task_id=task_id,
                 exclude_models=exclude_models or [],

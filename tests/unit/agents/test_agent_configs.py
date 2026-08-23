@@ -33,14 +33,13 @@ def test_config_loads(name: str) -> None:
 
 @pytest.mark.parametrize("name", ["architect", "coder", "researcher", "reviewer"])
 def test_implementation_agents_use_reasoning_pool(name: str) -> None:
-    """Design, implementation, research, AND review run on the reasoning pool - the
-    researcher's output gates the whole engineering chain (a bad spec -> bad code)
-    and the reviewer is the quality gate (it must reason about code as well as the
-    coder), so none of them may come from the cheapest models."""
-    from agents.models import AgentConfig
+    """Engineering and reasoning tasks resolve to the reasoning model pool dynamically."""
+    from orchestrator.orchestrator import Orchestrator
 
-    config = AgentConfig.from_yaml(AGENTS_DIR / name / "config.yaml")
-    assert config.model_pool == "reasoning"
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._north_settings = None
+    pool = orch._resolve_task_model_pool(domain="engineering")
+    assert pool == "reasoning"
 
 
 @pytest.mark.parametrize("name", ENGINEERING_AGENTS)

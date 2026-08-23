@@ -33,12 +33,19 @@ class TakeScreenshotTool(Tool):
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Destination PNG file path, e.g. 'screenshot.png' or 'docs/screen.png' (optional). When capturing all monitors, this is used as a base name with a per-display suffix (e.g. screen_d1.png).",
+                "description": (
+                    "Destination PNG file path, e.g. 'screenshot.png' or 'docs/screen.png' (optional). "
+                    "When capturing all monitors, this is used as a base name with a per-display suffix "
+                    "(e.g. screen_d1.png)."
+                ),
             },
             "workspace": {"type": "string", "description": "Workspace root (optional)"},
             "display": {
                 "type": "integer",
-                "description": "Capture only this 1-based display index (1 = main). Defaults to capturing ALL connected displays, one file per display.",
+                "description": (
+                    "Capture only this 1-based display index (1 = main). "
+                    "Defaults to capturing ALL connected displays, one file per display."
+                ),
             },
         },
     }

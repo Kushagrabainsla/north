@@ -1,6 +1,5 @@
 agent: news_briefing
 domain: general
-model_pool: fast_cheap
 accepts:
   - "news"
   - "briefing"

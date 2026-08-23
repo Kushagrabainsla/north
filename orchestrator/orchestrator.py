@@ -43,6 +43,7 @@ from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.models import (
     ExecutionMode,
+    ExecutionPath,
     ExecutionPlan,
     IntentClassification,
     TaskRequest,
@@ -1149,6 +1150,27 @@ class Orchestrator:
         await self._task_context_store.initialize_task(task_id, plan.agents)
         return classification, plan
 
+    def _resolve_task_model_pool(self, plan: ExecutionPlan | None = None, domain: str = "") -> str:
+        """Dynamically select model pool based on task complexity, power mode, and domain."""
+        power_mode = self._north_settings.power if self._north_settings is not None else StrategyMode.CRUISE
+        if power_mode == StrategyMode.SPORT:
+            return "reasoning"
+        if power_mode == StrategyMode.ECO:
+            return "speed"
+
+        if plan is not None:
+            if plan.execution_path == ExecutionPath.DEEP or plan.mode in (
+                ExecutionMode.HIERARCHICAL,
+                ExecutionMode.PARALLEL,
+            ):
+                return "reasoning"
+            if plan.engineering_kind in ("feature", "refactor", "bugfix", "research"):
+                return "reasoning"
+        if domain in ("engineering", "research"):
+            return "reasoning"
+
+        return "reasoning"
+
     async def _run_forced_agent(self, task_id: str, request: TaskRequest) -> None:
         """Run a single named agent directly, bypassing classification and the planner.
 
@@ -1158,9 +1180,17 @@ class Orchestrator:
         """
         agent = self._agent_registry.get(request.forced_agent)
         workspace = request.workspace or self._default_workspace
+        model_pool = self._resolve_task_model_pool(domain=agent.domain)
         await self._task_context_store.initialize_task(task_id, [agent.name])
         await self._stream_manager.emit(task_id, "executing", {"agents": [agent.name]})
-        failures = await self._execute_agent_group(task_id, request.prompt, [agent], workspace, context=request.context)
+        failures = await self._execute_agent_group(
+            task_id,
+            request.prompt,
+            [agent],
+            workspace,
+            context=request.context,
+            model_pool=model_pool,
+        )
         if failures:
             await self._report_execution_failures(task_id, failures)
         await self._finish_task(task_id, failures=failures, total_agents=1)
@@ -1304,7 +1334,9 @@ class Orchestrator:
             and "coder" in set(self._agent_registry.names())
         )
 
-    async def _run_deploy_flow(self, task_id: str, prompt: str, workspace: str, context: str = "") -> list[str]:
+    async def _run_deploy_flow(
+        self, task_id: str, prompt: str, workspace: str, context: str = "", model_pool: str = "reasoning"
+    ) -> list[str]:
         """Ship already-completed work: a single git/gh-capable agent, human-gated.
 
         Deploy is deliberately NOT the conductor and NOT gated by the code DoD - there
@@ -1314,7 +1346,9 @@ class Orchestrator:
         """
         coder = self._agent_registry.get("coder")
         deploy_prompt = f"{_DEPLOY_PREAMBLE}\n\n{prompt}"
-        return await self._execute_agent_group(task_id, deploy_prompt, [coder], workspace, context=context)
+        return await self._execute_agent_group(
+            task_id, deploy_prompt, [coder], workspace, context=context, model_pool=model_pool
+        )
 
     def _human_available(self) -> bool:
         """True when a human can be asked (any mode except autonomous)."""
@@ -1336,7 +1370,9 @@ class Orchestrator:
             and {"researcher", "architect"} <= set(self._agent_registry.names())
         )
 
-    async def _run_design_phase(self, task_id: str, prompt: str, workspace: str, context: str = "") -> list[str]:
+    async def _run_design_phase(
+        self, task_id: str, prompt: str, workspace: str, context: str = "", model_pool: str = "reasoning"
+    ) -> list[str]:
         """Interactive clarify + design: researcher gathers context (clarifying scope
         with the user if unclear), then the architect proposes and DISCUSSES a solution
         with the user until aligned, writing the agreed spec. Returns failures (empty
@@ -1345,7 +1381,12 @@ class Orchestrator:
         architect = self._agent_registry.get("architect")
         await self._stream_manager.emit(task_id, "design_phase", {"step": "research"})
         r_fail = await self._execute_agent_group(
-            task_id, f"{_DESIGN_RESEARCH_PREAMBLE}\n\n{prompt}", [researcher], workspace, context=context
+            task_id,
+            f"{_DESIGN_RESEARCH_PREAMBLE}\n\n{prompt}",
+            [researcher],
+            workspace,
+            context=context,
+            model_pool=model_pool,
         )
         if r_fail:
             return r_fail
@@ -1355,7 +1396,12 @@ class Orchestrator:
         design_ctx = f"{context}\n\n## Research context\n{research}" if research else context
         await self._stream_manager.emit(task_id, "design_phase", {"step": "design"})
         a_fail = await self._execute_agent_group(
-            task_id, f"{_DESIGN_ARCHITECT_PREAMBLE}\n\n{prompt}", [architect], workspace, context=design_ctx
+            task_id,
+            f"{_DESIGN_ARCHITECT_PREAMBLE}\n\n{prompt}",
+            [architect],
+            workspace,
+            context=design_ctx,
+            model_pool=model_pool,
         )
         if a_fail:
             return a_fail
@@ -1468,7 +1514,13 @@ class Orchestrator:
         return issues
 
     async def _run_engineering_conductor(
-        self, task_id: str, prompt: str, workspace: str, coder_preamble: str, context: str = ""
+        self,
+        task_id: str,
+        prompt: str,
+        workspace: str,
+        coder_preamble: str,
+        context: str = "",
+        model_pool: str = "reasoning",
     ) -> list[str]:
         """The IMPLEMENT + VERIFY phase: one continuous coder (framed by
         ``coder_preamble``), then an independent different-model reviewer with a
@@ -1483,14 +1535,22 @@ class Orchestrator:
         reviewer = self._agent_registry.get("reviewer")
 
         coder_prompt = f"{coder_preamble}\n\n{prompt}"
-        failures = await self._execute_agent_group(task_id, coder_prompt, [coder], workspace, context=context)
+        failures = await self._execute_agent_group(
+            task_id, coder_prompt, [coder], workspace, context=context, model_pool=model_pool
+        )
         if failures:
             return failures  # coder failed - nothing to review
 
         review_prompt = f"{prompt}\n\n{_CONDUCTOR_REVIEW_PROMPT}"
         for fix_round in range(_CONDUCTOR_MAX_FIX_ROUNDS + 1):
             review_failures = await self._execute_agent_group(
-                task_id, review_prompt, [reviewer], workspace, context=context, allow_delegation=False
+                task_id,
+                review_prompt,
+                [reviewer],
+                workspace,
+                context=context,
+                allow_delegation=False,
+                model_pool=model_pool,
             )
             if review_failures:
                 if _is_model_scarcity(review_failures):
@@ -1540,13 +1600,21 @@ class Orchestrator:
             items = "\n".join(f"- {m}" for m in review.must_fix) or "(see the review report)"
             await self._stream_manager.emit(task_id, "conductor_fix_round", {"round": fix_round + 1})
             fix_prompt = f"{prompt}\n\n{_CONDUCTOR_FIX_PREAMBLE.format(items=items[:_HANDOFF_ARTIFACT_MAX_CHARS])}"
-            fix_failures = await self._execute_agent_group(task_id, fix_prompt, [coder], workspace, context=context)
+            fix_failures = await self._execute_agent_group(
+                task_id, fix_prompt, [coder], workspace, context=context, model_pool=model_pool
+            )
             if fix_failures:
                 return fix_failures  # coder fix failed
         return []
 
     async def _execute_hierarchical_groups(
-        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
+        self,
+        task_id: str,
+        prompt: str,
+        plan: ExecutionPlan,
+        workspace: str,
+        context: str = "",
+        model_pool: str = "reasoning",
     ) -> list[str]:
         """Execute agents in hierarchical mode, passing results from earlier steps.
 
@@ -1576,7 +1644,9 @@ class Orchestrator:
             effective_prompt = (
                 f"{prompt}\n\n## Results from earlier steps\n{prior_context}" if prior_context else prompt
             )
-            failed = await self._execute_agent_group(task_id, effective_prompt, agents, workspace, context=context)
+            failed = await self._execute_agent_group(
+                task_id, effective_prompt, agents, workspace, context=context, model_pool=model_pool
+            )
             all_failures.extend(failed)
 
             all_data = await self._task_context_store.get_all(task_id)
@@ -1641,13 +1711,21 @@ class Orchestrator:
         )
 
     async def _execute_parallel_groups(
-        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
+        self,
+        task_id: str,
+        prompt: str,
+        plan: ExecutionPlan,
+        workspace: str,
+        context: str = "",
+        model_pool: str = "reasoning",
     ) -> list[str]:
         """Execute agents in parallel groups."""
         all_failures: list[str] = []
         for group in plan.parallel_groups:
             agents = [self._agent_registry.get(name) for name in group]
-            failed = await self._execute_agent_group(task_id, prompt, agents, workspace, context=context)
+            failed = await self._execute_agent_group(
+                task_id, prompt, agents, workspace, context=context, model_pool=model_pool
+            )
             all_failures.extend(failed)
         return all_failures
 
@@ -1867,13 +1945,18 @@ class Orchestrator:
         use_conductor = self._use_conductor(domain, plan)
         use_deploy = self._use_deploy_flow(domain, plan)
         use_design = use_conductor and self._use_design_phase(plan)
+        model_pool = self._resolve_task_model_pool(plan, domain)
         if use_deploy:
-            all_failures = await self._run_deploy_flow(task_id, prompt, workspace, context=context)
+            all_failures = await self._run_deploy_flow(
+                task_id, prompt, workspace, context=context, model_pool=model_pool
+            )
         elif use_design:
             # Cockpit: clarify + agree the design with the user first, an independent
             # different-model critique stress-tests the spec, then the continuous coder
             # implements the AGREED spec (resolving the critique within its scope).
-            design_failures = await self._run_design_phase(task_id, prompt, workspace, context=context)
+            design_failures = await self._run_design_phase(
+                task_id, prompt, workspace, context=context, model_pool=model_pool
+            )
             if design_failures:
                 all_failures = design_failures  # design blocked (incl. no usable spec) - don't implement
             else:
@@ -1887,15 +1970,25 @@ class Orchestrator:
                     workspace,
                     self._coder_preamble_for_agreed_spec(task_id, spec_critique),
                     context=context,
+                    model_pool=model_pool,
                 )
         elif use_conductor:
             all_failures = await self._run_engineering_conductor(
-                task_id, prompt, workspace, self._coder_preamble_for_kind(plan.engineering_kind), context=context
+                task_id,
+                prompt,
+                workspace,
+                self._coder_preamble_for_kind(plan.engineering_kind),
+                context=context,
+                model_pool=model_pool,
             )
         elif plan.mode == ExecutionMode.HIERARCHICAL:
-            all_failures = await self._execute_hierarchical_groups(task_id, prompt, plan, workspace, context=context)
+            all_failures = await self._execute_hierarchical_groups(
+                task_id, prompt, plan, workspace, context=context, model_pool=model_pool
+            )
         else:
-            all_failures = await self._execute_parallel_groups(task_id, prompt, plan, workspace, context=context)
+            all_failures = await self._execute_parallel_groups(
+                task_id, prompt, plan, workspace, context=context, model_pool=model_pool
+            )
 
         if all_failures:
             await self._report_execution_failures(task_id, all_failures)
@@ -2134,6 +2227,7 @@ class Orchestrator:
         workspace: str = "",
         context: str = "",
         allow_delegation: bool = True,
+        model_pool: str = "reasoning",
     ) -> list[str]:
         """Run a parallel group of agents concurrently; handle per-agent failures.
 
@@ -2152,6 +2246,7 @@ class Orchestrator:
                 prompt=prompt,
                 workspace=workspace,
                 context=context,
+                model_pool=model_pool,
                 exclude_models=await self._exclude_models_for(task_id, agent),
                 allow_delegation=allow_delegation,
             )

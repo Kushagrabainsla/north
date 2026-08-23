@@ -90,14 +90,14 @@ class LLMAgent(Agent):
             f"## Tools available\n{tool_lines or '(none)'}\n"
         )
 
-    def _resolve_priority(self) -> PoolPriority:
-        pool_name = self._config.model_pool
-        if pool_name not in POOL_TO_PRIORITY:
-            raise AgentConfigError(
-                f"Unknown model_pool '{pool_name}' in {self.name} config. "
-                f"Expected one of {sorted(POOL_TO_PRIORITY.keys())}."
-            )
-        return POOL_TO_PRIORITY[pool_name]
+    def _resolve_priority(self, pool_or_payload: str | AgentPayload | None = None) -> PoolPriority:
+        if isinstance(pool_or_payload, AgentPayload):
+            pool_name = pool_or_payload.model_pool
+        elif isinstance(pool_or_payload, str) and pool_or_payload:
+            pool_name = pool_or_payload
+        else:
+            pool_name = getattr(self._config, "model_pool", None) or "reasoning"
+        return POOL_TO_PRIORITY.get(pool_name, PoolPriority.HIGH)
 
     async def _execute(
         self,
@@ -112,7 +112,7 @@ class LLMAgent(Agent):
         response = await self._deps.inference_router.complete(
             CompletionRequest(
                 prompt=full_prompt,
-                priority=self._resolve_priority(),
+                priority=self._resolve_priority(payload),
                 component=self.name,
                 task_id=payload.task_id,
             )

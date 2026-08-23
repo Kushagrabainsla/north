@@ -1,6 +1,5 @@
 agent: architect
 domain: engineering
-model_pool: reasoning
 accepts:
   - "design"
   - "architecture"

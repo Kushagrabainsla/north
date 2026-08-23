@@ -1,6 +1,5 @@
 agent: home
 domain: home
-model_pool: fast_cheap
 accepts:
   - "light"
   - "lights"

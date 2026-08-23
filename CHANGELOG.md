@@ -11,6 +11,10 @@ All notable changes to north are documented here.
   - Added `task_queued` (⏳) and `task_resumed` (↻) status icons and step labels in CLI.
 - **Bootstrap Extraction Rate-Limit Resilience** (`bootstrap/onboarding.py`):
   - Background onboarding document extraction now catches rate limits with exponential backoff and defers unextracted files rather than prematurely marking them completed.
+- **Task-Driven Dynamic Model Selection & Agent Config Decoupling** (`agents/models.py`, `agents/llm_agent.py`, `agents/agentic_llm_agent.py`, `orchestrator/orchestrator.py`, `agents/*/config.yaml`):
+  - Removed static `model_pool` definitions from all agent `config.yaml` files, cleanly separating agent domain tools from task compute allocation.
+  - Added dynamic `model_pool` to `AgentPayload` resolved by the orchestrator per task based on task complexity (`FAST` vs `DEEP`), domain requirements, and user power modes (`SPORT`, `CRUISE`, `ECO`).
+  - Enabled high-capability free models (like `0xalpha`) to serve across all agents without being artificially pre-filtered by static agent configs.
 - **Model Family Prior for `ox-alpha`** (`inference/constants.py`, `tests/unit/inference/test_model_scorer.py`):
   - Added `ox-alpha`, `0x-alpha`, `0xalpha`, and `stealth` with priority tier `0.88` in `MODEL_FAMILY_TIERS` to ensure high-capability free models on OpenRouter are prioritized during model selection.
 

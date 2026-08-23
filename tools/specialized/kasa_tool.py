@@ -77,10 +77,7 @@ def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
     last_err = ""
     for attempt in ("binary", "module"):
         try:
-            if attempt == "binary":
-                cmd = [kasa_bin, "discover"]
-            else:
-                cmd = [sys.executable, "-m", "kasa", "discover"]
+            cmd = [kasa_bin, "discover"] if attempt == "binary" else [sys.executable, "-m", "kasa", "discover"]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
             output = result.stdout
             last_err = (result.stderr or "").strip()
@@ -348,18 +345,17 @@ class KasaTool(ApprovalGatedTool):
             return ToolOutput(success=False, error="Parameter 'action' is required.")
 
         target_hint = str(input.params.get("device", "")).strip().lower()
-        if action != "list":
+        if action != "list" and not target_hint:
             # Require an explicit target so a control action can never fan out
             # to every device on the network. No approval prompt - actions run
             # immediately once a device is named.
-            if not target_hint:
-                return ToolOutput(
-                    success=False,
-                    error=(
-                        "Parameter 'device' is required for control actions. "
-                        "Use action='list' to see available devices, then target one by alias or IP."
-                    ),
-                )
+            return ToolOutput(
+                success=False,
+                error=(
+                    "Parameter 'device' is required for control actions. "
+                    "Use action='list' to see available devices, then target one by alias or IP."
+                ),
+            )
 
         try:
             import kasa  # noqa: F401

@@ -1,6 +1,5 @@
 agent: researcher
 domain: engineering
-model_pool: reasoning
 accepts:
   - "investigate"
   - "explore"

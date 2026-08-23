@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import pytest
+
 from inference.capability import ModelCapability, ModelInfo, capabilities_from_model_id
 from inference.dispatcher import ModelDispatcher
 from inference.models import (
     CompletionRequest,
     CompletionResponse,
-    ModelEntry,
-    ModelPool,
-    PoolPriority,
 )
 from inference.provider import Provider
 
@@ -133,9 +131,15 @@ async def test_concurrent_refresh_with_graceful_failure_retention(tmp_path):
 @pytest.mark.asyncio
 async def test_dynamic_pool_candidate_routing(tmp_path):
     """Verify that specifying pool='reasoning' or pool='speed' selects appropriate candidates."""
-    m_reason = _make_info("claude-opus-5", "zen", frozenset({ModelCapability.COMPLETION, ModelCapability.REASONING}), quality=0.95)
-    m_speed = _make_info("groq-compound-mini", "groq", frozenset({ModelCapability.COMPLETION, ModelCapability.SPEED}), quality=0.4)
-    m_vision = _make_info("gemini-vision-pro", "gemini", frozenset({ModelCapability.COMPLETION, ModelCapability.VISION}), quality=0.8)
+    m_reason = _make_info(
+        "claude-opus-5", "zen", frozenset({ModelCapability.COMPLETION, ModelCapability.REASONING}), quality=0.95
+    )
+    m_speed = _make_info(
+        "groq-compound-mini", "groq", frozenset({ModelCapability.COMPLETION, ModelCapability.SPEED}), quality=0.4
+    )
+    m_vision = _make_info(
+        "gemini-vision-pro", "gemini", frozenset({ModelCapability.COMPLETION, ModelCapability.VISION}), quality=0.8
+    )
 
     p1 = _DummyProvider("zen", {"claude-opus-5": m_reason})
     p2 = _DummyProvider("groq", {"groq-compound-mini": m_speed})
@@ -162,7 +166,12 @@ async def test_dynamic_pool_candidate_routing(tmp_path):
 def test_current_pools_exposes_all_capability_pools(tmp_path):
     """Verify current_pools() returns all capability pools for CLI and UI observability."""
     m1 = _make_info("opus", "zen", frozenset({ModelCapability.REASONING, ModelCapability.COMPLETION}), quality=0.95)
-    m2 = _make_info("flash", "gemini", frozenset({ModelCapability.SPEED, ModelCapability.COMPLETION, ModelCapability.VISION}), quality=0.7)
+    m2 = _make_info(
+        "flash",
+        "gemini",
+        frozenset({ModelCapability.SPEED, ModelCapability.COMPLETION, ModelCapability.VISION}),
+        quality=0.7,
+    )
     m3 = _make_info("whisper", "groq", frozenset({ModelCapability.TRANSCRIPTION, ModelCapability.AUDIO}))
     m4 = _make_info("embed", "gemini", frozenset({ModelCapability.EMBEDDING}))
 
