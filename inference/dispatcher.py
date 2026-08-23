@@ -344,7 +344,13 @@ class ModelDispatcher(InferenceRouter):
             close = getattr(provider, "aclose", None)
             if close is not None:
                 try:
-                    _ = close()
+                    res = close()
+                    if asyncio.iscoroutine(res):
+                        try:
+                            loop = asyncio.get_running_loop()
+                            loop.create_task(res)
+                        except RuntimeError:
+                            pass
                 except Exception:
                     logger.warning("Failed to close provider %s on rebuild", provider.name, exc_info=True)
         self._providers = providers
@@ -452,14 +458,20 @@ class ModelDispatcher(InferenceRouter):
         if self._confidence_tracker is None or not self._dirty_scores:
             return
         dirty, self._dirty_scores = self._dirty_scores, set()
+        items: list[tuple[str, str, float, int]] = []
         for key in dirty:
             score, uses = self._model_confidence.get(key, (None, None))
-            if score is None:
-                continue
+            if score is not None and uses is not None:
+                items.append((key[0], key[1], score, uses))
+        if items:
             try:
-                await self._confidence_tracker.save_model_score(key[0], key[1], score, uses)
+                if hasattr(self._confidence_tracker, "save_model_scores_batch"):
+                    await self._confidence_tracker.save_model_scores_batch(items)
+                else:
+                    for model_id, provider, score, uses in items:
+                        await self._confidence_tracker.save_model_score(model_id, provider, score, uses)
             except Exception:
-                logger.warning("Failed to persist model score for %s/%s", key[1], key[0], exc_info=True)
+                logger.warning("Failed to persist model scores batch (%d items)", len(items), exc_info=True)
 
     def _effective_quality(self, info: ModelInfo) -> float:
         """Price-free quality score: family tier + live EMA + curation boost.

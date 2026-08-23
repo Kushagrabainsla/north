@@ -605,8 +605,10 @@ class Orchestrator:
         logger.info("Task queue drainer started")
         while True:
             try:
+                wake_signaled = False
                 with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
                     await asyncio.wait_for(self._queue_wake_event.wait(), timeout=poll_interval)
+                    wake_signaled = True
                 self._queue_wake_event.clear()
 
                 if self._running_task_store is None:
@@ -616,9 +618,16 @@ class Orchestrator:
                 if not queued_tasks:
                     continue
 
+                now = utcnow()
                 for rt in queued_tasks:
                     if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
                         break
+                    # If not explicitly woken by model recovery, enforce exponential backoff to prevent burning retries
+                    if not wake_signaled and rt.attempt > 0:
+                        min_delay = min(poll_interval * (2 ** max(0, rt.attempt - 1)), 60.0)
+                        elapsed = (now - rt.heartbeat_at).total_seconds()
+                        if elapsed < min_delay:
+                            continue
                     async with self._submit_lock:
                         if rt.task_id in self._active_tasks:
                             continue
@@ -1651,7 +1660,7 @@ class Orchestrator:
 
             all_data = await self._task_context_store.get_all(task_id)
             new_snippets = [
-                f"[{name}]: {(all_data.get(name) or {}).get('output', '')}"
+                f"[{name}]: {str((all_data.get(name) or {}).get('output', ''))[:_HANDOFF_ARTIFACT_MAX_CHARS]}"
                 for name in runnable
                 if (all_data.get(name) or {}).get("output")
             ]
@@ -2380,13 +2389,12 @@ class Orchestrator:
         isolated_payload = payload.model_copy(update={"workspace": wt.path})
         try:
             result = await self._run_agent_with_retry(agent, isolated_payload)
+            integration = await manager.integrate(wt, lock=workspace_lock(payload.workspace))
+            await self._emit_integration(payload.task_id, agent.name, integration)
+            return result
         except BaseException:
             await self._discard_worktree(manager, wt)
             raise
-
-        integration = await manager.integrate(wt, lock=workspace_lock(payload.workspace))
-        await self._emit_integration(payload.task_id, agent.name, integration)
-        return result
 
     async def _run_best_of_n(self, agent: Agent, payload: AgentPayload, manager: GitWorktreeManager) -> AgentResult:
         """Run N isolated coder attempts in parallel; integrate only the best (#11).
@@ -2587,7 +2595,8 @@ class Orchestrator:
         # possibly empty); questions/approvals carry no completion claims.
         if result.successful_tools is None or result.requires_approval or result.has_question:
             return
-        violations = verify_claims(result.output, result.successful_tools)
+        ws = payload.workspace if payload is not None else None
+        violations = verify_claims(result.output, result.successful_tools, workspace=ws)
         violations = self._add_evidence_gate_violations(agent, result, violations)
         if not violations:
             return
@@ -2642,7 +2651,7 @@ class Orchestrator:
         if repaired.successful_tools is None:
             return violations
 
-        remaining = verify_claims(repaired.output, repaired.successful_tools)
+        remaining = verify_claims(repaired.output, repaired.successful_tools, workspace=payload.workspace)
         if len(remaining) >= len(violations):
             return violations  # no improvement - keep the original answer
 

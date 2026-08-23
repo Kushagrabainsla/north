@@ -11,6 +11,7 @@ from agents.context_compaction import (
     context_window_for,
     estimate_messages_tokens,
     exchange_boundaries,
+    render_exchange_for_summary,
 )
 from inference.base import InferenceRouter
 from inference.models import (
@@ -171,3 +172,22 @@ async def test_compact_if_needed_skips_when_under_threshold() -> None:
     # No summarisation call should have happened
     assert len(router.complete_calls) == 0
     assert len(messages) == 4
+
+
+def test_render_exchange_preserves_multi_round_compacted_summary() -> None:
+    long_summary = (
+        "## Earlier context (auto-compacted)\n"
+        "- Step 1: created auth.py\n"
+        "- Step 2: created database.py\n"
+        "- Step 3: fixed login issue in views.py\n"
+        "- Step 4: passed all test suites\n"
+        + "x" * 500
+    )
+    messages = [
+        {"role": "user", "content": long_summary},
+        {"role": "assistant", "content": "Understood."},
+    ]
+    rendered = render_exchange_for_summary(messages)
+    assert "[previous summary:" in rendered
+    assert long_summary in rendered
+    assert len(rendered) > 500

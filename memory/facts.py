@@ -198,8 +198,9 @@ class FactStore:
         
         # Normalized text dedup (catches paraphrases like
         # "User studies CS at SJSU" vs "User studies computer science at San Jose State University")
-        if await asyncio.to_thread(self._find_normalized_sync, category, content):
-            await asyncio.to_thread(self._touch_sync, category, content)
+        matched_id = await asyncio.to_thread(self._find_normalized_sync, category, content)
+        if matched_id:
+            await asyncio.to_thread(self._touch_by_id_sync, matched_id)
             return False
         new_emb: list[float] = []
         try:
@@ -334,6 +335,14 @@ class FactStore:
             conn.execute(
                 "UPDATE context_facts SET updated_at = ? WHERE category = ? AND content = ?",
                 (datetime.now(UTC).isoformat(), category, content),
+            )
+
+    def _touch_by_id_sync(self, fact_id: str) -> None:
+        """Refresh recency of an existing fact by ID (normalized dedup path)."""
+        with open_db_connection(self._db_path) as conn:
+            conn.execute(
+                "UPDATE context_facts SET updated_at = ? WHERE id = ?",
+                (datetime.now(UTC).isoformat(), fact_id),
             )
 
     def _find_similar_sync(self, category: str, emb: list[float], threshold: float) -> str | None:

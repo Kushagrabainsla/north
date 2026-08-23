@@ -4,6 +4,26 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **Adversarial Hardening & Architectural Reliability (4 Fundamental Fix Buckets)**:
+  - **Bucket 1: State Representation & Context Continuity** (`agents/context_compaction.py`, `memory/facts.py`, `memory/injection.py`, `orchestrator/orchestrator.py`):
+    - Multi-round compaction now preserves previous auto-compacted summaries (`## Earlier context (auto-compacted)`) in full, eliminating long-task amnesia.
+    - Normalized fact deduplication touches matched rows by database primary key ID via `_touch_by_id_sync` rather than mismatched string lookups.
+    - Robust JSON extraction with `extract_json()` in `ContextInjector._route()` to handle markdown code fences and reasoning traces.
+    - Bounded intermediate hierarchical task outputs to `_HANDOFF_ARTIFACT_MAX_CHARS`.
+  - **Bucket 2: Task Queue & Rate-Limit Backoff Engine** (`orchestrator/orchestrator.py`, `tools/confidence.py`, `inference/dispatcher.py`, `context/code_index.py`, `gateways/telegram.py`):
+    - Added exponential backoff (`min(poll_interval * 2**(attempt-1), 60s)`) with recovery-wake awareness in `drain_queued_tasks_loop()`.
+    - Added `save_model_scores_batch()` using SQLite `executemany()` to flush dirty scores in a single database transaction.
+    - Batched code chunk embeddings across modified files via `_embed_batch_flat()` in `CodeIndex._ensure_fresh()`.
+    - Integrated `_typing_keepalive` in `TelegramGateway` to keep typing indicators alive during long tasks.
+  - **Bucket 3: Resource Lifecycle & Subprocess Supervision** (`tools/specialized/bash.py`, `inference/dispatcher.py`, `orchestrator/orchestrator.py`, `orchestrator/stream.py`):
+    - Subprocesses spawn with `start_new_session=True` and terminate process groups via `os.killpg(pgid, SIGTERM/SIGKILL)` on timeout, eliminating orphaned background processes.
+    - Provider `aclose()` coroutines scheduled onto active event loop during `rebuild()`, eliminating unawaited coroutine warnings and socket leaks.
+    - Worktree cleanup guaranteed on `manager.integrate()` failures.
+    - Stream history LRU promotion (`move_to_end`) and `_recently_finished` ring buffer prevent late SSE subscribers from blocking indefinitely.
+  - **Bucket 4: Deterministic Grounding & Code Synthesis Engine** (`tools/specialized/patch_file.py`, `orchestrator/verification.py`, `orchestrator/orchestrator.py`, `gateways/telegram.py`):
+    - Replaced regex with line-by-line state machine parser `_parse_search_replace_blocks()` for `patch_file` to support `=======` divider comments inside search blocks.
+    - Anchored `verify_claims` relative path checking to task `workspace` root directory rather than daemon CWD.
+    - Added automatic plain-text fallback on Telegram 400 Bad Request markdown errors.
 - **Task Queue & Auto-Resume on Model Scarcity** (`orchestrator/running_tasks.py`, `orchestrator/orchestrator.py`, `orchestrator/app.py`, `orchestrator/constants.py`, `cli/constants.py`, `tests/unit/orchestrator/test_task_queue.py`):
   - Added durable `queued` status and FIFO queue management in `RunningTaskStore` (`mark_queued`, `list_queued`, `mark_running_from_queued`).
   - Tasks encountering temporary model pool exhaustion or rate limits (`AllModelsRateLimitedError`) now automatically transition to `status="queued"` with attempt tracking rather than failing immediately.

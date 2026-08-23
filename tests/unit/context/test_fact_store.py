@@ -161,3 +161,23 @@ async def test_concurrent_searches_rebuild_cache_once(db_path: Path) -> None:
     results = await asyncio.gather(*[store.search("sky") for _ in range(8)])
     assert all(r == ["the sky is blue"] for r in results)
     assert rebuilds == 1, "concurrent searches must share one cache rebuild"
+
+
+async def test_normalized_dedup_touches_existing_fact_by_id(db_path: Path) -> None:
+    store = FactStore(db_path=db_path, embed_fn=_embedder(default=[]))
+    # Add initial fact
+    assert await store.add_fact("User is studying at San Jose State") is True
+    initial_facts = await store.all_facts()
+    initial_id = initial_facts[0]["id"]
+    initial_updated = initial_facts[0]["updated_at"]
+
+    # Sleep slightly so timestamp advances
+    await asyncio.sleep(0.01)
+
+    # Paraphrased version with filler words
+    assert await store.add_fact("The user was studying at the San Jose State") is False
+    assert await store.count() == 1
+
+    updated_facts = await store.all_facts()
+    assert updated_facts[0]["id"] == initial_id
+    assert updated_facts[0]["updated_at"] >= initial_updated

@@ -214,8 +214,40 @@ def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
     return new_content, content, len(edits)
 
 
+def _parse_search_replace_blocks(text: str) -> list[tuple[str, str]]:
+    """Stateful parser for <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE blocks.
+
+    Unlike naive regexes, properly handles ======= divider comments inside search blocks.
+    """
+    blocks: list[tuple[str, str]] = []
+    lines = text.splitlines(keepends=True)
+    state = "OUTSIDE"
+    search_lines: list[str] = []
+    replace_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        if state == "OUTSIDE":
+            if stripped == "<<<<<<< SEARCH":
+                state = "SEARCH"
+                search_lines = []
+                replace_lines = []
+        elif state == "SEARCH":
+            if stripped == "=======":
+                state = "REPLACE"
+            else:
+                search_lines.append(line)
+        elif state == "REPLACE":
+            if stripped == ">>>>>>> REPLACE":
+                blocks.append(("".join(search_lines), "".join(replace_lines)))
+                state = "OUTSIDE"
+            else:
+                replace_lines.append(line)
+    return blocks
+
+
 def _plan_blocks_or_legacy(content: str, old_string: str | None, new_string: str) -> tuple[str, str, int] | ToolOutput:
-    blocks = _BLOCK_RE.findall(new_string)
+    blocks = _parse_search_replace_blocks(new_string)
     if blocks:
         new_content = content
         for search_val, replace_val in blocks:

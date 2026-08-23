@@ -229,6 +229,22 @@ class ConfidenceTracker:
                 (model_id, provider, score, uses, now),
             )
 
+    async def save_model_scores_batch(self, items: list[tuple[str, str, float, int]]) -> None:
+        """Upsert multiple models' EMA scores in a single transaction."""
+        if not items:
+            return
+        await asyncio.to_thread(self._save_model_scores_batch_sync, items)
+
+    def _save_model_scores_batch_sync(self, items: list[tuple[str, str, float, int]]) -> None:
+        now = datetime.now(UTC).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO model_confidence "
+                "(model_id, provider, confidence, uses_total, last_updated) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(model_id, provider, score, uses, now) for (model_id, provider, score, uses) in items],
+            )
+
     async def inherit_from(self, new_agent: str, source_agent: str) -> None:
         """Copy `source_agent`'s tool rows to `new_agent` as a starting prior.
 

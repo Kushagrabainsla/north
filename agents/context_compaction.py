@@ -157,7 +157,11 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
             except Exception:
                 lines.append(f"  ← result: {str(content)[:_RENDER_PREVIEW_CHARS]}")
         elif role == "user":
-            lines.append(f"[user context: {str(msg.get('content', ''))[:_RENDER_PREVIEW_CHARS]}]")
+            content_str = str(msg.get("content", ""))
+            if "## Earlier context (auto-compacted)" in content_str:
+                lines.append(f"[previous summary:\n{content_str}]")
+            else:
+                lines.append(f"[user context: {content_str[:_RENDER_PREVIEW_CHARS]}]")
     return "\n".join(lines)
 
 

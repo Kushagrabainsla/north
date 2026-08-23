@@ -251,3 +251,48 @@ class TestBashAllowDangerous:
         tool = BashTool(approval_store=store, mode_provider=lambda: ApprovalMode.AUTONOMOUS)
         out = await tool.run(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
         assert out.success is True  # not pre-blocked; reached execution
+
+    @pytest.mark.asyncio
+    async def test_timeout_kills_process_group(self, monkeypatch) -> None:
+        killed = False
+        killpg_called = False
+
+        class _P:
+            pid = 12345
+            returncode = -9
+            called = 0
+
+            async def communicate(self):
+                self.called += 1
+                if self.called == 1:
+                    await asyncio.sleep(10)
+                return b"", b""
+
+            def kill(self):
+                nonlocal killed
+                killed = True
+
+        async def fake_exec_shell(cmd, **kwargs):
+            return _P()
+
+        def fake_killpg(pgid, sig):
+            nonlocal killpg_called
+            killpg_called = True
+
+        import asyncio
+        import os
+        monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_exec_shell)
+        monkeypatch.setattr(os, "killpg", fake_killpg)
+        monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+
+        store = MagicMock()
+        resolved = MagicMock(status="approved", chosen_option="Run")
+        store.wait_for_decision = AsyncMock(return_value=resolved)
+
+        from approval.mode import ApprovalMode
+        tool = BashTool(approval_store=store, mode_provider=lambda: ApprovalMode.AUTONOMOUS)
+        out = await tool.run(ToolInput(params={"command": "sleep 100", "timeout": 1}))
+
+        assert out.success is False
+        assert "timed out" in (out.error or "")
+        assert killpg_called is True

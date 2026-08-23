@@ -99,6 +99,17 @@ class TelegramGateway:
         try:
             resp = await self._http.post(_bot_url("sendMessage"), json=payload)
             resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Markdown parsing failed (e.g. unescaped code characters), retry as plain text
+            if exc.response.status_code == 400 and payload.get("parse_mode"):
+                payload.pop("parse_mode", None)
+                try:
+                    resp = await self._http.post(_bot_url("sendMessage"), json=payload)
+                    resp.raise_for_status()
+                    return
+                except httpx.RequestError as retry_exc:
+                    logger.error("Failed to send Telegram plain message to %s: %s", chat_id, retry_exc)
+            logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
         except httpx.RequestError as exc:
             logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
 
@@ -117,6 +128,13 @@ class TelegramGateway:
         """Show a typing indicator in the chat."""
         with contextlib.suppress(httpx.RequestError):
             await self._http.post(_bot_url("sendChatAction"), json={"chat_id": chat_id, "action": action})
+
+    async def _typing_keepalive(self, chat_id: int, stop_event: asyncio.Event) -> None:
+        """Periodically refresh the typing status until stop_event is set."""
+        while not stop_event.is_set():
+            await self._send_chat_action(chat_id, "typing")
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await asyncio.wait_for(stop_event.wait(), timeout=4.0)
 
     async def _submit_task(self, text: str) -> dict | None:
         """Submit a prompt to north via the webhook endpoint."""
@@ -288,8 +306,16 @@ class TelegramGateway:
             "task_id": task_id,
         }
 
-        # Poll for result
-        output = await self._get_task_result(task_id)
+        # Poll for result with continuous typing indicator
+        stop_typing = asyncio.Event()
+        typing_task = asyncio.create_task(self._typing_keepalive(chat_id, stop_typing))
+        try:
+            output = await self._get_task_result(task_id)
+        finally:
+            stop_typing.set()
+            typing_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await typing_task
 
         # Send result back
         if output:

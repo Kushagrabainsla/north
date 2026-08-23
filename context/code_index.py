@@ -182,19 +182,32 @@ class CodeIndex:
                 self._cache.pop(ws, None)
 
             changed_any = False
+            files_to_embed = []
+            flat_texts = []
+
             for rel, _text, digest, chunks in to_process:
                 if not chunks:
                     await asyncio.to_thread(self._upsert_file_sync, ws, rel, digest, [])
-                    continue
-                embedded = await self._embed_chunks([c[3] for c in chunks], rel)
-                if embedded is None:
-                    continue  # embedding unavailable - leave prior state, try again next search
-                rows = [
-                    (start, end, symbol, chunk_text, json.dumps(vec))
-                    for (start, end, symbol, chunk_text), vec in zip(chunks, embedded, strict=False)
-                ]
-                await asyncio.to_thread(self._upsert_file_sync, ws, rel, digest, rows)
-                changed_any = True
+                    changed_any = True
+                else:
+                    files_to_embed.append((rel, digest, chunks))
+                    for c in chunks:
+                        flat_texts.append(f"{rel}\n{c[3]}")
+
+            if flat_texts:
+                all_embedded = await self._embed_batch_flat(flat_texts)
+                if all_embedded is not None and len(all_embedded) == len(flat_texts):
+                    offset = 0
+                    for rel, digest, chunks in files_to_embed:
+                        count = len(chunks)
+                        file_embedded = all_embedded[offset : offset + count]
+                        offset += count
+                        rows = [
+                            (start, end, symbol, chunk_text, json.dumps(vec))
+                            for (start, end, symbol, chunk_text), vec in zip(chunks, file_embedded, strict=False)
+                        ]
+                        await asyncio.to_thread(self._upsert_file_sync, ws, rel, digest, rows)
+                        changed_any = True
 
             if changed_any:
                 self._cache.pop(ws, None)
@@ -219,15 +232,15 @@ class CodeIndex:
             to_embed.append((rel, text, digest, chunks))
         return removed, to_embed
 
-    async def _embed_chunks(self, texts: list[str], rel: str) -> list[list[float]] | None:
-        """Embed chunk texts (batched). Returns None if embedding is unavailable."""
+    async def _embed_batch_flat(self, texts: list[str]) -> list[list[float]] | None:
+        """Embed all chunk texts in batches of _EMBED_BATCH."""
         out: list[list[float]] = []
         for i in range(0, len(texts), _EMBED_BATCH):
-            batch = [f"{rel}\n{t}" for t in texts[i : i + _EMBED_BATCH]]
+            batch = texts[i : i + _EMBED_BATCH]
             try:
                 embs = await self._embed_fn(batch)
             except Exception:
-                logger.warning("CodeIndex: embed failed for %s - not indexed", rel)
+                logger.warning("CodeIndex: embed batch failed (%d texts) - not indexed", len(batch))
                 return None
             if len(embs) != len(batch):
                 return None

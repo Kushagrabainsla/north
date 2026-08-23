@@ -11,7 +11,9 @@ See docs/CODING_STYLE.md Section 16.1.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import signal
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -239,12 +241,14 @@ class BashTool(ApprovalGatedTool):
         if sandbox_error is not None:
             return ToolOutput(success=False, error=sandbox_error)
 
+        use_new_session = hasattr(os, "setsid")
         try:
             if exec_argv is not None:
                 proc = await asyncio.create_subprocess_exec(
                     *exec_argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    start_new_session=use_new_session,
                 )
             else:
                 proc = await asyncio.create_subprocess_shell(
@@ -252,12 +256,31 @@ class BashTool(ApprovalGatedTool):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=exec_cwd,
+                    start_new_session=use_new_session,
                 )
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             except TimeoutError:
-                proc.kill()
-                await proc.communicate()
+                if use_new_session and hasattr(os, "killpg") and hasattr(os, "getpgid"):
+                    try:
+                        pgid = os.getpgid(proc.pid)
+                        os.killpg(pgid, signal.SIGTERM)
+                        try:
+                            await asyncio.wait_for(proc.communicate(), timeout=1.0)
+                        except TimeoutError:
+                            os.killpg(pgid, signal.SIGKILL)
+                            try:
+                                await asyncio.wait_for(proc.communicate(), timeout=1.0)
+                            except Exception:
+                                pass
+                    except ProcessLookupError:
+                        pass
+                else:
+                    proc.kill()
+                    try:
+                        await proc.communicate()
+                    except Exception:
+                        pass
                 return ToolOutput(success=False, error=f"Command timed out after {timeout}s.")
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))

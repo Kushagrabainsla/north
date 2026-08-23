@@ -55,3 +55,43 @@ async def test_patch_file_rejects_concurrent_modification(tmp_path: Path):
     assert not out.success
     assert "modified concurrently on disk" in out.error
     assert f.read_text() == "initial_value = 999\n"  # Concurrent modification preserved!
+
+
+@pytest.mark.asyncio
+async def test_patch_file_handles_divider_lines_in_search_blocks(tmp_path: Path):
+    f = tmp_path / "divider.py"
+    content = (
+        "# ==========================================\n"
+        "# Section 1: Configuration\n"
+        "# ==========================================\n"
+        "DEBUG = False\n"
+    )
+    f.write_text(content)
+
+    tool = PatchFileTool()
+    block = (
+        "<<<<<<< SEARCH\n"
+        "# ==========================================\n"
+        "# Section 1: Configuration\n"
+        "# ==========================================\n"
+        "DEBUG = False\n"
+        "=======\n"
+        "# ==========================================\n"
+        "# Section 1: Configuration (Updated)\n"
+        "# ==========================================\n"
+        "DEBUG = True\n"
+        ">>>>>>> REPLACE"
+    )
+    out = await tool.run(
+        ToolInput(
+            params={
+                "path": str(f),
+                "new_string": block,
+                "workspace": str(tmp_path),
+            }
+        )
+    )
+
+    assert out.success
+    assert "DEBUG = True" in f.read_text()
+    assert "Section 1: Configuration (Updated)" in f.read_text()

@@ -48,15 +48,19 @@ class EventStreamManager:
         self._history: OrderedDict[str, deque[str]] = OrderedDict()
         # task_ids whose stream has finished (emit_done was called)
         self._done: set[str] = set()
+        # Bounded ring buffer of recently finished task_ids (survives eviction from _history)
+        self._recently_finished: deque[str] = deque(maxlen=_HISTORY_MAX_TASKS * 2)
 
     def _ensure_history(self, task_id: str) -> deque[str]:
         history = self._history.get(task_id)
-        if history is None:
-            while len(self._history) >= _HISTORY_MAX_TASKS:
-                evicted_id, _ = self._history.popitem(last=False)
-                self._done.discard(evicted_id)
-            history = deque(maxlen=_HISTORY_MAX_EVENTS)
-            self._history[task_id] = history
+        if history is not None:
+            self._history.move_to_end(task_id)
+            return history
+        while len(self._history) >= _HISTORY_MAX_TASKS:
+            evicted_id, _ = self._history.popitem(last=False)
+            self._done.discard(evicted_id)
+        history = deque(maxlen=_HISTORY_MAX_EVENTS)
+        self._history[task_id] = history
         return history
 
     def _record_history(self, task_id: str, message: str) -> None:
@@ -126,6 +130,7 @@ class EventStreamManager:
         """
         self._ensure_history(task_id)  # eviction of the history entry also clears the done flag
         self._done.add(task_id)
+        self._recently_finished.append(task_id)
         queues = self._subscribers.get(task_id, [])
         for q in queues:
             try:
@@ -155,7 +160,7 @@ class EventStreamManager:
         # Snapshot before registering the queue - no await in between, so an
         # event is either in the snapshot or delivered via the queue, never both.
         replay = list(self._history.get(task_id, ()))
-        done = task_id in self._done
+        done = (task_id in self._done) or (task_id in self._recently_finished)
         queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=max_queue_size)
         if not done:
             self._subscribers.setdefault(task_id, []).append(queue)

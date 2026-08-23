@@ -94,9 +94,10 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
 )
 
 
-def _verify_path_existence(output: str) -> list[str]:
+def _verify_path_existence(output: str, workspace: str | None = None) -> list[str]:
     """Check explicit path claims against physical filesystem reality."""
     violations: list[str] = []
+    ws_path = Path(workspace).expanduser().resolve() if workspace else None
     for match in _EXPLICIT_PATH_CLAIM_RE.finditer(output):
         window = output[max(0, match.start() - _GOVERNING_WINDOW_CHARS) : match.start()]
         if _NON_COMPLETION_RE.search(window):
@@ -104,6 +105,8 @@ def _verify_path_existence(output: str) -> list[str]:
         raw_path = match.group(1)
         try:
             p = Path(raw_path).expanduser()
+            if not p.is_absolute() and ws_path:
+                p = (ws_path / p).resolve()
             if not p.exists():
                 violations.append(f"output claims file was saved to '{raw_path}' but no such file exists on disk")
         except Exception:
@@ -125,7 +128,11 @@ def _has_completion_claim(output: str, pattern: re.Pattern[str]) -> bool:
     return False
 
 
-def verify_claims(output: str, successful_tools: Iterable[str]) -> list[str]:
+def verify_claims(
+    output: str,
+    successful_tools: Iterable[str],
+    workspace: str | None = None,
+) -> list[str]:
     """Return violations: claims in *output* unsupported by tool evidence or physical reality.
 
     Each violation is a human-readable sentence. An empty list means nothing was
@@ -137,7 +144,7 @@ def verify_claims(output: str, successful_tools: Iterable[str]) -> list[str]:
     violations: list[str] = []
 
     # 1. Deterministic physical path check: verify claimed output files exist on disk
-    for path_violation in _verify_path_existence(output):
+    for path_violation in _verify_path_existence(output, workspace=workspace):
         if path_violation not in violations:
             violations.append(path_violation)
 

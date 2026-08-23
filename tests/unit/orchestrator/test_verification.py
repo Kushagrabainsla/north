@@ -171,3 +171,14 @@ def test_claimed_existing_file_path_with_write_tool_ok(tmp_path) -> None:
     violations = verify_claims(output, ["write_file"])
     assert violations == []
 
+
+def test_claimed_relative_file_path_in_workspace_ok(tmp_path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    real_file = docs_dir / "report.md"
+    real_file.write_text("Report content")
+
+    output = "Report saved to docs/report.md"
+    violations = verify_claims(output, ["write_file"], workspace=str(tmp_path))
+    assert violations == []
+

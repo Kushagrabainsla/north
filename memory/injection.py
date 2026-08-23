@@ -14,7 +14,7 @@ from memory.base import ContextStore
 from memory.models import ContextDocument
 from utils.ids import generate_id
 from utils.tasks import spawn
-from utils.text import strip_html
+from utils.text import extract_json, strip_html
 from utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -142,12 +142,14 @@ class ContextInjector:
             )
         )
         try:
-            result = json.loads(response.text.strip())
-            doc_key = result["document"]
-            delta = str(result["delta"]).strip()
-            doc = _DOCUMENT_MAP.get(doc_key, ContextDocument.USER)
-            return doc, delta
-        except (json.JSONDecodeError, KeyError, ValueError):
+            result = extract_json(response.text.strip())
+            if isinstance(result, dict):
+                doc_key = result.get("document", "user")
+                delta = str(result.get("delta", "")).strip()
+                doc = _DOCUMENT_MAP.get(doc_key, ContextDocument.USER)
+                return doc, delta or text[:_MAX_CONTENT_CHARS]
+            return ContextDocument.USER, text[:_MAX_CONTENT_CHARS]
+        except (ValueError, KeyError, TypeError):
             return ContextDocument.USER, text[:_MAX_CONTENT_CHARS]
 
 
