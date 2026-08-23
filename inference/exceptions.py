@@ -12,6 +12,11 @@ class InferenceError(NorthError):
 class AllModelsRateLimitedError(InferenceError):
     """Every candidate in the dispatch chain was exhausted."""
 
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 
 class ModelRateLimitedError(InferenceError):
     """A specific (model, provider) pair returned a rate-limit response.

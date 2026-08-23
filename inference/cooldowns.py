@@ -55,7 +55,19 @@ class CooldownStore:
         """Return True if the model is currently under cooldown."""
         return self._expiry.get(key, 0.0) > time.monotonic()
 
+    def remaining(self, key: _CooldownKey) -> float:
+        """Return remaining cooldown seconds for key (0.0 if not active)."""
+        exp = self._expiry.get(key, 0.0)
+        return max(0.0, exp - time.monotonic())
+
+    def is_payment_required(self, provider_name: str, model_id: str) -> bool:
+        """Return True if model is specifically marked with payment/billing exhaustion."""
+        key = (model_id, provider_name)
+        # Payment cooldowns are 24h (> 3600s in the future)
+        return (self._expiry.get(key, 0.0) - time.monotonic()) > 3600.0
+
     def set_rate_limit(self, key: _CooldownKey, seconds: float | None = None) -> None:
+
         """Apply a short rate-limit cooldown (memory-only).
 
         Uses *seconds* when a provider supplied a Retry-After (clamped to

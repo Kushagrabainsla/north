@@ -60,6 +60,7 @@ _STEP_ICONS: dict[str, str] = {
     "agent_completed": "✓",
     "tool_called": "→",
     "tool_result": "✓",
+    "waiting_for_model": "⏳",
     "task_queued": "⏳",
     "task_resumed": "↻",
 }
@@ -74,6 +75,7 @@ _STEP_LABELS: dict[str, str] = {
     "routing": "planning…",
     "routed": "plan ready",
     "executing": "running agents…",
+    "waiting_for_model": "waiting for model capacity…",
     "task_queued": "queued (waiting for models)…",
     "task_resumed": "resuming from queue…",
 }
@@ -114,6 +116,8 @@ _SLASH_COMMANDS: dict[str, str] = {
     "/help": "show available commands",
     "/models": "list discovered models across capability pools",
     "/limits": "inspect active rate limits and cooldowns",
+    "/queue": "inspect active tasks and queued background jobs",
+    "/cancel": "cancel a running/queued task by ID, or '/cancel all'",
     "/jobs": "inspect active and scheduled background jobs",
     "/context": "inspect active context and goal documents",
     "/clear": "clear the conversation log",
@@ -123,6 +127,7 @@ _SLASH_COMMANDS: dict[str, str] = {
     "/autonomy": "show or set the approval dial (interactive|auto|autonomous)",
     "/quit": "exit north",
 }
+
 
 # Matches well-formed Textual console-markup spans ([tag] / [/tag]) for stripping.
 _MARKUP_RE = re.compile(r"\[/?[^\[\]]*\]")

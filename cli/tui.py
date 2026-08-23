@@ -325,6 +325,9 @@ class NorthApp(App[None]):
             "task_paused": self._on_task_paused,
             "approval_required": self._on_approval_required,
             "question_required": self._on_question_required,
+            "waiting_for_model": self._on_waiting_for_model,
+            "task_queued": self._on_task_queued,
+            "task_resumed": self._on_task_resumed,
             "design_phase": self._on_design_phase,
             "plan_seeded": self._on_plan_seeded,
             "conductor_fix_round": self._on_conductor_fix_round,
@@ -864,6 +867,24 @@ class NorthApp(App[None]):
         self._log("  [dim]task paused[/dim]")
         self._render_status_bar()
 
+    async def _on_waiting_for_model(self, task_id: str, data: dict) -> None:
+        wait_secs = int(data.get("wait_seconds", 10))
+        reason = data.get("reason", "rate limits")
+        self._set_status(f"waiting for model ({reason}, retrying in {wait_secs}s)…")
+
+    async def _on_task_queued(self, task_id: str, data: dict) -> None:
+        reason = data.get("reason", "waiting for model capacity")
+        retry_after = data.get("retry_after")
+        time_info = f" (retrying in ~{int(retry_after)}s)" if retry_after else ""
+        self._set_status("task queued (waiting for models)…")
+        self._log(f"  [yellow]⏳[/yellow]  [white]task queued[/white] [bright_black]({reason}{time_info})[/bright_black]")
+        if task_id:
+            self._log(f"    [bright_black]Task ID: {task_id} — type '/cancel {task_id}' to cancel[/bright_black]")
+
+    async def _on_task_resumed(self, task_id: str, data: dict) -> None:
+        self._set_status("resuming task from queue…")
+        self._log(f"  [cyan]↻[/cyan]  [white]resuming task[/white] [bright_black]{task_id}[/bright_black]")
+
     async def _on_approval_required(self, task_id: str, data: dict) -> None:
         card_id = data.get("card_id", "")
         # Ignore a repeat of a card we're already prompting for (see
@@ -1208,6 +1229,60 @@ class NorthApp(App[None]):
         elif cmd == "/agents":
             agents = await self._fetch_agents()
             self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))
+        elif cmd == "/queue":
+            try:
+                async with self._http() as c:
+                    r_tasks = await c.get(f"{self.base_url}/orchestrator/tasks", headers=self.headers, timeout=5.0)
+                    r_jobs = await c.get(
+                        f"{self.base_url}/orchestrator/jobs",
+                        params={"status": "pending"},
+                        headers=self.headers,
+                        timeout=5.0,
+                    )
+                    tasks = r_tasks.json() if r_tasks.status_code == 200 else []
+                    jobs = r_jobs.json() if r_jobs.status_code == 200 else []
+                    self._log("  [cyan]◆[/cyan]  [white]active tasks & queued jobs[/white]")
+                    if not tasks and not jobs:
+                        self._log("    [bright_black]No active tasks or queued jobs in flight.[/bright_black]")
+                    else:
+                        for t in tasks:
+                            tid = t.get("task_id", "")
+                            p = t.get("prompt", "")[:60]
+                            self._log(f"    [green]active task[/green]  [bright_black]{tid}[/bright_black]  {p}")
+                        for j in jobs:
+                            jid = j.get("job_id", "")
+                            p = j.get("task", "")[:60]
+                            self._log(f"    [yellow]queued job[/yellow]   [bright_black]{jid}[/bright_black]  {p}")
+                        self._log("    [bright_black]Type '/cancel <id>' to cancel a task/job, or '/cancel all' to cancel everything.[/bright_black]")
+            except Exception as exc:
+                self._log(f"  [red]error fetching queue: {exc}[/red]")
+        elif cmd.startswith("/cancel"):
+            parts = text.strip().split()
+            target = parts[1] if len(parts) > 1 else ""
+            if not target or target.lower() in ("all", "--all"):
+                try:
+                    async with self._http() as c:
+                        r = await c.post(f"{self.base_url}/orchestrator/cancel-all", headers=self.headers, timeout=10.0)
+                        if r.status_code == 200:
+                            data = r.json()
+                            self._log(
+                                f"  [yellow]✓[/yellow]  [white]cancelled {data.get('tasks_cancelled', 0)} active task(s) and {data.get('jobs_cancelled', 0)} queued job(s)[/white]"
+                            )
+                        else:
+                            self._log(f"  [red]error cancelling tasks (HTTP {r.status_code})[/red]")
+                except Exception as exc:
+                    self._log(f"  [red]error cancelling tasks: {exc}[/red]")
+            else:
+                try:
+                    async with self._http() as c:
+                        r = await c.post(f"{self.base_url}/orchestrator/cancel/{target}", headers=self.headers, timeout=10.0)
+                        if r.status_code == 200:
+                            data = r.json()
+                            self._log(f"  [yellow]✓[/yellow]  [white]cancelled {data.get('cancelled', 'task')} {data.get('id', target)}[/white]")
+                        else:
+                            self._log(f"  [red]task or job '{target}' not found or already completed[/red]")
+                except Exception as exc:
+                    self._log(f"  [red]error cancelling {target}: {exc}[/red]")
         elif cmd == "/jobs":
             try:
                 async with self._http() as c:

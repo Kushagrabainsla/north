@@ -829,6 +829,7 @@ class ModelDispatcher(InferenceRouter):
         is_valid: Callable[[Any], bool] | None = None,
         sticky_key: tuple[str, str, str, str] | None = None,
         fallback_candidates: list[_Candidate] | None = None,
+        allow_wait: bool = True,
     ):
         if not candidates:
             # Nothing in the primary pool - go straight to the fallback (free tier)
@@ -964,8 +965,38 @@ class ModelDispatcher(InferenceRouter):
                 is_valid=is_valid,
                 sticky_key=sticky_key,
                 fallback_candidates=None,
+                allow_wait=allow_wait,
+            )
+
+        # Check for transient rate limit cooldowns across all evaluated candidates
+        all_evaluated = candidates + (fallback_candidates or [])
+        transient_waits: list[float] = []
+        for info, _ in all_evaluated:
+            key = (info.model_id, info.provider_name)
+            if not self._cooldowns.is_payment_required(info.provider_name, info.model_id):
+                rem = self._cooldowns.remaining(key)
+                if rem > 0:
+                    transient_waits.append(rem)
+
+        min_wait = min(transient_waits) if transient_waits else 0.0
+
+        if allow_wait and 0 < min_wait <= 30.0:
+            logger.info(
+                "All candidates transiently rate-limited - pausing in-flight for %.1fs before retrying",
+                min_wait,
+            )
+            await asyncio.sleep(min_wait + 0.5)
+            return await self._dispatch(
+                candidates,
+                call_fn,
+                is_valid=is_valid,
+                sticky_key=sticky_key,
+                fallback_candidates=fallback_candidates,
+                allow_wait=False,
             )
 
         raise AllModelsRateLimitedError(
-            f"All {len(candidates)} candidate(s) exhausted - every model is rate-limited or has insufficient credits"
+            f"All {len(candidates)} candidate(s) exhausted - every model is rate-limited or has insufficient credits",
+            retry_after=min_wait if min_wait > 0 else None,
         )
+
