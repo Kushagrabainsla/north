@@ -60,6 +60,8 @@ _STEP_ICONS: dict[str, str] = {
     "agent_completed": "✓",
     "tool_called": "→",
     "tool_result": "✓",
+    "task_queued": "⏳",
+    "task_resumed": "↻",
 }
 
 _STEP_LABELS: dict[str, str] = {
@@ -72,6 +74,8 @@ _STEP_LABELS: dict[str, str] = {
     "routing": "planning…",
     "routed": "plan ready",
     "executing": "running agents…",
+    "task_queued": "queued (waiting for models)…",
+    "task_resumed": "resuming from queue…",
 }
 
 

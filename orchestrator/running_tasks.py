@@ -165,6 +165,43 @@ class RunningTaskStore:
             )
             return cur.rowcount > 0
 
+    async def mark_queued(self, task_id: str, *, attempt: int = 0) -> bool:
+        """Mark a task as queued waiting for model availability/capacity."""
+        return await asyncio.to_thread(self._mark_queued_sync, task_id, attempt)
+
+    def _mark_queued_sync(self, task_id: str, attempt: int) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            cur = conn.execute(
+                "UPDATE running_tasks SET status = 'queued', attempt = ?, heartbeat_at = ? WHERE task_id = ?",
+                (attempt, now, task_id),
+            )
+            return cur.rowcount > 0
+
+    async def mark_running_from_queued(self, task_id: str) -> bool:
+        """Transition a queued task back to running."""
+        return await asyncio.to_thread(self._mark_running_from_queued_sync, task_id)
+
+    def _mark_running_from_queued_sync(self, task_id: str) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            cur = conn.execute(
+                "UPDATE running_tasks SET status = 'running', heartbeat_at = ? WHERE task_id = ? AND status = 'queued'",
+                (now, task_id),
+            )
+            return cur.rowcount > 0
+
+    async def list_queued(self) -> list[RunningTask]:
+        """Return all queued tasks waiting for execution, oldest first."""
+        rows = await asyncio.to_thread(self._list_queued_sync)
+        return [rt for rt in (self._row_to_task(r) for r in rows) if rt is not None]
+
+    def _list_queued_sync(self) -> list[sqlite3.Row]:
+        with open_db_connection(self._db_path) as conn:
+            return list(
+                conn.execute("SELECT * FROM running_tasks WHERE status = 'queued' ORDER BY started_at ASC").fetchall()
+            )
+
     async def clear(self, task_id: str) -> None:
         """Remove a task from the registry once it reaches a terminal state."""
         await asyncio.to_thread(self._clear_sync, task_id)

@@ -81,3 +81,10 @@ def test_scoring_config_roundtrip():
     assert "family_tiers" in result
     # Should contain built-in defaults
     assert "claude-opus-4" in result["family_tiers"]
+
+
+def test_stealth_ox_alpha_family_tier():
+    s = _scorer()
+    assert s.family_tier("stealth/ox-alpha") == 0.88
+    assert s.family_tier("0xalpha") == 0.88
+

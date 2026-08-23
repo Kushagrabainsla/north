@@ -3,6 +3,17 @@
 All notable changes to north are documented here.
 
 ## [Unreleased]
+### Added
+- **Task Queue & Auto-Resume on Model Scarcity** (`orchestrator/running_tasks.py`, `orchestrator/orchestrator.py`, `orchestrator/app.py`, `orchestrator/constants.py`, `cli/constants.py`, `tests/unit/orchestrator/test_task_queue.py`):
+  - Added durable `queued` status and FIFO queue management in `RunningTaskStore` (`mark_queued`, `list_queued`, `mark_running_from_queued`).
+  - Tasks encountering temporary model pool exhaustion or rate limits (`AllModelsRateLimitedError`) now automatically transition to `status="queued"` with attempt tracking rather than failing immediately.
+  - Added `drain_queued_tasks_loop` background worker in `Orchestrator` to automatically claim and resume queued tasks when model cooldowns expire or model pools refresh.
+  - Added `task_queued` (⏳) and `task_resumed` (↻) status icons and step labels in CLI.
+- **Bootstrap Extraction Rate-Limit Resilience** (`bootstrap/onboarding.py`):
+  - Background onboarding document extraction now catches rate limits with exponential backoff and defers unextracted files rather than prematurely marking them completed.
+- **Model Family Prior for `ox-alpha`** (`inference/constants.py`, `tests/unit/inference/test_model_scorer.py`):
+  - Added `ox-alpha`, `0x-alpha`, `0xalpha`, and `stealth` with priority tier `0.88` in `MODEL_FAMILY_TIERS` to ensure high-capability free models on OpenRouter are prioritized during model selection.
+
 ### Performance & Reliability (6 Fundamental Architectural Fixes)
 - **Reactive Slot-Based Batch Scheduling & Drain Queue** (`jobs/scheduler.py`, `jobs/sqlite_processor.py`):
   - Replaced single-item candidate searching in `CronScheduler` with batch slot matching across all due entries, preventing same-minute cron starvation and 24-hour skips.

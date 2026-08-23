@@ -20,6 +20,7 @@ from pathlib import Path
 
 from bootstrap.schema import EXTRACTED_FACTS_JSON_SCHEMA, USER_PROFILE_JSON_SCHEMA, UserProfile
 from inference.base import InferenceRouter
+from inference.exceptions import AllModelsRateLimitedError
 from inference.models import CompletionRequest, PoolPriority
 from memory.facts import FactStore
 from utils.text import extract_json
@@ -230,19 +231,45 @@ async def run_bootstrap_if_needed(
     )
     total_facts = 0
     profile_sections: list[str] = []
+    failed_paths: set[str] = set()
     for path in pending:
-        # Flat facts (legacy extraction) for broad recall.
-        try:
-            candidates = await _extract_facts(path, inference_router)
-        except Exception:
-            logger.warning("bootstrap: failed to extract from %s", path, exc_info=True)
-            candidates = []
+        candidates = []
+        file_extracted = False
+        max_file_retries = 3
+        for attempt in range(max_file_retries):
+            try:
+                # Flat facts (legacy extraction) for broad recall.
+                candidates = await _extract_facts(path, inference_router)
+                file_extracted = True
+                break
+            except AllModelsRateLimitedError as e:
+                logger.warning(
+                    "bootstrap: rate limited extracting %s (attempt %d/%d): %s",
+                    path,
+                    attempt + 1,
+                    max_file_retries,
+                    e,
+                )
+                await asyncio.sleep(min(3.0 * (2**attempt), 20.0))
+            except Exception:
+                logger.warning("bootstrap: failed to extract from %s", path, exc_info=True)
+                candidates = []
+                file_extracted = True
+                break
+
+        if not file_extracted:
+            # Model access unavailable during all retries: do not mark file completed
+            failed_paths.add(str(path.resolve()))
+            continue
+
         # Structured profile (dense, domain-grouped) for cross-file fusion.
         try:
             profile_cands, profile_md = await _extract_profile(path, inference_router)
             candidates.extend(profile_cands)
             if profile_md:
                 profile_sections.append(profile_md)
+        except AllModelsRateLimitedError:
+            logger.warning("bootstrap: rate limited profile extract from %s - skipping profile slice", path)
         except Exception:
             logger.warning("bootstrap: failed profile extract from %s", path, exc_info=True)
         for cand in candidates:

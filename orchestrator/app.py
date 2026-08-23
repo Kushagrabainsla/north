@@ -395,13 +395,15 @@ async def _guarded(coro, name: str) -> None:
         logger.exception("background task %r failed", name)
 
 
-async def _pool_refresh_loop(deps) -> None:
+async def _pool_refresh_loop(deps, orchestrator: Orchestrator | None = None) -> None:
     interval = settings.inference_pool_refresh_interval_seconds
     while True:
         await asyncio.sleep(interval)
         try:
             await deps.inference_router.refresh_pools()
             logger.info("Inference pool refreshed successfully")
+            if orchestrator is not None:
+                orchestrator.notify_model_recovery()
         except Exception:
             logger.warning("Inference pool refresh failed", exc_info=True)
 
@@ -462,7 +464,11 @@ def _launch_background_tasks(
         asyncio.create_task(_guarded(episode_consolidator.run(), "episode_consolidator"), name="episode_consolidator"),
         asyncio.create_task(_guarded(skill_distiller.run(), "skill_distiller"), name="skill_distiller"),
         asyncio.create_task(_guarded(callback_server.serve(), "callback_server"), name="callback_server"),
-        asyncio.create_task(_guarded(_pool_refresh_loop(deps), "pool_refresh"), name="pool_refresh"),
+        asyncio.create_task(_guarded(_pool_refresh_loop(deps, orchestrator), "pool_refresh"), name="pool_refresh"),
+        asyncio.create_task(
+            _guarded(orchestrator.drain_queued_tasks_loop(), "task_queue_drainer"),
+            name="task_queue_drainer",
+        ),
         asyncio.create_task(
             _guarded(
                 watch_stuck_tasks(

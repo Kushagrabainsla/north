@@ -30,8 +30,10 @@ from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, Ledge
 from orchestrator.best_of_n import CandidateOutcome, any_viable, select_best
 from orchestrator.constants import (
     MAX_CONCURRENT_TASKS,
+    MAX_QUEUE_ATTEMPTS,
     NORTH_STAR_CONFIDENCE_THRESHOLD,
     POOL_REFRESH_COOLDOWN,
+    QUEUE_POLL_INTERVAL_SECONDS,
     STRATEGY_CMD_RE,
     WORKTREE_ISOLATION_AGENTS,
 )
@@ -498,6 +500,11 @@ class Orchestrator:
         # registers, bypassing MAX_CONCURRENT_TASKS.
         self._submit_lock = asyncio.Lock()
         self._last_pool_refresh_at: float = 0.0
+        self._queue_wake_event = asyncio.Event()
+
+    def notify_model_recovery(self) -> None:
+        """Signal that inference models have recovered or refreshed, waking the task queue."""
+        self._queue_wake_event.set()
 
     # ------------------------------------------------------------------ #
     #  Public API surface (called by FastAPI routes)                       #
@@ -592,6 +599,53 @@ class Orchestrator:
 
         return True
 
+    async def drain_queued_tasks_loop(self, poll_interval: float = QUEUE_POLL_INTERVAL_SECONDS) -> None:
+        """Background loop that monitors model availability and resumes queued tasks."""
+        logger.info("Task queue drainer started")
+        while True:
+            try:
+                with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                    await asyncio.wait_for(self._queue_wake_event.wait(), timeout=poll_interval)
+                self._queue_wake_event.clear()
+
+                if self._running_task_store is None:
+                    continue
+
+                queued_tasks = await self._running_task_store.list_queued()
+                if not queued_tasks:
+                    continue
+
+                for rt in queued_tasks:
+                    if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
+                        break
+                    async with self._submit_lock:
+                        if rt.task_id in self._active_tasks:
+                            continue
+                        claimed = await self._running_task_store.mark_running_from_queued(rt.task_id)
+                        if not claimed:
+                            continue
+                        logger.info("Resuming queued task %s (attempt %d)", rt.task_id, rt.attempt)
+                        await self._write_ledger(
+                            LedgerEntry.new(
+                                source=LedgerSource.SYSTEM,
+                                task_id=rt.task_id,
+                                input=rt.request.prompt,
+                                action="task_resumed",
+                                status=LedgerStatus.PENDING,
+                            )
+                        )
+                        await self._stream_manager.emit(
+                            rt.task_id, "task_resumed", {"attempt": rt.attempt}
+                        )
+                        task = asyncio.create_task(self._process_task(rt.task_id, rt.request))
+                        self._active_tasks[rt.task_id] = task
+                        task.add_done_callback(lambda _, tid=rt.task_id: self._active_tasks.pop(tid, None))
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.error("Error in task queue drainer loop", exc_info=True)
+                await asyncio.sleep(poll_interval)
+
     async def get_task(self, task_id: str) -> TaskResponse | None:
         """Return the current status of a task.
 
@@ -600,15 +654,27 @@ class Orchestrator:
         are logged COMPLETED per step, so reading the single most recent entry
         would report a still-running task as "completed" the instant it was
         classified. We scan for the terminal action instead, and report "pending"
-        while the task is still in flight.
+        or "queued" while the task is still in flight.
         """
         entries = await self._ledger.query(LedgerFilters(task_id=task_id, limit=100))
         if not entries:
             return None
+        # Check if currently queued in running_task_store
+        if self._running_task_store is not None:
+            queued = await self._running_task_store.list_queued()
+            if any(q.task_id == task_id for q in queued):
+                return TaskResponse(
+                    task_id=task_id,
+                    status="queued",
+                    created_at=format_timestamp(entries[-1].timestamp),
+                )
+
         for entry in entries:  # query() returns most-recent-first
             terminal = _TERMINAL_TASK_ACTIONS.get(entry.action)
             if terminal is not None:
                 return TaskResponse(task_id=task_id, status=terminal, created_at=format_timestamp(entry.timestamp))
+            if entry.action == "task_queued":
+                return TaskResponse(task_id=task_id, status="queued", created_at=format_timestamp(entry.timestamp))
         # No terminal entry yet - the task is still running.
         return TaskResponse(task_id=task_id, status="pending", created_at=format_timestamp(entries[-1].timestamp))
 
@@ -620,9 +686,14 @@ class Orchestrator:
         of a completed task, since get_task() reads the most recent entry.
         """
         running = self._active_tasks.pop(task_id, None)
-        if running is None:
+        was_queued = False
+        if running is None and self._running_task_store is not None:
+            queued = await self._running_task_store.list_queued()
+            if any(q.task_id == task_id for q in queued):
+                was_queued = True
+        if running is None and not was_queued:
             return False
-        if not running.done():
+        if running is not None and not running.done():
             running.cancel()
         if self._tracked_router:
             self._tracked_router.pop_task_cost(task_id)
@@ -966,6 +1037,40 @@ class Orchestrator:
             with contextlib.suppress(Exception):
                 await self._task_context_store.update_task_status(task_id, "failed")
             if error_type == "model_unavailable":
+                # Check attempt count to allow queueing / retry on model recovery
+                current_attempt = 0
+                if self._running_task_store is not None:
+                    tasks = await self._running_task_store.list_all()
+                    for t in tasks:
+                        if t.task_id == task_id:
+                            current_attempt = t.attempt
+                            break
+                if current_attempt < MAX_QUEUE_ATTEMPTS:
+                    logger.warning(
+                        "Task %s queued for model availability recovery (attempt %d): %s",
+                        task_id,
+                        current_attempt + 1,
+                        e,
+                    )
+                    if self._running_task_store is not None:
+                        await self._running_task_store.mark_queued(task_id, attempt=current_attempt + 1)
+                    await self._write_ledger(
+                        LedgerEntry.new(
+                            source=LedgerSource.SYSTEM,
+                            task_id=task_id,
+                            action="task_queued",
+                            output=f"model pool unavailable - queued for retry (attempt {current_attempt + 1})",
+                            status=LedgerStatus.PENDING,
+                        )
+                    )
+                    await self._stream_manager.emit(
+                        task_id,
+                        "task_queued",
+                        {"reason": "model pool unavailable - queued for retry", "attempt": current_attempt + 1},
+                    )
+                    self._queue_wake_event.set()
+                    return
+
                 # Not a north failure: the whole model pool was unavailable, so the
                 # work could not proceed. Skip honestly (autonomous mode just moves
                 # on) rather than reporting a failure the user would read as a bug.
@@ -992,10 +1097,15 @@ class Orchestrator:
                 self._plan_store.clear(task_id)
             if self._failure_handler is not None and hasattr(self._failure_handler, "clear_all"):
                 self._failure_handler.clear_all(task_id)
-            # The task has reached a terminal state (success/failure/cancel), so it
-            # is no longer in-flight: drop it from the crash-recovery registry.
+            # The task has reached a terminal state (success/failure/cancel/skip), so it
+            # is no longer in-flight: drop it from the crash-recovery registry unless queued.
             if self._running_task_store is not None:
-                await self._running_task_store.clear(task_id)
+                is_queued = False
+                queued = await self._running_task_store.list_queued()
+                if any(q.task_id == task_id for q in queued):
+                    is_queued = True
+                if not is_queued:
+                    await self._running_task_store.clear(task_id)
 
     async def _stage_plan(
         self, task_id: str, prompt: str, context: str = ""
