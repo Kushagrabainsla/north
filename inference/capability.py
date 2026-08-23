@@ -70,6 +70,11 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
         "orpheus",
         "-guard-",
         "imagen",
+        "veo",
+        "lyria",
+        "robotics",
+        "deep-research",
+        "live-translate",
     )
     if any(kw in lower for kw in _NON_CHAT_PATTERNS):
         return frozenset()
