@@ -444,12 +444,9 @@ class AgenticLLMAgent(LLMAgent):
         """Compact conversation history before the next API call.
 
         Token-aware: summarise old history when we approach the model's context
-        window (75% threshold). On the first iteration (no token count yet) apply
-        lightweight truncation as a baseline instead.
+        window (percentage threshold) using live router context window resolution
+        and estimated message token footprints.
         """
-        if last_tokens_in <= 0:
-            compact_history(messages, keep_recent=self._deps.agent_history_keep_recent)
-            return
         msgs_before = len(messages)
         await compact_if_needed(
             messages,
@@ -461,6 +458,7 @@ class AgenticLLMAgent(LLMAgent):
             keep_recent=self._deps.agent_history_keep_recent,
             max_summary_tokens=compact_tokens,
         )
+
         # Notify the UI when history was actually compacted (message count dropped)
         # so the status bar's compression counter stays truthful.
         if len(messages) < msgs_before and self._deps.stream_manager and task_id:

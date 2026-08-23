@@ -69,3 +69,9 @@ class InferenceRouter(ABC):
     @abstractmethod
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         """Embed a batch of texts and return one float vector per input."""
+
+    def get_context_window(self, model_id: str) -> int:
+        """Return the published context window (in tokens) for model_id from the live registry."""
+        return 128_000
+
+

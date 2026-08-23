@@ -107,6 +107,7 @@ class CompletionResponse(BaseModel):
     tokens_in: int
     tokens_out: int
     cost_usd: float
+    reasoning: str | None = None
 
 
 class ToolCallRequest(BaseModel):
@@ -150,6 +151,8 @@ class ToolCallResponse(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    reasoning: str | None = None
+
 
 
 class TranscriptionRequest(BaseModel):

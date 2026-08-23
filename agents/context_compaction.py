@@ -41,25 +41,71 @@ _CONTEXT_WINDOW_TABLE: tuple[tuple[str, int], ...] = (
     ("claude", 200_000),
     ("o1", 200_000),
     ("o3", 200_000),
+    ("gpt-5", 200_000),
     ("gpt-4o", 128_000),
     ("gpt-4-turbo", 128_000),
     ("gpt-4.1", 128_000),
-    ("llama", 128_000),
-    ("qwen", 128_000),
-    ("mistral", 128_000),
+    ("ox-alpha", 128_000),
+    ("0x-alpha", 128_000),
+    ("0xalpha", 128_000),
+    ("stealth", 128_000),
     ("deepseek", 128_000),
+    ("qwen", 128_000),
+    ("llama", 128_000),
+    ("mistral", 128_000),
+    ("kimi", 128_000),
+    ("glm", 128_000),
+    ("minimax", 128_000),
+    ("gemma", 128_000),
     ("phi", 16_000),
 )
 _DEFAULT_CONTEXT_WINDOW = 128_000
 
 
-def context_window_for(model: str) -> int:
-    """Return the published context-window size (tokens) for a model identifier."""
+def estimate_messages_tokens(messages: list[dict]) -> int:
+    """Estimate the total token count of a message list before calling the API.
+
+    Approximates tokens as ~4 chars per token for all roles, message contents,
+    tool call names/arguments, and tool return payloads.
+    """
+    total_chars = 0
+    for m in messages:
+        total_chars += len(str(m.get("role", "")))
+        content = m.get("content")
+        if isinstance(content, str):
+            total_chars += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    total_chars += len(str(part.get("text", "")))
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function", {})
+            total_chars += len(str(fn.get("name", "")))
+            total_chars += len(str(fn.get("arguments", "")))
+    return max(1, total_chars // 4)
+
+
+def context_window_for(model: str, router: Any = None) -> int:
+    """Return the published context-window size (tokens) for a model identifier.
+
+    Prioritizes querying the router's live registry (populated from provider APIs
+    like OpenRouter and OpenCode Zen). Falls back to published family sizes if
+    the router is unavailable or returns 0.
+    """
+    if router is not None and hasattr(router, "get_context_window"):
+        try:
+            window = router.get_context_window(model)
+            if window and window > 0:
+                return window
+        except Exception:
+            pass
+
     m = model.lower()
     for fragment, size in _CONTEXT_WINDOW_TABLE:
         if fragment in m:
             return size
     return _DEFAULT_CONTEXT_WINDOW
+
 
 
 def exchange_boundaries(messages: list[dict]) -> list[tuple[int, int]]:
@@ -115,18 +161,7 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def compact_history(messages: list[dict], keep_recent: int = 4) -> list[dict]:
-    """Compact the history by truncating older tool responses to save context.
-
-    Mutates and returns the same list so callers can chain. Also truncates the
-    arguments on the paired assistant tool_call so both halves of the exchange
-    shrink together - preventing context bloat from large input payloads that
-    were already executed.
-    """
-    tool_indices = [i for i, msg in enumerate(messages) if msg.get("role") == "tool"]
-    if len(tool_indices) <= keep_recent:
-        return messages
-
+def _truncate_tool_messages(messages: list[dict], indices_to_compact: list[int]) -> None:
     call_id_to_assistant: dict[str, int] = {}
     for i, msg in enumerate(messages):
         if msg.get("role") == "assistant":
@@ -135,10 +170,9 @@ def compact_history(messages: list[dict], keep_recent: int = 4) -> list[dict]:
                 if cid:
                     call_id_to_assistant[cid] = i
 
-    to_compact = tool_indices[:-keep_recent]
     compacted_assistant: set[int] = set()
 
-    for idx in to_compact:
+    for idx in indices_to_compact:
         msg = messages[idx]
         content = msg.get("content")
         if isinstance(content, str) and len(content) > _COMPACT_TRUNCATE_THRESHOLD:
@@ -170,18 +204,36 @@ def compact_history(messages: list[dict], keep_recent: int = 4) -> list[dict]:
                     if isinstance(args, str) and len(args) > _RENDER_PREVIEW_CHARS:
                         fn["arguments"] = "{}"
                 compacted_assistant.add(ast_idx)
+
+
+def compact_history(messages: list[dict], keep_recent: int = 4) -> list[dict]:
+    """Compact the history by truncating older tool responses to save context.
+
+    Mutates and returns the same list so callers can chain. Also truncates the
+    arguments on the paired assistant tool_call so both halves of the exchange
+    shrink together - preventing context bloat from large input payloads that
+    were already executed.
+    """
+    tool_indices = [i for i, msg in enumerate(messages) if msg.get("role") == "tool"]
+    if len(tool_indices) <= keep_recent:
+        if len(tool_indices) > 2:
+            _truncate_tool_messages(messages, tool_indices[:-2])
+        return messages
+
+    to_compact = tool_indices[:-keep_recent]
+    _truncate_tool_messages(messages, to_compact)
     return messages
 
 
 async def compact_if_needed(
     messages: list[dict],
     *,
-    tokens_in: int,
-    model_used: str,
-    inference_router: Any,
-    component: str,
-    task_id: str | None,
-    keep_recent: int,
+    tokens_in: int = 0,
+    model_used: str = "",
+    inference_router: Any = None,
+    component: str = "agent",
+    task_id: str | None = None,
+    keep_recent: int = 4,
     max_summary_tokens: int = COMPACT_TOKENS_DEFAULT,
 ) -> None:
     """LLM-summarise old exchanges when token usage exceeds the compaction threshold.
@@ -190,8 +242,11 @@ async def compact_if_needed(
     verbatim. Everything in between is replaced with a single summarised block.
     Falls back to truncation-only if the summarisation call fails.
     """
-    context_window = context_window_for(model_used)
-    if tokens_in < context_window * COMPACTION_THRESHOLD:
+    context_window = context_window_for(model_used, router=inference_router)
+    estimated_tokens = estimate_messages_tokens(messages)
+    effective_tokens = max(tokens_in, estimated_tokens)
+
+    if effective_tokens < context_window * COMPACTION_THRESHOLD:
         compact_history(messages, keep_recent=keep_recent)
         return
 
@@ -218,27 +273,30 @@ async def compact_if_needed(
         f"<history>\n{history_text}\n</history>"
     )
 
-    try:
-        resp = await inference_router.complete(
-            CompletionRequest(
-                prompt=prompt,
-                priority=PoolPriority.LOW,
-                component=f"{component}:compact",
-                task_id=task_id,
-                max_tokens=max_summary_tokens,
+    if inference_router is not None and hasattr(inference_router, "complete"):
+        try:
+            resp = await inference_router.complete(
+                CompletionRequest(
+                    prompt=prompt,
+                    priority=PoolPriority.LOW,
+                    component=f"{component}:compact",
+                    task_id=task_id,
+                    max_tokens=max_summary_tokens,
+                )
             )
-        )
-        summary = resp.text.strip()
-    except Exception:
-        logger.warning(
-            "Context compaction summarization failed for %s - falling back to truncation",
-            component,
-            exc_info=True,
-        )
-        compact_history(messages, keep_recent=keep_recent)
-        return
+            summary = resp.text.strip()
+            if summary:
+                messages[2:first_kept] = [
+                    {"role": "user", "content": f"## Earlier context (auto-compacted)\n{summary}"},
+                    {"role": "assistant", "content": "Understood - I have the compacted context."},
+                ]
+                return
+        except Exception:
+            logger.warning(
+                "Context compaction summarization failed for %s - falling back to truncation",
+                component,
+                exc_info=True,
+            )
 
-    messages[2:first_kept] = [
-        {"role": "user", "content": f"## Earlier context (auto-compacted)\n{summary}"},
-        {"role": "assistant", "content": "Understood - I have the compacted context."},
-    ]
+    compact_history(messages, keep_recent=keep_recent)
+

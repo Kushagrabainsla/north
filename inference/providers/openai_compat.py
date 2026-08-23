@@ -159,19 +159,21 @@ class OpenAICompatibleProvider:
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
         """Raise the cooldown-worthy errors for shared HTTP statuses.
 
-        401/403 are treated as provider-level auth/billing failures so the
-        dispatcher can open a provider circuit breaker and stop thrashing every
-        model behind the same invalid key or workspace.
+        401 is treated as a provider-level auth failure (invalid API key) so the
+        dispatcher can open a provider circuit breaker.
+
+        403 on aggregate providers (e.g. OpenRouter) is model-specific (restricted
+        model, terms agreement, or depleted model quota) and maps to
+        PaymentRequiredError for that specific model rather than taking down the
+        entire provider.
 
         402 (insufficient credits) maps to a long payment cooldown. 429/404/503
         (rate limited or model gone) and 413 (request/token-rate too large) map to
-        a short rate-limit cooldown that honours any Retry-After header, so the
-        dispatcher routes around the model instead of hammering it. Other statuses
-        return without raising so each caller can apply its own error type.
+        a short rate-limit cooldown that honours any Retry-After header.
         """
-        if response.status_code in (401, 403):
-            raise ProviderAuthError(f"{self.name} returned {response.status_code} - provider auth failed")
-        if response.status_code == 402:
+        if response.status_code == 401:
+            raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
+        if response.status_code in (402, 403):
             raise PaymentRequiredError(
                 model_id,
                 self.name,
@@ -229,10 +231,10 @@ class OpenAICompatibleProvider:
             raise InferenceError(f"{self.name} returned {response.status_code} for {model_id}: {response.text[:200]}")
 
     async def _raise_for_stream_status(self, resp: httpx.Response, model_id: str) -> None:
-        if resp.status_code in (401, 403):
+        if resp.status_code == 401:
             await resp.aread()
-            raise ProviderAuthError(f"{self.name} returned {resp.status_code} - provider auth failed")
-        if resp.status_code == 402:
+            raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
+        if resp.status_code in (402, 403):
             await resp.aread()
             raise PaymentRequiredError(
                 model_id,
@@ -241,6 +243,7 @@ class OpenAICompatibleProvider:
                 headers=dict(resp.headers),
                 body=self._safe_json(resp),
             )
+
         if resp.status_code in (429, 404, 503, 413):
             await resp.aread()
             headers = dict(resp.headers)
@@ -319,7 +322,16 @@ class OpenAICompatibleProvider:
         choices = payload.get("choices") or []
         if not choices:
             raise InferenceError(f"{self.name} returned empty choices for {model_id}: {payload}")
-        content = choices[0].get("message", {}).get("content") or ""
+        msg_obj = choices[0].get("message", {})
+        content = msg_obj.get("content") or ""
+        reasoning = (
+            msg_obj.get("reasoning")
+            or msg_obj.get("reasoning_content")
+            or msg_obj.get("thought")
+            or None
+        )
+        if not content and reasoning:
+            content = reasoning
         usage = payload.get("usage", {})
         return CompletionResponse(
             text=content,
@@ -327,7 +339,9 @@ class OpenAICompatibleProvider:
             tokens_in=usage.get("prompt_tokens", 0),
             tokens_out=usage.get("completion_tokens", 0),
             cost_usd=float(usage.get("cost", 0.0)),
+            reasoning=reasoning,
         )
+
 
     def _build_chat_body(self, model_id: str, messages: list[dict], request: CompletionRequest) -> dict:
         body: dict = {
@@ -398,11 +412,13 @@ class OpenAICompatibleProvider:
             body["tools"] = formatted_tools
 
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_calls_acc: dict[int, dict] = {}
         tokens_in = 0
         tokens_out = 0
         cost_usd = 0.0
         saw_tool_call = False
+        saw_reasoning = False
 
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as resp:
@@ -426,8 +442,27 @@ class OpenAICompatibleProvider:
                     if not choices:
                         continue
                     delta = choices[0].get("delta", {})
+
+                    reasoning_token = (
+                        delta.get("reasoning")
+                        or delta.get("reasoning_content")
+                        or delta.get("thought")
+                        or ""
+                    )
+                    if reasoning_token:
+                        reasoning_parts.append(reasoning_token)
+                        if token_callback is not None and not saw_tool_call:
+                            if not saw_reasoning:
+                                saw_reasoning = True
+                                await token_callback("<thought>")
+                            await token_callback(reasoning_token)
+
                     text_token = delta.get("content") or ""
                     if text_token:
+                        if saw_reasoning:
+                            saw_reasoning = False
+                            if token_callback is not None and not saw_tool_call:
+                                await token_callback("</thought>")
                         content_parts.append(text_token)
                         # Once a tool_calls delta has arrived the response is a
                         # tool-call turn - its content never reaches the final
@@ -435,9 +470,14 @@ class OpenAICompatibleProvider:
                         # that is then discarded.
                         if token_callback is not None and not saw_tool_call:
                             await token_callback(text_token)
+
                     for tc in (delta.get("tool_calls") or []):
                         if not saw_tool_call:
                             saw_tool_call = True
+                            if saw_reasoning:
+                                saw_reasoning = False
+                                if token_callback is not None and hasattr(token_callback, "reset"):
+                                    await token_callback("</thought>")
                             if token_callback is not None and hasattr(token_callback, "reset") and content_parts:
                                 await token_callback.reset()
                         idx = tc.get("index", 0)
@@ -452,6 +492,11 @@ class OpenAICompatibleProvider:
                             tool_calls_acc[idx]["arguments"] += fn["arguments"]
         except httpx.RequestError as e:
             raise InferenceError(f"Request to {self.name} failed: {e}") from e
+
+        if saw_reasoning and token_callback is not None and not saw_tool_call:
+            await token_callback("</thought>")
+
+        reasoning_text = "".join(reasoning_parts) if reasoning_parts else None
 
         if tool_calls_acc:
             calls = [
@@ -470,17 +515,25 @@ class OpenAICompatibleProvider:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 cost_usd=cost_usd,
+                reasoning=reasoning_text,
             )
+
+        content_text = "".join(content_parts)
+        if not content_text and reasoning_text:
+            # Fallback: model generated output in reasoning channel and finished
+            content_text = reasoning_text
 
         return ToolCallResponse(
             type="message",
-            content="".join(content_parts),
+            content=content_text,
             calls=[],
             model_used=model_id,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost_usd=cost_usd,
+            reasoning=reasoning_text,
         )
+
 
     @staticmethod
     def _parse_json_args(raw: str) -> dict:

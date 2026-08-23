@@ -39,10 +39,14 @@ class TestRaiseCooldownStatus:
         with pytest.raises(PaymentRequiredError):
             self._provider()._raise_cooldown_status(httpx.Response(402), "model")
 
-    @pytest.mark.parametrize("status", [401, 403])
-    def test_auth_statuses_raise_provider_auth_error(self, status: int) -> None:
+    def test_401_raises_provider_auth_error(self) -> None:
         with pytest.raises(ProviderAuthError):
-            self._provider()._raise_cooldown_status(httpx.Response(status), "model")
+            self._provider()._raise_cooldown_status(httpx.Response(401), "model")
+
+    def test_403_raises_payment_required_error(self) -> None:
+        with pytest.raises(PaymentRequiredError):
+            self._provider()._raise_cooldown_status(httpx.Response(403), "model")
+
 
     @pytest.mark.parametrize("status", [429, 404, 503])
     def test_rate_limited_statuses_raise(self, status: int) -> None:

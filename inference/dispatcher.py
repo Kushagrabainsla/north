@@ -89,11 +89,15 @@ def _completion_has_text(resp: Any) -> bool:
 
 
 def _toolcall_has_output(resp: Any) -> bool:
-    """A tool-call response is usable if it invoked tools or produced text."""
+    """A tool-call response is usable if it invoked tools, produced text, or reasoning."""
     if getattr(resp, "calls", None):
         return True
     content = getattr(resp, "content", None)
-    return bool(content and content.strip())
+    if bool(content and content.strip()):
+        return True
+    reasoning = getattr(resp, "reasoning", None)
+    return bool(reasoning and reasoning.strip())
+
 
 
 class ModelDispatcher(InferenceRouter):
@@ -281,6 +285,26 @@ class ModelDispatcher(InferenceRouter):
         if not candidates:
             raise AllModelsRateLimitedError("No completion models are available")
         return candidates[0][0].model_id
+
+    def get_context_window(self, model_id: str) -> int:
+        """Return the published context window (tokens) for model_id from the live registry."""
+        if not model_id:
+            return 128_000
+
+        # 1. Exact model_id match
+        for (provider_name, reg_model_id), (info, _) in self._registry.items():
+            if reg_model_id == model_id and info.context_window > 0:
+                return info.context_window
+
+        # 2. Case-insensitive or normalized / substring match
+        norm = model_id.lower().strip()
+        for (provider_name, reg_model_id), (info, _) in self._registry.items():
+            reg_norm = reg_model_id.lower().strip()
+            if (norm == reg_norm or norm.endswith(reg_norm) or reg_norm.endswith(norm)) and info.context_window > 0:
+                return info.context_window
+
+        return 128_000
+
 
     async def aclose(self) -> None:
         """Close all provider HTTPX clients. Call on application shutdown."""

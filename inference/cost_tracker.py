@@ -91,7 +91,11 @@ class CostTracker(InferenceRouter):
     def current_pools(self) -> dict[str, ModelPool]:
         return self._inner.current_pools()
 
+    def get_context_window(self, model_id: str) -> int:
+        return self._inner.get_context_window(model_id)
+
     async def aclose(self) -> None:
+
         if hasattr(self._inner, "aclose"):
             await self._inner.aclose()
 
