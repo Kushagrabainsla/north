@@ -1,5 +1,6 @@
 """ChromeAgentTool — autonomous browser automation and structured web extraction.
 
+Universal tool available to all agents (general, researcher, coder, news_briefing, wellness, etc.).
 Wraps the chrome-agent Rust CLI (https://github.com/sderosiaux/chrome-agent) over CDP.
 Provides:
   1. Token-efficient structured record extraction (MDR/DEPTA heuristics via 'extract').

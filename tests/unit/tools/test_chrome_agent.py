@@ -1,4 +1,4 @@
-"""Unit tests for ChromeAgentTool (tools/specialized/chrome_agent.py)."""
+"""Unit tests for ChromeAgentTool (tools/universal/chrome_agent.py)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
-from tools.specialized.chrome_agent import (
+from tools.universal.chrome_agent import (
     ChromeAgentTool,
     _find_chrome_agent_binary,
 )

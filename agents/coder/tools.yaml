@@ -5,4 +5,3 @@ tools:
   - gh
   - patch_file
   - rename_symbol
-  - chrome_agent
