@@ -40,11 +40,8 @@ def _get_pooled_connection(db_path: Path) -> tuple[str, sqlite3.Connection]:
             return key, conn
         except (sqlite3.ProgrammingError, sqlite3.OperationalError):
             cache.pop(key, None)
-            with _all_connections_lock:
-                try:
-                    _all_connections.remove(conn)
-                except ValueError:
-                    pass
+            with _all_connections_lock, contextlib.suppress(ValueError):
+                _all_connections.remove(conn)
     conn = sqlite3.connect(key)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")

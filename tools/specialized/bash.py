@@ -11,6 +11,7 @@ See docs/CODING_STYLE.md Section 16.1.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import signal
@@ -262,25 +263,19 @@ class BashTool(ApprovalGatedTool):
                 stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             except TimeoutError:
                 if use_new_session and hasattr(os, "killpg") and hasattr(os, "getpgid"):
-                    try:
+                    with contextlib.suppress(ProcessLookupError):
                         pgid = os.getpgid(proc.pid)
                         os.killpg(pgid, signal.SIGTERM)
                         try:
                             await asyncio.wait_for(proc.communicate(), timeout=1.0)
                         except TimeoutError:
                             os.killpg(pgid, signal.SIGKILL)
-                            try:
+                            with contextlib.suppress(Exception):
                                 await asyncio.wait_for(proc.communicate(), timeout=1.0)
-                            except Exception:
-                                pass
-                    except ProcessLookupError:
-                        pass
                 else:
                     proc.kill()
-                    try:
+                    with contextlib.suppress(Exception):
                         await proc.communicate()
-                    except Exception:
-                        pass
                 return ToolOutput(success=False, error=f"Command timed out after {timeout}s.")
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))

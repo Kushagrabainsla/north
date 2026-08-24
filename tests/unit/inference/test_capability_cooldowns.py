@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
+
+import httpx
 import pytest
 
 from inference.capability import ModelCapability, ModelInfo
@@ -16,6 +20,7 @@ from inference.models import (
     ToolCallResponse,
 )
 from inference.provider import Provider
+from inference.providers.openai_compat import OpenAICompatibleProvider
 
 
 class FakeProvider(Provider):
@@ -39,7 +44,9 @@ class FakeProvider(Provider):
             cost_usd=0.0,
         )
 
-    async def complete_with_tools(self, model_id: str, request: ToolCallRequest, token_callback=None) -> ToolCallResponse:
+    async def complete_with_tools(
+        self, model_id: str, request: ToolCallRequest, token_callback=None
+    ) -> ToolCallResponse:
         if model_id == "gpt-5-flaky":
             raise ModelDegenerateError(model_id, self.name, reason="upstream stream error (network_error)")
         return ToolCallResponse(
@@ -99,10 +106,7 @@ async def test_tool_failure_suspends_only_tool_capability() -> None:
     assert "gpt-4o-mini-working" in candidate_ids
 
 
-import json
-from collections.abc import AsyncIterator
-import httpx
-from inference.providers.openai_compat import OpenAICompatibleProvider
+
 
 
 class _MockStreamTransport(httpx.AsyncBaseTransport):

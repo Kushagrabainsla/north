@@ -208,7 +208,7 @@ class ToolRegistry:
     async def aclose(self) -> None:
         """Call aclose() on every registered tool that defines it."""
         for tool in self._tools.values():
-            if hasattr(tool, "aclose") and callable(getattr(tool, "aclose")):
+            if hasattr(tool, "aclose") and callable(tool.aclose):
                 try:
                     res = tool.aclose()
                     if inspect.isawaitable(res):

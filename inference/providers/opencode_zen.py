@@ -45,16 +45,19 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
 
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
         body = self._safe_json(response)
-        if response.status_code == 401 and isinstance(body, dict):
+        if (
+            response.status_code == 401
+            and isinstance(body, dict)
+            and ("CreditsError" in str(body) or "payment method" in str(body).lower())
+        ):
             # OpenCode Zen returns 401 with CreditsError when account has no payment card
-            if "CreditsError" in str(body) or "payment method" in str(body).lower():
-                raise PaymentRequiredError(
-                    model_id,
-                    self.name,
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    body=body,
-                )
+            raise PaymentRequiredError(
+                model_id,
+                self.name,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                body=body,
+            )
         if response.status_code in (400, 503) and isinstance(body, dict):
             msg = str(body)
             if "Model is unavailable" in msg or "Endpoint is unavailable" in msg:

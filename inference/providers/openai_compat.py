@@ -494,7 +494,8 @@ class OpenAICompatibleProvider:
                     choice = choices[0]
                     delta = choice.get("delta", {})
                     finish = choice.get("finish_reason")
-                    native_finish = str(choice.get("native_finish_reason") or delta.get("native_finish_reason") or "").lower()
+                    native_raw = choice.get("native_finish_reason") or delta.get("native_finish_reason") or ""
+                    native_finish = str(native_raw).lower()
                     if native_finish in ("network_error", "error", "failed", "upstream_error") or finish == "error":
                         raise ModelDegenerateError(
                             model_id,

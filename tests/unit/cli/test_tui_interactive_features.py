@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import contextlib
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from cli.formatting import _format_plan_table
 from cli.tui import (
-    ActionMenuModal,
     NorthApp,
     PlanCockpitModal,
-    SteerModal,
     ToolInspectorModal,
 )
-from cli.formatting import _format_plan_table
 
 _DEAD = "http://127.0.0.1:1"
 _HEADERS = {"X-North-Secret": "x"}
@@ -178,7 +177,9 @@ async def test_steering_submission_and_slash_commands():
         await app.on_input_submitted(SimpleNamespace(value=prompt.value, input=prompt))
         await pilot.pause()
 
-        assert any("steer" in call["url"] and call["json"]["instruction"] == "use pytest-asyncio strictly" for call in sink)
+        assert any(
+            "steer" in call["url"] and call["json"]["instruction"] == "use pytest-asyncio strictly" for call in sink
+        )
 
         # Test /thoughts slash command
         prompt.value = "/thoughts"
@@ -189,9 +190,9 @@ async def test_steering_submission_and_slash_commands():
 
 @pytest.mark.asyncio
 async def test_orchestrator_emit_steer_and_api_endpoint():
+    from approval.store import ApprovalStore
     from orchestrator.orchestrator import Orchestrator
     from orchestrator.stream import EventStreamManager
-    from approval.store import ApprovalStore
 
     stream_mgr = EventStreamManager()
     approval_store = ApprovalStore()

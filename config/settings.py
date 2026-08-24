@@ -5,6 +5,7 @@ See docs/CODING_STYLE.md Section 17.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import stat as _stat
@@ -201,10 +202,8 @@ class Settings(BaseSettings):
         for token in self.telegram_allowed_chat_ids.split(","):
             token = token.strip()
             if token:
-                try:
+                with contextlib.suppress(ValueError):
                     ids.add(int(token))
-                except ValueError:
-                    pass
         return frozenset(ids)
 
     @property

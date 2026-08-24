@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -26,12 +25,11 @@ def test_open_db_connection_nested_rollback(tmp_path: Path):
         conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
 
     # Test that an exception in outer block rolls back everything, including nested block
-    with pytest.raises(RuntimeError):
-        with open_db_connection(db_path) as conn1:
-            conn1.execute("INSERT INTO items (title) VALUES ('Outer 1')")
-            with open_db_connection(db_path) as conn2:
-                conn2.execute("INSERT INTO items (title) VALUES ('Inner')")
-            raise RuntimeError("Outer failure")
+    with pytest.raises(RuntimeError), open_db_connection(db_path) as conn1:
+        conn1.execute("INSERT INTO items (title) VALUES ('Outer 1')")
+        with open_db_connection(db_path) as conn2:
+            conn2.execute("INSERT INTO items (title) VALUES ('Inner')")
+        raise RuntimeError("Outer failure")
 
     with open_db_connection(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]

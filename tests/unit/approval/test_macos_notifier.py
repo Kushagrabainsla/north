@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -33,7 +32,10 @@ def test_map_alerter_action_approval():
 
 
 def test_map_alerter_action_question():
-    assert map_alerter_action_to_decision("Option A", CardType.QUESTION) == (ApprovalDecision.ANSWERED.value, "Option A")
+    assert map_alerter_action_to_decision("Option A", CardType.QUESTION) == (
+        ApprovalDecision.ANSWERED.value,
+        "Option A",
+    )
 
 
 @pytest.mark.asyncio

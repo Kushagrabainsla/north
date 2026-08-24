@@ -6,7 +6,6 @@ See README Section 6.8 and docs/CODING_STYLE.md Sections 12.1-12.4.
 from __future__ import annotations
 
 import datetime
-import secrets
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -33,7 +32,7 @@ from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
 from tools.confidence import ConfidenceTracker
 from utils.ids import generate_id
-from utils.security import load_secret, verify_request_secret, verify_secret
+from utils.security import verify_request_secret, verify_secret
 from utils.time import utcnow
 
 router = APIRouter(

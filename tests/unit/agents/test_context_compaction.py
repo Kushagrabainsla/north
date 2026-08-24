@@ -5,12 +5,9 @@ from __future__ import annotations
 import pytest
 
 from agents.context_compaction import (
-    COMPACTION_THRESHOLD,
-    compact_history,
     compact_if_needed,
     context_window_for,
     estimate_messages_tokens,
-    exchange_boundaries,
     render_exchange_for_summary,
 )
 from inference.base import InferenceRouter

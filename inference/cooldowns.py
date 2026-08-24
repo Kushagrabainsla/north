@@ -34,7 +34,8 @@ class CooldownStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path
         self._expiry: dict[_CooldownKey, float] = {}  # monotonic timestamps
-        self._capability_expiry: dict[tuple[str, str, str], float] = {}  # (model_id, provider, capability) -> mono timestamp
+        # (model_id, provider, capability) -> mono timestamp
+        self._capability_expiry: dict[tuple[str, str, str], float] = {}
         # Explicit tracking of which keys are payment cooldowns, replacing the
         # fragile "> 3600s remaining" heuristic.
         self._payment_keys: set[_CooldownKey] = set()

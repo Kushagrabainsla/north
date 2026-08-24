@@ -133,9 +133,7 @@ def exchange_boundaries(messages: list[dict]) -> list[tuple[int, int]]:
             j = i + 1
             while j < len(messages):
                 role = messages[j].get("role")
-                if role == "tool":
-                    j += 1
-                elif role == "user" and _is_visual_context_message(messages[j]):
+                if role == "tool" or role == "user" and _is_visual_context_message(messages[j]):
                     j += 1
                 else:
                     break
@@ -312,7 +310,10 @@ async def compact_if_needed(
             if summary:
                 messages[2:first_kept] = [
                     {"role": "assistant", "content": f"## Earlier context (auto-compacted)\n{summary}"},
-                    {"role": "user", "content": "Please proceed with the remaining task requirements using this context."},
+                    {
+                        "role": "user",
+                        "content": "Please proceed with the remaining task requirements using this context.",
+                    },
                 ]
                 return
         except Exception:

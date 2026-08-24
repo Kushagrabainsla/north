@@ -141,7 +141,9 @@ class EventStreamManager:
                     q.get_nowait()
                 with contextlib.suppress(asyncio.QueueFull):
                     q.put_nowait(None)
-                logger.warning("SSE queue was full for task %s; dropped oldest event to deliver done sentinel.", task_id)
+                logger.warning(
+                    "SSE queue was full for task %s; dropped oldest event to deliver done sentinel.", task_id
+                )
 
     async def subscribe(self, task_id: str, max_queue_size: int = 2048) -> AsyncIterator[str]:
         """Async generator that yields raw SSE-formatted text for task_id.

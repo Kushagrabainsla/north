@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -88,7 +88,7 @@ async def test_telegram_gateway_tracks_and_cleans_tasks() -> None:
     gw._get_updates = AsyncMock(return_value=[{"update_id": 1, "message": {"text": "hi"}}])  # type: ignore[method-assign]
 
     run_task = asyncio.create_task(gw.run())
-    await asyncio.sleep(0.02)
+    await asyncio.wait_for(processed.wait(), timeout=3.0)
     assert processed.is_set()
 
     await gw.stop()

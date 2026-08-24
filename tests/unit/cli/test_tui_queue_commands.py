@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+
 import pytest
-from types import SimpleNamespace
 
 from cli.tui import NorthApp
 
@@ -59,7 +59,7 @@ async def test_tui_queue_slash_command():
     app = NorthApp(base_url=_DEAD, headers=_HEADERS)
     calls = _install_capturing_http(app)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         await app._handle_slash("/queue")
         # Verify both active tasks and pending jobs were requested
         urls = [c["url"] for c in calls]
@@ -72,7 +72,7 @@ async def test_tui_cancel_specific_task_command():
     app = NorthApp(base_url=_DEAD, headers=_HEADERS)
     calls = _install_capturing_http(app)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         await app._handle_slash("/cancel task_123")
         post_calls = [c for c in calls if c["method"] == "POST"]
         assert any("cancel/task_123" in c["url"] for c in post_calls)
@@ -83,7 +83,7 @@ async def test_tui_cancel_all_command():
     app = NorthApp(base_url=_DEAD, headers=_HEADERS)
     calls = _install_capturing_http(app)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         await app._handle_slash("/cancel all")
         post_calls = [c for c in calls if c["method"] == "POST"]
         assert any("cancel-all" in c["url"] for c in post_calls)

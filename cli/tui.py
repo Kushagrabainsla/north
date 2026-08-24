@@ -25,7 +25,7 @@ from rich.syntax import Syntax as RichSyntax
 from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.suggester import Suggester
@@ -119,11 +119,17 @@ class ToolInspectorModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="tool-modal-box"):
-            yield Static("  [bold #58a6ff]🔍 Tool & Diff Inspector[/bold #58a6ff] [bright_black](Esc/q to close)[/bright_black]", id="tool-modal-title")
+            yield Static(
+                "  [bold #58a6ff]🔍 Tool & Diff Inspector[/bold #58a6ff] [bright_black](Esc/q to close)[/bright_black]",
+                id="tool-modal-title",
+            )
             with Horizontal(id="tool-modal-body"):
                 yield ListView(id="tool-modal-list")
                 with VerticalScroll(id="tool-modal-detail"):
-                    yield Static("Select a tool call from the left to inspect its parameters, output, and diffs.", id="tool-detail-content")
+                    yield Static(
+                        "Select a tool call from the left to inspect its parameters, output, and diffs.",
+                        id="tool-detail-content",
+                    )
             yield Static("  [dim]↑/↓ Navigate list · Enter to select · Esc to close[/dim]", id="tool-modal-footer")
 
     def on_mount(self) -> None:
@@ -137,7 +143,8 @@ class ToolInspectorModal(ModalScreen[None]):
             icon = "[green]✓[/green]" if success else "[red]✗[/red]"
             dur = item.get("duration")
             dur_str = f" ({dur:.2f}s)" if dur is not None else ""
-            list_view.append(ListItem(Label(f" {icon} [bold white]{tool}[/bold white][bright_black]{dur_str}[/bright_black]"), name=str(len(self._history) - 1 - i)))
+            label_text = f" {icon} [bold white]{tool}[/bold white][bright_black]{dur_str}[/bright_black]"
+            list_view.append(ListItem(Label(label_text), name=str(len(self._history) - 1 - i)))
         if self._history:
             self._render_tool_detail(self._history[-1])
 
@@ -164,7 +171,8 @@ class ToolInspectorModal(ModalScreen[None]):
         status_text = "SUCCESS" if success else "FAILED"
 
         lines = [
-            f"[bold {header_color}]▶ Tool: {tool}[/bold {header_color}]  [bright_black]({status_text} · {dur_str})[/bright_black]",
+            f"[bold {header_color}]▶ Tool: {tool}[/bold {header_color}]  "
+            f"[bright_black]({status_text} · {dur_str})[/bright_black]",
             "",
             "[bold white]Parameters:[/bold white]",
         ]
@@ -250,7 +258,11 @@ class PlanCockpitModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="plan-modal-box"):
-            yield Static("  [bold #3fb950]📋 Execution Plan & DoD Cockpit[/bold #3fb950] [bright_black](Esc/q to close)[/bright_black]", id="plan-modal-title")
+            yield Static(
+                "  [bold #3fb950]📋 Execution Plan & DoD Cockpit[/bold #3fb950] "
+                "[bright_black](Esc/q to close)[/bright_black]",
+                id="plan-modal-title",
+            )
             with VerticalScroll(id="plan-modal-body"):
                 yield Static(id="plan-modal-content")
             yield Static("  [dim]Press Esc or q to return to chat[/dim]", id="plan-modal-footer")
@@ -1188,9 +1200,11 @@ class NorthApp(App[None]):
         toks = max(1, len(buf) // 4)
         elapsed = time.monotonic() - self._reasoning_start_times[task_id]
         with contextlib.suppress(Exception):
-            self.query_one("#reasoning-header", Static).update(
-                f"  [bold #58a6ff]🧠 Thinking…[/bold #58a6ff] [bright_black]({toks} tokens · {elapsed:.1f}s · Ctrl+T to toggle)[/bright_black]"
+            header_text = (
+                f"  [bold #58a6ff]🧠 Thinking…[/bold #58a6ff] "
+                f"[bright_black]({toks} tokens · {elapsed:.1f}s · Ctrl+T to toggle)[/bright_black]"
             )
+            self.query_one("#reasoning-header", Static).update(header_text)
             self.query_one("#reasoning", Static).update(buf)
 
     async def _on_task_synthesis(self, task_id: str, data: dict) -> None:
@@ -1338,7 +1352,10 @@ class NorthApp(App[None]):
         retry_after = data.get("retry_after")
         time_info = f" (retrying in ~{int(retry_after)}s)" if retry_after else ""
         self._set_status("task queued (waiting for models)…")
-        self._log(f"  [yellow]⏳[/yellow]  [white]task queued[/white] [bright_black]({reason}{time_info})[/bright_black]")
+        self._log(
+            f"  [yellow]⏳[/yellow]  [white]task queued[/white] "
+            f"[bright_black]({reason}{time_info})[/bright_black]"
+        )
         if task_id:
             self._log(f"    [bright_black]Task ID: {task_id} — type '/cancel {task_id}' to cancel[/bright_black]")
 
@@ -1392,9 +1409,16 @@ class NorthApp(App[None]):
 
     async def _on_plan_seeded(self, task_id: str, data: dict) -> None:
         tasks = data.get("tasks", 0)
-        steps = data.get("steps") or [{"step_id": i + 1, "task": f"Task Step {i+1}", "agent": "coder", "status": "pending"} for i in range(tasks)]
+        default_steps = [
+            {"step_id": i + 1, "task": f"Task Step {i+1}", "agent": "coder", "status": "pending"}
+            for i in range(tasks)
+        ]
+        steps = data.get("steps") or default_steps
         self._plan_steps = steps
-        self._log(f"  [cyan]◆[/cyan]  [white]plan seeded[/white]  [bright_black]{tasks} task steps · Ctrl+P to inspect[/bright_black]")
+        self._log(
+            f"  [cyan]◆[/cyan]  [white]plan seeded[/white]  "
+            f"[bright_black]{tasks} task steps · Ctrl+P to inspect[/bright_black]"
+        )
 
     async def _on_conductor_fix_round(self, task_id: str, data: dict) -> None:
         round_num = data.get("round", 1)
@@ -1725,7 +1749,10 @@ class NorthApp(App[None]):
                             jid = j.get("job_id", "")
                             p = j.get("task", "")[:60]
                             self._log(f"    [yellow]queued job[/yellow]   [bright_black]{jid}[/bright_black]  {p}")
-                        self._log("    [bright_black]Type '/cancel <id>' to cancel a task/job, or '/cancel all' to cancel everything.[/bright_black]")
+                        self._log(
+                            "    [bright_black]Type '/cancel <id>' to cancel a task/job, "
+                            "or '/cancel all' to cancel everything.[/bright_black]"
+                        )
             except Exception as exc:
                 self._log(f"  [red]error fetching queue: {exc}[/red]")
         elif cmd.startswith("/cancel"):
@@ -1734,11 +1761,16 @@ class NorthApp(App[None]):
             if not target or target.lower() in ("all", "--all"):
                 try:
                     async with self._http() as c:
-                        r = await c.post(f"{self.base_url}/orchestrator/cancel-all", headers=self.headers, timeout=10.0)
+                        r = await c.post(
+                            f"{self.base_url}/orchestrator/cancel-all", headers=self.headers, timeout=10.0
+                        )
                         if r.status_code == 200:
                             data = r.json()
+                            c_tasks = data.get("tasks_cancelled", 0)
+                            c_jobs = data.get("jobs_cancelled", 0)
                             self._log(
-                                f"  [yellow]✓[/yellow]  [white]cancelled {data.get('tasks_cancelled', 0)} active task(s) and {data.get('jobs_cancelled', 0)} queued job(s)[/white]"
+                                f"  [yellow]✓[/yellow]  [white]cancelled {c_tasks} active task(s) "
+                                f"and {c_jobs} queued job(s)[/white]"
                             )
                         else:
                             self._log(f"  [red]error cancelling tasks (HTTP {r.status_code})[/red]")
@@ -1747,10 +1779,14 @@ class NorthApp(App[None]):
             else:
                 try:
                     async with self._http() as c:
-                        r = await c.post(f"{self.base_url}/orchestrator/cancel/{target}", headers=self.headers, timeout=10.0)
+                        r = await c.post(
+                            f"{self.base_url}/orchestrator/cancel/{target}", headers=self.headers, timeout=10.0
+                        )
                         if r.status_code == 200:
                             data = r.json()
-                            self._log(f"  [yellow]✓[/yellow]  [white]cancelled {data.get('cancelled', 'task')} {data.get('id', target)}[/white]")
+                            c_type = data.get("cancelled", "task")
+                            c_id = data.get("id", target)
+                            self._log(f"  [yellow]✓[/yellow]  [white]cancelled {c_type} {c_id}[/white]")
                         else:
                             self._log(f"  [red]task or job '{target}' not found or already completed[/red]")
                 except Exception as exc:
