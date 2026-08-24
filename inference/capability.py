@@ -67,6 +67,7 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
     _NON_CHAT_PATTERNS = (
         "prompt-guard",
         "llama-guard",
+        "safeguard",
         "orpheus",
         "-guard-",
         "imagen",
@@ -125,7 +126,7 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
         caps.add(ModelCapability.SPEED)
 
     # Models without function/tool calling support
-    if "compound" in lower:
+    if "compound" in lower or "allam" in lower or any(k in lower for k in alpha_variants):
         caps.discard(ModelCapability.TOOL_CALLS)
 
     return frozenset(caps)
