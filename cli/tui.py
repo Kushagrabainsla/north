@@ -695,6 +695,7 @@ class NorthApp(App[None]):
         self._conversation_history: deque[dict] = deque(maxlen=5)
         self._pending_user_messages: dict[str, str] = {}
         self._task_tool_activity: dict[str, list[dict]] = {}
+        self._last_logged_markup: str = ""
 
         self._input_history: list[str] = []
         self._history_index: int = -1
@@ -981,6 +982,9 @@ class NorthApp(App[None]):
             self.query_one("#status", Static).update(f"[bright_black]  {f}  {text}[/bright_black]")
 
     def _log(self, markup: str) -> None:
+        if markup == self._last_logged_markup and ("◎" in markup or "→" in markup):
+            return
+        self._last_logged_markup = markup
         log = self.query_one("#log", RichLog)
         log.write(markup)
         log.scroll_end(animate=False)
@@ -1156,13 +1160,14 @@ class NorthApp(App[None]):
             if thoughts:
                 toks = max(1, len(thoughts) // 4)
                 dur = now - self._reasoning_start_times.get(task_id, now)
+                dur_str = f"{dur:.1f}s" if dur >= 0.1 else "< 0.1s"
                 self._recent_thoughts.append({
                     "task_id": task_id,
                     "thoughts": thoughts,
                     "tokens": toks,
                     "duration": dur,
                 })
-                self._log(f"  [dim cyan]🧠 Thought for {dur:.1f}s ({toks} tokens · Ctrl+T to view)[/dim cyan]")
+                self._log(f"  [dim cyan]🧠 Thought for {dur_str} ({toks} tokens · Ctrl+T to view)[/dim cyan]")
             self._set_status("")
             self._log("  [cyan]◆[/cyan]  [white]north[/white]")
             self._start_streaming()
