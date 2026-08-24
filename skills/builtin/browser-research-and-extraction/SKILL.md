@@ -1,10 +1,10 @@
 ---
 name: browser-research-and-extraction
-description: "Use when navigating live web pages, scraping tabular or list data, reading articles/documentation, or asserting web UI states with chrome_agent."
+description: "Use when navigating live web pages, scraping tabular or list data, reading articles/documentation, or asserting web UI states with browser."
 ---
 # Browser Research and Structured Web Extraction
 
-> **Use `chrome_agent` to interact with dynamic web pages, harvest structured records, extract clean documentation, and verify UI states over Chrome CDP.**
+> **Use the `browser` tool to interact with dynamic web pages, harvest structured records, extract clean documentation, and verify UI states over Chrome CDP.**
 
 ## Use this when
 - Scraping tables, cards, news feeds, search results, or API listings from web pages.

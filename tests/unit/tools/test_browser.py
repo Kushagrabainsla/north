@@ -1,4 +1,4 @@
-"""Unit tests for ChromeAgentTool (tools/universal/chrome_agent.py)."""
+"""Unit tests for BrowserTool (tools/universal/browser.py)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import pytest
 
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
-from tools.universal.chrome_agent import (
-    ChromeAgentTool,
+from tools.universal.browser import (
+    BrowserTool,
     _find_chrome_agent_binary,
 )
 
@@ -31,11 +31,14 @@ def test_find_chrome_agent_binary():
 
 
 def test_build_args_all_actions():
-    tool = ChromeAgentTool(binary_cmd=["chrome-agent"])
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
 
-    # goto
+    # goto / navigate
     args = tool._build_args("goto", {"url": "https://example.com", "stealth": True}, "task1")
     assert args == ["--json", "--browser", "task1", "goto", "https://example.com", "--stealth", "--inspect"]
+
+    args_nav = tool._build_args("navigate", {"url": "https://example.com"}, "task1")
+    assert args_nav == ["--json", "--browser", "task1", "goto", "https://example.com", "--stealth", "--inspect"]
 
     # inspect
     args = tool._build_args("inspect", {"limit": 50, "uid": "n10"}, "task1")
@@ -79,7 +82,7 @@ def test_build_args_all_actions():
 
 
 def test_format_output():
-    tool = ChromeAgentTool(binary_cmd=["chrome-agent"])
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
 
     # Format extract
     extract_data = {
@@ -111,7 +114,7 @@ def test_format_output():
 
 @pytest.mark.asyncio
 async def test_run_success_json():
-    tool = ChromeAgentTool(binary_cmd=["chrome-agent"])
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
 
     mock_proc = MagicMock()
     mock_proc.pid = 12345
@@ -129,7 +132,7 @@ async def test_run_success_json():
 
 @pytest.mark.asyncio
 async def test_run_error_with_hint():
-    tool = ChromeAgentTool(binary_cmd=["chrome-agent"])
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
 
     mock_proc = MagicMock()
     mock_proc.pid = 12345
@@ -151,7 +154,7 @@ async def test_run_error_with_hint():
 
 @pytest.mark.asyncio
 async def test_run_assert_unmet_exit_code_2():
-    tool = ChromeAgentTool(binary_cmd=["chrome-agent"])
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
 
     mock_proc = MagicMock()
     mock_proc.pid = 12345
@@ -171,7 +174,7 @@ async def test_run_assert_unmet_exit_code_2():
 
 @pytest.mark.asyncio
 async def test_ssrf_blocking_for_private_ips():
-    tool = ChromeAgentTool(binary_cmd=["chrome-agent"])
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
 
     # Attempting to access private metadata IP
     output = await tool.run(ToolInput(params={"action": "goto", "url": "http://169.254.169.254/latest/meta-data"}))
@@ -179,8 +182,8 @@ async def test_ssrf_blocking_for_private_ips():
     assert "Security policy blocked navigation" in output.error
 
 
-def test_tool_registry_discovers_chrome_agent():
+def test_tool_registry_discovers_browser_tool():
     registry = ToolRegistry(auto_register=True)
-    tool = registry.get("chrome_agent")
+    tool = registry.get("browser")
     assert tool is not None
-    assert tool.name == "chrome_agent"
+    assert tool.name == "browser"

@@ -1,7 +1,7 @@
-"""ChromeAgentTool — autonomous browser automation and structured web extraction.
+"""BrowserTool — autonomous browser automation and structured web extraction.
 
 Universal tool available to all agents (general, researcher, coder, news_briefing, wellness, etc.).
-Wraps the chrome-agent Rust CLI (https://github.com/sderosiaux/chrome-agent) over CDP.
+Wraps the chrome-agent Rust CLI (https://github.com/sderosiaux/chrome-agent) over Chrome CDP.
 Provides:
   1. Token-efficient structured record extraction (MDR/DEPTA heuristics via 'extract').
   2. Reader mode article/documentation extraction ('read').
@@ -63,15 +63,15 @@ def _find_chrome_agent_binary() -> list[str] | None:
     return None
 
 
-class ChromeAgentTool(Tool):
-    """Automate Chrome and extract structured web data using chrome-agent."""
+class BrowserTool(Tool):
+    """Automate Chrome and extract structured web data via Chrome DevTools Protocol."""
 
-    name = "chrome_agent"
+    name = "browser"
     is_mutating = False
     description = (
-        "Autonomous browser automation and structured web extraction via chrome-agent (CDP). "
+        "Autonomous browser automation and structured web extraction via Chrome CDP. "
         "Actions:\n"
-        "  - 'goto': Navigate to URL. Supports --stealth, --copy-cookies, --connect.\n"
+        "  - 'goto' (or 'navigate'): Navigate to URL. Supports --stealth, --copy-cookies, --connect.\n"
         "  - 'extract': Discover and extract structured lists/tables as JSON records (saves 80% tokens).\n"
         "  - 'read': Reader-mode extraction of clean article/doc text without ads/nav.\n"
         "  - 'inspect': Accessibility Tree (AXTree) with stable numeric UIDs (e.g. n12), or diff=True.\n"
@@ -92,6 +92,7 @@ class ChromeAgentTool(Tool):
                 "type": "string",
                 "enum": [
                     "goto",
+                    "navigate",
                     "inspect",
                     "extract",
                     "read",
@@ -115,7 +116,7 @@ class ChromeAgentTool(Tool):
             },
             "url": {
                 "type": "string",
-                "description": "URL to navigate to (required for goto/read).",
+                "description": "URL to navigate to (required for goto/navigate/read).",
             },
             "uid": {
                 "type": "string",
@@ -218,7 +219,7 @@ class ChromeAgentTool(Tool):
         if task_id:
             args.extend(["--browser", task_id])
 
-        if action == "goto":
+        if action in ("goto", "navigate"):
             url = params.get("url", "").strip()
             if not url:
                 raise ValueError("Parameter 'url' is required for action='goto'.")
@@ -409,7 +410,7 @@ class ChromeAgentTool(Tool):
 
         # SSRF safety validation for external URLs
         url = params.get("url", "")
-        if url and action in ("goto", "read"):
+        if url and action in ("goto", "navigate", "read"):
             parsed = urlparse(url)
             # Allow localhost / 127.0.0.1 for local web app testing in dev
             if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
@@ -447,7 +448,7 @@ class ChromeAgentTool(Tool):
             except TimeoutError:
                 with contextlib.suppress(ProcessLookupError, OSError):
                     os.killpg(proc.pid, signal.SIGKILL)
-                return ToolOutput(success=False, error=f"chrome-agent timed out after {timeout}s.")
+                return ToolOutput(success=False, error=f"browser timed out after {timeout}s.")
         except Exception as exc:
             return ToolOutput(success=False, error=f"Subprocess execution failed: {exc}")
 
@@ -474,7 +475,7 @@ class ChromeAgentTool(Tool):
                     hint = parsed_json.get("hint", "")
                     json_error = parsed_json.get("error", "")
                     if not parsed_json.get("ok", True) and proc.returncode == 0:
-                        err = json_error or "Unknown chrome-agent failure."
+                        err = json_error or "Unknown browser failure."
                         if hint:
                             err += f" (Hint: {hint})"
                         return ToolOutput(success=False, data=data, error=err)
@@ -484,7 +485,7 @@ class ChromeAgentTool(Tool):
             data["raw_output"] = stdout
 
         if proc.returncode != 0:
-            error_msg = json_error or stderr or stdout or f"chrome-agent exited with status {proc.returncode}."
+            error_msg = json_error or stderr or stdout or f"browser exited with status {proc.returncode}."
             if hint:
                 error_msg += f" (Hint: {hint})"
             return ToolOutput(

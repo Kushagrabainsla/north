@@ -4,7 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
-- **`chrome_agent` Universal Tool & Browser Research Skill** (`tools/universal/chrome_agent.py`, `skills/builtin/browser-research-and-extraction/SKILL.md`, `tests/unit/tools/test_chrome_agent.py`):
+- **`browser` Universal Tool & Browser Research Skill** (`tools/universal/browser.py`, `skills/builtin/browser-research-and-extraction/SKILL.md`, `tests/unit/tools/test_browser.py`):
   - Added high-performance browser automation and structured web extraction tool wrapping `chrome-agent` (3 MB Rust CDP binary), available universally to **all** agents (`general`, `researcher`, `coder`, `news_briefing`, `wellness`, `home`, etc.).
   - **Autonomous Record Extraction (`extract`)**: Uses MDR/DEPTA heuristic pattern recognition to extract structured tables/lists directly into JSON records without CSS selectors or LLM DOM parsing, saving 80% prompt tokens.
   - **Reader Mode (`read`)**: Clean article and doc scraping using Readability heuristics, stripped of navigation, ads, and sidebars.
