@@ -2436,55 +2436,65 @@ class Orchestrator:
         if not pairs:
             return await self._run_agent_with_retry(agent, payload)
 
-        results = await asyncio.gather(
-            *[self._run_agent_with_retry(agent, p) for _, p in pairs],
-            return_exceptions=True,
-        )
-
-        outcomes: list[CandidateOutcome] = []
-        for i, ((wt, _), res) in enumerate(zip(pairs, results, strict=False)):
-            succeeded = not isinstance(res, BaseException)
-            diff_lines = await manager.diff_line_count(wt)
-            tests_passed = await self._candidate_tests_pass(wt) if succeeded and diff_lines else None
-            outcomes.append(
-                CandidateOutcome(
-                    index=i,
-                    succeeded=succeeded,
-                    changed=diff_lines > 0,
-                    tests_passed=tests_passed,
-                    diff_lines=diff_lines,
-                )
+        integrated_wt: Worktree | None = None
+        try:
+            results = await asyncio.gather(
+                *[self._run_agent_with_retry(agent, p) for _, p in pairs],
+                return_exceptions=True,
             )
 
-        winner = select_best(outcomes)
-        await self._stream_manager.emit(
-            payload.task_id,
-            "best_of_n",
-            {"candidates": len(outcomes), "winner": winner, "viable": any_viable(outcomes)},
-        )
+            outcomes: list[CandidateOutcome] = []
+            for i, ((wt, _), res) in enumerate(zip(pairs, results, strict=False)):
+                succeeded = not isinstance(res, BaseException)
+                diff_lines = await manager.diff_line_count(wt)
+                tests_passed = await self._candidate_tests_pass(wt) if succeeded and diff_lines else None
+                outcomes.append(
+                    CandidateOutcome(
+                        index=i,
+                        succeeded=succeeded,
+                        changed=diff_lines > 0,
+                        tests_passed=tests_passed,
+                        diff_lines=diff_lines,
+                    )
+                )
 
-        winner_result: AgentResult | None = None
-        for i, (wt, _) in enumerate(pairs):
-            if i == winner and not isinstance(results[i], BaseException):
-                integration = await manager.integrate(wt, lock=workspace_lock(payload.workspace))
-                await self._emit_integration(payload.task_id, agent.name, integration)
-                winner_result = results[i]  # type: ignore[assignment]
-            else:
-                await self._discard_worktree(manager, wt)
+            winner = select_best(outcomes)
+            await self._stream_manager.emit(
+                payload.task_id,
+                "best_of_n",
+                {"candidates": len(outcomes), "winner": winner, "viable": any_viable(outcomes)},
+            )
 
-        if winner_result is not None:
-            return winner_result
-        # No viable winner: surface the first real result, or re-raise the first error.
-        first = results[0]
-        if isinstance(first, BaseException):
-            raise first
-        return first  # type: ignore[return-value]
+            winner_result: AgentResult | None = None
+            for i, (wt, _) in enumerate(pairs):
+                if i == winner and not isinstance(results[i], BaseException):
+                    integration = await manager.integrate(wt, lock=workspace_lock(payload.workspace))
+                    integrated_wt = wt
+                    await self._emit_integration(payload.task_id, agent.name, integration)
+                    winner_result = results[i]  # type: ignore[assignment]
+                else:
+                    await self._discard_worktree(manager, wt)
+
+            if winner_result is not None:
+                return winner_result
+            # No viable winner: surface the first real result, or re-raise the first error.
+            first = results[0]
+            if isinstance(first, BaseException):
+                raise first
+            return first  # type: ignore[return-value]
+        finally:
+            # Guarantee any worktrees left undiscarded (e.g. cancelled during gather or scoring)
+            # are cleaned up so no dangling branches or /tmp directories leak.
+            for wt, _ in pairs:
+                if wt is not integrated_wt:
+                    await self._discard_worktree(manager, wt)
 
     async def _candidate_tests_pass(self, wt: Worktree) -> bool | None:
         """Run the configured best-of-N test command in *wt*; True/False, or None if unset."""
         cmd = self._best_of_n_test_command
         if not cmd:
             return None
+        proc = None
         try:
             proc = await asyncio.create_subprocess_shell(
                 cmd,
@@ -2493,11 +2503,21 @@ class Orchestrator:
                 stderr=asyncio.subprocess.DEVNULL,
             )
             code = await asyncio.wait_for(proc.wait(), timeout=_BEST_OF_N_TEST_TIMEOUT)
+            return code == 0
         except (TimeoutError, OSError):
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()  # type: ignore[possibly-undefined]
+            if proc is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
             return False
-        return code == 0
+        except BaseException:
+            if proc is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+            raise
 
     async def _discard_worktree(self, manager: GitWorktreeManager, wt: Worktree) -> None:
         """Best-effort cleanup of an isolated worktree after a failed/cancelled run."""

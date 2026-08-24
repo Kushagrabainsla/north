@@ -128,3 +128,34 @@ async def test_no_fallback_when_free_also_down() -> None:
     req = CompletionRequest(prompt="hi", component="planner", priority=PoolPriority.HIGH)
     with pytest.raises(AllModelsRateLimitedError):
         await d.complete(req)
+
+
+@pytest.mark.asyncio
+async def test_free_fallback_not_duplicated_when_primary_empty() -> None:
+    """When primary candidates list is empty, free fallback should be called once, not twice."""
+    from inference.exceptions import AllModelsRateLimitedError
+
+    d = _make_dispatcher()
+    # Remove paid model so primary candidates are empty
+    del d._registry[("paid-model", "opencode_zen")]
+
+    call_count = 0
+    provider = _FakeProvider("openrouter", "pay")
+
+    async def _failing_complete(model_id, request):
+        nonlocal call_count
+        call_count += 1
+        raise PaymentRequiredError(model_id, "openrouter")
+
+    provider.complete = _failing_complete
+    d._registry[("free-model", "openrouter")] = (
+        d._registry[("free-model", "openrouter")][0],
+        provider,
+    )
+
+    req = CompletionRequest(prompt="hi", component="planner", priority=PoolPriority.HIGH)
+    with pytest.raises(AllModelsRateLimitedError):
+        await d.complete(req)
+
+    assert call_count == 1
+

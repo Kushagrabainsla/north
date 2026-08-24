@@ -179,10 +179,12 @@ class ModelDispatcher(InferenceRouter):
         estimated = len(request.prompt) // 4
         priority = self._effective_priority(request.priority)
         candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated, pool=request.pool)
+        fallback = self._free_fallback_candidates(ModelCapability.COMPLETION, estimated) if candidates else None
         if not candidates:
             # Primary pool exhausted (out of credits / all rate-limited / down) -
             # fall back to the free tier so the request still completes.
-            candidates = self._free_fallback_candidates(ModelCapability.COMPLETION, estimated)
+            candidates = fallback or self._free_fallback_candidates(ModelCapability.COMPLETION, estimated)
+            fallback = None
         candidates = self._apply_exclusions(candidates, request.exclude_models)
 
         async def _call(provider: Provider, model_id: str) -> CompletionResponse:
@@ -211,7 +213,7 @@ class ModelDispatcher(InferenceRouter):
             _call,
             is_valid=_valid,
             sticky_key=sticky,
-            fallback_candidates=self._free_fallback_candidates(ModelCapability.COMPLETION, estimated),
+            fallback_candidates=fallback,
             capability=ModelCapability.COMPLETION,
         )
 
@@ -227,8 +229,10 @@ class ModelDispatcher(InferenceRouter):
         estimated = (len(text) + tools_chars) // 4
         priority = self._effective_priority(request.priority)
         candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated, pool=request.pool)
+        fallback = self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated) if candidates else None
         if not candidates:
-            candidates = self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated)
+            candidates = fallback or self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated)
+            fallback = None
         candidates = self._apply_exclusions(candidates, request.exclude_models)
 
         forwarded = False
@@ -258,7 +262,7 @@ class ModelDispatcher(InferenceRouter):
             _call,
             is_valid=_toolcall_has_output,
             sticky_key=sticky,
-            fallback_candidates=self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated),
+            fallback_candidates=fallback,
             capability=ModelCapability.TOOL_CALLS,
         )
 

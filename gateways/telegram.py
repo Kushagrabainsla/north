@@ -50,7 +50,7 @@ class TelegramGateway:
     def __init__(self, orchestrator_base: str = "http://127.0.0.1:8000") -> None:
         self._orchestrator_base = orchestrator_base
         self._offset: int = 0
-        self._pending: dict[int, dict] = {}  # chat_id -> {message_id, text, task_id}
+        self._pending: dict[tuple[int, int], dict] = {}  # (chat_id, message_id) -> {message_id, text, task_id}
         self._tasks: set[asyncio.Task] = set()
         self._http = httpx.AsyncClient(timeout=_HTTP_TIMEOUT)
         self._running = False
@@ -317,7 +317,8 @@ class TelegramGateway:
             return
 
         # Store in pending map so we can match results
-        self._pending[chat_id] = {
+        pending_key = (chat_id, message_id)
+        self._pending[pending_key] = {
             "message_id": message_id,
             "text": text,
             "task_id": task_id,
@@ -345,7 +346,7 @@ class TelegramGateway:
             await self._send_message(chat_id, msg, reply_to=message_id)
 
         # Remove from pending
-        self._pending.pop(chat_id, None)
+        self._pending.pop(pending_key, None)
 
     async def run(self) -> None:
         """Main polling loop — background task entrypoint."""

@@ -18,9 +18,20 @@ from pathlib import Path
 # Thread-local storage: each thread caches one connection per canonical db_path,
 # and tracks transaction nesting depth.
 _local = threading.local()
-# Global registry so close_all_pools() can reach every cached connection.
-_all_connections_lock = threading.Lock()
-_all_connections: list[sqlite3.Connection] = []
+# Global registry keyed by thread id so close_all_pools() can reach all cached
+# connections across threads, with automatic cleanup of terminated thread connections.
+_registry_lock = threading.Lock()
+_thread_conns: dict[int, dict[str, sqlite3.Connection]] = {}
+
+
+def _prune_dead_threads_locked() -> None:
+    """Close and evict connections belonging to threads that are no longer alive."""
+    alive_ids = {t.ident for t in threading.enumerate() if t.ident is not None}
+    dead_ids = [tid for tid in _thread_conns if tid not in alive_ids]
+    for tid in dead_ids:
+        for conn in _thread_conns.pop(tid, {}).values():
+            with contextlib.suppress(Exception):
+                conn.close()
 
 
 def _get_pooled_connection(db_path: Path) -> tuple[str, sqlite3.Connection]:
@@ -40,8 +51,10 @@ def _get_pooled_connection(db_path: Path) -> tuple[str, sqlite3.Connection]:
             return key, conn
         except (sqlite3.ProgrammingError, sqlite3.OperationalError):
             cache.pop(key, None)
-            with _all_connections_lock, contextlib.suppress(ValueError):
-                _all_connections.remove(conn)
+            with _registry_lock:
+                tid = threading.get_ident()
+                if tid in _thread_conns:
+                    _thread_conns[tid].pop(key, None)
     conn = sqlite3.connect(key)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -50,8 +63,12 @@ def _get_pooled_connection(db_path: Path) -> tuple[str, sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     cache[key] = conn
     _local.conns = cache
-    with _all_connections_lock:
-        _all_connections.append(conn)
+    with _registry_lock:
+        _prune_dead_threads_locked()
+        tid = threading.get_ident()
+        if tid not in _thread_conns:
+            _thread_conns[tid] = {}
+        _thread_conns[tid][key] = conn
     return key, conn
 
 
@@ -95,12 +112,14 @@ def close_all_pools() -> None:
 
     Call on application shutdown or before moving/replacing DB files.
     """
-    with _all_connections_lock:
-        for conn in list(_all_connections):
-            with contextlib.suppress(Exception):
-                conn.close()
-        _all_connections.clear()
+    with _registry_lock:
+        for conns in _thread_conns.values():
+            for conn in conns.values():
+                with contextlib.suppress(Exception):
+                    conn.close()
+        _thread_conns.clear()
 
 
 atexit.register(close_all_pools)
+
 

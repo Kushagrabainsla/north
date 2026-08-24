@@ -576,3 +576,32 @@ async def test_execute_calls_ordered_preserves_causal_chunks(tmp_path: Path) -> 
     assert len(results) == 2
     assert execution_order == ["write", "read"]
 
+
+async def test_append_tool_call_exchange_contiguous_tool_roles_with_visuals(tmp_path: Path) -> None:
+    """All role='tool' messages must precede any visual user messages for OpenAI protocol compliance."""
+    agent = _load_agent("coder", tmp_path)
+    messages: list[dict] = []
+
+    results = [
+        (ToolCall(name="take_screenshot", call_id="c1", params={}), "ok", True, [("b64img", "image/png")]),
+        (ToolCall(name="read_file", call_id="c2", params={}), "file content", True, []),
+    ]
+
+    agent._append_tool_call_exchange(messages, results)
+
+    # Message structure:
+    # 0: assistant tool_calls
+    # 1: tool c1
+    # 2: tool c2
+    # 3: user visual context
+    assert len(messages) == 4
+    assert messages[0]["role"] == "assistant"
+    assert len(messages[0]["tool_calls"]) == 2
+    assert messages[1]["role"] == "tool"
+    assert messages[1]["tool_call_id"] == "c1"
+    assert messages[2]["role"] == "tool"
+    assert messages[2]["tool_call_id"] == "c2"
+    assert messages[3]["role"] == "user"
+    assert "image_url" in messages[3]["content"][1]["type"]
+
+

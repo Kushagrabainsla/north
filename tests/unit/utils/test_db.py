@@ -63,3 +63,31 @@ def test_close_all_pools(tmp_path: Path):
     with open_db_connection(db_path) as conn:
         val = conn.execute("SELECT x FROM t").fetchone()[0]
         assert val == 42
+
+
+def test_dead_thread_connections_cleanup(tmp_path: Path):
+    import threading
+
+    from utils.db import _registry_lock, _thread_conns
+
+    db_path = tmp_path / "test_dead_thread.db"
+    worker_tid = None
+
+    def worker():
+        nonlocal worker_tid
+        worker_tid = threading.get_ident()
+        with open_db_connection(db_path) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS test_t (id INT)")
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+
+    # The worker thread is now dead. Calling open_db_connection on current thread prunes dead thread conns.
+    with open_db_connection(db_path) as conn:
+        conn.execute("SELECT 1")
+
+    with _registry_lock:
+        assert worker_tid not in _thread_conns
+
+

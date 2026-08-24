@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from orchestrator.best_of_n import CandidateOutcome, any_viable, select_best
+from orchestrator.worktree import Worktree
 
 
 def _c(index, succeeded=True, changed=True, tests_passed=None, diff_lines=10):
@@ -52,3 +57,36 @@ def test_all_nonviable_still_returns_an_index():
 
 def test_any_viable_true_when_one_changed_and_succeeded():
     assert any_viable([_c(0, succeeded=False), _c(1)]) is True
+
+
+@pytest.mark.asyncio
+async def test_candidate_tests_pass_reaps_process(tmp_path: Path):
+    from orchestrator.orchestrator import Orchestrator
+
+    orch = object.__new__(Orchestrator)
+    orch._best_of_n_test_command = "python3 -c 'import time; time.sleep(0.01)'"
+
+    wt = Worktree(base=str(tmp_path), path=str(tmp_path), branch="test-br", base_sha="sha")
+    result = await orch._candidate_tests_pass(wt)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_candidate_tests_pass_handles_timeout_and_kills_proc(tmp_path: Path):
+    import orchestrator.orchestrator as orch_mod
+    from orchestrator.orchestrator import Orchestrator
+
+    orch = object.__new__(Orchestrator)
+    # Simulate a command that takes too long
+    orch._best_of_n_test_command = "python3 -c 'import time; time.sleep(10)'"
+
+    wt = Worktree(base=str(tmp_path), path=str(tmp_path), branch="test-br", base_sha="sha")
+
+    # Temporarily set timeout low for test
+    orig_timeout = orch_mod._BEST_OF_N_TEST_TIMEOUT
+    orch_mod._BEST_OF_N_TEST_TIMEOUT = 0.05
+    try:
+        result = await orch._candidate_tests_pass(wt)
+        assert result is False
+    finally:
+        orch_mod._BEST_OF_N_TEST_TIMEOUT = orig_timeout

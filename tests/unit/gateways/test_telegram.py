@@ -100,3 +100,28 @@ async def test_telegram_gateway_tracks_and_cleans_tasks(monkeypatch: pytest.Monk
     with pytest.raises(asyncio.CancelledError):
         await run_task
     assert len(gw._tasks) == 0
+
+
+@pytest.mark.asyncio
+async def test_telegram_gateway_concurrent_messages_tracking(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+
+    gw = TelegramGateway()
+    gw._send_message = AsyncMock()  # type: ignore[method-assign]
+    gw._submit_task = AsyncMock(side_effect=[{"task_id": "t1"}, {"task_id": "t2"}])  # type: ignore[method-assign]
+    gw._get_task_result = AsyncMock(side_effect=["res1", "res2"])  # type: ignore[method-assign]
+    gw._send_chat_action = AsyncMock()  # type: ignore[method-assign]
+
+    msg1 = {"message_id": 101, "chat": {"id": 12345}, "from": {"id": 12345}, "text": "Task 1"}
+    msg2 = {"message_id": 102, "chat": {"id": 12345}, "from": {"id": 12345}, "text": "Task 2"}
+
+    # Process concurrently in the same chat
+    await asyncio.gather(gw._process_message(msg1), gw._process_message(msg2))
+
+    assert gw._send_message.await_count == 2
+    gw._send_message.assert_any_await(12345, "res1", reply_to=101)
+    gw._send_message.assert_any_await(12345, "res2", reply_to=102)
+    assert len(gw._pending) == 0
+

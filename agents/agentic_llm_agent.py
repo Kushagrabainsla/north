@@ -101,6 +101,7 @@ class AgenticLLMAgent(LLMAgent):
                 ],
             }
         )
+        user_visual_messages: list[dict] = []
         for item in results:
             call = item[0]
             result_str = item[1]
@@ -134,12 +135,16 @@ class AgenticLLMAgent(LLMAgent):
                         "type": "image_url",
                         "image_url": {"url": f"data:{mime};base64,{b64}"},
                     })
-                messages.append(
+                user_visual_messages.append(
                     {
                         "role": "user",
                         "content": content_blocks,
                     }
                 )
+
+        # Append any visual user messages after all tool responses to keep
+        # all tool messages contiguous per OpenAI API protocol.
+        messages.extend(user_visual_messages)
 
     async def _handle_tool_calls_response(
         self,
