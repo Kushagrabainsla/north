@@ -73,7 +73,11 @@ async def test_telegram_gateway_allows_authorized_chat(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_telegram_gateway_tracks_and_cleans_tasks() -> None:
+async def test_telegram_gateway_tracks_and_cleans_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_bot_token", "dummy-token-12345")
+
     gw = TelegramGateway()
     gw._http = AsyncMock()  # type: ignore[method-assign]
     gw._running = True
