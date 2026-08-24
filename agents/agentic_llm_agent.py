@@ -308,6 +308,12 @@ class AgenticLLMAgent(LLMAgent):
         _seen_models: set[str] = set()
         models_used: list[str] = []
 
+        known_registry_tools = (
+            set(self._deps.tool_registry._tools.keys())
+            if getattr(self._deps, "tool_registry", None)
+            else set()
+        )
+
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
             await self._compact_for_next_call(
@@ -316,7 +322,7 @@ class AgenticLLMAgent(LLMAgent):
 
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
-            _sync_hot_loaded_tools(self._deps, self.name, tool_map)
+            _sync_hot_loaded_tools(self._deps, self.name, tool_map, known_registry_tools)
             internal_schemas = [REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
             if payload.allow_delegation:
                 internal_schemas.insert(0, DELEGATE_TASK_SCHEMA)
@@ -939,13 +945,19 @@ def _is_rejection(decision: str) -> bool:
     return decision.lower() in _REJECTION_DECISIONS
 
 
-def _sync_hot_loaded_tools(deps: Any, agent_name: str, tool_map: dict[str, Tool]) -> None:
-    """Add any tools registered in the registry since this agent started executing."""
+def _sync_hot_loaded_tools(
+    deps: Any,
+    agent_name: str,
+    tool_map: dict[str, Tool],
+    known_registry_tools: set[str],
+) -> None:
+    """Add any newly registered tools (e.g. created by create_tool) since execution started."""
     registry = getattr(deps, "tool_registry", None)
     if registry is None:
         return
     for tool in registry.tools_for_agent(agent_name):
-        if tool.name not in tool_map:
+        if tool.name not in known_registry_tools:
+            known_registry_tools.add(tool.name)
             tool_map[tool.name] = tool
 
 
