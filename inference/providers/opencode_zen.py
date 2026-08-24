@@ -16,7 +16,7 @@ import httpx
 
 from inference.capability import ModelInfo, capabilities_from_model_id, quality_from_cost
 from inference.constants import OPENCODE_ZEN_BASE_URL
-from inference.exceptions import PaymentRequiredError, PoolRefreshError
+from inference.exceptions import ModelNotFoundError, PaymentRequiredError, PoolRefreshError
 from inference.providers.openai_compat import OpenAICompatibleProvider
 
 logger = logging.getLogger(__name__)
@@ -44,13 +44,34 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
         return dict(self._models)
 
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
+        body = self._safe_json(response)
+        if response.status_code == 401 and isinstance(body, dict):
+            # OpenCode Zen returns 401 with CreditsError when account has no payment card
+            if "CreditsError" in str(body) or "payment method" in str(body).lower():
+                raise PaymentRequiredError(
+                    model_id,
+                    self.name,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    body=body,
+                )
+        if response.status_code in (400, 503) and isinstance(body, dict):
+            msg = str(body)
+            if "Model is unavailable" in msg or "Endpoint is unavailable" in msg:
+                raise ModelNotFoundError(
+                    model_id,
+                    self.name,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    body=body,
+                )
         if response.status_code in (401, 403) and not _is_free_opencode_model(model_id):
             raise PaymentRequiredError(
                 model_id,
                 self.name,
                 status_code=response.status_code,
                 headers=dict(response.headers),
-                body=self._safe_json(response),
+                body=body,
             )
         super()._raise_cooldown_status(response, model_id)
 
