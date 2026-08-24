@@ -291,6 +291,14 @@ class ShellTool(ApprovalGatedTool):
                 session.close()
                 self._sessions.pop(shell_id, None)
 
+    async def aclose(self) -> None:
+        """Gracefully terminate all active shell sessions on shutdown."""
+        sessions = list(self._sessions.values())
+        self._sessions.clear()
+        for s in sessions:
+            with contextlib.suppress(Exception):
+                await s.stop()
+
     async def _request_approval(self, task_id: str | None, message: str) -> bool:
         """Gate a command/input behind the shared tool approval flow."""
         return await request_approval_decision(

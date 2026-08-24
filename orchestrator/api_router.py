@@ -33,7 +33,7 @@ from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
 from tools.confidence import ConfidenceTracker
 from utils.ids import generate_id
-from utils.security import load_secret, verify_request_secret
+from utils.security import load_secret, verify_request_secret, verify_secret
 from utils.time import utcnow
 
 router = APIRouter(
@@ -836,8 +836,8 @@ async def receive_webhook(source: str, request: Request) -> dict:
     Authentication is via the ``X-Webhook-Secret`` header - same secret as
     the rest of the API.
     """
-    secret = load_secret()
-    if not secrets.compare_digest(request.headers.get("X-Webhook-Secret", ""), secret):
+    webhook_secret = request.headers.get("X-Webhook-Secret", "")
+    if not webhook_secret or not verify_secret(webhook_secret):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Webhook-Secret header.")
 
     try:

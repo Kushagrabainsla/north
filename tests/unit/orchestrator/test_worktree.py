@@ -170,3 +170,20 @@ async def test_disjoint_integrations_serialize_under_lock(manager: GitWorktreeMa
     assert res_a.applied and res_b.applied
     assert (repo / "a.txt").read_text() == "A\n"
     assert (repo / "b.txt").read_text() == "B\n"
+
+
+@pytest.mark.asyncio
+async def test_worktree_integrates_binary_file_cleanly(repo: Path, tmp_path: Path) -> None:
+    """Verify non-UTF8 binary files integrate without byte corruption."""
+    mgr = GitWorktreeManager(str(repo), root=tmp_path / "wts")
+    wt = await mgr.create("binary-agent")
+
+    binary_data = b"\x00\xff\xfe\x80\x01\x02\x03PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    bin_file = Path(wt.path) / "image.png"
+    bin_file.write_bytes(binary_data)
+
+    res = await mgr.integrate(wt)
+    assert res.applied is True
+    assert res.changed is True
+    assert (repo / "image.png").read_bytes() == binary_data
+

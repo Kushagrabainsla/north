@@ -316,26 +316,30 @@ class RateLimitStatusStore:
     def _persist(self) -> None:
         if self._path is None:
             return
+        snapshot = list(self._records.values())
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            self._persist_sync()
+            self._persist_sync(snapshot)
             return
-        loop.run_in_executor(None, self._persist_sync)
+        loop.run_in_executor(None, self._persist_sync, snapshot)
 
-    def _persist_sync(self) -> None:
+    def _persist_sync(self, records: list[RateLimitRecord] | None = None) -> None:
         if self._path is None:
             return
         try:
             now = time.time()
+            recs = records if records is not None else list(self._records.values())
             data = {
                 "records": [
                     r.to_dict()
-                    for r in self._records.values()
+                    for r in recs
                     if r.available_at_epoch > now
                 ]
             }
-            self._path.write_text(json.dumps(data, indent=2))
+            tmp_path = self._path.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            tmp_path.replace(self._path)
         except Exception:
             logger.warning("Failed to persist rate-limit status", exc_info=True)
 

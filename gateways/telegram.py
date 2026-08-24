@@ -51,6 +51,7 @@ class TelegramGateway:
         self._orchestrator_base = orchestrator_base
         self._offset: int = 0
         self._pending: dict[int, dict] = {}  # chat_id -> {message_id, text, task_id}
+        self._tasks: set[asyncio.Task] = set()
         self._http = httpx.AsyncClient(timeout=_HTTP_TIMEOUT)
         self._running = False
 
@@ -63,6 +64,11 @@ class TelegramGateway:
 
     async def stop(self) -> None:
         self._running = False
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         await self._http.aclose()
         logger.info("Telegram gateway stopped")
 
@@ -237,6 +243,17 @@ class TelegramGateway:
     async def _process_message(self, msg: dict) -> None:
         """Process one incoming Telegram message."""
         chat_id = msg["chat"]["id"]
+        from_id = msg.get("from", {}).get("id")
+        allowed = settings.parsed_telegram_allowed_chat_ids
+        if allowed and chat_id not in allowed and (from_id is None or from_id not in allowed):
+            logger.warning("Unauthorized Telegram message from chat_id=%s from_id=%s", chat_id, from_id)
+            await self._send_message(
+                chat_id,
+                "⛔ Unauthorized: this Telegram account/chat is not on the allowed list for this North instance.",
+                reply_to=msg.get("message_id"),
+            )
+            return
+
         message_id = msg["message_id"]
         text = msg.get("text", "").strip()
         voice = msg.get("voice")
@@ -346,8 +363,10 @@ class TelegramGateway:
                     self._offset = update["update_id"] + 1
                     if "message" in update:
                         msg = update["message"]
-                        # Process in its own task so we don't block the poller
-                        asyncio.create_task(self._process_message(msg))
+                        # Process in its own task so we don't block the poller, retaining a strong ref
+                        task = asyncio.create_task(self._process_message(msg))
+                        self._tasks.add(task)
+                        task.add_done_callback(self._tasks.discard)
             except asyncio.CancelledError:
                 break
             except Exception:

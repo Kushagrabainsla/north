@@ -88,10 +88,13 @@ CREATE TABLE IF NOT EXISTS context_facts (
     source_mtime    REAL,
     evidence        TEXT,
     observed_at     DATETIME
-)
+);
+CREATE INDEX IF NOT EXISTS idx_context_facts_cat_updated ON context_facts (category, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_context_facts_updated ON context_facts (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_context_facts_cat_content ON context_facts (category, content);
 """
 
-# Migration: add new columns if they don't exist (for existing databases)
+# Migration: add new columns and indexes if they don't exist (for existing databases)
 _MIGRATION_STATEMENTS = [
     "ALTER TABLE context_facts ADD COLUMN subject TEXT NOT NULL DEFAULT 'user'",
     "ALTER TABLE context_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 0.8",
@@ -101,6 +104,9 @@ _MIGRATION_STATEMENTS = [
     "ALTER TABLE context_facts ADD COLUMN source_mtime REAL",
     "ALTER TABLE context_facts ADD COLUMN evidence TEXT",
     "ALTER TABLE context_facts ADD COLUMN observed_at DATETIME",
+    "CREATE INDEX IF NOT EXISTS idx_context_facts_cat_updated ON context_facts (category, updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_context_facts_updated ON context_facts (updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_context_facts_cat_content ON context_facts (category, content)",
 ]
 
 _MAX_FACTS_RETURNED: int = 15
@@ -129,7 +135,7 @@ class FactStore:
         self._embed_fn = embed_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
-            conn.execute(_SCHEMA)
+            conn.executescript(_SCHEMA)
             self._run_migrations(conn)
         # (id, content, embedding_vector, category, subject, status) - rebuilt lazily, invalidated on insert.
         self._cache: list[tuple[str, str, list[float], str, str, str]] | None = None

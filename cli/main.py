@@ -1428,7 +1428,6 @@ def tools_confidence(
 # ── config ────────────────────────────────────────────────────────────────────
 
 config_app = typer.Typer(help="System configuration.", no_args_is_help=True)
-app.add_typer(config_app, name="config")
 
 
 @config_app.command("set")
@@ -1447,12 +1446,12 @@ def config_set(
         )
         raise typer.Exit(1) from None
 
-    _, cast = _CONFIG_KEYS[key]
+    field_name, cast = _CONFIG_KEYS[key]
     try:
         cast(value)
-    except ValueError:
+    except (ValueError, TypeError):
         typer.secho(
-            f"Invalid value {value!r} for {key}: expected {cast.__name__}",
+            f"Invalid value {value!r} for {key}: expected {getattr(cast, '__name__', 'valid value')}",
             fg=typer.colors.RED,
             err=True,
         )
@@ -1460,11 +1459,104 @@ def config_set(
 
     env_file = settings.north_home / ".env"
     settings.north_home.mkdir(parents=True, exist_ok=True)
-    env_key = f"NORTH_{key.upper().replace('.', '_')}"
+    env_key = f"NORTH_{field_name.upper()}"
     _update_env_file(env_file, env_key, value)
 
-    typer.secho(f"✓ {env_key}={value}", fg=typer.colors.GREEN)
-    typer.echo("  Restart north for the change to take effect.")
+    # Mask sensitive credentials in feedback
+    if "key" in field_name or "token" in field_name or "secret" in field_name:
+        display_val = f"{value[:8]}...{value[-4:]}" if len(value) > 12 else "(hidden)"
+    else:
+        display_val = value
+
+    typer.secho(f"✓ {env_key}={display_val}", fg=typer.colors.GREEN)
+    typer.echo("  Saved to ~/.north/.env (restart north to apply).")
+
+
+@config_app.command("get")
+def config_get(
+    key: str = typer.Argument(..., help=f"Config key. Valid: {', '.join(_CONFIG_KEYS)}"),
+) -> None:
+    """Read a configuration value from the current environment / .env."""
+    from config.settings import settings
+
+    if key not in _CONFIG_KEYS:
+        typer.secho(
+            f"Unknown key {key!r}. Valid keys: {', '.join(_CONFIG_KEYS)}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    field_name, _ = _CONFIG_KEYS[key]
+    val = getattr(settings, field_name, None)
+    if "key" in field_name or "token" in field_name or "secret" in field_name:
+        display_val = f"{str(val)[:8]}...{str(val)[-4:]}" if val and len(str(val)) > 12 else ("(set)" if val else "(not set)")
+    else:
+        display_val = str(val) if val is not None and str(val) else "(not set)"
+    typer.echo(f"{key} = {display_val}")
+
+
+@config_app.command("list")
+def config_list() -> None:
+    """List all supported configuration keys and their current values."""
+    from config.settings import settings
+
+    _console.print()
+    _console.print("  [bold white]north configuration[/bold white]")
+    _console.print(f"  [bright_black]{'─' * 58}[/bright_black]")
+    for key, (field_name, _) in sorted(_CONFIG_KEYS.items()):
+        val = getattr(settings, field_name, None)
+        if "key" in field_name or "token" in field_name or "secret" in field_name:
+            display_val = f"[yellow]{str(val)[:8]}...{str(val)[-4:]}[/yellow]" if val and len(str(val)) > 12 else ("[yellow](set)[/yellow]" if val else "[dim](not set)[/dim]")
+        else:
+            display_val = f"[green]{val}[/green]" if val not in ("", None, ()) else "[dim](not set)[/dim]"
+        _console.print(f"  [cyan]{key:<28}[/cyan] [bright_black]→[/bright_black]  {display_val}")
+    _console.print()
+
+app.add_typer(config_app, name="config")
+
+
+@app.command("setup")
+def setup_interactive() -> None:
+    """Interactive setup wizard to configure API keys, Telegram, and system settings."""
+    from config.settings import settings
+
+    env_file = settings.north_home / ".env"
+    settings.north_home.mkdir(parents=True, exist_ok=True)
+
+    _console.print()
+    _console.print("  [bold cyan]✨ North Configuration Setup[/bold cyan]")
+    _console.print(f"  [bright_black]{'─' * 55}[/bright_black]")
+    _console.print("  Press [bold]Enter[/bold] to keep existing values or skip optional settings.\n")
+
+    # 1. Inference Provider Keys
+    openrouter = typer.prompt("  OpenRouter API Key (sk-or-...)", default=settings.openrouter_api_key or "", show_default=False).strip()
+    if openrouter:
+        _update_env_file(env_file, "NORTH_OPENROUTER_API_KEY", openrouter)
+
+    groq = typer.prompt("  Groq API Key (gsk-... optional)", default=settings.groq_api_key or "", show_default=False).strip()
+    if groq:
+        _update_env_file(env_file, "NORTH_GROQ_API_KEY", groq)
+
+    gemini = typer.prompt("  Google Gemini API Key (optional)", default=settings.gemini_api_key or "", show_default=False).strip()
+    if gemini:
+        _update_env_file(env_file, "NORTH_GEMINI_API_KEY", gemini)
+
+    # 2. Telegram Gateway Setup
+    _console.print()
+    setup_tg = typer.confirm("  Configure Telegram Bot integration?", default=bool(settings.telegram_bot_token))
+    if setup_tg:
+        tg_token = typer.prompt("  Telegram Bot Token (from @BotFather)", default=settings.telegram_bot_token or "", show_default=False).strip()
+        if tg_token:
+            _update_env_file(env_file, "NORTH_TELEGRAM_BOT_TOKEN", tg_token)
+
+        tg_chat = typer.prompt("  Allowed Telegram Chat/User ID (from @userinfobot)", default=settings.telegram_allowed_chat_ids or "", show_default=False).strip()
+        if tg_chat:
+            _update_env_file(env_file, "NORTH_TELEGRAM_ALLOWED_CHAT_IDS", tg_chat)
+
+    _console.print()
+    typer.secho("  ✓ Configuration saved to ~/.north/.env", fg=typer.colors.GREEN, bold=True)
+    _console.print("  Run [bold green]north start[/bold green] to launch North.\n")
 
 
 # ── port helpers ──────────────────────────────────────────────────────────────

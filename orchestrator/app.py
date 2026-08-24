@@ -510,11 +510,18 @@ def _launch_background_tasks(
     return tasks
 
 
-async def _shutdown(deps, callback_server: uvicorn.Server, background_tasks: list[asyncio.Task]) -> None:
+async def _shutdown(
+    deps,
+    callback_server: uvicorn.Server,
+    background_tasks: list[asyncio.Task],
+    tool_registry: ToolRegistry | None = None,
+) -> None:
     callback_server.should_exit = True
     for task in background_tasks:
         task.cancel()
     await asyncio.gather(*background_tasks, return_exceptions=True)
+    if tool_registry is not None:
+        await tool_registry.aclose()
     await deps.cost_tracker.aclose()
 
 
@@ -638,7 +645,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
-        await _shutdown(deps, callback_server, background_tasks)
+        await _shutdown(deps, callback_server, background_tasks, tool_registry)
 
 
 # ---------------------------------------------------------------------------

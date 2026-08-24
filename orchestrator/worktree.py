@@ -66,7 +66,8 @@ async def _run_git(
     *,
     timeout: int = _GIT_TIMEOUT,
     input_data: bytes | None = None,
-) -> tuple[int, str, str]:
+    binary: bool = False,
+) -> tuple[int, Any, str]:
     """Run ``git <args>`` in *cwd*, returning (returncode, stdout, stderr)."""
     proc = await asyncio.create_subprocess_exec(
         "git",
@@ -82,7 +83,8 @@ async def _run_git(
         proc.kill()
         await proc.wait()
         raise WorktreeError(f"git {args[0] if args else ''} timed out after {timeout}s") from exc
-    return proc.returncode, out.decode(errors="replace"), err.decode(errors="replace")
+    stdout = out if binary else out.decode(errors="replace")
+    return proc.returncode, stdout, err.decode(errors="replace")
 
 
 def _slug(label: str) -> str:
@@ -160,11 +162,11 @@ class GitWorktreeManager:
             await self.remove(wt, keep_branch=False)
             return IntegrationResult(applied=False, changed=False, conflicted=False, branch=wt.branch, path=wt.path)
 
-        code, patch, err = await _run_git(["diff", "--binary", wt.base_sha, "HEAD"], wt.path)
+        code, patch, err = await _run_git(["diff", "--binary", wt.base_sha, "HEAD"], wt.path, binary=True)
         if code != 0:
             raise WorktreeError(f"git diff failed: {err.strip()}")
 
-        applied = await self._apply_back(wt, patch.encode(), lock=lock)
+        applied = await self._apply_back(wt, patch, lock=lock)
         await self.remove(wt, keep_branch=not applied)
         return IntegrationResult(
             applied=applied,

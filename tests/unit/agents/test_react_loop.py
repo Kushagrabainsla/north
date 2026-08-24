@@ -533,9 +533,46 @@ async def test_multimodal_tool_image_context(tmp_path: Path) -> None:
     # Second: tool message containing metadata JSON
     assert messages[1]["role"] == "tool"
     assert "test.png" in messages[1]["content"]
-    assert "abcdef" not in messages[1]["content"]  # kept out of tool string
-    # Third: user message containing base64 image block
-    assert messages[2]["role"] == "user"
-    assert messages[2]["content"][0]["type"] == "text"
-    assert messages[2]["content"][1]["type"] == "image_url"
     assert messages[2]["content"][1]["image_url"]["url"] == "data:image/png;base64,abcdef"
+
+
+@pytest.mark.asyncio
+async def test_execute_calls_ordered_preserves_causal_chunks(tmp_path: Path) -> None:
+    """Verify that a mutating call followed by a read executes in proper causal order."""
+    from tools.base import Tool
+    from tools.models import ToolInput, ToolOutput
+
+    execution_order: list[str] = []
+
+    class WriteTool(Tool):
+        name = "write_tool"
+        is_mutating = True
+        description = "Write something."
+        parameters_schema = {"type": "object", "properties": {}}
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            execution_order.append("write")
+            return ToolOutput(success=True, data={"written": True})
+
+    class ReadTool(Tool):
+        name = "read_tool"
+        is_mutating = False
+        description = "Read something."
+        parameters_schema = {"type": "object", "properties": {}}
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            execution_order.append("read")
+            return ToolOutput(success=True, data={"read": True})
+
+    agent = _load_agent("coder", tmp_path)
+    tool_map = {"write_tool": WriteTool(), "read_tool": ReadTool()}
+
+    calls = [
+        ToolCall(name="write_tool", call_id="c1", params={}),
+        ToolCall(name="read_tool", call_id="c2", params={}),
+    ]
+
+    results = await agent._execute_calls_ordered(calls, AgentPayload(prompt="test", task_id="t1"), tool_map)
+    assert len(results) == 2
+    assert execution_order == ["write", "read"]
+

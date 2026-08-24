@@ -149,6 +149,11 @@ class Settings(BaseSettings):
     # Set NORTH_TELEGRAM_BOT_TOKEN in environment or .env.
     telegram_bot_token: str = ""
 
+    # Optional comma-separated list of allowed Telegram chat IDs or user IDs.
+    # When set, messages from other chats/users are rejected with an access error.
+    # Set NORTH_TELEGRAM_ALLOWED_CHAT_IDS="12345678,87654321" in environment or .env.
+    telegram_allowed_chat_ids: str = ""
+
     # Curated preferred models per pool, as a JSON object string, e.g.
     #   NORTH_PREFERRED_MODELS='{"reasoning": ["anthropic/claude-sonnet", "openai/gpt-4.1"]}'
     # This is the startup default; a "preferred_models" key in ~/.north/settings.json
@@ -187,6 +192,20 @@ class Settings(BaseSettings):
     extraction_max_daily_cost_usd: float = Field(default=0.10, ge=0.0)
     extraction_min_output_chars: int = Field(default=100, ge=0)
     extraction_max_concurrent: int = Field(default=5, ge=1)
+
+    @property
+    def parsed_telegram_allowed_chat_ids(self) -> frozenset[int]:
+        if not self.telegram_allowed_chat_ids:
+            return frozenset()
+        ids = set()
+        for token in self.telegram_allowed_chat_ids.split(","):
+            token = token.strip()
+            if token:
+                try:
+                    ids.add(int(token))
+                except ValueError:
+                    pass
+        return frozenset(ids)
 
     @property
     def secret(self) -> str:

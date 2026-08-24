@@ -244,7 +244,19 @@ class OpenAICompatibleProvider:
                 body=self._safe_json(resp),
             )
 
-        if resp.status_code in (429, 404, 503, 413):
+        if resp.status_code == 413:
+            await resp.aread()
+            headers = dict(resp.headers)
+            body = self._safe_json(resp)
+            raise PayloadTooLargeError(
+                model_id,
+                self.name,
+                status_code=resp.status_code,
+                headers=headers,
+                body=body,
+            )
+
+        if resp.status_code in (429, 404, 503):
             await resp.aread()
             headers = dict(resp.headers)
             body = self._safe_json(resp)

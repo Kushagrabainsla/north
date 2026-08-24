@@ -108,11 +108,22 @@ def context_window_for(model: str, router: Any = None) -> int:
 
 
 
+def _is_visual_context_message(msg: dict) -> bool:
+    """Return True if msg is a synthetic visual-context user message containing image data."""
+    content = msg.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "image_url":
+                return True
+    return False
+
+
 def exchange_boundaries(messages: list[dict]) -> list[tuple[int, int]]:
     """Return (start, end_inclusive) index pairs for each tool-call exchange.
 
     An exchange = one assistant message that has tool_calls + all the tool
-    result messages that immediately follow it.
+    result messages (and any accompanying visual user blocks) that immediately
+    follow it.
     """
     exchanges: list[tuple[int, int]] = []
     i = 2  # skip [0]=system, [1]=user-task
@@ -120,8 +131,14 @@ def exchange_boundaries(messages: list[dict]) -> list[tuple[int, int]]:
         if messages[i].get("role") == "assistant" and messages[i].get("tool_calls"):
             start = i
             j = i + 1
-            while j < len(messages) and messages[j].get("role") == "tool":
-                j += 1
+            while j < len(messages):
+                role = messages[j].get("role")
+                if role == "tool":
+                    j += 1
+                elif role == "user" and _is_visual_context_message(messages[j]):
+                    j += 1
+                else:
+                    break
             exchanges.append((start, j - 1))
             i = j
         else:
@@ -135,6 +152,9 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
     for msg in messages:
         role = msg.get("role")
         if role == "assistant":
+            content_str = str(msg.get("content", ""))
+            if "## Earlier context (auto-compacted)" in content_str:
+                lines.append(f"[previous summary:\n{content_str}]")
             for tc in msg.get("tool_calls") or []:
                 fn = tc.get("function", {})
                 name = fn.get("name", "?")
@@ -291,8 +311,8 @@ async def compact_if_needed(
             summary = resp.text.strip()
             if summary:
                 messages[2:first_kept] = [
-                    {"role": "user", "content": f"## Earlier context (auto-compacted)\n{summary}"},
-                    {"role": "assistant", "content": "Understood - I have the compacted context."},
+                    {"role": "assistant", "content": f"## Earlier context (auto-compacted)\n{summary}"},
+                    {"role": "user", "content": "Please proceed with the remaining task requirements using this context."},
                 ]
                 return
         except Exception:

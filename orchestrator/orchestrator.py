@@ -907,11 +907,22 @@ class Orchestrator:
         return self._stuck_task_max_age_seconds
 
     async def cancel_stuck_task(self, task_id: str) -> bool:
-        """Fail a task the watchdog found stalled: record why, then cancel it.
+        """Fail a task the watchdog found stalled: record why, then cancel it."""
+        running = self._active_tasks.pop(task_id, None)
+        was_queued = False
+        if running is None and self._running_task_store is not None:
+            queued = await self._running_task_store.list_queued()
+            if any(q.task_id == task_id for q in queued):
+                was_queued = True
+        if running is None and not was_queued:
+            return False
+        if running is not None and not running.done():
+            running.cancel()
+        if self._tracked_router:
+            self._tracked_router.pop_task_cost(task_id)
+        if self._running_task_store is not None:
+            await self._running_task_store.clear(task_id)
 
-        Cancelling routes through cancel_task(), whose _process_task unwind clears
-        the running-task registry, so no extra cleanup is needed here.
-        """
         await self._write_ledger(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
@@ -922,11 +933,9 @@ class Orchestrator:
                 error_type="stuck_timeout",
             )
         )
-        cancelled = await self.cancel_task(task_id)
-        if not cancelled and self._running_task_store is not None:
-            # Not in flight (e.g. a stale row with no live task): drop it directly.
-            await self._running_task_store.clear(task_id)
-        return cancelled
+        await self._stream_manager.emit(task_id, "task_stuck", {"error": "stuck_timeout"})
+        await self._stream_manager.emit_done(task_id)
+        return True
 
     async def list_active_tasks(self) -> list[TaskResponse]:
         """Returns tasks that are currently in-flight (asyncio tasks still running)."""

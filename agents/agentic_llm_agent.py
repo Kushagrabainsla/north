@@ -190,34 +190,53 @@ class AgenticLLMAgent(LLMAgent):
     ) -> list[tuple[ToolCall, str, bool, list[tuple[str, str]]]]:
         """Run read-only calls concurrently and mutating calls sequentially.
 
-        Mutating tools (file writes, shell, git) are serialized under the
-        per-WORKSPACE lock - not per agent instance - so a delegated coder and
-        reviewer working in the same tree cannot interleave mutations. Every call
-        is wrapped so a raised exception becomes a failed tool result rather
-        than cancelling its siblings (CODING_STYLE §10.5). Results preserve the
-        original call order.
+        To preserve causal ordering (e.g. write_file before read_file in the same
+        turn), calls are partitioned into contiguous chunks. Contiguous read-only
+        calls run concurrently via asyncio.gather(), while mutating calls run
+        sequentially under the per-WORKSPACE lock. Every call is wrapped so a
+        raised exception becomes a failed tool result rather than cancelling its
+        siblings (CODING_STYLE §10.5). Results preserve the original call order.
         """
         results: dict[int, tuple[ToolCall, str, bool, list[tuple[str, str]]]] = {}
 
-        concurrent = [(i, c) for i, c in enumerate(calls) if not self._is_mutating_call(c, tool_map)]
-        if concurrent:
-            gathered = await asyncio.gather(
-                *[self._safe_execute_call(c, payload, tool_map) for _, c in concurrent],
-                return_exceptions=True,
-            )
-            for (index, call), outcome in zip(concurrent, gathered, strict=True):
-                results[index] = outcome if not isinstance(outcome, BaseException) else _failed_call(call, outcome)
+        # Partition calls into contiguous runs of read-only vs mutating calls
+        chunks: list[list[tuple[int, ToolCall]]] = []
+        current_chunk: list[tuple[int, ToolCall]] = []
+        current_is_mutating: bool | None = None
 
         for index, call in enumerate(calls):
-            if index not in results:
-                if call.name == "delegate_task":
-                    # Never hold the workspace lock across delegation - the
-                    # sub-agent acquires it for its own mutations and would
-                    # deadlock against its parent.
-                    results[index] = await self._safe_execute_call(call, payload, tool_map)
-                else:
-                    async with workspace_lock(payload.workspace):
+            is_mut = self._is_mutating_call(call, tool_map)
+            if current_is_mutating is None or is_mut == current_is_mutating:
+                current_chunk.append((index, call))
+                current_is_mutating = is_mut
+            else:
+                chunks.append(current_chunk)
+                current_chunk = [(index, call)]
+                current_is_mutating = is_mut
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        for chunk in chunks:
+            is_mut = self._is_mutating_call(chunk[0][1], tool_map)
+            if not is_mut:
+                # Contiguous read-only calls execute concurrently
+                gathered = await asyncio.gather(
+                    *[self._safe_execute_call(c, payload, tool_map) for _, c in chunk],
+                    return_exceptions=True,
+                )
+                for (index, call), outcome in zip(chunk, gathered, strict=True):
+                    results[index] = outcome if not isinstance(outcome, BaseException) else _failed_call(call, outcome)
+            else:
+                # Mutating calls execute sequentially under the workspace lock
+                for index, call in chunk:
+                    if call.name == "delegate_task":
+                        # Never hold the workspace lock across delegation - the
+                        # sub-agent acquires it for its own mutations and would
+                        # deadlock against its parent.
                         results[index] = await self._safe_execute_call(call, payload, tool_map)
+                    else:
+                        async with workspace_lock(payload.workspace):
+                            results[index] = await self._safe_execute_call(call, payload, tool_map)
 
         ordered = [results[index] for index in range(len(calls))]
         await self._record_side_effects(payload, ordered, tool_map)

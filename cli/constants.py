@@ -84,7 +84,29 @@ _STEP_LABELS: dict[str, str] = {
 # ── Context documents + config keys ─────────────────────────────────────────
 _VALID_DOCS = ["user", "judgement_rules", "north_stars", "soul"]
 
+def _bool_cast(v: str) -> bool:
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("true", "1", "yes", "y", "on")
+
+
 _CONFIG_KEYS = {
+    # Inference provider keys
+    "openrouter.api_key": ("openrouter_api_key", str),
+    "groq.api_key": ("groq_api_key", str),
+    "gemini.api_key": ("gemini_api_key", str),
+    "opencode_zen.api_key": ("opencode_zen_api_key", str),
+    # Telegram integration
+    "telegram.bot_token": ("telegram_bot_token", str),
+    "telegram.allowed_chat_ids": ("telegram_allowed_chat_ids", str),
+    # Approval & Autonomy
+    "approval_mode": ("approval_mode", str),
+    "unattended_mode": ("unattended_mode", _bool_cast),
+    "autonomous_mode": ("autonomous_mode", _bool_cast),
+    # Sandboxing & Git
+    "sandbox.enabled": ("sandbox_enabled", _bool_cast),
+    "worktree.enabled": ("worktree_isolation_enabled", _bool_cast),
+    # Tuning
     "ledger.retention_days": ("task_cleanup_completed_days", int),
     "jobs.poll_interval_seconds": ("job_poll_interval_seconds", int),
     "agent.read_timeout_seconds": ("agent_read_timeout_seconds", int),

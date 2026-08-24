@@ -204,3 +204,14 @@ class ToolRegistry:
     def all_tool_names(self) -> set[str]:
         specialized = {name for names in self._graph.values() for name in names}
         return set(self._universal) | specialized
+
+    async def aclose(self) -> None:
+        """Call aclose() on every registered tool that defines it."""
+        for tool in self._tools.values():
+            if hasattr(tool, "aclose") and callable(getattr(tool, "aclose")):
+                try:
+                    res = tool.aclose()
+                    if inspect.isawaitable(res):
+                        await res
+                except Exception:
+                    logger.warning("Error closing tool %s", tool.name, exc_info=True)
