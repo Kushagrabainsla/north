@@ -243,10 +243,10 @@ class Agent(ABC):
             scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
 
         scored.sort(key=lambda pair: pair[1], reverse=True)
-        if len(scored) > 15:
+        if len(scored) > 6:
             core = [p for p in scored if p[0].name in _CORE_TOOL_NAMES]
             non_core = [p for p in scored if p[0].name not in _CORE_TOOL_NAMES]
-            scored = (core + non_core)[:15]
+            scored = (core + non_core)[:6]
             scored.sort(key=lambda pair: pair[1], reverse=True)
         return scored
 
