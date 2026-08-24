@@ -18,6 +18,7 @@ import httpx
 from inference.constants import DEFAULT_TIMEOUT_SECONDS, SSE_CHUNK_TIMEOUT_SECONDS
 from inference.exceptions import (
     InferenceError,
+    ModelDegenerateError,
     ModelNotFoundError,
     ModelRateLimitedError,
     PayloadTooLargeError,
@@ -356,7 +357,16 @@ class OpenAICompatibleProvider:
         choices = payload.get("choices") or []
         if not choices:
             raise InferenceError(f"{self.name} returned empty choices for {model_id}: {payload}")
-        msg_obj = choices[0].get("message", {})
+        choice = choices[0]
+        native_finish = str(choice.get("native_finish_reason") or "").lower()
+        finish = str(choice.get("finish_reason") or "").lower()
+        if native_finish in ("network_error", "error", "failed", "upstream_error") or finish == "error":
+            raise ModelDegenerateError(
+                model_id,
+                self.name,
+                reason=f"upstream error ({native_finish or finish})",
+            )
+        msg_obj = choice.get("message", {})
         content = msg_obj.get("content") or ""
         reasoning = (
             msg_obj.get("reasoning")
@@ -366,6 +376,12 @@ class OpenAICompatibleProvider:
         )
         if not content and reasoning:
             content = reasoning
+        if not content:
+            raise ModelDegenerateError(
+                model_id,
+                self.name,
+                reason="empty completion text and reasoning",
+            )
         usage = payload.get("usage", {})
         return CompletionResponse(
             text=content,
@@ -475,7 +491,16 @@ class OpenAICompatibleProvider:
                     choices = chunk.get("choices")
                     if not choices:
                         continue
-                    delta = choices[0].get("delta", {})
+                    choice = choices[0]
+                    delta = choice.get("delta", {})
+                    finish = choice.get("finish_reason")
+                    native_finish = str(choice.get("native_finish_reason") or delta.get("native_finish_reason") or "").lower()
+                    if native_finish in ("network_error", "error", "failed", "upstream_error") or finish == "error":
+                        raise ModelDegenerateError(
+                            model_id,
+                            self.name,
+                            reason=f"upstream stream error ({native_finish or finish})",
+                        )
 
                     reasoning_token = (
                         delta.get("reasoning")
@@ -531,6 +556,13 @@ class OpenAICompatibleProvider:
 
         if saw_reasoning and token_callback is not None and not saw_tool_call:
             await token_callback("</thought>")
+
+        if not tool_calls_acc and not content_parts and not reasoning_parts:
+            raise ModelDegenerateError(
+                model_id,
+                self.name,
+                reason="empty stream (no content, reasoning, or tool calls)",
+            )
 
         reasoning_text = "".join(reasoning_parts) if reasoning_parts else None
 

@@ -47,6 +47,32 @@ class ModelRateLimitedError(InferenceError):
         self.body = body
 
 
+class ModelDegenerateError(InferenceError):
+    """A model returned an empty, degenerate, or upstream-failed response (e.g. native_finish_reason: network_error).
+
+    ModelDispatcher catches this, applies a capability-specific or model cooldown, and tries
+    the next candidate in the chain.
+    """
+
+    def __init__(
+        self,
+        model_id: str,
+        provider_name: str,
+        reason: str = "empty or degenerate response",
+        *,
+        status_code: int | None = None,
+        headers: dict[str, str] | None = None,
+        body: dict | None = None,
+    ) -> None:
+        super().__init__(f"Degenerate response from {model_id} on {provider_name}: {reason}")
+        self.model_id = model_id
+        self.provider_name = provider_name
+        self.reason = reason
+        self.status_code = status_code
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self.body = body
+
+
 class PaymentRequiredError(InferenceError):
     """A provider returned 402 - account has insufficient credits.
 

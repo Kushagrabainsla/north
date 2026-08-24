@@ -56,3 +56,15 @@ def test_payment_exhausted_persists_to_disk_and_reloads(tmp_path) -> None:
     store2.load()
     assert store2.is_active(_KEY) is True
     assert store2.is_payment_required(_KEY[1], _KEY[0]) is True
+
+
+def test_capability_cooldown_isolates_specific_capability() -> None:
+    store = CooldownStore()
+    assert store.is_capability_active(_KEY, "tool_calls") is False
+    assert store.is_active(_KEY) is False
+
+    store.set_capability_cooldown(_KEY, "tool_calls", seconds=3600)
+    assert store.is_capability_active(_KEY, "tool_calls") is True
+    assert store.is_capability_active(_KEY, "completion") is False
+    assert store.is_active(_KEY) is False  # General model is still active!
+    assert store.remaining_capability(_KEY, "tool_calls") > 3500

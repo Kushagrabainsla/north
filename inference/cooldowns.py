@@ -19,6 +19,7 @@ _RATE_LIMIT_SECS: float = 60.0
 # model for a long time; payment cooldowns have their own (much longer) constant.
 _MAX_RATE_LIMIT_SECS: float = 600.0
 _PAYMENT_EXHAUSTED_SECS: float = 86_400.0  # 24 h
+_CAPABILITY_COOLDOWN_SECS: float = 3600.0  # 1 h (e.g. for degenerate tool_calls)
 
 
 class CooldownStore:
@@ -26,11 +27,13 @@ class CooldownStore:
 
     Rate-limit cooldowns (60 s) are memory-only - they reset on restart.
     Payment-exhausted cooldowns (24 h) are persisted to disk so they survive restarts.
+    Capability cooldowns (1 h) are memory-only per (model_id, provider, capability).
     """
 
     def __init__(self, path: Path | None = None) -> None:
         self._path = path
         self._expiry: dict[_CooldownKey, float] = {}  # monotonic timestamps
+        self._capability_expiry: dict[tuple[str, str, str], float] = {}  # (model_id, provider, capability) -> mono timestamp
 
     def load(self) -> None:
         """Load persisted payment cooldowns from disk, converting wall-clock → monotonic."""
@@ -65,6 +68,28 @@ class CooldownStore:
         key = (model_id, provider_name)
         # Payment cooldowns are 24h (> 3600s in the future)
         return (self._expiry.get(key, 0.0) - time.monotonic()) > 3600.0
+
+    def is_capability_active(self, key: _CooldownKey, capability: str) -> bool:
+        """Return True if a specific capability for this model is under cooldown."""
+        cap_key = (key[0], key[1], str(capability))
+        return self._capability_expiry.get(cap_key, 0.0) > time.monotonic()
+
+    def remaining_capability(self, key: _CooldownKey, capability: str) -> float:
+        """Return remaining capability cooldown seconds (0.0 if not active)."""
+        cap_key = (key[0], key[1], str(capability))
+        exp = self._capability_expiry.get(cap_key, 0.0)
+        return max(0.0, exp - time.monotonic())
+
+    def set_capability_cooldown(
+        self,
+        key: _CooldownKey,
+        capability: str,
+        seconds: float | None = None,
+    ) -> None:
+        """Apply a capability-specific cooldown (e.g. tool_calls suspended for 1 h)."""
+        duration = _CAPABILITY_COOLDOWN_SECS if seconds is None else max(seconds, 0.0)
+        cap_key = (key[0], key[1], str(capability))
+        self._capability_expiry[cap_key] = time.monotonic() + duration
 
     def set_rate_limit(self, key: _CooldownKey, seconds: float | None = None) -> None:
 

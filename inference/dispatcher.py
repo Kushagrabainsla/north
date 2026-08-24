@@ -41,6 +41,7 @@ from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
     InferenceError,
+    ModelDegenerateError,
     ModelNotFoundError,
     ModelRateLimitedError,
     PayloadTooLargeError,
@@ -211,6 +212,7 @@ class ModelDispatcher(InferenceRouter):
             is_valid=_valid,
             sticky_key=sticky,
             fallback_candidates=self._free_fallback_candidates(ModelCapability.COMPLETION, estimated),
+            capability=ModelCapability.COMPLETION,
         )
 
     async def complete_with_tools(
@@ -257,6 +259,7 @@ class ModelDispatcher(InferenceRouter):
             is_valid=_toolcall_has_output,
             sticky_key=sticky,
             fallback_candidates=self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated),
+            capability=ModelCapability.TOOL_CALLS,
         )
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
@@ -265,7 +268,7 @@ class ModelDispatcher(InferenceRouter):
         async def _call(provider: Provider, model_id: str) -> EmbedResponse:
             return await provider.embed(model_id, request)
 
-        return await self._dispatch(candidates, _call)
+        return await self._dispatch(candidates, _call, capability=ModelCapability.EMBEDDING)
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         if request.model:
@@ -278,7 +281,7 @@ class ModelDispatcher(InferenceRouter):
         async def _call(provider: Provider, model_id: str) -> TranscriptionResponse:
             return await provider.transcribe(model_id, request)
 
-        return await self._dispatch(candidates, _call)
+        return await self._dispatch(candidates, _call, capability=ModelCapability.TRANSCRIPTION)
 
     async def get_model(self, priority: PoolPriority) -> str:
         candidates = self._candidates(ModelCapability.COMPLETION, priority, 0)
@@ -532,9 +535,15 @@ class ModelDispatcher(InferenceRouter):
         capable = [
             pair for pair in self._registry.values()
             if pair[0].supports(req_cap) and pair[0].supports(capability)
+            and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(req_cap))
+            and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(capability))
         ]
         if not capable:
-            capable = [pair for pair in self._registry.values() if pair[0].supports(capability)]
+            capable = [
+                pair for pair in self._registry.values()
+                if pair[0].supports(capability)
+                and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(capability))
+            ]
         if not capable:
             return []
 
@@ -580,6 +589,7 @@ class ModelDispatcher(InferenceRouter):
                 (info, provider)
                 for info, provider in self._registry.values()
                 if info.supports(capability)
+                and not self._cooldowns.is_capability_active((info.model_id, info.provider_name), str(capability))
                 and (info.context_window == 0 or estimated_tokens <= 0 or info.context_window >= estimated_tokens)
                 and not self._cooldowns.is_active((info.model_id, info.provider_name))
                 and self._provider_health.is_available(info.provider_name)
@@ -629,7 +639,11 @@ class ModelDispatcher(InferenceRouter):
         "No models available". Excludes models in cooldown or behind a dead
         provider breaker, and respects the payload-size cap.
         """
-        capable = [pair for pair in self._registry.values() if pair[0].supports(capability)]
+        capable = [
+            pair for pair in self._registry.values()
+            if pair[0].supports(capability)
+            and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(capability))
+        ]
         if estimated_tokens > 0:
             capable = [
                 (info, provider)
@@ -844,6 +858,7 @@ class ModelDispatcher(InferenceRouter):
         sticky_key: tuple[str, str, str, str] | None = None,
         fallback_candidates: list[_Candidate] | None = None,
         allow_wait: bool = True,
+        capability: ModelCapability | str | None = None,
     ):
         if not candidates:
             # Nothing in the primary pool - go straight to the fallback (free tier)
@@ -860,6 +875,8 @@ class ModelDispatcher(InferenceRouter):
             key: _CooldownKey = (info.model_id, info.provider_name)
             if self._cooldowns.is_active(key):
                 continue
+            if capability is not None and self._cooldowns.is_capability_active(key, str(capability)):
+                continue
             if not self._provider_health.is_available(info.provider_name):
                 continue
             try:
@@ -871,12 +888,22 @@ class ModelDispatcher(InferenceRouter):
                 if is_valid is not None and not is_valid(result):
                     self._record_model_outcome(key, False)
                     self._persist_model_score(key)
-                    self._cooldowns.set_rate_limit(key, 120)
-                    logger.warning(
-                        "Empty/invalid response from %s/%s - trying next candidate",
-                        info.provider_name,
-                        info.model_id,
-                    )
+                    if capability is not None:
+                        self._cooldowns.set_capability_cooldown(key, str(capability))
+                        logger.warning(
+                            "Empty/invalid %s response from %s/%s - suspending %s capability for 1h",
+                            capability,
+                            info.provider_name,
+                            info.model_id,
+                            capability,
+                        )
+                    else:
+                        self._cooldowns.set_rate_limit(key, 120)
+                        logger.warning(
+                            "Empty/invalid response from %s/%s - trying next candidate",
+                            info.provider_name,
+                            info.model_id,
+                        )
                     continue
                 self._record_model_outcome(key, True)
                 self._persist_model_score(key)
@@ -885,6 +912,28 @@ class ModelDispatcher(InferenceRouter):
                 if sticky_key is not None:
                     self._remember_sticky(sticky_key, key)
                 return result
+            except ModelDegenerateError as e:
+                self._record_model_outcome(key, False)
+                self._persist_model_score(key)
+                if capability is not None:
+                    self._cooldowns.set_capability_cooldown(key, str(capability))
+                    logger.warning(
+                        "Degenerate %s response from %s/%s (%s) - suspending %s capability for 1h",
+                        capability,
+                        info.provider_name,
+                        info.model_id,
+                        e.reason,
+                        capability,
+                    )
+                else:
+                    self._cooldowns.set_rate_limit(key, 120)
+                    logger.warning(
+                        "Degenerate response from %s/%s (%s) - trying next candidate",
+                        info.provider_name,
+                        info.model_id,
+                        e.reason,
+                    )
+                continue
             except ModelRateLimitedError as e:
                 self._cooldowns.set_rate_limit(key, e.retry_after)
                 self._rate_limit_status.record_rate_limit(
@@ -997,6 +1046,7 @@ class ModelDispatcher(InferenceRouter):
                 sticky_key=sticky_key,
                 fallback_candidates=None,
                 allow_wait=allow_wait,
+                capability=capability,
             )
 
         # Check for transient rate limit cooldowns across all evaluated candidates
@@ -1024,6 +1074,7 @@ class ModelDispatcher(InferenceRouter):
                 sticky_key=sticky_key,
                 fallback_candidates=fallback_candidates,
                 allow_wait=False,
+                capability=capability,
             )
 
         raise AllModelsRateLimitedError(
