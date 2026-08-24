@@ -670,14 +670,12 @@ class Orchestrator:
         if not entries:
             return None
         # Check if currently queued in running_task_store
-        if self._running_task_store is not None:
-            queued = await self._running_task_store.list_queued()
-            if any(q.task_id == task_id for q in queued):
-                return TaskResponse(
-                    task_id=task_id,
-                    status="queued",
-                    created_at=format_timestamp(entries[-1].timestamp),
-                )
+        if self._running_task_store is not None and await self._running_task_store.is_queued(task_id):
+            return TaskResponse(
+                task_id=task_id,
+                status="queued",
+                created_at=format_timestamp(entries[-1].timestamp),
+            )
 
         for entry in entries:  # query() returns most-recent-first
             terminal = _TERMINAL_TASK_ACTIONS.get(entry.action)
@@ -698,9 +696,7 @@ class Orchestrator:
         running = self._active_tasks.pop(task_id, None)
         was_queued = False
         if running is None and self._running_task_store is not None:
-            queued = await self._running_task_store.list_queued()
-            if any(q.task_id == task_id for q in queued):
-                was_queued = True
+            was_queued = await self._running_task_store.is_queued(task_id)
         if running is None and not was_queued:
             return False
         if running is not None and not running.done():
@@ -1135,9 +1131,10 @@ class Orchestrator:
             # The task has reached a terminal state (success/failure/cancel/skip), so it
             # is no longer in-flight: drop it from the crash-recovery registry unless queued.
             if self._running_task_store is not None:
-                is_queued = await self._running_task_store.is_queued(task_id)
-                if not is_queued:
-                    await self._running_task_store.clear(task_id)
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    is_queued = await asyncio.shield(self._running_task_store.is_queued(task_id))
+                    if not is_queued:
+                        await asyncio.shield(self._running_task_store.clear(task_id))
 
     async def _stage_plan(
         self, task_id: str, prompt: str, context: str = ""

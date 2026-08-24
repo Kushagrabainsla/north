@@ -455,12 +455,14 @@ class SQLiteLedgerWriter(LedgerWriter):
         agent: str | None,
         source: LedgerSource | None,
     ) -> list[SearchResult]:
-        # Sanitise FTS5 query: replace whitespace with AND, escape special chars
-        fts_query = " AND ".join(
-            f'"{t}"' for t in query.replace("'", "").replace('"', "").replace("(", "").replace(")", "").split()
-        )
-        if not fts_query:
-            fts_query = f'"{query}"'
+        # Sanitise FTS5 query: extract non-empty tokens and wrap each in quotes
+        tokens = [
+            t for t in query.replace("'", "").replace('"', "").replace("(", "").replace(")", "").split()
+            if t.strip()
+        ]
+        if not tokens:
+            return []
+        fts_query = " AND ".join(f'"{t}"' for t in tokens)
 
         clauses = ["ledger_fts MATCH ?"]
         params: list = [fts_query]

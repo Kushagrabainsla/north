@@ -448,6 +448,8 @@ class BrowserTool(Tool):
             except TimeoutError:
                 with contextlib.suppress(ProcessLookupError, OSError):
                     os.killpg(proc.pid, signal.SIGKILL)
+                with contextlib.suppress(Exception):
+                    await proc.communicate()
                 return ToolOutput(success=False, error=f"browser timed out after {timeout}s.")
         except Exception as exc:
             return ToolOutput(success=False, error=f"Subprocess execution failed: {exc}")

@@ -456,8 +456,11 @@ class ModelDispatcher(InferenceRouter):
             self._flush_task = asyncio.create_task(self._flush_scores_after_delay())
 
     async def _flush_scores_after_delay(self) -> None:
-        await asyncio.sleep(_SCORE_FLUSH_INTERVAL_SECONDS)
-        await self._flush_dirty_scores()
+        while True:
+            await asyncio.sleep(_SCORE_FLUSH_INTERVAL_SECONDS)
+            if not self._dirty_scores:
+                break
+            await self._flush_dirty_scores()
 
     async def _flush_dirty_scores(self) -> None:
         if self._confidence_tracker is None or not self._dirty_scores:

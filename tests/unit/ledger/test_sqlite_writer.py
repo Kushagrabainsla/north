@@ -196,3 +196,14 @@ async def test_write_is_idempotent_failure_on_duplicate_id(
     await writer.write(_entry("dup"))
     with pytest.raises(LedgerWriteError):
         await writer.write(_entry("dup"))
+
+
+async def test_search_fts5_empty_or_punctuation_returns_empty(
+    writer: SQLiteLedgerWriter,
+) -> None:
+    """Searching for punctuation only or empty string returns empty list without error."""
+    await writer.write(_entry("e1", input="Hello world"))
+    results = await writer.search("   ")
+    assert results == []
+    results = await writer.search(" ' \" () ")
+    assert results == []

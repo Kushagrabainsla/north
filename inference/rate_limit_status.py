@@ -345,14 +345,22 @@ class RateLimitStatusStore:
             self._flush_task = loop.create_task(self._flush_after_delay())
 
     async def _flush_after_delay(self) -> None:
-        """Wait then flush; coalesces rapid events into one write."""
-        await asyncio.sleep(_PERSIST_DEBOUNCE_SECONDS)
-        if self._dirty:
+        """Wait then flush; coalesces rapid events into one write.
+
+        Loops until no further dirty state was flagged while the executor was writing.
+        """
+        while True:
+            await asyncio.sleep(_PERSIST_DEBOUNCE_SECONDS)
+            if not self._dirty:
+                break
             snapshot = list(self._records.values())
             self._dirty = False
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._persist_sync, snapshot
-            )
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._persist_sync, snapshot
+                )
+            except Exception:
+                logger.warning("Failed to persist rate-limit status", exc_info=True)
 
     def flush_now(self) -> None:
         """Synchronous immediate flush (call at shutdown)."""
