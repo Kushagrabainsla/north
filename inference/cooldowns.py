@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -34,6 +35,12 @@ class CooldownStore:
         self._path = path
         self._expiry: dict[_CooldownKey, float] = {}  # monotonic timestamps
         self._capability_expiry: dict[tuple[str, str, str], float] = {}  # (model_id, provider, capability) -> mono timestamp
+        # Explicit tracking of which keys are payment cooldowns, replacing the
+        # fragile "> 3600s remaining" heuristic.
+        self._payment_keys: set[_CooldownKey] = set()
+        # Serialises concurrent _persist_sync calls (dispatched via run_in_executor)
+        # so the read-modify-write cycle on the JSON file is atomic.
+        self._persist_lock = threading.Lock()
 
     def load(self) -> None:
         """Load persisted payment cooldowns from disk, converting wall-clock → monotonic."""
@@ -48,7 +55,9 @@ class CooldownStore:
                 if remaining <= 0:
                     continue
                 model_id, _, provider_name = raw_key.partition("::")
-                self._expiry[(model_id, provider_name)] = now_mono + remaining
+                key = (model_id, provider_name)
+                self._expiry[key] = now_mono + remaining
+                self._payment_keys.add(key)
             if self._expiry:
                 logger.info("Loaded %d persisted payment cooldown(s) from disk", len(self._expiry))
         except Exception:
@@ -56,7 +65,16 @@ class CooldownStore:
 
     def is_active(self, key: _CooldownKey) -> bool:
         """Return True if the model is currently under cooldown."""
-        return self._expiry.get(key, 0.0) > time.monotonic()
+        exp = self._expiry.get(key)
+        if exp is None:
+            return False
+        now = time.monotonic()
+        if exp <= now:
+            # Evict expired entry to prevent unbounded growth.
+            del self._expiry[key]
+            self._payment_keys.discard(key)
+            return False
+        return True
 
     def remaining(self, key: _CooldownKey) -> float:
         """Return remaining cooldown seconds for key (0.0 if not active)."""
@@ -66,13 +84,23 @@ class CooldownStore:
     def is_payment_required(self, provider_name: str, model_id: str) -> bool:
         """Return True if model is specifically marked with payment/billing exhaustion."""
         key = (model_id, provider_name)
-        # Payment cooldowns are 24h (> 3600s in the future)
-        return (self._expiry.get(key, 0.0) - time.monotonic()) > 3600.0
+        # Use explicit set membership instead of inferring from remaining duration.
+        if key not in self._payment_keys:
+            return False
+        # Verify the cooldown is still active; if expired, evict.
+        return self.is_active(key)
 
     def is_capability_active(self, key: _CooldownKey, capability: str) -> bool:
         """Return True if a specific capability for this model is under cooldown."""
         cap_key = (key[0], key[1], str(capability))
-        return self._capability_expiry.get(cap_key, 0.0) > time.monotonic()
+        exp = self._capability_expiry.get(cap_key)
+        if exp is None:
+            return False
+        if exp <= time.monotonic():
+            # Evict expired entry to prevent unbounded growth.
+            del self._capability_expiry[cap_key]
+            return False
+        return True
 
     def remaining_capability(self, key: _CooldownKey, capability: str) -> float:
         """Return remaining capability cooldown seconds (0.0 if not active)."""
@@ -105,6 +133,7 @@ class CooldownStore:
         """Apply a 24-hour payment cooldown and persist it to disk."""
         mono_expiry = time.monotonic() + _PAYMENT_EXHAUSTED_SECS
         self._expiry[key] = mono_expiry
+        self._payment_keys.add(key)
         self._persist(key, mono_expiry)
 
     def _persist(self, key: _CooldownKey, mono_expiry: float) -> None:
@@ -126,18 +155,21 @@ class CooldownStore:
     def _persist_sync(self, key: _CooldownKey, wall_expiry: float) -> None:
         if self._path is None:
             return
-        try:
-            data: dict[str, float] = {}
-            if self._path.exists():
-                with contextlib.suppress(Exception):
-                    data = json.loads(self._path.read_text())
-            # Drop already-expired entries so the file doesn't grow forever.
-            now_wall = time.time()
-            data = {k: v for k, v in data.items() if v > now_wall}
-            model_id, provider_name = key
-            data[f"{model_id}::{provider_name}"] = wall_expiry
-            tmp_path = self._path.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            tmp_path.replace(self._path)
-        except Exception:
-            logger.warning("Failed to persist payment cooldown for %s/%s", key[1], key[0], exc_info=True)
+        # Lock serialises concurrent executor threads so the read-modify-write
+        # on the JSON file is atomic — preventing data loss from interleaving.
+        with self._persist_lock:
+            try:
+                data: dict[str, float] = {}
+                if self._path.exists():
+                    with contextlib.suppress(Exception):
+                        data = json.loads(self._path.read_text())
+                # Drop already-expired entries so the file doesn't grow forever.
+                now_wall = time.time()
+                data = {k: v for k, v in data.items() if v > now_wall}
+                model_id, provider_name = key
+                data[f"{model_id}::{provider_name}"] = wall_expiry
+                tmp_path = self._path.with_suffix(".tmp")
+                tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                tmp_path.replace(self._path)
+            except Exception:
+                logger.warning("Failed to persist payment cooldown for %s/%s", key[1], key[0], exc_info=True)

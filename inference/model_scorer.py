@@ -125,6 +125,9 @@ class ModelScorer:
         # Pre-merge built-in defaults + config overrides once at init.
         self._tiers: dict[str, float] = dict(_DEFAULT_TIERS)
         self._tiers.update(self._config.family_tiers)
+        # Cache family_tier lookups: model_id -> score.  Stable between reload()
+        # calls, avoids O(n) substring scan on every _effective_quality() call.
+        self._family_cache: dict[str, float] = {}
 
     # ---- live reloading ----
 
@@ -132,22 +135,32 @@ class ModelScorer:
         """Re-read scoring config family_tiers (merged with built-in defaults)."""
         self._tiers = dict(_DEFAULT_TIERS)
         self._tiers.update(self._config.family_tiers)
+        self._family_cache.clear()
 
     def set_config(self, config: ScoringConfig) -> None:
         self._config = config
         # Immediately update merged tiers so scoring reflects new config.
         self._tiers = dict(_DEFAULT_TIERS)
         self._tiers.update(self._config.family_tiers)
+        self._family_cache.clear()
 
     # ---- scoring ----
 
     def family_tier(self, model_id: str) -> float:
-        """Longest matching substring wins; unknown falls back to config floor."""
+        """Longest matching substring wins; unknown falls back to config floor.
+
+        Results are cached per model_id (the mapping is stable between reload()
+        calls), eliminating repeated O(n) substring scans across the tier table.
+        """
+        cached = self._family_cache.get(model_id)
+        if cached is not None:
+            return cached
         lower = model_id.lower()
         best_len, best_score = 0, self._config.unknown_family_quality
         for key, score in self._tiers.items():
             if key in lower and len(key) > best_len:
                 best_len, best_score = len(key), score
+        self._family_cache[model_id] = best_score
         return best_score
 
     def score(

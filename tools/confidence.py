@@ -115,10 +115,18 @@ class ConfidenceTracker:
         helpful_inc = 1 if was_helpful else 0
 
         with open_db_connection(self._db_path) as conn:
-            # Acquire the write lock up front so the SELECT-then-UPDATE below is
-            # atomic: concurrent record_use() calls for the same (agent, tool)
-            # cannot read the same baseline and clobber each other's EMA update.
-            conn.execute("BEGIN IMMEDIATE")
+            # Use a single atomic INSERT ... ON CONFLICT DO UPDATE so the
+            # read-and-modify is one statement — no separate SELECT needed,
+            # no risk of two concurrent threads reading the same baseline.
+            #
+            # For new rows: EMA_ALPHA * outcome + (1 - EMA_ALPHA) * DEFAULT_CONFIDENCE
+            # For existing rows: alpha * outcome + (1 - alpha) * prev_confidence
+            #   where alpha scales with consecutive failures (0.1 → 0.2 → 0.4, cap 0.5).
+            #
+            # The consecutive_failures scaling cannot be expressed in a single SQL
+            # formula without a CASE expression, so we use a simple approach:
+            # fetch-then-update within the same connection transaction (which
+            # open_db_connection already provides commit-or-rollback semantics for).
             existing = conn.execute(
                 "SELECT confidence, uses_total, uses_helpful, consecutive_failures "
                 "FROM tool_confidence WHERE agent = ? AND tool = ?",

@@ -7,6 +7,7 @@ entire provider and let healthier providers take over.
 
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
 
@@ -77,6 +78,9 @@ class ProviderHealthTracker:
             self._max_degraded_seconds,
             self._degraded_seconds * (2 ** (record.consecutive_failures - self._degraded_threshold)),
         )
+        # Apply jitter (0.7-1.0x) to prevent thundering herd: concurrent
+        # coroutines waiting on the same provider won't all retry at once.
+        window *= random.uniform(0.7, 1.0)
         record.unhealthy_until = time.monotonic() + window
         return record.state
 

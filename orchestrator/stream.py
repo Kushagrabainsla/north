@@ -136,14 +136,12 @@ class EventStreamManager:
             try:
                 q.put_nowait(None)
             except asyncio.QueueFull:
-                # Drain buffered messages to make room, then force the sentinel.
-                while not q.empty():
-                    try:
-                        q.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                logger.warning("SSE queue was full for task %s; drained to deliver done sentinel.", task_id)
-                q.put_nowait(None)
+                # Discard one oldest buffered message to make room, then deliver the sentinel.
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    q.get_nowait()
+                with contextlib.suppress(asyncio.QueueFull):
+                    q.put_nowait(None)
+                logger.warning("SSE queue was full for task %s; dropped oldest event to deliver done sentinel.", task_id)
 
     async def subscribe(self, task_id: str, max_queue_size: int = 2048) -> AsyncIterator[str]:
         """Async generator that yields raw SSE-formatted text for task_id.

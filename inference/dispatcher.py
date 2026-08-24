@@ -865,8 +865,11 @@ class ModelDispatcher(InferenceRouter):
             # if one was supplied, otherwise fail fast.
             if fallback_candidates:
                 candidates = fallback_candidates
+                used_fallback = True
             else:
                 raise AllModelsRateLimitedError("No models available for this request")
+        else:
+            used_fallback = False
 
         if sticky_key is not None:
             candidates = self._apply_stickiness(sticky_key, candidates)
@@ -1037,7 +1040,7 @@ class ModelDispatcher(InferenceRouter):
 
         # Primary pool exhausted (all paid models out of credits / rate-limited /
         # down). If a free-tier fallback was supplied, try it before giving up.
-        if fallback_candidates and candidates is not fallback_candidates:
+        if fallback_candidates and not used_fallback:
             logger.info("Primary pool exhausted - falling back to free-tier models")
             return await self._dispatch(
                 fallback_candidates,

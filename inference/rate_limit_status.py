@@ -33,6 +33,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -279,6 +280,10 @@ def compute_wait_seconds(
     return min(candidates, key=lambda x: x[0])
 
 
+# Debounce interval: multiple rapid events coalesce into one disk write.
+_PERSIST_DEBOUNCE_SECONDS = 2.0
+
+
 class RateLimitStatusStore:
     """In-memory records of (provider, model) availability, persisted to disk."""
 
@@ -288,6 +293,11 @@ class RateLimitStatusStore:
         # Models successfully used this session. In-memory only (not persisted) so a
         # restart honestly reports un-tried models as "unknown" rather than "ok".
         self._checked: set[_Key] = set()
+        # Serialises concurrent _persist_sync calls so the read-modify-write is atomic.
+        self._persist_lock = threading.Lock()
+        # Debounced flush: a pending asyncio.Task that writes after a delay.
+        self._flush_task: asyncio.Task | None = None
+        self._dirty = False
 
     # ---- load / persist ----
 
@@ -314,34 +324,61 @@ class RateLimitStatusStore:
             logger.info("Loaded %d active rate-limit record(s) from disk", loaded)
 
     def _persist(self) -> None:
+        """Schedule a debounced disk write.
+
+        Multiple rapid events (e.g. 10 rate limits during a burst) coalesce into
+        a single write after _PERSIST_DEBOUNCE_SECONDS, instead of one write per
+        event.  The write is still dispatched to a thread pool to avoid blocking
+        the event loop.
+        """
         if self._path is None:
             return
-        snapshot = list(self._records.values())
+        self._dirty = True
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            self._persist_sync(snapshot)
+            # Not in an async context (e.g. startup) — write immediately.
+            self._persist_sync(list(self._records.values()))
+            self._dirty = False
             return
-        loop.run_in_executor(None, self._persist_sync, snapshot)
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = loop.create_task(self._flush_after_delay())
+
+    async def _flush_after_delay(self) -> None:
+        """Wait then flush; coalesces rapid events into one write."""
+        await asyncio.sleep(_PERSIST_DEBOUNCE_SECONDS)
+        if self._dirty:
+            snapshot = list(self._records.values())
+            self._dirty = False
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._persist_sync, snapshot
+            )
+
+    def flush_now(self) -> None:
+        """Synchronous immediate flush (call at shutdown)."""
+        if self._dirty and self._path is not None:
+            self._persist_sync(list(self._records.values()))
+            self._dirty = False
 
     def _persist_sync(self, records: list[RateLimitRecord] | None = None) -> None:
         if self._path is None:
             return
-        try:
-            now = time.time()
-            recs = records if records is not None else list(self._records.values())
-            data = {
-                "records": [
-                    r.to_dict()
-                    for r in recs
-                    if r.available_at_epoch > now
-                ]
-            }
-            tmp_path = self._path.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            tmp_path.replace(self._path)
-        except Exception:
-            logger.warning("Failed to persist rate-limit status", exc_info=True)
+        with self._persist_lock:
+            try:
+                now = time.time()
+                recs = records if records is not None else list(self._records.values())
+                data = {
+                    "records": [
+                        r.to_dict()
+                        for r in recs
+                        if r.available_at_epoch > now
+                    ]
+                }
+                tmp_path = self._path.with_suffix(".tmp")
+                tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                tmp_path.replace(self._path)
+            except Exception:
+                logger.warning("Failed to persist rate-limit status", exc_info=True)
 
     # ---- recording ----
 

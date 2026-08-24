@@ -202,6 +202,23 @@ class RunningTaskStore:
                 conn.execute("SELECT * FROM running_tasks WHERE status = 'queued' ORDER BY started_at ASC").fetchall()
             )
 
+    async def is_queued(self, task_id: str) -> bool:
+        """Return True if *task_id* is in the 'queued' state.
+
+        Uses a targeted SELECT instead of fetching all queued rows.  This
+        eliminates the O(n) full-table scan that ``list_queued()`` + linear
+        search was doing for single-task checks.
+        """
+        return await asyncio.to_thread(self._is_queued_sync, task_id)
+
+    def _is_queued_sync(self, task_id: str) -> bool:
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM running_tasks WHERE task_id = ? AND status = 'queued' LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            return row is not None
+
     async def clear(self, task_id: str) -> None:
         """Remove a task from the registry once it reaches a terminal state."""
         await asyncio.to_thread(self._clear_sync, task_id)

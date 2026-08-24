@@ -911,9 +911,7 @@ class Orchestrator:
         running = self._active_tasks.pop(task_id, None)
         was_queued = False
         if running is None and self._running_task_store is not None:
-            queued = await self._running_task_store.list_queued()
-            if any(q.task_id == task_id for q in queued):
-                was_queued = True
+            was_queued = await self._running_task_store.is_queued(task_id)
         if running is None and not was_queued:
             return False
         if running is not None and not running.done():
@@ -1137,10 +1135,7 @@ class Orchestrator:
             # The task has reached a terminal state (success/failure/cancel/skip), so it
             # is no longer in-flight: drop it from the crash-recovery registry unless queued.
             if self._running_task_store is not None:
-                is_queued = False
-                queued = await self._running_task_store.list_queued()
-                if any(q.task_id == task_id for q in queued):
-                    is_queued = True
+                is_queued = await self._running_task_store.is_queued(task_id)
                 if not is_queued:
                     await self._running_task_store.clear(task_id)
 
