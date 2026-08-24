@@ -1011,7 +1011,7 @@ class ModelDispatcher(InferenceRouter):
 
         min_wait = min(transient_waits) if transient_waits else 0.0
 
-        if allow_wait and 0 < min_wait <= 30.0:
+        if allow_wait and 0 < min_wait <= 40.0:
             logger.info(
                 "All candidates transiently rate-limited - pausing in-flight for %.1fs before retrying",
                 min_wait,
