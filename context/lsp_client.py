@@ -21,6 +21,7 @@ import ast
 import contextlib
 import json
 import logging
+import re
 import shutil
 import subprocess
 import time
@@ -161,9 +162,21 @@ def _name_position(text: str, symbol: str) -> tuple[int, int] | None:
         tree = ast.parse(text)
     except SyntaxError:
         return None
+    lines = text.splitlines()
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef | ast.ClassDef) and node.name == symbol:
-            kw = "class " if isinstance(node, ast.ClassDef) else "def "
+            line_idx = node.lineno - 1
+            if 0 <= line_idx < len(lines):
+                line_text = lines[line_idx]
+                match = re.search(r"\b" + re.escape(symbol) + r"\b", line_text[node.col_offset:])
+                if match:
+                    return line_idx, node.col_offset + match.start()
+            if isinstance(node, ast.ClassDef):
+                kw = "class "
+            elif isinstance(node, ast.AsyncFunctionDef):
+                kw = "async def "
+            else:
+                kw = "def "
             return node.lineno - 1, node.col_offset + len(kw)
     return None
 

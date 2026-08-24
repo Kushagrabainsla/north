@@ -89,9 +89,8 @@ class EpisodeConsolidator:
 
     async def _process_batch(self) -> int:
         since = self._load_watermark()
-        entries = await self._ledger.query(LedgerFilters(since=since, limit=_BATCH_SIZE))
-        # query() returns newest-first; process oldest-first so the watermark advances safely.
-        entries = list(reversed(entries))
+        # Query oldest-first from the watermark so the watermark advances without skipping backlog entries.
+        entries = await self._ledger.query(LedgerFilters(since=since, limit=_BATCH_SIZE, order_asc=True))
         recorded = 0
         for entry in entries:
             if entry.source == LedgerSource.SYSTEM and entry.action in _TERMINAL_OUTCOME and entry.task_id:

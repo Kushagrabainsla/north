@@ -178,6 +178,16 @@ async def test_query_orders_by_timestamp_descending(writer: SQLiteLedgerWriter) 
     assert [r.id for r in results] == ["new", "old"]
 
 
+async def test_query_orders_by_timestamp_ascending(writer: SQLiteLedgerWriter) -> None:
+    now = datetime.now(UTC)
+    await writer.write(_entry("old", timestamp=now - timedelta(hours=1)))
+    await writer.write(_entry("new", timestamp=now))
+
+    results = await writer.query(LedgerFilters(order_asc=True))
+
+    assert [r.id for r in results] == ["old", "new"]
+
+
 async def test_query_respects_limit(writer: SQLiteLedgerWriter) -> None:
     for i in range(5):
         await writer.write(_entry(f"e{i}"))

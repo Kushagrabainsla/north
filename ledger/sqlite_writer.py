@@ -218,7 +218,8 @@ class SQLiteLedgerWriter(LedgerWriter):
             params.append(filters.since.isoformat())
 
         where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
-        sql = f"SELECT * FROM ledger {where}ORDER BY timestamp DESC LIMIT ?"
+        order_dir = "ASC" if filters.order_asc else "DESC"
+        sql = f"SELECT * FROM ledger {where}ORDER BY timestamp {order_dir} LIMIT ?"
         params.append(filters.limit)
 
         with open_db_connection(self._db_path) as conn:

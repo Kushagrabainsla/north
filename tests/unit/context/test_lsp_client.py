@@ -20,7 +20,19 @@ def test_python_symbol_position_locates_class_and_def():
     cls = L.python_symbol_position(text, "Foo")
     assert cls == (3, 6)  # 0-based line 3, char after "class "
     fn = L.python_symbol_position(text, "bar")
-    assert fn is not None and fn[0] == 4
+    assert fn == (4, 8)
+
+
+def test_python_symbol_position_locates_async_def():
+    text = "async def fetch_data(url: str):\n    pass\n"
+    pos = L.python_symbol_position(text, "fetch_data")
+    assert pos == (0, 10)  # 0-based line 0, char 10 after "async def "
+
+
+def test_python_symbol_position_locates_async_method_in_class():
+    text = "class Handler:\n    async def handle_request(self):\n        pass\n"
+    pos = L.python_symbol_position(text, "handle_request")
+    assert pos == (1, 14)
 
 
 def test_python_symbol_position_missing_returns_none():

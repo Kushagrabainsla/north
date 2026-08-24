@@ -258,7 +258,12 @@ class ExtractionPipeline:
         await asyncio.gather(*[_bounded(i, e) for i, e in enumerate(entries)])
         return results
 
-    def _process_extraction_results(self, entries: list[LedgerEntry], results: list[bool | Exception]) -> int:
+    def _process_extraction_results(
+        self,
+        entries: list[LedgerEntry],
+        results: list[bool | Exception],
+        last_batch_entry: LedgerEntry | None = None,
+    ) -> int:
         """Process extraction output, saving watermarks sequentially until any error."""
         extractions = 0
         for entry, result in zip(entries, results, strict=True):
@@ -271,6 +276,9 @@ class ExtractionPipeline:
             if result:
                 extractions += 1
             self._save_watermark(entry.timestamp)
+        else:
+            if last_batch_entry is not None:
+                self._save_watermark(last_batch_entry.timestamp)
 
         return extractions
 
@@ -294,18 +302,18 @@ class ExtractionPipeline:
 
         await self._maybe_backup()
         since = since_override or self._load_watermark()
-        entries = await self._ledger.query(LedgerFilters(since=since, limit=_BATCH_SIZE))
-        # query returns DESC; process oldest first so watermark advances correctly
-        entries = list(reversed(entries))
+        # Query oldest-first from the watermark so the watermark advances without skipping backlog entries.
+        entries = await self._ledger.query(LedgerFilters(since=since, limit=_BATCH_SIZE, order_asc=True))
         if not entries:
             return 0
 
         to_process = self._filter_valid_entries(entries)
         if not to_process:
+            self._save_watermark(entries[-1].timestamp)
             return 0
 
         results = await self._run_extractions_concurrently(to_process)
-        return self._process_extraction_results(to_process, results)
+        return self._process_extraction_results(to_process, results, last_batch_entry=entries[-1])
 
     async def _process_entry(self, entry: LedgerEntry) -> bool:
         """Ask the LLM whether the user's message yields a fact worth storing."""

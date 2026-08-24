@@ -28,6 +28,7 @@ class LedgerFilters:
     status: LedgerStatus | None = None
     since: datetime | None = None
     limit: int = 100
+    order_asc: bool = False
 
 
 class LedgerWriter(ABC):
