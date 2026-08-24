@@ -91,3 +91,30 @@ def test_dead_thread_connections_cleanup(tmp_path: Path):
         assert worker_tid not in _thread_conns
 
 
+def test_open_db_connection_inner_savepoint_rollback(tmp_path: Path):
+    db_path = tmp_path / "test_sp.db"
+    with open_db_connection(db_path) as conn:
+        conn.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, val TEXT)")
+
+    with open_db_connection(db_path) as conn1:
+        conn1.execute("INSERT INTO records (val) VALUES ('outer')")
+        try:
+            with open_db_connection(db_path) as conn2:
+                conn2.execute("INSERT INTO records (val) VALUES ('inner_fail')")
+                raise ValueError("Inner error")
+        except ValueError:
+            pass
+        conn1.execute("INSERT INTO records (val) VALUES ('outer_after')")
+
+    with open_db_connection(db_path) as conn:
+        rows = [r[0] for r in conn.execute("SELECT val FROM records ORDER BY id ASC").fetchall()]
+        assert rows == ["outer", "outer_after"]
+
+
+def test_sqlite_vec_loaded(tmp_path: Path):
+    db_path = tmp_path / "test_vec.db"
+    with open_db_connection(db_path) as conn:
+        version = conn.execute("SELECT vec_version()").fetchone()[0]
+        assert version.startswith("v")
+
+

@@ -24,7 +24,6 @@ from sqlite3 import Connection
 from config.dependencies import EmbedFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
-from utils.math import cosine_similarity
 from utils.text import STOPWORDS
 
 logger = logging.getLogger(__name__)
@@ -146,30 +145,21 @@ class EpisodicStore:
         Tries embedding cosine similarity first; falls back to keyword overlap
         scoring so retrieval always works.
         """
-        rows = await asyncio.to_thread(self._load_all_sync, allowed_domains)
-        if not rows:
-            return []
-
         if self._embed_fn is not None:
             try:
                 vecs = await self._embed_fn([query])
-                if vecs:
-                    qvec = vecs[0]
-                    scored: list[tuple[float, str]] = []
-                    for _id, summary, emb_json, outcome, _domain in rows:
-                        if emb_json is None:
-                            continue
-                        try:
-                            emb = json.loads(emb_json)
-                        except json.JSONDecodeError:
-                            continue
-                        scored.append((cosine_similarity(qvec, emb), _label(summary, outcome)))
-                    scored.sort(key=lambda x: x[0], reverse=True)
-                    results = [s for _, s in scored[:max_results] if _ > 0.3]
+                if vecs and vecs[0]:
+                    results = await asyncio.to_thread(
+                        self._search_vector_sync, vecs[0], max_results, allowed_domains
+                    )
                     if results:
                         return results
             except Exception:
                 pass
+
+        rows = await asyncio.to_thread(self._load_all_sync, allowed_domains)
+        if not rows:
+            return []
 
         # Keyword fallback
         query_words = frozenset(w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in STOPWORDS)
@@ -179,6 +169,37 @@ class EpisodicStore:
             reverse=True,
         )
         return [_label(summary, outcome) for _, summary, _, outcome, _ in kw_scored[:max_results] if summary]
+
+    def _search_vector_sync(
+        self,
+        qvec: list[float],
+        max_results: int = 3,
+        allowed_domains: frozenset[str] | None = None,
+    ) -> list[str] | None:
+        """Native sqlite-vec vector search in SQLite; returns None if sqlite-vec is unavailable."""
+        try:
+            qvec_json = json.dumps(qvec)
+            sql = (
+                "SELECT summary, outcome, (1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
+                "FROM episodes WHERE embedding IS NOT NULL AND embedding != '' AND embedding != '[]'"
+            )
+            params: list[object] = [qvec_json]
+            if allowed_domains is not None:
+                if not allowed_domains:
+                    return []
+                placeholders = ",".join("?" for _ in allowed_domains)
+                sql += f" AND domain IN ({placeholders})"
+                params.extend(allowed_domains)
+            sql += " AND (1.0 - vec_distance_cosine(embedding, ?)) > 0.3 "
+            params.append(qvec_json)
+            sql += " ORDER BY similarity DESC LIMIT ?"
+            params.append(max_results)
+
+            with open_db_connection(self._db_path) as conn:
+                rows = conn.execute(sql, params).fetchall()
+            return [_label(r["summary"], r["outcome"] or "success") for r in rows if r["summary"]]
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------ #
 

@@ -31,6 +31,7 @@ dependencies = [
     # its pure-Python engine (or finds a system rg on PATH / via NORTH_RIPGREP).
     "ripgrep>=15.0.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "ripgrep>=15.0.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sqlite-vec>=0.1.9",
 ]
 
 [project.scripts]

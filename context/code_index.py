@@ -155,6 +155,11 @@ class CodeIndex:
             return []
         qvec = q_embs[0]
 
+        # Fast path: native sqlite-vec search in SQL
+        results = await asyncio.to_thread(self._search_vector_sync, ws, qvec, max_results)
+        if results is not None:
+            return results
+
         rows = self._cache.get(ws)
         if rows is None:
             rows = await asyncio.to_thread(self._load_workspace_sync, ws)
@@ -167,6 +172,25 @@ class CodeIndex:
             scored.append((cosine_similarity(qvec, emb), path, start, end, symbol, chunk))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [(p, s, e, sym, c) for _, p, s, e, sym, c in scored[:max_results]]
+
+    def _search_vector_sync(
+        self, ws: str, qvec: list[float], max_results: int
+    ) -> list[tuple[str, int, int, str, str]] | None:
+        """Native sqlite-vec search in SQLite; returns None if sqlite-vec is unavailable."""
+        try:
+            qvec_json = json.dumps(qvec)
+            sql = """
+            SELECT path, start_line, end_line, symbol, chunk_text,
+                   (1.0 - vec_distance_cosine(embedding, ?)) AS similarity
+            FROM code_chunks
+            WHERE workspace = ? AND embedding IS NOT NULL AND embedding != '' AND embedding != '[]'
+            ORDER BY similarity DESC LIMIT ?
+            """
+            with open_db_connection(self._db_path) as conn:
+                rows = conn.execute(sql, (qvec_json, ws, max_results)).fetchall()
+            return [(r["path"], r["start_line"], r["end_line"], r["symbol"], r["chunk_text"]) for r in rows]
+        except Exception:
+            return None
 
     async def _ensure_fresh(self, ws: str) -> None:
         """Re-embed changed files and drop deleted ones for the resolved workspace *ws*."""

@@ -56,6 +56,12 @@ def _get_pooled_connection(db_path: Path) -> tuple[str, sqlite3.Connection]:
                 if tid in _thread_conns:
                     _thread_conns[tid].pop(key, None)
     conn = sqlite3.connect(key)
+    with contextlib.suppress(Exception):
+        import sqlite_vec
+
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -76,26 +82,34 @@ def _get_pooled_connection(db_path: Path) -> tuple[str, sqlite3.Connection]:
 def open_db_connection(db_path: Path) -> Iterator[sqlite3.Connection]:
     """Return a pooled SQLite connection with WAL mode, normal sync, foreign keys, and Row factory.
 
-    Every SQLite-backed module in north (ledger, jobs, tools, tasks) opens
+    Every SQLite-backed module in north (ledger, jobs, tools, tasks, memory) opens
     connections through this single helper (docs/CODING_STYLE.md Section 11.1).
 
     Context manager: commits on clean exit of the outermost context, rolls back on exception.
-    Re-entrant/nested calls within the same thread reuse the active transaction without
-    prematurely committing outer blocks. Connections are **not** closed on exit — they are
-    reused across calls within the same thread. Use ``close_all_pools()`` for cleanup at shutdown.
+    Re-entrant/nested calls within the same thread use SAVEPOINTs so inner errors roll back
+    only their sub-transactions without prematurely committing outer blocks or leaving
+    dirty uncommitted state. Connections are **not** closed on exit — they are reused
+    across calls within the same thread. Use ``close_all_pools()`` for cleanup at shutdown.
     """
     key, conn = _get_pooled_connection(db_path)
     depths: dict[str, int] = getattr(_local, "depths", None) or {}
     depth = depths.get(key, 0) + 1
     depths[key] = depth
     _local.depths = depths
+    sp_name = f"north_sp_{depth}"
+    if depth > 1:
+        conn.execute(f"SAVEPOINT {sp_name}")
     try:
         yield conn
         if depth == 1:
             conn.commit()
+        else:
+            conn.execute(f"RELEASE SAVEPOINT {sp_name}")
     except BaseException:
         if depth == 1:
             conn.rollback()
+        else:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
         raise
     finally:
         current_depths: dict[str, int] = getattr(_local, "depths", None) or {}

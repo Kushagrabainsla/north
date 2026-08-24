@@ -17,6 +17,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from config.dependencies import EmbedFn
 from utils.db import open_db_connection
@@ -248,8 +249,6 @@ class FactStore:
             q_embs = await self._embed_fn([query])
         except Exception:
             return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
-        # Empty query vectors (rate-limited embedder returning degenerate
-        # results) mean semantic ranking is impossible — fall back to recency.
         if not q_embs or not q_embs[0]:
             return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
         qvec = q_embs[0]
@@ -261,14 +260,52 @@ class FactStore:
             # Return the most recent facts so recall still answers.
             return await asyncio.to_thread(self._recent_facts_sync, max_results, allowed_categories)
 
+        # Fast path: native sqlite-vec vector search in SQL
+        results = await asyncio.to_thread(self._search_vector_sync, qvec, max_results, allowed_categories)
+        if results is not None:
+            return results
+
+        # Fallback path: in-memory cache with Python cosine calculation
         scored = [
             (content, cosine_similarity(qvec, emb))
             for _, content, emb, category, _, _ in cache
             if emb and (allowed_categories is None or category in allowed_categories)
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
-        # Drop weak matches so irrelevant facts never dilute the agent's context (#10).
         return [content for content, score in scored[:max_results] if score >= _RECALL_MIN_SIMILARITY]
+
+    def _search_vector_sync(
+        self,
+        qvec: list[float],
+        max_results: int,
+        allowed_categories: frozenset[str] | None,
+    ) -> list[str] | None:
+        """Native sqlite-vec query in SQLite; returns None if sqlite-vec is unavailable."""
+        try:
+            qvec_json = json.dumps(qvec)
+            sql = (
+                "SELECT content, (1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
+                "FROM context_facts "
+                "WHERE embedding IS NOT NULL AND embedding != '' AND embedding != '[]'"
+            )
+            params: list[Any] = [qvec_json]
+            if allowed_categories is not None:
+                if not allowed_categories:
+                    return []
+                placeholders = ",".join("?" for _ in allowed_categories)
+                sql += f" AND category IN ({placeholders})"
+                params.extend(allowed_categories)
+            sql += " AND (1.0 - vec_distance_cosine(embedding, ?)) >= ? "
+            params.append(qvec_json)
+            params.append(_RECALL_MIN_SIMILARITY)
+            sql += " ORDER BY similarity DESC LIMIT ?"
+            params.append(max_results)
+
+            with open_db_connection(self._db_path) as conn:
+                rows = conn.execute(sql, params).fetchall()
+            return [r["content"] for r in rows]
+        except Exception:
+            return None
 
     async def count(self, category: str | None = None) -> int:
         """Total facts, or only those in *category* when given."""
@@ -357,6 +394,26 @@ class FactStore:
         Bounded to the most recent _DEDUP_SCAN_LIMIT rows so insert cost does
         not grow with total store size.
         """
+        emb_json = json.dumps(emb)
+        try:
+            sql = """
+            SELECT id FROM (
+                SELECT id, (1.0 - vec_distance_cosine(embedding, ?)) as sim
+                FROM context_facts
+                WHERE category = ? AND embedding IS NOT NULL AND embedding != '' AND embedding != '[]'
+                ORDER BY updated_at DESC LIMIT ?
+            )
+            WHERE sim >= ?
+            ORDER BY sim DESC LIMIT 1
+            """
+            with open_db_connection(self._db_path) as conn:
+                row = conn.execute(sql, (emb_json, category, _DEDUP_SCAN_LIMIT, threshold)).fetchone()
+                if row is not None:
+                    return row["id"]
+                return None
+        except Exception:
+            pass
+
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
                 "SELECT id, embedding FROM context_facts WHERE category = ? ORDER BY updated_at DESC LIMIT ?",

@@ -576,7 +576,7 @@ class ModelDispatcher(InferenceRouter):
         # providers with tiny request caps (e.g. Groq free, which 413s) toward models
         # that accept the payload. request_chars is None when the prompt is empty.
         if estimated_tokens > 0:
-            estimated_payload_chars = estimated_tokens * 4
+            estimated_payload_chars = (estimated_tokens * 4) + _SYSTEM_PROMPT_CHARS
             fitting = [
                 (info, provider)
                 for info, provider in fitting
@@ -591,13 +591,19 @@ class ModelDispatcher(InferenceRouter):
         ]
 
         if not available:
-            # Fallback to any healthy model supporting the base capability
+            # Fallback to any healthy model supporting the base capability that fits payload
+            estimated_payload_chars = (estimated_tokens * 4) + _SYSTEM_PROMPT_CHARS if estimated_tokens > 0 else 0
             available = [
                 (info, provider)
                 for info, provider in self._registry.values()
                 if info.supports(capability)
                 and not self._cooldowns.is_capability_active((info.model_id, info.provider_name), str(capability))
                 and (info.context_window == 0 or estimated_tokens <= 0 or info.context_window >= estimated_tokens)
+                and (
+                    info.max_payload_chars is None
+                    or estimated_payload_chars <= 0
+                    or estimated_payload_chars <= info.max_payload_chars
+                )
                 and not self._cooldowns.is_active((info.model_id, info.provider_name))
                 and self._provider_health.is_available(info.provider_name)
             ]
@@ -657,6 +663,7 @@ class ModelDispatcher(InferenceRouter):
                 for info, provider in capable
                 if info.context_window == 0 or info.context_window >= estimated_tokens
             ]
+        estimated_payload_chars = (estimated_tokens * 4) + _SYSTEM_PROMPT_CHARS if estimated_tokens > 0 else 0
         free: list[_Candidate] = [
             (info, provider)
             for info, provider in capable
@@ -665,8 +672,8 @@ class ModelDispatcher(InferenceRouter):
             and self._provider_health.is_available(info.provider_name)
             and (
                 info.max_payload_chars is None
-                or estimated_tokens <= 0
-                or (estimated_tokens * 4) <= info.max_payload_chars
+                or estimated_payload_chars <= 0
+                or estimated_payload_chars <= info.max_payload_chars
             )
         ]
         if not free:

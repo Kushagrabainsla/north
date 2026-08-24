@@ -10,6 +10,7 @@ approval waits and resolutions always touch the same in-memory registry.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from approval.models import Card
 
@@ -73,24 +74,20 @@ class ApprovalStore:
         """Block until the card is resolved or *timeout* seconds elapse.
 
         Returns the resolved ``Card`` (status ≠ "pending") or ``None`` on
-        timeout.  Never polls; wakes exactly when ``resolve()`` is called.
-        The asyncio.Event is freed after this method returns so it does not
-        accumulate indefinitely in long-running servers.
+        timeout. Never polls; wakes exactly when ``resolve()`` is called.
         """
         event = self._events.get(card_id)
         if event is None:
-            return self._cards.get(card_id)
-        try:
+            card = self._cards.get(card_id)
+            return card if (card and card.status != "pending") else None
+        with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(event.wait(), timeout=timeout)
-        except TimeoutError:
-            pass
-        finally:
-            # Release the Event regardless of outcome - it is no longer needed
-            # once we have woken up (either resolved or timed out).
-            self._events.pop(card_id, None)
+
         card = self._cards.get(card_id)
         if card is None or card.status == "pending":
             return None
+        # Clean up event once resolved
+        self._events.pop(card_id, None)
         return card
 
     def get(self, card_id: str) -> Card | None:
