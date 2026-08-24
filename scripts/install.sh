@@ -43,7 +43,7 @@ fi
 # ── 3. Install north CLI ──────────────────────────────────────────────────────
 
 info "Installing north CLI from GitHub..."
-uv tool install "git+$REPO" --force-reinstall -q
+uv tool install "git+$REPO@main" --force --no-cache -q
 success "north CLI installed"
 
 # Make sure the uv tool bin is on PATH for the rest of this session
