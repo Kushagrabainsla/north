@@ -324,7 +324,12 @@ class ExecutionPlanner:
         if mode == ExecutionMode.SINGLE_TOOL:
             direct_tool = data.get("direct_tool")
             direct_tool_params = data.get("direct_tool_params") or {}
-            if not direct_tool or not isinstance(direct_tool_params, dict):
+            # Interactive or multi-step tools require an agent's ReAct loop
+            if (
+                not direct_tool
+                or not isinstance(direct_tool_params, dict)
+                or direct_tool in ("bash", "shell", "chrome_agent", "browser")
+            ):
                 return self.build_fallback_plan(domain, task_id)
             # Verify the tool actually exists
             if self._tool_registry is not None:

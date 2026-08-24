@@ -401,7 +401,10 @@ class ChromeAgentTool(Tool):
         params = input.params or {}
         action = params.get("action", "")
         if not action:
-            return ToolOutput(success=False, error="Parameter 'action' is required.")
+            if params.get("url"):
+                action = "goto"
+            else:
+                return ToolOutput(success=False, error="Parameter 'action' is required.")
 
         # SSRF safety validation for external URLs
         url = params.get("url", "")

@@ -79,7 +79,7 @@ Work through in order. Stop at the first that fits.
 One deterministic tool call, no agent needed.
 **Fits:** "create notes.txt", "turn off lights" (kasa), "list files"
 **Hard stops:** ambiguous intent, result needs interpretation
-**Never use `bash` as single_tool** - route to `single_agent` instead.
+**Never use `bash`, `chrome_agent`, or `browser` as single_tool** - scraping, browsing, and coding tasks need interpretation/ReAct loops; route to `single_agent` instead.
 
 ### `single_agent`
 One agent's ReAct loop. Right for most tasks.
