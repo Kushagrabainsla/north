@@ -1898,8 +1898,11 @@ def update(
         raise typer.Exit(1) from None
 
     _console.print("  [dim]→[/dim]  reinstalling from git…")
+    git_spec = f"git+{install_url}"
+    if not git_spec.endswith("@main") and "@" not in git_spec.split("/")[-1]:
+        git_spec = f"{git_spec}@main"
     result = subprocess.run(
-        ["uv", "tool", "install", f"git+{install_url}", "--force-reinstall", "-q"],
+        ["uv", "tool", "install", git_spec, "--force", "--no-cache", "-q"],
         capture_output=True,
         text=True,
     )
