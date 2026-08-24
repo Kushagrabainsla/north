@@ -1529,16 +1529,23 @@ def setup_interactive() -> None:
     _console.print(f"  [bright_black]{'─' * 55}[/bright_black]")
     _console.print("  Press [bold]Enter[/bold] to keep existing values or skip optional settings.\n")
 
+    def _hint(val: str | None) -> str:
+        if not val:
+            return ""
+        if len(val) > 12:
+            return f" [dim](current: {val[:6]}...{val[-4:]})[/dim]"
+        return f" [dim](current: {val})[/dim]"
+
     # 1. Inference Provider Keys
-    openrouter = typer.prompt("  OpenRouter API Key (sk-or-...)", default=settings.openrouter_api_key or "", show_default=False).strip()
+    openrouter = typer.prompt(f"  OpenRouter API Key{_hint(settings.openrouter_api_key)}", default=settings.openrouter_api_key or "", show_default=False).strip()
     if openrouter:
         _update_env_file(env_file, "NORTH_OPENROUTER_API_KEY", openrouter)
 
-    groq = typer.prompt("  Groq API Key (gsk-... optional)", default=settings.groq_api_key or "", show_default=False).strip()
+    groq = typer.prompt(f"  Groq API Key{_hint(settings.groq_api_key)}", default=settings.groq_api_key or "", show_default=False).strip()
     if groq:
         _update_env_file(env_file, "NORTH_GROQ_API_KEY", groq)
 
-    gemini = typer.prompt("  Google Gemini API Key (optional)", default=settings.gemini_api_key or "", show_default=False).strip()
+    gemini = typer.prompt(f"  Google Gemini API Key{_hint(settings.gemini_api_key)}", default=settings.gemini_api_key or "", show_default=False).strip()
     if gemini:
         _update_env_file(env_file, "NORTH_GEMINI_API_KEY", gemini)
 
@@ -1546,11 +1553,11 @@ def setup_interactive() -> None:
     _console.print()
     setup_tg = typer.confirm("  Configure Telegram Bot integration?", default=bool(settings.telegram_bot_token))
     if setup_tg:
-        tg_token = typer.prompt("  Telegram Bot Token (from @BotFather)", default=settings.telegram_bot_token or "", show_default=False).strip()
+        tg_token = typer.prompt(f"  Telegram Bot Token (from @BotFather){_hint(settings.telegram_bot_token)}", default=settings.telegram_bot_token or "", show_default=False).strip()
         if tg_token:
             _update_env_file(env_file, "NORTH_TELEGRAM_BOT_TOKEN", tg_token)
 
-        tg_chat = typer.prompt("  Allowed Telegram Chat/User ID (from @userinfobot)", default=settings.telegram_allowed_chat_ids or "", show_default=False).strip()
+        tg_chat = typer.prompt(f"  Allowed Telegram Chat/User ID{_hint(settings.telegram_allowed_chat_ids)}", default=settings.telegram_allowed_chat_ids or "", show_default=False).strip()
         if tg_chat:
             _update_env_file(env_file, "NORTH_TELEGRAM_ALLOWED_CHAT_IDS", tg_chat)
 
