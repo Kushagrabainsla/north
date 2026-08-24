@@ -1874,15 +1874,33 @@ def update(
         typer.secho("✓ north updated and restarted via Docker.", fg=typer.colors.GREEN)
         return
 
-    # ── uv tool upgrade from git URL ──────────────────────────────────────
-    if not is_git_url:
-        typer.secho(
-            "ERROR: north is not installed via the install script.\n"
-            "Run: curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1) from None
+    # ── uv tool upgrade from git URL or local git checkout ────────────────
+    project_root = _find_project_root()
+    if not is_git_url and project_root and (project_root / ".git").exists():
+        _console.print(f"  [dim]source     [/dim]  {project_root} (local git repository)")
+        was_running = _port_in_use("127.0.0.1", port) and _is_north_server("127.0.0.1", port)
+        if was_running:
+            _console.print("  [dim]→[/dim]  stopping server…")
+            _stop_server(port)
+        _console.print()
+
+        if not yes:
+            typer.confirm("Proceed with update?", default=True, abort=True)
+
+        _console.print("  [dim]→[/dim]  pulling latest changes from git…")
+        _run_command(["git", "pull"], cwd=project_root)
+        _console.print("  [dim]→[/dim]  reinstalling dependencies…")
+        subprocess.run(["uv", "pip", "install", "-e", "."], cwd=project_root, check=False)
+        subprocess.run(["uv", "tool", "install", "--editable", "--force", str(project_root)], capture_output=True, check=False)
+        _console.print()
+        typer.secho("✓ north updated and synced.", fg=typer.colors.GREEN)
+        if restart:
+            _start_server_process(port, project_root=project_root)
+        return
+
+    if not install_url or not is_git_url:
+        install_url = "https://github.com/Kushagrabainsla/north.git"
+        is_git_url = True
 
     _console.print(f"  [dim]source     [/dim]  {install_url}")
 
