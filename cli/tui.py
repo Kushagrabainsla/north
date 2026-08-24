@@ -690,6 +690,8 @@ class NorthApp(App[None]):
         # repeats of the same pending card into a single prompt.
         self._pending_card_id: str | None = None
         self._user_task_ids: set[str] = set()
+        self._awaiting_user_task: bool = False
+        self._last_submitted_prompt: str = ""
         self._conversation_history: deque[dict] = deque(maxlen=5)
         self._pending_user_messages: dict[str, str] = {}
         self._task_tool_activity: dict[str, list[dict]] = {}
@@ -1022,7 +1024,12 @@ class NorthApp(App[None]):
     async def _handle_event(self, event: str, data: dict) -> None:
         task_id = data.get("task_id", "")
         if task_id and task_id not in self._user_task_ids:
-            return
+            if self._awaiting_user_task:
+                self._user_task_ids.add(task_id)
+                self._pending_user_messages[task_id] = self._last_submitted_prompt
+                self._awaiting_user_task = False
+            else:
+                return
         handler = self._event_handlers.get(event)
         if handler is not None:
             await handler(task_id, data)
@@ -1636,6 +1643,8 @@ class NorthApp(App[None]):
             body["context"] = "## Recent conversation\n" + "\n\n".join(turns)
 
         self._set_status("…")
+        self._awaiting_user_task = True
+        self._last_submitted_prompt = text
         try:
             async with self._http() as c:
                 resp = await c.post(
