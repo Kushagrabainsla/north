@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from typing import Any
 
 import httpx
 import pytest
 
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher
-from inference.exceptions import PaymentRequiredError, ProviderAuthError
+from inference.exceptions import PaymentRequiredError
 from inference.models import ToolCallRequest, ToolCallResponse
-from inference.provider import Provider
 from inference.providers.openai_compat import OpenAICompatibleProvider
 
 
@@ -25,7 +23,7 @@ class _MockStreamTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         async def body_stream() -> AsyncIterator[bytes]:
             for line in self._lines:
-                yield f"{line}\n\n".encode("utf-8")
+                yield f"{line}\n\n".encode()
 
         return httpx.Response(
             status_code=self._status_code,

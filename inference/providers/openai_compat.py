@@ -18,10 +18,12 @@ import httpx
 from inference.constants import DEFAULT_TIMEOUT_SECONDS, SSE_CHUNK_TIMEOUT_SECONDS
 from inference.exceptions import (
     InferenceError,
+    ModelNotFoundError,
     ModelRateLimitedError,
     PayloadTooLargeError,
     PaymentRequiredError,
     ProviderAuthError,
+    ProviderUnavailableError,
     TranscriptionError,
 )
 from inference.models import (
@@ -157,24 +159,30 @@ class OpenAICompatibleProvider:
         return any(marker in msg for marker in billing_markers)
 
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
-        """Raise the cooldown-worthy errors for shared HTTP statuses.
+        """Map HTTP status codes to typed exceptions for ModelDispatcher cooldown handling.
 
-        401 is treated as a provider-level auth failure (invalid API key) so the
-        dispatcher can open a provider circuit breaker.
-
-        403 on aggregate providers (e.g. OpenRouter) is model-specific (restricted
-        model, terms agreement, or depleted model quota) and maps to
-        PaymentRequiredError for that specific model rather than taking down the
-        entire provider.
-
-        402 (insufficient credits) maps to a long payment cooldown. 429/404/503
-        (rate limited or model gone) and 413 (request/token-rate too large) map to
-        a short rate-limit cooldown that honours any Retry-After header.
+        401 raises ProviderAuthError (provider down).
+        502/503/504 raises ProviderUnavailableError (provider down/degraded).
+        402 (insufficient credits) maps to a long payment cooldown on the model.
+        404 (model not found) maps to a long model cooldown without degrading the provider.
+        413 (request/token-rate too large) and 429 (rate limited) map to model-level cooldowns.
         """
         if response.status_code == 401:
             raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
+        if response.status_code in (502, 503, 504):
+            raise ProviderUnavailableError(
+                f"{self.name} returned {response.status_code} - gateway/server outage"
+            )
         if response.status_code in (402, 403):
             raise PaymentRequiredError(
+                model_id,
+                self.name,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                body=self._safe_json(response),
+            )
+        if response.status_code == 404:
+            raise ModelNotFoundError(
                 model_id,
                 self.name,
                 status_code=response.status_code,
@@ -192,13 +200,12 @@ class OpenAICompatibleProvider:
                 headers=dict(response.headers),
                 body=self._safe_json(response),
             )
-        if response.status_code in (429, 404, 503):
+        if response.status_code == 429:
             headers = dict(response.headers)
             body = self._safe_json(response)
             # Gemini (and other Google-fronted providers) return 429 with
             # RESOURCE_EXHAUSTED + "credits depleted" when billing is empty - that is
             # permanent, not a rate limit, so surface it as PaymentRequiredError
-            # (24h cooldown, shown as "needs billing") instead of a fake 60s countdown.
             if self._is_billing_exhausted(response.status_code, body, headers):
                 raise PaymentRequiredError(
                     model_id,
@@ -234,6 +241,11 @@ class OpenAICompatibleProvider:
         if resp.status_code == 401:
             await resp.aread()
             raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
+        if resp.status_code in (502, 503, 504):
+            await resp.aread()
+            raise ProviderUnavailableError(
+                f"{self.name} returned {resp.status_code} - gateway/server outage"
+            )
         if resp.status_code in (402, 403):
             await resp.aread()
             raise PaymentRequiredError(
@@ -243,7 +255,15 @@ class OpenAICompatibleProvider:
                 headers=dict(resp.headers),
                 body=self._safe_json(resp),
             )
-
+        if resp.status_code == 404:
+            await resp.aread()
+            raise ModelNotFoundError(
+                model_id,
+                self.name,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+                body=self._safe_json(resp),
+            )
         if resp.status_code == 413:
             await resp.aread()
             headers = dict(resp.headers)
@@ -256,7 +276,7 @@ class OpenAICompatibleProvider:
                 body=body,
             )
 
-        if resp.status_code in (429, 404, 503):
+        if resp.status_code == 429:
             await resp.aread()
             headers = dict(resp.headers)
             body = self._safe_json(resp)
@@ -311,6 +331,8 @@ class OpenAICompatibleProvider:
 
         try:
             response = await self._client.post("/chat/completions", json=body)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
+            raise ProviderUnavailableError(f"Connection to {self.name} failed: {e}") from e
         except httpx.RequestError as e:
             raise InferenceError(f"Request to {self.name} failed: {e}") from e
 
@@ -502,6 +524,8 @@ class OpenAICompatibleProvider:
                             tool_calls_acc[idx]["name"] = fn["name"]
                         if fn.get("arguments"):
                             tool_calls_acc[idx]["arguments"] += fn["arguments"]
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
+            raise ProviderUnavailableError(f"Connection to {self.name} failed: {e}") from e
         except httpx.RequestError as e:
             raise InferenceError(f"Request to {self.name} failed: {e}") from e
 

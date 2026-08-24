@@ -383,8 +383,8 @@ async def search_ledger(
 class AgentInfo(BaseModel):
     name: str
     domain: str
-    model_pool: str
-    accepts: list[str]
+    model_pool: str = "reasoning"
+    accepts: list[str] = []
 
 
 class AgentRunRequest(BaseModel):
@@ -407,7 +407,7 @@ async def list_agents() -> list[AgentInfo]:
         AgentInfo(
             name=a.name,
             domain=a.domain,
-            model_pool=a.config.model_pool,
+            model_pool=a.config.model_pool or "reasoning",
             accepts=a.config.accepts,
         )
         for a in _get_agent_registry().all()

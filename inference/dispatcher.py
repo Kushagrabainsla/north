@@ -41,10 +41,12 @@ from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
     InferenceError,
+    ModelNotFoundError,
     ModelRateLimitedError,
     PayloadTooLargeError,
     PaymentRequiredError,
     ProviderAuthError,
+    ProviderUnavailableError,
 )
 from inference.model_policy import model_matches
 from inference.model_scorer import ModelScorer, ScoringConfig
@@ -292,13 +294,13 @@ class ModelDispatcher(InferenceRouter):
             return 128_000
 
         # 1. Exact model_id match
-        for (provider_name, reg_model_id), (info, _) in self._registry.items():
+        for (_provider_name, reg_model_id), (info, _) in self._registry.items():
             if reg_model_id == model_id and info.context_window > 0:
                 return info.context_window
 
         # 2. Case-insensitive or normalized / substring match
         norm = model_id.lower().strip()
-        for (provider_name, reg_model_id), (info, _) in self._registry.items():
+        for (_provider_name, reg_model_id), (info, _) in self._registry.items():
             reg_norm = reg_model_id.lower().strip()
             if (norm == reg_norm or norm.endswith(reg_norm) or reg_norm.endswith(norm)) and info.context_window > 0:
                 return info.context_window
@@ -936,20 +938,37 @@ class ModelDispatcher(InferenceRouter):
                     info.provider_name,
                     info.model_id,
                 )
+            except ProviderUnavailableError as e:
+                self._record_model_outcome(key, False)
+                self._persist_model_score(key)
+                state = self._provider_health.mark_degraded(info.provider_name, str(e) or "server outage")
+                self._rate_limit_status.record_provider_down(
+                    info.provider_name, str(e) or "server outage"
+                )
+                logger.warning(
+                    "Provider degraded: %s - circuit %s (%s)",
+                    info.provider_name,
+                    state,
+                    e,
+                )
+            except ModelNotFoundError:
+                self._record_model_outcome(key, False)
+                self._persist_model_score(key)
+                self._cooldowns.set_rate_limit(key, 86400)
+                self._rate_limit_status.record_error(
+                    info.provider_name,
+                    info.model_id,
+                    reason="model not found (404)",
+                    is_free=info.is_free,
+                )
+                logger.info(
+                    "Model not found: %s/%s - skipping for 24 h",
+                    info.provider_name,
+                    info.model_id,
+                )
             except InferenceError as e:
                 self._record_model_outcome(key, False)
                 self._persist_model_score(key)
-                state = self._provider_health.mark_degraded(info.provider_name, "inference error")
-                if state != "healthy":
-                    logger.warning(
-                        "Provider degraded: %s/%s - circuit %s",
-                        info.provider_name,
-                        info.model_id,
-                        state,
-                    )
-                # Surface the failure in the status store so 'north limits' / '/limits'
-                # show it instead of a false "all available" (covers 5xx, timeouts,
-                # bad-JSON, transcription failures - anything raising InferenceError).
                 self._rate_limit_status.record_error(
                     info.provider_name,
                     info.model_id,
@@ -957,10 +976,10 @@ class ModelDispatcher(InferenceRouter):
                     is_free=info.is_free,
                 )
                 logger.warning(
-                    "Inference error on %s/%s - trying next candidate",
+                    "Inference error on %s/%s - trying next candidate: %s",
                     info.provider_name,
                     info.model_id,
-                    exc_info=True,
+                    e,
                 )
             except Exception:
                 self._record_model_outcome(key, False)

@@ -10,10 +10,12 @@ from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
     InferenceError,
+    ModelNotFoundError,
     ModelRateLimitedError,
     PaymentRequiredError,
     PoolRefreshError,
     ProviderAuthError,
+    ProviderUnavailableError,
     TranscriptionError,
 )
 from inference.factory import build_router
@@ -59,6 +61,7 @@ __all__ = [
     "quality_from_cost",
     "ModelDispatcher",
     "ModelInfo",
+    "ModelNotFoundError",
     "ModelPool",
     "ModelRateLimitedError",
     "OpenRouterRouter",
@@ -67,6 +70,7 @@ __all__ = [
     "PRIORITY_TO_POOL",
     "PaymentRequiredError",
     "ProviderAuthError",
+    "ProviderUnavailableError",
     "PoolPriority",
     "PoolRefreshError",
     "Provider",

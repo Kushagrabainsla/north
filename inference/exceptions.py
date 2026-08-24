@@ -106,6 +106,38 @@ class ProviderAuthError(InferenceError):
     """
 
 
+class ProviderUnavailableError(InferenceError):
+    """A provider has an infrastructure-level outage (502/503/504 or network drop).
+
+    ModelDispatcher treats this as a provider-level circuit-breaker event and
+    applies provider-level degradation.
+    """
+
+
+class ModelNotFoundError(InferenceError):
+    """A model does not exist or has been retired on the provider (HTTP 404).
+
+    ModelDispatcher applies a long cooldown to that specific (model, provider) pair
+    without degrading the overall provider.
+    """
+
+    def __init__(
+        self,
+        model_id: str,
+        provider_name: str,
+        *,
+        status_code: int | None = 404,
+        headers: dict[str, str] | None = None,
+        body: dict | None = None,
+    ) -> None:
+        super().__init__(f"Model not found: {model_id} on {provider_name}")
+        self.model_id = model_id
+        self.provider_name = provider_name
+        self.status_code = status_code
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self.body = body
+
+
 class ContextTooLargeError(InferenceError):
     """Input exceeds every available model's context window.
 

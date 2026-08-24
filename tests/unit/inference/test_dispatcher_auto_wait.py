@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import pytest
-from unittest.mock import patch
 
 from inference.capability import ModelInfo
 from inference.dispatcher import ModelDispatcher
@@ -63,7 +61,8 @@ async def test_dispatcher_raises_with_retry_after_when_exceeding_wait_cap():
     dispatcher = ModelDispatcher([provider])
     req = CompletionRequest(prompt="hello", component="general", priority=PoolPriority.MEDIUM)
 
-    # 60s exceeds the 30s in-flight wait threshold, so it should raise AllModelsRateLimitedError with retry_after attached
+    # 60s exceeds the 30s in-flight wait threshold, so it should raise
+    # AllModelsRateLimitedError with retry_after attached
     with pytest.raises(AllModelsRateLimitedError) as exc_info:
         await dispatcher.complete(req)
 

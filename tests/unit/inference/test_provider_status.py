@@ -48,10 +48,21 @@ class TestRaiseCooldownStatus:
             self._provider()._raise_cooldown_status(httpx.Response(403), "model")
 
 
-    @pytest.mark.parametrize("status", [429, 404, 503])
-    def test_rate_limited_statuses_raise(self, status: int) -> None:
+    def test_429_raises_rate_limited(self) -> None:
         with pytest.raises(ModelRateLimitedError):
-            self._provider()._raise_cooldown_status(httpx.Response(status), "model")
+            self._provider()._raise_cooldown_status(httpx.Response(429), "model")
+
+    def test_404_raises_model_not_found(self) -> None:
+        from inference.exceptions import ModelNotFoundError
+
+        with pytest.raises(ModelNotFoundError):
+            self._provider()._raise_cooldown_status(httpx.Response(404), "model")
+
+    def test_503_raises_provider_unavailable(self) -> None:
+        from inference.exceptions import ProviderUnavailableError
+
+        with pytest.raises(ProviderUnavailableError):
+            self._provider()._raise_cooldown_status(httpx.Response(503), "model")
 
     def test_413_is_treated_as_payload_too_large(self) -> None:
         # 413 (request too large, e.g. groq free-tier request cap) is permanent for
