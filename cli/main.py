@@ -367,18 +367,66 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                     if event == "agent_started":
                         agent = data.get("agent", "agent")
                         steps.append(("◎", f"{agent} agent running…", True))
+                    elif event == "model":
+                        model = data.get("model", "")
+                        if model and steps:
+                            for idx in range(len(steps) - 1, -1, -1):
+                                icon, lbl, active = steps[idx]
+                                if icon == "◎" and active:
+                                    agent_name = lbl.split()[0]
+                                    steps[idx] = ("◎", f"{agent_name} running on [cyan]{model}[/cyan]…", True)
+                                    break
+                    elif event == "failover":
+                        from_m = data.get("from", "model")
+                        to_m = data.get("to", "")
+                        reason = data.get("reason", "")
+                        reason_str = f" ({reason})" if reason else ""
+                        to_str = f" → [cyan]{to_m}[/cyan]" if to_m else ""
+                        steps.append(("↻", f"failover: [dim]{from_m}[/dim]{to_str}{reason_str}", False))
                     elif event == "agent_completed":
                         agent = data.get("agent", "agent")
                         summary = data.get("summary", "")
-                        label = f"{agent}: {summary}" if summary else f"{agent} agent done"
+                        duration = data.get("duration_ms")
+                        dur_str = f" [dim]({duration}ms)[/dim]" if duration else ""
+                        label = f"{agent}: {summary}{dur_str}" if summary else f"{agent} agent done{dur_str}"
                         steps.append(("✓", label, True))
                     elif event == "tool_called":
                         tool = data.get("tool", "tool")
-                        steps.append(("→", f"  {tool}…", True))
+                        params = data.get("params") or data.get("args") or {}
+                        params_preview = ""
+                        if isinstance(params, dict) and params:
+                            clean_params = {k: v for k, v in params.items() if not k.startswith("_")}
+                            if clean_params:
+                                items = []
+                                for k, v in clean_params.items():
+                                    val_str = json.dumps(v) if not isinstance(v, str) else v
+                                    if len(val_str) > 28:
+                                        val_str = val_str[:25] + "…"
+                                    items.append(f"{k}={val_str}")
+                                params_preview = f" [dim]({', '.join(items)})[/dim]"
+                        steps.append(("→", f"  {tool}{params_preview}…", True))
                     elif event == "tool_result":
                         tool = data.get("tool", "tool")
                         success = data.get("success", True)
-                        steps.append(("✓" if success else "✗", f"  {tool}", True))
+                        formatted = data.get("formatted") or data.get("summary") or data.get("error") or ""
+                        preview_str = ""
+                        if formatted:
+                            f_str = str(formatted).strip().replace("\n", " ")
+                            if len(f_str) > 35:
+                                f_str = f_str[:32] + "…"
+                            preview_str = f" [dim]→ {f_str}[/dim]"
+                        steps.append(("✓" if success else "✗", f"  {tool}{preview_str}", True))
+                    elif event == "classified":
+                        domain = data.get("domain", "")
+                        is_conseq = data.get("is_consequential", False)
+                        desc = "complex" if is_conseq else "direct"
+                        label = f"classified: [cyan]{domain}[/cyan] [dim]({desc})[/dim]" if domain else "classified"
+                        steps.append(("✓", label, True))
+                    elif event == "routed":
+                        agents = data.get("agents", [])
+                        agents_str = ", ".join(agents) if agents else ""
+                        label = f"plan ready: [cyan]{agents_str}[/cyan]" if agents_str else "plan ready"
+                        steps.append(("✓", label, True))
                     elif event == "approval_required":
                         steps.append(("?", "Approval required", False))
                         live.update(_make_renderable())
@@ -1229,6 +1277,7 @@ def status() -> None:
     # ── Providers (from settings, which keys are present) ──
     try:
         from config.settings import settings as cfg
+
         providers = []
         for key, label in (
             ("openrouter_api_key", "openrouter"),
@@ -1490,7 +1539,9 @@ def config_get(
     field_name, _ = _CONFIG_KEYS[key]
     val = getattr(settings, field_name, None)
     if "key" in field_name or "token" in field_name or "secret" in field_name:
-        display_val = f"{str(val)[:8]}...{str(val)[-4:]}" if val and len(str(val)) > 12 else ("(set)" if val else "(not set)")
+        display_val = (
+            f"{str(val)[:8]}...{str(val)[-4:]}" if val and len(str(val)) > 12 else ("(set)" if val else "(not set)")
+        )
     else:
         display_val = str(val) if val is not None and str(val) else "(not set)"
     typer.echo(f"{key} = {display_val}")
@@ -1507,11 +1558,16 @@ def config_list() -> None:
     for key, (field_name, _) in sorted(_CONFIG_KEYS.items()):
         val = getattr(settings, field_name, None)
         if "key" in field_name or "token" in field_name or "secret" in field_name:
-            display_val = f"[yellow]{str(val)[:8]}...{str(val)[-4:]}[/yellow]" if val and len(str(val)) > 12 else ("[yellow](set)[/yellow]" if val else "[dim](not set)[/dim]")
+            display_val = (
+                f"[yellow]{str(val)[:8]}...{str(val)[-4:]}[/yellow]"
+                if val and len(str(val)) > 12
+                else ("[yellow](set)[/yellow]" if val else "[dim](not set)[/dim]")
+            )
         else:
             display_val = f"[green]{val}[/green]" if val not in ("", None, ()) else "[dim](not set)[/dim]"
         _console.print(f"  [cyan]{key:<28}[/cyan] [bright_black]→[/bright_black]  {display_val}")
     _console.print()
+
 
 app.add_typer(config_app, name="config")
 
@@ -1537,15 +1593,25 @@ def setup_interactive() -> None:
         return f" [dim](current: {val})[/dim]"
 
     # 1. Inference Provider Keys
-    openrouter = typer.prompt(f"  OpenRouter API Key{_hint(settings.openrouter_api_key)}", default=settings.openrouter_api_key or "", show_default=False).strip()
+    openrouter = typer.prompt(
+        f"  OpenRouter API Key{_hint(settings.openrouter_api_key)}",
+        default=settings.openrouter_api_key or "",
+        show_default=False,
+    ).strip()
     if openrouter:
         _update_env_file(env_file, "NORTH_OPENROUTER_API_KEY", openrouter)
 
-    groq = typer.prompt(f"  Groq API Key{_hint(settings.groq_api_key)}", default=settings.groq_api_key or "", show_default=False).strip()
+    groq = typer.prompt(
+        f"  Groq API Key{_hint(settings.groq_api_key)}", default=settings.groq_api_key or "", show_default=False
+    ).strip()
     if groq:
         _update_env_file(env_file, "NORTH_GROQ_API_KEY", groq)
 
-    gemini = typer.prompt(f"  Google Gemini API Key{_hint(settings.gemini_api_key)}", default=settings.gemini_api_key or "", show_default=False).strip()
+    gemini = typer.prompt(
+        f"  Google Gemini API Key{_hint(settings.gemini_api_key)}",
+        default=settings.gemini_api_key or "",
+        show_default=False,
+    ).strip()
     if gemini:
         _update_env_file(env_file, "NORTH_GEMINI_API_KEY", gemini)
 
@@ -1553,11 +1619,19 @@ def setup_interactive() -> None:
     _console.print()
     setup_tg = typer.confirm("  Configure Telegram Bot integration?", default=bool(settings.telegram_bot_token))
     if setup_tg:
-        tg_token = typer.prompt(f"  Telegram Bot Token (from @BotFather){_hint(settings.telegram_bot_token)}", default=settings.telegram_bot_token or "", show_default=False).strip()
+        tg_token = typer.prompt(
+            f"  Telegram Bot Token (from @BotFather){_hint(settings.telegram_bot_token)}",
+            default=settings.telegram_bot_token or "",
+            show_default=False,
+        ).strip()
         if tg_token:
             _update_env_file(env_file, "NORTH_TELEGRAM_BOT_TOKEN", tg_token)
 
-        tg_chat = typer.prompt(f"  Allowed Telegram Chat/User ID{_hint(settings.telegram_allowed_chat_ids)}", default=settings.telegram_allowed_chat_ids or "", show_default=False).strip()
+        tg_chat = typer.prompt(
+            f"  Allowed Telegram Chat/User ID{_hint(settings.telegram_allowed_chat_ids)}",
+            default=settings.telegram_allowed_chat_ids or "",
+            show_default=False,
+        ).strip()
         if tg_chat:
             _update_env_file(env_file, "NORTH_TELEGRAM_ALLOWED_CHAT_IDS", tg_chat)
 
@@ -1891,7 +1965,9 @@ def update(
         _run_command(["git", "pull"], cwd=project_root)
         _console.print("  [dim]→[/dim]  reinstalling dependencies…")
         subprocess.run(["uv", "pip", "install", "-e", "."], cwd=project_root, check=False)
-        subprocess.run(["uv", "tool", "install", "--editable", "--force", str(project_root)], capture_output=True, check=False)
+        subprocess.run(
+            ["uv", "tool", "install", "--editable", "--force", str(project_root)], capture_output=True, check=False
+        )
         _console.print()
         typer.secho("✓ north updated and synced.", fg=typer.colors.GREEN)
         if restart:

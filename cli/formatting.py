@@ -21,9 +21,7 @@ from cli.constants import _FILL_COLOURS, _MARKUP_RE, _SLASH_COMMANDS
 
 def _reconstruct_task_output(entries: list[dict]) -> str:
     """Join the ``agent_completed`` outputs from ledger *entries* into one string."""
-    return "\n\n".join(
-        e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output")
-    )
+    return "\n\n".join(e["output"] for e in entries if e.get("action") == "agent_completed" and e.get("output"))
 
 
 def _fmt_params(params: dict) -> str:
@@ -126,14 +124,18 @@ def _build_steps_table(steps: list[tuple[str, str, bool]]) -> Table:
     t.add_column()
     for icon, label, active in steps:
         if active:
+            label_text = Text.from_markup(label) if "[" in label else Text(label, style="white")
             t.add_row(
                 Text(icon, style="white"),
-                Text(label, style="white"),
+                label_text,
             )
         else:
+            icon_style = "dim red" if icon == "✗" else "dim green"
+            label_text = Text.from_markup(label) if "[" in label else Text(label)
+            label_text.stylize("dim")
             t.add_row(
-                Text(icon, style="dim green"),
-                Text(label, style="dim"),
+                Text(icon, style=icon_style),
+                label_text,
             )
     return t
 
@@ -177,8 +179,24 @@ def _format_plan_table(plan_steps: list[dict], dod_evals: list[dict] | None = No
     else:
         for s in plan_steps:
             st = s.get("status", "pending")
-            st_style = "green" if st in ("completed", "done") else "yellow" if st == "in_progress" else "red" if st == "failed" else "dim"
-            icon = "✓ " if st in ("completed", "done") else "▶ " if st == "in_progress" else "✗ " if st == "failed" else "○ "
+            st_style = (
+                "green"
+                if st in ("completed", "done")
+                else "yellow"
+                if st == "in_progress"
+                else "red"
+                if st == "failed"
+                else "dim"
+            )
+            icon = (
+                "✓ "
+                if st in ("completed", "done")
+                else "▶ "
+                if st == "in_progress"
+                else "✗ "
+                if st == "failed"
+                else "○ "
+            )
             t.add_row(
                 str(s.get("step_id", s.get("id", ""))),
                 str(s.get("agent", s.get("phase", ""))),
