@@ -560,7 +560,7 @@ class ModelDispatcher(InferenceRouter):
         # providers with tiny request caps (e.g. Groq free, which 413s) toward models
         # that accept the payload. request_chars is None when the prompt is empty.
         if estimated_tokens > 0:
-            estimated_payload_chars = estimated_tokens * 4 + _SYSTEM_PROMPT_CHARS
+            estimated_payload_chars = estimated_tokens * 4
             fitting = [
                 (info, provider)
                 for info, provider in fitting
@@ -645,7 +645,7 @@ class ModelDispatcher(InferenceRouter):
             and (
                 info.max_payload_chars is None
                 or estimated_tokens <= 0
-                or (estimated_tokens * 4 + _SYSTEM_PROMPT_CHARS) <= info.max_payload_chars
+                or (estimated_tokens * 4) <= info.max_payload_chars
             )
         ]
         if not free:
