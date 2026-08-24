@@ -110,6 +110,7 @@ class CooldownStore:
             now_wall = time.time()
             data = {k: v for k, v in data.items() if v > now_wall}
             model_id, provider_name = key
+            data[f"{model_id}::{provider_name}"] = wall_expiry
             tmp_path = self._path.with_suffix(".tmp")
             tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             tmp_path.replace(self._path)

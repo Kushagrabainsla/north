@@ -954,7 +954,7 @@ class ModelDispatcher(InferenceRouter):
             except ModelNotFoundError:
                 self._record_model_outcome(key, False)
                 self._persist_model_score(key)
-                self._cooldowns.set_rate_limit(key, 86400)
+                self._cooldowns.set_payment_exhausted(key)
                 self._rate_limit_status.record_error(
                     info.provider_name,
                     info.model_id,
