@@ -1029,15 +1029,20 @@ class NorthApp(App[None]):
 
     async def _on_classifying(self, task_id: str, data: dict) -> None:
         self._set_status("classifying…")
+        self._log("  [bright_black]→[/bright_black]  [dim]classifying…[/dim]")
 
     async def _on_classified(self, task_id: str, data: dict) -> None:
         domain = data.get("domain", "")
-        flag = "  ·  consequential" if data.get("is_consequential") else ""
-        self._set_status(f"routing → {domain}{flag}…")
+        flag = " [dim](complex)[/dim]" if data.get("is_consequential") else " [dim](direct)[/dim]"
+        self._set_status(f"routing → {domain}…")
+        label = f"classified: [cyan]{domain}[/cyan]{flag}" if domain else "classified"
+        self._log(f"  [dim green]✓[/dim green]  {label}")
 
     async def _on_routed(self, task_id: str, data: dict) -> None:
         agents = data.get("agents") or []
         self._set_status(f"running {', '.join(agents) or 'general'}…")
+        if agents:
+            self._log(f"  [dim green]✓[/dim green]  plan ready: [cyan]{', '.join(agents)}[/cyan]")
 
     async def _on_north_star_checking(self, task_id: str, data: dict) -> None:
         self._set_status("checking goals…")
@@ -1065,14 +1070,8 @@ class NorthApp(App[None]):
         agents = data.get("agents") or []
         label = ", ".join(agents) if agents else agent or "general"
         self._set_status(f"running {label}…")
-        # Write an agent header for specialist agents so the user can see who
-        # is working. The default 'general' agent is suppressed - its header
-        # would just echo the user's prompt (already shown) and the answer is
-        # labelled '◆ north' below.
-        if agent and agent != "general":
-            task_desc = (data.get("task") or "").strip()
-            desc_part = f"  [bright_black]{task_desc[:80]}[/bright_black]" if task_desc else ""
-            self._log(f"  [cyan]◆[/cyan]  [white]{agent}[/white]{desc_part}")
+        model_str = f" [dim]on [cyan]{self._model}[/cyan][/dim]" if self._model else ""
+        self._log(f"  [bright_black]◎[/bright_black]  [cyan]{label}[/cyan] agent running{model_str}…")
 
     async def _on_tool_called(self, task_id: str, data: dict) -> None:
         tool = data.get("tool", "")
