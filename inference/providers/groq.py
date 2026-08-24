@@ -55,10 +55,10 @@ class GroqRouter(OpenAICompatibleProvider):
             caps = capabilities_from_model_id(model_id, "groq")
             # Transcription models are not token-based; context_window is not meaningful.
             ctx = 0 if ModelCapability.TRANSCRIPTION in caps else int(m.get("context_window") or 131_072)
-            # Modern Groq models support up to 128k tokens; allow up to 128k chars payload
+            # Groq free-tier limits TPM and request size; cap at 24k chars
             payload_cap = None
             if ModelCapability.COMPLETION in caps:
-                payload_cap = 128_000
+                payload_cap = 24_000
             live[model_id] = ModelInfo(
                 model_id=model_id,
                 provider_name="groq",
