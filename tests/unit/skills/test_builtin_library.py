@@ -51,6 +51,12 @@ def test_key_skills_present():
         "safe-refactoring",
         "security-and-hardening",
         "conducting-a-literature-review",  # general-domain research/synthesis skill
+        "alignment-and-grilling",
+        "deep-module-architecture",
+        "tracer-bullet-ticket-decomposition",
+        "interactive-human-wizard",
+        "two-axis-code-review",
+        "plain-english-reframing",
     }
     assert expected <= names
 
