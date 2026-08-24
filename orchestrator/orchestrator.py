@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import shlex
+import shutil
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -2424,14 +2425,17 @@ class Orchestrator:
         worktree can be created.
         """
         n = self._best_of_n
-        pairs: list[tuple[Worktree, AgentPayload]] = []
+        pairs: list[tuple[Worktree, AgentPayload, str]] = []
         for i in range(n):
+            cand_task_id = f"{payload.task_id}__bo{i}"
             try:
                 wt = await manager.create(f"{agent.name}-{payload.task_id}-bo{i}")
             except WorktreeError:
                 logger.warning("best-of-n: worktree %d create failed; skipping", i, exc_info=True)
                 continue
-            pairs.append((wt, payload.model_copy(update={"workspace": wt.path})))
+            pairs.append(
+                (wt, payload.model_copy(update={"workspace": wt.path, "task_id": cand_task_id}), cand_task_id)
+            )
 
         if not pairs:
             return await self._run_agent_with_retry(agent, payload)
@@ -2439,12 +2443,12 @@ class Orchestrator:
         integrated_wt: Worktree | None = None
         try:
             results = await asyncio.gather(
-                *[self._run_agent_with_retry(agent, p) for _, p in pairs],
+                *[self._run_agent_with_retry(agent, p) for _, p, _ in pairs],
                 return_exceptions=True,
             )
 
             outcomes: list[CandidateOutcome] = []
-            for i, ((wt, _), res) in enumerate(zip(pairs, results, strict=False)):
+            for i, ((wt, _, _), res) in enumerate(zip(pairs, results, strict=False)):
                 succeeded = not isinstance(res, BaseException)
                 diff_lines = await manager.diff_line_count(wt)
                 tests_passed = await self._candidate_tests_pass(wt) if succeeded and diff_lines else None
@@ -2466,14 +2470,28 @@ class Orchestrator:
             )
 
             winner_result: AgentResult | None = None
-            for i, (wt, _) in enumerate(pairs):
+            for i, (wt, _, cand_task_id) in enumerate(pairs):
                 if i == winner and not isinstance(results[i], BaseException):
                     integration = await manager.integrate(wt, lock=workspace_lock(payload.workspace))
                     integrated_wt = wt
                     await self._emit_integration(payload.task_id, agent.name, integration)
                     winner_result = results[i]  # type: ignore[assignment]
+                    # Promote winning candidate handoff directory to canonical task directory
+                    winner_handoff = Path(handoff_dir_for(cand_task_id))
+                    canonical_handoff = Path(handoff_dir_for(payload.task_id))
+                    if winner_handoff.exists():
+                        if canonical_handoff.exists():
+                            shutil.rmtree(canonical_handoff, ignore_errors=True)
+                        try:
+                            winner_handoff.rename(canonical_handoff)
+                        except OSError:
+                            shutil.copytree(winner_handoff, canonical_handoff, dirs_exist_ok=True)
+                            shutil.rmtree(winner_handoff, ignore_errors=True)
                 else:
                     await self._discard_worktree(manager, wt)
+                    cand_handoff = Path(handoff_dir_for(cand_task_id))
+                    if cand_handoff.exists():
+                        shutil.rmtree(cand_handoff, ignore_errors=True)
 
             if winner_result is not None:
                 return winner_result
@@ -2483,11 +2501,13 @@ class Orchestrator:
                 raise first
             return first  # type: ignore[return-value]
         finally:
-            # Guarantee any worktrees left undiscarded (e.g. cancelled during gather or scoring)
-            # are cleaned up so no dangling branches or /tmp directories leak.
-            for wt, _ in pairs:
+            # Guarantee any worktrees and scratch directories left undiscarded are cleaned up
+            for wt, _, cand_task_id in pairs:
                 if wt is not integrated_wt:
                     await self._discard_worktree(manager, wt)
+                cand_handoff = Path(handoff_dir_for(cand_task_id))
+                if cand_handoff.exists() and cand_handoff != Path(handoff_dir_for(payload.task_id)):
+                    shutil.rmtree(cand_handoff, ignore_errors=True)
 
     async def _candidate_tests_pass(self, wt: Worktree) -> bool | None:
         """Run the configured best-of-N test command in *wt*; True/False, or None if unset."""

@@ -126,3 +126,27 @@ async def test_missing_workspace_returns_empty(tmp_path: Path) -> None:
     idx = CodeIndex(tmp_path / "idx.db", _fake_embed)
     res = await idx.search(str(tmp_path / "does_not_exist"), "anything", max_results=5)
     assert res == []
+
+
+@pytest.mark.asyncio
+async def test_polyglot_syntax_chunks(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "service.ts",
+        "export class AuthService {\n  async validateUser() {\n    return true;\n  }\n}\n",
+    )
+    _write(
+        tmp_path,
+        "engine.rs",
+        "pub async fn compute_sum(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+    )
+    idx = CodeIndex(tmp_path / "idx.db", _fake_embed)
+    res_ts = await idx.search(str(tmp_path), "validate user auth", max_results=1)
+    assert res_ts
+    assert res_ts[0][0] == "service.ts"
+    assert "AuthService" in res_ts[0][3] or "validateUser" in res_ts[0][4]
+
+    res_rs = await idx.search(str(tmp_path), "compute sum add", max_results=1)
+    assert res_rs
+    assert res_rs[0][0] == "engine.rs"
+

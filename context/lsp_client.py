@@ -239,6 +239,46 @@ def find_references(root: Path, target: Path, line: int, char: int) -> list[tupl
     return out
 
 
+def goto_definition(root: Path, target: Path, line: int, char: int) -> list[tuple[str, int, int]]:
+    """Return definition locations for the symbol at (line, char) as (rel_or_abs_path, line, col), 1-based.
+
+    Raises LspUnavailable when no server is installed for the file's language.
+    """
+    cmd = server_command_for(target.suffix)
+    if cmd is None:
+        raise LspUnavailable(f"no language server for {target.suffix}")
+    conn = _Connection(cmd)
+    try:
+        _open(conn, root, target, target.read_text(encoding="utf-8", errors="replace"))
+        result = conn.request(
+            "textDocument/definition",
+            {
+                "textDocument": {"uri": _uri(target)},
+                "position": {"line": line, "character": char},
+            },
+        )
+    finally:
+        conn.close()
+    if not result:
+        return []
+    if isinstance(result, dict):
+        result = [result]
+    out: list[tuple[str, int, int]] = []
+    for loc in result:
+        uri = loc.get("uri") or loc.get("targetUri")
+        if not uri:
+            continue
+        p = _path_from_uri(uri)
+        try:
+            rel = str(p.relative_to(root))
+        except ValueError:
+            rel = str(p)
+        rng = loc.get("range") or loc.get("targetSelectionRange") or loc.get("targetRange") or {}
+        start = rng.get("start", {"line": 0, "character": 0})
+        out.append((rel, start["line"] + 1, start["character"] + 1))
+    return out
+
+
 def rename_symbol(root: Path, target: Path, symbol: str, new_name: str) -> tuple[int, int, list[str]]:
     """Rename *symbol* (defined in *target*) project-wide. Returns (files, edits, changed_rel_paths).
 

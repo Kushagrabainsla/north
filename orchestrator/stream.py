@@ -98,7 +98,17 @@ class EventStreamManager:
 
         self._record_history(task_id, message)
 
-        queues = self._subscribers.get(task_id, [])
+        queues = list(self._subscribers.get(task_id, []))
+        # Multiplex candidate events to the parent task subscriber queue
+        if "__bo" in task_id:
+            parent_id, _, cand_idx = task_id.partition("__bo")
+            parent_queues = self._subscribers.get(parent_id, [])
+            cand_payload = {**payload, "candidate_index": int(cand_idx) if cand_idx.isdigit() else cand_idx}
+            cand_message = _SSE_TEMPLATE.format(event=event, data=json.dumps(cand_payload))
+            for q in parent_queues:
+                with contextlib.suppress(asyncio.QueueFull):
+                    q.put_nowait(cand_message)
+
         for q in queues:
             try:
                 q.put_nowait(message)

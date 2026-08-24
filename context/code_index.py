@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -99,8 +100,66 @@ def _python_chunks(text: str) -> list[tuple[int, int, str, str]]:
     return out
 
 
+_DECL_RE = re.compile(
+    r"""(?mx)
+    ^[ \t]*
+    (?:
+        (?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)
+      | (?:export\s+)?(?:class|interface|type|enum)\s+([A-Za-z0-9_$]+)
+      | (?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>
+      | func\s+(?:\([^)]+\)\s+)?([A-Za-z0-9_]+)\s*\(
+      | type\s+([A-Za-z0-9_]+)\s+(?:struct|interface)
+      | (?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)
+      | (?:pub(?:\([^)]+\))?\s+)?(?:struct|enum|trait|impl)\s+([A-Za-z0-9_]+)
+      | (?:public|private|protected)?\s*(?:static\s+)?(?:class|interface|enum)\s+([A-Za-z0-9_]+)
+      | def\s+([A-Za-z0-9_!?]+)
+    )
+    """
+)
+
+
+def _polyglot_syntax_chunks(text: str) -> list[tuple[int, int, str, str]]:
+    """Extract syntax-bounded function, class, and interface chunks for polyglot source code."""
+    lines = text.splitlines()
+    if not lines:
+        return []
+
+    chunks: list[tuple[int, int, str, str]] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _DECL_RE.search(line)
+        if m:
+            symbol = next((g for g in m.groups() if g), "")
+            start_line = i
+            open_braces = 0
+            has_braces = False
+            end_line = start_line
+
+            for j in range(start_line, min(len(lines), start_line + 80)):
+                cur = lines[j]
+                open_braces += cur.count("{") - cur.count("}")
+                if "{" in cur:
+                    has_braces = True
+                end_line = j
+                if has_braces and open_braces <= 0:
+                    break
+
+            chunk_lines = lines[start_line : end_line + 1]
+            body = "\n".join(chunk_lines).strip()
+            if len(chunk_lines) >= 3 and body:
+                chunks.append((start_line + 1, end_line + 1, symbol, body[:_MAX_CHUNK_CHARS]))
+                i = end_line + 1
+                continue
+        i += 1
+
+    if not chunks:
+        return _window_chunks(text)
+    return chunks
+
+
 def _window_chunks(text: str) -> list[tuple[int, int, str, str]]:
-    """Overlapping line windows for languages without an AST parser here."""
+    """Overlapping line windows for unstructured text or unsupported languages."""
     lines = text.splitlines()
     if not lines:
         return []
@@ -117,7 +176,27 @@ def _window_chunks(text: str) -> list[tuple[int, int, str, str]]:
 
 
 def _chunk_file(rel: str, text: str) -> list[tuple[int, int, str, str]]:
-    chunks = _python_chunks(text) if rel.endswith(".py") else _window_chunks(text)
+    if rel.endswith(".py"):
+        chunks = _python_chunks(text)
+    elif any(
+        rel.endswith(ext)
+        for ext in (
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".go",
+            ".rs",
+            ".java",
+            ".cpp",
+            ".c",
+            ".cs",
+            ".rb",
+        )
+    ):
+        chunks = _polyglot_syntax_chunks(text)
+    else:
+        chunks = _window_chunks(text)
     return chunks[:_MAX_CHUNKS_PER_FILE]
 
 

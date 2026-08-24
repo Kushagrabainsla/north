@@ -202,8 +202,7 @@ class ToolRegistry:
         return list(self._graph.keys())
 
     def all_tool_names(self) -> set[str]:
-        specialized = {name for names in self._graph.values() for name in names}
-        return set(self._universal) | specialized
+        return set(self._tools.keys())
 
     async def aclose(self) -> None:
         """Call aclose() on every registered tool that defines it."""
