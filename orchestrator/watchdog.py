@@ -42,8 +42,9 @@ async def _sweep(orchestrator: Orchestrator, max_age_seconds: int) -> None:
         return
     now = datetime.now(UTC)
     for rt in await store.list_all():
-        # Paused tasks are intentionally idle — don't fail them as stuck.
-        if rt.status == "paused":
+        # Paused tasks are intentionally idle, and queued tasks are waiting for capacity:
+        # only actively running tasks are expected to heartbeat.
+        if rt.status in ("paused", "queued"):
             continue
         stalled_for = (now - rt.heartbeat_at).total_seconds()
         if stalled_for <= max_age_seconds:

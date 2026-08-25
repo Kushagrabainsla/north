@@ -26,16 +26,17 @@ def _running_task(
     *,
     attempt: int = 0,
     age_seconds: float = 1.0,
-    heartbeat_age: float = 1.0,
+    heartbeat_age: float | None = None,
     has_side_effects: bool = False,
 ) -> RunningTask:
     now = datetime.now(UTC)
+    hb_age = age_seconds if heartbeat_age is None else heartbeat_age
     return RunningTask(
         task_id=task_id,
         request=TaskRequest(prompt=f"prompt {task_id}", source=LedgerSource.PROMPT, workspace="/ws"),
         attempt=attempt,
         started_at=now - timedelta(seconds=age_seconds),
-        heartbeat_at=now - timedelta(seconds=heartbeat_age),
+        heartbeat_at=now - timedelta(seconds=hb_age),
         has_side_effects=has_side_effects,
     )
 

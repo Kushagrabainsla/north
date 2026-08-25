@@ -184,3 +184,18 @@ def strip_html(html: str) -> str:
     for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
         tag.decompose()
     return " ".join(soup.get_text(separator="\n").split())
+
+
+def extract_markdown_section(text: str, heading: str) -> str:
+    """Extract the body of a markdown section (## <heading>) from text.
+
+    Returns the section content string (trimmed) or empty string if not found.
+    Handles sections positioned anywhere in the document, stopping at the next ## section.
+    """
+    if not text:
+        return ""
+    pattern = rf"(?:^|\n)##\s+{re.escape(heading)}\s*\n(.*?)(?=\n##|\Z)"
+    match = re.search(pattern, text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return ""

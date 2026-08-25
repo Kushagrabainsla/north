@@ -224,13 +224,22 @@ class FactStore:
                 self._find_similar_sync, category, new_emb, _DEDUP_SIMILARITY_THRESHOLD
             )
 
-        inserted = await asyncio.to_thread(
+        inserted, fact_id = await asyncio.to_thread(
             self._insert_or_replace_sync,
             content, category, emb_json, replace_id,
             subject, confidence, status,
             source_path, source_hash, source_mtime, evidence
         )
-        self._cache = None
+        if self._cache is not None:
+            if not inserted and replace_id:
+                self._cache = [
+                    (item[0], content, new_emb, category, subject, status) if item[0] == replace_id else item
+                    for item in self._cache
+                ]
+            else:
+                self._cache.append((fact_id, content, new_emb, category, subject, status))
+                if len(self._cache) > _MAX_FACTS_STORED:
+                    self._cache = self._cache[-_MAX_FACTS_STORED:]
         return inserted
 
     async def search(
@@ -433,8 +442,8 @@ class FactStore:
     def _insert_or_replace_sync(self, content: str, category: str, emb_json: str, replace_id: str | None,
                              subject: str = "user", confidence: float = 0.8, status: str = "active",
                              source_path: str | None = None, source_hash: str | None = None,
-                             source_mtime: float | None = None, evidence: str | None = None) -> bool:
-        """Insert *content*; returns True when a new row was created.
+                             source_mtime: float | None = None, evidence: str | None = None) -> tuple[bool, str]:
+        """Insert *content*; returns (is_new_row, fact_id).
 
         When *replace_id* is set the existing row is updated in place (cosine
         dedup path) and False is returned.
@@ -446,13 +455,14 @@ class FactStore:
                     "UPDATE context_facts SET content = ?, embedding = ?, updated_at = ? WHERE id = ?",
                     (content, emb_json, now, replace_id),
                 )
-                return False
+                return False, replace_id
+            fact_id = generate_id()
             conn.execute(
                 """INSERT INTO context_facts
                 (id, content, category, embedding, updated_at, subject, confidence, status,
                  source_path, source_hash, source_mtime, evidence, observed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (generate_id(), content, category, emb_json, now, subject, confidence, status,
+                (fact_id, content, category, emb_json, now, subject, confidence, status,
                  source_path, source_hash, source_mtime, evidence, now),
             )
             # Retention: evict the oldest facts beyond the cap so the store
@@ -462,7 +472,7 @@ class FactStore:
                 "(SELECT id FROM context_facts ORDER BY updated_at DESC LIMIT ?)",
                 (_MAX_FACTS_STORED,),
             )
-            return True
+            return True, fact_id
 
     def _load_all_sync(self) -> list[tuple[str, str, str, str, str, str]]:
         with open_db_connection(self._db_path) as conn:

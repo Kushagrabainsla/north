@@ -67,7 +67,7 @@ async def recover_interrupted_tasks(
             # Paused tasks are user-initiated — only resume via explicit resume_paused_task().
             if rt.status == "paused":
                 continue
-            age = (now - rt.started_at).total_seconds()
+            stalled_for = (now - rt.heartbeat_at).total_seconds()
             if rt.has_side_effects and not resume_side_effecting:
                 await _fail_task(
                     deps,
@@ -76,7 +76,7 @@ async def recover_interrupted_tasks(
                     "effects (e.g. a repeated push or message). Re-submit manually if you want it re-run.",
                 )
                 failed.append(rt.task_id)
-            elif age > max_age_seconds:
+            elif stalled_for > max_age_seconds:
                 await _fail_task(
                     deps, rt.task_id, f"Interrupted task exceeded max age ({max_age_seconds}s) - marked failed."
                 )

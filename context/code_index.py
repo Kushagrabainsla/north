@@ -176,8 +176,12 @@ def _window_chunks(text: str) -> list[tuple[int, int, str, str]]:
 
 
 def _chunk_file(rel: str, text: str) -> list[tuple[int, int, str, str]]:
+    if not text.strip():
+        return []
     if rel.endswith(".py"):
         chunks = _python_chunks(text)
+        if not chunks:
+            chunks = _window_chunks(text)
     elif any(
         rel.endswith(ext)
         for ext in (
@@ -195,6 +199,8 @@ def _chunk_file(rel: str, text: str) -> list[tuple[int, int, str, str]]:
         )
     ):
         chunks = _polyglot_syntax_chunks(text)
+        if not chunks:
+            chunks = _window_chunks(text)
     else:
         chunks = _window_chunks(text)
     return chunks[:_MAX_CHUNKS_PER_FILE]

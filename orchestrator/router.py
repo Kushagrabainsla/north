@@ -21,7 +21,7 @@ from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPath, ExecutionPlan, IntentClassification
 from utils.prompts import load_prompt
-from utils.text import extract_json
+from utils.text import extract_json, extract_markdown_section
 
 _PLAN_CACHE_TTL_SECONDS: int = 3600  # 1 hour
 _PLAN_CACHE_MAX_SIZE: int = 256
@@ -80,11 +80,8 @@ def _recent_conversation(context: str) -> str:
     personal background facts add noise and would pollute the routing cache key.
     Returns "" when the blob has no conversation section (backward compatible).
     """
-    if context.startswith("## Recent conversation"):
-        # Keep up to the next top-level (##) section, matching how the agent
-        # splits the same blob in _build_task_message.
-        parts = re.split(r"\n\n(?=##)", context, maxsplit=1)
-        section = parts[0].strip().removeprefix("## Recent conversation").strip()
+    section = extract_markdown_section(context, "Recent conversation")
+    if section:
         return section[-_PLANNER_CONVERSATION_TAIL_CHARS:]
     return ""
 
