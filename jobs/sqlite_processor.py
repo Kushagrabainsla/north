@@ -135,32 +135,24 @@ class SQLiteJobProcessor(JobProcessor):
     def _claim_next_sync(self) -> sqlite3.Row | None:
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                row = conn.execute(
-                    """
-                    SELECT * FROM job_queue
-                    WHERE status = ?
-                      AND scheduled_at <= ?
-                      AND (retry_after IS NULL OR retry_after <= ?)
-                    ORDER BY priority ASC, scheduled_at ASC
-                    LIMIT 1
-                    """,
-                    (JobStatus.PENDING.value, now, now),
-                ).fetchone()
-                if row is None:
-                    conn.execute("COMMIT")
-                    return None
-                conn.execute(
-                    "UPDATE job_queue SET status = ?, started_at = ? WHERE job_id = ?",
-                    (JobStatus.RUNNING.value, now, row["job_id"]),
-                )
-                updated = conn.execute("SELECT * FROM job_queue WHERE job_id = ?", (row["job_id"],)).fetchone()
-                conn.execute("COMMIT")
-                return updated
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
+            row = conn.execute(
+                """
+                SELECT * FROM job_queue
+                WHERE status = ?
+                  AND scheduled_at <= ?
+                  AND (retry_after IS NULL OR retry_after <= ?)
+                ORDER BY priority ASC, scheduled_at ASC
+                LIMIT 1
+                """,
+                (JobStatus.PENDING.value, now, now),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE job_queue SET status = ?, started_at = ? WHERE job_id = ?",
+                (JobStatus.RUNNING.value, now, row["job_id"]),
+            )
+            return conn.execute("SELECT * FROM job_queue WHERE job_id = ?", (row["job_id"],)).fetchone()
 
     async def mark_completed(self, job_id: str) -> None:
         await asyncio.to_thread(self._set_terminal_sync, job_id, JobStatus.COMPLETED)
@@ -256,31 +248,25 @@ class SQLiteJobProcessor(JobProcessor):
         requeued = 0
         failed = 0
         with open_db_connection(self._db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                rows = conn.execute(
-                    "SELECT job_id, retry_count, max_retries FROM job_queue "
-                    "WHERE status = ? AND (started_at IS NULL OR started_at <= ?)",
-                    (JobStatus.RUNNING.value, cutoff),
-                ).fetchall()
-                for row in rows:
-                    if row["retry_count"] >= row["max_retries"]:
-                        conn.execute(
-                            "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
-                            (JobStatus.FAILED.value, now.isoformat(), row["job_id"]),
-                        )
-                        failed += 1
-                    else:
-                        conn.execute(
-                            "UPDATE job_queue SET status = ?, started_at = NULL, "
-                            "retry_count = retry_count + 1 WHERE job_id = ?",
-                            (JobStatus.PENDING.value, row["job_id"]),
-                        )
-                        requeued += 1
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
+            rows = conn.execute(
+                "SELECT job_id, retry_count, max_retries FROM job_queue "
+                "WHERE status = ? AND (started_at IS NULL OR started_at <= ?)",
+                (JobStatus.RUNNING.value, cutoff),
+            ).fetchall()
+            for row in rows:
+                if row["retry_count"] >= row["max_retries"]:
+                    conn.execute(
+                        "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
+                        (JobStatus.FAILED.value, now.isoformat(), row["job_id"]),
+                    )
+                    failed += 1
+                else:
+                    conn.execute(
+                        "UPDATE job_queue SET status = ?, started_at = NULL, "
+                        "retry_count = retry_count + 1 WHERE job_id = ?",
+                        (JobStatus.PENDING.value, row["job_id"]),
+                    )
+                    requeued += 1
         if requeued or failed:
             logger.warning(
                 "JobProcessor: reaped %d stale RUNNING job(s) - %d requeued, %d failed",

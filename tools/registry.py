@@ -102,6 +102,7 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
         self._universal: list[str] = []
         self._last_reload: float = 0.0  # monotonic timestamp of last filesystem scan
+        self._dir_mtimes: dict[Path, float] = {}
 
         if auto_register:
             self._auto_discover()
@@ -109,33 +110,64 @@ class ToolRegistry:
     def _auto_discover(self) -> None:
         self._universal = []
         for directory, package in _UNIVERSAL_DIRS:
-            for tool in _discover(_TOOLS_ROOT / directory, package).values():
+            dir_path = _TOOLS_ROOT / directory
+            if dir_path.exists():
+                try:
+                    self._dir_mtimes[dir_path] = dir_path.stat().st_mtime
+                except OSError:
+                    pass
+            for tool in _discover(dir_path, package).values():
                 self._tools[tool.name] = tool
                 self._universal.append(tool.name)
 
-        specialized = _discover(_TOOLS_ROOT / "specialized", "tools.specialized")
+        spec_path = _TOOLS_ROOT / "specialized"
+        if spec_path.exists():
+            try:
+                self._dir_mtimes[spec_path] = spec_path.stat().st_mtime
+            except OSError:
+                pass
+        specialized = _discover(spec_path, "tools.specialized")
         for tool in specialized.values():
             self._tools[tool.name] = tool
 
     def reload(self) -> None:
         """Re-scan tool directories for new files.
 
+        Fast-paths when directory modification times have not changed.
         Only adds tools not already registered - existing tools are not
         replaced so in-flight tasks are unaffected.
         """
         for directory, package in _UNIVERSAL_DIRS:
-            for tool in _discover(_TOOLS_ROOT / directory, package).values():
+            dir_path = _TOOLS_ROOT / directory
+            if not dir_path.exists():
+                continue
+            try:
+                mtime = dir_path.stat().st_mtime
+            except OSError:
+                continue
+            if self._dir_mtimes.get(dir_path) == mtime:
+                continue
+            self._dir_mtimes[dir_path] = mtime
+            for tool in _discover(dir_path, package).values():
                 if tool.name not in self._tools:
                     self._tools[tool.name] = tool
                     if tool.name not in self._universal:
                         self._universal.append(tool.name)
                     logger.info("ToolRegistry.reload: picked up new universal tool %r", tool.name)
 
-        specialized = _discover(_TOOLS_ROOT / "specialized", "tools.specialized")
-        for tool in specialized.values():
-            if tool.name not in self._tools:
-                self._tools[tool.name] = tool
-                logger.info("ToolRegistry.reload: picked up new specialized tool %r", tool.name)
+        spec_path = _TOOLS_ROOT / "specialized"
+        if spec_path.exists():
+            try:
+                mtime = spec_path.stat().st_mtime
+                if self._dir_mtimes.get(spec_path) != mtime:
+                    self._dir_mtimes[spec_path] = mtime
+                    specialized = _discover(spec_path, "tools.specialized")
+                    for tool in specialized.values():
+                        if tool.name not in self._tools:
+                            self._tools[tool.name] = tool
+                            logger.info("ToolRegistry.reload: picked up new specialized tool %r", tool.name)
+            except OSError:
+                pass
 
     def update_graph(self, agent_name: str, tool_names: list[str]) -> None:
         """Add or extend the specialized tool list for an agent.

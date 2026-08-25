@@ -483,6 +483,7 @@ class ModelDispatcher(InferenceRouter):
                     for model_id, provider, score, uses in items:
                         await self._confidence_tracker.save_model_score(model_id, provider, score, uses)
             except Exception:
+                self._dirty_scores.update(dirty)
                 logger.warning("Failed to persist model scores batch (%d items)", len(items), exc_info=True)
 
     def _effective_quality(self, info: ModelInfo) -> float:

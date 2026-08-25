@@ -191,7 +191,7 @@ def _plan(path: Path, edits: Any, old_string: str | None, new_string: str | None
 def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
     if not isinstance(edits, list) or not edits:
         return ToolOutput(success=False, error="'edits' must be a non-empty list.")
-    new_content = content
+    spans: list[tuple[int, int, str, int]] = []
     for index, edit in enumerate(edits):
         if not isinstance(edit, dict):
             return ToolOutput(success=False, error=f"Edit {index} is not an object.")
@@ -199,7 +199,7 @@ def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
         replacement = edit.get("new_string")
         if old_string is None or replacement is None:
             return ToolOutput(success=False, error=f"Edit {index} needs both 'old_string' and 'new_string'.")
-        count = new_content.count(old_string)
+        count = content.count(old_string)
         if count == 0:
             return ToolOutput(
                 success=False,
@@ -210,7 +210,24 @@ def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
                 success=False,
                 error=f"Edit {index}: old_string appears {count} times - add surrounding context.",
             )
-        new_content = new_content.replace(old_string, replacement, 1)
+        start = content.find(old_string)
+        end = start + len(old_string)
+        spans.append((start, end, replacement, index))
+
+    # Check for overlapping edit spans
+    sorted_by_start = sorted(spans, key=lambda s: s[0])
+    for i in range(len(sorted_by_start) - 1):
+        if sorted_by_start[i][1] > sorted_by_start[i + 1][0]:
+            return ToolOutput(
+                success=False,
+                error=f"Edits {sorted_by_start[i][3]} and {sorted_by_start[i+1][3]} overlap in the target file.",
+            )
+
+    # Apply replacements from end to start so character offsets remain exact
+    new_content = content
+    for start, end, replacement, _ in sorted(spans, key=lambda s: s[0], reverse=True):
+        new_content = new_content[:start] + replacement + new_content[end:]
+
     return new_content, content, len(edits)
 
 

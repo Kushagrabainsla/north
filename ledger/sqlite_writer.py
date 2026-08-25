@@ -415,12 +415,12 @@ class SQLiteLedgerWriter(LedgerWriter):
             raise LedgerWriteError(f"Failed to prune ledger: {e}") from e
 
     def _prune_sync(self, completed_before: datetime, failed_before: datetime) -> int:
-        # PENDING and CANCELLED rows share the completed retention window:
+        # PENDING, CANCELLED and unstatused rows share the completed retention window:
         # every task leaves an initial PENDING entry behind, so without this
         # they would accumulate forever.
         with open_db_connection(self._db_path) as conn:
             cur = conn.execute(
-                "DELETE FROM ledger WHERE (status IN (?, ?, ?) AND timestamp < ?) OR (status = ? AND timestamp < ?)",
+                "DELETE FROM ledger WHERE ((status IN (?, ?, ?) OR status IS NULL) AND timestamp < ?) OR (status = ? AND timestamp < ?)",
                 (
                     LedgerStatus.COMPLETED.value,
                     LedgerStatus.PENDING.value,
@@ -481,7 +481,7 @@ class SQLiteLedgerWriter(LedgerWriter):
         join_where = f" AND {' AND '.join(join_clauses)}" if join_clauses else ""
 
         sql = f"""
-            SELECT l.*, rank, snippet(ledger_fts, 1, '<b>', '</b>', '…', 48) AS snippet
+            SELECT l.*, rank, snippet(ledger_fts, -1, '<b>', '</b>', '…', 48) AS snippet
             FROM ledger l
             JOIN ledger_fts ON l.rowid = ledger_fts.rowid
             WHERE {where} {join_where}

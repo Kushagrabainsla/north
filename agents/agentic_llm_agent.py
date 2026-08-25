@@ -238,10 +238,13 @@ class AgenticLLMAgent(LLMAgent):
                         # Never hold the workspace lock across delegation - the
                         # sub-agent acquires it for its own mutations and would
                         # deadlock against its parent.
-                        results[index] = await self._safe_execute_call(call, payload, tool_map)
+                        res = await self._safe_execute_call(call, payload, tool_map)
                     else:
                         async with workspace_lock(payload.workspace):
-                            results[index] = await self._safe_execute_call(call, payload, tool_map)
+                            res = await self._safe_execute_call(call, payload, tool_map)
+                    results[index] = res
+                    if res[2]:
+                        await self._record_side_effects(payload, [res], tool_map)
 
         ordered = [results[index] for index in range(len(calls))]
         await self._record_side_effects(payload, ordered, tool_map)

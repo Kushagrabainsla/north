@@ -11,11 +11,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-_locks: dict[str, asyncio.Lock] = {}
+_locks: dict[tuple[str, asyncio.AbstractEventLoop | None], asyncio.Lock] = {}
 
 
 def workspace_lock(workspace: str) -> asyncio.Lock:
-    """Return the process-wide mutation lock for *workspace*.
+    """Return the process-wide mutation lock for *workspace* in the current event loop.
 
     An empty workspace maps to a shared default lock - unscoped mutations are
     still serialized against each other.
@@ -24,7 +24,21 @@ def workspace_lock(workspace: str) -> asyncio.Lock:
         key = str(Path(workspace).expanduser().resolve()) if workspace else ""
     except OSError:
         key = workspace
-    lock = _locks.get(key)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    lock_key = (key, loop)
+    lock = _locks.get(lock_key)
     if lock is None:
-        lock = _locks.setdefault(key, asyncio.Lock())
+        lock = asyncio.Lock()
+        _locks[lock_key] = lock
+
+    if len(_locks) > 100:
+        dead = [k for k in _locks if k[1] is not None and k[1].is_closed()]
+        for d in dead:
+            _locks.pop(d, None)
+
     return lock
