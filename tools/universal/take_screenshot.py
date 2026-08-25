@@ -25,8 +25,8 @@ class TakeScreenshotTool(Tool):
     name = "take_screenshot"
     is_mutating = True
     description = (
-        "Take a screenshot of the user's screen and save it as a PNG file in the workspace. "
-        "Use it to capture visual output, view browser/app states, or document the desktop."
+        "Capture what is visible on the user's active screens/monitors. Returns the captured image "
+        "directly into your visual context for inspection, reading open apps/windows, and analyzing screen activity."
     )
     parameters_schema = {
         "type": "object",
