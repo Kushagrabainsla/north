@@ -1,9 +1,4 @@
-"""Builds the active InferenceRouter from current settings.
-
-Add new provider branches here when a new provider key is introduced.
-OpenRouter is always the last provider in the chain - broadest model
-coverage as the final fallback.
-"""
+"""Build the active router from the shared provider registry."""
 
 from __future__ import annotations
 
@@ -14,6 +9,7 @@ from config.strategy import NorthSettings
 from inference.base import InferenceRouter
 from inference.dispatcher import ModelDispatcher
 from inference.provider import Provider
+from inference.registry import PROVIDER_DEFINITIONS, AuthKind
 
 if TYPE_CHECKING:
     from tools.confidence import ConfidenceTracker
@@ -28,33 +24,28 @@ def build_router(
     opencode_zen_api_key: str = "",
     confidence_tracker: ConfidenceTracker | None = None,
     cooldowns_path: Path | None = None,
+    provider_settings: object | None = None,
 ) -> InferenceRouter:
-    """Assemble a ModelDispatcher from available provider keys.
+    """Assemble a ModelDispatcher from configured provider definitions.
 
-    Direct providers (Groq, Gemini, OpenCode Zen) are prepended when their keys
-    are present so they are preferred over OpenRouter for their own models.
-    OpenRouter is always included as the broadest fallback.
+    Providers are ordered by their registry fallback order. The named key
+    arguments remain as a compatibility layer for existing callers.
     """
     providers: list[Provider] = []
-
-    if groq_api_key:
-        from inference.providers.groq import GroqRouter
-
-        providers.append(GroqRouter(groq_api_key))
-
-    if gemini_api_key:
-        from inference.providers.gemini import GeminiRouter
-
-        providers.append(GeminiRouter(gemini_api_key))
-
-    if opencode_zen_api_key:
-        from inference.providers.opencode_zen import OpenCodeZenRouter
-
-        providers.append(OpenCodeZenRouter(opencode_zen_api_key))
-
-    if openrouter_api_key:
-        from inference.providers.openrouter import OpenRouterRouter
-
-        providers.append(OpenRouterRouter(openrouter_api_key))
+    credentials = {
+        "openrouter_api_key": openrouter_api_key,
+        "groq_api_key": groq_api_key,
+        "gemini_api_key": gemini_api_key,
+        "opencode_zen_api_key": opencode_zen_api_key,
+    }
+    for definition in sorted(PROVIDER_DEFINITIONS, key=lambda item: item.fallback_order):
+        if definition.auth_kind is AuthKind.API_KEY:
+            credential = credentials.get(definition.settings_field or "", "") or definition.resolve_credential(
+                provider_settings
+            )
+            if credential:
+                providers.append(definition.build(credential))
+        elif definition.is_configured(provider_settings):
+            providers.append(definition.build())
 
     return ModelDispatcher(providers, north_settings, confidence_tracker, cooldowns_path)

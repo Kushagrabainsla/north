@@ -15,13 +15,15 @@
 curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash
 ```
 
-The installer asks for an API key and saves it for you. One provider is enough to start; you can integrate keys from any of these:
+The installer configures an inference provider. One provider is enough to start:
 
-| Provider | Key | Create a key |
+| Provider | Authentication | Setup |
 |---|---|---|
 | OpenRouter | `NORTH_OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | Groq | `NORTH_GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) |
 | Gemini | `NORTH_GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | [opencode.ai/auth](https://opencode.ai/auth) |
+| OpenAI Codex (experimental) | Browser OAuth | `north auth login openai-codex` |
 
 To add or change keys later, edit `~/.north/.env`:
 
@@ -29,7 +31,12 @@ To add or change keys later, edit `~/.north/.env`:
 NORTH_OPENROUTER_API_KEY=sk-or-...
 NORTH_GROQ_API_KEY=gsk_...
 NORTH_GEMINI_API_KEY=...
+NORTH_OPENCODE_ZEN_API_KEY=...
 ```
+
+North stores its own OpenAI Codex OAuth token under `~/.north/credentials/`
+with private file permissions. Use `north auth status` to inspect provider
+configuration and `north auth logout openai-codex` to remove the token.
 
 ---
 
@@ -43,6 +50,9 @@ NORTH_GEMINI_API_KEY=...
 | `north start --docker` | Start server via Docker Compose |
 | `north stop` | Stop the server |
 | `north reset` | Wipe data, keep API key |
+| `north auth login openai-codex` | Connect an OpenAI Codex subscription |
+| `north auth status` | Show provider authentication status |
+| `north auth logout openai-codex` | Remove North's Codex credentials |
 | `north reset --all` | Wipe everything |
 | `north update` | Update to latest version |
 | | |

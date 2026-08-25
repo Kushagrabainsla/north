@@ -26,6 +26,7 @@ See docs/CODING_STYLE.md Section 8 and README Section 10.2.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import datetime
 import json
@@ -90,6 +91,10 @@ def _load_env_keys(env_file: Path) -> dict[str, str]:
 
 
 def _provider_is_configured(provider: _Provider, env_keys: dict[str, str]) -> bool:
+    if provider["auth_kind"] == "oauth_pkce":
+        from inference.registry import get_provider_definition
+
+        return get_provider_definition(provider["id"]).is_configured()
     if os.environ.get(provider["env_key"], "").strip():
         return True
     return bool(env_keys.get(provider["env_key"], "").strip())
@@ -140,6 +145,14 @@ def _prompt_provider_keys(env_file: Path, providers: list[_Provider]) -> bool:
     """Prompt the user for each provider's API key. Returns True if at least one was saved."""
     any_saved = False
     for p in providers:
+        if p["auth_kind"] == "oauth_pkce":
+            try:
+                _login_codex_interactive(open_browser=True)
+            except Exception as exc:
+                typer.secho(f"  OpenAI Codex login failed: {exc}", fg=typer.colors.RED, err=True)
+                continue
+            any_saved = True
+            continue
         typer.echo(f"\n  {p['name']}  -  get a key at {p['url']}")
         api_key = typer.prompt(f"  Enter your {p['name']} API key").strip()
         if not api_key:
@@ -159,6 +172,21 @@ def _render_provider_menu() -> None:
     for i, p in enumerate(_PROVIDERS, 1):
         typer.echo(f"  [{i}] {p['name']:12}  {p['description']}")
     typer.echo("")
+
+
+def _login_codex_interactive(*, open_browser: bool) -> None:
+    from inference.codex_auth import CodexCredentialProvider
+
+    def show_url(url: str) -> None:
+        typer.echo("\nOpen this URL to authenticate OpenAI Codex:\n")
+        typer.echo(url)
+        typer.echo("\nWaiting for the browser callback…")
+
+    credentials = CodexCredentialProvider(authorization_callback=show_url)
+    status = asyncio.run(credentials.login(open_browser=open_browser))
+    account = f" ({status.account_id})" if status.account_id else ""
+    typer.secho(f"✓ OpenAI Codex connected{account}.", fg=typer.colors.GREEN)
+    typer.echo("Restart North if it is already running so the new provider is added to its model pools.")
 
 
 def _ensure_api_keys() -> None:
@@ -1102,6 +1130,82 @@ def run_agent(
 
 
 # ── inference ─────────────────────────────────────────────────────────────────
+
+# ── provider authentication ─────────────────────────────────────────────────
+
+auth_app = typer.Typer(help="Inference provider authentication.", no_args_is_help=True)
+app.add_typer(auth_app, name="auth")
+
+
+@auth_app.command("login")
+def auth_login(
+    provider: str = typer.Argument("openai-codex", help="Provider to authenticate."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Print the login URL without opening it."),
+) -> None:
+    """Log in to an OAuth inference provider."""
+    from inference.registry import AuthKind, get_provider_definition
+
+    try:
+        definition = get_provider_definition(provider)
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
+    if definition.auth_kind is not AuthKind.OAUTH_PKCE or definition.id != "openai_codex":
+        typer.secho(
+            f"{definition.display_name} uses an API key; configure {definition.env_key}.",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(2)
+    _login_codex_interactive(open_browser=not no_browser)
+
+
+@auth_app.command("status")
+def auth_status() -> None:
+    """Show configured inference credentials without revealing secrets."""
+    from config.settings import settings
+    from inference.codex_auth import CodexCredentialProvider
+    from inference.registry import PROVIDER_DEFINITIONS, AuthKind
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Provider")
+    table.add_column("Authentication")
+    table.add_column("Status")
+    table.add_column("Account")
+    for definition in PROVIDER_DEFINITIONS:
+        if definition.auth_kind is AuthKind.OAUTH_PKCE and definition.id == "openai_codex":
+            status = CodexCredentialProvider().status()
+            detail = "connected" if status.configured and not status.needs_login else status.detail
+            account = status.account_id or "—"
+        else:
+            configured = definition.is_configured(settings)
+            detail = "configured" if configured else "not configured"
+            account = "—"
+        table.add_row(definition.display_name, definition.auth_kind.value, detail, account)
+    _console.print(table)
+
+
+@auth_app.command("logout")
+def auth_logout(provider: str = typer.Argument("openai-codex", help="Provider to disconnect.")) -> None:
+    """Delete North's locally stored OAuth credentials."""
+    from inference.codex_auth import CodexCredentialProvider
+    from inference.registry import get_provider_definition
+
+    try:
+        definition = get_provider_definition(provider)
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
+    if definition.id != "openai_codex":
+        typer.secho(
+            f"{definition.display_name} uses an API key; remove {definition.env_key} instead.",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(2)
+    asyncio.run(CodexCredentialProvider().logout())
+    typer.secho("✓ OpenAI Codex credentials removed from North.", fg=typer.colors.GREEN)
+
+
+# ── inference ────────────────────────────────────────────────────────────────
 
 inference_app = typer.Typer(help="Inference cost and model info.", no_args_is_help=True)
 app.add_typer(inference_app, name="inference")

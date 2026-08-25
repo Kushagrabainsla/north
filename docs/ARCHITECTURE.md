@@ -898,15 +898,17 @@ The Inference Router selects the appropriate LLM for every inference call in the
 
 ### 8.1 Providers
 
-Inference is served by a `ModelDispatcher` that fans out across multiple providers.  OpenRouter is always included for broad model coverage; direct providers (Groq, Gemini) are prepended when their API keys are present so they are preferred for their own models.  Each provider has its own `NORTH_*_API_KEY` environment variable; only `NORTH_OPENROUTER_API_KEY` is required.
+Inference is served by a `ModelDispatcher` that fans out across multiple providers. A shared provider registry owns setup metadata, authentication type, construction, and fallback order. API-key providers and rotating OAuth providers share the same credential contract, while wire transports remain provider-specific. Any one configured provider is enough to start North.
 
-| Provider | Key | Notes |
+| Provider | Authentication | Notes |
 |---|---|---|
-| OpenRouter | `NORTH_OPENROUTER_API_KEY` | Required. Broadest model catalogue; embeddings; fallback for all tiers. |
+| OpenRouter | `NORTH_OPENROUTER_API_KEY` | Broadest model catalogue; embeddings; fallback for all tiers. |
 | Groq | `NORTH_GROQ_API_KEY` | Optional. Free-tier fast completions; Whisper transcription. |
 | Gemini | `NORTH_GEMINI_API_KEY` | Optional. Free-tier completions; embeddings. |
+| OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | Optional. Free and paid completion models. |
+| OpenAI Codex | Browser OAuth | Experimental Responses transport; North retains its own tool loop. |
 
-All providers share the same `Provider` protocol (`inference/provider.py`) and are registered into a single `ModelDispatcher` at startup via `inference/factory.py:build_router()`.
+All providers share the same `Provider` protocol (`inference/provider.py`) and are registered into a single `ModelDispatcher` at startup via `inference/factory.py:build_router()`. OAuth tokens are owned by North, atomically persisted with private permissions, and refreshed per request through the shared credential interface.
 
 ### 8.2 Dynamic Model Pools
 
@@ -1541,7 +1543,10 @@ north/
     __init__.py
     base.py             <- InferenceRouter (ABC): complete, complete_with_tools, embed, transcribe
     dispatcher.py       <- ModelDispatcher: multi-provider router with per-model cooldowns and EMA
-    factory.py          <- build_router(): assembles ModelDispatcher from available provider keys
+    factory.py          <- build_router(): assembles ModelDispatcher from the provider registry
+    registry.py         <- provider setup, auth type, construction, and fallback order
+    auth.py             <- generic API-key/OAuth credential contracts
+    codex_auth.py       <- Codex PKCE login, refresh, and secure token persistence
     capability.py       <- ModelCapability, ModelInfo, quality_from_cost
     provider.py         <- Provider (Protocol): contract each inference provider must satisfy
     cost_tracker.py     <- CostTracker: InferenceRouter decorator, accumulates cost per task_id
@@ -1553,6 +1558,7 @@ north/
       openrouter.py     <- OpenRouterRouter: dynamic catalogue, embeddings, transcription
       groq.py           <- GroqRouter: free-tier completions and Whisper transcription
       gemini.py         <- GeminiRouter: free-tier completions and embeddings
+      openai_codex.py   <- experimental Codex Responses transport
 
   approval/
     __init__.py

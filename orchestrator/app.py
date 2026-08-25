@@ -98,14 +98,10 @@ def _step(msg: str) -> None:
 
 
 def _validate_config() -> None:
-    if not any(
-        [
-            settings.openrouter_api_key,
-            settings.groq_api_key,
-            settings.gemini_api_key,
-        ]
-    ):
-        raise RuntimeError("No inference provider API key is set. Run `north start` to configure one.")
+    from inference.registry import PROVIDER_DEFINITIONS
+
+    if not any(definition.is_configured(settings) for definition in PROVIDER_DEFINITIONS):
+        raise RuntimeError("No inference provider is configured. Run `north start` to configure one.")
 
 
 def _attach_tui_notifier(deps) -> None:

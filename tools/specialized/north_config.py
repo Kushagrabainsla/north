@@ -16,15 +16,13 @@ import re
 from pathlib import Path
 from typing import Any
 
+from inference.registry import PROVIDER_DEFINITIONS
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
 # Keys whose values should be masked in output (secrets)
 _SECRET_KEYS = frozenset({
-    "NORTH_OPENROUTER_API_KEY",
-    "NORTH_GROQ_API_KEY",
-    "NORTH_GEMINI_API_KEY",
-    "NORTH_OPENCODE_ZEN_API_KEY",
+    *(definition.env_key for definition in PROVIDER_DEFINITIONS if definition.env_key),
     "NORTH_TELEGRAM_BOT_TOKEN",
     "NORTH_SECRET",
     "NORTH_ANTHROPIC_API_KEY",
@@ -32,12 +30,9 @@ _SECRET_KEYS = frozenset({
 })
 
 # Keys that affect the live inference router and need a rebuild on change.
-_INFERENCE_KEYS = frozenset({
-    "NORTH_OPENROUTER_API_KEY",
-    "NORTH_GROQ_API_KEY",
-    "NORTH_GEMINI_API_KEY",
-    "NORTH_OPENCODE_ZEN_API_KEY",
-})
+_INFERENCE_KEYS = frozenset(
+    definition.env_key for definition in PROVIDER_DEFINITIONS if definition.env_key
+)
 
 
 class NorthConfigTool(Tool):
@@ -164,6 +159,7 @@ class NorthConfigTool(Tool):
                 groq_api_key=settings.groq_api_key,
                 gemini_api_key=settings.gemini_api_key,
                 opencode_zen_api_key=settings.opencode_zen_api_key,
+                provider_settings=settings,
                 confidence_tracker=deps.confidence_tracker,
                 cooldowns_path=settings.north_home / "cooldowns.json",
             )

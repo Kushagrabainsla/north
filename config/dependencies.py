@@ -140,6 +140,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         groq_api_key=settings.groq_api_key,
         gemini_api_key=settings.gemini_api_key,
         opencode_zen_api_key=settings.opencode_zen_api_key,
+        provider_settings=settings,
         confidence_tracker=confidence_tracker,
         cooldowns_path=settings.north_home / "cooldowns.json",
     )

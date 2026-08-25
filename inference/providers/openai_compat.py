@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from inference.auth import ApiKeyCredentialProvider, CredentialProvider
 from inference.constants import DEFAULT_TIMEOUT_SECONDS, SSE_CHUNK_TIMEOUT_SECONDS
 from inference.exceptions import (
     InferenceError,
@@ -60,13 +61,26 @@ class OpenAICompatibleProvider:
     name, base_url, api_key, and optional overrides for embed/transcribe.
     """
 
-    def __init__(self, name: str, base_url: str, api_key: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        base_url: str,
+        api_key: str = "",
+        *,
+        credentials: CredentialProvider | None = None,
+    ) -> None:
         self.name = name
+        self._credentials = credentials or ApiKeyCredentialProvider(name, api_key)
         self._client = httpx.AsyncClient(
             base_url=base_url,
             timeout=httpx.Timeout(timeout=DEFAULT_TIMEOUT_SECONDS, connect=5.0),
-            headers={"Authorization": f"Bearer {api_key}"},
+            event_hooks={"request": [self._authenticate_request]},
         )
+
+    async def _authenticate_request(self, request: httpx.Request) -> None:
+        """Resolve credentials for every request so OAuth refresh is transparent."""
+        auth = await self._credentials.get_auth()
+        request.headers.update(auth.headers)
 
     # ---- status helpers ----
 

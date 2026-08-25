@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import TypedDict
 
+from inference.registry import PROVIDER_DEFINITIONS
+
 # ── HTTP client ─────────────────────────────────────────────────────────────
 _BASE_URL = "http://127.0.0.1:8000"
 _TIMEOUT = 30.0
@@ -17,31 +19,24 @@ _TIMEOUT = 30.0
 
 # ── First-run provider setup ────────────────────────────────────────────────
 class _Provider(TypedDict):
+    id: str
     name: str
     env_key: str
+    auth_kind: str
     description: str
     url: str
 
 
 _PROVIDERS: list[_Provider] = [
     {
-        "name": "OpenRouter",
-        "env_key": "NORTH_OPENROUTER_API_KEY",
-        "description": "All models - Claude, GPT-4, Gemini, Llama, and more (recommended)",
-        "url": "https://openrouter.ai/keys",
-    },
-    {
-        "name": "Groq",
-        "env_key": "NORTH_GROQ_API_KEY",
-        "description": "Ultra-fast open-source models - Llama, Mixtral",
-        "url": "https://console.groq.com/keys",
-    },
-    {
-        "name": "Gemini",
-        "env_key": "NORTH_GEMINI_API_KEY",
-        "description": "Google Gemini 1.5 Pro and Flash",
-        "url": "https://aistudio.google.com/apikey",
-    },
+        "id": definition.id,
+        "name": definition.display_name,
+        "env_key": definition.env_key or "",
+        "auth_kind": definition.auth_kind.value,
+        "description": definition.description,
+        "url": definition.setup_url or "",
+    }
+    for definition in PROVIDER_DEFINITIONS
 ]
 
 
@@ -91,11 +86,11 @@ def _bool_cast(v: str) -> bool:
 
 
 _CONFIG_KEYS = {
-    # Inference provider keys
-    "openrouter.api_key": ("openrouter_api_key", str),
-    "groq.api_key": ("groq_api_key", str),
-    "gemini.api_key": ("gemini_api_key", str),
-    "opencode_zen.api_key": ("opencode_zen_api_key", str),
+    **{
+        f"{definition.id}.api_key": (definition.settings_field, str)
+        for definition in PROVIDER_DEFINITIONS
+        if definition.auth_kind.value == "api_key" and definition.settings_field
+    },
     # Telegram integration
     "telegram.bot_token": ("telegram_bot_token", str),
     "telegram.allowed_chat_ids": ("telegram_allowed_chat_ids", str),
