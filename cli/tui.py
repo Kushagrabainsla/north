@@ -2116,7 +2116,19 @@ class NorthApp(App[None]):
                     if turn.get("error"):
                         log.write(RichText("    " + turn["error"], style="yellow"))
                 self._write_rule()
+
+            # Preserve any in-flight active turn currently running
+            for active_turn in self._current_turn_activity.values():
+                log.write(f"> {active_turn.get('prompt', '')}")
+                if self._details_expanded:
+                    for line in _format_turn_details(active_turn):
+                        log.write(line)
+                if active_turn.get("output"):
+                    log.write("  [bold #a371f7]◈[/bold #a371f7]  [white bold]north[/white bold]")
+                    log.write(RichPadding(RichMarkdown(active_turn["output"]), (0, 0, 0, 4)))
+
             log.scroll_end(animate=False)
+
 
 
     def action_toggle_reasoning(self) -> None:

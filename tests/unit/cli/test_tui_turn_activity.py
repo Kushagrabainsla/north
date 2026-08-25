@@ -121,3 +121,41 @@ async def test_turn_activity_lifecycle_and_details_toggle():
         assert not app._details_expanded
         hint2 = str(app.query_one("#hint").render())
         assert "ctrl+o details" in hint2
+
+
+@pytest.mark.asyncio
+async def test_toggle_activity_details_mid_flight():
+    """Verify that pressing Ctrl+O mid-flight preserves the in-flight prompt without vanishing."""
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        tid = "task-inflight-1"
+        app._user_task_ids.add(tid)
+        app._pending_user_messages[tid] = "in flight task prompt"
+        app._current_turn_activity[tid] = {
+            "task_id": tid,
+            "prompt": "in flight task prompt",
+            "domain": "general",
+            "is_consequential": False,
+            "agents": ["general"],
+            "model": "gpt-5.6-terra",
+            "thought_duration": 0.0,
+            "thought_tokens": 0,
+            "tools": [],
+            "verifications": [],
+            "output": "",
+            "status": "running",
+            "error": "",
+        }
+
+        # Press Ctrl+O while task is still running
+        app.action_toggle_activity_details()
+        await pilot.pause()
+        assert app._details_expanded
+
+        # Verify that the in-flight prompt was not erased from the log
+        log_lines = [str(line) for line in app.query_one("#log").lines]
+        log_text = "\n".join(log_lines)
+        assert "in flight task prompt" in log_text
+
