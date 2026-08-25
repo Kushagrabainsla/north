@@ -698,6 +698,8 @@ class NorthApp(App[None]):
         self._streaming_active: set[str] = set()
         self._last_assistant_response: str = ""
         self._stream_start_times: dict[str, float] = {}
+        self._turn_start_times: dict[str, float] = {}
+        self._agent_start_times: dict[str, float] = {}
         self._stream_token_counts: dict[str, int] = {}
         self._streaming_tok_per_sec: float = 0.0
         self._approval_pending: dict | None = None
@@ -1049,6 +1051,7 @@ class NorthApp(App[None]):
         if task_id and task_id not in self._user_task_ids:
             if self._awaiting_user_task:
                 self._user_task_ids.add(task_id)
+                self._turn_start_times.setdefault(task_id, time.monotonic())
                 self._pending_user_messages[task_id] = self._last_submitted_prompt
                 self._current_turn_activity[task_id] = {
                     "task_id": task_id,
@@ -1119,6 +1122,8 @@ class NorthApp(App[None]):
         self._render_status_bar()
 
     async def _on_agent_started(self, task_id: str, data: dict) -> None:
+        if task_id:
+            self._agent_start_times.setdefault(task_id, time.monotonic())
         agent = data.get("agent", "")
         agents = data.get("agents") or []
         label = ", ".join(agents) if agents else agent or "general"
@@ -1210,8 +1215,13 @@ class NorthApp(App[None]):
             thoughts = self._reasoning_buffer.get(task_id, "")
             if thoughts:
                 toks = max(1, len(thoughts) // 4)
-                dur = now - self._reasoning_start_times.get(task_id, now)
-                dur_str = f"{dur:.1f}s" if dur >= 0.1 else "< 0.1s"
+                start_t = (
+                    self._reasoning_start_times.get(task_id)
+                    or self._agent_start_times.get(task_id)
+                    or self._turn_start_times.get(task_id, now)
+                )
+                dur = max(0.01, now - start_t)
+                dur_str = f"{dur:.1f}s" if dur >= 0.1 else f"{dur:.2f}s"
                 if task_id in self._current_turn_activity:
                     self._current_turn_activity[task_id]["thought_duration"] = dur
                     self._current_turn_activity[task_id]["thought_tokens"] = toks
@@ -1255,10 +1265,14 @@ class NorthApp(App[None]):
     async def _on_task_completed(self, task_id: str, data: dict) -> None:
         sys.stdout.write("\a")
         sys.stdout.flush()
+        now = time.monotonic()
         self._session_cost += float(data.get("cost_usd", 0.0) or 0.0)
         output = self._token_buffer.pop(task_id, "")
         self._reasoning_buffer.pop(task_id, None)
         self._stream_start_times.pop(task_id, None)
+        start_t = self._turn_start_times.pop(task_id, None) or self._agent_start_times.pop(task_id, None)
+        self._agent_start_times.pop(task_id, None)
+        self._reasoning_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
         was_streaming = task_id in self._streaming_active
@@ -1271,6 +1285,8 @@ class NorthApp(App[None]):
         if turn is not None:
             turn["output"] = output
             turn["status"] = "completed"
+            if start_t:
+                turn["turn_duration"] = max(0.01, now - start_t)
             self._turns.append(turn)
 
         if was_streaming:
@@ -1322,6 +1338,9 @@ class NorthApp(App[None]):
         self._token_buffer.pop(task_id, None)
         self._reasoning_buffer.pop(task_id, None)
         self._stream_start_times.pop(task_id, None)
+        self._turn_start_times.pop(task_id, None)
+        self._agent_start_times.pop(task_id, None)
+        self._reasoning_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
@@ -1345,6 +1364,9 @@ class NorthApp(App[None]):
         self._token_buffer.pop(task_id, None)
         self._reasoning_buffer.pop(task_id, None)
         self._stream_start_times.pop(task_id, None)
+        self._turn_start_times.pop(task_id, None)
+        self._agent_start_times.pop(task_id, None)
+        self._reasoning_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
@@ -1366,6 +1388,9 @@ class NorthApp(App[None]):
         self._token_buffer.pop(task_id, None)
         self._reasoning_buffer.pop(task_id, None)
         self._stream_start_times.pop(task_id, None)
+        self._turn_start_times.pop(task_id, None)
+        self._agent_start_times.pop(task_id, None)
+        self._reasoning_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
@@ -1759,6 +1784,7 @@ class NorthApp(App[None]):
                 task_id = resp.json().get("task_id", "")
                 if task_id:
                     self._user_task_ids.add(task_id)
+                    self._turn_start_times[task_id] = time.monotonic()
                     self._pending_user_messages[task_id] = text
                     self._current_turn_activity[task_id] = {
                         "task_id": task_id,

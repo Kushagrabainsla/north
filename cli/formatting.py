@@ -235,11 +235,15 @@ def _format_turn_summary(turn: dict) -> str:
     elif agent_str:
         parts.append(f"{agent_str} agent")
 
+    turn_dur = turn.get("turn_duration", 0.0)
     thought_dur = turn.get("thought_duration", 0.0)
     thought_toks = turn.get("thought_tokens", 0)
     if thought_dur > 0 or thought_toks > 0:
-        dur_str = f"{thought_dur:.1f}s" if thought_dur >= 0.1 else "< 0.1s"
+        dur_str = f"{thought_dur:.1f}s" if thought_dur >= 0.1 else f"{thought_dur:.2f}s"
         parts.append(f"{dur_str} thoughts")
+    elif turn_dur > 0:
+        dur_str = f"{turn_dur:.1f}s" if turn_dur >= 0.1 else f"{turn_dur:.2f}s"
+        parts.append(dur_str)
 
     verifs = turn.get("verifications") or []
     if verifs:
@@ -267,11 +271,15 @@ def _format_turn_details(turn: dict) -> list[str]:
         model_str = f" [dim]on [cyan]{turn.get('model')}[/cyan][/dim]" if turn.get("model") else ""
         lines.append(f"    [bright_black]◎[/bright_black]  [cyan]{', '.join(agents)}[/cyan] [dim]agent running{model_str}…[/dim]")
 
+    turn_dur = turn.get("turn_duration", 0.0)
     thought_dur = turn.get("thought_duration", 0.0)
     thought_toks = turn.get("thought_tokens", 0)
     if thought_dur > 0 or thought_toks > 0:
-        dur_str = f"{thought_dur:.1f}s" if thought_dur >= 0.1 else "< 0.1s"
+        dur_str = f"{thought_dur:.1f}s" if thought_dur >= 0.1 else f"{thought_dur:.2f}s"
         lines.append(f"    [dim cyan]🧠 Thought for {dur_str} ({thought_toks} tokens · Ctrl+T to view)[/dim cyan]")
+    elif turn_dur > 0:
+        dur_str = f"{turn_dur:.1f}s" if turn_dur >= 0.1 else f"{turn_dur:.2f}s"
+        lines.append(f"    [dim green]✓[/dim green]  [dim]latency:[/dim] [cyan]{dur_str}[/cyan]")
 
     for t in turn.get("tools") or []:
         tool = t.get("tool", "")

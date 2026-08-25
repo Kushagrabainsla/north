@@ -1508,3 +1508,44 @@ async def test_seed_plan_from_spec_no_store_is_noop(tmp_path):
     orch, _, _ = _make_orchestrator(tmp_path)
     orch._plan_store = None
     assert await orch._seed_plan_from_spec("t1") == 0
+
+
+@pytest.mark.asyncio
+async def test_get_task_and_cancel_task_paused_and_queued_tasks(tmp_path):
+    from orchestrator.running_tasks import RunningTaskStore
+
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+    running_store = RunningTaskStore(tmp_path / "running.db")
+    orch._running_task_store = running_store
+    req = TaskRequest(prompt="paused task test", source=LedgerSource.PROMPT)
+
+    # 1. Mark task as paused in RunningTaskStore and ledger
+    await orch._running_task_store.mark_running("t_paused", req)
+    await orch._running_task_store.mark_paused("t_paused")
+    await ledger.write(
+        LedgerEntry.new(
+            source=LedgerSource.SYSTEM,
+            task_id="t_paused",
+            action="task_paused",
+            status=LedgerStatus.PENDING,
+        )
+    )
+
+    # get_task must report "paused"
+    resp = await orch.get_task("t_paused")
+    assert resp is not None
+    assert resp.status == "paused"
+
+    # list_active_tasks must include paused task
+    active = await orch.list_active_tasks()
+    assert any(t.task_id == "t_paused" and t.status == "paused" for t in active)
+
+    # cancel_task on paused task must succeed and clear it from running_task_store
+    cancelled = await orch.cancel_task("t_paused")
+    assert cancelled is True
+    assert await orch._running_task_store.get("t_paused") is None
+
+    # After cancellation, get_task must report "cancelled"
+    resp_after = await orch.get_task("t_paused")
+    assert resp_after is not None
+    assert resp_after.status == "cancelled"

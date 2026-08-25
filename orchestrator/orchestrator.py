@@ -664,19 +664,21 @@ class Orchestrator:
         failed / cancelled). Intermediate steps - classification and each agent -
         are logged COMPLETED per step, so reading the single most recent entry
         would report a still-running task as "completed" the instant it was
-        classified. We scan for the terminal action instead, and report "pending"
-        or "queued" while the task is still in flight.
+        classified. We scan for the terminal action instead, and report "pending",
+        "queued", or "paused" while the task is still in flight.
         """
         entries = await self._ledger.query(LedgerFilters(task_id=task_id, limit=100))
         if not entries:
             return None
-        # Check if currently queued in running_task_store
-        if self._running_task_store is not None and await self._running_task_store.is_queued(task_id):
-            return TaskResponse(
-                task_id=task_id,
-                status="queued",
-                created_at=format_timestamp(entries[-1].timestamp),
-            )
+        # Check if currently queued or paused in running_task_store
+        if self._running_task_store is not None:
+            stored_task = await self._running_task_store.get(task_id)
+            if stored_task is not None and stored_task.status in ("queued", "paused"):
+                return TaskResponse(
+                    task_id=task_id,
+                    status=stored_task.status,
+                    created_at=format_timestamp(entries[-1].timestamp),
+                )
 
         for entry in entries:  # query() returns most-recent-first
             terminal = _TERMINAL_TASK_ACTIONS.get(entry.action)
@@ -684,6 +686,8 @@ class Orchestrator:
                 return TaskResponse(task_id=task_id, status=terminal, created_at=format_timestamp(entry.timestamp))
             if entry.action == "task_queued":
                 return TaskResponse(task_id=task_id, status="queued", created_at=format_timestamp(entry.timestamp))
+            if entry.action == "task_paused":
+                return TaskResponse(task_id=task_id, status="paused", created_at=format_timestamp(entry.timestamp))
         # No terminal entry yet - the task is still running.
         return TaskResponse(task_id=task_id, status="pending", created_at=format_timestamp(entries[-1].timestamp))
 
@@ -695,10 +699,11 @@ class Orchestrator:
         of a completed task, since get_task() reads the most recent entry.
         """
         running = self._active_tasks.pop(task_id, None)
-        was_queued = False
+        was_stored = False
         if running is None and self._running_task_store is not None:
-            was_queued = await self._running_task_store.is_queued(task_id)
-        if running is None and not was_queued:
+            stored = await self._running_task_store.get(task_id)
+            was_stored = stored is not None
+        if running is None and not was_stored:
             return False
         if running is not None and not running.done():
             running.cancel()
@@ -905,10 +910,11 @@ class Orchestrator:
     async def cancel_stuck_task(self, task_id: str) -> bool:
         """Fail a task the watchdog found stalled: record why, then cancel it."""
         running = self._active_tasks.pop(task_id, None)
-        was_queued = False
+        was_stored = False
         if running is None and self._running_task_store is not None:
-            was_queued = await self._running_task_store.is_queued(task_id)
-        if running is None and not was_queued:
+            stored = await self._running_task_store.get(task_id)
+            was_stored = stored is not None
+        if running is None and not was_stored:
             return False
         if running is not None and not running.done():
             running.cancel()
@@ -932,8 +938,12 @@ class Orchestrator:
         return True
 
     async def list_active_tasks(self) -> list[TaskResponse]:
-        """Returns tasks that are currently in-flight (asyncio tasks still running)."""
-        responses = await asyncio.gather(*(self.get_task(task_id) for task_id in list(self._active_tasks)))
+        """Returns tasks that are currently in-flight (active, queued, or paused)."""
+        task_ids = set(self._active_tasks)
+        if self._running_task_store is not None:
+            for rt in await self._running_task_store.list_all():
+                task_ids.add(rt.task_id)
+        responses = await asyncio.gather(*(self.get_task(task_id) for task_id in task_ids))
         return [resp for resp in responses if resp is not None]
 
     # ------------------------------------------------------------------ #
