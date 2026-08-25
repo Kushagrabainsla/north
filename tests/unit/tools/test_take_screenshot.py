@@ -161,10 +161,21 @@ async def test_screenshot_screencapture_fails(tmp_path: Path) -> None:
     assert "permission" in out.error.lower()
 
 
-async def test_screenshot_non_macos() -> None:
-    """On non-macOS platforms, the tool returns a clean error."""
+async def test_screenshot_linux_support(tmp_path: Path) -> None:
+    """On Linux platforms, the tool captures using Linux utilities or PIL."""
     tool = TakeScreenshotTool()
-    with patch.object(sys, "platform", "linux"):
-        out = await tool.run(ToolInput(params={"path": "shot.png"}))
-    assert not out.success
-    assert "macOS" in out.error
+    dest = tmp_path / "shot.png"
+
+    def _fake_run(cmd, **kwargs):
+        dest.write_bytes(b"\x89PNG\r\n\x1a\nfake-screenshot")
+        return _make_result(returncode=0)
+
+    with (
+        patch.object(sys, "platform", "linux"),
+        patch("tools.universal.take_screenshot.shutil.which", return_value="/usr/bin/scrot"),
+        patch("tools.universal.take_screenshot.subprocess.run", side_effect=_fake_run),
+    ):
+        out = await tool.run(ToolInput(params={"path": "shot.png", "workspace": str(tmp_path)}))
+
+    assert out.success
+    assert out.data["path"] == str(dest)
