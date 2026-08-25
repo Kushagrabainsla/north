@@ -217,6 +217,83 @@ def _format_plan_table(plan_steps: list[dict], dod_evals: list[dict] | None = No
     return t
 
 
+def _format_turn_summary(turn: dict) -> str:
+    """Format a compact, Claude Code-style one-line collapsible summary for a turn."""
+    parts = []
+    agents = turn.get("agents") or ([turn.get("domain")] if turn.get("domain") else [])
+    agent_str = ", ".join(agents) if agents else "general"
+
+    tools = turn.get("tools") or []
+    tool_count = len(tools)
+    if tool_count > 0:
+        tool_counts: dict[str, int] = {}
+        for t in tools:
+            name = t.get("tool", "tool")
+            tool_counts[name] = tool_counts.get(name, 0) + 1
+        tool_breakdown = ", ".join(f"{count} {name}" if count > 1 else name for name, count in tool_counts.items())
+        parts.append(f"{tool_count} tool{'s' if tool_count != 1 else ''} ({tool_breakdown})")
+    elif agent_str:
+        parts.append(f"{agent_str} agent")
+
+    thought_dur = turn.get("thought_duration", 0.0)
+    thought_toks = turn.get("thought_tokens", 0)
+    if thought_dur > 0 or thought_toks > 0:
+        dur_str = f"{thought_dur:.1f}s" if thought_dur >= 0.1 else "< 0.1s"
+        parts.append(f"{dur_str} thoughts")
+
+    verifs = turn.get("verifications") or []
+    if verifs:
+        passed_count = sum(1 for v in verifs if v.get("passed"))
+        parts.append(f"{passed_count}/{len(verifs)} checks passed")
+
+    summary_content = " · ".join(parts) if parts else "direct answer"
+    return f"  [bold cyan]▶[/bold cyan] [dim]{summary_content}[/dim] [bright_black]· Ctrl+O to expand[/bright_black]"
+
+
+def _format_turn_details(turn: dict) -> list[str]:
+    """Format an expanded, detailed step-by-step breakdown of everything the system did."""
+    lines = [
+        "  [bold cyan]▼[/bold cyan] [cyan]Execution Details[/cyan] [bright_black](Ctrl+O to collapse)[/bright_black]"
+    ]
+
+    domain = turn.get("domain")
+    if domain:
+        flag = " [dim](complex)[/dim]" if turn.get("is_consequential") else " [dim](direct)[/dim]"
+        lines.append(f"    [dim green]✓[/dim green]  [dim]classified:[/dim] [cyan]{domain}[/cyan]{flag}")
+
+    agents = turn.get("agents") or []
+    if agents:
+        lines.append(f"    [dim green]✓[/dim green]  [dim]plan ready:[/dim] [cyan]{', '.join(agents)}[/cyan]")
+        model_str = f" [dim]on [cyan]{turn.get('model')}[/cyan][/dim]" if turn.get("model") else ""
+        lines.append(f"    [bright_black]◎[/bright_black]  [cyan]{', '.join(agents)}[/cyan] [dim]agent running{model_str}…[/dim]")
+
+    thought_dur = turn.get("thought_duration", 0.0)
+    thought_toks = turn.get("thought_tokens", 0)
+    if thought_dur > 0 or thought_toks > 0:
+        dur_str = f"{thought_dur:.1f}s" if thought_dur >= 0.1 else "< 0.1s"
+        lines.append(f"    [dim cyan]🧠 Thought for {dur_str} ({thought_toks} tokens · Ctrl+T to view)[/dim cyan]")
+
+    for t in turn.get("tools") or []:
+        tool = t.get("tool", "")
+        success = t.get("success", True)
+        icon = "[dim green]✓[/dim green]" if success else "[dim red]✗[/dim red]"
+        params_str = t.get("params_str") or ""
+        suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
+        res = t.get("result") or ("ok" if success else "failed")
+        dur = t.get("duration")
+        dur_str = f" [dim]({dur:.2f}s)[/dim]" if dur is not None else ""
+        lines.append(f"    {icon}  [cyan]{tool}[/cyan]{suffix} [dim]→ {res}[/dim]{dur_str}")
+
+    for v in turn.get("verifications") or []:
+        cmd = v.get("command", "")
+        passed = v.get("passed", False)
+        icon = "[dim green]✓[/dim green]" if passed else "[dim red]✗[/dim red]"
+        verdict = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
+        lines.append(f"    {icon}  [dim]verify({cmd})[/dim] {verdict}")
+
+    return lines
+
+
 def _format_help_table(commands: dict[str, str]) -> Table:
     """Render a styled help command palette table."""
     t = Table(title="Available Slash Commands & Keybindings", box=ROUNDED, header_style="bold cyan")
@@ -225,6 +302,7 @@ def _format_help_table(commands: dict[str, str]) -> Table:
     for cmd, desc in commands.items():
         t.add_row(cmd, desc)
     t.add_section()
+    t.add_row("Ctrl+O", "Toggle compact summary vs detailed execution steps")
     t.add_row("Ctrl+T", "Toggle live Chain-of-Thought reasoning drawer")
     t.add_row("Ctrl+I", "Open interactive Tool Call & Diff Inspector modal")
     t.add_row("Ctrl+P", "Open Execution Plan & Step Tree Cockpit modal")

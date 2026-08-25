@@ -48,6 +48,8 @@ from cli.formatting import (
     _format_help_table,
     _format_jobs_table,
     _format_plan_table,
+    _format_turn_details,
+    _format_turn_summary,
     _reconstruct_task_output,
     _short_model,
     _strip_markup,
@@ -652,6 +654,7 @@ class NorthApp(App[None]):
 
     BINDINGS = [
         Binding("ctrl+c", "interrupt", "Interrupt", priority=True),
+        Binding("ctrl+o", "toggle_activity_details", "Details", priority=True),
         Binding("ctrl+t", "toggle_reasoning", "Thoughts", priority=True),
         Binding("ctrl+i", "inspect_tools", "Tools", priority=True),
         Binding("ctrl+p", "inspect_plan", "Plan", priority=True),
@@ -683,6 +686,9 @@ class NorthApp(App[None]):
         self._token_buffer: dict[str, str] = {}
         self._reasoning_buffer: dict[str, str] = {}  # model's private chain-of-thought, shown in drawer
         self._reasoning_visible: bool = False
+        self._details_expanded: bool = False
+        self._turns: list[dict] = []
+        self._current_turn_activity: dict[str, dict] = {}
         self._reasoning_start_times: dict[str, float] = {}
         self._recent_thoughts: deque[dict] = deque(maxlen=20)
         self._tool_history: deque[dict] = deque(maxlen=50)
@@ -914,8 +920,9 @@ class NorthApp(App[None]):
 
     def _refresh_hint(self) -> None:
         thoughts_label = "ctrl+t hide thoughts" if self._reasoning_visible else "ctrl+t thoughts"
+        details_label = "ctrl+o collapse" if self._details_expanded else "ctrl+o details"
         hint = (
-            f"  {self._strategy}  ·  {thoughts_label}  ·  ctrl+i tools  ·  ctrl+p plan"
+            f"  {self._strategy}  ·  {details_label}  ·  {thoughts_label}  ·  ctrl+i tools  ·  ctrl+p plan"
             "  ·  esc menu  ·  /commands  ·  ctrl+y copy  ·  ctrl+d dictate"
         )
         self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
@@ -1043,6 +1050,21 @@ class NorthApp(App[None]):
             if self._awaiting_user_task:
                 self._user_task_ids.add(task_id)
                 self._pending_user_messages[task_id] = self._last_submitted_prompt
+                self._current_turn_activity[task_id] = {
+                    "task_id": task_id,
+                    "prompt": self._last_submitted_prompt,
+                    "domain": "",
+                    "is_consequential": False,
+                    "agents": [],
+                    "model": self._model,
+                    "thought_duration": 0.0,
+                    "thought_tokens": 0,
+                    "tools": [],
+                    "verifications": [],
+                    "output": "",
+                    "status": "running",
+                    "error": "",
+                }
                 self._awaiting_user_task = False
             else:
                 return
@@ -1056,13 +1078,19 @@ class NorthApp(App[None]):
 
     async def _on_classified(self, task_id: str, data: dict) -> None:
         domain = data.get("domain", "")
-        flag = " [dim](complex)[/dim]" if data.get("is_consequential") else " [dim](direct)[/dim]"
+        is_consequential = bool(data.get("is_consequential"))
+        if task_id in self._current_turn_activity:
+            self._current_turn_activity[task_id]["domain"] = domain
+            self._current_turn_activity[task_id]["is_consequential"] = is_consequential
+        flag = " [dim](complex)[/dim]" if is_consequential else " [dim](direct)[/dim]"
         self._set_status(f"routing → {domain}…")
         label = f"classified: [cyan]{domain}[/cyan]{flag}" if domain else "classified"
         self._log(f"  [dim green]✓[/dim green]  {label}")
 
     async def _on_routed(self, task_id: str, data: dict) -> None:
         agents = data.get("agents") or []
+        if task_id in self._current_turn_activity:
+            self._current_turn_activity[task_id]["agents"] = list(agents)
         self._set_status(f"running {', '.join(agents) or 'general'}…")
         if agents:
             self._log(f"  [dim green]✓[/dim green]  plan ready: [cyan]{', '.join(agents)}[/cyan]")
@@ -1081,6 +1109,8 @@ class NorthApp(App[None]):
 
     async def _on_model(self, task_id: str, data: dict) -> None:
         self._model = data.get("model", "")
+        if task_id in self._current_turn_activity:
+            self._current_turn_activity[task_id]["model"] = self._model
         self._refresh_hint()
         self._render_status_bar()
 
@@ -1092,6 +1122,13 @@ class NorthApp(App[None]):
         agent = data.get("agent", "")
         agents = data.get("agents") or []
         label = ", ".join(agents) if agents else agent or "general"
+        if task_id in self._current_turn_activity:
+            if agents:
+                self._current_turn_activity[task_id]["agents"] = list(agents)
+            elif agent and agent not in self._current_turn_activity[task_id]["agents"]:
+                self._current_turn_activity[task_id]["agents"].append(agent)
+            if self._model:
+                self._current_turn_activity[task_id]["model"] = self._model
         self._set_status(f"running {label}…")
         model_str = f" [dim]on [cyan]{self._model}[/cyan][/dim]" if self._model else ""
         self._log(f"  [bright_black]◎[/bright_black]  [cyan]{label}[/cyan] agent running{model_str}…")
@@ -1119,6 +1156,8 @@ class NorthApp(App[None]):
             self._task_tool_activity.setdefault(task_id, []).append(
                 {"tool": tool, "params": params_str, "result": None}
             )
+            if task_id in self._current_turn_activity:
+                self._current_turn_activity[task_id]["tools"].append(entry)
 
     async def _on_tool_result(self, task_id: str, data: dict) -> None:
         tool = data.get("tool", "")
@@ -1173,6 +1212,9 @@ class NorthApp(App[None]):
                 toks = max(1, len(thoughts) // 4)
                 dur = now - self._reasoning_start_times.get(task_id, now)
                 dur_str = f"{dur:.1f}s" if dur >= 0.1 else "< 0.1s"
+                if task_id in self._current_turn_activity:
+                    self._current_turn_activity[task_id]["thought_duration"] = dur
+                    self._current_turn_activity[task_id]["thought_tokens"] = toks
                 self._recent_thoughts.append({
                     "task_id": task_id,
                     "thoughts": thoughts,
@@ -1224,6 +1266,12 @@ class NorthApp(App[None]):
 
         if not output:
             output = await self._fetch_ledger_output(task_id)
+
+        turn = self._current_turn_activity.pop(task_id, None)
+        if turn is not None:
+            turn["output"] = output
+            turn["status"] = "completed"
+            self._turns.append(turn)
 
         if was_streaming:
             self._finish_streaming(task_id, output)
@@ -1278,6 +1326,11 @@ class NorthApp(App[None]):
         self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
         error = data.get("error", "Task failed.")
+        turn = self._current_turn_activity.pop(task_id, None)
+        if turn is not None:
+            turn["status"] = "failed"
+            turn["error"] = error
+            self._turns.append(turn)
         self._set_status("")
         self._user_task_ids.discard(task_id)
         self._log("  [red]◆[/red]  [red]error[/red]")
@@ -1295,6 +1348,11 @@ class NorthApp(App[None]):
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
+        turn = self._current_turn_activity.pop(task_id, None)
+        if turn is not None:
+            turn["status"] = "cancelled"
+            turn["error"] = "cancelled"
+            self._turns.append(turn)
         self._set_status("")
         self._user_task_ids.discard(task_id)
         self._log("  [dim]cancelled[/dim]")
@@ -1312,6 +1370,11 @@ class NorthApp(App[None]):
         self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
         reason = data.get("reason", "Task skipped.")
+        turn = self._current_turn_activity.pop(task_id, None)
+        if turn is not None:
+            turn["status"] = "skipped"
+            turn["error"] = reason
+            self._turns.append(turn)
         self._set_status("")
         self._user_task_ids.discard(task_id)
         self._log("  [yellow]◆[/yellow]  [yellow]task skipped[/yellow]")
@@ -1330,6 +1393,11 @@ class NorthApp(App[None]):
         self._streaming_tok_per_sec = 0.0
         self._task_tool_activity.pop(task_id, None)
         reason = data.get("reason", "Task rejected.")
+        turn = self._current_turn_activity.pop(task_id, None)
+        if turn is not None:
+            turn["status"] = "rejected"
+            turn["error"] = reason
+            self._turns.append(turn)
         self._set_status("")
         self._user_task_ids.discard(task_id)
         self._log("  [yellow]◆[/yellow]  [yellow]task rejected[/yellow]")
@@ -1434,6 +1502,11 @@ class NorthApp(App[None]):
     async def _on_auto_verify(self, task_id: str, data: dict) -> None:
         cmd = data.get("command", "")
         passed = data.get("passed", False)
+        if task_id in self._current_turn_activity:
+            self._current_turn_activity[task_id]["verifications"].append({
+                "command": cmd,
+                "passed": passed,
+            })
         if passed:
             self._log(f"    [dim green]✓  auto-verify passed ({cmd})[/dim green]")
         else:
@@ -1687,6 +1760,21 @@ class NorthApp(App[None]):
                 if task_id:
                     self._user_task_ids.add(task_id)
                     self._pending_user_messages[task_id] = text
+                    self._current_turn_activity[task_id] = {
+                        "task_id": task_id,
+                        "prompt": text,
+                        "domain": "",
+                        "is_consequential": False,
+                        "agents": [],
+                        "model": self._model,
+                        "thought_duration": 0.0,
+                        "thought_tokens": 0,
+                        "tools": [],
+                        "verifications": [],
+                        "output": "",
+                        "status": "running",
+                        "error": "",
+                    }
                     self._session_tokens += max(1, len(text) // 4)
                     self._render_status_bar()
         except httpx.ConnectError:
@@ -1872,6 +1960,10 @@ class NorthApp(App[None]):
             from inference.rate_limit_status import format_status_table
 
             self._log_rich(format_status_table(settings.north_home / "rate_limit_status.json"))
+        elif cmd == "/details":
+            self.action_toggle_activity_details()
+            state = "expanded" if self._details_expanded else "collapsed"
+            self._log(f"  [bright_black]Execution traces {state} (Ctrl+O)[/bright_black]")
         elif cmd == "/thoughts":
             self.action_toggle_reasoning()
             state = "expanded" if self._reasoning_visible else "collapsed"
@@ -1892,6 +1984,39 @@ class NorthApp(App[None]):
             self._log(f"  [bright_black]unknown command: {cmd} - try /help[/bright_black]")
 
     # ── interactive cockpit actions ──────────────────────────────────────────
+
+    def action_toggle_activity_details(self) -> None:
+        """Toggle compact summary vs detailed execution steps under each prompt."""
+        self._details_expanded = not self._details_expanded
+        self._refresh_hint()
+        self._redraw_chat_history()
+
+    def _redraw_chat_history(self) -> None:
+        """Redraw conversation history switching between compact and detailed traces."""
+        with contextlib.suppress(Exception):
+            log = self.query_one("#log", RichLog)
+            log.clear()
+            self._draw_banner()
+            for turn in self._turns:
+                log.write(f"> {turn.get('prompt', '')}")
+                if self._details_expanded:
+                    for line in _format_turn_details(turn):
+                        log.write(line)
+                else:
+                    log.write(_format_turn_summary(turn))
+                if turn.get("output"):
+                    log.write("  [cyan]◆[/cyan]  [white]north[/white]")
+                    log.write(RichPadding(RichMarkdown(turn["output"]), (0, 0, 0, 4)))
+                elif turn.get("status") == "failed":
+                    log.write("  [red]◆[/red]  [red]error[/red]")
+                    if turn.get("error"):
+                        log.write(RichText("    " + turn["error"], style="red"))
+                elif turn.get("status") == "skipped":
+                    log.write("  [yellow]◆[/yellow]  [yellow]task skipped[/yellow]")
+                    if turn.get("error"):
+                        log.write(RichText("    " + turn["error"], style="yellow"))
+                self._write_rule()
+            log.scroll_end(animate=False)
 
     def action_toggle_reasoning(self) -> None:
         """Toggle the live Chain-of-Thought reasoning drawer."""
