@@ -219,6 +219,18 @@ class RunningTaskStore:
             ).fetchone()
             return row is not None
 
+    async def get(self, task_id: str) -> RunningTask | None:
+        """Fetch a single task by ID using an index-backed point query."""
+        row = await asyncio.to_thread(self._get_sync, task_id)
+        return self._row_to_task(row) if row is not None else None
+
+    def _get_sync(self, task_id: str) -> sqlite3.Row | None:
+        with open_db_connection(self._db_path) as conn:
+            return conn.execute(
+                "SELECT * FROM running_tasks WHERE task_id = ? LIMIT 1",
+                (task_id,),
+            ).fetchone()
+
     async def clear(self, task_id: str) -> None:
         """Remove a task from the registry once it reaches a terminal state."""
         await asyncio.to_thread(self._clear_sync, task_id)

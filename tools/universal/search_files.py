@@ -46,14 +46,26 @@ _RG_CANDIDATE_PATHS: tuple[str, ...] = (
 # Language type → file globs, mirroring ripgrep's --type shorthands.
 _TYPE_GLOBS: dict[str, tuple[str, ...]] = {
     "py": ("*.py",),
+    "python": ("*.py",),
     "ts": ("*.ts", "*.tsx"),
+    "typescript": ("*.ts", "*.tsx"),
     "js": ("*.js", "*.jsx", "*.mjs"),
+    "javascript": ("*.js", "*.jsx", "*.mjs"),
     "go": ("*.go",),
+    "golang": ("*.go",),
     "rust": ("*.rs",),
+    "rs": ("*.rs",),
     "java": ("*.java",),
-    "md": ("*.md",),
+    "md": ("*.md", "*.markdown"),
+    "markdown": ("*.md", "*.markdown"),
     "yaml": ("*.yaml", "*.yml"),
+    "yml": ("*.yaml", "*.yml"),
     "json": ("*.json",),
+    "css": ("*.css", "*.scss", "*.sass", "*.less"),
+    "html": ("*.html", "*.htm"),
+    "sql": ("*.sql",),
+    "sh": ("*.sh", "*.bash", "*.zsh"),
+    "bash": ("*.sh", "*.bash", "*.zsh"),
 }
 _OUTPUT_MODES: frozenset[str] = frozenset({"content", "files_with_matches", "count"})
 

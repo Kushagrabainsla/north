@@ -61,8 +61,8 @@ class _ShellSession:
         self._buffer = bytearray()
         self._read_pos = 0
         self._closed = False
-        loop = asyncio.get_running_loop()
-        loop.add_reader(master_fd, self._on_readable)
+        self._loop = asyncio.get_running_loop()
+        self._loop.add_reader(master_fd, self._on_readable)
 
     def _on_readable(self) -> None:
         try:
@@ -85,8 +85,8 @@ class _ShellSession:
         if self._closed:
             return
         self._closed = True
-        with contextlib.suppress(ValueError, OSError):
-            asyncio.get_running_loop().remove_reader(self._master_fd)
+        with contextlib.suppress(ValueError, OSError, RuntimeError):
+            self._loop.remove_reader(self._master_fd)
 
     @property
     def is_running(self) -> bool:
@@ -113,13 +113,19 @@ class _ShellSession:
     async def stop(self) -> str:
         self._detach_reader()
         if self._proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+            with contextlib.suppress(ProcessLookupError, OSError):
+                if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+                    os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+                else:
+                    self._proc.terminate()
             try:
                 await asyncio.wait_for(self._proc.wait(), timeout=3)
             except TimeoutError:
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+                        os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                    else:
+                        self._proc.kill()
                 await self._proc.wait()
         with contextlib.suppress(OSError):
             os.read(self._master_fd, _READ_CHUNK)  # drain any final bytes

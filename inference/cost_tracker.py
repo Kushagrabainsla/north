@@ -33,6 +33,9 @@ from inference.models import (
 )
 
 
+_MAX_TRACKED_TASKS: int = 2000
+
+
 class CostTracker(InferenceRouter):
     """InferenceRouter decorator that accumulates cost_usd per task_id.
 
@@ -57,6 +60,9 @@ class CostTracker(InferenceRouter):
     def _add_cost(self, task_id: str | None, cost_usd: float) -> None:
         if task_id and cost_usd:
             self._task_costs[task_id] = self._task_costs.get(task_id, 0.0) + cost_usd
+            if len(self._task_costs) > _MAX_TRACKED_TASKS:
+                oldest = next(iter(self._task_costs))
+                self._task_costs.pop(oldest, None)
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         response = await self._inner.complete(request)

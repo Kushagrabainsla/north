@@ -778,8 +778,7 @@ class Orchestrator:
             if not await self._running_task_store.mark_running_from_paused(task_id):
                 return False
             # Reconstruct the request from the store.
-            all_tasks = await self._running_task_store.list_all()
-            rt = next((t for t in all_tasks if t.task_id == task_id), None)
+            rt = await self._running_task_store.get(task_id)
             if rt is None:
                 return False
             if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
@@ -1072,11 +1071,9 @@ class Orchestrator:
                 # Check attempt count to allow queueing / retry on model recovery
                 current_attempt = 0
                 if self._running_task_store is not None:
-                    tasks = await self._running_task_store.list_all()
-                    for t in tasks:
-                        if t.task_id == task_id:
-                            current_attempt = t.attempt
-                            break
+                    stored_task = await self._running_task_store.get(task_id)
+                    if stored_task is not None:
+                        current_attempt = stored_task.attempt
                 if current_attempt < MAX_QUEUE_ATTEMPTS:
                     logger.warning(
                         "Task %s queued for model availability recovery (attempt %d): %s",

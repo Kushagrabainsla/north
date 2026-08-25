@@ -138,3 +138,16 @@ async def test_paused_status_preserved_across_remark(store: RunningTaskStore) ->
     # Re-marking with mark_running should reset to running
     await store.mark_running("t1", req, attempt=1)
     assert (await store.list_all())[0].status == "running"
+
+
+async def test_get_existing_and_missing_task(store: RunningTaskStore) -> None:
+    req = TaskRequest(prompt="find me", source=LedgerSource.PROMPT)
+    await store.mark_running("t_point", req, attempt=3)
+
+    found = await store.get("t_point")
+    assert found is not None
+    assert found.task_id == "t_point"
+    assert found.attempt == 3
+    assert found.request.prompt == "find me"
+
+    assert await store.get("nonexistent") is None
