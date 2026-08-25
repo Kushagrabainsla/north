@@ -40,23 +40,41 @@ _PROVIDERS: list[_Provider] = [
 ]
 
 
+# ── Design Tokens & Theme ───────────────────────────────────────────────────
+THEME = {
+    "bg_app": "#090d13",
+    "bg_card": "#161b22",
+    "bg_subtle": "#21262d",
+    "border_subtle": "#30363d",
+    "border_focus": "#58a6ff",
+    "text_primary": "#f0f6fc",
+    "text_secondary": "#8b949e",
+    "text_dim": "#484f58",
+    "brand": "#a371f7",
+    "accent": "#58a6ff",
+    "success": "#3fb950",
+    "warning": "#d29922",
+    "danger": "#f85149",
+}
+
+
 # ── Pipeline step rendering (task progress table) ───────────────────────────
 _STEP_ICONS: dict[str, str] = {
-    "classifying": "→",
+    "classifying": "●",
     "classified": "✓",
     "classified_as_trivial": "✓",
-    "north_star_checking": "→",
+    "north_star_checking": "●",
     "north_star_aligned": "✓",
-    "north_star_conflict": "◆",
-    "routing": "→",
+    "north_star_conflict": "▲",
+    "routing": "●",
     "routed": "✓",
-    "executing": "→",
-    "agent_started": "→",
+    "executing": "●",
+    "agent_started": "●",
     "agent_completed": "✓",
-    "tool_called": "→",
+    "tool_called": "⚙",
     "tool_result": "✓",
-    "waiting_for_model": "⏳",
-    "task_queued": "⏳",
+    "waiting_for_model": "○",
+    "task_queued": "○",
     "task_resumed": "↻",
 }
 
@@ -74,6 +92,7 @@ _STEP_LABELS: dict[str, str] = {
     "task_queued": "queued (waiting for models)…",
     "task_resumed": "resuming from queue…",
 }
+
 
 
 # ── Context documents + config keys ─────────────────────────────────────────

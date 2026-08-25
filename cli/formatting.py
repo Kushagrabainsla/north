@@ -251,35 +251,35 @@ def _format_turn_summary(turn: dict) -> str:
         parts.append(f"{passed_count}/{len(verifs)} checks passed")
 
     summary_content = " · ".join(parts) if parts else "direct answer"
-    return f"  [bold cyan]▶[/bold cyan] [dim]{summary_content}[/dim] [bright_black]· Ctrl+O to expand[/bright_black]"
+    return f"  [bold #58a6ff]┌─ Activity[/bold #58a6ff] [dim]── {summary_content} ──[/dim] [bright_black](Ctrl+O to expand)[/bright_black]"
 
 
 def _format_turn_details(turn: dict) -> list[str]:
     """Format an expanded, detailed step-by-step breakdown of everything the system did."""
     lines = [
-        "  [bold cyan]▼[/bold cyan] [cyan]Execution Details[/cyan] [bright_black](Ctrl+O to collapse)[/bright_black]"
+        "  [bold #58a6ff]┌─ Activity & Execution Details[/bold #58a6ff] [bright_black](Ctrl+O to collapse)[/bright_black]"
     ]
 
     domain = turn.get("domain")
     if domain:
         flag = " [dim](complex)[/dim]" if turn.get("is_consequential") else " [dim](direct)[/dim]"
-        lines.append(f"    [dim green]✓[/dim green]  [dim]classified:[/dim] [cyan]{domain}[/cyan]{flag}")
+        lines.append(f"  │  [dim green]✓[/dim green]  [dim]classified:[/dim] [cyan]{domain}[/cyan]{flag}")
 
     agents = turn.get("agents") or []
     if agents:
-        lines.append(f"    [dim green]✓[/dim green]  [dim]plan ready:[/dim] [cyan]{', '.join(agents)}[/cyan]")
+        lines.append(f"  │  [dim green]✓[/dim green]  [dim]plan ready:[/dim] [cyan]{', '.join(agents)}[/cyan]")
         model_str = f" [dim]on [cyan]{turn.get('model')}[/cyan][/dim]" if turn.get("model") else ""
-        lines.append(f"    [bright_black]◎[/bright_black]  [cyan]{', '.join(agents)}[/cyan] [dim]agent running{model_str}…[/dim]")
+        lines.append(f"  │  [bright_black]●[/bright_black]  [cyan]{', '.join(agents)}[/cyan] [dim]agent running{model_str}…[/dim]")
 
     turn_dur = turn.get("turn_duration", 0.0)
     thought_dur = turn.get("thought_duration", 0.0)
     thought_toks = turn.get("thought_tokens", 0)
     if thought_dur > 0 or thought_toks > 0:
         dur_str = f"{thought_dur:.1f}s" if thought_dur >= 0.1 else f"{thought_dur:.2f}s"
-        lines.append(f"    [dim cyan]🧠 Thought for {dur_str} ({thought_toks} tokens · Ctrl+T to view)[/dim cyan]")
+        lines.append(f"  │  [dim cyan]◈ Thought for {dur_str} ({thought_toks} tokens · Ctrl+T to view)[/dim cyan]")
     elif turn_dur > 0:
         dur_str = f"{turn_dur:.1f}s" if turn_dur >= 0.1 else f"{turn_dur:.2f}s"
-        lines.append(f"    [dim green]✓[/dim green]  [dim]latency:[/dim] [cyan]{dur_str}[/cyan]")
+        lines.append(f"  │  [dim green]✓[/dim green]  [dim]latency:[/dim] [cyan]{dur_str}[/cyan]")
 
     for t in turn.get("tools") or []:
         tool = t.get("tool", "")
@@ -290,16 +290,18 @@ def _format_turn_details(turn: dict) -> list[str]:
         res = t.get("result") or ("ok" if success else "failed")
         dur = t.get("duration")
         dur_str = f" [dim]({dur:.2f}s)[/dim]" if dur is not None else ""
-        lines.append(f"    {icon}  [cyan]{tool}[/cyan]{suffix} [dim]→ {res}[/dim]{dur_str}")
+        lines.append(f"  │  {icon}  [cyan]{tool}[/cyan]{suffix} [dim]→ {res}[/dim]{dur_str}")
 
     for v in turn.get("verifications") or []:
         cmd = v.get("command", "")
         passed = v.get("passed", False)
         icon = "[dim green]✓[/dim green]" if passed else "[dim red]✗[/dim red]"
         verdict = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
-        lines.append(f"    {icon}  [dim]verify({cmd})[/dim] {verdict}")
+        lines.append(f"  │  {icon}  [dim]verify({cmd})[/dim] {verdict}")
 
+    lines.append("  [bold #58a6ff]└─────────────────────────────────────────────────────────────[/bold #58a6ff]")
     return lines
+
 
 
 def _format_help_table(commands: dict[str, str]) -> Table:

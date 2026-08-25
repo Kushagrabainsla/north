@@ -463,7 +463,33 @@ class NorthApp(App[None]):
     CSS = """
     Screen {
         layout: vertical;
-        background: $background;
+        background: #090d13;
+    }
+
+    /* ── top cockpit header bar ───────────────────────────── */
+
+    #header-bar {
+        width: 100%;
+        height: 1;
+        background: #161b22;
+        color: #8b949e;
+        border-bottom: solid #30363d;
+    }
+
+    #header-brand {
+        width: auto;
+        padding: 0 1;
+    }
+
+    #header-model {
+        width: 1fr;
+        text-align: center;
+    }
+
+    #header-meta {
+        width: auto;
+        padding: 0 1;
+        text-align: right;
     }
 
     /* ── chat log ─────────────────────────────────────────── */
@@ -473,7 +499,8 @@ class NorthApp(App[None]):
         height: 1fr;
         border: none;
         padding: 0;
-        background: $background;
+        background: #090d13;
+
         /* Keep the scrollbar invisible in every state (default / hover / active)
            so hovering or clicking the chat never flashes an accent-coloured
            scrollbar - the only focus difference should be the input box border. */
@@ -799,6 +826,10 @@ class NorthApp(App[None]):
             await self._client.aclose()
 
     def compose(self) -> ComposeResult:
+        with Horizontal(id="header-bar"):
+            yield Static(" [bold #a371f7]◈ NORTH[/bold #a371f7] [dim]•[/dim] [dim green]● active[/dim green]", id="header-brand")
+            yield Static("", id="header-model")
+            yield Static("", id="header-meta")
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
         with VerticalScroll(id="reasoning-wrap"):
             yield Static("", id="reasoning-header")
@@ -823,8 +854,10 @@ class NorthApp(App[None]):
 
         self._strategy = _read_power(self._settings_path)
         self._refresh_hint()
+        self._render_header_bar()
         self._render_status_bar()
         self._set_status("")
+
 
         self.set_interval(0.08, self._tick)
         self.run_worker(self._listen(), exclusive=False)
@@ -934,7 +967,17 @@ class NorthApp(App[None]):
         )
         self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
 
+    def _render_header_bar(self) -> None:
+        """Compose the sticky top cockpit header bar with active model and session counters."""
+        with contextlib.suppress(Exception):
+            model = _short_model(self._model) if self._model else "ready"
+            self.query_one("#header-model", Static).update(f"[bold #58a6ff]⚡ {model}[/bold #58a6ff]")
+            strat = self._strategy.upper()
+            cost = f"${self._session_cost:.3f}"
+            self.query_one("#header-meta", Static).update(f"[dim]🔋 {strat}  ·  {cost} [/dim]")
+
     def _render_status_bar(self) -> None:
+
         """Compose the live status bar, dropping low-priority segments as the
         terminal narrows so the bar never wraps or truncates mid-segment."""
         from agents.context_compaction import context_window_for
@@ -1041,12 +1084,14 @@ class NorthApp(App[None]):
         self.query_one("#streaming-wrap", VerticalScroll).display = False
         self.query_one("#streaming", Static).update("")
         if final_output:
-            # Identical renderer to the live stream (rich Markdown), so the message
-            # simply moves from the capped live area into the scrollback with no
-            # re-flow or chrome change - tables, lists, and inline styling included.
-            # (Do NOT flatten with _to_prose here: it has no table support and would
-            # fork rendering from the streaming path, the original "table un-renders
-            # when the stream finishes" bug.)
+            if self._turns:
+                turn = self._turns[-1]
+                if not self._details_expanded:
+                    self._log(_format_turn_summary(turn))
+                else:
+                    for line in _format_turn_details(turn):
+                        self._log(line)
+            self._log("  [bold #a371f7]◈[/bold #a371f7]  [white bold]north[/white bold]")
             self._log_rich(RichPadding(RichMarkdown(final_output), (0, 0, 0, 4)))
 
     # ── SSE event handler ────────────────────────────────────────────────────
@@ -1062,7 +1107,8 @@ class NorthApp(App[None]):
 
     async def _on_classifying(self, task_id: str, data: dict) -> None:
         self._set_status("classifying…")
-        self._log("  [bright_black]→[/bright_black]  [dim]classifying…[/dim]")
+        if self._details_expanded:
+            self._log("  [dim]●  classifying…[/dim]")
 
     async def _on_classified(self, task_id: str, data: dict) -> None:
         domain = data.get("domain", "")
@@ -1073,14 +1119,15 @@ class NorthApp(App[None]):
         flag = " [dim](complex)[/dim]" if is_consequential else " [dim](direct)[/dim]"
         self._set_status(f"routing → {domain}…")
         label = f"classified: [cyan]{domain}[/cyan]{flag}" if domain else "classified"
-        self._log(f"  [dim green]✓[/dim green]  {label}")
+        if self._details_expanded:
+            self._log(f"  [dim green]✓[/dim green]  {label}")
 
     async def _on_routed(self, task_id: str, data: dict) -> None:
         agents = data.get("agents") or []
         if task_id in self._current_turn_activity:
             self._current_turn_activity[task_id]["agents"] = list(agents)
         self._set_status(f"running {', '.join(agents) or 'general'}…")
-        if agents:
+        if self._details_expanded and agents:
             self._log(f"  [dim green]✓[/dim green]  plan ready: [cyan]{', '.join(agents)}[/cyan]")
 
     async def _on_north_star_checking(self, task_id: str, data: dict) -> None:
@@ -1092,7 +1139,7 @@ class NorthApp(App[None]):
     async def _on_north_star_conflict(self, task_id: str, data: dict) -> None:
         tension = (data.get("tension") or "")[:200]
         self._set_status("")
-        self._log("  [yellow]◆[/yellow]  [yellow]goal conflict[/yellow]")
+        self._log("  [yellow]▲[/yellow]  [yellow]goal conflict[/yellow]")
         self._log_rich(RichText("    " + tension, style="white"))
 
     async def _on_model(self, task_id: str, data: dict) -> None:
@@ -1100,6 +1147,7 @@ class NorthApp(App[None]):
         if task_id in self._current_turn_activity:
             self._current_turn_activity[task_id]["model"] = self._model
         self._refresh_hint()
+        self._render_header_bar()
         self._render_status_bar()
 
     async def _on_compaction(self, task_id: str, data: dict) -> None:
@@ -1121,14 +1169,16 @@ class NorthApp(App[None]):
                 self._current_turn_activity[task_id]["model"] = self._model
         self._set_status(f"running {label}…")
         model_str = f" [dim]on [cyan]{self._model}[/cyan][/dim]" if self._model else ""
-        self._log(f"  [bright_black]◎[/bright_black]  [cyan]{label}[/cyan] agent running{model_str}…")
+        if self._details_expanded:
+            self._log(f"  [bright_black]●[/bright_black]  [cyan]{label}[/cyan] agent running{model_str}…")
 
     async def _on_tool_called(self, task_id: str, data: dict) -> None:
         tool = data.get("tool", "")
         params = data.get("params") or {}
         params_str = _fmt_params(params)
         suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
-        self._log(f"    [bright_black]→[/bright_black]  [cyan]{tool}[/cyan]{suffix}")
+        if self._details_expanded:
+            self._log(f"  │  ⚙  [cyan]{tool}[/cyan]{suffix}")
         self._set_status(f"{tool}…")
         entry = {
             "task_id": task_id,
@@ -1136,6 +1186,7 @@ class NorthApp(App[None]):
             "params": params,
             "params_str": params_str,
             "result": None,
+            "formatted": None,
             "success": True,
             "error": None,
             "start_time": time.monotonic(),
@@ -1152,32 +1203,39 @@ class NorthApp(App[None]):
     async def _on_tool_result(self, task_id: str, data: dict) -> None:
         tool = data.get("tool", "")
         success = data.get("success", True)
-        self._log(f"    [dim green]✓  {tool}[/dim green]" if success else f"    [dim red]✗  {tool}[/dim red]")
+        if self._details_expanded:
+            self._log(f"  │  [dim green]✓  {tool}[/dim green]" if success else f"  │  [dim red]✗  {tool}[/dim red]")
         formatted = data.get("formatted", "")
         error = data.get("error", "")
         result = (
             formatted[:200].replace("\n", " ")
             if formatted
-            else f"failed: {error[:100]}"
-            if error
-            else ("ok" if success else "failed")
+            else (error[:200].replace("\n", " ") if error else ("ok" if success else "failed"))
         )
-        now = time.monotonic()
-        for item in reversed(self._tool_history):
-            if item.get("tool") == tool and item.get("result") is None:
-                item["result"] = result
-                item["formatted"] = formatted
-                item["error"] = error
-                item["success"] = success
-                if item.get("start_time"):
-                    item["duration"] = now - item["start_time"]
-                break
-        if task_id:
-            for entry in self._task_tool_activity.get(task_id, []):
-                if entry["tool"] == tool and entry["result"] is None:
-                    entry["result"] = result
-                    break
-        self._set_status("thinking…")
+        if self._tool_history:
+            self._tool_history[-1]["result"] = result
+            self._tool_history[-1]["formatted"] = formatted
+            self._tool_history[-1]["success"] = success
+            self._tool_history[-1]["error"] = error
+            st = self._tool_history[-1].get("start_time")
+            if st:
+                self._tool_history[-1]["duration"] = max(0.01, time.monotonic() - st)
+
+
+        if task_id and task_id in self._task_tool_activity:
+            tools = self._task_tool_activity[task_id]
+            if tools:
+                tools[-1]["result"] = result
+
+        if task_id and task_id in self._current_turn_activity:
+            turn_tools = self._current_turn_activity[task_id].get("tools", [])
+            if turn_tools:
+                turn_tools[-1]["result"] = result
+                turn_tools[-1]["success"] = success
+                turn_tools[-1]["error"] = error
+                st = turn_tools[-1].get("start_time")
+                if st:
+                    turn_tools[-1]["duration"] = max(0.01, time.monotonic() - st)
 
     async def _on_token(self, task_id: str, data: dict) -> None:
         text = data.get("text", "")
@@ -1187,13 +1245,12 @@ class NorthApp(App[None]):
         if task_id not in self._stream_start_times:
             self._stream_start_times[task_id] = now
             self._stream_token_counts[task_id] = 0
-        self._stream_token_counts[task_id] += max(1, len(text) // 4)
-        elapsed = now - self._stream_start_times[task_id]
-        if elapsed > 0.2:
-            self._streaming_tok_per_sec = self._stream_token_counts[task_id] / elapsed
+        self._stream_token_counts[task_id] = self._stream_token_counts.get(task_id, 0) + 1
+        elapsed = max(0.001, now - self._stream_start_times[task_id])
+        self._streaming_tok_per_sec = self._stream_token_counts[task_id] / elapsed
 
-        self._token_buffer[task_id] = self._token_buffer.get(task_id, "") + text
-        # Rough running token estimate (≈4 chars/token) for the status bar.
+        buf = self._token_buffer.get(task_id, "") + text
+        self._token_buffer[task_id] = buf
         self._session_tokens += max(1, len(text) // 4)
         if task_id not in self._streaming_active:
             self._streaming_active.add(task_id)
@@ -1216,9 +1273,9 @@ class NorthApp(App[None]):
                     "tokens": toks,
                     "duration": dur,
                 })
-                self._log(f"  [dim cyan]🧠 Thought for {dur_str} ({toks} tokens · Ctrl+T to view)[/dim cyan]")
+                if self._details_expanded:
+                    self._log(f"  │  [dim cyan]◈ Thought for {dur_str} ({toks} tokens · Ctrl+T to view)[/dim cyan]")
             self._set_status("")
-            self._log("  [cyan]◆[/cyan]  [white]north[/white]")
             self._start_streaming()
         self._update_streaming(task_id)
         self._render_status_bar()
@@ -1238,7 +1295,7 @@ class NorthApp(App[None]):
         elapsed = time.monotonic() - self._reasoning_start_times[task_id]
         with contextlib.suppress(Exception):
             header_text = (
-                f"  [bold #58a6ff]🧠 Thinking…[/bold #58a6ff] "
+                f"  [bold #58a6ff]◈ Thinking…[/bold #58a6ff] "
                 f"[bright_black]({toks} tokens · {elapsed:.1f}s · Ctrl+T to toggle)[/bright_black]"
             )
             self.query_one("#reasoning-header", Static).update(header_text)
@@ -1277,10 +1334,13 @@ class NorthApp(App[None]):
         if was_streaming:
             self._finish_streaming(task_id, output)
         elif output:
-            self._log("  [cyan]◆[/cyan]  [white]north[/white]")
-            # Same markdown path as _finish_streaming - keep the non-streamed
-            # branch (output fetched whole from the ledger) rendering tables
-            # and lists identically rather than flattening to prose.
+            if turn is not None:
+                if not self._details_expanded:
+                    self._log(_format_turn_summary(turn))
+                else:
+                    for line in _format_turn_details(turn):
+                        self._log(line)
+            self._log("  [bold #a371f7]◈[/bold #a371f7]  [white bold]north[/white bold]")
             self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
 
         if output:
@@ -2045,18 +2105,19 @@ class NorthApp(App[None]):
                 else:
                     log.write(_format_turn_summary(turn))
                 if turn.get("output"):
-                    log.write("  [cyan]◆[/cyan]  [white]north[/white]")
+                    log.write("  [bold #a371f7]◈[/bold #a371f7]  [white bold]north[/white bold]")
                     log.write(RichPadding(RichMarkdown(turn["output"]), (0, 0, 0, 4)))
                 elif turn.get("status") == "failed":
-                    log.write("  [red]◆[/red]  [red]error[/red]")
+                    log.write("  [red]✗[/red]  [red]error[/red]")
                     if turn.get("error"):
                         log.write(RichText("    " + turn["error"], style="red"))
                 elif turn.get("status") == "skipped":
-                    log.write("  [yellow]◆[/yellow]  [yellow]task skipped[/yellow]")
+                    log.write("  [yellow]▲[/yellow]  [yellow]task skipped[/yellow]")
                     if turn.get("error"):
                         log.write(RichText("    " + turn["error"], style="yellow"))
                 self._write_rule()
             log.scroll_end(animate=False)
+
 
     def action_toggle_reasoning(self) -> None:
         """Toggle the live Chain-of-Thought reasoning drawer."""
