@@ -605,3 +605,56 @@ async def test_append_tool_call_exchange_contiguous_tool_roles_with_visuals(tmp_
     assert "image_url" in messages[3]["content"][1]["type"]
 
 
+async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> None:
+    """_load_tools must not arbitrarily truncate to 10 and must include tools required by active skills."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from skills.models import Skill
+
+    agent = _load_agent("general", tmp_path)
+
+    def _tool(name: str):
+        t = MagicMock()
+        t.name = name
+        return t
+
+    # Register 15 tools
+    names = [
+        "read_file", "patch_file", "check_types", "bash", "list_dir", "search_files",
+        "glob", "write_file", "web_search", "fetch_url", "kasa", "git",
+        "take_screenshot", "take_photo", "custom_tool"
+    ]
+    agent._deps.tool_registry = MagicMock()
+    agent._deps.tool_registry.tools_for_agent.return_value = [_tool(n) for n in names]
+    agent._deps.confidence_tracker = MagicMock()
+    agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=[])
+
+    # Fake skill that mentions take_screenshot
+    fake_skill = Skill(
+        name="screen-inspection",
+        description="Inspect what is on the screen using take_screenshot",
+        body="Use take_screenshot to capture desktop displays.",
+        directory=tmp_path,
+        domains=frozenset({"general"}),
+    )
+    skill_registry = MagicMock()
+    skill_registry.all.return_value = [fake_skill]
+    agent._deps.skill_registry = skill_registry
+
+    skill_selector = MagicMock()
+    skill_selector.select = AsyncMock(return_value=[fake_skill])
+    agent._deps.skill_selector = skill_selector
+
+    # No semantic tool index wired (fallback mode)
+    agent._deps.tool_index = None
+
+    loaded = await agent._load_tools("check my screen")
+    loaded_names = {t.name for t, _ in loaded}
+
+    # All 15 tools are available without a 10-tool cap
+    assert len(loaded) == 15
+    assert "take_screenshot" in loaded_names
+    assert "take_photo" in loaded_names
+    assert "custom_tool" in loaded_names
+
+

@@ -219,40 +219,43 @@ class Agent(ABC):
     async def _load_tools(self, task_prompt: str = "") -> list[tuple[Tool, float]]:
         """Return (tool, confidence_score) pairs for this agent, sorted by score descending.
 
-        When a ToolIndex is available and the tool count exceeds SEMANTIC_FILTER_MIN,
-        only the top SEMANTIC_TOP_K semantically relevant tools are returned.
-        Falls back silently to full injection when the index is unavailable or
-        returns no results (e.g. cold start before embeddings are built).
+        All tools registered for the agent (universal + specialized) are available without
+        artificial capping. When skills are required/selected for the task, any tools
+        referenced by those skills are guaranteed to be included.
         """
         registry_tools = self._deps.tool_registry.tools_for_agent(self.name)
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
 
+        # Check required/selected skills for this task prompt to guarantee their tools are available
+        skill_tools: set[str] = set()
+        if task_prompt and self._deps.skill_registry is not None:
+            skills = [s for s in self._deps.skill_registry.all() if s.available_to(self.domain)]
+            selected = []
+            if self._deps.skill_selector is not None:
+                try:
+                    selected = await self._deps.skill_selector.select(task_prompt, candidates=skills)
+                except Exception:
+                    selected = []
+            all_tool_names = {t.name for t in registry_tools}
+            for skill in selected:
+                for t_name in all_tool_names:
+                    if t_name in skill.body or t_name in skill.description:
+                        skill_tools.add(t_name)
+
         tool_index = self._deps.tool_index
         if task_prompt and tool_index is not None and len(registry_tools) > SEMANTIC_FILTER_MIN:
-            top_names = set(await tool_index.search_tools(task_prompt, top_k=SEMANTIC_TOP_K))
-            # Never let semantic ranking hide the essential read/search/edit/verify
-            # core - only ever force-including tools the agent actually has (#8).
+            try:
+                top_names = set(await tool_index.search_tools(task_prompt, top_k=SEMANTIC_TOP_K))
+            except Exception:
+                top_names = set()
             top_names |= {t.name for t in registry_tools if t.name in _CORE_TOOL_NAMES}
+            top_names |= skill_tools
             if top_names:
                 scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools if t.name in top_names]
-                if not scored:
-                    scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
-                    if len(scored) > 10:
-                        core = [p for p in scored if p[0].name in _CORE_TOOL_NAMES]
-                        non_core = [p for p in scored if p[0].name not in _CORE_TOOL_NAMES]
-                        scored = (core + non_core)[:10]
             else:
                 scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
-                if len(scored) > 10:
-                    core = [p for p in scored if p[0].name in _CORE_TOOL_NAMES]
-                    non_core = [p for p in scored if p[0].name not in _CORE_TOOL_NAMES]
-                    scored = (core + non_core)[:10]
         else:
             scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
-            if len(scored) > 10:
-                core = [p for p in scored if p[0].name in _CORE_TOOL_NAMES]
-                non_core = [p for p in scored if p[0].name not in _CORE_TOOL_NAMES]
-                scored = (core + non_core)[:10]
 
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return scored
