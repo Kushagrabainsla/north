@@ -844,15 +844,14 @@ class NorthApp(App[None]):
         # discovery is async, so the banner is composed in a worker.
         self.run_worker(self._draw_banner_async(), exclusive=False)
 
-    async def _draw_banner_async(self) -> None:
-        log = self.query_one("#log", RichLog)
+    def _write_banner_lines(self, log: RichLog, toolsets: list[str] | None = None) -> None:
         backend = f"textual · {os.environ.get('TERM', 'unknown')}"
         cwd = self.workspace or os.getcwd()
         home = str(Path.home())
         if cwd.startswith(home):
             cwd = "~" + cwd[len(home) :]
 
-        toolsets = await self._fetch_agents()
+        tools = toolsets if toolsets is not None else getattr(self, "_cached_agent_toolsets", None)
 
         log.write("")
         log.write("  [bold white]north[/bold white]  [bright_black]personal operating system[/bright_black]")
@@ -861,13 +860,18 @@ class NorthApp(App[None]):
         log.write(f"  [bright_black]backend[/bright_black]   {backend}")
         log.write(f"  [bright_black]cwd[/bright_black]       {cwd}")
         log.write(f"  [bright_black]strategy[/bright_black]  {self._strategy}")
-        if toolsets:
-            shown = ", ".join(toolsets[:10]) + ("…" if len(toolsets) > 10 else "")
+        if tools:
+            shown = ", ".join(tools[:10]) + ("…" if len(tools) > 10 else "")
             log.write(f"  [bright_black]toolsets[/bright_black]  {shown}")
         if self.yolo:
             log.write("  [#f85149]⚠ YOLO[/#f85149]     [bright_black]auto-approve enabled[/bright_black]")
         log.write("")
         self._write_rule()
+
+    async def _draw_banner_async(self) -> None:
+        log = self.query_one("#log", RichLog)
+        self._cached_agent_toolsets = await self._fetch_agents()
+        self._write_banner_lines(log, self._cached_agent_toolsets)
 
     async def _fetch_agents(self) -> list[str]:
         """Best-effort list of registered agent names, shown as 'toolsets' in the
@@ -2022,7 +2026,7 @@ class NorthApp(App[None]):
         with contextlib.suppress(Exception):
             log = self.query_one("#log", RichLog)
             log.clear()
-            self._draw_banner()
+            self._write_banner_lines(log)
             for turn in self._turns:
                 log.write(f"> {turn.get('prompt', '')}")
                 if self._details_expanded:
