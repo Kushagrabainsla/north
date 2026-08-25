@@ -75,12 +75,14 @@ class SkillSelector:
         self._embeddings = None
 
     async def _skill_embeddings(self, skills: list[Skill]) -> dict[str, list[float]]:
-        """Embed each skill's retrieval key once, rebuilding when the skill set changes."""
-        names = {skill.name for skill in skills}
-        if self._embeddings is not None and set(self._embeddings) == names:
-            return self._embeddings
-        vectors = await self._embed_fn([_retrieval_key(skill) for skill in skills])
-        self._embeddings = {skill.name: vec for skill, vec in zip(skills, vectors, strict=False)}
+        """Embed each skill's retrieval key once, incrementally caching embeddings."""
+        if self._embeddings is None:
+            self._embeddings = {}
+        missing = [skill for skill in skills if skill.name not in self._embeddings]
+        if missing:
+            vectors = await self._embed_fn([_retrieval_key(skill) for skill in missing])
+            for skill, vec in zip(missing, vectors, strict=False):
+                self._embeddings[skill.name] = vec
         return self._embeddings
 
 

@@ -80,14 +80,15 @@ class ApprovalStore:
         if event is None:
             card = self._cards.get(card_id)
             return card if (card and card.status != "pending") else None
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(event.wait(), timeout=timeout)
+        try:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(event.wait(), timeout=timeout)
+        finally:
+            self._events.pop(card_id, None)
 
         card = self._cards.get(card_id)
         if card is None or card.status == "pending":
             return None
-        # Clean up event once resolved
-        self._events.pop(card_id, None)
         return card
 
     def get(self, card_id: str) -> Card | None:

@@ -108,17 +108,23 @@ class TaskContextStore:
 
         while True:
 
-            def _check() -> sqlite3.Row | None:
+            def _check() -> tuple[sqlite3.Row | None, str]:
                 with open_db_connection(self._db_path) as conn:
                     try:
-                        return conn.execute(
+                        key_row = conn.execute(
                             "SELECT value, status FROM task_state WHERE task_id = ? AND agent = ? AND key = ?",
                             (task_id, source_agent, actual_key),
                         ).fetchone()
+                        status_row = conn.execute(
+                            "SELECT status FROM task_state WHERE task_id = ? AND agent = ? AND key = '_status'",
+                            (task_id, source_agent),
+                        ).fetchone()
+                        agent_status = status_row["status"] if status_row else "unknown"
+                        return key_row, agent_status
                     except sqlite3.OperationalError:
-                        return None
+                        return None, "unknown"
 
-            row = await asyncio.to_thread(_check)
+            row, agent_status = await asyncio.to_thread(_check)
             if row:
                 status = row["status"]
                 if status == "completed":
@@ -131,22 +137,11 @@ class TaskContextStore:
                         return None
                 elif status == "failed":
                     raise OrchestratorError(f"Source agent '{source_agent}' failed. Cannot read '{key}'.")
+            elif agent_status == "failed":
+                raise OrchestratorError(f"Source agent '{source_agent}' failed. Key '{key}' is unavailable.")
 
             elapsed = loop.time() - start_time
             if elapsed >= timeout:
-
-                def _check_agent_status() -> str:
-                    with open_db_connection(self._db_path) as conn:
-                        try:
-                            r = conn.execute(
-                                "SELECT status FROM task_state WHERE task_id = ? AND agent = ? AND key = ?",
-                                (task_id, source_agent, "_status"),
-                            ).fetchone()
-                            return r["status"] if r else "unknown"
-                        except sqlite3.OperationalError:
-                            return "unknown"
-
-                agent_status = await asyncio.to_thread(_check_agent_status)
                 if agent_status in ("pending", "running"):
                     if required:
                         raise OrchestratorError(
