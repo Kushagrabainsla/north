@@ -524,7 +524,7 @@ class Orchestrator:
                 existing_id = self._idempotency.get(key)
                 if existing_id is not None:
                     existing = await self.get_task(existing_id)
-                    if existing is not None:
+                    if existing is not None and existing.status in ("pending", "running", "queued"):
                         logger.info("submit_task: deduped duplicate submission to task %s", existing_id)
                         return existing
             if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
