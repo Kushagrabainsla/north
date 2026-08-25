@@ -710,7 +710,6 @@ class NorthApp(App[None]):
         # repeats of the same pending card into a single prompt.
         self._pending_card_id: str | None = None
         self._user_task_ids: set[str] = set()
-        self._awaiting_user_task: bool = False
         self._last_submitted_prompt: str = ""
         self._conversation_history: deque[dict] = deque(maxlen=5)
         self._pending_user_messages: dict[str, str] = {}
@@ -1052,29 +1051,9 @@ class NorthApp(App[None]):
 
     async def _handle_event(self, event: str, data: dict) -> None:
         task_id = data.get("task_id", "")
+        # Filter out background daemons/cron tasks from hijacking the interactive chat view
         if task_id and task_id not in self._user_task_ids:
-            if self._awaiting_user_task:
-                self._user_task_ids.add(task_id)
-                self._turn_start_times.setdefault(task_id, time.monotonic())
-                self._pending_user_messages[task_id] = self._last_submitted_prompt
-                self._current_turn_activity[task_id] = {
-                    "task_id": task_id,
-                    "prompt": self._last_submitted_prompt,
-                    "domain": "",
-                    "is_consequential": False,
-                    "agents": [],
-                    "model": self._model,
-                    "thought_duration": 0.0,
-                    "thought_tokens": 0,
-                    "tools": [],
-                    "verifications": [],
-                    "output": "",
-                    "status": "running",
-                    "error": "",
-                }
-                self._awaiting_user_task = False
-            else:
-                return
+            return
         handler = self._event_handlers.get(event)
         if handler is not None:
             await handler(task_id, data)
@@ -1774,7 +1753,6 @@ class NorthApp(App[None]):
             body["context"] = "## Recent conversation\n" + "\n\n".join(turns)
 
         self._set_status("…")
-        self._awaiting_user_task = True
         self._last_submitted_prompt = text
         try:
             async with self._http() as c:
