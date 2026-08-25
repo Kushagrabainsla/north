@@ -79,11 +79,11 @@ Work through in order. Stop at the first that fits.
 One deterministic tool call, no agent needed.
 **Fits:** "create notes.txt", "turn off lights" (kasa), "list files"
 **Hard stops:** ambiguous intent, result needs interpretation
-**Never use `bash`, `chrome_agent`, or `browser` as single_tool** - scraping, browsing, and coding tasks need interpretation/ReAct loops; route to `single_agent` instead.
+**Never use `bash`, `chrome_agent`, `browser`, `take_screenshot`, or `take_photo` as single_tool** - scraping, browsing, coding, and visual inspection/screen understanding tasks need interpretation/ReAct loops (capturing the visual context and describing what is seen); route to `single_agent` instead.
 
 ### `single_agent`
 One agent's ReAct loop. Right for most tasks.
-**Fits:** "debug this error", "what did I spend on food"
+**Fits:** "debug this error", "what did I spend on food", "what is on my screen"
 **Hard stop:** do NOT upgrade to parallel just because complex.
 
 ### `parallel`
@@ -105,6 +105,10 @@ In hierarchical output, `parallel_groups` lists **sequential stages** - each inn
 ## Routing examples (STUDY THESE)
 
 ```
+"What is on my screen right now?" / "Check what I am seeing on my monitors"
+→ domain: general, mode: single_agent
+(VISUAL INSPECTION - general agent takes screenshot and analyzes what is on screen)
+
 "What is the capital of France?"
 → domain: general, mode: single_agent
 (FACTUAL QUESTION - general agent answers from knowledge)
