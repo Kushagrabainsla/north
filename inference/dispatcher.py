@@ -222,11 +222,28 @@ class ModelDispatcher(InferenceRouter):
         request: ToolCallRequest,
         token_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> ToolCallResponse:
-        text = " ".join(str(m.get("content") or "") for m in request.messages)
-        # Tool schemas are sent with every request and can dwarf short
-        # conversations - include them or the context-fit check undercounts.
-        tools_chars = sum(len(json.dumps(t)) for t in request.tools) if request.tools else 0
-        estimated = (len(text) + tools_chars) // 4
+        # Estimate tokens safely without treating base64 image data URLs as millions of text tokens
+        estimated = 0
+        for m in request.messages:
+            c = m.get("content")
+            if isinstance(c, str):
+                estimated += len(c) // 4
+            elif isinstance(c, list):
+                for part in c:
+                    if isinstance(part, dict):
+                        if part.get("type") == "image_url":
+                            estimated += 1200  # Standard high-res image token footprint
+                        elif part.get("type") == "text":
+                            estimated += len(str(part.get("text") or "")) // 4
+                        else:
+                            estimated += len(str(part)) // 4
+                    else:
+                        estimated += len(str(part)) // 4
+            elif c:
+                estimated += len(str(c)) // 4
+        if request.tools:
+            tools_chars = sum(len(json.dumps(t)) for t in request.tools)
+            estimated += tools_chars // 4
         priority = self._effective_priority(request.priority)
         candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated, pool=request.pool)
         fallback = self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated) if candidates else None

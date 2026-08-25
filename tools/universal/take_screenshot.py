@@ -108,6 +108,35 @@ def _capture_one(path: Path, display: int | None) -> None:
         raise RuntimeError(f"screencapture failed: {res.stderr}")
 
 
+def _compress_for_vision(src_path: Path) -> tuple[str, str]:
+    """Compress and resize screenshot for vision LLM inference using macOS sips.
+
+    Reduces full-res Retina PNGs (6MB - 15MB) to crisp 1600px JPEGs (~200KB),
+    preventing context overflows while preserving complete legibility.
+    """
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        res = subprocess.run(
+            ["sips", "-s", "format", "jpeg", "-s", "formatOptions", "80", "-Z", "1600", str(src_path), "--out", str(tmp_path)],
+            capture_output=True,
+            timeout=5,
+        )
+        if res.returncode == 0 and tmp_path.exists():
+            data = tmp_path.read_bytes()
+            tmp_path.unlink(missing_ok=True)
+            b64 = base64.b64encode(data).decode("ascii")
+            return b64, "image/jpeg"
+    except Exception:
+        pass
+    # Fallback to direct raw bytes if sips fails
+    raw = src_path.read_bytes()
+    b64 = base64.b64encode(raw).decode("ascii")
+    mime, _ = mimetypes.guess_type(str(src_path))
+    return b64, mime or "image/png"
+
+
 def _capture_sync(path: Path, display: int | None) -> ToolOutput:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,12 +165,8 @@ def _capture_sync(path: Path, display: int | None) -> ToolOutput:
             total_bytes += len(image_bytes)
             written.append(out_path)
 
-        # Encode only the first image into base64 (the rest are on disk).
-        first = written[0].read_bytes()
-        b64 = base64.b64encode(first).decode("ascii")
-        mime, _ = mimetypes.guess_type(str(written[0]))
-        if mime is None:
-            mime = "image/png"
+        # Compress visual preview for vision LLM consumption
+        b64, mime = _compress_for_vision(written[0])
 
         return ToolOutput(
             success=True,

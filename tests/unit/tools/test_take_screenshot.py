@@ -49,7 +49,7 @@ async def test_screenshot_creates_file(tmp_path: Path) -> None:
     assert out.data["paths"] == [str(dest)]
     assert out.data["size_bytes"] > 0
     assert out.data["base64_image"] is not None
-    assert out.data["mime_type"] == "image/png"
+    assert out.data["mime_type"] in ("image/jpeg", "image/png")
 
 
 async def test_screenshot_default_filename(tmp_path: Path) -> None:
