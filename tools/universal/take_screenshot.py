@@ -42,8 +42,8 @@ class TakeScreenshotTool(Tool):
             "display": {
                 "type": "integer",
                 "description": (
-                    "Capture only this 1-based display index (e.g. 1 = main, 2 = second monitor, 3 = third monitor). "
-                    "Defaults to capturing all connected displays in a combined view."
+                    "Capture a specific 1-based display index (e.g. 1 = main, 2 = second monitor, 3 = third monitor). "
+                    "Pass 0 or omit to capture ALL connected monitors simultaneously in a combined panoramic view."
                 ),
             },
         },
@@ -69,8 +69,10 @@ class TakeScreenshotTool(Tool):
                 display = int(display)
             except (TypeError, ValueError):
                 return ToolOutput(success=False, error="Parameter 'display' must be an integer.")
-            if display < 1:
-                return ToolOutput(success=False, error="Parameter 'display' must be >= 1.")
+            if display == 0:
+                display = None  # 0 explicitly means all connected monitors
+            elif display < 0:
+                return ToolOutput(success=False, error="Parameter 'display' must be >= 0 (0 for all displays, 1+ for specific monitor).")
 
         return await asyncio.to_thread(_capture_screen_pure_python, resolved, display)
 

@@ -88,11 +88,15 @@ async def test_screenshot_default_filename(tmp_path: Path) -> None:
 
 
 async def test_screenshot_invalid_display(tmp_path: Path) -> None:
-    """A non-integer or <1 display value is rejected."""
+    """A non-integer or negative display value is rejected."""
     tool = TakeScreenshotTool()
-    out = await tool.run(ToolInput(params={"path": "shot.png", "workspace": str(tmp_path), "display": 0}))
+    out = await tool.run(ToolInput(params={"path": "shot.png", "workspace": str(tmp_path), "display": -1}))
     assert not out.success
     assert "display" in out.error.lower()
+
+    out2 = await tool.run(ToolInput(params={"path": "shot.png", "workspace": str(tmp_path), "display": "abc"}))
+    assert not out2.success
+    assert "display" in out2.error.lower()
 
 
 async def test_screenshot_blocked_path(tmp_path: Path) -> None:
