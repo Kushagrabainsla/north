@@ -59,6 +59,24 @@ _NO_CODE_KINDS: frozenset[str] = frozenset({"question", "research"})
 # researcher→architect→coder→reviewer pipeline - so they map to a coder-only plan.
 _DEPLOY_KINDS: frozenset[str] = frozenset({"deploy", "ship"})
 
+# Tools that produce raw sensory, perceptual, search, or shell output that requires
+# model interpretation (e.g. answering "what is on my screen?", "search the web for X",
+# "what are these files?"). They must never run in blind single_tool mode.
+_INTERPRETATION_TOOLS: frozenset[str] = frozenset({
+    "take_screenshot",
+    "take_photo",
+    "web_search",
+    "fetch_url",
+    "browser",
+    "chrome_agent",
+    "bash",
+    "shell",
+    "search_code",
+    "find_references",
+    "goto_definition",
+    "search_symbols",
+})
+
 
 def _plan_cache_key(prompt: str, conversation: str = "") -> str:
     """Stable hash of the normalized prompt (plus recent conversation) for routing.
@@ -317,15 +335,15 @@ class ExecutionPlanner:
         except ValueError:
             mode = ExecutionMode.SINGLE_AGENT
 
-        # single_tool path
+        # single_tool path: strictly for deterministic actuation without interpretation
         if mode == ExecutionMode.SINGLE_TOOL:
             direct_tool = data.get("direct_tool")
             direct_tool_params = data.get("direct_tool_params") or {}
-            # Interactive or multi-step tools require an agent's ReAct loop
+            # Sensory, perceptual, search, and interactive tools require an agent's ReAct loop
             if (
                 not direct_tool
                 or not isinstance(direct_tool_params, dict)
-                or direct_tool in ("bash", "shell", "chrome_agent", "browser")
+                or direct_tool in _INTERPRETATION_TOOLS
             ):
                 return self.build_fallback_plan(domain, task_id)
             # Verify the tool actually exists
