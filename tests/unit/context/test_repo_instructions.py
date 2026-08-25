@@ -34,3 +34,37 @@ async def test_multiple_files_each_get_their_own_delimiters(tmp_path: Path) -> N
 async def test_empty_workspace_returns_empty(tmp_path: Path) -> None:
     assert await load_repo_instructions(str(tmp_path)) == ""
     assert await load_repo_instructions("") == ""
+
+
+async def test_hierarchical_nested_repo_instructions(tmp_path: Path) -> None:
+    # Set up mock git root
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "AGENTS.md").write_text("global root rule", encoding="utf-8")
+    (tmp_path / "NORTH.md").write_text("north project rule", encoding="utf-8")
+
+    subpkg = tmp_path / "packages" / "api"
+    subpkg.mkdir(parents=True)
+    (subpkg / "AGENTS.md").write_text("api package rule", encoding="utf-8")
+
+    cursor_rules_dir = subpkg / ".cursor" / "rules"
+    cursor_rules_dir.mkdir(parents=True)
+    (cursor_rules_dir / "style.mdc").write_text("cursor rule for api", encoding="utf-8")
+
+    north_rules_dir = tmp_path / ".north" / "rules"
+    north_rules_dir.mkdir(parents=True)
+    (north_rules_dir / "security.md").write_text("north security rule", encoding="utf-8")
+
+    # Load from subfolder
+    text = await load_repo_instructions(str(subpkg))
+
+    assert "<<<BEGIN UNTRUSTED REPO FILE: AGENTS.md>>>" in text
+    assert "<<<BEGIN UNTRUSTED REPO FILE: NORTH.md>>>" in text
+    assert "<<<BEGIN UNTRUSTED REPO FILE: .north/rules/security.md>>>" in text
+    assert "<<<BEGIN UNTRUSTED REPO FILE: packages/api/AGENTS.md>>>" in text
+    assert "<<<BEGIN UNTRUSTED REPO FILE: packages/api/.cursor/rules/style.mdc>>>" in text
+
+    # Verify order: root rules appear before subfolder rules
+    pos_root = text.index("global root rule")
+    pos_sub = text.index("api package rule")
+    assert pos_root < pos_sub
+

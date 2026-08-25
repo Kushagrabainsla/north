@@ -73,14 +73,14 @@ class TelegramGateway:
         logger.info("Telegram gateway stopped")
 
     async def _get_updates(self) -> list[dict]:
-        """Long-poll Telegram for new messages."""
+        """Long-poll Telegram for new messages and callback queries."""
         try:
             resp = await self._http.post(
                 _bot_url("getUpdates"),
                 json={
                     "offset": self._offset,
                     "timeout": 25,  # long-poll (seconds)
-                    "allowed_updates": ["message"],
+                    "allowed_updates": ["message", "callback_query"],
                 },
             )
             resp.raise_for_status()
@@ -93,7 +93,13 @@ class TelegramGateway:
             logger.debug("Telegram poll error: %s", exc)
             return []
 
-    async def _send_message(self, chat_id: int, text: str, reply_to: int | None = None) -> None:
+    async def _send_message(
+        self,
+        chat_id: int,
+        text: str,
+        reply_to: int | None = None,
+        reply_markup: dict | None = None,
+    ) -> dict | None:
         """Send a message to a Telegram chat."""
         payload: dict = {
             "chat_id": chat_id,
@@ -102,9 +108,12 @@ class TelegramGateway:
         }
         if reply_to:
             payload["reply_to_message_id"] = reply_to
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         try:
             resp = await self._http.post(_bot_url("sendMessage"), json=payload)
             resp.raise_for_status()
+            return resp.json()
         except httpx.HTTPStatusError as exc:
             # Markdown parsing failed (e.g. unescaped code characters), retry as plain text
             if exc.response.status_code == 400 and payload.get("parse_mode"):
@@ -112,19 +121,107 @@ class TelegramGateway:
                 try:
                     resp = await self._http.post(_bot_url("sendMessage"), json=payload)
                     resp.raise_for_status()
-                    return
+                    return resp.json()
                 except httpx.RequestError as retry_exc:
                     logger.error("Failed to send Telegram plain message to %s: %s", chat_id, retry_exc)
             logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
         except httpx.RequestError as exc:
             logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
+        return None
+
+    async def _edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: dict | None = None,
+    ) -> bool:
+        """Edit an existing Telegram message."""
+        payload: dict = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "Markdown",
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        try:
+            resp = await self._http.post(_bot_url("editMessageText"), json=payload)
+            resp.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 400 and payload.get("parse_mode"):
+                payload.pop("parse_mode", None)
+                try:
+                    resp = await self._http.post(_bot_url("editMessageText"), json=payload)
+                    resp.raise_for_status()
+                    return True
+                except httpx.RequestError:
+                    pass
+            logger.error("Failed to edit Telegram message %s: %s", message_id, exc)
+        except httpx.RequestError as exc:
+            logger.error("Failed to edit Telegram message %s: %s", message_id, exc)
+        return False
+
+    async def _answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
+        """Acknowledge a callback query from an inline keyboard button."""
+        payload: dict = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text
+        try:
+            await self._http.post(_bot_url("answerCallbackQuery"), json=payload)
+        except httpx.RequestError as exc:
+            logger.debug("Failed to answer callback query %s: %s", callback_query_id, exc)
+
+    async def _respond_approval(self, card_id: str, decision: str, chosen_option: str = "") -> bool:
+        """Submit an approval response to the orchestrator."""
+        url = f"{self._orchestrator_base}/orchestrator/approval/respond"
+        payload = {
+            "card_id": card_id,
+            "decision": decision,
+            "chosen_option": chosen_option or ("Approve" if decision == "approved" else "Reject"),
+        }
+        try:
+            resp = await self._http.post(url, json=payload, headers=_headers())
+            return resp.status_code in (200, 204)
+        except httpx.RequestError as exc:
+            logger.error("Failed to submit approval response to orchestrator: %s", exc)
+            return False
+
+    async def _cancel_task(self, target_id: str) -> bool:
+        """Cancel a running task in the orchestrator."""
+        url = f"{self._orchestrator_base}/orchestrator/cancel/{target_id}"
+        try:
+            resp = await self._http.post(url, headers=_headers())
+            return resp.status_code == 200
+        except httpx.RequestError as exc:
+            logger.error("Failed to cancel task %s: %s", target_id, exc)
+            return False
+
+    async def _get_settings(self) -> dict | None:
+        """Fetch orchestrator settings."""
+        url = f"{self._orchestrator_base}/orchestrator/settings"
+        try:
+            resp = await self._http.get(url, headers=_headers())
+            if resp.status_code == 200:
+                return resp.json()
+        except httpx.RequestError:
+            pass
+        return None
+
+    async def _update_settings(self, new_settings: dict) -> dict | None:
+        """Update orchestrator settings."""
+        url = f"{self._orchestrator_base}/orchestrator/settings"
+        try:
+            resp = await self._http.post(url, json=new_settings, headers=_headers())
+            if resp.status_code == 200:
+                return resp.json()
+        except httpx.RequestError:
+            pass
+        return None
 
     async def _send_limits(self, chat_id: int, reply_to: int | None = None) -> None:
-        """Send the current rate-limit / cooldown status as Markdown.
-
-        Reads the on-disk status file directly (same source as ``north limits``),
-        so it works whether or not the orchestrator is actively dispatching.
-        """
+        """Send the current rate-limit / cooldown status as Markdown."""
         from inference.rate_limit_status import format_status_markdown
 
         text = format_status_markdown(settings.north_home / "rate_limit_status.json")
@@ -157,15 +254,41 @@ class TelegramGateway:
             logger.error("Failed to submit task to north: %s", exc)
             return None
 
-    async def _get_task_result(self, task_id: str) -> str | None:
-        """Poll the ledger for the completed agent's output."""
+    async def _get_task_result(self, task_id: str, chat_id: int | None = None) -> str | None:
+        """Poll the ledger for the completed agent's output, sending interactive approval cards if needed."""
         url = f"{self._orchestrator_base}/orchestrator/ledger"
         params = {"task_id": task_id, "limit": 50}
+        prompted_cards: set[str] = set()
+
         for i in range(_TASK_POLL_MAX_ATTEMPTS):
             try:
                 resp = await self._http.get(url, params=params, headers=_headers())
                 if resp.status_code == 200:
                     entries = resp.json()
+
+                    # Check for interactive approval cards
+                    if chat_id is not None:
+                        for entry in entries:
+                            action = entry.get("action", "")
+                            if action == "approval_required":
+                                card_id = entry.get("card_id") or ""
+                                if card_id and card_id not in prompted_cards:
+                                    prompted_cards.add(card_id)
+                                    msg_text = (
+                                        f"⚠️ **Approval Required**\n\n"
+                                        f"Task `{task_id}` requires your confirmation to proceed:\n"
+                                        f"_{entry.get('message', 'Confirm action')}_"
+                                    )
+                                    markup = {
+                                        "inline_keyboard": [
+                                            [
+                                                {"text": "✅ Approve", "callback_data": f"approval:approved:{card_id}"},
+                                                {"text": "❌ Reject", "callback_data": f"approval:rejected:{card_id}"},
+                                            ]
+                                        ]
+                                    }
+                                    await self._send_message(chat_id, msg_text, reply_markup=markup)
+
                     # Scan for the final synthesized or completed task output first
                     for entry in entries:  # most-recent-first
                         action = entry.get("action", "")
@@ -240,6 +363,40 @@ class TelegramGateway:
             logger.error("Failed to transcribe audio: %s", exc)
             return None
 
+    async def _process_callback_query(self, cb: dict) -> None:
+        """Handle inline button clicks (approvals, dismissals)."""
+        cb_id = cb.get("id", "")
+        from_id = cb.get("from", {}).get("id")
+        msg = cb.get("message", {})
+        chat_id = msg.get("chat", {}).get("id")
+        data = cb.get("data", "")
+
+        allowed = settings.parsed_telegram_allowed_chat_ids
+        if allowed and (chat_id not in allowed and (from_id is None or from_id not in allowed)):
+            await self._answer_callback_query(cb_id, text="⛔ Unauthorized")
+            return
+
+        if data.startswith("approval:"):
+            # Format: approval:<decision>:<card_id>
+            parts = data.split(":", 2)
+            if len(parts) == 3:
+                decision = parts[1]
+                card_id = parts[2]
+                success = await self._respond_approval(card_id, decision)
+                status_icon = "✅" if decision == "approved" else "❌"
+                if success:
+                    msg_id = msg.get("message_id")
+                    if chat_id and msg_id:
+                        orig_text = msg.get("text", "Approval Request")
+                        new_text = f"{orig_text}\n\n{status_icon} **Decision:** {decision.capitalize()} (via Telegram)"
+                        await self._edit_message_text(chat_id, msg_id, new_text, reply_markup={"inline_keyboard": []})
+                    await self._answer_callback_query(cb_id, text=f"{status_icon} Decision recorded: {decision}")
+                else:
+                    await self._answer_callback_query(cb_id, text="❌ Failed to record decision (already resolved or error)")
+                return
+
+        await self._answer_callback_query(cb_id)
+
     async def _process_message(self, msg: dict) -> None:
         """Process one incoming Telegram message."""
         chat_id = msg["chat"]["id"]
@@ -280,26 +437,74 @@ class TelegramGateway:
         if not text:
             return
 
-        # Ignore commands we don't handle
+        # Slash commands
         if text.startswith("/"):
-            if text == "/start":
+            cmd = text.split()[0]
+            args = text.split()[1:]
+
+            if cmd in ("/start", "/help"):
                 await self._send_message(
                     chat_id,
-                    "👋 Hello! I'm **north** — your personal life operating system.\n\n"
-                    "Just send me a message and I'll process it through my agents.\n"
-                    "You can also send **voice messages** — I'll transcribe and handle them.\n\n"
-                    "Examples:\n"
-                    '  • "What\'s on my calendar today?"\n'
-                    '  • "Check my budget for groceries"\n'
-                    '  • "Remind me about the dentist appointment"\n'
-                    "  • 🎤 Send a voice note with any request\n\n"
-                    "Commands:\n"
-                    "  • /limits — show provider/model rate-limit & cooldown status",
+                    "👋 **Welcome to North** — Your Autonomous Assistant\n\n"
+                    "Send any message or voice note to execute tasks.\n\n"
+                    "**Available Controls:**\n"
+                    "  • `/status` — View active tasks & orchestrator status\n"
+                    "  • `/cancel` — Cancel the currently running task\n"
+                    "  • `/autonomy` — View or set approval mode (`/autonomy interactive|auto|autonomous`)\n"
+                    "  • `/limits` — Show provider/model rate-limit & cooldown status\n"
+                    "  • `/help` — Show this command reference",
                     reply_to=message_id,
                 )
-            elif text.split()[0] == "/limits":
-                # Show precise rate-limit status (same data as `north limits`).
+            elif cmd == "/limits":
                 await self._send_limits(chat_id, reply_to=message_id)
+            elif cmd == "/status":
+                url = f"{self._orchestrator_base}/orchestrator/tasks"
+                try:
+                    resp = await self._http.get(url, headers=_headers())
+                    if resp.status_code == 200:
+                        tasks = resp.json()
+                        if not tasks:
+                            await self._send_message(chat_id, "🟢 **Status:** Idle — No active tasks running.", reply_to=message_id)
+                        else:
+                            lines = [f"🔄 **Active Tasks ({len(tasks)}):**"]
+                            for t in tasks[:5]:
+                                lines.append(f"  • `{t.get('task_id')}`: {t.get('status')} ({t.get('agent', 'orch')})")
+                            await self._send_message(chat_id, "\n".join(lines), reply_to=message_id)
+                    else:
+                        await self._send_message(chat_id, "⚠️ Could not retrieve tasks from orchestrator.", reply_to=message_id)
+                except httpx.RequestError as exc:
+                    await self._send_message(chat_id, f"❌ Connection error: {exc}", reply_to=message_id)
+            elif cmd in ("/cancel", "/stop"):
+                # Find pending task for this chat or target arg
+                target_task = args[0] if args else None
+                if not target_task:
+                    for (c_id, _), item in self._pending.items():
+                        if c_id == chat_id:
+                            target_task = item.get("task_id")
+                            break
+                if target_task:
+                    success = await self._cancel_task(target_task)
+                    if success:
+                        await self._send_message(chat_id, f"🛑 Task `{target_task}` cancelled.", reply_to=message_id)
+                    else:
+                        await self._send_message(chat_id, f"❌ Failed to cancel task `{target_task}`.", reply_to=message_id)
+                else:
+                    await self._send_message(chat_id, "ℹ️ No running tasks found to cancel.", reply_to=message_id)
+            elif cmd == "/autonomy":
+                if args:
+                    new_mode = args[0].lower()
+                    if new_mode in ("interactive", "auto", "autonomous"):
+                        updated = await self._update_settings({"approval_mode": new_mode})
+                        if updated:
+                            await self._send_message(chat_id, f"✅ Approval mode updated to: `{new_mode}`", reply_to=message_id)
+                        else:
+                            await self._send_message(chat_id, "❌ Failed to update approval mode.", reply_to=message_id)
+                    else:
+                        await self._send_message(chat_id, "⚠️ Invalid mode. Choose: `interactive`, `auto`, or `autonomous`.", reply_to=message_id)
+                else:
+                    current = await self._get_settings()
+                    mode = current.get("approval_mode", "interactive") if current else settings.approval_mode
+                    await self._send_message(chat_id, f"⚙️ Current approval mode: `{mode}`\nUse `/autonomy <mode>` to change.", reply_to=message_id)
             return
 
         # Show typing indicator
@@ -328,7 +533,7 @@ class TelegramGateway:
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(self._typing_keepalive(chat_id, stop_typing))
         try:
-            output = await self._get_task_result(task_id)
+            output = await self._get_task_result(task_id, chat_id=chat_id)
         finally:
             stop_typing.set()
             typing_task.cancel()
@@ -366,6 +571,11 @@ class TelegramGateway:
                         msg = update["message"]
                         # Process in its own task so we don't block the poller, retaining a strong ref
                         task = asyncio.create_task(self._process_message(msg))
+                        self._tasks.add(task)
+                        task.add_done_callback(self._tasks.discard)
+                    elif "callback_query" in update:
+                        cb = update["callback_query"]
+                        task = asyncio.create_task(self._process_callback_query(cb))
                         self._tasks.add(task)
                         task.add_done_callback(self._tasks.discard)
             except asyncio.CancelledError:

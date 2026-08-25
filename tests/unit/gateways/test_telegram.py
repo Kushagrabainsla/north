@@ -125,3 +125,65 @@ async def test_telegram_gateway_concurrent_messages_tracking(monkeypatch: pytest
     gw._send_message.assert_any_await(12345, "res2", reply_to=102)
     assert len(gw._pending) == 0
 
+
+@pytest.mark.asyncio
+async def test_telegram_gateway_slash_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+
+    gw = TelegramGateway()
+    gw._send_message = AsyncMock()  # type: ignore[method-assign]
+    gw._cancel_task = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    gw._update_settings = AsyncMock(return_value={"approval_mode": "auto"})  # type: ignore[method-assign]
+    gw._get_settings = AsyncMock(return_value={"approval_mode": "interactive"})  # type: ignore[method-assign]
+
+    # /help command
+    await gw._process_message({"message_id": 1, "chat": {"id": 12345}, "text": "/help"})
+    assert gw._send_message.call_args[0][0] == 12345
+    assert "Available Controls" in gw._send_message.call_args[0][1]
+    assert gw._send_message.call_args[1].get("reply_to") == 1
+
+
+    # /cancel command when pending
+    gw._pending[(12345, 99)] = {"message_id": 99, "task_id": "task_abc"}
+    await gw._process_message({"message_id": 2, "chat": {"id": 12345}, "text": "/cancel"})
+    gw._cancel_task.assert_awaited_with("task_abc")
+    assert "cancelled" in gw._send_message.call_args[0][1].lower()
+
+    # /autonomy auto command
+    await gw._process_message({"message_id": 3, "chat": {"id": 12345}, "text": "/autonomy auto"})
+    gw._update_settings.assert_awaited_with({"approval_mode": "auto"})
+    assert "updated" in gw._send_message.call_args[0][1].lower()
+
+
+@pytest.mark.asyncio
+async def test_telegram_gateway_callback_query_approval(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+
+    gw = TelegramGateway()
+    gw._respond_approval = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    gw._edit_message_text = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    gw._answer_callback_query = AsyncMock()  # type: ignore[method-assign]
+
+    cb = {
+        "id": "cb_123",
+        "from": {"id": 12345},
+        "message": {
+            "message_id": 55,
+            "chat": {"id": 12345},
+            "text": "Approval required: delete file",
+        },
+        "data": "approval:approved:card_xyz",
+    }
+
+    await gw._process_callback_query(cb)
+
+    gw._respond_approval.assert_awaited_once_with("card_xyz", "approved")
+    gw._edit_message_text.assert_awaited_once()
+    assert "Approved" in gw._edit_message_text.call_args[0][2]
+    gw._answer_callback_query.assert_awaited_once_with("cb_123", text="✅ Decision recorded: approved")
+
+

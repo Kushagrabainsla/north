@@ -19,12 +19,19 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-# Well-known instruction filenames, in the order they are concatenated.
+# Well-known instruction filenames, in the order they are checked per directory.
 _INSTRUCTION_FILES: tuple[str, ...] = (
     "AGENTS.md",
     "CLAUDE.md",
-    ".github/copilot-instructions.md",
+    "NORTH.md",
     ".cursorrules",
+    ".github/copilot-instructions.md",
+    ".north/instructions.md",
+)
+_INSTRUCTION_GLOBS: tuple[str, ...] = (
+    ".cursor/rules/*.md",
+    ".cursor/rules/*.mdc",
+    ".north/rules/*.md",
 )
 _MAX_INSTRUCTION_CHARS = 12_000
 
@@ -32,8 +39,8 @@ _MAX_INSTRUCTION_CHARS = 12_000
 async def load_repo_instructions(workspace: str) -> str:
     """Return the repo's instruction files under *workspace*, merged into one section.
 
-    Searches the workspace root and its enclosing git root. Returns an empty
-    string when *workspace* is unset/invalid or no instruction files exist.
+    Searches hierarchically from the enclosing git root down to the workspace directory.
+    Returns an empty string when *workspace* is unset/invalid or no instruction files exist.
     """
     if not workspace:
         return ""
@@ -55,25 +62,54 @@ def _load_sync(workspace: str) -> str:
     if not root.is_dir():
         return ""
 
-    roots: list[Path] = [root]
     git_root = _git_root(root)
     if git_root is not None and git_root != root:
-        roots.append(git_root)
+        # Build top-down hierarchy: [git_root, intermediate_parents..., root]
+        chain = [root]
+        for p in root.parents:
+            chain.append(p)
+            if p == git_root:
+                break
+        roots = list(reversed(chain))
+    else:
+        roots = [root]
 
+    top_base = roots[0]
     sections: list[str] = []
     seen: set[Path] = set()
+
     for base in roots:
+        # 1. Exact well-known filenames
+        candidate_paths: list[Path] = []
         for relative in _INSTRUCTION_FILES:
             path = base / relative
-            if path in seen or not path.is_file():
-                continue
-            seen.add(path)
+            if path.is_file():
+                candidate_paths.append(path)
+
+        # 2. Directory rule globs
+        for pattern in _INSTRUCTION_GLOBS:
             try:
-                text = path.read_text(encoding="utf-8").strip()
+                candidate_paths.extend(sorted(base.glob(pattern)))
+            except OSError:
+                continue
+
+        for path in candidate_paths:
+            resolved = path.resolve()
+            if resolved in seen or not resolved.is_file():
+                continue
+            seen.add(resolved)
+            try:
+                text = resolved.read_text(encoding="utf-8").strip()
             except (OSError, UnicodeDecodeError):
                 continue
             if text:
-                sections.append(f"<<<BEGIN UNTRUSTED REPO FILE: {path.name}>>>\n{text}\n<<<END UNTRUSTED REPO FILE>>>")
+                try:
+                    rel_label = str(resolved.relative_to(top_base))
+                except ValueError:
+                    rel_label = resolved.name
+                sections.append(
+                    f"<<<BEGIN UNTRUSTED REPO FILE: {rel_label}>>>\n{text}\n<<<END UNTRUSTED REPO FILE>>>"
+                )
 
     if not sections:
         return ""
@@ -87,3 +123,4 @@ def _load_sync(workspace: str) -> str:
     if len(merged) > _MAX_INSTRUCTION_CHARS:
         merged = merged[:_MAX_INSTRUCTION_CHARS] + "\n\n[… repo conventions truncated]"
     return merged
+

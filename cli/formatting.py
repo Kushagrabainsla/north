@@ -353,3 +353,21 @@ def _copy_to_clipboard(text: str) -> bool:
             except Exception:
                 continue
     return True
+
+
+def summarize_diff(diff_text: str) -> tuple[int, int, list[str]]:
+    """Parse unified diff text and return (added_lines, deleted_lines, files_modified)."""
+    added = 0
+    deleted = 0
+    files: list[str] = []
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/") or line.startswith("+++ "):
+            fname = line.split(" ", 1)[-1].removeprefix("b/").strip()
+            if fname and fname not in files and fname != "/dev/null":
+                files.append(fname)
+        elif line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deleted += 1
+    return added, deleted, files
+

@@ -53,7 +53,9 @@ from cli.formatting import (
     _reconstruct_task_output,
     _short_model,
     _strip_markup,
+    summarize_diff,
 )
+
 
 
 class ToolInspectorModal(ModalScreen[None]):
@@ -1455,12 +1457,20 @@ class NorthApp(App[None]):
             self._log(f"  [#f85149]⚠[/#f85149]  [bright_black]auto-approved: {options[0]}[/bright_black]")
             await self._submit_approval("1")
             return
-        self._log("  [yellow]◆[/yellow]  [yellow]approval required[/yellow]")
+        self._log("  [yellow]◆[/yellow]  [yellow bold]approval required[/yellow bold]")
         msg = data.get("message", "")
         # Check if the message contains a unified diff code block
         if "```diff" in msg:
             pre, _, rest = msg.partition("```diff\n")
             diff_body, _, post = rest.partition("```")
+            added, deleted, files = summarize_diff(diff_body)
+            if files or added or deleted:
+                fnames = ", ".join(files[:3]) + ("…" if len(files) > 3 else "")
+                self._log(
+                    f"    [dim]Diff:[/dim] [cyan]{fnames or 'patch'}[/cyan]  "
+                    f"[green]+{added}[/green] [red]-{deleted}[/red]  "
+                    f"[bright_black](Ctrl+I to inspect)[/bright_black]"
+                )
             if pre.strip():
                 self._log_rich(RichText("    " + pre.strip(), style="white"))
             self._log_rich(
@@ -1474,8 +1484,16 @@ class NorthApp(App[None]):
         else:
             self._log_rich(RichText("    " + msg, style="white"))
 
-        for i, opt in enumerate(options, 1):
-            self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
+        if options == ["Approve", "Reject"]:
+            self._log(
+                "    [bold green][y][/bold green] [white]Approve (1)[/white]    "
+                "[bold red][n][/bold red] [white]Reject (2)[/white]    "
+                "[bright_black](or type rejection feedback)[/bright_black]"
+            )
+        else:
+            for i, opt in enumerate(options, 1):
+                self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
+
 
     async def _on_design_phase(self, task_id: str, data: dict) -> None:
         step = data.get("step", "")
@@ -1615,6 +1633,7 @@ class NorthApp(App[None]):
         # any selection (numbered option or free text) is an "answered" decision.
         is_question = bool(data.get("question"))
         options = data.get("options") or ([] if is_question else ["Approve", "Reject"])
+        feedback = ""
         try:
             idx = int(raw) - 1
             chosen = options[idx] if 0 <= idx < len(options) else raw
@@ -1623,12 +1642,16 @@ class NorthApp(App[None]):
                 chosen = raw  # free-form answer
             else:
                 low = raw.lower()
-                if low in ("a", "approve", "approved", "yes"):
+                if low in ("y", "yes", "a", "approve", "approved", "ok"):
                     chosen = options[0]
-                elif low in ("r", "reject", "rejected", "no"):
+                elif low in ("n", "no", "r", "reject", "rejected"):
                     chosen = options[1] if len(options) > 1 else options[0]
+                elif low.startswith(("n ", "reject ", "no ", "r ")):
+                    feedback = raw.split(maxsplit=1)[1].strip()
+                    chosen = f"Reject: {feedback}"
                 else:
                     chosen = raw or options[0]
+
         if is_question:
             decision = "answered"
         else:
@@ -1636,9 +1659,17 @@ class NorthApp(App[None]):
                 "approved"
                 if chosen == options[0]
                 else "rejected"
-                if len(options) > 1 and chosen == options[1]
+                if (len(options) > 1 and chosen == options[1]) or feedback or chosen.lower().startswith("reject")
                 else "answered"
             )
+
+        if decision == "approved":
+            self._log(f"    [dim green]✓  approved: {chosen}[/dim green]")
+        elif decision == "rejected":
+            self._log(f"    [dim red]✗  rejected: {chosen}[/dim red]")
+        else:
+            self._log(f"    [dim cyan]✓  answered: {chosen}[/dim cyan]")
+
         try:
             async with self._http() as c:
                 await c.post(
@@ -1655,6 +1686,7 @@ class NorthApp(App[None]):
                 )
         except Exception:
             pass
+
 
     # ── input ─────────────────────────────────────────────────────────────────
 
