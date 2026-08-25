@@ -220,13 +220,13 @@ class Agent(ABC):
         """Return (tool, confidence_score) pairs for this agent, sorted by score descending.
 
         All tools registered for the agent (universal + specialized) are available without
-        artificial capping. When skills are required/selected for the task, any tools
-        referenced by those skills are guaranteed to be included.
+        artificial capping or accidental filter dropouts. When skills or semantic search
+        identify tools relevant to the task, their ranking scores are prioritized.
         """
         registry_tools = self._deps.tool_registry.tools_for_agent(self.name)
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
 
-        # Check required/selected skills for this task prompt to guarantee their tools are available
+        # Check required/selected skills for this task prompt to prioritize their tools
         skill_tools: set[str] = set()
         if task_prompt and self._deps.skill_registry is not None:
             skills = [s for s in self._deps.skill_registry.all() if s.available_to(self.domain)]
@@ -242,20 +242,12 @@ class Agent(ABC):
                     if t_name in skill.body or t_name in skill.description:
                         skill_tools.add(t_name)
 
-        tool_index = self._deps.tool_index
-        if task_prompt and tool_index is not None and len(registry_tools) > SEMANTIC_FILTER_MIN:
-            try:
-                top_names = set(await tool_index.search_tools(task_prompt, top_k=SEMANTIC_TOP_K))
-            except Exception:
-                top_names = set()
-            top_names |= {t.name for t in registry_tools if t.name in _CORE_TOOL_NAMES}
-            top_names |= skill_tools
-            if top_names:
-                scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools if t.name in top_names]
-            else:
-                scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
-        else:
-            scored = [(t, scores.get(t.name, 0.5)) for t in registry_tools]
+        scored: list[tuple[Tool, float]] = []
+        for t in registry_tools:
+            base_score = scores.get(t.name, 0.5)
+            if t.name in skill_tools:
+                base_score = max(base_score, 0.9)
+            scored.append((t, base_score))
 
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return scored
