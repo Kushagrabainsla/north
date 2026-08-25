@@ -539,3 +539,119 @@ async def test_extract_profile_parses_sections(tmp_path: Path) -> None:
     assert "The user maintains the north agent framework" in contents
     assert "## Education" in md
     assert "## Projects" in md
+
+
+# --- New Hardened ROI Triage Tests -----------------------------------------
+
+
+def test_token_boundary_prevents_substring_false_positives() -> None:
+    """Words like 'recv' or 'opencv' must NOT match 'cv'; 'syntax' must NOT match 'tax'."""
+    from bootstrap.onboarding import _rank_file
+
+    home = Path.home()
+    recv_file = home / "Downloads" / "recv.txt"
+    cv_file = home / "Downloads" / "my_cv.pdf"
+
+    class _Stub:
+        def __init__(self, p: Path, size: int = 1000) -> None:
+            self._p = p
+            self._size = size
+        def resolve(self): return self._p
+        @property
+        def suffix(self): return self._p.suffix
+        @property
+        def stem(self): return self._p.stem
+        def stat(self):
+            import os
+            return os.stat_result((0, 0, 0, 0, 0, 0, self._size, 0, 0, 0))
+        def relative_to(self, other): return self._p.relative_to(other)
+
+    rank_recv = _rank_file(_Stub(recv_file), "downloads", user_tokens=set())
+    rank_cv = _rank_file(_Stub(cv_file), "downloads", user_tokens=set())
+
+    # CV file has lower rank tuple (higher priority)
+    assert rank_cv < rank_recv
+
+
+def test_user_identity_boosts_user_named_resumes() -> None:
+    """A file named 'Kushagra_Bainsla.pdf' must receive identity boost over generic notes."""
+    from bootstrap.onboarding import _rank_file
+
+    home = Path.home()
+    user_file = home / "Downloads" / "Kushagra_Bainsla.pdf"
+    generic_file = home / "Downloads" / "notes.txt"
+
+    class _Stub:
+        def __init__(self, p: Path, size: int = 1000) -> None:
+            self._p = p
+            self._size = size
+        def resolve(self): return self._p
+        @property
+        def suffix(self): return self._p.suffix
+        @property
+        def stem(self): return self._p.stem
+        def stat(self):
+            import os
+            return os.stat_result((0, 0, 0, 0, 0, 0, self._size, 0, 0, 0))
+        def relative_to(self, other): return self._p.relative_to(other)
+
+    user_tokens = {"kushagra", "bainsla"}
+    rank_user_file = _rank_file(_Stub(user_file), "downloads", user_tokens=user_tokens)
+    rank_generic = _rank_file(_Stub(generic_file), "downloads", user_tokens=user_tokens)
+
+    # rank_user_file must be Group 0 with lower rank tuple
+    assert rank_user_file[0] == 0
+    assert rank_user_file < rank_generic
+
+
+async def test_bootstrap_pauses_without_marker_on_rate_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When models fail or are rate-limited, bootstrap must NOT mark done."""
+    from inference.exceptions import AllModelsRateLimitedError
+
+    class _RateLimitedRouter(_FakeRouter):
+        async def complete(self, request: CompletionRequest) -> CompletionResponse:
+            raise AllModelsRateLimitedError("All models busy")
+
+    home = tmp_path / "home"
+    (home / "Documents").mkdir(parents=True)
+    (home / "Documents" / "resume.md").write_text("User resume details", encoding="utf-8")
+    _fake_home(monkeypatch, home)
+
+    north_home = tmp_path / "north_home"
+    north_home.mkdir()
+    store = _FakeFactStore(bootstrap_count=0)
+
+    await run_bootstrap_if_needed(store, _RateLimitedRouter(), north_home)
+
+    # Must NOT have written .bootstrapped
+    assert not (north_home / ".bootstrapped").exists()
+    assert store.added == []
+
+
+def test_stem_cluster_deduplicates_versions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Multiple versions of a resume must be deduplicated to the newest."""
+    home = tmp_path / "home"
+    downloads = home / "Downloads"
+    downloads.mkdir(parents=True)
+
+    v1 = downloads / "resume_v1.pdf"
+    v2 = downloads / "resume_v2.pdf"
+    v1.write_bytes(b"pdf v1")
+    v2.write_bytes(b"pdf v2")
+
+    import os
+    import time
+    # Make v2 newer
+    os.utime(v1, (time.time() - 1000, time.time() - 1000))
+    os.utime(v2, (time.time(), time.time()))
+
+    _fake_home(monkeypatch, home)
+    discovered = _discover_files()
+    discovered_names = [p.name for p in discovered]
+
+    # Only v2 should be selected
+    assert "resume_v2.pdf" in discovered_names
+    assert "resume_v1.pdf" not in discovered_names
+

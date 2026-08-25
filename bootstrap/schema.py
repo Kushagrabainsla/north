@@ -94,6 +94,20 @@ class UserProfile(BaseModel):
     projects: list[str] = Field(default_factory=list, description="Active projects, repos, hackathons, coursework.")
 
 
+class UnifiedBootstrapExtraction(BaseModel):
+    """Unified structured output containing both atomic facts and structured profile domains."""
+
+    facts: list[FactItem] = Field(
+        default_factory=list,
+        max_length=15,
+        description="List of atomic personal facts extracted from the document.",
+    )
+    profile: UserProfile = Field(
+        default_factory=UserProfile,
+        description="Structured domain profile extracted from the document.",
+    )
+
+
 # JSON Schema for OpenAI-compatible structured output (response_format)
 EXTRACTED_FACTS_JSON_SCHEMA = ExtractedFacts.model_json_schema()
 EXTRACTED_FACTS_JSON_SCHEMA["name"] = "extracted_facts"
@@ -102,3 +116,7 @@ EXTRACTED_FACTS_JSON_SCHEMA["strict"] = True
 USER_PROFILE_JSON_SCHEMA = UserProfile.model_json_schema()
 USER_PROFILE_JSON_SCHEMA["name"] = "user_profile"
 USER_PROFILE_JSON_SCHEMA["strict"] = True
+
+UNIFIED_EXTRACTION_JSON_SCHEMA = UnifiedBootstrapExtraction.model_json_schema()
+UNIFIED_EXTRACTION_JSON_SCHEMA["name"] = "unified_bootstrap_extraction"
+UNIFIED_EXTRACTION_JSON_SCHEMA["strict"] = True
