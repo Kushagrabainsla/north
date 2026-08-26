@@ -31,6 +31,9 @@ class Skill:
     body: str
     directory: Path
     source: SkillSource = SkillSource.BUILTIN
+    # Used to attribute outcomes to the exact procedure that was injected.
+    version: str = "1.0.0"
+    status: str = "active"
     # Task ids a learned skill was distilled from (empty for built-in skills).
     provenance: tuple[str, ...] = ()
     # Agent domains this skill may be injected into. Defaults to engineering (where
@@ -44,7 +47,7 @@ class Skill:
 
     def available_to(self, domain: str) -> bool:
         """True when this skill may be injected into an agent of ``domain``."""
-        return domain in self.domains
+        return self.status == "active" and domain in self.domains
 
     def bundled_file_names(self) -> list[str]:
         """Names of supporting files in the skill folder (everything but SKILL.md).

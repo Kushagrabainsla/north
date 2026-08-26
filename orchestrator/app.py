@@ -266,6 +266,7 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
         running_task_store=deps.running_task_store,
         plan_store=deps.plan_store,
         north_settings=deps.north_settings,
+        agent_run_store=deps.agent_run_store,
     )
 
 
@@ -366,6 +367,7 @@ def _configure_routers(orchestrator, deps, agent_registry, context_injector) -> 
         confidence_tracker=deps.confidence_tracker,
         cron_store=deps.cron_store,
         north_settings=deps.north_settings,
+        agent_run_store=deps.agent_run_store,
     )
 
 

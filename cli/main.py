@@ -394,7 +394,10 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
 
                     if event == "agent_started":
                         agent = data.get("agent", "agent")
-                        steps.append(("◎", f"{agent} agent running…", True))
+                        branch = "  ├─ " if data.get("parent_run_id") else ""
+                        run = str(data.get("run_id") or "")[:8]
+                        run_str = f" [dim]#{run}[/dim]" if run else ""
+                        steps.append(("◎", f"{branch}{agent} agent running{run_str}…", True))
                     elif event == "model":
                         model = data.get("model", "")
                         if model and steps:
@@ -416,7 +419,14 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                         summary = data.get("summary", "")
                         duration = data.get("duration_ms")
                         dur_str = f" [dim]({duration}ms)[/dim]" if duration else ""
-                        label = f"{agent}: {summary}{dur_str}" if summary else f"{agent} agent done{dur_str}"
+                        branch = "  └─ " if data.get("parent_run_id") else ""
+                        run = str(data.get("run_id") or "")[:8]
+                        run_str = f" [dim]#{run}[/dim]" if run else ""
+                        label = (
+                            f"{branch}{agent}: {summary}{dur_str}{run_str}"
+                            if summary
+                            else f"{branch}{agent} agent done{dur_str}{run_str}"
+                        )
                         steps.append(("✓", label, True))
                     elif event == "tool_called":
                         tool = data.get("tool", "tool")

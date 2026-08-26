@@ -2460,7 +2460,18 @@ class Orchestrator:
                 logger.warning("best-of-n: worktree %d create failed; skipping", i, exc_info=True)
                 continue
             pairs.append(
-                (wt, payload.model_copy(update={"workspace": wt.path, "task_id": cand_task_id}), cand_task_id)
+                (
+                    wt,
+                    payload.model_copy(
+                        update={
+                            "workspace": wt.path,
+                            "task_id": cand_task_id,
+                            "run_id": generate_id(),
+                            "attempt": i,
+                        }
+                    ),
+                    cand_task_id,
+                )
             )
 
         if not pairs:
@@ -2608,13 +2619,18 @@ class Orchestrator:
     async def _run_agent_with_retry(self, agent: Agent, payload: AgentPayload) -> AgentResult:
         """Run an agent, retrying on failure up to the handler's max_retries."""
         task_id = payload.task_id
-        await self._stream_manager.emit(
-            task_id,
-            "agent_started",
-            {"agent": agent.name, "task": payload.prompt[:100]},
-        )
-
         while True:
+            await self._stream_manager.emit(
+                task_id,
+                "agent_started",
+                {
+                    "agent": agent.name,
+                    "task": payload.prompt[:100],
+                    "run_id": payload.run_id,
+                    "parent_run_id": payload.parent_run_id,
+                    "attempt": payload.attempt,
+                },
+            )
             t0 = time.monotonic()
             try:
                 result = await agent.run(payload)
@@ -2624,7 +2640,14 @@ class Orchestrator:
                 await self._stream_manager.emit(
                     task_id,
                     "agent_completed",
-                    {"agent": agent.name, "summary": result.summary, "duration_ms": result.duration_ms},
+                    {
+                        "agent": agent.name,
+                        "summary": result.summary,
+                        "duration_ms": result.duration_ms,
+                        "run_id": result.run_id,
+                        "parent_run_id": result.parent_run_id,
+                        "attempt": result.attempt,
+                    },
                 )
                 return result
             except asyncio.CancelledError:
@@ -2633,10 +2656,33 @@ class Orchestrator:
             except Exception as exc:
                 should_retry = await self._failure_handler.handle_failure(task_id, agent.name, exc)
                 if not should_retry:
+                    await self._stream_manager.emit(
+                        task_id,
+                        "agent_failed",
+                        {
+                            "agent": agent.name,
+                            "error": str(exc)[:500],
+                            "run_id": payload.run_id,
+                            "parent_run_id": payload.parent_run_id,
+                            "attempt": payload.attempt,
+                        },
+                    )
                     raise
                 # The failed attempt may have streamed partial output - tell
                 # the UI to discard it before the retry re-streams the answer.
-                await self._stream_manager.emit(task_id, "stream_reset", {"agent": agent.name})
+                await self._stream_manager.emit(
+                    task_id,
+                    "stream_reset",
+                    {
+                        "agent": agent.name,
+                        "run_id": payload.run_id,
+                        "parent_run_id": payload.parent_run_id,
+                        "attempt": payload.attempt,
+                    },
+                )
+                payload = payload.model_copy(
+                    update={"run_id": generate_id(), "attempt": payload.attempt + 1}
+                )
                 self._maybe_refresh_pools_background()
 
     def _add_evidence_gate_violations(self, agent: Agent, result: AgentResult, violations: list[str]) -> list[str]:
@@ -2726,7 +2772,14 @@ class Orchestrator:
             + "\n\nEither actually perform those actions using your tools, or rewrite your answer to "
             "remove any claim you did not verify with a tool. Never state something was done unless a tool did it."
         )
-        repair_payload = payload.model_copy(update={"prompt": f"{payload.prompt}\n\n[correction required]\n{feedback}"})
+        repair_payload = payload.model_copy(
+            update={
+                "run_id": generate_id(),
+                "parent_run_id": result.run_id or payload.run_id,
+                "attempt": payload.attempt + 1,
+                "prompt": f"{payload.prompt}\n\n[correction required]\n{feedback}",
+            }
+        )
         await self._stream_manager.emit(task_id, "self_repair_started", {"agent": agent.name, "violations": violations})
         try:
             repaired = await agent.run(repair_payload)
@@ -2814,6 +2867,10 @@ class Orchestrator:
         """Write result to task context, ledger, and notify user if needed."""
         await self._verify_agent_claims(task_id, agent, result, payload)
         await self._critique_result(task_id, agent, result, payload)
+        # Verification/self-repair can refine the result after Agent.run() first
+        # persisted it. Keep the run index aligned with the final audited output.
+        if result.run_id and agent.deps.agent_run_store is not None:
+            await agent.deps.agent_run_store.complete(result.run_id, result)
         await self._task_context_store.write(
             task_id=task_id,
             agent=agent.name,
@@ -2833,6 +2890,9 @@ class Orchestrator:
             LedgerEntry.new(
                 source=LedgerSource.AGENT,
                 task_id=task_id,
+                run_id=result.run_id,
+                parent_run_id=result.parent_run_id,
+                attempt=result.attempt,
                 agent=agent.name,
                 action="agent_completed",
                 output=result.output,

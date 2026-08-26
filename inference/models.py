@@ -81,6 +81,7 @@ class CompletionRequest(BaseModel):
     pool: str | None = None  # Explicit capability pool override (e.g. reasoning, speed, vision)
     component: str
     task_id: str | None = None
+    run_id: str | None = None
     max_tokens: int | None = None
     temperature: float | None = None
     # When True the provider is instructed to return valid JSON (response_format
@@ -108,6 +109,7 @@ class CompletionResponse(BaseModel):
     tokens_out: int
     cost_usd: float
     reasoning: str | None = None
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolCallRequest(BaseModel):
@@ -123,6 +125,7 @@ class ToolCallRequest(BaseModel):
     pool: str | None = None
     component: str
     task_id: str | None = None
+    run_id: str | None = None
     # See CompletionRequest.exclude_models - forces an independent model choice.
     exclude_models: list[str] = Field(default_factory=list)
 
@@ -152,6 +155,7 @@ class ToolCallResponse(BaseModel):
     tokens_out: int = 0
     cost_usd: float = 0.0
     reasoning: str | None = None
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 

@@ -167,7 +167,14 @@ class SkillDistiller:
         # into invalid YAML - the skill would then fail to load, its provenance would
         # never be recorded, and the same cluster would be re-distilled every pass.
         frontmatter = yaml.safe_dump(
-            {"name": name, "description": description, "source": SkillSource.LEARNED.value, "provenance": provenance},
+            {
+                "name": name,
+                "description": description,
+                "version": "1.0.0",
+                "status": "active",
+                "source": SkillSource.LEARNED.value,
+                "provenance": provenance,
+            },
             sort_keys=False,
             allow_unicode=True,
         )

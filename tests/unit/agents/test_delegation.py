@@ -213,12 +213,15 @@ async def test_delegation_increments_depth(tmp_path: Path) -> None:
     agent = GeneralAgent(config, deps)
 
     parent_depth = 3
+    parent = AgentPayload(task_id="t1", prompt="x", delegation_depth=parent_depth)
     await agent._delegate_task(
-        AgentPayload(task_id="t1", prompt="x", delegation_depth=parent_depth),
+        parent,
         {"agent": "researcher", "task": "do research"},
     )
     assert len(captured) == 1
     assert captured[0].delegation_depth == parent_depth + 1
+    assert captured[0].parent_run_id == parent.run_id
+    assert captured[0].run_id != parent.run_id
 
 
 async def test_delegation_propagates_workspace(tmp_path: Path) -> None:

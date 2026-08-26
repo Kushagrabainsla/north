@@ -169,28 +169,52 @@ def test_message_conversion_preserves_tool_call_continuity() -> None:
 async def test_codex_completion_parses_sse_and_usage() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer token"
+        assert request.headers["x-client-request-id"].startswith("run-1:")
         body = json.loads(await request.aread())
         assert body["store"] is False
         assert body["input"][0]["content"][0]["text"] == "hello"
-        return httpx.Response(200, content=_sse(
-            {"type": "response.output_text.delta", "delta": "Hello"},
-            {"type": "response.output_text.delta", "delta": " there"},
-            {
-                "type": "response.completed",
-                "response": {"model": "codex-model", "usage": {"input_tokens": 3, "output_tokens": 2}},
-            },
-        ))
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "req-1", "x-ratelimit-remaining-requests": "9"},
+            content=_sse(
+                {
+                    "type": "response.created",
+                    "sequence_number": 1,
+                    "response": {"id": "resp-1", "conversation": {"id": "conv-1"}},
+                },
+                {"type": "response.output_text.delta", "delta": "Hello"},
+                {"type": "response.output_text.delta", "delta": " there"},
+                {
+                    "type": "response.completed",
+                    "sequence_number": 4,
+                    "response": {
+                        "id": "resp-1",
+                        "model": "codex-model",
+                        "output": [{"id": "msg-1", "type": "message", "content": []}],
+                        "usage": {"input_tokens": 3, "output_tokens": 2},
+                    },
+                },
+            ),
+        )
 
     client = httpx.AsyncClient(base_url="https://example.test", transport=httpx.MockTransport(handler))
     provider = OpenAICodexProvider(ApiKeyCredentialProvider("test", "token"), client=client)
     response = await provider.complete(
         "codex-model",
-        CompletionRequest(prompt="hello", component="test", priority=PoolPriority.MEDIUM),
+        CompletionRequest(prompt="hello", component="test", priority=PoolPriority.MEDIUM, run_id="run-1"),
     )
 
     assert response.text == "Hello there"
     assert response.tokens_in == 3
     assert response.tokens_out == 2
+    assert response.provider_metadata["response_id"] == "resp-1"
+    assert response.provider_metadata["conversation_id"] == "conv-1"
+    assert response.provider_metadata["item_ids"] == ["msg-1"]
+    assert response.provider_metadata["output_items"] == [{"id": "msg-1", "type": "message"}]
+    assert response.provider_metadata["last_sequence_number"] == 4
+    assert response.provider_metadata["request_id"] == "req-1"
+    assert response.provider_metadata["rate_limits"]["x-ratelimit-remaining-requests"] == "9"
+    assert response.provider_metadata["stored_remotely"] is False
     await client.aclose()
 
 

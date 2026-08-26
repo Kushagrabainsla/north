@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from memory import MemoryGateway
     from memory.episodic import EpisodicStore
     from memory.facts import FactStore
+    from orchestrator.agent_runs import AgentRunStore
     from orchestrator.plan_store import PlanStore
     from orchestrator.running_tasks import RunningTaskStore
     from orchestrator.stream import EventStreamManager
@@ -67,6 +68,7 @@ class Dependencies:
     task_context_store: TaskContextStore
     running_task_store: RunningTaskStore
     plan_store: PlanStore
+    agent_run_store: AgentRunStore
     north_settings: NorthSettings
     memory: MemoryGateway
     # Shared async callable used by EpisodicStore, EmbeddingIndex, ToolIndex,
@@ -109,6 +111,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     from memory import LocalMemoryGateway
     from memory.episodic import EpisodicStore
     from memory.facts import FactStore
+    from orchestrator.agent_runs import AgentRunStore
     from orchestrator.plan_store import PlanStore
     from orchestrator.running_tasks import RunningTaskStore
     from orchestrator.stream import EventStreamManager
@@ -182,6 +185,8 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         episodic_store=episodic_store,
     )
 
+    tasks_db = settings.north_home / "tasks" / "tasks.db"
+    agent_run_store = AgentRunStore(tasks_db)
     return Dependencies(
         context_store=context_store,
         ledger=ledger,
@@ -189,14 +194,15 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         notifier=TerminalNotifier(),
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
         cost_tracker=cost_tracker,
-        stream_manager=EventStreamManager(),
+        stream_manager=EventStreamManager(run_store=agent_run_store),
         approval_store=ApprovalStore(),
         cron_store=UserCronStore(settings.north_home / "jobs.db"),
         confidence_tracker=confidence_tracker,
         episodic_store=episodic_store,
-        task_context_store=TaskContextStore(),
+        task_context_store=TaskContextStore(db_path=tasks_db),
         running_task_store=RunningTaskStore(settings.north_home / "running_tasks.db"),
         plan_store=PlanStore(),
+        agent_run_store=agent_run_store,
         north_settings=north_settings,
         memory=memory,
         embed_fn=_embed_fn,

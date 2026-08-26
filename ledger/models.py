@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from utils.execution_context import current_execution
 from utils.ids import generate_id
 from utils.time import utcnow
 
@@ -59,9 +60,17 @@ class LedgerEntry(BaseModel):
         Every writer needs exactly this trio; the factory keeps call sites to
         the fields that actually vary (CODING_STYLE §5 DRY).
         """
+        execution = current_execution()
+        if execution is not None:
+            fields.setdefault("run_id", execution.run_id)
+            fields.setdefault("parent_run_id", execution.parent_run_id)
+            fields.setdefault("attempt", execution.attempt)
         return cls(id=generate_id(), timestamp=utcnow(), source=source, **fields)
 
     task_id: str | None = None
+    run_id: str | None = None
+    parent_run_id: str | None = None
+    attempt: int | None = None
     agent: str | None = None
     input: str | None = None
     action: str | None = None

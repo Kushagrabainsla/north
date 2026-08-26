@@ -93,6 +93,11 @@ class SkillRegistry:
             return None
 
         provenance = tuple(str(t) for t in (frontmatter.get("provenance") or []))
+        version = str(frontmatter.get("version") or "1.0.0").strip()
+        status = str(frontmatter.get("status") or "active").strip().lower()
+        if status not in {"candidate", "active", "retired"}:
+            logger.warning("SkillRegistry: skipping skill %r - invalid status %r", name, status)
+            return None
         raw_domains = frontmatter.get("domains")
         domains = (
             frozenset(str(d).strip() for d in raw_domains if str(d).strip())
@@ -105,6 +110,8 @@ class SkillRegistry:
             body=body,
             directory=directory,
             source=source,
+            version=version,
+            status=status,
             provenance=provenance,
             domains=domains,
         )

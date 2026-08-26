@@ -16,6 +16,7 @@ from collections import OrderedDict, deque
 from collections.abc import AsyncIterator
 from typing import Any
 
+from utils.execution_context import current_execution
 from utils.time import format_timestamp, utcnow
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,19 @@ _SSE_TEMPLATE = "event: {event}\ndata: {data}\n\n"
 
 _HISTORY_MAX_EVENTS = 2048
 _HISTORY_MAX_TASKS = 500
+
+_DURABLE_EVENTS = frozenset({
+    "agent_started",
+    "agent_completed",
+    "agent_failed",
+    "tool_called",
+    "tool_result",
+    "skill_selected",
+    "model",
+    "model_response",
+    "compaction",
+    "stream_reset",
+})
 
 
 class EventStreamManager:
@@ -39,7 +53,7 @@ class EventStreamManager:
     history and closes instead of blocking forever.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, run_store: Any | None = None) -> None:
         # Maps task_id → list of subscriber queues
         self._subscribers: dict[str, list[asyncio.Queue[str | None]]] = {}
         # Global subscribers receive every event (used by the TUI)
@@ -50,6 +64,7 @@ class EventStreamManager:
         self._done: set[str] = set()
         # Bounded ring buffer of recently finished task_ids (survives eviction from _history)
         self._recently_finished: deque[str] = deque(maxlen=_HISTORY_MAX_TASKS * 2)
+        self._run_store = run_store
 
     def _ensure_history(self, task_id: str) -> deque[str]:
         history = self._history.get(task_id)
@@ -85,12 +100,25 @@ class EventStreamManager:
         """
         # Reserved keys win over payload data so a data dict can never clobber
         # the routing fields subscribers rely on.
+        execution = current_execution()
+        run_id = data.get("run_id") or (execution.run_id if execution else None)
+        parent_run_id = data.get("parent_run_id") or (execution.parent_run_id if execution else None)
+        attempt = data.get("attempt") if "attempt" in data else (execution.attempt if execution else None)
         payload = {
             **data,
             "task_id": task_id,
             "event": event,
             "timestamp": format_timestamp(utcnow()),
         }
+        if run_id:
+            payload["run_id"] = run_id
+        if parent_run_id:
+            payload["parent_run_id"] = parent_run_id
+        if attempt is not None:
+            payload["attempt"] = attempt
+
+        if self._run_store is not None and run_id and event in _DURABLE_EVENTS:
+            await self._run_store.record_event(run_id, task_id, event, payload)
         message = _SSE_TEMPLATE.format(
             event=event,
             data=json.dumps(payload),

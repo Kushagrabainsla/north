@@ -23,6 +23,7 @@ class LedgerFilters:
     """Query filters for the ledger. `None` means "no filter on that field"."""
 
     task_id: str | None = None
+    run_id: str | None = None
     agent: str | None = None
     source: LedgerSource | None = None
     status: LedgerStatus | None = None

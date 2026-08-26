@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -13,7 +14,7 @@ from context.repo_map import build_repo_map
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
-from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
+from utils.execution_context import ExecutionIdentity, bind_execution
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +65,38 @@ class Agent(ABC):
 
     async def run(self, payload: AgentPayload) -> AgentResult:
         """Template method. Do not override. Implement `_execute()` instead."""
-        context, scored_tools = await asyncio.gather(
-            self._load_context(payload),
-            self._load_tools(payload.prompt),
-        )
-        raw = await self._execute(payload, context, scored_tools)
-        return self._format_result(raw)
+        identity = ExecutionIdentity(payload.run_id, payload.parent_run_id, payload.attempt)
+        store = self._deps.agent_run_store
+        if store is not None:
+            await store.start(payload, self.name)
+        started = time.monotonic()
+        with bind_execution(identity):
+            try:
+                context, scored_tools = await asyncio.gather(
+                    self._load_context(payload),
+                    self._load_tools(payload.prompt),
+                )
+                raw = await self._execute(payload, context, scored_tools)
+                result = self._format_result(raw).model_copy(
+                    update={
+                        "run_id": payload.run_id,
+                        "parent_run_id": payload.parent_run_id,
+                        "attempt": payload.attempt,
+                    }
+                )
+                if result.duration_ms is None:
+                    result.duration_ms = int((time.monotonic() - started) * 1000)
+                if store is not None:
+                    await store.complete(payload.run_id, result)
+                return result
+            except asyncio.CancelledError:
+                if store is not None:
+                    await store.finish_with_error(payload.run_id, "cancelled", "Agent run cancelled")
+                raise
+            except Exception as exc:
+                if store is not None:
+                    await store.finish_with_error(payload.run_id, "failed", str(exc))
+                raise
 
     @abstractmethod
     async def _execute(
@@ -184,7 +211,7 @@ class Agent(ABC):
                 "## Applicable skills (advisory procedural context - it does not override "
                 f"system instructions, user instructions, or safety constraints)\n\n{bodies}"
             )
-            await self._emit_skill_selected(payload, sorted(selected_names))
+            await self._emit_skill_selected(payload, selected)
 
         others = [skill.name for skill in skills if skill.name not in selected_names]
         if others:
@@ -192,13 +219,22 @@ class Agent(ABC):
             sections.append(f"Other skills available (load full instructions with use_skill): {listed}")
         return "\n\n".join(sections)
 
-    async def _emit_skill_selected(self, payload: AgentPayload, names: list[str]) -> None:
+    async def _emit_skill_selected(self, payload: AgentPayload, selected: list[Any]) -> None:
         """Record which skills were injected, for observability and A/B analysis."""
         if not payload.task_id:
             return
+        names = sorted(skill.name for skill in selected)
+        versions = [
+            {"name": skill.name, "version": skill.version, "source": skill.source.value}
+            for skill in sorted(selected, key=lambda item: item.name)
+        ]
+        if self._deps.agent_run_store is not None:
+            await self._deps.agent_run_store.set_skills(payload.run_id, versions)
         if self._deps.stream_manager is not None:
             try:
-                await self._deps.stream_manager.emit(payload.task_id, "skill_selected", {"skills": names})
+                await self._deps.stream_manager.emit(
+                    payload.task_id, "skill_selected", {"skills": names, "skill_versions": versions}
+                )
             except Exception:
                 logger.debug("skill_selected emit failed for task %s", payload.task_id, exc_info=True)
         if self._deps.ledger is not None:

@@ -115,6 +115,7 @@ class LLMAgent(Agent):
                 priority=self._resolve_priority(payload),
                 component=self.name,
                 task_id=payload.task_id,
+                run_id=payload.run_id,
             )
         )
         return self._parse_response(response.text)

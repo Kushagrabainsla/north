@@ -5,6 +5,7 @@ See docs/CODING_STYLE.md Section 7.2.
 
 from __future__ import annotations
 
+from orchestrator.agent_runs import AgentRun, AgentRunStore
 from orchestrator.exceptions import (
     NorthStarConflictError,
     OrchestratorError,
@@ -19,6 +20,8 @@ from orchestrator.stream import EventStreamManager
 from orchestrator.task_context import TaskContextStore
 
 __all__ = [
+    "AgentRun",
+    "AgentRunStore",
     "ExecutionPlan",
     "ExecutionPlanner",
     "EventStreamManager",

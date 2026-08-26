@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,9 @@ async def test_write_then_get_round_trips_every_field(writer: SQLiteLedgerWriter
         id_="e1",
         source=LedgerSource.AGENT,
         task_id="task-001",
+        run_id="run-001",
+        parent_run_id="run-parent",
+        attempt=2,
         agent="finance",
         input="Plan my week",
         action="agent_completed",
@@ -63,12 +67,39 @@ async def test_write_then_get_round_trips_every_field(writer: SQLiteLedgerWriter
     assert fetched.id == original.id
     assert fetched.source is LedgerSource.AGENT
     assert fetched.task_id == "task-001"
+    assert fetched.run_id == "run-001"
+    assert fetched.parent_run_id == "run-parent"
+    assert fetched.attempt == 2
     assert fetched.agent == "finance"
     assert fetched.agent_output == {"steps": ["a", "b", "c"], "confidence": 0.92}
     assert fetched.tools_used == ["web_search", "calendar_api"]
     assert fetched.tokens_in == 1240
     assert fetched.cost_usd == pytest.approx(0.0024)
     assert fetched.status is LedgerStatus.COMPLETED
+
+
+def test_existing_ledger_migrates_agent_run_columns_before_index_creation(tmp_path: Path) -> None:
+    path = tmp_path / "old-ledger.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE ledger (
+                id TEXT PRIMARY KEY, timestamp DATETIME NOT NULL, source TEXT NOT NULL,
+                task_id TEXT, agent TEXT, input TEXT, action TEXT, output TEXT,
+                agent_output JSON, tools_used JSON, model_used TEXT, tokens_in INTEGER,
+                tokens_out INTEGER, cost_usd REAL, status TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    SQLiteLedgerWriter(path)
+
+    with sqlite3.connect(path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(ledger)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(ledger)")}
+    assert {"run_id", "parent_run_id", "attempt"} <= columns
+    assert "idx_ledger_run_id" in indexes
 
 
 async def test_get_returns_none_for_missing_entry(writer: SQLiteLedgerWriter) -> None:
@@ -135,6 +166,15 @@ async def test_query_filters_by_task_id(writer: SQLiteLedgerWriter) -> None:
     results = await writer.query(LedgerFilters(task_id="task-A"))
 
     assert {r.id for r in results} == {"e1", "e2"}
+
+
+async def test_query_filters_by_run_id(writer: SQLiteLedgerWriter) -> None:
+    await writer.write(_entry("e1", task_id="task-A", run_id="run-1"))
+    await writer.write(_entry("e2", task_id="task-A", run_id="run-2"))
+
+    results = await writer.query(LedgerFilters(run_id="run-1"))
+
+    assert [r.id for r in results] == ["e1"]
 
 
 async def test_query_filters_by_agent(writer: SQLiteLedgerWriter) -> None:

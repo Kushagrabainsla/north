@@ -32,6 +32,7 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from utils.ids import generate_id
 
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
@@ -209,7 +210,7 @@ class OpenAICodexProvider:
             body["text"] = {"format": {"type": "json_schema", **request.response_schema}}
         elif request.json_mode:
             body["text"] = {"format": {"type": "json_object"}}
-        result = await self._stream(model_id, body)
+        result = await self._stream(model_id, body, run_id=request.run_id)
         if result["calls"]:
             raise InferenceError("OpenAI Codex unexpectedly returned a tool call for a completion request")
         return CompletionResponse(
@@ -219,6 +220,7 @@ class OpenAICodexProvider:
             tokens_out=result["tokens_out"],
             cost_usd=0.0,
             reasoning=result["reasoning"] or None,
+            provider_metadata=result["metadata"],
         )
 
     async def complete_with_tools(
@@ -239,7 +241,7 @@ class OpenAICodexProvider:
         }
         if instructions:
             body["instructions"] = instructions
-        result = await self._stream(model_id, body, token_callback)
+        result = await self._stream(model_id, body, token_callback, run_id=request.run_id)
         calls = result["calls"]
         return ToolCallResponse(
             type="tool_calls" if calls else "message",
@@ -250,6 +252,7 @@ class OpenAICodexProvider:
             tokens_out=result["tokens_out"],
             cost_usd=0.0,
             reasoning=result["reasoning"] or None,
+            provider_metadata=result["metadata"],
         )
 
     async def _stream(
@@ -257,6 +260,8 @@ class OpenAICodexProvider:
         model_id: str,
         body: dict[str, Any],
         token_callback: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         text = ""
         reasoning = ""
@@ -264,10 +269,29 @@ class OpenAICodexProvider:
         tokens_in = 0
         tokens_out = 0
         response_model = ""
+        response_id = ""
+        conversation_id = ""
+        previous_response_id = ""
+        item_ids: list[str] = []
+        output_items: list[dict[str, str]] = []
+        event_types: list[str] = []
+        seen_event_types: set[str] = set()
+        last_sequence_number: int | None = None
+        client_request_id = f"{run_id or 'north'}:{generate_id()}"
+        request_id = ""
+        rate_limits: dict[str, str] = {}
         try:
+            headers = dict(await self._request_headers())
+            headers["X-Client-Request-Id"] = client_request_id
             async with self._client.stream(
-                "POST", "/responses", json=body, headers=await self._request_headers()
+                "POST", "/responses", json=body, headers=headers
             ) as response:
+                request_id = response.headers.get("x-request-id", "")
+                rate_limits = {
+                    key: value
+                    for key, value in response.headers.items()
+                    if key.lower().startswith("x-ratelimit-")
+                }
                 if response.status_code >= 400:
                     await response.aread()
                     self._raise_status(response, model_id)
@@ -291,6 +315,17 @@ class OpenAICodexProvider:
                     except json.JSONDecodeError:
                         continue
                     event_type = event.get("type")
+                    if isinstance(event.get("sequence_number"), int):
+                        last_sequence_number = event["sequence_number"]
+                    if isinstance(event_type, str) and event_type not in seen_event_types:
+                        seen_event_types.add(event_type)
+                        event_types.append(event_type)
+                    envelope = event.get("response") if isinstance(event.get("response"), dict) else {}
+                    if event_type in {"response.created", "response.in_progress"}:
+                        response_id = str(envelope.get("id") or response_id)
+                        conversation = envelope.get("conversation")
+                        if isinstance(conversation, dict):
+                            conversation_id = str(conversation.get("id") or conversation_id)
                     if event_type == "response.output_text.delta":
                         delta = str(event.get("delta", ""))
                         text += delta
@@ -300,6 +335,16 @@ class OpenAICodexProvider:
                         reasoning += str(event.get("delta", ""))
                     elif event_type in {"response.output_item.added", "response.output_item.done"}:
                         item = event.get("item", {})
+                        item_id = str(item.get("id") or "")
+                        if item_id and item_id not in item_ids:
+                            item_ids.append(item_id)
+                        descriptor = {
+                            key: str(item[key])
+                            for key in ("id", "type", "status", "name", "call_id")
+                            if item.get(key) is not None
+                        }
+                        if descriptor and descriptor not in output_items:
+                            output_items.append(descriptor)
                         if item.get("type") == "function_call":
                             key = str(item.get("id") or item.get("call_id") or event.get("output_index", ""))
                             entry = calls_by_id.setdefault(
@@ -321,7 +366,22 @@ class OpenAICodexProvider:
                         tokens_in = int(usage.get("input_tokens") or 0)
                         tokens_out = int(usage.get("output_tokens") or 0)
                         response_model = str(completed.get("model") or "")
+                        response_id = str(completed.get("id") or response_id)
+                        previous_response_id = str(completed.get("previous_response_id") or "")
+                        conversation = completed.get("conversation")
+                        if isinstance(conversation, dict):
+                            conversation_id = str(conversation.get("id") or conversation_id)
                         for item in completed.get("output") or []:
+                            item_id = str(item.get("id") or "")
+                            if item_id and item_id not in item_ids:
+                                item_ids.append(item_id)
+                            descriptor = {
+                                key: str(item[key])
+                                for key in ("id", "type", "status", "name", "call_id")
+                                if item.get(key) is not None
+                            }
+                            if descriptor and descriptor not in output_items:
+                                output_items.append(descriptor)
                             if item.get("type") == "message" and not text:
                                 text = "".join(
                                     str(part.get("text", ""))
@@ -356,6 +416,20 @@ class OpenAICodexProvider:
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
             "model": response_model,
+            "metadata": {
+                "provider": self.name,
+                "response_id": response_id,
+                "conversation_id": conversation_id,
+                "previous_response_id": previous_response_id,
+                "item_ids": item_ids,
+                "output_items": output_items,
+                "event_types": event_types,
+                "last_sequence_number": last_sequence_number,
+                "request_id": request_id,
+                "client_request_id": client_request_id,
+                "rate_limits": rate_limits,
+                "stored_remotely": False,
+            },
         }
 
     async def embed(self, model_id: str, request: EmbedRequest) -> EmbedResponse:

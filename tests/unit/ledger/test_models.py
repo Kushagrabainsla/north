@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from ledger import LedgerEntry, LedgerSource, LedgerStatus
+from utils.execution_context import ExecutionIdentity, bind_execution
 
 
 def test_ledger_source_enum_matches_spec() -> None:
@@ -51,6 +52,15 @@ def test_ledger_entry_accepts_minimal_required_fields() -> None:
     assert entry.status is None
     assert entry.tools_used == []
     assert entry.agent_output is None
+
+
+def test_new_entry_inherits_current_agent_run_identity() -> None:
+    with bind_execution(ExecutionIdentity("run-1", "parent-1", 2)):
+        entry = LedgerEntry.new(LedgerSource.AGENT, task_id="task-1")
+
+    assert entry.run_id == "run-1"
+    assert entry.parent_run_id == "parent-1"
+    assert entry.attempt == 2
 
 
 def test_ledger_entry_rejects_unknown_source() -> None:

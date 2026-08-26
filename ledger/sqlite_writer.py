@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS ledger (
     timestamp       DATETIME NOT NULL,
     source          TEXT NOT NULL,
     task_id         TEXT,
+    run_id          TEXT,
+    parent_run_id   TEXT,
+    attempt         INTEGER,
     agent           TEXT,
     input           TEXT,
     action          TEXT,
@@ -91,6 +94,9 @@ _FTS5_TRIGGERS = [
 _MIGRATIONS = [
     "ALTER TABLE ledger ADD COLUMN duration_ms INTEGER",
     "ALTER TABLE ledger ADD COLUMN error_type TEXT",
+    "ALTER TABLE ledger ADD COLUMN run_id TEXT",
+    "ALTER TABLE ledger ADD COLUMN parent_run_id TEXT",
+    "ALTER TABLE ledger ADD COLUMN attempt INTEGER",
 ]
 
 # Column order for INSERTs. Placeholders are derived from this tuple so the two
@@ -100,6 +106,9 @@ _INSERT_COLUMN_NAMES = (
     "timestamp",
     "source",
     "task_id",
+    "run_id",
+    "parent_run_id",
+    "attempt",
     "agent",
     "input",
     "action",
@@ -137,6 +146,7 @@ class SQLiteLedgerWriter(LedgerWriter):
             for migration in _MIGRATIONS:
                 with contextlib.suppress(sqlite3.OperationalError):
                     conn.execute(migration)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_run_id ON ledger (run_id)")
             # FTS5 — best-effort (some platforms may not have FTS5 enabled).
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(_FTS5_SCHEMA)
@@ -163,6 +173,9 @@ class SQLiteLedgerWriter(LedgerWriter):
                     entry.timestamp.isoformat(),
                     entry.source.value,
                     entry.task_id,
+                    entry.run_id,
+                    entry.parent_run_id,
+                    entry.attempt,
                     entry.agent,
                     entry.input,
                     entry.action,
@@ -204,6 +217,9 @@ class SQLiteLedgerWriter(LedgerWriter):
         if filters.task_id is not None:
             clauses.append("task_id = ?")
             params.append(filters.task_id)
+        if filters.run_id is not None:
+            clauses.append("run_id = ?")
+            params.append(filters.run_id)
         if filters.agent is not None:
             clauses.append("agent = ?")
             params.append(filters.agent)
@@ -420,7 +436,9 @@ class SQLiteLedgerWriter(LedgerWriter):
         # they would accumulate forever.
         with open_db_connection(self._db_path) as conn:
             cur = conn.execute(
-                "DELETE FROM ledger WHERE ((status IN (?, ?, ?) OR status IS NULL) AND timestamp < ?) OR (status = ? AND timestamp < ?)",
+                "DELETE FROM ledger WHERE "
+                "((status IN (?, ?, ?) OR status IS NULL) AND timestamp < ?) "
+                "OR (status = ? AND timestamp < ?)",
                 (
                     LedgerStatus.COMPLETED.value,
                     LedgerStatus.PENDING.value,
@@ -501,6 +519,9 @@ class SQLiteLedgerWriter(LedgerWriter):
             timestamp=datetime.fromisoformat(row["timestamp"]),
             source=LedgerSource(row["source"]),
             task_id=row["task_id"],
+            run_id=row["run_id"],
+            parent_run_id=row["parent_run_id"],
+            attempt=row["attempt"],
             agent=row["agent"],
             input=row["input"],
             action=row["action"],

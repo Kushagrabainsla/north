@@ -633,8 +633,11 @@ DELETE /orchestrator/task/{id}           -> cancel a task
 
 GET    /orchestrator/ledger              -> view ledger entries (paginated)
 GET    /orchestrator/ledger?task_id=x    -> filter by task
+GET    /orchestrator/ledger?run_id=x     -> filter by one agent invocation
 GET    /orchestrator/ledger?agent=x      -> filter by agent
 GET    /orchestrator/ledger?source=x     -> filter by source type
+GET    /orchestrator/tasks/{id}/runs     -> inspect the task's agent-run tree
+GET    /orchestrator/runs/{id}/events    -> inspect durable events for one run
 
 GET    /orchestrator/agents              -> list registered agents
 POST   /orchestrator/agent/run           -> manually trigger an agent
@@ -906,7 +909,7 @@ Inference is served by a `ModelDispatcher` that fans out across multiple provide
 | Groq | `NORTH_GROQ_API_KEY` | Optional. Free-tier fast completions; Whisper transcription. |
 | Gemini | `NORTH_GEMINI_API_KEY` | Optional. Free-tier completions; embeddings. |
 | OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | Optional. Free and paid completion models. |
-| OpenAI Codex | Browser OAuth | Experimental Responses transport; North retains its own tool loop. |
+| OpenAI Codex | Browser OAuth | Experimental Responses transport; North retains its own tool loop and locally records response/item/request IDs, event types, and rate-limit metadata per agent run. |
 
 All providers share the same `Provider` protocol (`inference/provider.py`) and are registered into a single `ModelDispatcher` at startup via `inference/factory.py:build_router()`. OAuth tokens are owned by North, atomically persisted with private permissions, and refreshed per request through the shared credential interface.
 
@@ -1746,6 +1749,11 @@ Seven SQLite databases:
 ~/.north/facts.db        <- per-fact embedding vectors for semantic context retrieval
 ~/.north/tasks/          <- shared tasks.db (Task Context Object, task_id column)
 ```
+
+`tasks.db` also contains `agent_runs`, `agent_run_events`, and `skill_usage`.
+These tables distinguish repeated, delegated, parallel, and retried executions
+with `run_id`, `parent_run_id`, and `attempt`; the ledger remains the detailed
+append-only audit trail.
 
 ### 16.4 Async
 

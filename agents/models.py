@@ -13,6 +13,7 @@ from inference.base import InferenceRouter
 from memory.base import ContextStore
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
+from utils.ids import generate_id
 
 if TYPE_CHECKING:
     from approval.base import Notifier
@@ -35,6 +36,11 @@ class AgentPayload(BaseModel):
     """Input handed to an agent's `run()`. The Orchestrator constructs this."""
 
     task_id: str
+    # One identity per actual invocation. Delegated agents and retries receive a
+    # fresh id while remaining linked to the same top-level task.
+    run_id: str = Field(default_factory=generate_id)
+    parent_run_id: str | None = None
+    attempt: int = 0
     prompt: str
     context: str = ""  # optional pre-loaded context summary
     workspace: str = ""  # root directory for filesystem/shell tools
@@ -57,6 +63,9 @@ class AgentResult(BaseModel):
 
     output: str
     summary: str
+    run_id: str | None = None
+    parent_run_id: str | None = None
+    attempt: int = 0
     data: dict[str, Any] = Field(default_factory=dict)
     requires_approval: bool = False
     has_question: bool = False
@@ -175,3 +184,5 @@ class AgentDependencies:
     # Both are optional so non-engineering setups and tests need not wire them.
     skill_registry: Any | None = field(default=None)
     skill_selector: Any | None = field(default=None)
+    # Durable execution index shared by top-level and delegated agents.
+    agent_run_store: Any | None = field(default=None)

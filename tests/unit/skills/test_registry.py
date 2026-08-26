@@ -76,6 +76,27 @@ def test_learned_skill_loads_with_provenance(tmp_path):
     assert skill.provenance == ("task_a", "task_b")
 
 
+def test_skill_version_and_lifecycle_control_eligibility(tmp_path):
+    _write_skill(
+        tmp_path,
+        "candidate",
+        "---\nname: candidate\ndescription: Use when testing\nversion: 2.1.0\nstatus: candidate\n---\nbody",
+    )
+    skill = SkillRegistry(builtin_dir=tmp_path).get("candidate")
+    assert skill.version == "2.1.0"
+    assert skill.status == "candidate"
+    assert not skill.available_to("engineering")
+
+
+def test_invalid_skill_status_is_rejected(tmp_path):
+    _write_skill(
+        tmp_path,
+        "bad-status",
+        "---\nname: bad-status\ndescription: Use when testing\nstatus: broken\n---\nbody",
+    )
+    assert SkillRegistry(builtin_dir=tmp_path).names() == []
+
+
 def test_get_unknown_raises(tmp_path):
     with pytest.raises(SkillNotFoundError):
         SkillRegistry(builtin_dir=tmp_path).get("nope")

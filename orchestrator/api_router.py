@@ -27,6 +27,7 @@ from ledger.models import LedgerEntry, LedgerSource
 from memory.base import ContextStore
 from memory.injection import ContextInjector
 from memory.models import ContextDocument
+from orchestrator.agent_runs import AgentRunStore
 from orchestrator.models import TaskRequest, TaskResponse
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
@@ -67,6 +68,7 @@ _inference_router: InferenceRouter | None = None
 _confidence_tracker: ConfidenceTracker | None = None
 _cron_store: UserCronStore | None = None
 _north_settings: NorthSettings | None = None
+_agent_run_store: AgentRunStore | None = None
 
 
 def configure(
@@ -81,11 +83,12 @@ def configure(
     confidence_tracker: ConfidenceTracker,
     cron_store: UserCronStore | None = None,
     north_settings: NorthSettings | None = None,
+    agent_run_store: AgentRunStore | None = None,
 ) -> None:
     """Wire the singletons used by every route. Called once in app lifespan."""
     global _orchestrator, _stream_manager, _ledger, _agent_registry
     global _context_store, _context_injector, _job_processor
-    global _inference_router, _confidence_tracker, _cron_store, _north_settings
+    global _inference_router, _confidence_tracker, _cron_store, _north_settings, _agent_run_store
     _orchestrator = orchestrator
     _stream_manager = stream_manager
     _ledger = ledger
@@ -97,6 +100,7 @@ def configure(
     _confidence_tracker = confidence_tracker
     _cron_store = cron_store
     _north_settings = north_settings
+    _agent_run_store = agent_run_store
 
 
 def _require[T](value: T | None, name: str) -> T:
@@ -116,6 +120,10 @@ def _get_stream_manager() -> EventStreamManager:
 
 def _get_ledger() -> LedgerWriter:
     return _require(_ledger, "LedgerWriter")
+
+
+def _get_agent_run_store() -> AgentRunStore:
+    return _require(_agent_run_store, "AgentRunStore")
 
 
 def _get_agent_registry() -> AgentRegistry:
@@ -332,6 +340,7 @@ _LEDGER_EXCLUDE = {"agent_output", "tools_used"}
 @router.get("/ledger", response_model=list[LedgerEntry], response_model_exclude=_LEDGER_EXCLUDE)
 async def query_ledger(
     task_id: str | None = None,
+    run_id: str | None = None,
     agent: str | None = None,
     source: str | None = None,
     limit: int = 50,
@@ -346,7 +355,9 @@ async def query_ledger(
                 status_code=422,
                 detail=f"Unknown source {source!r}. Valid: {[s.value for s in LedgerSource]}",
             ) from None
-    return await _get_ledger().query(LedgerFilters(task_id=task_id, agent=agent, source=src, limit=limit))
+    return await _get_ledger().query(
+        LedgerFilters(task_id=task_id, run_id=run_id, agent=agent, source=src, limit=limit)
+    )
 
 
 class SearchOut(BaseModel):
@@ -663,6 +674,58 @@ async def inference_models() -> dict[str, ModelPoolOut]:
     """Current model pool state."""
     pools = _get_inference_router().current_pools()
     return {name: ModelPoolOut(name=pool.name, models=pool.models) for name, pool in pools.items()}
+
+
+# ── Agent run inspection ──────────────────────────────────────────────────────
+
+
+class AgentRunOut(BaseModel):
+    run_id: str
+    task_id: str
+    parent_run_id: str | None
+    agent: str
+    attempt: int
+    status: str
+    prompt: str
+    workspace: str
+    model_pool: str
+    delegation_depth: int
+    started_at: datetime.datetime
+    completed_at: datetime.datetime | None
+    duration_ms: int | None
+    output: str | None
+    summary: str | None
+    error: str | None
+    models_used: list[str]
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float
+    skills: list[dict[str, str]]
+    provider_state: dict[str, Any]
+
+
+@router.get("/tasks/{task_id}/runs", response_model=list[AgentRunOut])
+async def task_agent_runs(task_id: str) -> list[AgentRunOut]:
+    """Return the durable execution tree for a task."""
+    runs = await _get_agent_run_store().list_for_task(task_id)
+    return [
+        AgentRunOut(
+            **{
+                **run.__dict__,
+                "models_used": list(run.models_used),
+                "skills": list(run.skills),
+            }
+        )
+        for run in runs
+    ]
+
+
+@router.get("/runs/{run_id}/events", response_model=list[dict[str, Any]])
+async def agent_run_events(run_id: str) -> list[dict[str, Any]]:
+    """Return significant, durable events for one agent invocation."""
+    if await _get_agent_run_store().get(run_id) is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return await _get_agent_run_store().list_events(run_id)
 
 
 # ── Tools confidence endpoint ─────────────────────────────────────────────────

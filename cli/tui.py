@@ -57,7 +57,6 @@ from cli.formatting import (
 )
 
 
-
 class ToolInspectorModal(ModalScreen[None]):
     """Interactive modal to inspect recent tool calls, parameters, stdout, and diffs."""
 
@@ -768,6 +767,8 @@ class NorthApp(App[None]):
             "compaction": self._on_compaction,
             "executing": self._on_agent_started,
             "agent_started": self._on_agent_started,
+            "agent_completed": self._on_agent_completed,
+            "agent_failed": self._on_agent_failed,
             "tool_called": self._on_tool_called,
             "tool_result": self._on_tool_result,
             "token": self._on_token,
@@ -827,7 +828,10 @@ class NorthApp(App[None]):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="header-bar"):
-            yield Static(" [bold #a371f7]◈ NORTH[/bold #a371f7] [dim]•[/dim] [dim green]● active[/dim green]", id="header-brand")
+            yield Static(
+                " [bold #a371f7]◈ NORTH[/bold #a371f7] [dim]•[/dim] [dim green]● active[/dim green]",
+                id="header-brand",
+            )
             yield Static("", id="header-model")
             yield Static("", id="header-meta")
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
@@ -1170,7 +1174,33 @@ class NorthApp(App[None]):
         self._set_status(f"running {label}…")
         model_str = f" [dim]on [cyan]{self._model}[/cyan][/dim]" if self._model else ""
         if self._details_expanded:
-            self._log(f"  [bright_black]●[/bright_black]  [cyan]{label}[/cyan] agent running{model_str}…")
+            branch = "  ├─" if data.get("parent_run_id") else "  "
+            run = str(data.get("run_id") or "")[:8]
+            run_str = f" [dim]#{run}[/dim]" if run else ""
+            self._log(
+                f"{branch}[bright_black]●[/bright_black]  [cyan]{label}[/cyan]"
+                f" agent running{model_str}{run_str}…"
+            )
+
+    async def _on_agent_completed(self, task_id: str, data: dict) -> None:
+        """Close one visible agent-tree node without completing the whole task."""
+        agent = data.get("agent", "agent")
+        summary = str(data.get("summary") or "")[:120]
+        branch = "  └─" if data.get("parent_run_id") else "  "
+        run = str(data.get("run_id") or "")[:8]
+        run_str = f" [dim]#{run}[/dim]" if run else ""
+        if self._details_expanded:
+            suffix = f": {summary}" if summary else ""
+            self._log(f"{branch}[dim green]✓[/dim green]  [cyan]{agent}[/cyan]{suffix}{run_str}")
+
+    async def _on_agent_failed(self, task_id: str, data: dict) -> None:
+        agent = data.get("agent", "agent")
+        error = str(data.get("error") or "failed")[:120]
+        branch = "  └─" if data.get("parent_run_id") else "  "
+        run = str(data.get("run_id") or "")[:8]
+        run_str = f" [dim]#{run}[/dim]" if run else ""
+        if self._details_expanded:
+            self._log(f"{branch}[dim red]✗[/dim red]  [cyan]{agent}[/cyan]: {error}{run_str}")
 
     async def _on_tool_called(self, task_id: str, data: dict) -> None:
         tool = data.get("tool", "")
@@ -1182,6 +1212,7 @@ class NorthApp(App[None]):
         self._set_status(f"{tool}…")
         entry = {
             "task_id": task_id,
+            "run_id": data.get("run_id"),
             "tool": tool,
             "params": params,
             "params_str": params_str,

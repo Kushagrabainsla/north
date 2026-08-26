@@ -44,6 +44,7 @@ from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
+from utils.execution_context import current_execution
 from utils.tasks import spawn
 from utils.text import normalize_dashes
 from utils.time import localnow
@@ -386,6 +387,7 @@ class AgenticLLMAgent(LLMAgent):
                 _seen_models.add(last_model_used)
                 models_used.append(last_model_used)
             emitted_model = await self._maybe_emit_model(response, emitted_model, payload.task_id)
+            await self._record_provider_metadata(payload, response)
 
             if response.type == "message":
                 # Final answer - answer tokens were already streamed via token_cb;
@@ -507,6 +509,16 @@ class AgenticLLMAgent(LLMAgent):
             return response.model_used
         return emitted_model
 
+    async def _record_provider_metadata(self, payload: AgentPayload, response: Any) -> None:
+        """Persist structured provider protocol state for this exact run."""
+        metadata = getattr(response, "provider_metadata", None)
+        if not isinstance(metadata, dict) or not metadata:
+            return
+        if self._deps.agent_run_store is not None:
+            await self._deps.agent_run_store.merge_provider_state(payload.run_id, metadata)
+        if self._deps.stream_manager is not None:
+            await self._deps.stream_manager.emit(payload.task_id, "model_response", metadata)
+
     # ------------------------------------------------------------------
 
     async def _complete_with_tools(
@@ -525,6 +537,7 @@ class AgenticLLMAgent(LLMAgent):
                 priority=self._resolve_priority(model_pool),
                 component=self.name,
                 task_id=task_id,
+                run_id=(current.run_id if (current := current_execution()) is not None else None),
                 exclude_models=exclude_models or [],
             ),
             token_callback=token_callback,
@@ -683,15 +696,56 @@ class AgenticLLMAgent(LLMAgent):
 
         sub_payload = AgentPayload(
             task_id=payload.task_id,
+            parent_run_id=payload.run_id,
             prompt=task,
             workspace=workspace,
             delegation_depth=payload.delegation_depth + 1,
             delegation_chain=payload.delegation_chain + [self.name],
         )
+        resolved_agent_name = str(getattr(agent, "name", agent_name))
         try:
+            if self._deps.stream_manager is not None:
+                await self._deps.stream_manager.emit(
+                    payload.task_id,
+                    "agent_started",
+                    {
+                        "agent": resolved_agent_name,
+                        "task": task[:100],
+                        "run_id": sub_payload.run_id,
+                        "parent_run_id": sub_payload.parent_run_id,
+                        "attempt": sub_payload.attempt,
+                    },
+                )
             result = await agent.run(sub_payload)
-            return json.dumps({"success": True, "output": result.output, "summary": result.summary})
+            if self._deps.stream_manager is not None:
+                await self._deps.stream_manager.emit(
+                    payload.task_id,
+                    "agent_completed",
+                    {
+                        "agent": resolved_agent_name,
+                        "summary": result.summary,
+                        "duration_ms": result.duration_ms,
+                        "run_id": result.run_id,
+                        "parent_run_id": result.parent_run_id,
+                        "attempt": result.attempt,
+                    },
+                )
+            return json.dumps(
+                {"success": True, "run_id": result.run_id, "output": result.output, "summary": result.summary}
+            )
         except Exception as exc:
+            if self._deps.stream_manager is not None:
+                await self._deps.stream_manager.emit(
+                    payload.task_id,
+                    "agent_failed",
+                    {
+                        "agent": resolved_agent_name,
+                        "error": str(exc)[:500],
+                        "run_id": sub_payload.run_id,
+                        "parent_run_id": sub_payload.parent_run_id,
+                        "attempt": sub_payload.attempt,
+                    },
+                )
             logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
             return await self._delegation_failed(payload, agent_name, str(exc))
 
