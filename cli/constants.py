@@ -151,7 +151,7 @@ _FILL_COLOURS = (
 _SLASH_COMMANDS: dict[str, str] = {
     "/help": "show available commands",
     "/details": "toggle compact summary vs detailed execution steps (Ctrl+O)",
-    "/thoughts": "toggle live reasoning and thoughts drawer (Ctrl+T)",
+    "/thoughts": "toggle thoughts inside the current message (Ctrl+T)",
     "/tools": "inspect recent tool calls, arguments, and diffs (Ctrl+I)",
     "/inspect": "alias for /tools (Ctrl+I)",
     "/plan": "inspect execution plan and DoD criteria (Ctrl+P)",

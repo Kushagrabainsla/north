@@ -129,7 +129,7 @@ async def test_read_only_panes_are_not_focusable():
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         assert app.query_one("#log").can_focus is False
-        assert app.query_one("#streaming-wrap").can_focus is False
+        assert app.query_one("#active-turns").can_focus is False
 
 
 async def test_tab_on_empty_prompt_keeps_focus_on_input():
@@ -160,24 +160,29 @@ async def test_status_bar_renders_on_a_narrow_terminal():
 
 
 async def test_live_stream_uses_same_markdown_engine_as_final_message():
-    # Guards the streaming->final fix: the live stream renders through the SAME
-    # rich Markdown engine used for the finalized message in the log, so tables and
-    # headings do not re-flow or change chrome when the stream ends.
-    from rich.markdown import Markdown as RichMarkdown
+    # Live output belongs to the active turn, rather than a detached bottom drawer.
+    from rich.console import Group
 
     app = NorthApp(base_url=_DEAD, headers=_HEADERS)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         tid = "task_test"
         app._user_task_ids.add(tid)
+        app._current_turn_activity[tid] = {
+            "task_id": tid,
+            "prompt": "render a table",
+            "tools": [],
+            "verifications": [],
+            "status": "running",
+        }
         await app._handle_event("token", {"task_id": tid, "text": "# H\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"})
         await pilot.pause()
-        stream = app.query_one("#streaming")
-        assert isinstance(stream.content, RichMarkdown)  # live == same engine as final
-        assert app.query_one("#streaming-wrap").display is True
+        active = app.query_one("#active-turn-content")
+        assert isinstance(active.content, Group)
+        assert app.query_one("#active-turns").display is True
         await app._handle_event("task_completed", {"task_id": tid, "cost_usd": 0.0})
         await pilot.pause()
-        assert app.query_one("#streaming-wrap").display is False  # handed off to the log
+        assert app.query_one("#active-turns").display is False
 
 
 async def test_approval_diff_syntax_highlighted():

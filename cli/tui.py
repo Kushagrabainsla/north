@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import httpx
+from rich.console import Group
 from rich.markdown import Markdown as RichMarkdown
 from rich.padding import Padding as RichPadding
 from rich.syntax import Syntax as RichSyntax
@@ -34,7 +35,6 @@ from textual.widgets import Button, Input, Label, ListItem, ListView, RichLog, S
 from cli.constants import (
     _REASONING_PREVIEW_CHARS,
     _SLASH_COMMANDS,
-    _SPIN,
     _SSE_BACKOFF_BASE,
     _SSE_BACKOFF_MAX,
 )
@@ -328,13 +328,13 @@ class ActionMenuModal(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="action-menu-box"):
-            yield Static("  [bold #d29922]⚡ Task Action & Steering Menu[/bold #d29922]", id="action-menu-title")
+            yield Static("  [bold #d29922]Task actions[/bold #d29922]", id="action-menu-title")
             with Vertical(id="action-menu-options"):
-                yield Button(" [1] 🎯 Steer Agent (/steer)", id="btn-steer", variant="primary")
-                yield Button(" [2] 🔍 Inspect Tool Calls & Diffs (Ctrl+I)", id="btn-tools")
-                yield Button(" [3] 🧠 View Full Chain of Thought (Ctrl+T)", id="btn-thoughts")
-                yield Button(" [4] 📋 View Plan & DoD Status (Ctrl+P)", id="btn-plan")
-                yield Button(" [5] 🛑 Cancel Task (/cancel)", id="btn-cancel", variant="error")
+                yield Button(" [1] Steer agent (/steer)", id="btn-steer", variant="primary")
+                yield Button(" [2] Inspect tools and diffs (Ctrl+I)", id="btn-tools")
+                yield Button(" [3] View thoughts for this message (Ctrl+T)", id="btn-thoughts")
+                yield Button(" [4] View plan and checks (Ctrl+P)", id="btn-plan")
+                yield Button(" [5] Cancel task (/cancel)", id="btn-cancel", variant="error")
             yield Static("  [dim]Press [1-5] or click · Esc to return[/dim]", id="action-menu-footer")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -452,12 +452,11 @@ class NorthApp(App[None]):
     """Textual chat UI for north."""
 
     # Layout (top → bottom):
-    #   #log           - scrollable chat history (top-anchored)  (1fr)
-    #   #streaming-wrap - scrollable live stream area (≤50%, hidden when idle)
-    #     #streaming    - live markdown during token stream
-    #   #status        - working spinner (empty when idle)        (1 row)
-    #   #input-row     - ╭ >  [                       ] ╮ box     (3 rows)
-    #   #hint          - dim shortcuts (strategy · history · …)   (1 row)
+    #   #log          - completed turns and system notices       (1fr)
+    #   #active-turns - mutable, task-scoped live conversation   (≤65%)
+    #   #statusbar    - global model/context/cost information     (1 row)
+    #   #input-row    - ╭ >  [                       ] ╮ box       (3 rows)
+    #   #hint         - dim shortcuts                              (1 row)
 
     CSS = """
     Screen {
@@ -513,84 +512,27 @@ class NorthApp(App[None]):
         scrollbar-corner-color: $background;
     }
 
-    /* ── live reasoning drawer (Ctrl+T) ───────────────────── */
+    /* ── active turns ─────────────────────────────────────── */
 
-    #reasoning-wrap {
+    #active-turns {
         width: 100%;
         height: auto;
-        max-height: 40%;
+        max-height: 65%;
         display: none;
         overflow-y: auto;
         overflow-x: hidden;
-        border-top: solid #1f6feb;
-        border-bottom: solid #30363d;
-        background: #0d1117;
-        padding: 0 1;
+        background: #090d13;
+        border-top: solid #30363d;
+        padding: 1 2 0 2;
         scrollbar-size: 1 1;
-        scrollbar-background: #0d1117;
+        scrollbar-background: #090d13;
         scrollbar-color: #30363d;
     }
 
-    #reasoning-header {
-        width: 100%;
-        height: 1;
-        color: #58a6ff;
-        background: #0d1117;
-        text-style: bold;
-        padding: 0;
-    }
-
-    #reasoning {
+    #active-turn-content {
         width: 100%;
         height: auto;
-        padding: 0 0 0 2;
-        background: #0d1117;
-        color: #8b949e;
-    }
-
-    /* ── live streaming area ──────────────────────────────── */
-
-    /* Scrollable wrapper: caps the live area at half the screen and lets the
-       user scroll through output longer than that while it streams. The inner
-       Static sizes to its content; this container provides the scrollbar. */
-    #streaming-wrap {
-        width: 100%;
-        height: auto;
-        max-height: 50%;
-        display: none;
-        overflow-y: auto;
-        overflow-x: hidden;
-        background: $background;
-        scrollbar-size: 1 1;
-        scrollbar-background: $background;
-        scrollbar-background-hover: $background;
-        scrollbar-background-active: $background;
-        scrollbar-color: $background;
-        scrollbar-color-hover: $background;
-        scrollbar-color-active: $background;
-        scrollbar-corner-color: $background;
-    }
-
-    /* The live stream renders the growing buffer through the *same* rich
-       Markdown engine used for the finalized message in #log, so the view does
-       not re-flow or change chrome when the stream ends (see _finish_streaming). */
-    #streaming {
-        width: 100%;
-        height: auto;
-        padding: 0 0 0 4;
-        background: $background;
-        color: $text;
-    }
-
-    /* ── footer: status · top-sep · input · bot-sep · pad ── */
-
-    /* working-spinner line, just above the input box (empty when idle) */
-    #status {
-        width: 100%;
-        height: 1;
-        background: $background;
-        color: $text-muted;
-        padding: 0 0 0 2;
+        background: #090d13;
     }
 
     /* persistent live status bar, just above the input box */
@@ -654,16 +596,9 @@ class NorthApp(App[None]):
     #log:focus,
     #log:focus-within,
     #log:hover,
-    #reasoning-wrap:focus,
-    #reasoning-wrap:focus-within,
-    #reasoning-wrap:hover,
-    #streaming-wrap:focus,
-    #streaming-wrap:focus-within,
-    #streaming-wrap:hover,
-    #streaming:focus,
-    #streaming:focus-within,
-    #status:focus,
-    #status:hover,
+    #active-turns:focus,
+    #active-turns:focus-within,
+    #active-turns:hover,
     #hint:focus,
     #hint:hover,
     #prompt-prefix:focus,
@@ -788,6 +723,7 @@ class NorthApp(App[None]):
             "task_steered": self._on_task_steered,
             "design_phase": self._on_design_phase,
             "plan_seeded": self._on_plan_seeded,
+            "plan_updated": self._on_plan_updated,
             "conductor_fix_round": self._on_conductor_fix_round,
             "auto_verify_started": self._on_auto_verify_started,
             "auto_verify": self._on_auto_verify,
@@ -829,18 +765,14 @@ class NorthApp(App[None]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="header-bar"):
             yield Static(
-                " [bold #a371f7]◈ NORTH[/bold #a371f7] [dim]•[/dim] [dim green]● active[/dim green]",
+                " [bold #a371f7]NORTH[/bold #a371f7] [dim]· active[/dim]",
                 id="header-brand",
             )
             yield Static("", id="header-model")
             yield Static("", id="header-meta")
         yield RichLog(id="log", highlight=False, markup=True, wrap=True)
-        with VerticalScroll(id="reasoning-wrap"):
-            yield Static("", id="reasoning-header")
-            yield Static("", id="reasoning")
-        with VerticalScroll(id="streaming-wrap"):
-            yield Static("", id="streaming")
-        yield Static("", id="status")
+        with VerticalScroll(id="active-turns"):
+            yield Static("", id="active-turn-content")
         yield Static("", id="statusbar")
         with Horizontal(id="input-row"):
             yield Static(">", id="prompt-prefix")
@@ -866,13 +798,12 @@ class NorthApp(App[None]):
         self.set_interval(0.08, self._tick)
         self.run_worker(self._listen(), exclusive=False)
         self.query_one("#prompt", Input).focus()
-        # The chat log and live-stream panes are read-only: keep them out of the
+        # The completed log and active-turn pane are read-only: keep them out of the
         # focus chain so Tab (or a click) can never move focus off the input and
         # strand the user with keystrokes that go nowhere. Mouse-wheel scrolling
         # still works without focus.
         self.query_one("#log", RichLog).can_focus = False
-        self.query_one("#reasoning-wrap", VerticalScroll).can_focus = False
-        self.query_one("#streaming-wrap", VerticalScroll).can_focus = False
+        self.query_one("#active-turns", VerticalScroll).can_focus = False
         # Defer so the log's width is known before drawing the banner rule.
         self.call_after_refresh(self._draw_banner)
 
@@ -963,11 +894,14 @@ class NorthApp(App[None]):
     # ── rendering helpers ────────────────────────────────────────────────────
 
     def _refresh_hint(self) -> None:
-        thoughts_label = "ctrl+t hide thoughts" if self._reasoning_visible else "ctrl+t thoughts"
-        details_label = "ctrl+o collapse" if self._details_expanded else "ctrl+o details"
+        turn = self._focused_turn()
+        thoughts_open = bool(turn and turn.get("thoughts_expanded"))
+        details_open = bool(turn and turn.get("details_expanded"))
+        thoughts_label = "ctrl+t hide thoughts" if thoughts_open else "ctrl+t thoughts"
+        details_label = "ctrl+o collapse" if details_open else "ctrl+o details"
         hint = (
             f"  {self._strategy}  ·  {details_label}  ·  {thoughts_label}  ·  ctrl+i tools  ·  ctrl+p plan"
-            "  ·  esc menu  ·  /commands  ·  ctrl+y copy  ·  ctrl+d dictate"
+            "  ·  esc menu  ·  /help"
         )
         self.query_one("#hint", Static).update(f"[bright_black]{hint}[/bright_black]")
 
@@ -975,10 +909,10 @@ class NorthApp(App[None]):
         """Compose the sticky top cockpit header bar with active model and session counters."""
         with contextlib.suppress(Exception):
             model = _short_model(self._model) if self._model else "ready"
-            self.query_one("#header-model", Static).update(f"[bold #58a6ff]⚡ {model}[/bold #58a6ff]")
+            self.query_one("#header-model", Static).update(f"[bold #58a6ff]{model}[/bold #58a6ff]")
             strat = self._strategy.upper()
             cost = f"${self._session_cost:.3f}"
-            self.query_one("#header-meta", Static).update(f"[dim]🔋 {strat}  ·  {cost} [/dim]")
+            self.query_one("#header-meta", Static).update(f"[dim]{strat}  ·  {cost} [/dim]")
 
     def _render_status_bar(self) -> None:
 
@@ -1037,22 +971,14 @@ class NorthApp(App[None]):
 
     def _tick(self) -> None:
         self._spin_frame += 1
-        if self._status_text:
-            f = _SPIN[self._spin_frame % len(_SPIN)]
-            with contextlib.suppress(NoMatches):
-                self.query_one("#status", Static).update(f"[bright_black]  {f}  {self._status_text}[/bright_black]")
         # Refresh the bar roughly once a second so elapsed time ticks live
         # without redrawing on every 80ms animation frame.
         if self._spin_frame % 12 == 0:
             self._render_status_bar()
 
     def _set_status(self, text: str) -> None:
+        """Record transient status for compatibility; task status renders inline."""
         self._status_text = text
-        if not text:
-            self.query_one("#status", Static).update("")
-        else:
-            f = _SPIN[self._spin_frame % len(_SPIN)]
-            self.query_one("#status", Static).update(f"[bright_black]  {f}  {text}[/bright_black]")
 
     def _log(self, markup: str) -> None:
         if markup == self._last_logged_markup and ("◎" in markup or "→" in markup):
@@ -1067,36 +993,114 @@ class NorthApp(App[None]):
         log.write(renderable)  # type: ignore[arg-type]
         log.scroll_end(animate=False)
 
-    # ── streaming widget ─────────────────────────────────────────────────────
+    # ── task-scoped turn rendering ───────────────────────────────────────────
 
-    def _start_streaming(self) -> None:
-        self.query_one("#streaming-wrap", VerticalScroll).display = True
-        self.query_one("#streaming", Static).update("")
+    def _focused_turn(self) -> dict | None:
+        """Return the newest active turn, or the newest completed turn."""
+        if self._current_turn_activity:
+            return next(reversed(self._current_turn_activity.values()))
+        return self._turns[-1] if self._turns else None
+
+    @staticmethod
+    def _plan_progress(turn: dict) -> tuple[int, int]:
+        steps = turn.get("plan_steps") or []
+        done = sum(1 for step in steps if step.get("status") in {"done", "completed"})
+        return done, len(steps)
+
+    def _turn_renderables(self, turn: dict, *, active: bool) -> list[object]:
+        """Build one self-contained user/activity/answer block."""
+        items: list[object] = [RichText("› " + str(turn.get("prompt", "")), style="bold white")]
+        expanded = bool(turn.get("details_expanded"))
+        phase = str(turn.get("phase") or ("working" if active else turn.get("status", "completed")))
+
+        if expanded:
+            for line in _format_turn_details(turn):
+                items.append(RichText.from_markup(line))
+        else:
+            summary = _format_turn_summary(turn).replace("Ctrl+O to expand", "Ctrl+O")
+            items.append(RichText.from_markup(summary))
+
+        if active and phase:
+            items.append(RichText(f"  ◉ {phase}", style="dim cyan"))
+
+        thoughts = str(turn.get("thoughts") or "")
+        if thoughts:
+            tokens = int(turn.get("thought_tokens") or max(1, len(thoughts) // 4))
+            state = "hide" if turn.get("thoughts_expanded") else "show"
+            items.append(RichText.from_markup(
+                f"  [cyan]Thinking[/cyan] [bright_black]· {tokens} tokens · Ctrl+T to {state}[/bright_black]"
+            ))
+            if turn.get("thoughts_expanded"):
+                items.append(RichPadding(RichText(thoughts, style="dim"), (0, 0, 0, 4)))
+
+        done, total = self._plan_progress(turn)
+        if total:
+            items.append(RichText.from_markup(
+                f"  [cyan]Plan[/cyan] [bright_black]· {done}/{total} complete · Ctrl+P to inspect[/bright_black]"
+            ))
+
+        interaction = turn.get("interaction")
+        if interaction:
+            kind = interaction.get("kind", "input")
+            color = "yellow" if kind == "approval" else "cyan"
+            items.append(RichText.from_markup(f"  [{color}]{kind} required[/{color}]"))
+            if interaction.get("message"):
+                items.append(RichPadding(RichText(str(interaction["message"])), (0, 0, 0, 4)))
+            for index, option in enumerate(interaction.get("options") or [], 1):
+                items.append(RichText(f"    [{index}] {option}", style="dim"))
+
+        for resolved in turn.get("interactions") or []:
+            decision = str(resolved.get("decision") or "answered")
+            chosen = str(resolved.get("chosen") or "")
+            color = "green" if decision == "approved" else "red" if decision == "rejected" else "cyan"
+            items.append(RichText.from_markup(f"  [{color}]✓ {decision}[/{color}] [dim]· {chosen}[/dim]"))
+
+        output = str(turn.get("output") or self._token_buffer.get(str(turn.get("task_id", "")), ""))
+        if output:
+            label = "North · responding" if active else "North"
+            items.append(RichText(label, style="bold #a371f7"))
+            items.append(RichPadding(RichMarkdown(output), (0, 0, 0, 2)))
+        elif turn.get("status") in {"failed", "skipped", "rejected", "cancelled"}:
+            style = "red" if turn.get("status") == "failed" else "yellow"
+            items.append(RichText(str(turn.get("error") or turn["status"]), style=style))
+
+        return items
+
+    def _render_active_turns(self) -> None:
+        """Update all in-flight turns in place, keeping each task together."""
+        with contextlib.suppress(NoMatches):
+            wrap = self.query_one("#active-turns", VerticalScroll)
+            content = self.query_one("#active-turn-content", Static)
+            turns = list(self._current_turn_activity.values())
+            wrap.display = bool(turns)
+            if not turns:
+                content.update("")
+                return
+            renderables: list[object] = []
+            for index, turn in enumerate(turns):
+                if index:
+                    renderables.append(RichText("─" * max(20, self.size.width - 6), style="bright_black"))
+                renderables.extend(self._turn_renderables(turn, active=True))
+            content.update(Group(*renderables))
+            wrap.scroll_end(animate=False)
+
+    def _append_completed_turn(self, turn: dict) -> None:
+        """Append a finalized, grouped turn to immutable scrollback."""
+        log = self.query_one("#log", RichLog)
+        for renderable in self._turn_renderables(turn, active=False):
+            log.write(renderable)  # type: ignore[arg-type]
+        self._write_rule()
+
+    def _update_turn_phase(self, task_id: str, phase: str) -> None:
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn["phase"] = phase
+            self._render_active_turns()
 
     def _update_streaming(self, task_id: str) -> None:
-        # Render the growing buffer through the same rich Markdown engine used for
-        # the finalized message, so the view does not change when the stream ends.
-        # (The #streaming CSS supplies the left indent, matching the RichPadding
-        # applied to the final message in _finish_streaming.)
-        buffer = self._token_buffer.get(task_id, "")
-        self.query_one("#streaming", Static).update(RichMarkdown(buffer) if buffer else "")
-        # Keep the newest tokens in view as they stream; the user can still
-        # scroll up through the live area (it's a VerticalScroll now).
-        self.query_one("#streaming-wrap", VerticalScroll).scroll_end(animate=False)
-
-    def _finish_streaming(self, task_id: str, final_output: str) -> None:
-        self.query_one("#streaming-wrap", VerticalScroll).display = False
-        self.query_one("#streaming", Static).update("")
-        if final_output:
-            if self._turns:
-                turn = self._turns[-1]
-                if not self._details_expanded:
-                    self._log(_format_turn_summary(turn))
-                else:
-                    for line in _format_turn_details(turn):
-                        self._log(line)
-            self._log("  [bold #a371f7]◈[/bold #a371f7]  [white bold]north[/white bold]")
-            self._log_rich(RichPadding(RichMarkdown(final_output), (0, 0, 0, 4)))
+        # The growing buffer uses the same Markdown renderer as the finalized
+        # answer, inside the same turn, so neither placement nor chrome jumps.
+        self._render_active_turns()
 
     # ── SSE event handler ────────────────────────────────────────────────────
 
@@ -1111,8 +1115,7 @@ class NorthApp(App[None]):
 
     async def _on_classifying(self, task_id: str, data: dict) -> None:
         self._set_status("classifying…")
-        if self._details_expanded:
-            self._log("  [dim]●  classifying…[/dim]")
+        self._update_turn_phase(task_id, "classifying")
 
     async def _on_classified(self, task_id: str, data: dict) -> None:
         domain = data.get("domain", "")
@@ -1120,22 +1123,19 @@ class NorthApp(App[None]):
         if task_id in self._current_turn_activity:
             self._current_turn_activity[task_id]["domain"] = domain
             self._current_turn_activity[task_id]["is_consequential"] = is_consequential
-        flag = " [dim](complex)[/dim]" if is_consequential else " [dim](direct)[/dim]"
         self._set_status(f"routing → {domain}…")
-        label = f"classified: [cyan]{domain}[/cyan]{flag}" if domain else "classified"
-        if self._details_expanded:
-            self._log(f"  [dim green]✓[/dim green]  {label}")
+        self._update_turn_phase(task_id, f"routing · {domain}" if domain else "routing")
 
     async def _on_routed(self, task_id: str, data: dict) -> None:
         agents = data.get("agents") or []
         if task_id in self._current_turn_activity:
             self._current_turn_activity[task_id]["agents"] = list(agents)
         self._set_status(f"running {', '.join(agents) or 'general'}…")
-        if self._details_expanded and agents:
-            self._log(f"  [dim green]✓[/dim green]  plan ready: [cyan]{', '.join(agents)}[/cyan]")
+        self._update_turn_phase(task_id, f"running · {', '.join(agents) or 'general'}")
 
     async def _on_north_star_checking(self, task_id: str, data: dict) -> None:
         self._set_status("checking goals…")
+        self._update_turn_phase(task_id, "checking goals")
 
     async def _on_north_star_noop(self, task_id: str, data: dict) -> None:
         """north_star_aligned / north_star_check_skipped - no UI change."""
@@ -1143,8 +1143,11 @@ class NorthApp(App[None]):
     async def _on_north_star_conflict(self, task_id: str, data: dict) -> None:
         tension = (data.get("tension") or "")[:200]
         self._set_status("")
-        self._log("  [yellow]▲[/yellow]  [yellow]goal conflict[/yellow]")
-        self._log_rich(RichText("    " + tension, style="white"))
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn["phase"] = "goal conflict"
+            turn["interaction"] = {"kind": "goal conflict", "message": tension, "options": []}
+            self._render_active_turns()
 
     async def _on_model(self, task_id: str, data: dict) -> None:
         self._model = data.get("model", "")
@@ -1172,43 +1175,31 @@ class NorthApp(App[None]):
             if self._model:
                 self._current_turn_activity[task_id]["model"] = self._model
         self._set_status(f"running {label}…")
-        model_str = f" [dim]on [cyan]{self._model}[/cyan][/dim]" if self._model else ""
-        if self._details_expanded:
-            branch = "  ├─" if data.get("parent_run_id") else "  "
-            run = str(data.get("run_id") or "")[:8]
-            run_str = f" [dim]#{run}[/dim]" if run else ""
-            self._log(
-                f"{branch}[bright_black]●[/bright_black]  [cyan]{label}[/cyan]"
-                f" agent running{model_str}{run_str}…"
-            )
+        self._update_turn_phase(task_id, f"running · {label}")
 
     async def _on_agent_completed(self, task_id: str, data: dict) -> None:
         """Close one visible agent-tree node without completing the whole task."""
         agent = data.get("agent", "agent")
         summary = str(data.get("summary") or "")[:120]
-        branch = "  └─" if data.get("parent_run_id") else "  "
-        run = str(data.get("run_id") or "")[:8]
-        run_str = f" [dim]#{run}[/dim]" if run else ""
-        if self._details_expanded:
-            suffix = f": {summary}" if summary else ""
-            self._log(f"{branch}[dim green]✓[/dim green]  [cyan]{agent}[/cyan]{suffix}{run_str}")
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn.setdefault("agent_events", []).append({"agent": agent, "status": "completed", "summary": summary})
+            turn["phase"] = f"{agent} completed"
+            self._render_active_turns()
 
     async def _on_agent_failed(self, task_id: str, data: dict) -> None:
         agent = data.get("agent", "agent")
         error = str(data.get("error") or "failed")[:120]
-        branch = "  └─" if data.get("parent_run_id") else "  "
-        run = str(data.get("run_id") or "")[:8]
-        run_str = f" [dim]#{run}[/dim]" if run else ""
-        if self._details_expanded:
-            self._log(f"{branch}[dim red]✗[/dim red]  [cyan]{agent}[/cyan]: {error}{run_str}")
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn.setdefault("agent_events", []).append({"agent": agent, "status": "failed", "summary": error})
+            turn["phase"] = f"{agent} failed"
+            self._render_active_turns()
 
     async def _on_tool_called(self, task_id: str, data: dict) -> None:
         tool = data.get("tool", "")
         params = data.get("params") or {}
         params_str = _fmt_params(params)
-        suffix = f"[bright_black]({params_str})[/bright_black]" if params_str else ""
-        if self._details_expanded:
-            self._log(f"  │  ⚙  [cyan]{tool}[/cyan]{suffix}")
         self._set_status(f"{tool}…")
         entry = {
             "task_id": task_id,
@@ -1230,12 +1221,12 @@ class NorthApp(App[None]):
             )
             if task_id in self._current_turn_activity:
                 self._current_turn_activity[task_id]["tools"].append(entry)
+                self._current_turn_activity[task_id]["phase"] = tool
+                self._render_active_turns()
 
     async def _on_tool_result(self, task_id: str, data: dict) -> None:
         tool = data.get("tool", "")
         success = data.get("success", True)
-        if self._details_expanded:
-            self._log(f"  │  [dim green]✓  {tool}[/dim green]" if success else f"  │  [dim red]✗  {tool}[/dim red]")
         formatted = data.get("formatted", "")
         error = data.get("error", "")
         result = (
@@ -1243,14 +1234,22 @@ class NorthApp(App[None]):
             if formatted
             else (error[:200].replace("\n", " ") if error else ("ok" if success else "failed"))
         )
-        if self._tool_history:
-            self._tool_history[-1]["result"] = result
-            self._tool_history[-1]["formatted"] = formatted
-            self._tool_history[-1]["success"] = success
-            self._tool_history[-1]["error"] = error
-            st = self._tool_history[-1].get("start_time")
+        history_entry = next(
+            (
+                entry
+                for entry in reversed(self._tool_history)
+                if entry.get("task_id") == task_id and entry.get("tool") == tool and entry.get("result") is None
+            ),
+            None,
+        )
+        if history_entry is not None:
+            history_entry["result"] = result
+            history_entry["formatted"] = formatted
+            history_entry["success"] = success
+            history_entry["error"] = error
+            st = history_entry.get("start_time")
             if st:
-                self._tool_history[-1]["duration"] = max(0.01, time.monotonic() - st)
+                history_entry["duration"] = max(0.01, time.monotonic() - st)
 
 
         if task_id and task_id in self._task_tool_activity:
@@ -1260,13 +1259,18 @@ class NorthApp(App[None]):
 
         if task_id and task_id in self._current_turn_activity:
             turn_tools = self._current_turn_activity[task_id].get("tools", [])
-            if turn_tools:
-                turn_tools[-1]["result"] = result
-                turn_tools[-1]["success"] = success
-                turn_tools[-1]["error"] = error
-                st = turn_tools[-1].get("start_time")
+            turn_entry = next(
+                (entry for entry in reversed(turn_tools) if entry.get("tool") == tool and entry.get("result") is None),
+                None,
+            )
+            if turn_entry is not None:
+                turn_entry["result"] = result
+                turn_entry["success"] = success
+                turn_entry["error"] = error
+                st = turn_entry.get("start_time")
                 if st:
-                    turn_tools[-1]["duration"] = max(0.01, time.monotonic() - st)
+                    turn_entry["duration"] = max(0.01, time.monotonic() - st)
+            self._render_active_turns()
 
     async def _on_token(self, task_id: str, data: dict) -> None:
         text = data.get("text", "")
@@ -1294,20 +1298,17 @@ class NorthApp(App[None]):
                     or self._turn_start_times.get(task_id, now)
                 )
                 dur = max(0.01, now - start_t)
-                dur_str = f"{dur:.1f}s" if dur >= 0.1 else f"{dur:.2f}s"
                 if task_id in self._current_turn_activity:
                     self._current_turn_activity[task_id]["thought_duration"] = dur
                     self._current_turn_activity[task_id]["thought_tokens"] = toks
+                    self._current_turn_activity[task_id]["thoughts"] = thoughts
                 self._recent_thoughts.append({
                     "task_id": task_id,
                     "thoughts": thoughts,
                     "tokens": toks,
                     "duration": dur,
                 })
-                if self._details_expanded:
-                    self._log(f"  │  [dim cyan]◈ Thought for {dur_str} ({toks} tokens · Ctrl+T to view)[/dim cyan]")
             self._set_status("")
-            self._start_streaming()
         self._update_streaming(task_id)
         self._render_status_bar()
 
@@ -1319,21 +1320,22 @@ class NorthApp(App[None]):
             self._reasoning_start_times[task_id] = time.monotonic()
         buf = self._reasoning_buffer.get(task_id, "") + text
         self._reasoning_buffer[task_id] = buf
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn["thoughts"] = buf
+            turn["thought_tokens"] = max(1, len(buf) // 4)
+            turn["phase"] = "thinking"
+            self._render_active_turns()
         preview = " ".join(buf.split())[-_REASONING_PREVIEW_CHARS:]
         self._set_status(f"thinking… {preview}")
 
-        toks = max(1, len(buf) // 4)
         elapsed = time.monotonic() - self._reasoning_start_times[task_id]
-        with contextlib.suppress(Exception):
-            header_text = (
-                f"  [bold #58a6ff]◈ Thinking…[/bold #58a6ff] "
-                f"[bright_black]({toks} tokens · {elapsed:.1f}s · Ctrl+T to toggle)[/bright_black]"
-            )
-            self.query_one("#reasoning-header", Static).update(header_text)
-            self.query_one("#reasoning", Static).update(buf)
+        if turn is not None:
+            turn["thought_duration"] = elapsed
 
     async def _on_task_synthesis(self, task_id: str, data: dict) -> None:
         self._set_status("synthesising…")
+        self._update_turn_phase(task_id, "synthesising")
 
     async def _on_task_completed(self, task_id: str, data: dict) -> None:
         sys.stdout.write("\a")
@@ -1348,7 +1350,6 @@ class NorthApp(App[None]):
         self._reasoning_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
-        was_streaming = task_id in self._streaming_active
         self._streaming_active.discard(task_id)
 
         if not output:
@@ -1358,21 +1359,14 @@ class NorthApp(App[None]):
         if turn is not None:
             turn["output"] = output
             turn["status"] = "completed"
+            turn["phase"] = "completed"
             if start_t:
                 turn["turn_duration"] = max(0.01, now - start_t)
             self._turns.append(turn)
 
-        if was_streaming:
-            self._finish_streaming(task_id, output)
-        elif output:
-            if turn is not None:
-                if not self._details_expanded:
-                    self._log(_format_turn_summary(turn))
-                else:
-                    for line in _format_turn_details(turn):
-                        self._log(line)
-            self._log("  [bold #a371f7]◈[/bold #a371f7]  [white bold]north[/white bold]")
-            self._log_rich(RichPadding(RichMarkdown(output), (0, 0, 0, 4)))
+        if turn is not None:
+            self._append_completed_turn(turn)
+        self._render_active_turns()
 
         if output:
             self._last_assistant_response = output
@@ -1388,7 +1382,6 @@ class NorthApp(App[None]):
             short = output[:600] + ("…" if len(output) > 600 else "")
             self._conversation_history.append({"user": user_msg, "tools": tools_used, "north": short})
         self._render_status_bar()
-        self._write_rule()
 
     async def _fetch_ledger_output(self, task_id: str) -> str:
         """Reconstruct a completed task's answer from the ledger when no tokens streamed."""
@@ -1408,10 +1401,8 @@ class NorthApp(App[None]):
     async def _on_task_failed(self, task_id: str, data: dict) -> None:
         sys.stdout.write("\a")
         sys.stdout.flush()
-        if task_id in self._streaming_active:
-            self._finish_streaming(task_id, "")
         self._streaming_active.discard(task_id)
-        self._token_buffer.pop(task_id, None)
+        partial_output = self._token_buffer.pop(task_id, "")
         self._reasoning_buffer.pop(task_id, None)
         self._stream_start_times.pop(task_id, None)
         self._turn_start_times.pop(task_id, None)
@@ -1425,19 +1416,19 @@ class NorthApp(App[None]):
         if turn is not None:
             turn["status"] = "failed"
             turn["error"] = error
+            turn["phase"] = "failed"
+            turn["output"] = partial_output
             self._turns.append(turn)
         self._set_status("")
         self._user_task_ids.discard(task_id)
-        self._log("  [red]◆[/red]  [red]error[/red]")
-        self._log_rich(RichText("    " + error, style="red"))
+        if turn is not None:
+            self._append_completed_turn(turn)
+        self._render_active_turns()
         self._render_status_bar()
-        self._write_rule()
 
     async def _on_task_cancelled(self, task_id: str, data: dict) -> None:
-        if task_id in self._streaming_active:
-            self._finish_streaming(task_id, "")
         self._streaming_active.discard(task_id)
-        self._token_buffer.pop(task_id, None)
+        partial_output = self._token_buffer.pop(task_id, "")
         self._reasoning_buffer.pop(task_id, None)
         self._stream_start_times.pop(task_id, None)
         self._turn_start_times.pop(task_id, None)
@@ -1450,18 +1441,19 @@ class NorthApp(App[None]):
         if turn is not None:
             turn["status"] = "cancelled"
             turn["error"] = "cancelled"
+            turn["phase"] = "cancelled"
+            turn["output"] = partial_output
             self._turns.append(turn)
         self._set_status("")
         self._user_task_ids.discard(task_id)
-        self._log("  [dim]cancelled[/dim]")
+        if turn is not None:
+            self._append_completed_turn(turn)
+        self._render_active_turns()
         self._render_status_bar()
-        self._write_rule()
 
     async def _on_task_skipped(self, task_id: str, data: dict) -> None:
-        if task_id in self._streaming_active:
-            self._finish_streaming(task_id, "")
         self._streaming_active.discard(task_id)
-        self._token_buffer.pop(task_id, None)
+        partial_output = self._token_buffer.pop(task_id, "")
         self._reasoning_buffer.pop(task_id, None)
         self._stream_start_times.pop(task_id, None)
         self._turn_start_times.pop(task_id, None)
@@ -1475,19 +1467,19 @@ class NorthApp(App[None]):
         if turn is not None:
             turn["status"] = "skipped"
             turn["error"] = reason
+            turn["phase"] = "skipped"
+            turn["output"] = partial_output
             self._turns.append(turn)
         self._set_status("")
         self._user_task_ids.discard(task_id)
-        self._log("  [yellow]◆[/yellow]  [yellow]task skipped[/yellow]")
-        self._log_rich(RichText("    " + reason, style="yellow"))
+        if turn is not None:
+            self._append_completed_turn(turn)
+        self._render_active_turns()
         self._render_status_bar()
-        self._write_rule()
 
     async def _on_task_rejected(self, task_id: str, data: dict) -> None:
-        if task_id in self._streaming_active:
-            self._finish_streaming(task_id, "")
         self._streaming_active.discard(task_id)
-        self._token_buffer.pop(task_id, None)
+        partial_output = self._token_buffer.pop(task_id, "")
         self._reasoning_buffer.pop(task_id, None)
         self._stream_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
@@ -1498,39 +1490,37 @@ class NorthApp(App[None]):
         if turn is not None:
             turn["status"] = "rejected"
             turn["error"] = reason
+            turn["phase"] = "rejected"
+            turn["output"] = partial_output
             self._turns.append(turn)
         self._set_status("")
         self._user_task_ids.discard(task_id)
-        self._log("  [yellow]◆[/yellow]  [yellow]task rejected[/yellow]")
-        self._log_rich(RichText("    " + reason, style="yellow"))
+        if turn is not None:
+            self._append_completed_turn(turn)
+        self._render_active_turns()
         self._render_status_bar()
-        self._write_rule()
 
     async def _on_task_paused(self, task_id: str, data: dict) -> None:
         self._set_status("paused")
-        self._log("  [dim]task paused[/dim]")
+        self._update_turn_phase(task_id, "paused")
         self._render_status_bar()
 
     async def _on_waiting_for_model(self, task_id: str, data: dict) -> None:
         wait_secs = int(data.get("wait_seconds", 10))
         reason = data.get("reason", "rate limits")
         self._set_status(f"waiting for model ({reason}, retrying in {wait_secs}s)…")
+        self._update_turn_phase(task_id, f"waiting for model · {reason}")
 
     async def _on_task_queued(self, task_id: str, data: dict) -> None:
         reason = data.get("reason", "waiting for model capacity")
         retry_after = data.get("retry_after")
         time_info = f" (retrying in ~{int(retry_after)}s)" if retry_after else ""
         self._set_status("task queued (waiting for models)…")
-        self._log(
-            f"  [yellow]⏳[/yellow]  [white]task queued[/white] "
-            f"[bright_black]({reason}{time_info})[/bright_black]"
-        )
-        if task_id:
-            self._log(f"    [bright_black]Task ID: {task_id} — type '/cancel {task_id}' to cancel[/bright_black]")
+        self._update_turn_phase(task_id, f"queued · {reason}{time_info}")
 
     async def _on_task_resumed(self, task_id: str, data: dict) -> None:
         self._set_status("resuming task from queue…")
-        self._log(f"  [cyan]↻[/cyan]  [white]resuming task[/white] [bright_black]{task_id}[/bright_black]")
+        self._update_turn_phase(task_id, "resuming")
 
     async def _on_approval_required(self, task_id: str, data: dict) -> None:
         card_id = data.get("card_id", "")
@@ -1543,13 +1533,18 @@ class NorthApp(App[None]):
         self._pending_card_id = card_id
         self._set_status("")
         options = data.get("options") or ["Approve", "Reject"]
+        msg = data.get("message", "")
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn["phase"] = "waiting for approval"
+            turn["interaction"] = {"kind": "approval", "message": msg, "options": options}
+            self._render_active_turns()
         if self.yolo:
             # Auto-approve mode: take the first option without prompting.
-            self._log(f"  [#f85149]⚠[/#f85149]  [bright_black]auto-approved: {options[0]}[/bright_black]")
             await self._submit_approval("1")
             return
-        self._log("  [yellow]◆[/yellow]  [yellow bold]approval required[/yellow bold]")
-        msg = data.get("message", "")
+        if turn is not None:
+            return
         # Check if the message contains a unified diff code block
         if "```diff" in msg:
             pre, _, rest = msg.partition("```diff\n")
@@ -1590,7 +1585,10 @@ class NorthApp(App[None]):
         step = data.get("step", "")
         self._active_phase = f"design phase: {step}"
         self._set_status(f"design phase: {step}…")
-        self._log(f"  [cyan]◆[/cyan]  [white]design phase[/white]  [bright_black]{step}[/bright_black]")
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn["active_phase"] = self._active_phase
+        self._update_turn_phase(task_id, self._active_phase)
 
     async def _on_plan_seeded(self, task_id: str, data: dict) -> None:
         tasks = data.get("tasks", 0)
@@ -1600,21 +1598,48 @@ class NorthApp(App[None]):
         ]
         steps = data.get("steps") or default_steps
         self._plan_steps = steps
-        self._log(
-            f"  [cyan]◆[/cyan]  [white]plan seeded[/white]  "
-            f"[bright_black]{tasks} task steps · Ctrl+P to inspect[/bright_black]"
-        )
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn["plan_steps"] = steps
+            self._render_active_turns()
+
+    async def _on_plan_updated(self, task_id: str, data: dict) -> None:
+        """Keep the inline plan synchronized with the agent's live checklist."""
+        rendered = str(data.get("plan") or "")
+        steps: list[dict] = []
+        marks = {"[x]": "done", "[~]": "in_progress", "[ ]": "pending"}
+        for index, line in enumerate(rendered.splitlines(), 1):
+            stripped = line.strip()
+            mark = next((candidate for candidate in marks if stripped.startswith(candidate)), None)
+            if mark is None:
+                continue
+            steps.append({
+                "step_id": index,
+                "agent": "",
+                "task": stripped[len(mark):].strip(),
+                "status": marks[mark],
+            })
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            if steps:
+                turn["plan_steps"] = steps
+            turn["phase"] = f"plan · {int(data.get('done') or 0)}/{int(data.get('total') or len(steps))} complete"
+            self._plan_steps = list(turn.get("plan_steps") or [])
+            self._render_active_turns()
 
     async def _on_conductor_fix_round(self, task_id: str, data: dict) -> None:
         round_num = data.get("round", 1)
         self._active_phase = f"reviewer fix round {round_num}"
         self._set_status(f"reviewer fix round {round_num}…")
-        self._log(f"  [yellow]◆[/yellow]  [yellow]reviewer fix round {round_num}[/yellow]")
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn["active_phase"] = self._active_phase
+        self._update_turn_phase(task_id, self._active_phase)
 
     async def _on_auto_verify_started(self, task_id: str, data: dict) -> None:
         cmd = data.get("command", "")
         self._set_status(f"verifying ({cmd})…")
-        self._log(f"    [bright_black]→[/bright_black]  [cyan]auto-verify[/cyan] [bright_black]({cmd})[/bright_black]")
+        self._update_turn_phase(task_id, f"verifying · {cmd}")
 
     async def _on_auto_verify(self, task_id: str, data: dict) -> None:
         cmd = data.get("command", "")
@@ -1624,30 +1649,26 @@ class NorthApp(App[None]):
                 "command": cmd,
                 "passed": passed,
             })
-        if passed:
-            self._log(f"    [dim green]✓  auto-verify passed ({cmd})[/dim green]")
-        else:
-            self._log(f"    [dim red]✗  auto-verify failed ({cmd})[/dim red]")
+            self._current_turn_activity[task_id]["phase"] = "verification passed" if passed else "verification failed"
+            self._render_active_turns()
 
     async def _on_dod_evaluated(self, task_id: str, data: dict) -> None:
-        passed = data.get("passed", False)
-        reasons = data.get("reasons") or []
         self._dod_results.append(data)
-        summary = ", ".join(reasons) if reasons else ("met" if passed else "unmet")
-        style = "dim green" if passed else "dim yellow"
-        icon = "✓" if passed else "!"
-        self._log(f"    [{style}]{icon}  Definition of Done: {summary}[/{style}]")
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn.setdefault("dod_results", []).append(data)
+            self._render_active_turns()
 
     async def _on_task_steered(self, task_id: str, data: dict) -> None:
         instruction = data.get("instruction", "")
-        self._log(f"  [magenta]🎯 steered[/magenta]  [bright_black]{instruction}[/bright_black]")
+        self._update_turn_phase(task_id, f"steered · {instruction}")
 
     async def _on_stream_reset(self, task_id: str, data: dict) -> None:
         # Reset token buffer when tool calling is engaged mid-thought
         self._token_buffer.pop(task_id, None)
         self._reasoning_buffer.pop(task_id, None)
         if task_id in self._streaming_active:
-            self.query_one("#streaming", Static).update("")
+            self._render_active_turns()
 
     async def _on_question_required(self, task_id: str, data: dict) -> None:
         # Reuses the pending-card input path; a free-form answer is allowed.
@@ -1659,17 +1680,24 @@ class NorthApp(App[None]):
         self._pending_card_id = card_id
         self._set_status("")
         options = data.get("options") or []
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            turn["phase"] = "waiting for answer"
+            turn["interaction"] = {
+                "kind": "question",
+                "message": data.get("question", ""),
+                "options": options,
+            }
+            self._render_active_turns()
         if self.yolo:
             ans = options[0] if options else "Use your best judgment."
-            self._log(f"  [#f85149]⚠[/#f85149]  [bright_black]auto-answered: {ans}[/bright_black]")
             await self._submit_approval("1" if options else ans)
             return
-        self._log("  [cyan]◆[/cyan]  [cyan]north asks[/cyan]")
-        self._log_rich(RichText("    " + data.get("question", ""), style="white"))
-        for i, opt in enumerate(options, 1):
-            self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
-        hint = "type a number or your own answer" if options else "type your answer"
-        self._log(f"    [bright_black]{hint}[/bright_black]")
+        if turn is None:
+            self._log("  [cyan]question required[/cyan]")
+            self._log_rich(RichText("    " + data.get("question", ""), style="white"))
+            for index, option in enumerate(options, 1):
+                self._log(f"    [bright_black][{index}][/bright_black]  {option}")
 
     # ── SSE listener (runs as Textual worker in the same event loop) ─────────
 
@@ -1754,12 +1782,22 @@ class NorthApp(App[None]):
                 else "answered"
             )
 
-        if decision == "approved":
-            self._log(f"    [dim green]✓  approved: {chosen}[/dim green]")
-        elif decision == "rejected":
-            self._log(f"    [dim red]✗  rejected: {chosen}[/dim red]")
+        task_id = str(data.get("task_id") or "")
+        turn = self._current_turn_activity.get(task_id)
+        if turn is not None:
+            pending = turn.get("interaction") or {}
+            turn.setdefault("interactions", []).append({
+                "kind": pending.get("kind", "question" if is_question else "approval"),
+                "message": pending.get("message", ""),
+                "chosen": chosen,
+                "decision": decision,
+            })
+            turn["interaction"] = None
+            turn["phase"] = f"{decision} · {chosen}"
+            self._render_active_turns()
         else:
-            self._log(f"    [dim cyan]✓  answered: {chosen}[/dim cyan]")
+            style = "green" if decision == "approved" else "red" if decision == "rejected" else "cyan"
+            self._log(f"    [dim {style}]✓  {decision}: {chosen}[/dim {style}]")
 
         try:
             async with self._http() as c:
@@ -1852,8 +1890,6 @@ class NorthApp(App[None]):
         except Exception:
             pass
 
-        self._log(f"  [bright_black]>[/bright_black]  {text}")
-
         body: dict = {"prompt": text}
         if self.workspace:
             body["workspace"] = self.workspace
@@ -1905,8 +1941,17 @@ class NorthApp(App[None]):
                         "output": "",
                         "status": "running",
                         "error": "",
+                        "phase": "submitted",
+                        "thoughts": "",
+                        "details_expanded": self._details_expanded,
+                        "thoughts_expanded": self._reasoning_visible,
+                        "plan_steps": [],
+                        "dod_results": [],
+                        "active_phase": "",
+                        "interaction": None,
                     }
                     self._session_tokens += max(1, len(text) // 4)
+                    self._render_active_turns()
                     self._render_status_bar()
         except httpx.ConnectError:
             self._set_status("")
@@ -2098,7 +2143,7 @@ class NorthApp(App[None]):
         elif cmd == "/thoughts":
             self.action_toggle_reasoning()
             state = "expanded" if self._reasoning_visible else "collapsed"
-            self._log(f"  [bright_black]Live reasoning drawer {state} (Ctrl+T)[/bright_black]")
+            self._log(f"  [bright_black]Thoughts for the current message {state} (Ctrl+T)[/bright_black]")
         elif cmd in ("/tools", "/inspect"):
             self.action_inspect_tools()
         elif cmd == "/plan":
@@ -2117,10 +2162,17 @@ class NorthApp(App[None]):
     # ── interactive cockpit actions ──────────────────────────────────────────
 
     def action_toggle_activity_details(self) -> None:
-        """Toggle compact summary vs detailed execution steps under each prompt."""
-        self._details_expanded = not self._details_expanded
+        """Toggle activity only for the active/latest message."""
+        turn = self._focused_turn()
+        if turn is None:
+            return
+        turn["details_expanded"] = not bool(turn.get("details_expanded"))
+        self._details_expanded = bool(turn["details_expanded"])  # compatibility for integrations
         self._refresh_hint()
-        self._redraw_chat_history()
+        if turn in self._current_turn_activity.values():
+            self._render_active_turns()
+        else:
+            self._redraw_chat_history()
 
     def _redraw_chat_history(self) -> None:
         """Redraw conversation history switching between compact and detailed traces."""
@@ -2129,54 +2181,44 @@ class NorthApp(App[None]):
             log.clear()
             self._write_banner_lines(log)
             for turn in self._turns:
-                log.write(f"> {turn.get('prompt', '')}")
-                if self._details_expanded:
-                    for line in _format_turn_details(turn):
-                        log.write(line)
-                else:
-                    log.write(_format_turn_summary(turn))
-                if turn.get("output"):
-                    log.write("  [bold #a371f7]◈[/bold #a371f7]  [white bold]north[/white bold]")
-                    log.write(RichPadding(RichMarkdown(turn["output"]), (0, 0, 0, 4)))
-                elif turn.get("status") == "failed":
-                    log.write("  [red]✗[/red]  [red]error[/red]")
-                    if turn.get("error"):
-                        log.write(RichText("    " + turn["error"], style="red"))
-                elif turn.get("status") == "skipped":
-                    log.write("  [yellow]▲[/yellow]  [yellow]task skipped[/yellow]")
-                    if turn.get("error"):
-                        log.write(RichText("    " + turn["error"], style="yellow"))
+                for renderable in self._turn_renderables(turn, active=False):
+                    log.write(renderable)  # type: ignore[arg-type]
                 self._write_rule()
 
             # Preserve any in-flight active turn currently running
-            for active_turn in self._current_turn_activity.values():
-                log.write(f"> {active_turn.get('prompt', '')}")
-                if self._details_expanded:
-                    for line in _format_turn_details(active_turn):
-                        log.write(line)
-                if active_turn.get("output"):
-                    log.write("  [bold #a371f7]◈[/bold #a371f7]  [white bold]north[/white bold]")
-                    log.write(RichPadding(RichMarkdown(active_turn["output"]), (0, 0, 0, 4)))
-
             log.scroll_end(animate=False)
+            self._render_active_turns()
 
 
 
     def action_toggle_reasoning(self) -> None:
-        """Toggle the live Chain-of-Thought reasoning drawer."""
-        self._reasoning_visible = not self._reasoning_visible
-        with contextlib.suppress(Exception):
-            wrap = self.query_one("#reasoning-wrap", VerticalScroll)
-            wrap.styles.display = "block" if self._reasoning_visible else "none"
+        """Toggle thoughts inside the active/latest message."""
+        turn = self._focused_turn()
+        if turn is None:
+            self._reasoning_visible = not self._reasoning_visible
+            self._refresh_hint()
+            return
+        turn["thoughts_expanded"] = not bool(turn.get("thoughts_expanded"))
+        self._reasoning_visible = bool(turn["thoughts_expanded"])  # compatibility for integrations
         self._refresh_hint()
+        if turn in self._current_turn_activity.values():
+            self._render_active_turns()
+        else:
+            self._redraw_chat_history()
 
     def action_inspect_tools(self) -> None:
-        """Open the interactive Tool & Diff Inspector modal."""
-        self.push_screen(ToolInspectorModal(list(self._tool_history)))
+        """Open tools belonging to the active/latest message."""
+        turn = self._focused_turn()
+        tools = list(turn.get("tools") or []) if turn is not None else []
+        self.push_screen(ToolInspectorModal(tools))
 
     def action_inspect_plan(self) -> None:
-        """Open the execution plan cockpit modal."""
-        self.push_screen(PlanCockpitModal(list(self._plan_steps), list(self._dod_results), self._active_phase))
+        """Open the plan belonging to the active/latest message."""
+        turn = self._focused_turn()
+        steps = list(turn.get("plan_steps") or []) if turn is not None else list(self._plan_steps)
+        dod = list(turn.get("dod_results") or []) if turn is not None else list(self._dod_results)
+        phase = str(turn.get("active_phase") or "") if turn is not None else self._active_phase
+        self.push_screen(PlanCockpitModal(steps, dod, phase))
 
     def action_action_menu(self) -> None:
         """Open in-flight action and steer menu when tasks are active."""

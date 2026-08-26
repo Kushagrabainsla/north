@@ -48,7 +48,13 @@ def test_format_turn_details_breakdown() -> None:
         "thought_duration": 2.1,
         "thought_tokens": 80,
         "tools": [
-            {"tool": "patch_file", "params_str": "path='auth.py'", "result": "applied 1 hunk", "duration": 0.05, "success": True}
+            {
+                "tool": "patch_file",
+                "params_str": "path='auth.py'",
+                "result": "applied 1 hunk",
+                "duration": 0.05,
+                "success": True,
+            }
         ],
         "verifications": [{"command": "pytest tests/unit/auth/", "passed": True}],
     }
@@ -95,7 +101,10 @@ async def test_turn_activity_lifecycle_and_details_toggle():
         await app._handle_event("model", {"task_id": tid, "model": "stealth/ox-alpha"})
         await app._handle_event("agent_started", {"task_id": tid, "agent": "general"})
         await app._handle_event("tool_called", {"task_id": tid, "tool": "search_files", "params": {"pattern": "def"}})
-        await app._handle_event("tool_result", {"task_id": tid, "tool": "search_files", "success": True, "formatted": "3 results"})
+        await app._handle_event(
+            "tool_result",
+            {"task_id": tid, "tool": "search_files", "success": True, "formatted": "3 results"},
+        )
         await app._handle_event("token", {"task_id": tid, "text": "All files checked."})
         await app._handle_event("task_completed", {"task_id": tid, "cost_usd": "0.001"})
         await pilot.pause()
@@ -154,8 +163,34 @@ async def test_toggle_activity_details_mid_flight():
         await pilot.pause()
         assert app._details_expanded
 
-        # Verify that the in-flight prompt was not erased from the log
-        log_lines = [str(line) for line in app.query_one("#log").lines]
-        log_text = "\n".join(log_lines)
-        assert "in flight task prompt" in log_text
+        # The prompt stays inside its mutable active-turn card.
+        content = app.query_one("#active-turn-content").content
+        assert any("in flight task prompt" in getattr(item, "plain", "") for item in content.renderables)
+        assert app.query_one("#active-turns").display is True
 
+
+@pytest.mark.asyncio
+async def test_turn_expansion_is_scoped_to_latest_message():
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        for task_id, prompt in (("first", "first prompt"), ("second", "second prompt")):
+            app._user_task_ids.add(task_id)
+            app._current_turn_activity[task_id] = {
+                "task_id": task_id,
+                "prompt": prompt,
+                "tools": [],
+                "verifications": [],
+                "status": "running",
+                "details_expanded": False,
+                "thoughts_expanded": False,
+            }
+
+        app.action_toggle_activity_details()
+        app.action_toggle_reasoning()
+        await pilot.pause()
+
+        assert app._current_turn_activity["first"]["details_expanded"] is False
+        assert app._current_turn_activity["first"]["thoughts_expanded"] is False
+        assert app._current_turn_activity["second"]["details_expanded"] is True
+        assert app._current_turn_activity["second"]["thoughts_expanded"] is True

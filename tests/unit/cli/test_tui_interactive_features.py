@@ -52,27 +52,35 @@ def _install_capturing_http(app: NorthApp) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_reasoning_drawer_toggle_and_buffer_accumulation():
+async def test_reasoning_is_inline_and_buffer_accumulates():
     app = NorthApp(base_url=_DEAD, headers=_HEADERS)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         assert not app._reasoning_visible
         
-        # Toggle thoughts on
-        app.action_toggle_reasoning()
-        assert app._reasoning_visible
-        assert app.query_one("#reasoning-wrap").styles.display == "block"
-
-        # Stream reasoning events
         tid = "t_reason"
         app._user_task_ids.add(tid)
+        app._current_turn_activity[tid] = {
+            "task_id": tid,
+            "prompt": "inspect migrations",
+            "tools": [],
+            "verifications": [],
+            "status": "running",
+        }
+
+        # Toggle thoughts on for this message only.
+        app.action_toggle_reasoning()
+        assert app._reasoning_visible
+        assert app._current_turn_activity[tid]["thoughts_expanded"] is True
+
+        # Stream reasoning events
         await app._handle_event("reasoning", {"task_id": tid, "text": "Analyzing the database schema..."})
         await app._handle_event("reasoning", {"task_id": tid, "text": " Let's check migrations."})
         await pilot.pause()
 
         assert app._reasoning_buffer[tid] == "Analyzing the database schema... Let's check migrations."
-        header_text = str(app.query_one("#reasoning-header").render())
-        assert "Thinking" in header_text
+        assert app._current_turn_activity[tid]["thoughts"].startswith("Analyzing the database")
+        assert app.query_one("#active-turns").display is True
 
         # Start token stream -> preserves thoughts in _recent_thoughts
         await app._handle_event("token", {"task_id": tid, "text": "Here is the plan."})
@@ -161,6 +169,54 @@ async def test_plan_cockpit_modal_and_dod_evaluation():
         app.pop_screen()
         await pilot.pause()
         assert not isinstance(app.screen, PlanCockpitModal)
+
+
+@pytest.mark.asyncio
+async def test_plan_updates_and_questions_stay_with_their_task():
+    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        for task_id in ("planning", "other"):
+            app._user_task_ids.add(task_id)
+            app._current_turn_activity[task_id] = {
+                "task_id": task_id,
+                "prompt": f"prompt for {task_id}",
+                "tools": [],
+                "verifications": [],
+                "status": "running",
+                "plan_steps": [],
+            }
+
+        await app._handle_event(
+            "plan_updated",
+            {
+                "task_id": "planning",
+                "plan": "[x] Inspect code\n[~] Implement card\n[ ] Run tests",
+                "done": 1,
+                "total": 3,
+            },
+        )
+        await app._handle_event(
+            "question_required",
+            {
+                "task_id": "planning",
+                "card_id": "question-1",
+                "question": "Which layout?",
+                "options": ["Compact", "Comfortable"],
+            },
+        )
+        await pilot.pause()
+
+        planning = app._current_turn_activity["planning"]
+        assert [step["status"] for step in planning["plan_steps"]] == ["done", "in_progress", "pending"]
+        assert planning["interaction"]["message"] == "Which layout?"
+        assert app._current_turn_activity["other"]["plan_steps"] == []
+        assert app._current_turn_activity["other"].get("interaction") is None
+
+        await app._submit_approval("1")
+        assert planning["interaction"] is None
+        assert planning["interactions"][-1]["chosen"] == "Compact"
+        assert planning["interactions"][-1]["decision"] == "answered"
 
 
 @pytest.mark.asyncio

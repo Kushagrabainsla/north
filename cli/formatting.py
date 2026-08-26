@@ -251,13 +251,17 @@ def _format_turn_summary(turn: dict) -> str:
         parts.append(f"{passed_count}/{len(verifs)} checks passed")
 
     summary_content = " · ".join(parts) if parts else "direct answer"
-    return f"  [bold #58a6ff]┌─ Activity[/bold #58a6ff] [dim]── {summary_content} ──[/dim] [bright_black](Ctrl+O to expand)[/bright_black]"
+    return (
+        f"  [bold #58a6ff]┌─ Activity[/bold #58a6ff] [dim]── {summary_content} ──[/dim] "
+        "[bright_black](Ctrl+O to expand)[/bright_black]"
+    )
 
 
 def _format_turn_details(turn: dict) -> list[str]:
     """Format an expanded, detailed step-by-step breakdown of everything the system did."""
     lines = [
-        "  [bold #58a6ff]┌─ Activity & Execution Details[/bold #58a6ff] [bright_black](Ctrl+O to collapse)[/bright_black]"
+        "  [bold #58a6ff]┌─ Activity & Execution Details[/bold #58a6ff] "
+        "[bright_black](Ctrl+O to collapse)[/bright_black]"
     ]
 
     domain = turn.get("domain")
@@ -269,7 +273,10 @@ def _format_turn_details(turn: dict) -> list[str]:
     if agents:
         lines.append(f"  │  [dim green]✓[/dim green]  [dim]plan ready:[/dim] [cyan]{', '.join(agents)}[/cyan]")
         model_str = f" [dim]on [cyan]{turn.get('model')}[/cyan][/dim]" if turn.get("model") else ""
-        lines.append(f"  │  [bright_black]●[/bright_black]  [cyan]{', '.join(agents)}[/cyan] [dim]agent running{model_str}…[/dim]")
+        lines.append(
+            f"  │  [bright_black]●[/bright_black]  [cyan]{', '.join(agents)}[/cyan] "
+            f"[dim]agent running{model_str}…[/dim]"
+        )
 
     turn_dur = turn.get("turn_duration", 0.0)
     thought_dur = turn.get("thought_duration", 0.0)
@@ -313,9 +320,9 @@ def _format_help_table(commands: dict[str, str]) -> Table:
         t.add_row(cmd, desc)
     t.add_section()
     t.add_row("Ctrl+O", "Toggle compact summary vs detailed execution steps")
-    t.add_row("Ctrl+T", "Toggle live Chain-of-Thought reasoning drawer")
-    t.add_row("Ctrl+I", "Open interactive Tool Call & Diff Inspector modal")
-    t.add_row("Ctrl+P", "Open Execution Plan & Step Tree Cockpit modal")
+    t.add_row("Ctrl+T", "Toggle thoughts inside the current message")
+    t.add_row("Ctrl+I", "Inspect tools and diffs for the current message")
+    t.add_row("Ctrl+P", "Inspect the current message's plan and checks")
     t.add_row("Esc", "Open In-Flight Action & Steer Menu during active tasks")
     t.add_row("Ctrl+D", "Toggle push-to-talk voice dictation (Whisper)")
     t.add_row("Ctrl+G", "Open full prompt in external $EDITOR (vi/nano)")
@@ -363,7 +370,7 @@ def summarize_diff(diff_text: str) -> tuple[int, int, list[str]]:
     deleted = 0
     files: list[str] = []
     for line in diff_text.splitlines():
-        if line.startswith("+++ b/") or line.startswith("+++ "):
+        if line.startswith(("+++ b/", "+++ ")):
             fname = line.split(" ", 1)[-1].removeprefix("b/").strip()
             if fname and fname not in files and fname != "/dev/null":
                 files.append(fname)
@@ -372,4 +379,3 @@ def summarize_diff(diff_text: str) -> tuple[int, int, list[str]]:
         elif line.startswith("-") and not line.startswith("---"):
             deleted += 1
     return added, deleted, files
-
