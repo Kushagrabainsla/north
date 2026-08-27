@@ -153,6 +153,7 @@ a { color: inherit; text-decoration: none; }
 .run-card { padding: 8px 0; border-bottom: 1px solid var(--line-soft); }.run-card > div { display: flex; justify-content: space-between; }.run-card b { font-size: 10px; }.run-card small { color: var(--muted); font-size: 8px; }.error-text { color: var(--red); }.skill-chip, .tag-list span { display: inline-block; padding: 4px 7px; border: 1px solid var(--line); border-radius: 15px; margin: 3px; font-size: 8px; }
 .composer { position: fixed; bottom: 16px; left: calc(var(--sidebar-width) + 250px + max(24px, (100vw - var(--sidebar-width) - 250px - 1050px)/2)); right: max(24px, (100vw - var(--sidebar-width) - 250px - 1050px)/2); background: rgba(20,24,29,.96); border: 1px solid #303842; border-radius: 13px; padding: 10px 12px; box-shadow: 0 18px 60px rgba(0,0,0,.45); backdrop-filter: blur(18px); z-index: 6; }
 .composer textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; line-height: 1.5; }.composer > div { display: flex; align-items: center; justify-content: space-between; }.composer small { color: var(--faint); font-size: 8px; }.composer button { border: 0; background: var(--accent); color: #11170b; border-radius: 8px; padding: 7px 10px; font-weight: 700; font-size: 9px; }.composer button:disabled { opacity: .35; }
+.composer-actions { display: flex; align-items: center; gap: 6px; }.composer .composer-tool { width: 29px; height: 29px; padding: 0; border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); font-size: 14px; }.composer .composer-tool:hover, .composer .composer-tool.recording { color: var(--accent); border-color: var(--accent); }
 .empty-room span { color: var(--accent); font-size: 22px; }.empty-room h2 { margin: 12px 0 2px; }
 
 /* Verbose pages */
@@ -185,5 +186,12 @@ body { font-size: 13px; }
 .row-main small, .list-row small, .artifact-card small { font-size: 10px; }
 .status { font-size: 9px; }
 .accent, .conversation-glyph, .panel > header a span { text-shadow: 0 0 12px rgba(181,243,109,.55); }
+
+/* Bootstrap rows use a fixed badge column so long paths stay readable. */
+.bootstrap-row { grid-template-columns: minmax(0, 1fr) max-content; gap: 16px; }
+.bootstrap-row > span:first-child { min-width: 0; }
+.bootstrap-row b, .bootstrap-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bootstrap-row > .status { justify-self: end; align-self: center; width: max-content; }
+.facts-panel { margin-bottom: 18px; }
 .primary-button, .new-chat { box-shadow: 0 0 18px rgba(181,243,109,.18); }
 html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfortable"] body { zoom: 1; }html[data-type-scale="large"] body { zoom: 1.1; }
