@@ -66,7 +66,7 @@ function TurnBundle({ turn, streamed, expandAll, reload }: { turn: Turn; streame
           <EventRows entries={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || ""))}/>
         </DetailSection>
         <DetailSection title="Agent runs" count={runs.length} open={expandAll}>
-          {runs.length ? runs.map(run => <div className="run-card" key={run.run_id}><div><b>{run.agent}</b><Status value={run.status}/></div><small>Attempt {run.attempt + 1} · {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "running"} · {run.models_used.join(", ") || "model pending"}</small>{run.error && <p className="error-text">{run.error}</p>}</div>) : <Empty>No agent runs recorded yet.</Empty>}
+          {runs.length ? runs.map(run => <div className="run-card" key={run.run_id}><div><b>{run.agent}</b><Status value={run.status}/></div><small>Attempt {run.attempt + 1} · {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "running"} · {run.providers_used?.join(", ") || "provider pending"} · {run.models_used.join(", ") || "model pending"}</small>{run.error && <p className="error-text">{run.error}</p>}</div>) : <Empty>No agent runs recorded yet.</Empty>}
         </DetailSection>
         <DetailSection title="Tools and skills" count={tools.length + runs.flatMap(r => r.skills).length} open={expandAll}>
           <EventRows entries={tools}/>{runs.flatMap(run => run.skills.map(skill => <div className="skill-chip" key={`${run.run_id}-${skill.name}`}>{skill.name} <small>v{skill.version}</small></div>))}

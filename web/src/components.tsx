@@ -9,7 +9,7 @@ const nav = [
   ["/artifacts", "Artifacts", "◇"],
   ["/schedule", "Schedule", "◷"], ["/approvals", "Approvals", "!"],
   ["/memory", "Memory", "◎"], ["/agents", "Agents", "△"],
-  ["/activity", "Activity", "≋"], ["/bootstrap", "Bootstrap", "↥"],
+  ["/activity", "Activity", "≋"],
   ["/system", "System", "◉"], ["/settings", "Settings", "⚙"]
 ];
 

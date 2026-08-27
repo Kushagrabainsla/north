@@ -39,6 +39,7 @@ export interface AgentRun {
   output?: string;
   error?: string;
   models_used: string[];
+  providers_used?: string[];
   tokens_in: number;
   tokens_out: number;
   cost_usd: number;

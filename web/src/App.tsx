@@ -2,7 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components";
 import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
-import { Activity, Agents, Approvals, Artifacts, Bootstrap, Insights, Memory, Schedule, SettingsPage, SystemPage, Tasks } from "./pages/Verbose";
+import { Activity, Agents, Approvals, Artifacts, Insights, Memory, Schedule, SettingsPage, SystemPage, Tasks } from "./pages/Verbose";
 
 export function App() {
   return <Routes><Route element={<Layout/>}>
@@ -17,7 +17,7 @@ export function App() {
     <Route path="/memory" element={<Memory/>}/>
     <Route path="/agents" element={<Agents/>}/>
     <Route path="/activity" element={<Activity/>}/>
-    <Route path="/bootstrap" element={<Bootstrap/>}/>
+    <Route path="/bootstrap" element={<Navigate to="/memory" replace/>}/>
     <Route path="/insights" element={<Navigate to="/system" replace/>}/>
     <Route path="/system" element={<SystemPage/>}/>
     <Route path="/settings" element={<SettingsPage/>}/>

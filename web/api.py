@@ -126,6 +126,11 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
         ledger.query(LedgerFilters(task_id=task_id, limit=300, order_asc=True)),
         _require(_agent_run_store, "AgentRunStore").list_for_task(task_id),
     )
+    provider_by_model: dict[str, str] = {}
+    if _inference_router is not None:
+        for pool in _inference_router.current_pools().values():
+            for model in pool.models:
+                provider_by_model[model.id] = model.provider
     output = ""
     for entry in reversed(entries):
         if entry.action == "agent_completed" and entry.output:
@@ -146,6 +151,7 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
                 "started_at": run.started_at.isoformat(),
                 "completed_at": run.completed_at.isoformat() if run.completed_at else None,
                 "models_used": list(run.models_used),
+                "providers_used": sorted({provider_by_model.get(model, "unknown") for model in run.models_used}),
                 "skills": list(run.skills),
             }
             for run in runs
@@ -258,12 +264,13 @@ async def system_overview() -> dict[str, Any]:
     progress = _load_progress(home) or []
     candidates = [str(path.resolve()) for path in _discover_files()]
     marker = home / ".bootstrapped"
+    completed = progress or ([{"path": path, "status": "completed"} for path in candidates] if marker.exists() else [])
     return {
         "providers": providers,
         "settings": {"power": settings.power.value, "autonomy": settings.autonomy.value},
         "bootstrap": {
             "status": "complete" if marker.exists() else ("in_progress" if progress else "not_started"),
-            "completed": progress,
+            "completed": completed,
             "candidates": candidates,
             "candidate_count": len(candidates),
         },
