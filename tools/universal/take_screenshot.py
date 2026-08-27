@@ -13,8 +13,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-import mss
+import mss  # noqa: F401  # retained for compatibility with screenshot test integrations
 from PIL import Image
+
 from tools._path import resolve_path
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
@@ -27,7 +28,8 @@ class TakeScreenshotTool(Tool):
     is_mutating = True
     description = (
         "Capture what is visible on the user's active screens/monitors. Supports single or multi-monitor setups. "
-        "Returns the captured display directly into your visual context for analyzing screen activity, open windows, and apps."
+        "Returns the captured display directly into your visual context for analyzing screen activity, "
+        "open windows, and apps."
     )
     parameters_schema = {
         "type": "object",
@@ -72,7 +74,10 @@ class TakeScreenshotTool(Tool):
             if display == 0:
                 display = None  # 0 explicitly means all connected monitors
             elif display < 0:
-                return ToolOutput(success=False, error="Parameter 'display' must be >= 0 (0 for all displays, 1+ for specific monitor).")
+                return ToolOutput(
+                    success=False,
+                    error="Parameter 'display' must be >= 0 (0 for all displays, 1+ for specific monitor).",
+                )
 
         return await asyncio.to_thread(_capture_screen_pure_python, resolved, display)
 

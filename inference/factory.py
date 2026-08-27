@@ -40,9 +40,9 @@ def build_router(
     }
     for definition in sorted(PROVIDER_DEFINITIONS, key=lambda item: item.fallback_order):
         if definition.auth_kind is AuthKind.API_KEY:
-            credential = credentials.get(definition.settings_field or "", "") or definition.resolve_credential(
-                provider_settings
-            )
+            credential = credentials.get(definition.settings_field or "", "")
+            if not credential and provider_settings is not None:
+                credential = definition.resolve_credential(provider_settings)
             if credential:
                 providers.append(definition.build(credential))
         elif definition.is_configured(provider_settings):

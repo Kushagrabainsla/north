@@ -20,10 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from bootstrap.schema import (
-    EXTRACTED_FACTS_JSON_SCHEMA,
     UNIFIED_EXTRACTION_JSON_SCHEMA,
-    USER_PROFILE_JSON_SCHEMA,
-    UnifiedBootstrapExtraction,
     UserProfile,
 )
 from inference.base import InferenceRouter
@@ -226,7 +223,8 @@ IMPORTANT SECURITY RULES:
 - Do not fabricate, guess, or infer facts not literally present in the file.
 - Never emit identification numbers (I-94, passport, SSN, visa, account numbers), API keys, passwords, or secrets.
 - Skip AI/system/prompt-leak content, roleplay scenarios, and generic environment details (OS, shell).
-- Files about OTHER people (third parties, vendors, other individuals) must be SKIPPED or labeled subject="third_party". Only extract facts about the user.
+- Files about OTHER people (third parties, vendors, other individuals) must be SKIPPED
+  or labeled subject="third_party". Only extract facts about the user.
 
 Return a JSON object containing:
 1. "facts": An array of atomic personal facts about the user. Each fact must have:
@@ -707,7 +705,11 @@ async def _extract_unified(
     try:
         parsed = _parse_json_lenient(resp.text)
     except Exception:
-        logger.warning("bootstrap: LLM returned invalid structured output for %s — %r", path.name, getattr(resp, "text", "")[:200])
+        logger.warning(
+            "bootstrap: LLM returned invalid structured output for %s — %r",
+            path.name,
+            getattr(resp, "text", "")[:200],
+        )
         return [], ""
 
     # 1. Parse atomic facts
@@ -734,7 +736,11 @@ async def _extract_unified(
 
     # 2. Parse profile sections (supports nested {"profile": {...}} and top-level profile dicts)
     raw_profile = parsed.get("profile") if isinstance(parsed, dict) else None
-    if not isinstance(raw_profile, dict) and isinstance(parsed, dict) and any(k in parsed for k in UserProfile.model_fields):
+    if (
+        not isinstance(raw_profile, dict)
+        and isinstance(parsed, dict)
+        and any(k in parsed for k in UserProfile.model_fields)
+    ):
         raw_profile = parsed
 
     if isinstance(raw_profile, dict):

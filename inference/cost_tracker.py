@@ -32,7 +32,6 @@ from inference.models import (
     TranscriptionResponse,
 )
 
-
 _MAX_TRACKED_TASKS: int = 2000
 
 

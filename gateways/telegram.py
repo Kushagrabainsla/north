@@ -392,7 +392,9 @@ class TelegramGateway:
                         await self._edit_message_text(chat_id, msg_id, new_text, reply_markup={"inline_keyboard": []})
                     await self._answer_callback_query(cb_id, text=f"{status_icon} Decision recorded: {decision}")
                 else:
-                    await self._answer_callback_query(cb_id, text="❌ Failed to record decision (already resolved or error)")
+                    await self._answer_callback_query(  # noqa: E501
+                        cb_id, text="❌ Failed to record decision (already resolved or error)"
+                    )
                 return
 
         await self._answer_callback_query(cb_id)
@@ -464,14 +466,18 @@ class TelegramGateway:
                     if resp.status_code == 200:
                         tasks = resp.json()
                         if not tasks:
-                            await self._send_message(chat_id, "🟢 **Status:** Idle — No active tasks running.", reply_to=message_id)
+                            await self._send_message(
+                                chat_id, "🟢 **Status:** Idle — No active tasks running.", reply_to=message_id
+                            )
                         else:
                             lines = [f"🔄 **Active Tasks ({len(tasks)}):**"]
                             for t in tasks[:5]:
                                 lines.append(f"  • `{t.get('task_id')}`: {t.get('status')} ({t.get('agent', 'orch')})")
                             await self._send_message(chat_id, "\n".join(lines), reply_to=message_id)
                     else:
-                        await self._send_message(chat_id, "⚠️ Could not retrieve tasks from orchestrator.", reply_to=message_id)
+                        await self._send_message(
+                            chat_id, "⚠️ Could not retrieve tasks from orchestrator.", reply_to=message_id
+                        )
                 except httpx.RequestError as exc:
                     await self._send_message(chat_id, f"❌ Connection error: {exc}", reply_to=message_id)
             elif cmd in ("/cancel", "/stop"):
@@ -487,7 +493,9 @@ class TelegramGateway:
                     if success:
                         await self._send_message(chat_id, f"🛑 Task `{target_task}` cancelled.", reply_to=message_id)
                     else:
-                        await self._send_message(chat_id, f"❌ Failed to cancel task `{target_task}`.", reply_to=message_id)
+                        await self._send_message(
+                            chat_id, f"❌ Failed to cancel task `{target_task}`.", reply_to=message_id
+                        )
                 else:
                     await self._send_message(chat_id, "ℹ️ No running tasks found to cancel.", reply_to=message_id)
             elif cmd == "/autonomy":
@@ -496,15 +504,25 @@ class TelegramGateway:
                     if new_mode in ("interactive", "auto", "autonomous"):
                         updated = await self._update_settings({"approval_mode": new_mode})
                         if updated:
-                            await self._send_message(chat_id, f"✅ Approval mode updated to: `{new_mode}`", reply_to=message_id)
+                            await self._send_message(
+                                chat_id, f"✅ Approval mode updated to: `{new_mode}`", reply_to=message_id
+                            )
                         else:
                             await self._send_message(chat_id, "❌ Failed to update approval mode.", reply_to=message_id)
                     else:
-                        await self._send_message(chat_id, "⚠️ Invalid mode. Choose: `interactive`, `auto`, or `autonomous`.", reply_to=message_id)
+                        await self._send_message(
+                            chat_id,
+                            "⚠️ Invalid mode. Choose: `interactive`, `auto`, or `autonomous`.",
+                            reply_to=message_id,
+                        )
                 else:
                     current = await self._get_settings()
                     mode = current.get("approval_mode", "interactive") if current else settings.approval_mode
-                    await self._send_message(chat_id, f"⚙️ Current approval mode: `{mode}`\nUse `/autonomy <mode>` to change.", reply_to=message_id)
+                    await self._send_message(
+                        chat_id,
+                        f"⚙️ Current approval mode: `{mode}`\nUse `/autonomy <mode>` to change.",
+                        reply_to=message_id,
+                    )
             return
 
         # Show typing indicator

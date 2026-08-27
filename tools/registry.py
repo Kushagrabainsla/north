@@ -18,6 +18,7 @@ To add a new tool:
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import inspect
 import logging
@@ -112,20 +113,16 @@ class ToolRegistry:
         for directory, package in _UNIVERSAL_DIRS:
             dir_path = _TOOLS_ROOT / directory
             if dir_path.exists():
-                try:
+                with contextlib.suppress(OSError):
                     self._dir_mtimes[dir_path] = dir_path.stat().st_mtime
-                except OSError:
-                    pass
             for tool in _discover(dir_path, package).values():
                 self._tools[tool.name] = tool
                 self._universal.append(tool.name)
 
         spec_path = _TOOLS_ROOT / "specialized"
         if spec_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 self._dir_mtimes[spec_path] = spec_path.stat().st_mtime
-            except OSError:
-                pass
         specialized = _discover(spec_path, "tools.specialized")
         for tool in specialized.values():
             self._tools[tool.name] = tool

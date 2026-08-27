@@ -282,6 +282,14 @@ async def bootstrap_status() -> dict[str, Any]:
     return (await system_overview())["bootstrap"]
 
 
+@router.get("/memory/facts")
+async def memory_facts() -> list[dict[str, Any]]:
+    """Return durable facts for the Memory view without exposing embeddings."""
+    if _fact_store is None:
+        return []
+    return await _fact_store.all_facts()
+
+
 class BootstrapRequest(BaseModel):
     paths: list[str] = Field(default_factory=list, max_length=25)
 
