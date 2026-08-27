@@ -23,7 +23,7 @@ The installer configures an inference provider. One provider is enough to start:
 | Groq | `NORTH_GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) |
 | Gemini | `NORTH_GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | [opencode.ai/auth](https://opencode.ai/auth) |
-| OpenAI Codex (experimental) | Browser OAuth | `north auth login openai-codex` |
+| OpenAI Codex | Browser OAuth | `north auth login openai-codex` |
 
 To add or change keys later, edit `~/.north/.env`:
 
@@ -57,27 +57,22 @@ configuration and `north auth logout openai-codex` to remove the token.
 | `north auth logout openai-codex` | Remove North's Codex credentials |
 | `north reset --all` | Wipe everything |
 | `north update` | Update to latest version |
-| | |
 | `north task "..."` | Submit a task |
 | `north task cancel <id>` | Cancel a task |
 | `north tasks` | List active tasks |
 | `north stream <id>` | Stream raw events for a task |
 | `north dictate` | Push-to-talk voice input |
-| | |
 | `north ledger` | View the audit log |
 | `north jobs` | List scheduled jobs |
 | `north job cancel <id>` | Cancel a job |
-| | |
 | `north agents` | List registered agents |
 | `north agent run <name> <task>` | Run an agent manually |
 | `north agent create` | Scaffold a new agent |
-| | |
 | `north context show north_stars` | View your current goals |
 | `north context edit judgement_rules` | Edit approval rules |
 | `north context add --text "..."` | Add text to your context |
 | `north context add --file resume.pdf` | Add a document |
 | `north context add --url <url>` | Add a web page |
-| | |
 | `north inference costs` | Show inference cost summary |
 | `north inference models` | Show model pool state |
 | `north limits` | Show per-provider/model rate-limit & cooldown status with precise reset times (reads on-disk state, works offline) |
