@@ -24,8 +24,7 @@ function ArtifactLibrary({ newsOnly = false }: { newsOnly?: boolean }) {
   return <>{(resource.error || error) && <ErrorNotice message={resource.error || error}/>}<div className="artifact-grid">{files.map(file => <button className="artifact-card" key={file.id} onClick={() => open(file)}><span>{file.kind === "news" ? "☼" : "◇"}</span><div><b>{file.name}</b><small>{file.kind} · {file.size ? `${Math.ceil(file.size / 1024)} KB` : ""} · {timeAgo(file.updated_at)}</small></div></button>)}</div>{!files.length && <Empty>No files have been generated in this section.</Empty>}{selected && <div className="document-view"><header><div><span>{selected.kind}</span><h2>{selected.name}</h2></div><button onClick={() => setSelected(null)}>Close</button></header><Markdown>{selected.content || ""}</Markdown></div>}</>;
 }
 
-export function Briefings() { return <div className="page reading-page"><PageHeader eyebrow="Intelligence" title="Briefings" subtitle="Daily news and generated reports, collected in one readable archive."/><ArtifactLibrary newsOnly/></div>; }
-export function Artifacts() { return <div className="page"><PageHeader eyebrow="Outputs" title="Artifacts" subtitle="Every report, note, plan, and file North has produced."/><ArtifactLibrary/></div>; }
+export function Artifacts() { return <div className="page"><PageHeader eyebrow="Outputs" title="Artifacts" subtitle="Every report, briefing, note, plan, and file North has produced."/><ArtifactLibrary/></div>; }
 
 export function Approvals() {
   const resource = useResource<Approval[]>("/web/api/approvals", 4000);
@@ -52,7 +51,7 @@ export function Memory() {
   const [draft, setDraft] = useState<string | null>(null);
   const content = draft ?? resource.data?.content ?? "";
   const save = async () => { await api(`/orchestrator/context/${doc}`, { method: "PUT", body: JSON.stringify({ content }) }); setDraft(null); await resource.reload(); };
-  return <div className="page"><PageHeader eyebrow="Knowledge" title="Memory" subtitle="The durable context North brings into your work." actions={<button className="primary-button" disabled={draft === null} onClick={save}>Save document</button>}/><div className="memory-layout"><aside>{docs.map(name => <button className={doc === name ? "active" : ""} key={name} onClick={() => { setDoc(name); setDraft(null); }}>{name.replaceAll("_", " ")}.md</button>)}</aside><section>{resource.loading ? <Loading/> : <textarea className="document-editor" value={content} onChange={e => setDraft(e.target.value)} />}</section></div></div>;
+  return <div className="page"><PageHeader eyebrow="Knowledge" title="Memory" subtitle="The durable context North brings into your work." actions={<button className="primary-button" disabled={draft === null} onClick={save}>Save document</button>}/><div className="memory-layout"><aside>{docs.map(name => <button className={doc === name ? "active" : ""} key={name} onClick={() => { setDoc(name); setDraft(null); }}>{name.replaceAll("_", " ")}.md</button>)}</aside><div className="memory-editor-grid"><section><div className="editor-label">Markdown source</div>{resource.loading ? <Loading/> : <textarea className="document-editor" value={content} onChange={e => setDraft(e.target.value)} />}</section><section className="memory-preview"><div className="editor-label">Rendered preview</div><Markdown>{content || "Nothing written yet."}</Markdown></section></div></div></div>;
 }
 
 interface Agent { name: string; domain: string; model_pool: string; accepts: string[]; }

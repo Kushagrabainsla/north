@@ -5,7 +5,7 @@ import type { Conversation } from "./types";
 
 const nav = [
   ["/", "Dashboard", "⌘"], ["/chat", "Chat", "◫"], ["/tasks", "Tasks", "✓"],
-  ["/briefings", "Briefings", "☼"], ["/artifacts", "Artifacts", "◇"],
+  ["/artifacts", "Artifacts", "◇"],
   ["/schedule", "Schedule", "◷"], ["/approvals", "Approvals", "!"],
   ["/memory", "Memory", "◎"], ["/agents", "Agents", "△"],
   ["/activity", "Activity", "≋"], ["/insights", "Insights", "↗"],
@@ -20,7 +20,7 @@ export function Layout() {
   };
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">N</span><div><b>north</b><small>personal operating system</small></div></div>
+      <div className="brand"><img className="brand-logo" src="https://repository-images.githubusercontent.com/1221207908/a9516630-e5f6-475f-ab80-44b2dd6dc9c8" alt="North logo"/><div><b>north</b><small>personal operating system</small></div></div>
       <button className="new-chat" onClick={newChat}>+ New conversation</button>
       <nav>{nav.map(([to, label, icon]) => <NavLink key={to} to={to} end={to === "/"}>
         <span className="nav-icon">{icon}</span><span>{label}</span>
@@ -52,16 +52,36 @@ export function Loading() { return <div className="loading"><span className="pul
 export function ErrorNotice({ message }: { message: string }) { return <div className="error-notice">{message}</div>; }
 
 export function Markdown({ children }: { children: string }) {
-  const blocks = children.split(/\n{2,}/);
-  return <div className="markdown">{blocks.map((block, index) => {
-    if (block.startsWith("```")) return <pre key={index}><code>{block.replace(/^```\w*\n?/, "").replace(/```$/, "")}</code></pre>;
-    if (block.startsWith("### ")) return <h3 key={index}>{block.slice(4)}</h3>;
-    if (block.startsWith("## ")) return <h2 key={index}>{block.slice(3)}</h2>;
-    if (block.startsWith("# ")) return <h1 key={index}>{block.slice(2)}</h1>;
-    const lines = block.split("\n");
-    if (lines.every(line => line.startsWith("- "))) return <ul key={index}>{lines.map(line => <li key={line}>{line.slice(2)}</li>)}</ul>;
-    return <p key={index}>{lines.map((line, i) => <span key={i}>{line}{i < lines.length - 1 && <br/>}</span>)}</p>;
-  })}</div>;
+  const lines = children.replace(/\r\n/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let paragraph: string[] = [], list: string[] = [], ordered = false, code: string[] | null = null;
+  const flushParagraph = () => { if (paragraph.length) { blocks.push(<p key={`p-${blocks.length}`}>{renderInline(paragraph.join("\n"))}</p>); paragraph = []; } };
+  const flushList = () => { if (list.length) { const Tag = ordered ? "ol" : "ul"; blocks.push(<Tag key={`l-${blocks.length}`}>{list.map((item, i) => <li key={i}>{renderInline(item)}</li>)}</Tag>); list = []; } };
+  lines.forEach((line, index) => {
+    if (line.trim().startsWith("```")) { flushParagraph(); flushList(); if (code) { blocks.push(<pre key={`c-${index}`}><code>{code.join("\n")}</code></pre>); code = null; } else code = []; return; }
+    if (code) { code.push(line); return; }
+    const heading = line.match(/^(#{1,3})\s+(.+)/); const bullet = line.match(/^\s*[-*+]\s+(.+)/); const number = line.match(/^\s*\d+[.)]\s+(.+)/);
+    if (heading) { flushParagraph(); flushList(); const Tag = `h${heading[1].length}` as "h1" | "h2" | "h3"; blocks.push(<Tag key={`h-${index}`}>{renderInline(heading[2])}</Tag>); return; }
+    if (bullet || number) { flushParagraph(); if (list.length && ordered !== Boolean(number)) flushList(); ordered = Boolean(number); list.push((bullet || number)![1]); return; }
+    if (!line.trim()) { flushParagraph(); flushList(); return; }
+    paragraph.push(line);
+  });
+  flushParagraph(); flushList();
+  const finalCode = code as string[] | null;
+  if (finalCode) blocks.push(<pre key="c-final"><code>{finalCode.join("\n")}</code></pre>);
+  return <div className="markdown">{blocks}</div>;
+}
+
+function renderInline(value: string): ReactNode[] {
+  const parts = value.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("*") && part.endsWith("*")) return <em key={index}>{part.slice(1, -1)}</em>;
+    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
+    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
+    return <span key={index}>{part.split("\n").map((line, i) => <span key={i}>{line}{i < part.split("\n").length - 1 && <br/>}</span>)}</span>;
+  });
 }
 
 export function timeAgo(value?: string | number) {

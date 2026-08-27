@@ -27,8 +27,8 @@ export function Dashboard() {
       <Panel title="Agents" label={`${data.agents.length} available`} to="/agents">
         <div className="agent-cloud">{data.agents.slice(0, 8).map(agent => <span key={agent.name}><i/>{agent.name}</span>)}</div>
       </Panel>
-      <Panel title="Today's briefing" label="Daily intelligence" to="/briefings" className="wide-panel briefing-panel">
-        {data.artifacts.find(a => a.kind === "news") ? <div className="briefing-summary"><div className="sun-mark">☼</div><div><b>{data.artifacts.find(a => a.kind === "news")!.name}</b><p>Your latest news briefing is ready to read.</p></div><NavLink to="/briefings" className="primary-button">Open briefing</NavLink></div> : <Empty>No briefing has been generated yet.</Empty>}
+      <Panel title="Today's briefing" label="Daily intelligence" to="/artifacts" className="wide-panel briefing-panel">
+        {data.artifacts.find(a => a.kind === "news") ? <div className="briefing-summary"><div className="sun-mark">☼</div><div><b>{data.artifacts.find(a => a.kind === "news")!.name}</b><p>Your latest news briefing is ready to read.</p></div><NavLink to="/artifacts" className="primary-button">Open artifact</NavLink></div> : <Empty>No briefing has been generated yet.</Empty>}
       </Panel>
       <Panel title="Schedule" label={`${data.cron.length} recurring`} to="/schedule">
         {data.jobs.length ? data.jobs.slice(0, 3).map(job => <div className="list-row" key={job.job_id}><div><b>{job.task}</b><small>{new Date(job.scheduled_at).toLocaleString()}</small></div><Status value={job.status}/></div>) : <Empty>No upcoming queued work.</Empty>}

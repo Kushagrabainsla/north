@@ -2,7 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components";
 import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
-import { Activity, Agents, Approvals, Artifacts, Briefings, Insights, Memory, Schedule, SettingsPage, SystemPage, Tasks } from "./pages/Verbose";
+import { Activity, Agents, Approvals, Artifacts, Insights, Memory, Schedule, SettingsPage, SystemPage, Tasks } from "./pages/Verbose";
 
 export function App() {
   return <Routes><Route element={<Layout/>}>
@@ -10,7 +10,7 @@ export function App() {
     <Route path="/chat" element={<Chat/>}/>
     <Route path="/chat/:conversationId" element={<Chat/>}/>
     <Route path="/tasks" element={<Tasks/>}/>
-    <Route path="/briefings" element={<Briefings/>}/>
+    <Route path="/briefings" element={<Navigate to="/artifacts" replace/>}/>
     <Route path="/artifacts" element={<Artifacts/>}/>
     <Route path="/schedule" element={<Schedule/>}/>
     <Route path="/approvals" element={<Approvals/>}/>
