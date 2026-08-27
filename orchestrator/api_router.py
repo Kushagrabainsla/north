@@ -33,13 +33,13 @@ from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
 from tools.confidence import ConfidenceTracker
 from utils.ids import generate_id
-from utils.security import verify_request_secret, verify_secret
+from utils.security import verify_api_access, verify_secret
 from utils.time import utcnow
 
 router = APIRouter(
     prefix="/orchestrator",
     tags=["orchestrator"],
-    dependencies=[Depends(verify_request_secret)],
+    dependencies=[Depends(verify_api_access)],
 )
 
 # Unauthenticated router - only hosts /health so Docker / load-balancer probes

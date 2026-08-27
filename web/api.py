@@ -1,0 +1,330 @@
+"""REST endpoints used by the local North browser interface."""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import mimetypes
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, Field
+
+from ledger.base import LedgerFilters
+from orchestrator.models import TaskRequest
+from utils.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
+
+from .conversations import ConversationStore, Turn
+
+session_router = APIRouter(prefix="/web", tags=["web"])
+router = APIRouter(prefix="/web/api", tags=["web"], dependencies=[Depends(verify_api_access)])
+
+_orchestrator = None
+_ledger = None
+_agent_registry = None
+_job_processor = None
+_cron_store = None
+_approval_store = None
+_north_settings = None
+_agent_run_store = None
+_conversation_store: ConversationStore | None = None
+_north_home: Path | None = None
+
+
+def configure(
+    *,
+    orchestrator,
+    ledger,
+    agent_registry,
+    job_processor,
+    cron_store,
+    approval_store,
+    north_settings,
+    agent_run_store,
+    north_home: Path,
+) -> None:
+    global _orchestrator, _ledger, _agent_registry, _job_processor, _cron_store
+    global _approval_store, _north_settings, _agent_run_store, _conversation_store, _north_home
+    _orchestrator = orchestrator
+    _ledger = ledger
+    _agent_registry = agent_registry
+    _job_processor = job_processor
+    _cron_store = cron_store
+    _approval_store = approval_store
+    _north_settings = north_settings
+    _agent_run_store = agent_run_store
+    _north_home = north_home
+    _conversation_store = ConversationStore(north_home / "web.db")
+
+
+def _require(value, name: str):
+    if value is None:
+        raise RuntimeError(f"{name} not configured")
+    return value
+
+
+@session_router.post("/session")
+async def create_local_session(request: Request, response: Response) -> dict[str, Any]:
+    """Silently establish a browser session for a loopback-hosted app."""
+    if (request.url.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1", "testserver"}:
+        raise HTTPException(status_code=403, detail="The North web interface is local-only.")
+    session = issue_web_session()
+    response.set_cookie(
+        WEB_SESSION_COOKIE,
+        session.token,
+        httponly=True,
+        samesite="strict",
+        secure=False,
+        max_age=12 * 60 * 60,
+        path="/",
+    )
+    return {"csrf": session.csrf, "expires_at": session.expires_at}
+
+
+class ConversationCreate(BaseModel):
+    title: str = Field(default="New chat", max_length=160)
+
+
+class ConversationUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=160)
+    pinned: bool | None = None
+    archived: bool | None = None
+
+
+class TurnCreate(BaseModel):
+    prompt: str = Field(min_length=1, max_length=32_768)
+
+
+def _conversation_payload(conversation) -> dict[str, Any]:
+    return asdict(conversation)
+
+
+def _entry_payload(entry) -> dict[str, Any]:
+    return entry.model_dump(mode="json", exclude={"agent_output"})
+
+
+async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
+    if not task_id:
+        return None
+    orchestrator = _require(_orchestrator, "Orchestrator")
+    ledger = _require(_ledger, "Ledger")
+    task, entries, runs = await asyncio.gather(
+        orchestrator.get_task(task_id),
+        ledger.query(LedgerFilters(task_id=task_id, limit=300, order_asc=True)),
+        _require(_agent_run_store, "AgentRunStore").list_for_task(task_id),
+    )
+    output = ""
+    for entry in reversed(entries):
+        if entry.action == "agent_completed" and entry.output:
+            output = entry.output
+            break
+    if not output:
+        for entry in reversed(entries):
+            if entry.output:
+                output = entry.output
+                break
+    return {
+        "task": task.model_dump(mode="json") if task else {"task_id": task_id, "status": "unknown"},
+        "output": output,
+        "entries": [_entry_payload(entry) for entry in entries],
+        "runs": [
+            {
+                **run.__dict__,
+                "started_at": run.started_at.isoformat(),
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "models_used": list(run.models_used),
+                "skills": list(run.skills),
+            }
+            for run in runs
+        ],
+    }
+
+
+async def _turn_payload(turn: Turn) -> dict[str, Any]:
+    return {**asdict(turn), "detail": await _task_detail(turn.task_id)}
+
+
+@router.get("/conversations")
+async def list_conversations(q: str = "", archived: bool = False, limit: int = 100) -> list[dict[str, Any]]:
+    conversations = await _require(_conversation_store, "ConversationStore").list(
+        query=q, archived=archived, limit=limit
+    )
+    return [_conversation_payload(conversation) for conversation in conversations]
+
+
+@router.post("/conversations", status_code=201)
+async def create_conversation(body: ConversationCreate) -> dict[str, Any]:
+    conversation = await _require(_conversation_store, "ConversationStore").create(body.title)
+    return _conversation_payload(conversation)
+
+
+@router.patch("/conversations/{conversation_id}")
+async def update_conversation(conversation_id: str, body: ConversationUpdate) -> dict[str, Any]:
+    conversation = await _require(_conversation_store, "ConversationStore").update(
+        conversation_id,
+        title=body.title,
+        pinned=body.pinned,
+        archived=body.archived,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return _conversation_payload(conversation)
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str) -> dict[str, Any]:
+    store = _require(_conversation_store, "ConversationStore")
+    conversation = await store.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    turns = await store.turns(conversation_id)
+    payloads = await asyncio.gather(*[_turn_payload(turn) for turn in turns])
+    return {**_conversation_payload(conversation), "turns": payloads}
+
+
+@router.post("/conversations/{conversation_id}/turns", status_code=202)
+async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
+    store = _require(_conversation_store, "ConversationStore")
+    try:
+        turn = await store.add_turn(conversation_id, body.prompt)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
+    previous = await store.turns(conversation_id)
+    context_parts: list[str] = []
+    for item in previous[-6:-1]:
+        detail = await _task_detail(item.task_id)
+        answer = detail.get("output", "") if detail else ""
+        context_parts.append(f"User: {item.prompt}\nNorth: {answer[:4000]}")
+    context = "## Recent conversation\n" + "\n\n".join(context_parts) if context_parts else ""
+    task = await _require(_orchestrator, "Orchestrator").submit_task(
+        TaskRequest(
+            prompt=body.prompt,
+            context=context,
+            idempotency_key=f"web:{conversation_id}:{turn.id}",
+        )
+    )
+    await store.attach_task(turn.id, task.task_id)
+    return {**asdict(turn), "task_id": task.task_id, "detail": {"task": task.model_dump(mode="json")}}
+
+
+@router.get("/tasks/{task_id}")
+async def web_task_detail(task_id: str) -> dict[str, Any]:
+    detail = await _task_detail(task_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return detail
+
+
+@router.get("/approvals")
+async def approvals(limit: int = 100) -> list[dict[str, Any]]:
+    return [card.model_dump(mode="json") for card in _require(_approval_store, "ApprovalStore").all(limit)]
+
+
+def _allowed_output_roots() -> list[Path]:
+    home = _require(_north_home, "North home")
+    return [home / name for name in ("news", "notes", "wellness")]
+
+
+def _artifact_id(path: Path) -> str:
+    home = _require(_north_home, "North home")
+    relative = str(path.relative_to(home))
+    return base64.urlsafe_b64encode(relative.encode()).decode().rstrip("=")
+
+
+def _artifact_path(artifact_id: str) -> Path:
+    try:
+        padded = artifact_id + "=" * (-len(artifact_id) % 4)
+        relative = base64.urlsafe_b64decode(padded.encode()).decode()
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+    home = _require(_north_home, "North home").resolve()
+    path = (home / relative).resolve()
+    if not any(path.is_relative_to(root.resolve()) for root in _allowed_output_roots()):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return path
+
+
+def _list_artifacts_sync(limit: int) -> list[dict[str, Any]]:
+    paths: list[Path] = []
+    for root in _allowed_output_roots():
+        if root.exists():
+            paths.extend(path for path in root.rglob("*") if path.is_file())
+    paths.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    result = []
+    for path in paths[: max(1, min(limit, 500))]:
+        stat = path.stat()
+        result.append(
+            {
+                "id": _artifact_id(path),
+                "name": path.name,
+                "kind": path.parent.name,
+                "media_type": mimetypes.guess_type(path.name)[0] or "text/plain",
+                "size": stat.st_size,
+                "updated_at": stat.st_mtime,
+            }
+        )
+    return result
+
+
+@router.get("/artifacts")
+async def list_artifacts(limit: int = 100) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_list_artifacts_sync, limit)
+
+
+@router.get("/artifacts/{artifact_id}")
+async def get_artifact(artifact_id: str) -> dict[str, Any]:
+    path = _artifact_path(artifact_id)
+    if path.stat().st_size > 2_000_000:
+        raise HTTPException(status_code=413, detail="Artifact is too large to preview")
+    content = await asyncio.to_thread(path.read_text, "utf-8", "replace")
+    return {
+        "id": artifact_id,
+        "name": path.name,
+        "kind": path.parent.name,
+        "media_type": mimetypes.guess_type(path.name)[0] or "text/plain",
+        "content": content,
+    }
+
+
+@router.get("/dashboard")
+async def dashboard() -> dict[str, Any]:
+    active, jobs, cron, metrics, ledger_entries, conversations, artifacts = await asyncio.gather(
+        _require(_orchestrator, "Orchestrator").list_active_tasks(),
+        _require(_job_processor, "JobProcessor").list_jobs(limit=8),
+        _require(_cron_store, "CronStore").list(),
+        _require(_ledger, "Ledger").get_metrics(days=7),
+        _require(_ledger, "Ledger").query(LedgerFilters(limit=12)),
+        _require(_conversation_store, "ConversationStore").list(limit=6),
+        list_artifacts(limit=6),
+    )
+    agents = _require(_agent_registry, "AgentRegistry").all()
+    settings = _require(_north_settings, "NorthSettings")
+    return {
+        "system": {"status": "online", "power": settings.power.value, "autonomy": settings.autonomy.value},
+        "attention": [card.model_dump(mode="json") for card in _require(_approval_store, "ApprovalStore").pending()],
+        "active_tasks": [task.model_dump(mode="json") for task in active],
+        "conversations": [_conversation_payload(item) for item in conversations],
+        "agents": [
+            {"name": agent.name, "domain": agent.domain, "model_pool": agent.config.model_pool or "reasoning"}
+            for agent in agents
+        ],
+        "jobs": [
+            {
+                "job_id": job.job_id,
+                "agent": job.agent,
+                "task": job.task,
+                "status": job.status.value,
+                "scheduled_at": job.scheduled_at.isoformat(),
+            }
+            for job in jobs
+        ],
+        "cron": cron,
+        "metrics": metrics,
+        "activity": [_entry_payload(entry) for entry in ledger_entries],
+        "artifacts": artifacts,
+    }

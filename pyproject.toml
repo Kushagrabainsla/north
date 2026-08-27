@@ -52,10 +52,31 @@ py-modules = ["exceptions"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["tests*", ".venv*", "build*"]
+exclude = [
+    "tests*",
+    ".venv*",
+    "build*",
+    "web.node_modules*",
+    "web.src*",
+]
 
 [tool.setuptools.package-data]
 "*" = ["*.yaml", "*.yml", "*.md", "*.html", "*.css", "*.js", "*.sh"]
+
+[tool.setuptools.exclude-package-data]
+"web" = [
+    "node_modules",
+    "node_modules/*",
+    "node_modules/**/*",
+    "src",
+    "src/*",
+    "src/**/*",
+    "*.ts",
+    "*.tsx",
+    "*.json",
+    "*.tsbuildinfo",
+    "vite.config.*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

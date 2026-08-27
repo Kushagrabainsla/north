@@ -28,3 +28,13 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# web client dependencies and generated TypeScript metadata
+web/node_modules/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+
+# The compiled web client is shipped with the Python package.
+!web/dist/
+!web/dist/**

@@ -17,6 +17,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from agents.models import AgentDependencies
 from agents.registry import AgentRegistry
@@ -75,6 +76,9 @@ from utils.logging import configure_structured_logging
 from utils.security import load_secret
 from utils.time import utcnow
 from utils.version import NORTH_VERSION
+from web.api import configure as configure_web
+from web.api import router as web_api_router
+from web.api import session_router as web_session_router
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +372,17 @@ def _configure_routers(orchestrator, deps, agent_registry, context_injector) -> 
         cron_store=deps.cron_store,
         north_settings=deps.north_settings,
         agent_run_store=deps.agent_run_store,
+    )
+    configure_web(
+        orchestrator=orchestrator,
+        ledger=deps.ledger,
+        agent_registry=agent_registry,
+        job_processor=deps.job_processor,
+        cron_store=deps.cron_store,
+        approval_store=deps.approval_store,
+        north_settings=deps.north_settings,
+        agent_run_store=deps.agent_run_store,
+        north_home=settings.north_home,
     )
 
 
@@ -666,3 +681,9 @@ async def _task_capacity_handler(request: Request, exc: TaskCapacityError) -> JS
 app.include_router(health_router)
 app.include_router(orchestrator_router)
 app.include_router(webhook_router)
+app.include_router(web_session_router)
+app.include_router(web_api_router)
+
+_WEB_DIST = Path(__file__).parent.parent / "web" / "dist"
+if _WEB_DIST.exists():
+    app.mount("/app", StaticFiles(directory=_WEB_DIST, html=True), name="north-web")

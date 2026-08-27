@@ -47,6 +47,8 @@ configuration and `north auth logout openai-codex` to remove the token.
 | `north` | Open the TUI (starts server if needed) |
 | `north start` | Start server + TUI |
 | `north start --no-chat` | Start server only |
+| `north web` | Build stale web assets, then start server + open the web cockpit |
+| `north web --no-open` | Start server without opening a browser |
 | `north start --docker` | Start server via Docker Compose |
 | `north stop` | Stop the server |
 | `north reset` | Wipe data, keep API key |

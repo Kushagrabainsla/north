@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import time
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1926,6 +1927,68 @@ def start(
         return
 
     _launch_tui(host=host, port=port, workspace=resolved_workspace)
+
+
+def _web_build_is_stale(web_dir: Path) -> bool:
+    """Return whether the bundled web assets are missing or older than inputs."""
+    dist_index = web_dir / "dist" / "index.html"
+    if not dist_index.is_file():
+        return True
+    input_names = ("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "index.html")
+    inputs = [web_dir / name for name in input_names]
+    src_dir = web_dir / "src"
+    if src_dir.is_dir():
+        inputs.extend(path for path in src_dir.rglob("*") if path.is_file())
+    input_mtime = max((path.stat().st_mtime for path in inputs if path.is_file()), default=0)
+    return dist_index.stat().st_mtime < input_mtime
+
+
+def _ensure_web_build() -> None:
+    """Build the frontend automatically when running from a source checkout."""
+    web_dir = Path(__file__).resolve().parents[1] / "web"
+    if not _web_build_is_stale(web_dir):
+        return
+    if not (web_dir / "package.json").is_file():
+        if (web_dir / "dist" / "index.html").is_file():
+            return  # Installed package: compiled assets are present, sources are not.
+        typer.secho("Web assets are missing and the frontend source is unavailable.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    npm = shutil.which("npm")
+    if npm is None:
+        typer.secho(
+            "Web assets are stale, but npm is not installed. Install Node.js/npm and retry.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    _console.print("  [dim]web assets stale; rebuilding frontend…[/dim]")
+    result = subprocess.run([npm, "run", "build"], cwd=web_dir, check=False)
+    if result.returncode != 0:
+        typer.secho("Frontend build failed; see the output above.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(result.returncode or 1)
+
+
+@app.command("web")
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
+    port: int = typer.Option(8000, "--port", "-p", help="North server port."),
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Root directory agents can read/write. Defaults to the current project root.",
+    ),
+    docker: bool = typer.Option(False, "--docker", help="Start the server through Docker Compose."),
+    no_open: bool = typer.Option(False, "--no-open", help="Start the server without opening a browser."),
+) -> None:
+    """Start North's web cockpit and open it in the default browser."""
+    _ensure_web_build()
+    if not _port_in_use(host, port) or not _is_north_server(host, port):
+        start(host=host, port=port, docker=docker, no_chat=True, workspace=workspace)
+    url = f"http://{host}:{port}/app/"
+    _console.print(f"  [dim]web cockpit [/dim]  {url}")
+    if not no_open:
+        webbrowser.open(url)
 
 
 @app.command("stop")
