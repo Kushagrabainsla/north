@@ -884,6 +884,7 @@ async def run_bootstrap_if_needed(
     fact_store: FactStore | None,
     inference_router: InferenceRouter,
     north_home: Path,
+    selected_paths: set[str] | None = None,
 ) -> None:
     """Seed facts from local files on first-ever start.
 
@@ -899,19 +900,21 @@ async def run_bootstrap_if_needed(
         return
 
     marker = north_home / _BOOTSTRAPPED_MARKER
-    if marker.exists():
+    if marker.exists() and not selected_paths:
         logger.debug("bootstrap: already seeded (marker found)")
         return
 
     progress = _load_progress(north_home)
 
     existing = await fact_store.count(category="bootstrap")
-    if existing > 0 and progress is None:
+    if existing > 0 and progress is None and not selected_paths:
         logger.debug("bootstrap: skipped (fact store already has %d facts)", existing)
         marker.touch()
         return
 
     files = _discover_files()
+    if selected_paths:
+        files = [path for path in files if str(path.resolve()) in selected_paths]
     if not files:
         logger.info("bootstrap: no candidate files found — marking done")
         marker.touch()

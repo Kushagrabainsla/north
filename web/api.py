@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import mimetypes
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
+from inference.registry import PROVIDER_DEFINITIONS
 from ledger.base import LedgerFilters
 from orchestrator.models import TaskRequest
 from utils.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
@@ -31,6 +34,9 @@ _north_settings = None
 _agent_run_store = None
 _conversation_store: ConversationStore | None = None
 _north_home: Path | None = None
+_fact_store = None
+_inference_router = None
+_bootstrap_task: asyncio.Task | None = None
 
 
 def configure(
@@ -44,9 +50,12 @@ def configure(
     north_settings,
     agent_run_store,
     north_home: Path,
+    fact_store=None,
+    inference_router=None,
 ) -> None:
     global _orchestrator, _ledger, _agent_registry, _job_processor, _cron_store
     global _approval_store, _north_settings, _agent_run_store, _conversation_store, _north_home
+    global _fact_store, _inference_router
     _orchestrator = orchestrator
     _ledger = ledger
     _agent_registry = agent_registry
@@ -56,6 +65,8 @@ def configure(
     _north_settings = north_settings
     _agent_run_store = agent_run_store
     _north_home = north_home
+    _fact_store = fact_store
+    _inference_router = inference_router
     _conversation_store = ConversationStore(north_home / "web.db")
 
 
@@ -221,6 +232,120 @@ async def web_task_detail(task_id: str) -> dict[str, Any]:
 @router.get("/approvals")
 async def approvals(limit: int = 100) -> list[dict[str, Any]]:
     return [card.model_dump(mode="json") for card in _require(_approval_store, "ApprovalStore").all(limit)]
+
+
+@router.get("/system")
+async def system_overview() -> dict[str, Any]:
+    settings = _require(_north_settings, "North settings")
+    providers = []
+    for definition in PROVIDER_DEFINITIONS:
+        credential = definition.resolve_credential(settings)
+        providers.append({
+            "id": definition.id,
+            "name": definition.display_name,
+            "description": definition.description,
+            "auth_kind": definition.auth_kind.value,
+            "configured": definition.is_configured(settings),
+            "env_key": definition.env_key,
+            "setup_url": definition.setup_url,
+            "credential_hint": (
+                credential[:4] + "…" + credential[-4:]
+                if len(credential) > 8
+                else ("configured" if credential else "")
+            ),
+        })
+    home = _require(_north_home, "North home")
+    progress = _load_progress(home) or []
+    candidates = [str(path.resolve()) for path in _discover_files()]
+    marker = home / ".bootstrapped"
+    return {
+        "providers": providers,
+        "settings": {"power": settings.power.value, "autonomy": settings.autonomy.value},
+        "bootstrap": {
+            "status": "complete" if marker.exists() else ("in_progress" if progress else "not_started"),
+            "completed": progress,
+            "candidates": candidates,
+            "candidate_count": len(candidates),
+        },
+    }
+
+
+@router.get("/bootstrap")
+async def bootstrap_status() -> dict[str, Any]:
+    return (await system_overview())["bootstrap"]
+
+
+class BootstrapRequest(BaseModel):
+    paths: list[str] = Field(default_factory=list, max_length=25)
+
+
+@router.post("/bootstrap", status_code=202)
+async def start_bootstrap(body: BootstrapRequest) -> dict[str, Any]:
+    global _bootstrap_task
+    if _fact_store is None or _inference_router is None:
+        raise HTTPException(status_code=503, detail="Bootstrap dependencies are not ready")
+    if _bootstrap_task and not _bootstrap_task.done():
+        return {"status": "in_progress"}
+    candidates = {str(path.resolve()) for path in _discover_files()}
+    selected = {str(Path(path).expanduser().resolve()) for path in body.paths}
+    if selected and not selected.issubset(candidates):
+        raise HTTPException(status_code=400, detail="One or more selected files are not eligible bootstrap sources")
+    _bootstrap_task = asyncio.create_task(
+        run_bootstrap_if_needed(
+            _fact_store,
+            _inference_router,
+            _require(_north_home, "North home"),
+            selected_paths=selected or None,
+        )
+    )
+    return {"status": "started", "selected": len(selected) or len(candidates)}
+
+
+class ProviderCredentialUpdate(BaseModel):
+    api_key: str = Field(min_length=1, max_length=512)
+
+
+@router.post("/providers/{provider_id}")
+async def update_provider(provider_id: str, body: ProviderCredentialUpdate) -> dict[str, Any]:
+    definition = next((item for item in PROVIDER_DEFINITIONS if item.id == provider_id), None)
+    if definition is None:
+        raise HTTPException(status_code=404, detail="Unknown provider")
+    if not definition.env_key:
+        raise HTTPException(status_code=400, detail="This provider uses browser authentication; use the CLI login flow")
+    home = _require(_north_home, "North home")
+    home.mkdir(parents=True, exist_ok=True)
+    env_path = home / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    prefix = f"{definition.env_key}="
+    replacement = f"{definition.env_key}={body.api_key.strip()}"
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[index] = replacement
+            break
+    else:
+        lines.append(replacement)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    env_path.chmod(0o600)
+    os.environ[definition.env_key] = body.api_key.strip()
+    from config.runtime import get_runtime
+    from config.settings import reload_settings, settings
+    from inference.factory import build_router
+
+    reload_settings()
+    runtime = get_runtime()
+    if runtime is not None:
+        new_router = build_router(
+            openrouter_api_key=settings.openrouter_api_key,
+            north_settings=runtime.north_settings,
+            groq_api_key=settings.groq_api_key,
+            gemini_api_key=settings.gemini_api_key,
+            opencode_zen_api_key=settings.opencode_zen_api_key,
+            provider_settings=settings,
+            confidence_tracker=runtime.confidence_tracker,
+            cooldowns_path=settings.north_home / "cooldowns.json",
+        )
+        runtime.cost_tracker.set_inner(new_router)
+    return {"id": definition.id, "configured": True, "credential_hint": body.api_key[:4] + "…" + body.api_key[-4:]}
 
 
 def _allowed_output_roots() -> list[Path]:

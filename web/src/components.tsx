@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useState } from "react";
 import { post } from "./api";
 import type { Conversation } from "./types";
 
@@ -8,19 +9,21 @@ const nav = [
   ["/artifacts", "Artifacts", "◇"],
   ["/schedule", "Schedule", "◷"], ["/approvals", "Approvals", "!"],
   ["/memory", "Memory", "◎"], ["/agents", "Agents", "△"],
-  ["/activity", "Activity", "≋"], ["/insights", "Insights", "↗"],
+  ["/activity", "Activity", "≋"], ["/bootstrap", "Bootstrap", "↥"],
   ["/system", "System", "◉"], ["/settings", "Settings", "⚙"]
 ];
 
 export function Layout() {
   const navigate = useNavigate();
+  const [collapsed, setCollapsed] = useState(false);
   const newChat = async () => {
     const chat = await post<Conversation>("/web/api/conversations", { title: "New chat" });
     navigate(`/chat/${chat.id}`);
   };
-  return <div className="app-shell">
+  return <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src="https://repository-images.githubusercontent.com/1221207908/a9516630-e5f6-475f-ab80-44b2dd6dc9c8" alt="North logo"/><div><b>north</b><small>personal operating system</small></div></div>
+      <button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button>
       <button className="new-chat" onClick={newChat}>+ New conversation</button>
       <nav>{nav.map(([to, label, icon]) => <NavLink key={to} to={to} end={to === "/"}>
         <span className="nav-icon">{icon}</span><span>{label}</span>

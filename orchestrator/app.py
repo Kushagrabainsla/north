@@ -383,6 +383,8 @@ def _configure_routers(orchestrator, deps, agent_registry, context_injector) -> 
         north_settings=deps.north_settings,
         agent_run_store=deps.agent_run_store,
         north_home=settings.north_home,
+        fact_store=deps.fact_store,
+        inference_router=deps.inference_router,
     )
 
 
