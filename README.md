@@ -25,7 +25,9 @@ The installer configures an inference provider. One provider is enough to start:
 | OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | [opencode.ai/auth](https://opencode.ai/auth) |
 | OpenAI Codex | Browser OAuth | `north auth login openai-codex` |
 
-To add or change keys later, edit `~/.north/.env`:
+To add or change provider keys later, run `north web` and use the cockpit's
+**System → Providers** controls. For advanced/headless setups, you can still
+edit `~/.north/.env` directly:
 
 ```
 NORTH_OPENROUTER_API_KEY=sk-or-...
