@@ -23,12 +23,11 @@ export function Layout() {
   return <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src="https://repository-images.githubusercontent.com/1221207908/a9516630-e5f6-475f-ab80-44b2dd6dc9c8" alt="North logo"/><div><b>north</b><small>personal operating system</small></div></div>
-      <button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button>
       <button className="new-chat" onClick={newChat}>+ New conversation</button>
       <nav>{nav.map(([to, label, icon]) => <NavLink key={to} to={to} end={to === "/"}>
         <span className="nav-icon">{icon}</span><span>{label}</span>
       </NavLink>)}</nav>
-      <div className="server-state"><span className="online-dot"/><div><b>North is online</b><small>Local server · live</small></div></div>
+      <div className="sidebar-footer"><div className="server-state"><span className="online-dot"/><div><b>North is online</b><small>Local server · live</small></div></div><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>
     </aside>
     <main className="workspace"><Outlet /></main>
   </div>;
