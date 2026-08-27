@@ -100,7 +100,7 @@ a { color: inherit; text-decoration: none; }
 .agent-cloud i { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-right: 6px; }
 .briefing-panel { background: linear-gradient(120deg, rgba(42,35,18,.7), rgba(16,19,22,.95)); }
 .briefing-summary .primary-button { margin-left: auto; font-size: 10px; }
-.sun-mark { width: 38px; height: 38px; border: 1px solid rgba(255,201,105,.3); color: var(--amber); border-radius: 50%; display: grid; place-items: center; }
+.sun-mark { width: 38px; height: 38px; flex: 0 0 38px; aspect-ratio: 1; border: 1px solid rgba(255,201,105,.3); color: var(--amber); border-radius: 50%; display: grid; place-items: center; }
 .metric-row, .metric-cards { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; }
 .metric strong, .metric span { display: block; }
 .metric strong { font-size: 23px; letter-spacing: -.04em; }
