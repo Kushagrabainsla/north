@@ -940,7 +940,6 @@ async def run_bootstrap_if_needed(
         len(completed_paths),
     )
     total_facts = 0
-    profile_sections: list[str] = []
 
     for path in pending:
         candidates = []
@@ -949,9 +948,7 @@ async def run_bootstrap_if_needed(
 
         for attempt in range(max_file_retries):
             try:
-                candidates, profile_md = await _extract_unified(path, inference_router)
-                if profile_md:
-                    profile_sections.append(profile_md)
+                candidates, _profile_md = await _extract_unified(path, inference_router)
                 file_extracted = True
                 break
             except AllModelsRateLimitedError as e:
@@ -1009,24 +1006,8 @@ async def run_bootstrap_if_needed(
         _save_progress(north_home, progress_items)
         await asyncio.sleep(_BOOTSTRAP_DELAY_SECONDS)
 
-    # Cross-file fusion: one consolidated user-profile fact
-    synthesized = _synthesize_profile(profile_sections)
-    if synthesized:
-        try:
-            if await fact_store.add_fact_with_provenance(
-                content=synthesized,
-                category="bootstrap",
-                subject="user",
-                confidence=0.9,
-                status="active",
-                source_path="<synthesized>",
-                source_hash="profile-synthesis",
-                source_mtime=0.0,
-                evidence=None,
-            ):
-                total_facts += 1
-        except Exception:
-            logger.warning("bootstrap: failed to store synthesized profile", exc_info=True)
+    # Keep the fact store atomic: profile markdown is written to context docs,
+    # while each durable fact remains a single claim rather than a paragraph.
 
     # Write versioned marker only on clean completion
     marker.write_text(

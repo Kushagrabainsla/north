@@ -190,6 +190,13 @@ async def update_conversation(conversation_id: str, body: ConversationUpdate) ->
     return _conversation_payload(conversation)
 
 
+@router.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_conversation(conversation_id: str) -> None:
+    deleted = await _require(_conversation_store, "ConversationStore").delete(conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str) -> dict[str, Any]:
     store = _require(_conversation_store, "ConversationStore")

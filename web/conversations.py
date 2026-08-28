@@ -116,6 +116,14 @@ class ConversationStore:
         await asyncio.to_thread(self._update_sync, conversation_id, title, pinned, archived)
         return await self.get(conversation_id)
 
+    async def delete(self, conversation_id: str) -> bool:
+        return await asyncio.to_thread(self._delete_sync, conversation_id)
+
+    def _delete_sync(self, conversation_id: str) -> bool:
+        with open_db_connection(self._db_path) as conn:
+            result = conn.execute("DELETE FROM web_conversations WHERE id=?", (conversation_id,))
+            return result.rowcount > 0
+
     def _update_sync(
         self,
         conversation_id: str,
