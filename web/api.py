@@ -297,6 +297,38 @@ async def memory_facts() -> list[dict[str, Any]]:
     return await _fact_store.all_facts()
 
 
+class FactCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+    category: str = Field(default="user", max_length=80)
+
+
+@router.post("/memory/facts", status_code=201)
+async def create_memory_fact(body: FactCreate) -> dict[str, Any]:
+    store = _require(_fact_store, "FactStore")
+    await store.add_fact(body.content, body.category)
+    match = next(
+        (fact for fact in await store.all_facts(body.category) if fact["content"] == body.content.strip()),
+        None,
+    )
+    if match is None:
+        raise HTTPException(status_code=409, detail="Fact already exists or was rejected")
+    return match
+
+
+@router.patch("/memory/facts/{fact_id}")
+async def update_memory_fact(fact_id: str, body: FactCreate) -> dict[str, Any]:
+    store = _require(_fact_store, "FactStore")
+    if not await store.update_fact(fact_id, body.content, body.category):
+        raise HTTPException(status_code=404, detail="Fact not found or rejected")
+    return next(fact for fact in await store.all_facts() if fact["id"] == fact_id)
+
+
+@router.delete("/memory/facts/{fact_id}", status_code=204)
+async def delete_memory_fact(fact_id: str) -> None:
+    if not await _require(_fact_store, "FactStore").delete_fact(fact_id):
+        raise HTTPException(status_code=404, detail="Fact not found")
+
+
 class BootstrapRequest(BaseModel):
     paths: list[str] = Field(default_factory=list, max_length=25)
 

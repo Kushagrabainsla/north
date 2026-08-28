@@ -324,6 +324,44 @@ class FactStore:
         """Return all facts for web UI display, optionally filtered by category."""
         return await asyncio.to_thread(self._all_facts_sync, category)
 
+    async def update_fact(self, fact_id: str, content: str, category: str | None = None) -> bool:
+        content = content.strip()
+        if not content or _contains_secret(content):
+            return False
+        try:
+            vectors = await self._embed_fn([content])
+            embedding = json.dumps(vectors[0] if vectors else [])
+        except Exception:
+            embedding = json.dumps([])
+        return await asyncio.to_thread(self._update_fact_sync, fact_id, content, category, embedding)
+
+    def _update_fact_sync(self, fact_id: str, content: str, category: str | None, embedding: str) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            if category is None:
+                result = conn.execute(
+                    "UPDATE context_facts SET content=?, embedding=?, updated_at=? WHERE id=?",
+                    (content, embedding, now, fact_id),
+                )
+            else:
+                result = conn.execute(
+                    "UPDATE context_facts SET content=?, category=?, embedding=?, updated_at=? WHERE id=?",
+                    (content, category, embedding, now, fact_id),
+                )
+        if result.rowcount:
+            self.invalidate_cache()
+        return result.rowcount > 0
+
+    async def delete_fact(self, fact_id: str) -> bool:
+        deleted = await asyncio.to_thread(self._delete_fact_sync, fact_id)
+        if deleted:
+            self.invalidate_cache()
+        return deleted
+
+    def _delete_fact_sync(self, fact_id: str) -> bool:
+        with open_db_connection(self._db_path) as conn:
+            return conn.execute("DELETE FROM context_facts WHERE id=?", (fact_id,)).rowcount > 0
+
     def invalidate_cache(self) -> None:
         self._cache = None
 
@@ -519,12 +557,13 @@ class FactStore:
         with open_db_connection(self._db_path) as conn:
             if category:
                 rows = conn.execute(
-                    "SELECT id, content, category, updated_at FROM context_facts "
+                    "SELECT id, content, category, subject, confidence, status, updated_at FROM context_facts "
                     "WHERE category = ? ORDER BY updated_at DESC",
                     (category,),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, content, category, updated_at FROM context_facts ORDER BY updated_at DESC"
+                    "SELECT id, content, category, subject, confidence, status, updated_at "
+                    "FROM context_facts ORDER BY updated_at DESC"
                 ).fetchall()
         return [dict(r) for r in rows]

@@ -194,5 +194,6 @@ body { font-size: 13px; }
 .bootstrap-row b, .bootstrap-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bootstrap-row > .status { justify-self: end; align-self: center; width: max-content; }
 .facts-panel { margin-bottom: 18px; }
+.fact-editor { display: flex; gap: 8px; margin-bottom: 10px; }.fact-editor input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--text); padding: 9px 10px; }.fact-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }.fact-actions button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }.fact-actions button:hover { color: var(--accent); }.fact-actions button:last-child:hover { color: var(--red); }
 .primary-button, .new-chat { box-shadow: 0 0 18px rgba(181,243,109,.18); }
 html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfortable"] body { zoom: 1; }html[data-type-scale="large"] body { zoom: 1.1; }
