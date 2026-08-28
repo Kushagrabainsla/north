@@ -25,7 +25,11 @@ class TakeScreenshotTool(Tool):
     """Takes a screenshot of the user's screens in pure Python."""
 
     name = "take_screenshot"
-    is_mutating = True
+    # Screen inspection is read-only from the user's perspective. The capture is
+    # also persisted for the model's visual context, but it is an ephemeral,
+    # workspace-scoped diagnostic artifact and should not block simple questions
+    # such as "what is on my desktop?" with an approval card.
+    is_mutating = False
     description = (
         "Capture what is visible on the user's active screens/monitors. Supports single or multi-monitor setups. "
         "Returns the captured display directly into your visual context for analyzing screen activity, "
