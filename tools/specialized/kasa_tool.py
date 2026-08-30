@@ -43,6 +43,18 @@ _COLOR_TEMPS: dict[str, int] = {
     "daylight": 6500,
 }
 
+# Practical presets for natural-language lighting requests. A scene without a
+# device target intentionally applies to every discovered Kasa device.
+_SCENES: dict[str, tuple[tuple[str, dict[str, int]], ...]] = {
+    "moody": (("brightness", {"brightness": 30}), ("color_temp", {"color_temp": 2700})),
+    "cozy": (("brightness", {"brightness": 35}), ("color_temp", {"color_temp": 2700})),
+    "movie": (("brightness", {"brightness": 15}), ("color_temp", {"color_temp": 2500})),
+    "focus": (("brightness", {"brightness": 90}), ("color_temp", {"color_temp": 5000})),
+    "romantic": (("brightness", {"brightness": 25}), ("color", {"hue": 330, "saturation": 75})),
+    "party": (("brightness", {"brightness": 70}), ("color", {"hue": 300, "saturation": 100})),
+    "sunset": (("brightness", {"brightness": 40}), ("color_temp", {"color_temp": 2500})),
+}
+
 # Valid colour-temperature range for Kasa bulbs, in Kelvin.
 _KELVIN_MIN = 2500
 _KELVIN_MAX = 6500
@@ -230,6 +242,24 @@ async def _apply_action_to_devices(
     return results, errors
 
 
+async def _apply_scene_to_devices(
+    matched: dict[str, Any], scene: str, alias_map: dict[str, str]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Apply every command in a named scene to each matched device."""
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for ip, dev in matched.items():
+        alias = alias_map.get(ip, dev.alias or ip)
+        try:
+            for action, params in _SCENES[scene]:
+                await _dispatch_device_action(dev, action, _resolve_action_params(action, params))
+            await dev.update()
+            results.append(_device_state(dev, ip, alias_map, include_hsv=True))
+        except Exception as exc:
+            errors.append(f"{alias}: {exc}")
+    return results, errors
+
+
 def _summarize_action(
     action: str,
     resolved: _ActionParams,
@@ -259,7 +289,8 @@ class KasaTool(ApprovalGatedTool):
         "on/off/toggle; brightness needs a dimmer or bulb, and colour or colour-temperature "
         "needs a colour/tunable-white bulb (the tool reports if a device lacks a feature). "
         "Identify the target by its alias/name (e.g. 'Desk lamp') or IP; if you do not know "
-        "it, run action='list' first. Only action='list' works without a device. "
+        "it, run action='list' first. Named scenes (moody, cozy, movie, focus, romantic, party, "
+        "sunset) may target all discovered lights when no device is supplied. "
         "Control actions execute immediately - no approval prompt."
     )
     parameters_schema = {
@@ -267,13 +298,14 @@ class KasaTool(ApprovalGatedTool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["on", "off", "toggle", "list", "brightness", "color", "color_temp"],
+                "enum": ["on", "off", "toggle", "list", "brightness", "color", "color_temp", "scene"],
                 "description": (
                     "'on'/'off'/'toggle' - power control. "
                     "'brightness' - set brightness (requires brightness param). "
                     "'color' - set colour by name or hue/saturation (requires color or hue param). "
                     "'color_temp' - set white colour temperature (requires color_temp param). "
-                    "'list' - show all discovered devices and their state."
+                    "'list' - show all discovered devices and their state. "
+                    "'scene' - apply a preset mood to one device or all discovered devices."
                 ),
             },
             "device": {
@@ -317,6 +349,11 @@ class KasaTool(ApprovalGatedTool):
                     "Used with action='color_temp'."
                 ),
             },
+            "scene": {
+                "type": "string",
+                "enum": sorted(_SCENES),
+                "description": "Preset mood: moody, cozy, movie, focus, romantic, party, or sunset.",
+            },
         },
         "required": ["action"],
     }
@@ -347,7 +384,7 @@ class KasaTool(ApprovalGatedTool):
             return ToolOutput(success=False, error="Parameter 'action' is required.")
 
         target_hint = str(input.params.get("device", "")).strip().lower()
-        if action != "list" and not target_hint:
+        if action not in ("list", "scene") and not target_hint:
             # Require an explicit target so a control action can never fan out
             # to every device on the network. No approval prompt - actions run
             # immediately once a device is named.
@@ -358,6 +395,14 @@ class KasaTool(ApprovalGatedTool):
                     "Use action='list' to see available devices, then target one by alias or IP."
                 ),
             )
+
+        if action == "scene":
+            scene = str(input.params.get("scene", "")).strip().lower()
+            if scene not in _SCENES:
+                return ToolOutput(
+                    success=False,
+                    error=f"Unknown scene {scene!r}. Available: {', '.join(sorted(_SCENES))}.",
+                )
 
         try:
             import kasa  # noqa: F401
@@ -377,20 +422,26 @@ class KasaTool(ApprovalGatedTool):
             ]
             return ToolOutput(success=True, data={"devices": devices})
 
-        matched = self._match_devices(found, alias_map, target_hint)
+        matched = found if action == "scene" and not target_hint else self._match_devices(found, alias_map, target_hint)
         if isinstance(matched, ToolOutput):
             return matched
 
-        try:
-            resolved = _resolve_action_params(action, input.params)
-        except ValueError as exc:
-            return ToolOutput(success=False, error=str(exc))
-
-        results, errors = await _apply_action_to_devices(matched, action, resolved, alias_map)
+        if action == "scene":
+            scene = str(input.params["scene"]).strip().lower()
+            results, errors = await _apply_scene_to_devices(matched, scene, alias_map)
+            message = f"Applied {scene} scene to: {', '.join(r['alias'] for r in results)}."
+        else:
+            try:
+                resolved = _resolve_action_params(action, input.params)
+            except ValueError as exc:
+                return ToolOutput(success=False, error=str(exc))
+            results, errors = await _apply_action_to_devices(matched, action, resolved, alias_map)
+            message = _summarize_action(action, resolved, results, errors)
         if errors and not results:
             return ToolOutput(success=False, error="; ".join(errors))
 
-        message = _summarize_action(action, resolved, results, errors)
+        if errors:
+            message += f" Errors: {'; '.join(errors)}"
         return ToolOutput(success=True, data={"devices": results, "message": message})
 
     @staticmethod

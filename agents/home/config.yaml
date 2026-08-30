@@ -14,6 +14,12 @@ accepts:
   - "toggle"
   - "dim"
   - "brightness"
+  - "mood"
+  - "moody"
+  - "cozy"
+  - "party"
+  - "movie"
+  - "focus"
 output_format: structured_json
 version: 1.0.0
 class_name: HomeAgent

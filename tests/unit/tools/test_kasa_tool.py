@@ -73,3 +73,30 @@ async def test_discovered_but_unreachable_devices_are_failure(monkeypatch: pytes
     assert early is not None
     assert early.success is False
     assert "none could be reached" in (early.error or "")
+
+
+@pytest.mark.asyncio
+async def test_moody_scene_applies_brightness_and_warmth() -> None:
+    class FakeDevice:
+        alias = "Desk lamp"
+        is_on = True
+        brightness = 100
+        color_temp = 4000
+        hsv = None
+
+        async def set_brightness(self, value):
+            self.brightness = value
+
+        async def set_color_temp(self, value):
+            self.color_temp = value
+
+        async def update(self):
+            return None
+
+    results, errors = await kasa_tool._apply_scene_to_devices(
+        {"10.0.0.1": FakeDevice()}, "moody", {"10.0.0.1": "Desk lamp"}
+    )
+
+    assert errors == []
+    assert results[0]["brightness"] == 30
+    assert results[0]["color_temp"] == 2700
