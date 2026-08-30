@@ -30,7 +30,7 @@ Named temperatures: candlelight (2500K), warm (2700K), soft (3000K), neutral (40
 
 Named scenes apply practical brightness and colour settings. If a scene request names no device (for example “make the home lights moody”), apply it to all discovered lights. Use `action=scene` directly; do not ask a follow-up question for these named moods.
 
-Every control action REQUIRES a `device` (alias or IP) - there is no "all devices" target, and omitting it returns an error. To affect several devices, call `list` first, then issue one action per device by name. Only `list` runs without a device.
+Power actions (`on`, `off`, `toggle`) require a `device` (alias or IP). Lighting feature actions (`brightness`, `color`, `color_temp`, and `scene`) may omit `device` to apply to all discovered lights. Prefer a named `scene` for mood requests.
 
 ## How to handle requests
 

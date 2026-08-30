@@ -384,7 +384,12 @@ class KasaTool(ApprovalGatedTool):
             return ToolOutput(success=False, error="Parameter 'action' is required.")
 
         target_hint = str(input.params.get("device", "")).strip().lower()
-        if action not in ("list", "scene") and not target_hint:
+        # Broad lighting requests are common in natural language. Allow
+        # feature controls without a target to apply to all discovered
+        # devices; keep power actions target-specific to avoid surprises with
+        # plugs and switches.
+        broad_actions = {"brightness", "color", "color_temp", "scene"}
+        if action not in broad_actions and not target_hint:
             # Require an explicit target so a control action can never fan out
             # to every device on the network. No approval prompt - actions run
             # immediately once a device is named.
@@ -422,7 +427,9 @@ class KasaTool(ApprovalGatedTool):
             ]
             return ToolOutput(success=True, data={"devices": devices})
 
-        matched = found if action == "scene" and not target_hint else self._match_devices(found, alias_map, target_hint)
+        matched = (
+            found if action in broad_actions and not target_hint else self._match_devices(found, alias_map, target_hint)
+        )
         if isinstance(matched, ToolOutput):
             return matched
 
