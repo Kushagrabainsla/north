@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { post } from "./api";
+import { useHealth } from "./hooks";
 import type { Conversation } from "./types";
 
 const nav = [
@@ -27,7 +28,7 @@ export function Layout() {
       <nav>{nav.map(([to, label, icon]) => <NavLink key={to} to={to} end={to === "/"}>
         <span className="nav-icon">{icon}</span><span>{label}</span>
       </NavLink>)}</nav>
-      <div className="sidebar-footer"><div className="server-state"><span className="online-dot"/><div><b>North is online</b><small>Local server · live</small></div></div><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>
+      <div className="sidebar-footer"><HealthIndicator/><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>
     </aside>
     <main className="workspace"><Outlet /></main>
   </div>;
@@ -52,6 +53,13 @@ export function Empty({ children = "Nothing here yet." }: { children?: ReactNode
 
 export function Loading() { return <div className="loading"><span className="pulse"/>Loading</div>; }
 export function ErrorNotice({ message }: { message: string }) { return <div className="error-notice">{message}</div>; }
+
+export function HealthIndicator({ variant = "compact" }: { variant?: "compact" | "panel" | "hero" }) {
+  const health = useHealth();
+  const label = health.state === "online" ? "North is operational" : health.state === "offline" ? "North is offline" : "Checking North";
+  if (variant === "hero") return <><span className={`online-orb health-${health.state}`} /><div><h2>{label}</h2><p>Live liveness check · REST + SSE</p></div></>;
+  return <div className={`health-indicator health-${health.state}`}><span className="health-dot"/><div><b>{label}</b><small>{health.state === "online" ? "Health check passed" : health.state === "offline" ? "Health check failed" : "Waiting for health check"}</small></div></div>;
+}
 
 export function Markdown({ children }: { children: string }) {
   const lines = children.replace(/\r\n/g, "\n").split("\n");

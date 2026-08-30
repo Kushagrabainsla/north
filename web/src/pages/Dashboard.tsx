@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { Empty, ErrorNotice, Loading, PageHeader, Panel, Status, timeAgo } from "../components";
+import { Empty, ErrorNotice, HealthIndicator, Loading, PageHeader, Panel, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
 
@@ -13,7 +13,7 @@ export function Dashboard() {
       actions={<button className="ghost-button" onClick={reload}>Refresh</button>} />
     <div className="cockpit-grid">
       <Panel title="System" label="Status" to="/system" className="system-panel">
-        <div className="hero-status"><span className="online-orb"/><div><strong>All systems operational</strong><p>Power {data.system.power} · {data.system.autonomy}</p></div></div>
+        <div className="hero-status"><HealthIndicator variant="panel"/><div><p>Power {data.system.power} · {data.system.autonomy}</p></div></div>
       </Panel>
       <Panel title="Attention" label={`${data.attention.length} items`} to="/approvals" className={data.attention.length ? "attention-panel" : ""}>
         {data.attention.length ? data.attention.slice(0, 3).map(item => <NavLink className="list-row" to="/approvals" key={item.id}><div><b>{item.title}</b><small>{item.agent} needs a decision</small></div><span>→</span></NavLink>) : <Empty>Nothing needs you right now.</Empty>}

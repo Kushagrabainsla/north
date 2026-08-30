@@ -24,3 +24,10 @@ export function useResource<T>(path: string | null, refreshMs = 0) {
   }, [reload, refreshMs]);
   return { data, error, loading, reload, setData };
 }
+
+export function useHealth() {
+  const resource = useResource<{ status: string }>("/health", 5000);
+  const online = resource.data?.status === "ok" && !resource.error;
+  const state = resource.loading && !resource.data ? "checking" : online ? "online" : "offline";
+  return { ...resource, online, state };
+}

@@ -78,12 +78,17 @@ def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
     for attempt in ("binary", "module"):
         try:
             cmd = [kasa_bin, "discover"] if attempt == "binary" else [sys.executable, "-m", "kasa", "discover"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            # North is commonly launched detached, where stdin may be closed.
+            # Explicitly detach all standard input so Python-based CLIs cannot
+            # fail during interpreter startup with EBADF (Errno 9).
+            result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
             output = result.stdout
             last_err = (result.stderr or "").strip()
-            if result.returncode != 0 and not output.strip():
-                # Surface the failure rather than pretend the network is empty.
-                return [], f"`{' '.join(cmd)}` exited {result.returncode}: {last_err or 'no output'}"
+            if result.returncode != 0:
+                # A broken/missing binary should not prevent the module fallback.
+                # Preserve the diagnostic if both discovery methods fail.
+                last_err = f"`{' '.join(cmd)}` exited {result.returncode}: {last_err or 'no output'}"
+                continue
         except FileNotFoundError:
             last_err = f"kasa executable not found at {kasa_bin}"
             continue  # try the `-m kasa` fallback
@@ -95,9 +100,6 @@ def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
         hosts = re.findall(r"Host:\s+(\d+\.\d+\.\d+\.\d+)", output)
         aliases = re.findall(r"==\s+(.+?)\s+-\s+\w+\s+==", output)
         pairs = [(host, aliases[i] if i < len(aliases) else host) for i, host in enumerate(hosts)]
-        if not pairs and output.strip():
-            # Discovery ran but parsed nothing - report the raw signal.
-            return [], f"kasa discover produced output but no devices parsed; stderr: {last_err or '(none)'}"
         return pairs, ""
 
     return [], last_err or "kasa discovery produced no output"
@@ -410,8 +412,9 @@ class KasaTool(ApprovalGatedTool):
                 {},
                 {},
                 ToolOutput(
-                    success=True,
+                    success=not diagnostic,
                     data={"devices": [], "message": message},
+                    error=message if diagnostic else None,
                 ),
             )
         try:
@@ -423,11 +426,12 @@ class KasaTool(ApprovalGatedTool):
                 {},
                 {},
                 ToolOutput(
-                    success=True,
+                    success=False,
                     data={
                         "devices": [],
                         "message": "Devices discovered but could not connect to any.",
                     },
+                    error="Devices were discovered but none could be reached.",
                 ),
             )
         return found, dict(pairs), None

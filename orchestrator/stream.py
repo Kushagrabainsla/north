@@ -26,6 +26,8 @@ _SSE_TEMPLATE = "event: {event}\ndata: {data}\n\n"
 
 _HISTORY_MAX_EVENTS = 2048
 _HISTORY_MAX_TASKS = 500
+_SSE_HEARTBEAT_SECONDS = 15.0
+_SSE_HEARTBEAT = ": keep-alive\n\n"
 
 _DURABLE_EVENTS = frozenset({
     "agent_started",
@@ -208,7 +210,13 @@ class EventStreamManager:
             if done:
                 return
             while True:
-                message = await queue.get()
+                try:
+                    message = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    # SSE comments keep proxies and browsers from expiring an
+                    # otherwise healthy idle connection. EventSource ignores them.
+                    yield _SSE_HEARTBEAT
+                    continue
                 if message is None:
                     return
                 yield message
@@ -229,7 +237,11 @@ class EventStreamManager:
         self._global_subs.append(queue)
         try:
             while True:
-                message = await queue.get()
+                try:
+                    message = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    yield _SSE_HEARTBEAT
+                    continue
                 if message is None:
                     return
                 yield message
