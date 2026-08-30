@@ -43,6 +43,12 @@ def test_discovery_uses_module_fallback_after_binary_failure(monkeypatch: pytest
     assert commands == [["/usr/bin/kasa", "discover"], [kasa_tool.sys.executable, "-m", "kasa", "discover"]]
 
 
+def test_action_aliases_cover_natural_tool_calls() -> None:
+    assert kasa_tool._ACTION_ALIASES["set_brightness"] == "brightness"
+    assert kasa_tool._ACTION_ALIASES["turn_on"] == "on"
+    assert kasa_tool._ACTION_ALIASES["apply_scene"] == "scene"
+
+
 @pytest.mark.asyncio
 async def test_discovery_failure_is_reported_as_tool_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_to_thread(_func):

@@ -55,6 +55,18 @@ _SCENES: dict[str, tuple[tuple[str, dict[str, int]], ...]] = {
     "sunset": (("brightness", {"brightness": 40}), ("color_temp", {"color_temp": 2500})),
 }
 
+_ACTION_ALIASES = {
+    "turn_on": "on",
+    "turn_off": "off",
+    "set_brightness": "brightness",
+    "set_color": "color",
+    "set_colour": "color",
+    "set_color_temp": "color_temp",
+    "set_color_temperature": "color_temp",
+    "apply_scene": "scene",
+    "mood": "scene",
+}
+
 # Valid colour-temperature range for Kasa bulbs, in Kelvin.
 _KELVIN_MIN = 2500
 _KELVIN_MAX = 6500
@@ -379,7 +391,8 @@ class KasaTool(ApprovalGatedTool):
         return "\n\n".join(blocks)
 
     async def run(self, input: ToolInput) -> ToolOutput:
-        action = input.params.get("action")
+        action = str(input.params.get("action", "")).strip().lower()
+        action = _ACTION_ALIASES.get(action, action)
         if not action:
             return ToolOutput(success=False, error="Parameter 'action' is required.")
 
