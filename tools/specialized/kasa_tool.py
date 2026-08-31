@@ -78,6 +78,9 @@ _ACTION_VERBS: dict[str, str] = {
     "toggle": "Toggled",
 }
 
+_DEVICE_TIMEOUT_SECONDS = 12.0
+_DEVICE_RETRIES = 2
+
 
 @dataclass
 class _ActionParams:
@@ -135,12 +138,15 @@ async def _connect_devices(pairs: list[tuple[str, str]]) -> dict[str, Any]:
 
     found = {}
     for host, _ in pairs:
-        try:
-            dev = await Device.connect(host=host)
-            await dev.update()
-            found[host] = dev
-        except Exception:
-            pass
+        for attempt in range(_DEVICE_RETRIES + 1):
+            try:
+                dev = await asyncio.wait_for(Device.connect(host=host), timeout=_DEVICE_TIMEOUT_SECONDS)
+                await asyncio.wait_for(dev.update(), timeout=_DEVICE_TIMEOUT_SECONDS)
+                found[host] = dev
+                break
+            except Exception:
+                if attempt < _DEVICE_RETRIES:
+                    await asyncio.sleep(0.25 * (attempt + 1))
     return found
 
 
@@ -245,13 +251,41 @@ async def _apply_action_to_devices(
     errors: list[str] = []
     for ip, dev in matched.items():
         alias = alias_map.get(ip, dev.alias or ip)
-        try:
-            await _dispatch_device_action(dev, action, resolved)
-            await dev.update()
-            results.append(_device_state(dev, ip, alias_map, include_hsv=action == "color"))
-        except Exception as exc:
-            errors.append(f"{alias}: {exc}")
+        last_error: Exception | None = None
+        for attempt in range(_DEVICE_RETRIES + 1):
+            try:
+                await asyncio.wait_for(_dispatch_device_action(dev, action, resolved), timeout=_DEVICE_TIMEOUT_SECONDS)
+                await asyncio.wait_for(dev.update(), timeout=_DEVICE_TIMEOUT_SECONDS)
+                state = _device_state(dev, ip, alias_map, include_hsv=action == "color")
+                if not _action_verified(action, resolved, state):
+                    raise RuntimeError(f"device state did not confirm requested {action} change")
+                results.append(state)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < _DEVICE_RETRIES:
+                    await asyncio.sleep(0.25 * (attempt + 1))
+        if last_error is not None:
+            errors.append(f"{alias}: {last_error}")
     return results, errors
+
+
+def _action_verified(action: str, resolved: _ActionParams, state: dict[str, Any]) -> bool:
+    """Confirm that a device reports the requested state after a mutation."""
+    if action == "on":
+        return state.get("is_on") is True
+    if action == "off":
+        return state.get("is_on") is False
+    if action == "brightness":
+        return state.get("brightness") == resolved.brightness
+    if action == "color_temp":
+        return state.get("color_temp") == resolved.kelvin
+    if action == "color":
+        return state.get("hue") == resolved.hue and state.get("saturation") == resolved.saturation
+    # Toggle has no fixed expected value, but update() succeeding confirms the
+    # command reached the device and produced a readable state.
+    return action == "toggle" and isinstance(state.get("is_on"), bool)
 
 
 async def _apply_scene_to_devices(
@@ -262,14 +296,39 @@ async def _apply_scene_to_devices(
     errors: list[str] = []
     for ip, dev in matched.items():
         alias = alias_map.get(ip, dev.alias or ip)
-        try:
-            for action, params in _SCENES[scene]:
-                await _dispatch_device_action(dev, action, _resolve_action_params(action, params))
-            await dev.update()
-            results.append(_device_state(dev, ip, alias_map, include_hsv=True))
-        except Exception as exc:
-            errors.append(f"{alias}: {exc}")
+        last_error: Exception | None = None
+        for attempt in range(_DEVICE_RETRIES + 1):
+            try:
+                supported = [(action, params) for action, params in _SCENES[scene] if _supports_action(dev, action)]
+                if not supported:
+                    raise RuntimeError("device does not support any controls in this scene")
+                for action, params in supported:
+                    await asyncio.wait_for(
+                        _dispatch_device_action(dev, action, _resolve_action_params(action, params)),
+                        timeout=_DEVICE_TIMEOUT_SECONDS,
+                    )
+                await asyncio.wait_for(dev.update(), timeout=_DEVICE_TIMEOUT_SECONDS)
+                results.append(_device_state(dev, ip, alias_map, include_hsv=True))
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < _DEVICE_RETRIES:
+                    await asyncio.sleep(0.25 * (attempt + 1))
+        if last_error is not None:
+            errors.append(f"{alias}: {last_error}")
     return results, errors
+
+
+def _supports_action(dev: Any, action: str) -> bool:
+    """Return whether a device advertises support for a lighting feature."""
+    capability = {"brightness": "is_dimmable", "color": "is_color", "color_temp": "is_variable_color_temp"}.get(action)
+    if capability is None:
+        return True
+    value = getattr(dev, capability, None)
+    # Test doubles and older python-kasa versions may not expose capability
+    # flags. In that case retain the previous optimistic behaviour.
+    return value is not False
 
 
 def _summarize_action(

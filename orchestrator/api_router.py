@@ -25,6 +25,7 @@ from jobs.models import Job, JobPriority, JobStatus, JobType
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource
 from memory.base import ContextStore
+from memory.gateway import LocalMemoryGateway
 from memory.injection import ContextInjector
 from memory.models import ContextDocument
 from orchestrator.agent_runs import AgentRunStore
@@ -468,7 +469,15 @@ class ContextWriteRequest(BaseModel):
 async def read_context(doc: str) -> ContextDocOut:
     """Read a context document."""
     document = _resolve_doc(doc)
-    content = await _get_context_store().read(document)
+    context_store = _get_context_store()
+    # soul.md has a shipped persona fallback when no user override exists.
+    # Use the same gateway path as agents so the Memory UI shows the effective
+    # document rather than an empty editor for a missing override.
+    content = (
+        await LocalMemoryGateway(context_store).read_persona()
+        if document is ContextDocument.SOUL
+        else await context_store.read(document)
+    )
     return ContextDocOut(document=document.value, content=content)
 
 
