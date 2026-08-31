@@ -7,7 +7,7 @@ avoid an import cycle with the DI hub.
 """
 
 from memory.base import ContextStore, MemoryGateway
-from memory.documents import FileContextStore
+from memory.documents import FileContextStore, SQLiteContextStore
 from memory.exceptions import ContextError, ContextReadError, ContextWriteError
 from memory.extraction import ExtractionPipeline
 from memory.gateway import LocalMemoryGateway
@@ -23,6 +23,7 @@ __all__ = [
     "ContextWriteError",
     "ExtractionPipeline",
     "FileContextStore",
+    "SQLiteContextStore",
     "LocalMemoryGateway",
     "MemoryContext",
     "MemoryGateway",

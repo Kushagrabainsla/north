@@ -488,6 +488,16 @@ async def write_context(doc: str, body: ContextWriteRequest) -> None:
     await _get_context_store().write(document, body.content)
 
 
+@router.delete("/context/{doc}", status_code=204)
+async def delete_context(doc: str) -> None:
+    """Delete a user-customized context document."""
+    document = _resolve_doc(doc)
+    delete = getattr(_get_context_store(), "delete", None)
+    if delete is None:
+        raise HTTPException(status_code=405, detail="This context store does not support deletion")
+    await delete(document)
+
+
 @router.post("/context/add", status_code=202)
 async def add_context(
     text: str | None = Form(None),

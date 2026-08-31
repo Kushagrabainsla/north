@@ -24,7 +24,7 @@ from inference import InferenceRouter
 from inference.factory import build_router
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
-from memory import ContextStore, FileContextStore
+from memory import ContextStore, SQLiteContextStore
 
 if TYPE_CHECKING:
     from context.code_index import CodeIndex
@@ -134,7 +134,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         # 2b memory model: public.md was renamed to user.md. Preserve the user's
         # existing facts document under the new name (idempotent, one-time).
         legacy_public.rename(user_doc)
-    context_store = FileContextStore(context_dir)
+    context_store = SQLiteContextStore(settings.north_home / "memory.db", legacy_path=context_dir)
     ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
     base_router = build_router(

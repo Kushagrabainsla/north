@@ -43,7 +43,7 @@ export function Schedule() {
   return <div className="page"><PageHeader eyebrow="Automation" title="Schedule" subtitle="Queued work and recurring routines."/><div className="two-column"><Panel title="Agenda" label={`${jobs.data?.length || 0} jobs`}>{jobs.loading ? <Loading/> : jobs.data?.length ? jobs.data.map(job => <div className="list-row" key={job.job_id}><div><b>{job.task}</b><small>{job.agent} · {new Date(job.scheduled_at).toLocaleString()}</small></div><Status value={job.status}/></div>) : <Empty>No queued work.</Empty>}</Panel><Panel title="Recurring" label={`${cron.data?.length || 0} routines`}>{cron.loading ? <Loading/> : cron.data?.length ? cron.data.map(item => <div className="list-row" key={item.name}><div><b>{item.name}</b><small>{item.task} · {String(item.hour).padStart(2,"0")}:{String(item.minute).padStart(2,"0")}</small></div><span>{item.agent}</span></div>) : <Empty>No recurring routines.</Empty>}</Panel></div></div>;
 }
 
-const docs = ["user.md", "north_stars.md", "judgement_rules.md", "soul.md"];
+const docs = ["north_stars.md", "judgement_rules.md", "soul.md"];
 interface ContextDoc { document: string; content: string; }
 export function Memory() {
   const [doc, setDoc] = useState(docs[0]);

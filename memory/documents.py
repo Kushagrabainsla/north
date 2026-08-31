@@ -20,6 +20,71 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class SQLiteContextStore(ContextStore):
+    """Database-backed context documents with one-time Markdown migration."""
+
+    def __init__(self, db_path: Path, legacy_path: Path | None = None) -> None:
+        from utils.db import open_db_connection
+
+        self._db_path = db_path
+        self._legacy_path = legacy_path
+        self._locks: dict[str, asyncio.Lock] = {}
+        with open_db_connection(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS context_documents "
+                "(document TEXT PRIMARY KEY, content TEXT NOT NULL)"
+            )
+            if legacy_path is not None:
+                for document in ContextDocument:
+                    path = legacy_path / document.value
+                    exists = conn.execute(
+                        "SELECT 1 FROM context_documents WHERE document = ?", (document.value,)
+                    ).fetchone()
+                    if path.exists() and exists is None:
+                        conn.execute(
+                            "INSERT INTO context_documents(document, content) VALUES (?, ?)",
+                            (document.value, path.read_text(encoding="utf-8")),
+                        )
+
+    async def read(self, document: ContextDocument) -> str:
+        return await asyncio.to_thread(self._read_sync, document)
+
+    def _read_sync(self, document: ContextDocument) -> str:
+        from utils.db import open_db_connection
+
+        with open_db_connection(self._db_path) as conn:
+            row = conn.execute("SELECT content FROM context_documents WHERE document = ?", (document.value,)).fetchone()
+            return str(row[0]) if row else ""
+
+    async def write(self, document: ContextDocument, content: str) -> None:
+        await asyncio.to_thread(self._write_sync, document, content)
+
+    def _write_sync(self, document: ContextDocument, content: str) -> None:
+        from utils.db import open_db_connection
+
+        with open_db_connection(self._db_path) as conn:
+            conn.execute(
+                "INSERT INTO context_documents(document, content) VALUES (?, ?) "
+                "ON CONFLICT(document) DO UPDATE SET content=excluded.content",
+                (document.value, content),
+            )
+
+    async def append(self, document: ContextDocument, delta: str) -> None:
+        lock = self._locks.setdefault(document.value, asyncio.Lock())
+        async with lock:
+            existing = await self.read(document)
+            await self.write(document, f"{existing}{'\\n' if existing else ''}{delta}")
+
+    async def delete(self, document: ContextDocument) -> None:
+        await asyncio.to_thread(self._delete_sync, document)
+
+    def _delete_sync(self, document: ContextDocument) -> None:
+        from utils.db import open_db_connection
+
+        with open_db_connection(self._db_path) as conn:
+            conn.execute("DELETE FROM context_documents WHERE document = ?", (document.value,))
+
+
 class FileContextStore(ContextStore):
     """The five context documents persist as markdown files under `base_path`.
 
