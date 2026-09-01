@@ -36,6 +36,7 @@ _conversation_store: ConversationStore | None = None
 _north_home: Path | None = None
 _fact_store = None
 _inference_router = None
+_skill_registry = None
 _bootstrap_task: asyncio.Task | None = None
 
 
@@ -52,10 +53,11 @@ def configure(
     north_home: Path,
     fact_store=None,
     inference_router=None,
+    skill_registry=None,
 ) -> None:
     global _orchestrator, _ledger, _agent_registry, _job_processor, _cron_store
     global _approval_store, _north_settings, _agent_run_store, _conversation_store, _north_home
-    global _fact_store, _inference_router
+    global _fact_store, _inference_router, _skill_registry
     _orchestrator = orchestrator
     _ledger = ledger
     _agent_registry = agent_registry
@@ -67,6 +69,7 @@ def configure(
     _north_home = north_home
     _fact_store = fact_store
     _inference_router = inference_router
+    _skill_registry = skill_registry
     _conversation_store = ConversationStore(north_home / "web.db")
 
 
@@ -220,8 +223,14 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
     context_parts: list[str] = []
     for item in previous[-6:-1]:
         detail = await _task_detail(item.task_id)
-        answer = detail.get("output", "") if detail else ""
-        context_parts.append(f"User: {item.prompt}\nNorth: {answer[:4000]}")
+        # A pending/paused turn has no authoritative final answer yet. Injecting
+        # its partial output makes the next task look like a continuation of the
+        # previous question and can cause North to answer the wrong turn.
+        if not detail or detail.get("task", {}).get("status") != "completed":
+            continue
+        answer = detail.get("output", "")
+        if answer:
+            context_parts.append(f"User: {item.prompt}\nNorth: {answer[:4000]}")
     context = "## Recent conversation\n" + "\n\n".join(context_parts) if context_parts else ""
     task = await _require(_orchestrator, "Orchestrator").submit_task(
         TaskRequest(
@@ -300,6 +309,62 @@ async def memory_facts() -> list[dict[str, Any]]:
 class FactCreate(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
     category: str = Field(default="user", max_length=80)
+
+
+class SkillUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=100_000)
+
+
+@router.get("/skills")
+async def list_skills() -> list[dict[str, Any]]:
+    registry = _require(_skill_registry, "SkillRegistry")
+    return [
+        {
+            "name": skill.name,
+            "description": skill.description,
+            "source": skill.source.value,
+            "version": skill.version,
+            "status": skill.status,
+            "domains": sorted(skill.domains),
+        }
+        for skill in sorted(registry.all(), key=lambda item: item.name)
+    ]
+
+
+@router.get("/skills/{name}")
+async def get_skill(name: str) -> dict[str, Any]:
+    registry = _require(_skill_registry, "SkillRegistry")
+    try:
+        skill = registry.get(name)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    content = await asyncio.to_thread((skill.directory / "SKILL.md").read_text, encoding="utf-8")
+    return {"name": skill.name, "content": content, "source": skill.source.value}
+
+
+@router.put("/skills/{name}")
+async def update_skill(name: str, body: SkillUpdate) -> dict[str, Any]:
+    from skills.exceptions import SkillParseError
+    from skills.parser import parse_skill_document
+    from skills.registry import rejection_reason
+
+    registry = _require(_skill_registry, "SkillRegistry")
+    try:
+        skill = registry.get(name)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    try:
+        frontmatter, content_body = parse_skill_document(body.content)
+    except SkillParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    parsed_name = str(frontmatter.get("name") or "").strip()
+    description = str(frontmatter.get("description") or "").strip()
+    reason = rejection_reason(parsed_name, description, content_body, source=skill.source)
+    if parsed_name != name or reason:
+        raise HTTPException(status_code=422, detail=reason or "Skill name cannot be changed")
+    await asyncio.to_thread((skill.directory / "SKILL.md").write_text, body.content, encoding="utf-8")
+    registry.reload()
+    return await get_skill(name)
 
 
 @router.post("/memory/facts", status_code=201)

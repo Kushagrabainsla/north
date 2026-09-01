@@ -749,14 +749,16 @@ class Orchestrator:
         running = self._active_tasks.pop(task_id, None)
         if running is None:
             return False
+        # Keep the row in the store but mark it paused so reconcile won't
+        # auto-resume it — only an explicit resume_paused_task() call should.
+        # Persist this state before cancellation so _process_task's finally block
+        # can never race ahead and delete the recovery row.
+        if self._running_task_store is not None:
+            await self._running_task_store.mark_paused(task_id)
         if not running.done():
             running.cancel()
         if self._tracked_router:
             self._tracked_router.pop_task_cost(task_id)
-        # Keep the row in the store but mark it paused so reconcile won't
-        # auto-resume it — only an explicit resume_paused_task() call should.
-        if self._running_task_store is not None:
-            await self._running_task_store.mark_paused(task_id)
         await self._write_ledger(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
@@ -1140,8 +1142,9 @@ class Orchestrator:
             # is no longer in-flight: drop it from the crash-recovery registry unless queued.
             if self._running_task_store is not None:
                 with contextlib.suppress(Exception, asyncio.CancelledError):
-                    is_queued = await asyncio.shield(self._running_task_store.is_queued(task_id))
-                    if not is_queued:
+                    stored_task = await asyncio.shield(self._running_task_store.get(task_id))
+                    is_resumable = stored_task is not None and stored_task.status in {"queued", "paused"}
+                    if not is_resumable:
                         await asyncio.shield(self._running_task_store.clear(task_id))
 
     async def _stage_plan(

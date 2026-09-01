@@ -344,6 +344,20 @@ class ExtractionPipeline:
 
         doc = _DOCUMENT_MAP[doc_key]
 
+        # User facts live only in FactStore. Keeping a second user document in
+        # the document database recreates the split-brain state the atomic fact
+        # store replaced and leaves the dashboard showing stale information.
+        if doc is ContextDocument.USER and self._fact_store is not None:
+            try:
+                inserted = await self._fact_store.add_fact(delta, doc_key)
+            except Exception:
+                logger.warning("FactStore: failed to persist fact '%s'", delta[:80])
+                return False
+            if not inserted:
+                return False
+            await self._record_extraction(entry, doc, delta)
+            return True
+
         # Deduplication: skip if the fact is already captured in the document.
         if await self._is_duplicate(doc, delta, entry.task_id):
             return False
@@ -359,6 +373,10 @@ class ExtractionPipeline:
         # Trim document if it has grown too large.
         await self._maybe_trim(doc, entry.task_id)
 
+        await self._record_extraction(entry, doc, delta)
+        return True
+
+    async def _record_extraction(self, entry: LedgerEntry, doc: ContextDocument, delta: str) -> None:
         await self._ledger.write(
             LedgerEntry(
                 id=generate_id(),
@@ -370,7 +388,6 @@ class ExtractionPipeline:
                 status=LedgerStatus.COMPLETED,
             )
         )
-        return True
 
     async def _is_duplicate(self, doc: ContextDocument, delta: str, task_id: str | None) -> bool:
         """Return True if delta is already captured (or is contentless noise).

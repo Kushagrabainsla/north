@@ -34,7 +34,14 @@ class SQLiteContextStore(ContextStore):
                 "CREATE TABLE IF NOT EXISTS context_documents "
                 "(document TEXT PRIMARY KEY, content TEXT NOT NULL)"
             )
-            if legacy_path is not None:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS context_metadata "
+                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            migrated = conn.execute(
+                "SELECT 1 FROM context_metadata WHERE key = 'markdown_migration_complete'"
+            ).fetchone()
+            if legacy_path is not None and migrated is None:
                 for document in ContextDocument:
                     path = legacy_path / document.value
                     exists = conn.execute(
@@ -45,6 +52,10 @@ class SQLiteContextStore(ContextStore):
                             "INSERT INTO context_documents(document, content) VALUES (?, ?)",
                             (document.value, path.read_text(encoding="utf-8")),
                         )
+                conn.execute(
+                    "INSERT INTO context_metadata(key, value) VALUES "
+                    "('markdown_migration_complete', '1')"
+                )
 
     async def read(self, document: ContextDocument) -> str:
         return await asyncio.to_thread(self._read_sync, document)
@@ -73,7 +84,8 @@ class SQLiteContextStore(ContextStore):
         lock = self._locks.setdefault(document.value, asyncio.Lock())
         async with lock:
             existing = await self.read(document)
-            await self.write(document, f"{existing}{'\\n' if existing else ''}{delta}")
+            separator = "\n" if existing else ""
+            await self.write(document, f"{existing}{separator}{delta}")
 
     async def delete(self, document: ContextDocument) -> None:
         await asyncio.to_thread(self._delete_sync, document)

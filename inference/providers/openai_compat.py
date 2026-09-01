@@ -328,6 +328,10 @@ class OpenAICompatibleProvider:
         """
         return {}
 
+    def _request_body_fields(self, request: CompletionRequest | ToolCallRequest) -> dict:
+        """Provider-specific fields derived from one inference request."""
+        return {}
+
     # ---- completion ----
 
     async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
@@ -412,6 +416,7 @@ class OpenAICompatibleProvider:
             "model": model_id,
             "messages": messages,
             **self._extra_body_fields(),
+            **self._request_body_fields(request),
         }
         if request.max_tokens is not None:
             body["max_tokens"] = request.max_tokens
@@ -471,6 +476,7 @@ class OpenAICompatibleProvider:
             "messages": request.messages,
             "stream": True,
             **self._extra_body_fields(),
+            **self._request_body_fields(request),
         }
         if formatted_tools:
             body["tools"] = formatted_tools

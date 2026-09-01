@@ -20,8 +20,10 @@ from inference.exceptions import (
     TranscriptionError,
 )
 from inference.models import (
+    CompletionRequest,
     EmbedRequest,
     EmbedResponse,
+    ToolCallRequest,
     TranscriptionRequest,
     TranscriptionResponse,
 )
@@ -104,6 +106,12 @@ class OpenRouterRouter(OpenAICompatibleProvider):
 
     def _extra_body_fields(self) -> dict:
         return {"usage": {"include": True}}
+
+    def _request_body_fields(self, request: CompletionRequest | ToolCallRequest) -> dict:
+        # OpenRouter uses session_id for sticky provider routing. Agent loops reuse
+        # a task id across their calls, which keeps the stable prompt prefix on a
+        # warm provider and improves automatic prompt-cache hit rates.
+        return {"session_id": request.task_id} if request.task_id else {}
 
     # ---- Embeddings ----
 

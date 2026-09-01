@@ -132,22 +132,28 @@ def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
     return [], last_err or "kasa discovery produced no output"
 
 
-async def _connect_devices(pairs: list[tuple[str, str]]) -> dict[str, Any]:
-    """Connect to each discovered device. Returns {ip: device}."""
+async def _connect_devices(pairs: list[tuple[str, str]]) -> tuple[dict[str, Any], list[str]]:
+    """Connect to discovered devices, preserving per-device failures."""
     from kasa import Device
 
     found = {}
-    for host, _ in pairs:
+    errors: list[str] = []
+    for host, alias in pairs:
+        last_error: Exception | None = None
         for attempt in range(_DEVICE_RETRIES + 1):
             try:
                 dev = await asyncio.wait_for(Device.connect(host=host), timeout=_DEVICE_TIMEOUT_SECONDS)
                 await asyncio.wait_for(dev.update(), timeout=_DEVICE_TIMEOUT_SECONDS)
                 found[host] = dev
+                last_error = None
                 break
-            except Exception:
+            except Exception as exc:
+                last_error = exc
                 if attempt < _DEVICE_RETRIES:
                     await asyncio.sleep(0.25 * (attempt + 1))
-    return found
+        if last_error is not None:
+            errors.append(f"{alias} ({host}): {type(last_error).__name__}: {last_error}")
+    return found, errors
 
 
 def _device_state(
@@ -548,10 +554,11 @@ class KasaTool(ApprovalGatedTool):
                 ),
             )
         try:
-            found = await _connect_devices(pairs)
+            found, connection_errors = await _connect_devices(pairs)
         except Exception as exc:
             return {}, {}, ToolOutput(success=False, error=f"Failed to connect to devices: {exc}")
         if not found:
+            diagnostic = "; ".join(connection_errors) or "unknown connection failure"
             return (
                 {},
                 {},
@@ -559,9 +566,9 @@ class KasaTool(ApprovalGatedTool):
                     success=False,
                     data={
                         "devices": [],
-                        "message": "Devices discovered but could not connect to any.",
+                        "message": f"Devices discovered but could not connect. {diagnostic}",
                     },
-                    error="Devices were discovered but none could be reached.",
+                    error=f"Devices were discovered but none could be reached. {diagnostic}",
                 ),
             )
         return found, dict(pairs), None

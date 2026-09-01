@@ -69,7 +69,7 @@ async def test_discovered_but_unreachable_devices_are_failure(monkeypatch: pytes
         return [("192.168.1.20", "Desk lamp")], ""
 
     async def fake_connect(_pairs):
-        return {}
+        return {}, ["Desk lamp (192.168.1.20): TimeoutError: timed out"]
 
     monkeypatch.setattr(kasa_tool.asyncio, "to_thread", fake_to_thread)
     monkeypatch.setattr(kasa_tool, "_connect_devices", fake_connect)
@@ -79,6 +79,7 @@ async def test_discovered_but_unreachable_devices_are_failure(monkeypatch: pytes
     assert early is not None
     assert early.success is False
     assert "none could be reached" in (early.error or "")
+    assert "TimeoutError" in (early.error or "")
 
 
 @pytest.mark.asyncio

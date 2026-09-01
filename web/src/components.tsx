@@ -9,7 +9,7 @@ const nav = [
   ["/", "Dashboard", "⌘"], ["/chat", "Chat", "◫"], ["/tasks", "Tasks", "✓"],
   ["/artifacts", "Artifacts", "◇"],
   ["/schedule", "Schedule", "◷"], ["/approvals", "Approvals", "!"],
-  ["/memory", "Memory", "◎"], ["/agents", "Agents", "△"],
+  ["/memory", "Memory", "◎"], ["/agents", "Agents", "△"], ["/skills", "Skills", "✦"],
   ["/activity", "Activity", "≋"],
   ["/system", "System", "◉"], ["/settings", "Settings", "⚙"]
 ];

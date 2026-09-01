@@ -1549,3 +1549,34 @@ async def test_get_task_and_cancel_task_paused_and_queued_tasks(tmp_path):
     resp_after = await orch.get_task("t_paused")
     assert resp_after is not None
     assert resp_after.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_pause_preserves_recovery_row_after_pipeline_cancellation(tmp_path, monkeypatch):
+    """The cancelled pipeline cleanup must not erase the row Resume needs."""
+    from orchestrator.running_tasks import RunningTaskStore
+
+    orch, _, _ = _make_orchestrator(tmp_path)
+    store = RunningTaskStore(tmp_path / "running-pause.db")
+    orch._running_task_store = store
+    request = TaskRequest(prompt="pause race", source=LedgerSource.PROMPT)
+    await store.mark_running("t_pause_race", request)
+
+    started = asyncio.Event()
+
+    async def block_plan(*_args, **_kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(orch, "_stage_plan", block_plan)
+    pipeline = asyncio.create_task(orch._process_task("t_pause_race", request))
+    orch._active_tasks["t_pause_race"] = pipeline
+    await started.wait()
+
+    assert await orch.pause_task("t_pause_race") is True
+    with pytest.raises(asyncio.CancelledError):
+        await pipeline
+
+    stored = await store.get("t_pause_race")
+    assert stored is not None
+    assert stored.status == "paused"

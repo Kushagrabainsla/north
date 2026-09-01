@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from inference.exceptions import ModelRateLimitedError, PaymentRequiredError, ProviderAuthError
-from inference.models import CompletionRequest, TranscriptionRequest
+from inference.models import CompletionRequest, ToolCallRequest, TranscriptionRequest
 from inference.providers.groq import GroqRouter
 from inference.providers.openai_compat import OpenAICompatibleProvider
 from inference.providers.openrouter import OpenRouterRouter
@@ -157,6 +157,16 @@ async def test_openrouter_transcribe_maps_cooldown_statuses(
             await provider.transcribe("whisper", TranscriptionRequest(audio=b"x"))
     finally:
         await provider.aclose()
+
+
+def test_openrouter_uses_task_as_sticky_prompt_cache_session() -> None:
+    provider = OpenRouterRouter(api_key="k")
+    completion = CompletionRequest(prompt="hi", component="test", task_id="task-123")
+    tools = ToolCallRequest(messages=[], tools=[], component="test", task_id="task-123")
+
+    assert provider._request_body_fields(completion) == {"session_id": "task-123"}
+    assert provider._request_body_fields(tools) == {"session_id": "task-123"}
+    assert provider._request_body_fields(completion.model_copy(update={"task_id": None})) == {}
 
 
 @pytest.mark.parametrize(
