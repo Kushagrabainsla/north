@@ -113,9 +113,16 @@ export function Chat() {
   const [chatListWidth, setChatListWidth] = useState(() => Number(localStorage.getItem("north-chat-list-width")) || 250);
   const fileInput = useRef<HTMLInputElement>(null);
   const chatRoom = useRef<HTMLElement>(null);
+  const openedAtBottom = useRef<string | null>(null);
   const visibleChats = useMemo(() => (chats.data || []).filter(chat => chat.title.toLowerCase().includes(search.toLowerCase())), [chats.data, search]);
   const live = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
+  useEffect(() => {
+    if (!conversationId) { openedAtBottom.current = null; return; }
+    if (room.data?.id !== conversationId || openedAtBottom.current === conversationId) return;
+    openedAtBottom.current = conversationId;
+    window.requestAnimationFrame(() => chatRoom.current?.scrollTo({ top: chatRoom.current.scrollHeight }));
+  }, [conversationId, room.data?.id]);
   useEffect(() => {
     if (!resizing) return;
     const move = (event: PointerEvent) => {
