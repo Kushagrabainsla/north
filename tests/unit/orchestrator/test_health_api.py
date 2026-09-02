@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator import api_router
+from orchestrator.api import health as api_router
 from orchestrator.api_context import ApiServices, bind_services
 
 

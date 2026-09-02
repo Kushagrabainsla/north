@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from orchestrator.api_router import MAX_TRANSCRIBE_BYTES, _read_body_capped
+from orchestrator.api.transcription import MAX_TRANSCRIBE_BYTES, _read_body_capped
 
 
 class FakeRequest:

@@ -4,7 +4,18 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
-- **Orchestrator routes are being split per area** (`orchestrator/api/`): health, metrics, SSE streams, inference, tool confidence, tasks, context, jobs, cron, ledger, and settings now live in their own modules alongside a shared `deps.py` holding the routers and accessors (CODING_STYLE §12.4). `api_router.py` keeps the remaining areas and re-exports the package's router objects, so `app.py` and every importer are unchanged. 1031 -> 345 lines so far, across 12 area modules; the route table is verified after each move to hold the same 69 routes with no parameterised path shadowing a literal one.
+
+### Changed
+
+### Fixed
+
+### Removed
+
+---
+
+## [1.7.0] - 2026-09-02
+### Added
+- **Orchestrator API routes split per area** (`orchestrator/api/`): `api_router.py` was a single 1,031-line module holding every route for tasks, ledger, agents, context, jobs, cron, inference, settings, and webhooks. It is now 16 modules under `orchestrator/api/` - largest 119 lines, median ~62 - with a shared `deps.py` owning the routers and accessors, exactly the per-area layout CODING_STYLE §12.4 asks for. The module is gone; `app.py` imports the three routers and `configure` from the package. Moved in three commits, verifying after each that the app still exposes the same 69 routes and that no parameterised path (`/task/{id}`) captures a literal one registered after it - the failure mode that silently misroutes requests while every test still passes.
 
 ### Changed
 

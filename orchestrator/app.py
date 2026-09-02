@@ -37,9 +37,9 @@ from memory.consolidator import EpisodeConsolidator
 from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
 from memory.injection import ContextInjector
-from orchestrator.api_router import configure as configure_api
-from orchestrator.api_router import health_router, webhook_router
-from orchestrator.api_router import router as orchestrator_router
+from orchestrator.api import configure as configure_api
+from orchestrator.api import health_router, webhook_router
+from orchestrator.api import router as orchestrator_router
 from orchestrator.constants import WATCHDOG_POLL_INTERVAL_SECONDS
 from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler

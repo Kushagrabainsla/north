@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-import orchestrator.api_router as api
+import orchestrator.api.agents as api
 from agents.exceptions import AgentNotFoundError
 from orchestrator.api_context import ApiServices, bind_services
 from orchestrator.models import TaskResponse
