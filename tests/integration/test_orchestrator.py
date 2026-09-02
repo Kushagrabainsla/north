@@ -23,6 +23,7 @@ from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import FileContextStore, LocalMemoryGateway
 from memory.extraction import ExtractionPipeline
 from orchestrator.failure_handler import FailureHandler
+from orchestrator.isolation import AgentIsolation
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
@@ -674,10 +675,22 @@ class _FileWritingCoder:
         return AgentResult(output="done", summary=f"wrote {self._filename}", successful_tools=["write_file"])
 
 
-def _isolating_orchestrator(tmp_path: Path):
+def _isolating_orchestrator(tmp_path: Path, best_of_n: int = 1):
+    """An orchestrator whose isolation collaborator is wired for worktree runs.
+
+    Rebuilt rather than poked: AgentIsolation takes its settings at construction,
+    exactly as the orchestrator wires it in production.
+    """
     orch, ledger, _ = _make_orchestrator(tmp_path)
-    orch._worktree_isolation = True  # type: ignore[attr-defined]
-    orch._worktree_root = str(tmp_path / "worktrees")  # type: ignore[attr-defined]
+    orch._isolation = AgentIsolation(
+        enabled=True,
+        worktree_root=str(tmp_path / "worktrees"),
+        best_of_n=best_of_n,
+        test_command="",
+        stream_manager=orch._stream_manager,
+        write_ledger=orch._write_ledger,
+        run_agent=orch._run_agent_with_retry,
+    )
     return orch, ledger
 
 
@@ -688,7 +701,7 @@ async def test_isolated_coder_applies_changes_back(tmp_path):
     orch, _ = _isolating_orchestrator(tmp_path)
     payload = AgentPayload(task_id="t1", prompt="add feature", workspace=str(repo))
 
-    result = await orch._run_agent_isolated_or_direct(_FileWritingCoder("feature.py", "x = 1\n"), payload)
+    result = await orch._isolation.run(_FileWritingCoder("feature.py", "x = 1\n"), payload)
 
     assert result.summary == "wrote feature.py"
     assert (repo / "feature.py").read_text() == "x = 1\n"  # applied back to base tree
@@ -712,7 +725,7 @@ async def test_isolated_coder_does_not_touch_base_until_integrate(tmp_path):
             seen["base_clean"] = not (repo / "feature.py").exists()
             return await super().run(payload)
 
-    await orch._run_agent_isolated_or_direct(_Probe("feature.py", "1\n"), payload)
+    await orch._isolation.run(_Probe("feature.py", "1\n"), payload)
 
     assert seen == {"isolated": True, "base_clean": True}
     assert (repo / "feature.py").exists()  # applied on completion
@@ -726,8 +739,8 @@ async def test_two_isolated_coders_disjoint_both_apply(tmp_path):
     payload = AgentPayload(task_id="t1", prompt="parallel", workspace=str(repo))
 
     await asyncio.gather(
-        orch._run_agent_isolated_or_direct(_FileWritingCoder("a.py", "A\n"), payload),
-        orch._run_agent_isolated_or_direct(_FileWritingCoder("b.py", "B\n"), payload),
+        orch._isolation.run(_FileWritingCoder("a.py", "A\n"), payload),
+        orch._isolation.run(_FileWritingCoder("b.py", "B\n"), payload),
     )
 
     assert (repo / "a.py").read_text() == "A\n"
@@ -745,8 +758,8 @@ async def test_two_isolated_coders_conflict_retains_branch(tmp_path):
     payload = AgentPayload(task_id="t1", prompt="collide", workspace=str(repo))
 
     await asyncio.gather(
-        orch._run_agent_isolated_or_direct(_FileWritingCoder("collide.txt", "FROM_A\n"), payload),
-        orch._run_agent_isolated_or_direct(_FileWritingCoder("collide.txt", "FROM_B\n"), payload),
+        orch._isolation.run(_FileWritingCoder("collide.txt", "FROM_A\n"), payload),
+        orch._isolation.run(_FileWritingCoder("collide.txt", "FROM_B\n"), payload),
     )
 
     # Exactly one landed; the other was retained on a branch and logged as a conflict.
@@ -778,12 +791,11 @@ class _UniqueFileCoder:
 async def test_best_of_n_integrates_exactly_one_candidate(tmp_path):
     repo = tmp_path / "repo"
     _init_git_repo(repo)
-    orch, _ = _isolating_orchestrator(tmp_path)
-    orch._best_of_n = 3  # type: ignore[attr-defined]
+    orch, _ = _isolating_orchestrator(tmp_path, best_of_n=3)
     coder = _UniqueFileCoder()
     payload = AgentPayload(task_id="t1", prompt="add feature", workspace=str(repo))
 
-    result = await orch._run_agent_isolated_or_direct(coder, payload)
+    result = await orch._isolation.run(coder, payload)
 
     assert coder.runs == 3  # all three candidates ran
     landed = list(repo.glob("cand_*.py"))
@@ -796,12 +808,11 @@ async def test_best_of_n_integrates_exactly_one_candidate(tmp_path):
 async def test_best_of_n_disabled_runs_single_attempt(tmp_path):
     repo = tmp_path / "repo"
     _init_git_repo(repo)
-    orch, _ = _isolating_orchestrator(tmp_path)
-    orch._best_of_n = 1  # type: ignore[attr-defined]
+    orch, _ = _isolating_orchestrator(tmp_path, best_of_n=1)
     coder = _UniqueFileCoder()
     payload = AgentPayload(task_id="t1", prompt="add feature", workspace=str(repo))
 
-    await orch._run_agent_isolated_or_direct(coder, payload)
+    await orch._isolation.run(coder, payload)
 
     assert coder.runs == 1  # N=1 is the ordinary single-worktree path
     assert len(list(repo.glob("cand_*.py"))) == 1

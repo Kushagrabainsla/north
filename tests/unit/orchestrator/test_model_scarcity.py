@@ -190,7 +190,7 @@ async def test_execute_agent_group_tags_real_exhaustion_as_model_unavailable():
     async def boom(agent, payload):
         raise AllModelsRateLimitedError("No completion models are available")
 
-    orch._run_agent_isolated_or_direct = boom
+    orch._isolation.run = boom
     agent = type("A", (), {"name": "reviewer"})()
     failures = await orch._execute_agent_group("t1", "review it", [agent])
     assert failures == ["reviewer"]

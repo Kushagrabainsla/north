@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator.best_of_n import CandidateOutcome, any_viable, select_best
+from orchestrator.isolation import AgentIsolation
 from orchestrator.worktree import Worktree
 
 
@@ -59,34 +60,36 @@ def test_any_viable_true_when_one_changed_and_succeeded():
     assert any_viable([_c(0, succeeded=False), _c(1)]) is True
 
 
+def _isolation(test_command: str) -> AgentIsolation:
+    """Just the isolation collaborator - no orchestrator needed to test it."""
+    return AgentIsolation(
+        enabled=True,
+        worktree_root="",
+        best_of_n=1,
+        test_command=test_command,
+        stream_manager=None,
+        write_ledger=None,
+        run_agent=None,
+    )
+
+
 @pytest.mark.asyncio
 async def test_candidate_tests_pass_reaps_process(tmp_path: Path):
-    from orchestrator.orchestrator import Orchestrator
-
-    orch = object.__new__(Orchestrator)
-    orch._best_of_n_test_command = "python3 -c 'import time; time.sleep(0.01)'"
-
+    isolation = _isolation("python3 -c 'import time; time.sleep(0.01)'")
     wt = Worktree(base=str(tmp_path), path=str(tmp_path), branch="test-br", base_sha="sha")
-    result = await orch._candidate_tests_pass(wt)
-    assert result is True
+    assert await isolation._candidate_tests_pass(wt) is True
 
 
 @pytest.mark.asyncio
 async def test_candidate_tests_pass_handles_timeout_and_kills_proc(tmp_path: Path):
-    import orchestrator.orchestrator as orch_mod
-    from orchestrator.orchestrator import Orchestrator
+    import orchestrator.isolation as isolation_mod
 
-    orch = object.__new__(Orchestrator)
-    # Simulate a command that takes too long
-    orch._best_of_n_test_command = "python3 -c 'import time; time.sleep(10)'"
-
+    isolation = _isolation("python3 -c 'import time; time.sleep(10)'")
     wt = Worktree(base=str(tmp_path), path=str(tmp_path), branch="test-br", base_sha="sha")
 
-    # Temporarily set timeout low for test
-    orig_timeout = orch_mod._BEST_OF_N_TEST_TIMEOUT
-    orch_mod._BEST_OF_N_TEST_TIMEOUT = 0.05
+    original = isolation_mod._BEST_OF_N_TEST_TIMEOUT
+    isolation_mod._BEST_OF_N_TEST_TIMEOUT = 0.05
     try:
-        result = await orch._candidate_tests_pass(wt)
-        assert result is False
+        assert await isolation._candidate_tests_pass(wt) is False
     finally:
-        orch_mod._BEST_OF_N_TEST_TIMEOUT = orig_timeout
+        isolation_mod._BEST_OF_N_TEST_TIMEOUT = original

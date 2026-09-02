@@ -13,6 +13,20 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.8.0] - 2026-09-02
+### Changed
+- **`orchestrator.py` split, first pass** (`orchestrator/engineering_prompts.py`, `orchestrator/verify_command.py`, `orchestrator/isolation.py`): 2,996 -> 2,586 lines, 78 -> 71 methods. The engineering pipeline's prompts and framings (~200 lines of prose the orchestrator only formats), the safe verification-command detection and runner, and the whole worktree-isolation / best-of-N path now live in their own modules. `AgentIsolation` is a real collaborator, not a namespace: it takes the worktree settings, a stream manager, a ledger write, and one way to run an agent, and owns nothing about task lifecycle - which is why its tests now build it directly instead of `object.__new__(Orchestrator)`.
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+---
+
 ## [1.7.1] - 2026-09-02
 ### Added
 
