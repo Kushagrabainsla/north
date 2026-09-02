@@ -34,6 +34,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import webbrowser
 from dataclasses import dataclass
@@ -2027,26 +2028,52 @@ def stop(
     typer.secho("✓ Stopped.", fg=typer.colors.GREEN)
 
 
+def _move_entries(source: Path, names: tuple[str, ...], destination: Path) -> tuple[str, ...]:
+    """Move each named entry from *source* into *destination*; return those moved.
+
+    Moved rather than copied so restrictive file permissions - credentials are
+    written 0600 - survive the round trip. Names that are not present are
+    skipped, so a fresh install with no credentials is not an error.
+    """
+    destination.mkdir(parents=True, exist_ok=True)
+    moved: list[str] = []
+    for name in names:
+        entry = source / name
+        if not entry.exists():
+            continue
+        shutil.move(str(entry), str(destination / name))
+        moved.append(name)
+    return tuple(moved)
+
+
 @app.command("reset")
 def reset(
-    all: bool = typer.Option(False, "--all", help="Also remove the API key and .env config."),
+    all: bool = typer.Option(False, "--all", help="Also remove your API keys and every provider login."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
 ) -> None:
     """Wipe north's data and start fresh.
 
     Stops the server and deletes all local state - ledger, context, tasks,
-    logs, learned preferences, and the secret key. Your API key in .env is
-    kept unless you pass --all.
+    logs, learned preferences, and the secret key. Your API keys in .env and
+    the providers you have logged into (e.g. OpenAI Codex) are kept unless you
+    pass --all.
     """
     from config.settings import settings
+    from inference.codex_auth import CREDENTIALS_DIR_NAME
 
     north_home = settings.north_home
 
+    # What a plain reset keeps: the things that identify you to a provider.
+    # Everything else under north's home is data, which is what reset exists to
+    # wipe. `credentials/` is kept whole, so a provider added later survives
+    # without anyone having to remember to update this list.
+    preserved = (".env", CREDENTIALS_DIR_NAME)
+
     # What gets wiped
     if all:
-        scope = f"{north_home}/ (everything including .env and API key)"
+        scope = f"{north_home}/ (everything, including API keys and provider logins)"
     else:
-        scope = f"{north_home}/ (data only - .env and API key are kept)"
+        scope = f"{north_home}/ (data only - API keys and provider logins are kept)"
 
     if not yes:
         typer.secho(f"This will permanently delete: {scope}", fg=typer.colors.YELLOW)
@@ -2069,19 +2096,22 @@ def reset(
         typer.secho("✓ north fully removed. Run north start to begin fresh.", fg=typer.colors.GREEN)
         return
 
-    # Selective wipe - keep .env
-    env_backup = None
-    env_file = north_home / ".env"
-    if env_file.exists():
-        env_backup = env_file.read_text(encoding="utf-8")
-
-    shutil.rmtree(north_home, ignore_errors=True)
-
-    if env_backup is not None:
+    # Selective wipe: keep what identifies you to a provider, delete the data.
+    staging = Path(tempfile.mkdtemp(dir=north_home.parent, prefix=".north-reset-"))
+    try:
+        moved = _move_entries(north_home, preserved, staging)
+        shutil.rmtree(north_home, ignore_errors=True)
         north_home.mkdir(parents=True, exist_ok=True)
-        env_file.write_text(env_backup, encoding="utf-8")
+        _move_entries(staging, moved, north_home)
+    except OSError as exc:
+        typer.secho(f"Reset failed: {exc}", fg=typer.colors.RED, err=True)
+        typer.secho(f"Your credentials are safe in {staging} - move them back to {north_home}.", fg=typer.colors.YELLOW)
+        raise typer.Exit(1) from exc
+    shutil.rmtree(staging, ignore_errors=True)
 
-    typer.secho("✓ Data wiped. API key kept. Run north start to begin fresh.", fg=typer.colors.GREEN)
+    typer.secho(
+        "✓ Data wiped. API keys and provider logins kept. Run north start to begin fresh.", fg=typer.colors.GREEN
+    )
 
 
 @app.command("update")

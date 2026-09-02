@@ -13,6 +13,14 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.9.1] - 2026-09-02
+### Fixed
+- **`north reset` destroyed every provider login** (`cli/main.py`, `inference/codex_auth.py`). The command promises "your API key in .env is kept unless you pass `--all`", but it preserved *only* `.env` before deleting `~/.north` - so `~/.north/credentials/`, where OAuth logins like OpenAI Codex live, was wiped by a reset that said it was keeping your credentials. The only symptom was the provider quietly reporting "not configured" afterwards, with nothing to connect it to the reset.
+
+  A plain reset now preserves `.env` **and the whole `credentials/` directory**. They are *moved* into a staging directory on the same filesystem rather than copied, so the restrictive permissions on credential files (`0600` in a `0700` directory) survive the round trip - reading and rewriting the contents, as the old code did for `.env`, would have silently widened them. The directory is kept whole rather than by filename, so a provider added later is preserved without anyone remembering to update a list. If a step fails part-way the command says where the staged credentials are instead of losing them, and `--all` still removes everything.
+
+---
+
 ## [1.9.0] - 2026-09-02
 ### Added
 - **The clean-code bar is written down** (`docs/CLEAN_CODE.md`, `docs/CODING_STYLE.md` §4.10-4.15, `skills/builtin/clean-code-checklist/`). Code is clean if it can be understood easily by everyone on the team - read and enhanced by a developer other than its author. The general checklist behind that (names, functions, comments, vertical structure, objects vs data, the six code smells) now lives in one document, with the five rules the codebase was already enforcing informally added to Section 4 as real rules: no flag arguments, Law of Demeter, value objects over primitives, boundary conditions in one place, polymorphism over type switches. The same checklist ships as a skill, so north's own coding agents can fetch it the way they fetch `safe-refactoring`.

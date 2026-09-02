@@ -39,9 +39,15 @@ CODEX_SCOPE = "openid profile email offline_access"
 _REFRESH_MARGIN_SECONDS = 60
 
 
+# Where every authenticated provider's credentials live, relative to north's home.
+# Named here rather than spelled inline so `north reset` can preserve the whole
+# directory without having to know which providers are in it.
+CREDENTIALS_DIR_NAME = "credentials"
+
+
 def default_codex_token_path() -> Path:
     north_home = Path(os.environ.get("NORTH_HOME", "~/.north")).expanduser()
-    return north_home / "credentials" / "openai_codex.json"
+    return north_home / CREDENTIALS_DIR_NAME / "openai_codex.json"
 
 
 def _b64url(data: bytes) -> str:
