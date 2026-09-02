@@ -13,6 +13,19 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.7.1] - 2026-09-02
+### Added
+
+### Changed
+
+### Fixed
+- **Cancelling a best-of-N task no longer leaks worktrees and scratch directories** (`orchestrator/orchestrator.py`): the cleanup in `_run_best_of_n`'s `finally` awaits, and an await in a `finally` re-raises the moment the task is being cancelled - so every candidate after the first was abandoned. Introduced in 1.3.9, when that cleanup moved off the event loop and a synchronous `shutil.rmtree` (which completed regardless) became an `await asyncio.to_thread(...)`. Now shielded, matching the task-registry cleanup in the same file.
+- **Releasing a finished task's approval cards cannot mask the reason it ended** (`orchestrator/orchestrator.py`): the UI notification was spawned outside the guarded block, so at shutdown - when the loop may already be closed - the failure propagated out of `_process_task`'s `finally` and replaced the real terminal state with "event loop is closed". Resolving the cards, the part that matters, was already happening first.
+
+### Removed
+
+---
+
 ## [1.7.0] - 2026-09-02
 ### Added
 - **Orchestrator API routes split per area** (`orchestrator/api/`): `api_router.py` was a single 1,031-line module holding every route for tasks, ledger, agents, context, jobs, cron, inference, settings, and webhooks. It is now 16 modules under `orchestrator/api/` - largest 119 lines, median ~62 - with a shared `deps.py` owning the routers and accessors, exactly the per-area layout CODING_STYLE §12.4 asks for. The module is gone; `app.py` imports the three routers and `configure` from the package. Moved in three commits, verifying after each that the app still exposes the same 69 routes and that no parameterised path (`/task/{id}`) captures a literal one registered after it - the failure mode that silently misroutes requests while every test still passes.

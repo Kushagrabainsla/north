@@ -991,20 +991,31 @@ class Orchestrator:
         Best-effort and synchronous, so it is safe to call while a cancellation
         is unwinding. Anything waiting on one of these cards wakes immediately
         with a `task_ended` status rather than sitting until its timeout.
+
+        Nothing here may raise: this runs in ``_process_task``'s ``finally``, and
+        at shutdown the loop can already be closed - so a failed notification
+        would replace whatever actually ended the task with a confusing
+        "event loop is closed". Resolving the cards is the part that matters;
+        telling the UI is a courtesy.
         """
+        released: list[Card] = []
         try:
             released = self._approval_store.cancel_for_task(task_id)
+            for card in released:
+                spawn(
+                    self._stream_manager.emit(
+                        task_id,
+                        "approval_responded",
+                        {"card_id": card.id, "decision": card.status, "chosen_option": ""},
+                    ),
+                    name="approval_card_released",
+                )
         except Exception:
-            logger.debug("releasing pending cards failed for task %s", task_id, exc_info=True)
-            return
-        for card in released:
-            spawn(
-                self._stream_manager.emit(
-                    task_id,
-                    "approval_responded",
-                    {"card_id": card.id, "decision": card.status, "chosen_option": ""},
-                ),
-                name="approval_card_released",
+            logger.debug(
+                "releasing pending cards for task %s: %d resolved, notification failed",
+                task_id,
+                len(released),
+                exc_info=True,
             )
 
     async def _heartbeat(self, task_id: str) -> None:
@@ -2565,14 +2576,28 @@ class Orchestrator:
                 raise first
             return first  # type: ignore[return-value]
         finally:
-            # Guarantee any worktrees and scratch directories left undiscarded are cleaned up
-            canonical = Path(handoff_dir_for(payload.task_id))
-            for wt, _, cand_task_id in pairs:
-                if wt is not integrated_wt:
-                    await self._discard_worktree(manager, wt)
-                cand_handoff = Path(handoff_dir_for(cand_task_id))
-                if cand_handoff != canonical:
-                    await asyncio.to_thread(_remove_handoff_dir, cand_handoff)
+            # Shielded: an await in a `finally` re-raises immediately once the task
+            # is being cancelled, which would abandon every candidate after the
+            # first - leaving git worktrees and scratch directories behind on every
+            # cancelled best-of-N run. Same guard the task-registry cleanup uses.
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await asyncio.shield(self._cleanup_candidates(manager, pairs, integrated_wt, payload.task_id))
+
+    async def _cleanup_candidates(
+        self,
+        manager: GitWorktreeManager,
+        pairs: list[tuple[Worktree, AgentPayload, str]],
+        integrated: Worktree | None,
+        task_id: str,
+    ) -> None:
+        """Discard every losing worktree and scratch directory. Best-effort."""
+        canonical = Path(handoff_dir_for(task_id))
+        for wt, _, cand_task_id in pairs:
+            if wt is not integrated:
+                await self._discard_worktree(manager, wt)
+            cand_handoff = Path(handoff_dir_for(cand_task_id))
+            if cand_handoff != canonical:
+                await asyncio.to_thread(_remove_handoff_dir, cand_handoff)
 
     async def _candidate_tests_pass(self, wt: Worktree) -> bool | None:
         """Run the configured best-of-N test command in *wt*; True/False, or None if unset."""
