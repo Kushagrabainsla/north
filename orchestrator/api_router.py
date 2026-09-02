@@ -10,7 +10,7 @@ import datetime
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
@@ -30,6 +30,12 @@ from memory.gateway import LocalMemoryGateway
 from memory.injection import ContextInjector
 from memory.models import ContextDocument
 from orchestrator.agent_runs import AgentRunStore
+from orchestrator.api_context import (
+    bind_request_services,
+    current_services,
+    merge,
+    services_of,
+)
 from orchestrator.models import TaskRequest, TaskResponse
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
@@ -41,7 +47,9 @@ from utils.time import utcnow
 router = APIRouter(
     prefix="/orchestrator",
     tags=["orchestrator"],
-    dependencies=[Depends(verify_api_access)],
+    # bind_request_services first so route bodies (and the helpers they call)
+    # can reach this app's wiring through current_services().
+    dependencies=[Depends(bind_request_services), Depends(verify_api_access)],
 )
 
 # Unauthenticated router - only hosts /health so Docker / load-balancer probes
@@ -50,13 +58,16 @@ health_router = APIRouter(tags=["health"])
 
 
 @health_router.get("/health", include_in_schema=True)
-async def health_check() -> dict:
+async def health_check(request: Request = None) -> dict:  # noqa: RUF013 - callable directly in tests
     """Readiness probe for the runtime components required to operate North.
 
-    The route remains unauthenticated for Docker/load-balancer probes. It returns
-    HTTP 200 with status=degraded when the API is alive but a dependency is not
-    ready, allowing the browser to show the difference from an unreachable API.
+    The route remains unauthenticated for Docker/load-balancer probes, so it is
+    not covered by the router-level services binding and reads them from the app
+    directly. It returns HTTP 200 with status=degraded when the API is alive but a
+    dependency is not ready, letting the browser tell that apart from an
+    unreachable API.
     """
+    services = services_of(request.app) if request is not None else current_services()
     checks: dict[str, dict[str, Any]] = {"api": {"status": "ok"}}
 
     async def run_check(name: str, operation) -> None:
@@ -66,35 +77,27 @@ async def health_check() -> dict:
         except Exception as exc:
             checks[name] = {"status": "failed", "detail": f"{type(exc).__name__}: {exc}"}
 
-    if _orchestrator is None:
-        checks["orchestrator"] = {"status": "failed", "detail": "not configured"}
-    else:
-        await run_check("orchestrator", _orchestrator.list_active_tasks())
-    if _ledger is None:
-        checks["ledger"] = {"status": "failed", "detail": "not configured"}
-    else:
-        await run_check("ledger", _ledger.query(LedgerFilters(limit=1)))
-    if _context_store is None:
-        checks["memory"] = {"status": "failed", "detail": "not configured"}
-    else:
-        await run_check("memory", _context_store.read(ContextDocument.SOUL))
-    if _job_processor is None:
-        checks["scheduler"] = {"status": "failed", "detail": "not configured"}
-    else:
-        await run_check("scheduler", _job_processor.list_jobs(limit=1))
-    checks["event_stream"] = {
-        "status": "ok" if _stream_manager is not None else "failed",
-        **({} if _stream_manager is not None else {"detail": "not configured"}),
-    }
-    if _inference_router is None:
+    async def probe(name: str, component: Any, operation) -> None:
+        if component is None:
+            checks[name] = {"status": "failed", "detail": "not configured"}
+            return
+        await run_check(name, operation())
+
+    await probe("orchestrator", services.orchestrator, lambda: services.orchestrator.list_active_tasks())
+    await probe("ledger", services.ledger, lambda: services.ledger.query(LedgerFilters(limit=1)))
+    await probe("memory", services.context_store, lambda: services.context_store.read(ContextDocument.SOUL))
+    await probe("scheduler", services.job_processor, lambda: services.job_processor.list_jobs(limit=1))
+
+    checks["event_stream"] = (
+        {"status": "ok"} if services.stream_manager is not None else {"status": "failed", "detail": "not configured"}
+    )
+
+    if services.inference_router is None:
         checks["inference"] = {"status": "failed", "detail": "not configured"}
     else:
         try:
-            summary = _inference_router.health_summary()
-            checks["inference"] = {
-                "status": "ok" if summary["ready"] else "failed",
-                **summary,
-            }
+            summary = services.inference_router.health_summary()
+            checks["inference"] = {"status": "ok" if summary["ready"] else "failed", **summary}
         except Exception as exc:
             checks["inference"] = {"status": "failed", "detail": f"{type(exc).__name__}: {exc}"}
 
@@ -102,22 +105,8 @@ async def health_check() -> dict:
     return {"status": status, "checks": checks}
 
 
-# Module-level singletons injected by app.py at startup
-_orchestrator: Orchestrator | None = None
-_stream_manager: EventStreamManager | None = None
-_ledger: LedgerWriter | None = None
-_agent_registry: AgentRegistry | None = None
-_context_store: ContextStore | None = None
-_context_injector: ContextInjector | None = None
-_job_processor: JobProcessor | None = None
-_inference_router: InferenceRouter | None = None
-_confidence_tracker: ConfidenceTracker | None = None
-_cron_store: UserCronStore | None = None
-_north_settings: NorthSettings | None = None
-_agent_run_store: AgentRunStore | None = None
-
-
 def configure(
+    app: FastAPI,
     orchestrator: Orchestrator,
     stream_manager: EventStreamManager,
     ledger: LedgerWriter,
@@ -131,69 +120,67 @@ def configure(
     north_settings: NorthSettings | None = None,
     agent_run_store: AgentRunStore | None = None,
 ) -> None:
-    """Wire the singletons used by every route. Called once in app lifespan."""
-    global _orchestrator, _stream_manager, _ledger, _agent_registry
-    global _context_store, _context_injector, _job_processor
-    global _inference_router, _confidence_tracker, _cron_store, _north_settings, _agent_run_store
-    _orchestrator = orchestrator
-    _stream_manager = stream_manager
-    _ledger = ledger
-    _agent_registry = agent_registry
-    _context_store = context_store
-    _context_injector = context_injector
-    _job_processor = job_processor
-    _inference_router = inference_router
-    _confidence_tracker = confidence_tracker
-    _cron_store = cron_store
-    _north_settings = north_settings
-    _agent_run_store = agent_run_store
+    """Attach this app's wiring. Called once in the lifespan.
 
-
-def _require[T](value: T | None, name: str) -> T:
-    """Return a configured singleton or fail loudly when configure() was skipped."""
-    if value is None:
-        raise RuntimeError(f"{name} not configured")
-    return value
+    The components live on ``app.state`` rather than in module globals, so two
+    apps can coexist and a test can wire its own without mutating import-time
+    state (CODING_STYLE §22).
+    """
+    merge(
+        app,
+        orchestrator=orchestrator,
+        stream_manager=stream_manager,
+        ledger=ledger,
+        agent_registry=agent_registry,
+        context_store=context_store,
+        context_injector=context_injector,
+        job_processor=job_processor,
+        inference_router=inference_router,
+        confidence_tracker=confidence_tracker,
+        cron_store=cron_store,
+        north_settings=north_settings,
+        agent_run_store=agent_run_store,
+    )
 
 
 def _get_orchestrator() -> Orchestrator:
-    return _require(_orchestrator, "Orchestrator")
+    return current_services().require("orchestrator")
 
 
 def _get_stream_manager() -> EventStreamManager:
-    return _require(_stream_manager, "EventStreamManager")
+    return current_services().require("stream_manager")
 
 
 def _get_ledger() -> LedgerWriter:
-    return _require(_ledger, "LedgerWriter")
+    return current_services().require("ledger")
 
 
 def _get_agent_run_store() -> AgentRunStore:
-    return _require(_agent_run_store, "AgentRunStore")
+    return current_services().require("agent_run_store")
 
 
 def _get_agent_registry() -> AgentRegistry:
-    return _require(_agent_registry, "AgentRegistry")
+    return current_services().require("agent_registry")
 
 
 def _get_context_store() -> ContextStore:
-    return _require(_context_store, "ContextStore")
+    return current_services().require("context_store")
 
 
 def _get_context_injector() -> ContextInjector:
-    return _require(_context_injector, "ContextInjector")
+    return current_services().require("context_injector")
 
 
 def _get_job_processor() -> JobProcessor:
-    return _require(_job_processor, "JobProcessor")
+    return current_services().require("job_processor")
 
 
 def _get_inference_router() -> InferenceRouter:
-    return _require(_inference_router, "InferenceRouter")
+    return current_services().require("inference_router")
 
 
 def _get_confidence_tracker() -> ConfidenceTracker:
-    return _require(_confidence_tracker, "ConfidenceTracker")
+    return current_services().require("confidence_tracker")
 
 
 # ── Transcription endpoint ────────────────────────────────────────────────────
@@ -380,7 +367,9 @@ async def get_metrics(days: int = 7) -> dict:
 
 # ── Ledger endpoints ──────────────────────────────────────────────────────────
 
-_LEDGER_EXCLUDE = {"agent_output", "tools_used"}
+# Bulk fields the ledger listing never needs. frozenset so a caller cannot
+# mutate the exclusion set that every /ledger response is rendered through.
+_LEDGER_EXCLUDE: frozenset[str] = frozenset({"agent_output", "tools_used"})
 
 
 @router.get("/ledger", response_model=list[LedgerEntry], response_model_exclude=_LEDGER_EXCLUDE)
@@ -645,7 +634,7 @@ async def cancel_job(job_id: str) -> None:
 
 
 def _get_cron_store() -> UserCronStore:
-    return _require(_cron_store, "CronStore")
+    return current_services().require("cron_store")
 
 
 class CronEntryOut(BaseModel):
@@ -898,17 +887,24 @@ class SettingsUpdate(BaseModel):
     autonomy: str | None = None
 
 
+def _settings_out(settings_obj: NorthSettings | None) -> SettingsOut:
+    """Render the dials, falling back to the documented defaults when unwired."""
+    return SettingsOut(
+        power=settings_obj.power.value if settings_obj else "cruise",
+        autonomy=settings_obj.autonomy.value if settings_obj else "interactive",
+    )
+
+
 @router.get("/settings", response_model=SettingsOut)
 async def get_settings() -> SettingsOut:
     """Return current user settings."""
-    power = _north_settings.power.value if _north_settings else "cruise"
-    autonomy = _north_settings.autonomy.value if _north_settings else "interactive"
-    return SettingsOut(power=power, autonomy=autonomy)
+    return _settings_out(current_services().north_settings)
 
 
 @router.post("/settings", response_model=SettingsOut)
 async def update_settings(body: SettingsUpdate) -> SettingsOut:
     """Update user settings live (power and/or autonomy). No restart needed."""
+    settings_obj = current_services().north_settings
     if body.power is not None:
         try:
             mode = StrategyMode(body.power)
@@ -917,22 +913,20 @@ async def update_settings(body: SettingsUpdate) -> SettingsOut:
                 status_code=422,
                 detail=f"Unknown power {body.power!r}. Valid: eco, cruise, sport",
             ) from None
-        if _north_settings is not None:
-            _north_settings.set_power(mode)
+        if settings_obj is not None:
+            settings_obj.set_power(mode)
 
     if body.autonomy is not None:
-        mode = parse_approval_mode(body.autonomy)
-        if mode is None:
+        approval_mode = parse_approval_mode(body.autonomy)
+        if approval_mode is None:
             raise HTTPException(
                 status_code=422,
                 detail=f"Unknown autonomy {body.autonomy!r}. Valid: interactive, auto, autonomous",
             ) from None
-        if _north_settings is not None:
-            _north_settings.set_autonomy(mode)
+        if settings_obj is not None:
+            settings_obj.set_autonomy(approval_mode)
 
-    power_out = _north_settings.power.value if _north_settings else "cruise"
-    autonomy_out = _north_settings.autonomy.value if _north_settings else "interactive"
-    return SettingsOut(power=power_out, autonomy=autonomy_out)
+    return _settings_out(settings_obj)
 
 
 # ── Webhook endpoint ─────────────────────────────────────────────────────────

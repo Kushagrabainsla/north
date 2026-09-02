@@ -1,6 +1,11 @@
+"""The /health probe reports the real state of each runtime component."""
+
 from __future__ import annotations
 
+import pytest
+
 from orchestrator import api_router
+from orchestrator.api_context import ApiServices, bind_services
 
 
 class _Orchestrator:
@@ -28,15 +33,19 @@ class _Inference:
         return {"ready": True, "models": 2, "providers": 1}
 
 
-async def test_health_check_reports_real_ready_components(monkeypatch) -> None:
-    monkeypatch.setattr(api_router, "_orchestrator", _Orchestrator())
-    monkeypatch.setattr(api_router, "_ledger", _Ledger())
-    monkeypatch.setattr(api_router, "_context_store", _Memory())
-    monkeypatch.setattr(api_router, "_job_processor", _Jobs())
-    monkeypatch.setattr(api_router, "_stream_manager", object())
-    monkeypatch.setattr(api_router, "_inference_router", _Inference())
+@pytest.mark.asyncio
+async def test_health_check_reports_real_ready_components() -> None:
+    services = ApiServices(
+        orchestrator=_Orchestrator(),
+        ledger=_Ledger(),
+        context_store=_Memory(),
+        job_processor=_Jobs(),
+        stream_manager=object(),
+        inference_router=_Inference(),
+    )
 
-    result = await api_router.health_check()
+    with bind_services(services):
+        result = await api_router.health_check()
 
     assert result["status"] == "ok"
     assert set(result["checks"]) == {
@@ -45,14 +54,26 @@ async def test_health_check_reports_real_ready_components(monkeypatch) -> None:
     assert result["checks"]["inference"]["models"] == 2
 
 
-async def test_health_check_is_degraded_when_runtime_is_not_configured(monkeypatch) -> None:
-    for name in (
-        "_orchestrator", "_ledger", "_context_store", "_job_processor", "_stream_manager", "_inference_router"
-    ):
-        monkeypatch.setattr(api_router, name, None)
-
-    result = await api_router.health_check()
+@pytest.mark.asyncio
+async def test_health_check_is_degraded_when_runtime_is_not_configured() -> None:
+    with bind_services(ApiServices()):
+        result = await api_router.health_check()
 
     assert result["status"] == "degraded"
     assert result["checks"]["api"]["status"] == "ok"
     assert result["checks"]["ledger"]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_two_apps_can_hold_different_wiring() -> None:
+    """The point of moving off module globals: no shared mutable state."""
+    from fastapi import FastAPI
+
+    from orchestrator.api_context import attach, services_of
+
+    ready, empty = FastAPI(), FastAPI()
+    attach(ready, ApiServices(ledger=_Ledger()))
+    attach(empty, ApiServices())
+
+    assert services_of(ready).ledger is not None
+    assert services_of(empty).ledger is None

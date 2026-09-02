@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 import orchestrator.api_router as api
 from agents.exceptions import AgentNotFoundError
+from orchestrator.api_context import ApiServices, bind_services
 from orchestrator.models import TaskResponse
 
 
@@ -42,21 +43,20 @@ class _CapturingOrchestrator:
         return TaskResponse(task_id="task_1", status="pending", created_at="now")
 
 
-async def test_run_agent_unknown_name_returns_404(monkeypatch):
-    monkeypatch.setattr(api, "_agent_registry", _UnknownRegistry())
-    with pytest.raises(HTTPException) as exc:
+async def test_run_agent_unknown_name_returns_404():
+    with bind_services(ApiServices(agent_registry=_UnknownRegistry())), pytest.raises(HTTPException) as exc:
         await api.run_agent(api.AgentRunRequest(agent="ghost", task="do it"))
     assert exc.value.status_code == 404
     assert "ghost" in str(exc.value.detail)
     assert "coder" in str(exc.value.detail)  # lists the available agents
 
 
-async def test_run_agent_forwards_forced_agent(monkeypatch):
+async def test_run_agent_forwards_forced_agent():
     orchestrator = _CapturingOrchestrator()
-    monkeypatch.setattr(api, "_agent_registry", _KnownRegistry())
-    monkeypatch.setattr(api, "_orchestrator", orchestrator)
+    services = ApiServices(agent_registry=_KnownRegistry(), orchestrator=orchestrator)
 
-    response = await api.run_agent(api.AgentRunRequest(agent="coder", task="fix the bug"))
+    with bind_services(services):
+        response = await api.run_agent(api.AgentRunRequest(agent="coder", task="fix the bug"))
 
     assert response.task_id == "task_1"
     request = orchestrator.last_request

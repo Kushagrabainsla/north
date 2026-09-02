@@ -13,6 +13,18 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.6.0] - 2026-09-02
+### Added
+
+### Changed
+- **The HTTP layer no longer holds module-level wiring** (`orchestrator/api_context.py`, `orchestrator/api_router.py`, `web/api.py`, `orchestrator/app.py`): 27 module-level singletons - 12 in the orchestrator router, 15 in the web router - are replaced by one frozen `ApiServices` set per FastAPI app, stored on `app.state` and bound to each request through a router-level dependency, the same context-variable mechanism `utils/execution_context.py` uses to carry run identity through an agent call. This is what CODING_STYLE §22 (no global mutable state) and §6.3 (injected at the boundary) already asked for. Two apps can now hold independent wiring, a test builds exactly the slice it exercises via `bind_services()` instead of monkeypatching import-time state, and a component that was never wired raises "`X` is not configured on this app" rather than an `AttributeError`. Both routers `merge()` into one app so neither overwrites the other's slice. The web layer's in-flight state (browser logins, the bootstrap task) moved onto the app as a `WebRuntime` for the same reason.
+
+### Fixed
+
+### Removed
+
+---
+
 ## [1.5.2] - 2026-09-02
 ### Added
 

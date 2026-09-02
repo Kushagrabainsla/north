@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from orchestrator.api_context import ApiServices, bind_services
 from skills.registry import SkillRegistry
 from web import api as web_api
 
@@ -21,13 +22,13 @@ def _document(description: str = "Original description") -> str:
 
 
 @pytest.fixture
-def skill_registry(tmp_path, monkeypatch) -> SkillRegistry:
+def skill_registry(tmp_path) -> SkillRegistry:
     directory = tmp_path / "test-skill"
     directory.mkdir()
     (directory / "SKILL.md").write_text(_document(), encoding="utf-8")
     registry = SkillRegistry(tmp_path)
-    monkeypatch.setattr(web_api, "_skill_registry", registry)
-    return registry
+    with bind_services(ApiServices(skill_registry=registry)):
+        yield registry
 
 
 async def test_skill_api_lists_reads_updates_and_reloads(skill_registry: SkillRegistry) -> None:

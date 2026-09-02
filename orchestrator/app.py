@@ -366,8 +366,9 @@ def _build_context_injector(deps) -> ContextInjector:
     )
 
 
-def _configure_routers(orchestrator, deps, agent_registry, context_injector, skill_registry) -> None:
+def _configure_routers(app, orchestrator, deps, agent_registry, context_injector, skill_registry) -> None:
     configure_api(
+        app,
         orchestrator=orchestrator,
         stream_manager=deps.stream_manager,
         ledger=deps.ledger,
@@ -382,6 +383,7 @@ def _configure_routers(orchestrator, deps, agent_registry, context_injector, ski
         agent_run_store=deps.agent_run_store,
     )
     configure_web(
+        app,
         orchestrator=orchestrator,
         ledger=deps.ledger,
         agent_registry=agent_registry,
@@ -645,7 +647,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     _step("configuring API router")
-    _configure_routers(orchestrator, deps, agent_registry, context_injector, skill_registry)
+    _configure_routers(app, orchestrator, deps, agent_registry, context_injector, skill_registry)
 
     _step("configuring callback server")
     callback_server = _build_callback_server()

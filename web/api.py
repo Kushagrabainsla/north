@@ -11,36 +11,26 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
 from ledger.base import LedgerFilters
+from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
 from utils.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 
 from .conversations import ConversationStore, Turn
 
-session_router = APIRouter(prefix="/web", tags=["web"])
-router = APIRouter(prefix="/web/api", tags=["web"], dependencies=[Depends(verify_api_access)])
-
-_orchestrator = None
-_ledger = None
-_agent_registry = None
-_job_processor = None
-_cron_store = None
-_approval_store = None
-_north_settings = None
-_agent_run_store = None
-_conversation_store: ConversationStore | None = None
-_north_home: Path | None = None
-_fact_store = None
-_inference_router = None
-_skill_registry = None
-_bootstrap_task: asyncio.Task | None = None
-
+session_router = APIRouter(prefix="/web", tags=["web"], dependencies=[Depends(bind_request_services)])
+router = APIRouter(
+    prefix="/web/api",
+    tags=["web"],
+    # Bound first so routes can reach this app's wiring via current_services().
+    dependencies=[Depends(bind_request_services), Depends(verify_api_access)],
+)
 
 @dataclass
 class ProviderAuthSession:
@@ -53,10 +43,22 @@ class ProviderAuthSession:
     task: asyncio.Task | None = field(default=None, repr=False)
 
 
-_provider_auth_sessions: dict[str, ProviderAuthSession] = {}
+@dataclass
+class WebRuntime:
+    """Per-app runtime state for the web layer.
+
+    Not injected wiring - these track work this app has in flight, so they are
+    mutable and live alongside the wiring on ``app.state`` rather than at module
+    scope, where two apps would share one bootstrap task and one set of logins.
+    """
+
+    bootstrap_task: asyncio.Task | None = None
+    auth_sessions: dict[str, ProviderAuthSession] = field(default_factory=dict)
+
 
 
 def configure(
+    app: FastAPI,
     *,
     orchestrator,
     ledger,
@@ -71,28 +73,28 @@ def configure(
     inference_router=None,
     skill_registry=None,
 ) -> None:
-    global _orchestrator, _ledger, _agent_registry, _job_processor, _cron_store
-    global _approval_store, _north_settings, _agent_run_store, _conversation_store, _north_home
-    global _fact_store, _inference_router, _skill_registry
-    _orchestrator = orchestrator
-    _ledger = ledger
-    _agent_registry = agent_registry
-    _job_processor = job_processor
-    _cron_store = cron_store
-    _approval_store = approval_store
-    _north_settings = north_settings
-    _agent_run_store = agent_run_store
-    _north_home = north_home
-    _fact_store = fact_store
-    _inference_router = inference_router
-    _skill_registry = skill_registry
-    _conversation_store = ConversationStore(north_home / "web.db")
+    """Contribute the web layer's wiring to *app*.
 
-
-def _require(value, name: str):
-    if value is None:
-        raise RuntimeError(f"{name} not configured")
-    return value
+    Merges rather than replaces: the orchestrator router configures the same app
+    and each owns a different slice (CODING_STYLE §22 - no module-level state).
+    """
+    merge(
+        app,
+        orchestrator=orchestrator,
+        ledger=ledger,
+        agent_registry=agent_registry,
+        job_processor=job_processor,
+        cron_store=cron_store,
+        approval_store=approval_store,
+        north_settings=north_settings,
+        agent_run_store=agent_run_store,
+        north_home=north_home,
+        fact_store=fact_store,
+        inference_router=inference_router,
+        skill_registry=skill_registry,
+        conversation_store=ConversationStore(north_home / "web.db"),
+        web_runtime=WebRuntime(),
+    )
 
 
 @session_router.post("/session")
@@ -138,16 +140,16 @@ def _entry_payload(entry) -> dict[str, Any]:
 async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
     if not task_id:
         return None
-    orchestrator = _require(_orchestrator, "Orchestrator")
-    ledger = _require(_ledger, "Ledger")
+    orchestrator = current_services().require("orchestrator")
+    ledger = current_services().require("ledger")
     task, entries, runs = await asyncio.gather(
         orchestrator.get_task(task_id),
         ledger.query(LedgerFilters(task_id=task_id, limit=300, order_asc=True)),
-        _require(_agent_run_store, "AgentRunStore").list_for_task(task_id),
+        current_services().require("agent_run_store").list_for_task(task_id),
     )
     provider_by_model: dict[str, str] = {}
-    if _inference_router is not None:
-        for pool in _inference_router.current_pools().values():
+    if current_services().inference_router is not None:
+        for pool in current_services().inference_router.current_pools().values():
             for model in pool.models:
                 provider_by_model[model.id] = model.provider
     output = ""
@@ -184,7 +186,7 @@ async def _turn_payload(turn: Turn) -> dict[str, Any]:
 
 @router.get("/conversations")
 async def list_conversations(q: str = "", archived: bool = False, limit: int = 100) -> list[dict[str, Any]]:
-    conversations = await _require(_conversation_store, "ConversationStore").list(
+    conversations = await current_services().require("conversation_store").list(
         query=q, archived=archived, limit=limit
     )
     return [_conversation_payload(conversation) for conversation in conversations]
@@ -192,13 +194,13 @@ async def list_conversations(q: str = "", archived: bool = False, limit: int = 1
 
 @router.post("/conversations", status_code=201)
 async def create_conversation(body: ConversationCreate) -> dict[str, Any]:
-    conversation = await _require(_conversation_store, "ConversationStore").create(body.title)
+    conversation = await current_services().require("conversation_store").create(body.title)
     return _conversation_payload(conversation)
 
 
 @router.patch("/conversations/{conversation_id}")
 async def update_conversation(conversation_id: str, body: ConversationUpdate) -> dict[str, Any]:
-    conversation = await _require(_conversation_store, "ConversationStore").update(
+    conversation = await current_services().require("conversation_store").update(
         conversation_id,
         title=body.title,
         pinned=body.pinned,
@@ -211,14 +213,14 @@ async def update_conversation(conversation_id: str, body: ConversationUpdate) ->
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
 async def delete_conversation(conversation_id: str) -> None:
-    deleted = await _require(_conversation_store, "ConversationStore").delete(conversation_id)
+    deleted = await current_services().require("conversation_store").delete(conversation_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
 
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str) -> dict[str, Any]:
-    store = _require(_conversation_store, "ConversationStore")
+    store = current_services().require("conversation_store")
     conversation = await store.get(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -229,7 +231,7 @@ async def get_conversation(conversation_id: str) -> dict[str, Any]:
 
 @router.post("/conversations/{conversation_id}/turns", status_code=202)
 async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
-    store = _require(_conversation_store, "ConversationStore")
+    store = current_services().require("conversation_store")
     try:
         turn = await store.add_turn(conversation_id, body.prompt)
     except LookupError as exc:
@@ -248,7 +250,7 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
         if answer:
             context_parts.append(f"User: {item.prompt}\nNorth: {answer[:4000]}")
     context = "## Recent conversation\n" + "\n\n".join(context_parts) if context_parts else ""
-    task = await _require(_orchestrator, "Orchestrator").submit_task(
+    task = await current_services().require("orchestrator").submit_task(
         TaskRequest(
             prompt=body.prompt,
             context=context,
@@ -269,7 +271,7 @@ async def web_task_detail(task_id: str) -> dict[str, Any]:
 
 @router.get("/approvals")
 async def approvals(limit: int = 100) -> list[dict[str, Any]]:
-    return [card.model_dump(mode="json") for card in _require(_approval_store, "ApprovalStore").all(limit)]
+    return [card.model_dump(mode="json") for card in current_services().require("approval_store").all(limit)]
 
 
 def _bootstrap_overview(home: Path) -> tuple[list, list[str], bool]:
@@ -284,7 +286,7 @@ def _bootstrap_overview(home: Path) -> tuple[list, list[str], bool]:
 
 @router.get("/system")
 async def system_overview() -> dict[str, Any]:
-    settings = _require(_north_settings, "North settings")
+    settings = current_services().require("north_settings")
     providers = []
     for definition in PROVIDER_DEFINITIONS:
         credential = definition.resolve_credential(settings)
@@ -304,7 +306,7 @@ async def system_overview() -> dict[str, Any]:
                 ),
             }
         )
-    home = _require(_north_home, "North home")
+    home = current_services().require("north_home")
     # _discover_files() walks the user's home directory - off-thread so this
     # GET never stalls the event loop (CODING_STYLE §10.3).
     progress, candidates, bootstrapped = await asyncio.to_thread(_bootstrap_overview, home)
@@ -329,9 +331,9 @@ async def bootstrap_status() -> dict[str, Any]:
 @router.get("/memory/facts")
 async def memory_facts() -> list[dict[str, Any]]:
     """Return durable facts for the Memory view without exposing embeddings."""
-    if _fact_store is None:
+    if current_services().fact_store is None:
         return []
-    return await _fact_store.all_facts()
+    return await current_services().fact_store.all_facts()
 
 
 class FactCreate(BaseModel):
@@ -345,7 +347,7 @@ class SkillUpdate(BaseModel):
 
 @router.get("/skills")
 async def list_skills() -> list[dict[str, Any]]:
-    registry = _require(_skill_registry, "SkillRegistry")
+    registry = current_services().require("skill_registry")
     return [
         {
             "name": skill.name,
@@ -361,7 +363,7 @@ async def list_skills() -> list[dict[str, Any]]:
 
 @router.get("/skills/{name}")
 async def get_skill(name: str) -> dict[str, Any]:
-    registry = _require(_skill_registry, "SkillRegistry")
+    registry = current_services().require("skill_registry")
     try:
         skill = registry.get(name)
     except Exception as exc:
@@ -376,7 +378,7 @@ async def update_skill(name: str, body: SkillUpdate) -> dict[str, Any]:
     from skills.parser import parse_skill_document
     from skills.registry import rejection_reason
 
-    registry = _require(_skill_registry, "SkillRegistry")
+    registry = current_services().require("skill_registry")
     try:
         skill = registry.get(name)
     except Exception as exc:
@@ -397,7 +399,7 @@ async def update_skill(name: str, body: SkillUpdate) -> dict[str, Any]:
 
 @router.post("/memory/facts", status_code=201)
 async def create_memory_fact(body: FactCreate) -> dict[str, Any]:
-    store = _require(_fact_store, "FactStore")
+    store = current_services().require("fact_store")
     await store.add_fact(body.content, body.category)
     match = next(
         (fact for fact in await store.all_facts(body.category) if fact["content"] == body.content.strip()),
@@ -410,7 +412,7 @@ async def create_memory_fact(body: FactCreate) -> dict[str, Any]:
 
 @router.patch("/memory/facts/{fact_id}")
 async def update_memory_fact(fact_id: str, body: FactCreate) -> dict[str, Any]:
-    store = _require(_fact_store, "FactStore")
+    store = current_services().require("fact_store")
     if not await store.update_fact(fact_id, body.content, body.category):
         raise HTTPException(status_code=404, detail="Fact not found or rejected")
     return next(fact for fact in await store.all_facts() if fact["id"] == fact_id)
@@ -418,7 +420,7 @@ async def update_memory_fact(fact_id: str, body: FactCreate) -> dict[str, Any]:
 
 @router.delete("/memory/facts/{fact_id}", status_code=204)
 async def delete_memory_fact(fact_id: str) -> None:
-    if not await _require(_fact_store, "FactStore").delete_fact(fact_id):
+    if not await current_services().require("fact_store").delete_fact(fact_id):
         raise HTTPException(status_code=404, detail="Fact not found")
 
 
@@ -428,20 +430,20 @@ class BootstrapRequest(BaseModel):
 
 @router.post("/bootstrap", status_code=202)
 async def start_bootstrap(body: BootstrapRequest) -> dict[str, Any]:
-    global _bootstrap_task
-    if _fact_store is None or _inference_router is None:
+    runtime = current_services().require("web_runtime")
+    if current_services().fact_store is None or current_services().inference_router is None:
         raise HTTPException(status_code=503, detail="Bootstrap dependencies are not ready")
-    if _bootstrap_task and not _bootstrap_task.done():
+    if runtime.bootstrap_task and not runtime.bootstrap_task.done():
         return {"status": "in_progress"}
     candidates = {str(path.resolve()) for path in _discover_files()}
     selected = {str(Path(path).expanduser().resolve()) for path in body.paths}
     if selected and not selected.issubset(candidates):
         raise HTTPException(status_code=400, detail="One or more selected files are not eligible bootstrap sources")
-    _bootstrap_task = asyncio.create_task(
+    runtime.bootstrap_task = asyncio.create_task(
         run_bootstrap_if_needed(
-            _fact_store,
-            _inference_router,
-            _require(_north_home, "North home"),
+            current_services().fact_store,
+            current_services().inference_router,
+            current_services().require("north_home"),
             selected_paths=selected or None,
         )
     )
@@ -460,37 +462,39 @@ def _provider_definition(provider_id: str) -> ProviderDefinition:
     return definition
 
 
-async def _refresh_inference_runtime() -> None:
-    """Rebuild the live router after provider credentials change."""
-    global _inference_router
+async def _refresh_inference_runtime(app: FastAPI) -> None:
+    """Rebuild the live router after provider credentials change.
 
+    Takes the app so the rebuilt router replaces the one this app's routes read
+    (`merge`), alongside swapping it into the live dependency container.
+    """
     from config.runtime import get_runtime
     from config.settings import reload_settings, settings
     from inference.factory import build_router
 
     reload_settings()
-    runtime = get_runtime()
-    if runtime is None:
+    deps = get_runtime()
+    if deps is None:
         return
     new_router = build_router(
         openrouter_api_key=settings.openrouter_api_key,
-        north_settings=runtime.north_settings,
+        north_settings=deps.north_settings,
         groq_api_key=settings.groq_api_key,
         gemini_api_key=settings.gemini_api_key,
         opencode_zen_api_key=settings.opencode_zen_api_key,
         provider_settings=settings,
-        confidence_tracker=runtime.confidence_tracker,
+        confidence_tracker=deps.confidence_tracker,
         cooldowns_path=settings.north_home / "cooldowns.json",
     )
-    runtime.inference_router = new_router
-    runtime.cost_tracker.set_inner(new_router)
-    _inference_router = new_router
+    deps.inference_router = new_router
+    deps.cost_tracker.set_inner(new_router)
+    merge(app, inference_router=new_router)
 
 
 def _provider_auth_payload(definition: ProviderDefinition) -> dict[str, Any]:
     credentials = CodexCredentialProvider()
     status = credentials.status()
-    session = _provider_auth_sessions.get(definition.id)
+    session = current_services().require("web_runtime").auth_sessions.get(definition.id)
     state = session.state if session else ("connected" if status.configured else "disconnected")
     detail = session.detail if session else status.detail
     if session and session.state == "connected" and not status.configured:
@@ -512,18 +516,18 @@ def _provider_auth_payload(definition: ProviderDefinition) -> dict[str, Any]:
 
 
 @router.post("/providers/{provider_id}/auth")
-async def start_provider_auth(provider_id: str) -> dict[str, Any]:
+async def start_provider_auth(provider_id: str, request: Request) -> dict[str, Any]:
     definition = _provider_definition(provider_id)
     if definition.auth_kind is not AuthKind.OAUTH_PKCE or definition.id != "openai_codex":
         raise HTTPException(status_code=400, detail="This provider does not support browser login")
 
-    existing = _provider_auth_sessions.get(definition.id)
+    existing = current_services().require("web_runtime").auth_sessions.get(definition.id)
     if existing and existing.task and not existing.task.done():
         return _provider_auth_payload(definition)
 
     ready = asyncio.Event()
     session = ProviderAuthSession(provider_id=definition.id)
-    _provider_auth_sessions[definition.id] = session
+    current_services().require("web_runtime").auth_sessions[definition.id] = session
 
     def authorization_ready(url: str) -> None:
         session.authorization_url = url
@@ -532,13 +536,16 @@ async def start_provider_auth(provider_id: str) -> dict[str, Any]:
         ready.set()
 
     credentials = CodexCredentialProvider(authorization_callback=authorization_ready)
+    # Captured now: the background login outlives this request, so it cannot
+    # read the app off a request that has already finished.
+    app = request.app
 
     async def run_login() -> None:
         try:
             status = await credentials.login(open_browser=False)
             session.state = "connected"
             session.detail = status.detail or "Logged in"
-            await _refresh_inference_runtime()
+            await _refresh_inference_runtime(app)
         except asyncio.CancelledError:
             session.state = "cancelled"
             session.detail = "Login cancelled"
@@ -570,17 +577,17 @@ async def provider_auth_status(provider_id: str) -> dict[str, Any]:
 
 
 @router.delete("/providers/{provider_id}/auth")
-async def logout_provider(provider_id: str) -> dict[str, Any]:
+async def logout_provider(provider_id: str, request: Request) -> dict[str, Any]:
     definition = _provider_definition(provider_id)
     if definition.auth_kind is not AuthKind.OAUTH_PKCE or definition.id != "openai_codex":
         raise HTTPException(status_code=400, detail="This provider does not support browser login")
-    session = _provider_auth_sessions.pop(definition.id, None)
+    session = current_services().require("web_runtime").auth_sessions.pop(definition.id, None)
     if session and session.task and not session.task.done():
         session.task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await session.task
     await CodexCredentialProvider().logout()
-    await _refresh_inference_runtime()
+    await _refresh_inference_runtime(request.app)
     return _provider_auth_payload(definition)
 
 
@@ -605,24 +612,24 @@ def _write_env_key(home: Path, env_key: str, value: str) -> None:
 
 
 @router.post("/providers/{provider_id}")
-async def update_provider(provider_id: str, body: ProviderCredentialUpdate) -> dict[str, Any]:
+async def update_provider(provider_id: str, body: ProviderCredentialUpdate, request: Request) -> dict[str, Any]:
     definition = _provider_definition(provider_id)
     if not definition.env_key:
         raise HTTPException(status_code=400, detail="This provider uses browser authentication; use the CLI login flow")
-    home = _require(_north_home, "North home")
+    home = current_services().require("north_home")
     await asyncio.to_thread(_write_env_key, home, definition.env_key, body.api_key.strip())
     os.environ[definition.env_key] = body.api_key.strip()
-    await _refresh_inference_runtime()
+    await _refresh_inference_runtime(request.app)
     return {"id": definition.id, "configured": True, "credential_hint": body.api_key[:4] + "…" + body.api_key[-4:]}
 
 
 def _allowed_output_roots() -> list[Path]:
-    home = _require(_north_home, "North home")
+    home = current_services().require("north_home")
     return [home / name for name in ("news", "notes", "wellness")]
 
 
 def _artifact_id(path: Path) -> str:
-    home = _require(_north_home, "North home")
+    home = current_services().require("north_home")
     relative = str(path.relative_to(home))
     return base64.urlsafe_b64encode(relative.encode()).decode().rstrip("=")
 
@@ -633,7 +640,7 @@ def _artifact_path(artifact_id: str) -> Path:
         relative = base64.urlsafe_b64decode(padded.encode()).decode()
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Artifact not found") from exc
-    home = _require(_north_home, "North home").resolve()
+    home = current_services().require("north_home").resolve()
     path = (home / relative).resolve()
     if not any(path.is_relative_to(root.resolve()) for root in _allowed_output_roots()):
         raise HTTPException(status_code=404, detail="Artifact not found")
@@ -687,19 +694,19 @@ async def get_artifact(artifact_id: str) -> dict[str, Any]:
 @router.get("/dashboard")
 async def dashboard() -> dict[str, Any]:
     active, jobs, cron, metrics, ledger_entries, conversations, artifacts = await asyncio.gather(
-        _require(_orchestrator, "Orchestrator").list_active_tasks(),
-        _require(_job_processor, "JobProcessor").list_jobs(limit=8),
-        _require(_cron_store, "CronStore").list(),
-        _require(_ledger, "Ledger").get_metrics(days=7),
-        _require(_ledger, "Ledger").query(LedgerFilters(limit=12)),
-        _require(_conversation_store, "ConversationStore").list(limit=6),
+        current_services().require("orchestrator").list_active_tasks(),
+        current_services().require("job_processor").list_jobs(limit=8),
+        current_services().require("cron_store").list(),
+        current_services().require("ledger").get_metrics(days=7),
+        current_services().require("ledger").query(LedgerFilters(limit=12)),
+        current_services().require("conversation_store").list(limit=6),
         list_artifacts(limit=6),
     )
-    agents = _require(_agent_registry, "AgentRegistry").all()
-    settings = _require(_north_settings, "NorthSettings")
+    agents = current_services().require("agent_registry").all()
+    settings = current_services().require("north_settings")
     return {
         "system": {"status": "online", "power": settings.power.value, "autonomy": settings.autonomy.value},
-        "attention": [card.model_dump(mode="json") for card in _require(_approval_store, "ApprovalStore").pending()],
+        "attention": [card.model_dump(mode="json") for card in current_services().require("approval_store").pending()],
         "active_tasks": [task.model_dump(mode="json") for task in active],
         "conversations": [_conversation_payload(item) for item in conversations],
         "agents": [
