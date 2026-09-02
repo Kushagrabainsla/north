@@ -132,10 +132,12 @@ class AgenticLLMAgent(LLMAgent):
                     {"type": "text", "text": f"[Visual context from tool '{call.name}']"}
                 ]
                 for b64, mime in images:
-                    content_blocks.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64}"},
-                    })
+                    content_blocks.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{b64}"},
+                        }
+                    )
                 user_visual_messages.append(
                     {
                         "role": "user",
@@ -244,10 +246,10 @@ class AgenticLLMAgent(LLMAgent):
                         async with workspace_lock(payload.workspace):
                             res = await self._safe_execute_call(call, payload, tool_map)
                     results[index] = res
-                    if res[2]:
-                        await self._record_side_effects(payload, [res], tool_map)
 
         ordered = [results[index] for index in range(len(calls))]
+        # Recorded once for the whole turn: the flag is a per-task boolean, so
+        # marking it per mutating call as well was a duplicate write.
         await self._record_side_effects(payload, ordered, tool_map)
         return ordered
 
@@ -318,9 +320,7 @@ class AgenticLLMAgent(LLMAgent):
         models_used: list[str] = []
 
         known_registry_tools = (
-            set(self._deps.tool_registry._tools.keys())
-            if getattr(self._deps, "tool_registry", None)
-            else set()
+            set(self._deps.tool_registry._tools.keys()) if getattr(self._deps, "tool_registry", None) else set()
         )
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
@@ -699,6 +699,13 @@ class AgenticLLMAgent(LLMAgent):
             parent_run_id=payload.run_id,
             prompt=task,
             workspace=workspace,
+            # The sub-agent inherits the run's framing: the caller's context
+            # (conversation history / webhook data), the task's model pool, and any
+            # model-independence constraint. Without these it silently reverted to
+            # defaults and lost the conversation it was delegated within.
+            context=payload.context,
+            model_pool=payload.model_pool,
+            exclude_models=list(payload.exclude_models),
             delegation_depth=payload.delegation_depth + 1,
             delegation_chain=payload.delegation_chain + [self.name],
         )

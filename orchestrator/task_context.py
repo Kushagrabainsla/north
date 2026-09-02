@@ -55,7 +55,6 @@ class TaskContextStore:
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
             conn.execute(_SCHEMA_INDEX)
-            conn.commit()
         # Per-task condition variables: write() notifies, read() waits.
         self._conditions: dict[str, asyncio.Condition] = {}
 
@@ -78,7 +77,6 @@ class TaskContextStore:
                     """,
                     [(task_id, agent, "_status", None, "pending", now_str) for agent in agents],
                 )
-                conn.commit()
 
         await asyncio.to_thread(_run)
 
@@ -184,7 +182,6 @@ class TaskContextStore:
                     """,
                     (task_id, agent, key, val_str, status, now_str),
                 )
-                conn.commit()
 
         await asyncio.to_thread(_run)
         condition = self._get_condition(task_id)
@@ -239,7 +236,6 @@ class TaskContextStore:
         def _run() -> None:
             with open_db_connection(self._db_path) as conn:
                 conn.execute("DELETE FROM task_state WHERE task_id = ?", (task_id,))
-                conn.commit()
 
         await asyncio.to_thread(_run)
         self._conditions.pop(task_id, None)
@@ -305,7 +301,6 @@ class TaskContextStore:
                     f"DELETE FROM task_state WHERE task_id IN ({del_placeholders})",
                     to_delete,
                 )
-                conn.commit()
                 return to_delete, result.rowcount
 
         deleted_ids, count = await asyncio.to_thread(_run)

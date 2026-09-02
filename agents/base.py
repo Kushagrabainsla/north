@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -35,6 +36,19 @@ _MAX_SKILL_NAMES_LISTED: int = 12
 # `general` is enabled for the research/literature-review skill (knowledge-synthesis
 # tasks route to the general assistant); it only ever sees skills tagged `general`.
 _SKILLS_ENABLED_DOMAINS: frozenset[str] = frozenset({"engineering", "general"})
+
+
+def _mentioned_tool_names(skills: list[Any], tool_names: set[str]) -> set[str]:
+    """Tool names named as whole words in any of *skills*' text.
+
+    Substring matching over-fires ("global" contains "glob"), which promoted
+    tools a skill never actually calls above ones it does.
+    """
+    if not skills or not tool_names:
+        return set()
+    corpus = " ".join(f"{skill.body} {skill.description}" for skill in skills)
+    words = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", corpus))
+    return tool_names & words
 
 
 class Agent(ABC):
@@ -290,13 +304,11 @@ class Agent(ABC):
         registry_tools = self._deps.tool_registry.tools_for_agent(self.name)
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
 
-        all_tool_names = {t.name for t in registry_tools}
-        skill_tools: set[str] = {
-            name
-            for skill in (selected_skills or [])
-            for name in all_tool_names
-            if name in skill.body or name in skill.description
-        }
+        # Word-boundary match: a bare substring test let a skill that merely
+        # mentions "bash" in prose boost the `bash` tool, and any skill naming
+        # `glob` boost it via "global".
+        mentioned = _mentioned_tool_names(selected_skills or [], {t.name for t in registry_tools})
+        skill_tools: set[str] = mentioned
 
         scored: list[tuple[Tool, float]] = []
         for t in registry_tools:

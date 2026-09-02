@@ -44,6 +44,11 @@ _UNIVERSAL_DIRS: tuple[tuple[str, str], ...] = (
 _RELOAD_TTL_SECONDS = 2.0
 
 
+def _dir_fingerprint(directory: Path) -> float:
+    """A value that changes when any .py file in *directory* is added or edited."""
+    return directory.stat().st_mtime + sum(p.stat().st_mtime for p in directory.glob("*.py"))
+
+
 def _discover(directory: Path, package: str) -> dict[str, Tool]:
     """Scan a directory for Tool subclasses. Returns {tool_name: instance}.
 
@@ -65,21 +70,47 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
             continue
         for obj in vars(module).values():
             if isinstance(obj, type) and issubclass(obj, Tool) and obj is not Tool and not inspect.isabstract(obj):
-                try:
-                    instance = obj()
-                    tools[instance.name] = instance
-                except TypeError:
+                if _needs_constructor_args(obj):
                     logger.debug(
                         "tool discovery: %s skipped (needs manual registration)",
                         obj.__name__,
                     )
+                    continue
+                try:
+                    instance = obj()
+                    tools[instance.name] = instance
                 except Exception as exc:
+                    # Reached only for a tool that *should* construct bare, so a
+                    # TypeError here is a real bug in its __init__, not the
+                    # "needs manual registration" case checked above.
                     logger.warning(
                         "tool discovery: %s failed to instantiate: %s",
                         obj.__name__,
                         exc,
                     )
     return tools
+
+
+def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
+    """True when *tool_cls* cannot be built with no arguments.
+
+    Checked from the signature rather than by catching TypeError, so a genuine
+    TypeError raised *inside* a tool's ``__init__`` is reported instead of being
+    silently read as "this tool wants injected dependencies".
+    """
+    try:
+        signature = inspect.signature(tool_cls)
+    except (TypeError, ValueError):
+        return False
+    required_kinds = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    )
+    return any(
+        param.default is inspect.Parameter.empty and param.kind in required_kinds
+        for param in signature.parameters.values()
+    )
 
 
 class ToolRegistry:
@@ -114,7 +145,7 @@ class ToolRegistry:
             dir_path = _TOOLS_ROOT / directory
             if dir_path.exists():
                 with contextlib.suppress(OSError):
-                    self._dir_mtimes[dir_path] = dir_path.stat().st_mtime
+                    self._dir_mtimes[dir_path] = _dir_fingerprint(dir_path)
             for tool in _discover(dir_path, package).values():
                 self._tools[tool.name] = tool
                 self._universal.append(tool.name)
@@ -122,29 +153,22 @@ class ToolRegistry:
         spec_path = _TOOLS_ROOT / "specialized"
         if spec_path.exists():
             with contextlib.suppress(OSError):
-                self._dir_mtimes[spec_path] = spec_path.stat().st_mtime
+                self._dir_mtimes[spec_path] = _dir_fingerprint(spec_path)
         specialized = _discover(spec_path, "tools.specialized")
         for tool in specialized.values():
             self._tools[tool.name] = tool
 
     def reload(self) -> None:
-        """Re-scan tool directories for new files.
+        """Re-scan tool directories for new or edited files.
 
-        Fast-paths when directory modification times have not changed.
-        Only adds tools not already registered - existing tools are not
-        replaced so in-flight tasks are unaffected.
+        Fast-paths when nothing in a directory has changed. Only adds tools not
+        already registered - existing tools are not replaced so in-flight tasks
+        are unaffected.
         """
         for directory, package in _UNIVERSAL_DIRS:
             dir_path = _TOOLS_ROOT / directory
-            if not dir_path.exists():
+            if not self._directory_changed(dir_path):
                 continue
-            try:
-                mtime = dir_path.stat().st_mtime
-            except OSError:
-                continue
-            if self._dir_mtimes.get(dir_path) == mtime:
-                continue
-            self._dir_mtimes[dir_path] = mtime
             for tool in _discover(dir_path, package).values():
                 if tool.name not in self._tools:
                     self._tools[tool.name] = tool
@@ -153,18 +177,29 @@ class ToolRegistry:
                     logger.info("ToolRegistry.reload: picked up new universal tool %r", tool.name)
 
         spec_path = _TOOLS_ROOT / "specialized"
-        if spec_path.exists():
-            try:
-                mtime = spec_path.stat().st_mtime
-                if self._dir_mtimes.get(spec_path) != mtime:
-                    self._dir_mtimes[spec_path] = mtime
-                    specialized = _discover(spec_path, "tools.specialized")
-                    for tool in specialized.values():
-                        if tool.name not in self._tools:
-                            self._tools[tool.name] = tool
-                            logger.info("ToolRegistry.reload: picked up new specialized tool %r", tool.name)
-            except OSError:
-                pass
+        if self._directory_changed(spec_path):
+            for tool in _discover(spec_path, "tools.specialized").values():
+                if tool.name not in self._tools:
+                    self._tools[tool.name] = tool
+                    logger.info("ToolRegistry.reload: picked up new specialized tool %r", tool.name)
+
+    def _directory_changed(self, dir_path: Path) -> bool:
+        """True when *dir_path* has a new/removed/edited .py file since last scan.
+
+        A directory's own mtime only moves when an entry is added or removed, so
+        a tool file *edited* in place (create_tool updating an existing tool) was
+        never detected. The fingerprint folds in each file's own mtime.
+        """
+        if not dir_path.exists():
+            return False
+        try:
+            fingerprint = _dir_fingerprint(dir_path)
+        except OSError:
+            return False
+        if self._dir_mtimes.get(dir_path) == fingerprint:
+            return False
+        self._dir_mtimes[dir_path] = fingerprint
+        return True
 
     def update_graph(self, agent_name: str, tool_names: list[str]) -> None:
         """Add or extend the specialized tool list for an agent.

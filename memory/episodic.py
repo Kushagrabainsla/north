@@ -149,9 +149,7 @@ class EpisodicStore:
             try:
                 vecs = await self._embed_fn([query])
                 if vecs and vecs[0]:
-                    results = await asyncio.to_thread(
-                        self._search_vector_sync, vecs[0], max_results, allowed_domains
-                    )
+                    results = await asyncio.to_thread(self._search_vector_sync, vecs[0], max_results, allowed_domains)
                     if results:
                         return results
             except Exception:
@@ -261,7 +259,6 @@ class EpisodicStore:
             )
             cutoff = (datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)).isoformat()
             conn.execute("DELETE FROM episodes WHERE timestamp < ?", (cutoff,))
-            conn.commit()
 
     def _load_all_sync(
         self, allowed_domains: frozenset[str] | None = None

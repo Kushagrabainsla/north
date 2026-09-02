@@ -3,7 +3,7 @@
 Wraps any InferenceRouter and intercepts every complete() call to
 accumulate cost_usd by task_id. Because all pipeline components
 (classifier, north-star checker, router, synthesizer, agents) share the
-same wrapped instance, the total reflects every LLM call for a task  - 
+same wrapped instance, the total reflects every LLM call for a task  -
 not just agent calls.
 
 Usage:
@@ -16,6 +16,7 @@ See docs/CODING_STYLE.md Sections 2.2, 3, 6.4.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 
 from inference.base import InferenceRouter
@@ -46,7 +47,7 @@ class CostTracker(InferenceRouter):
 
     def __init__(self, inner: InferenceRouter) -> None:
         self._inner = inner
-        self._task_costs: dict[str, float] = {}
+        self._task_costs: OrderedDict[str, float] = OrderedDict()
 
     def get_inner(self) -> InferenceRouter:
         """Return the wrapped router (e.g. for live reload hooks)."""
@@ -59,9 +60,12 @@ class CostTracker(InferenceRouter):
     def _add_cost(self, task_id: str | None, cost_usd: float) -> None:
         if task_id and cost_usd:
             self._task_costs[task_id] = self._task_costs.get(task_id, 0.0) + cost_usd
-            if len(self._task_costs) > _MAX_TRACKED_TASKS:
-                oldest = next(iter(self._task_costs))
-                self._task_costs.pop(oldest, None)
+            # Least-recently-charged eviction. Evicting by insertion order would
+            # discard a long-running task's accumulated cost while it is still
+            # spending, since it was registered before the newer tasks.
+            self._task_costs.move_to_end(task_id)
+            while len(self._task_costs) > _MAX_TRACKED_TASKS:
+                self._task_costs.popitem(last=False)
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         response = await self._inner.complete(request)

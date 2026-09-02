@@ -50,6 +50,11 @@ _STALE_LEASE_SECONDS: int = 3600
 _RETRY_BASE_SECONDS: int = 30
 _RETRY_MAX_SECONDS: int = 3600
 
+# Most jobs submit a task, and task submission has its own concurrency cap; this
+# bounds how many jobs the processor itself holds in flight so a queue backlog
+# cannot spawn unbounded concurrent work in one tick.
+_MAX_CONCURRENT_JOBS: int = 8
+
 
 def _retry_delay_seconds(retry_count: int) -> int:
     """Delay before a failed job retries: 30s, 60s, 120s, ... capped at 1 hour."""
@@ -81,9 +86,7 @@ class SQLiteJobProcessor(JobProcessor):
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_job_queue_pending ON job_queue (status, priority, scheduled_at)"
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_job_queue_agent_task ON job_queue (agent, task, status)"
-            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_job_queue_agent_task ON job_queue (agent, task, status)")
 
     async def enqueue(self, job: Job) -> str:
         try:
@@ -291,8 +294,11 @@ class SQLiteJobProcessor(JobProcessor):
 
         while True:
             try:
-                # Drain queue: claim all pending jobs in a loop before sleeping
-                while True:
+                # Drain queue: claim pending jobs before sleeping, but never hold
+                # more than _MAX_CONCURRENT_JOBS in flight - a large backlog would
+                # otherwise spawn one task per job at once and stampede the
+                # inference pool. Jobs left in the queue are claimed next tick.
+                while len(self._running_jobs) < _MAX_CONCURRENT_JOBS:
                     job = await self.claim_next()
                     if job is None:
                         break

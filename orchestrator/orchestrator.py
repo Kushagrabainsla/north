@@ -2117,25 +2117,12 @@ class Orchestrator:
             result = await tool.run(ToolInput(params=params))
             success = result.success
             output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
-            if success and result.data and "base64_image" in result.data:
-                try:
-                    b64 = result.data.get("base64_image")
-                    mime = result.data.get("mime_type", "image/png")
-                    if b64 and self._inference_router is not None:
-                        synth_req = CompletionRequest(
-                            prompt=(
-                                f"The user asked: {prompt}\n\n"
-                                "Analyze the visual context captured by the screenshot/photo tool "
-                                "and answer the user's question directly with specific details."
-                            ),
-                            images=[(b64, mime)],
-                            component="general",
-                        )
-                        synth_resp = await self._inference_router.complete(synth_req)
-                        if synth_resp and synth_resp.text.strip():
-                            output = synth_resp.text.strip()
-                except Exception:
-                    logger.debug("Visual synthesis in _execute_single_tool failed", exc_info=True)
+            # No image-interpretation branch here on purpose: every tool that returns
+            # an image (take_screenshot, take_photo) is in the planner's
+            # _INTERPRETATION_TOOLS set, so it can never be routed to single-tool
+            # mode - it always runs inside an agent's ReAct loop, which feeds the
+            # image to the model as a proper image message. A second synthesis path
+            # here would be unreachable and worse.
             if success and getattr(tool, "is_mutating", False) and self._running_task_store is not None:
                 await self._running_task_store.mark_side_effect(task_id)
         except ToolNotFoundError:
