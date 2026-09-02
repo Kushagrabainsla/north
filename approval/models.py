@@ -26,6 +26,10 @@ class ApprovalDecision(StrEnum):
     REJECTED = "rejected"
     ANSWERED = "answered"  # a QUESTION card was given a free-form/selected answer
     TIMEOUT_REJECTED = "timeout_rejected"
+    # The task the card belonged to ended before the user answered (cancelled,
+    # paused, failed, or killed as stuck). Not a decision - the question simply
+    # stopped mattering, and the card must not keep asking.
+    TASK_ENDED = "task_ended"
 
 
 class Card(BaseModel):

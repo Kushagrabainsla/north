@@ -13,6 +13,17 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.5.2] - 2026-09-02
+### Added
+
+### Changed
+
+### Fixed
+- **A finished task stops asking for approvals** (`approval/store.py`, `approval/models.py`, `orchestrator/orchestrator.py`): nothing resolved a task's pending cards when it was cancelled, paused, failed, or killed by the watchdog, so the card stayed `pending` forever - still listed on the Approvals page as a decision the user owed, for work that could no longer happen, with an `asyncio.Event` held per card. `ApprovalStore.cancel_for_task()` now resolves them as `task_ended` from `_process_task`'s `finally`, covering every exit path, and anything waiting on such a card wakes immediately instead of sitting until its 300-second timeout. A decision the user already made is never overwritten.
+- **The approval-store cap is now actually a cap** (`approval/store.py`): eviction only ever considered *resolved* cards, so pending ones bypassed it entirely - 200 pending cards were retained against a cap of 10, along with 200 events. Eviction now falls back to the oldest cards of any status and logs when it has to, as a backstop behind `cancel_for_task`.
+
+---
+
 ## [1.5.1] - 2026-09-02
 ### Added
 

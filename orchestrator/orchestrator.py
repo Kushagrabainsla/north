@@ -985,6 +985,28 @@ class Orchestrator:
                 exc,
             )
 
+    def _release_pending_cards(self, task_id: str) -> None:
+        """Resolve any approval/question cards this finished task left pending.
+
+        Best-effort and synchronous, so it is safe to call while a cancellation
+        is unwinding. Anything waiting on one of these cards wakes immediately
+        with a `task_ended` status rather than sitting until its timeout.
+        """
+        try:
+            released = self._approval_store.cancel_for_task(task_id)
+        except Exception:
+            logger.debug("releasing pending cards failed for task %s", task_id, exc_info=True)
+            return
+        for card in released:
+            spawn(
+                self._stream_manager.emit(
+                    task_id,
+                    "approval_responded",
+                    {"card_id": card.id, "decision": card.status, "chosen_option": ""},
+                ),
+                name="approval_card_released",
+            )
+
     async def _heartbeat(self, task_id: str) -> None:
         """Signal that *task_id* is making progress so the watchdog leaves it alone."""
         if self._running_task_store is None:
@@ -1156,6 +1178,13 @@ class Orchestrator:
             # leak in CostTracker._task_costs on a long-lived server.
             if self._tracked_router is not None:
                 self._tracked_router.pop_task_cost(task_id)
+            # This task can no longer act on an answer, so stop asking for one.
+            # Left pending, its cards would keep appearing in the approvals list
+            # and would never be evicted (the cap spares pending cards), so a
+            # cancelled or failed task leaked a card and an event apiece.
+            # Synchronous on purpose: this runs in a `finally` that may already
+            # be unwinding a cancellation, where an await would re-raise.
+            self._release_pending_cards(task_id)
             if self._plan_store is not None and hasattr(self._plan_store, "clear"):
                 self._plan_store.clear(task_id)
             if self._failure_handler is not None and hasattr(self._failure_handler, "clear_all"):
