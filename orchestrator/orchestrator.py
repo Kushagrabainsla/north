@@ -2743,12 +2743,19 @@ class Orchestrator:
                 return
 
         bullets = "\n".join(f"- {v}" for v in violations)
-        result.output = (
-            f"{result.output}\n\n---\n"
+        note = (
+            "\n\n---\n"
             "⚠️ **Unverified claims** - no tool evidence was found for part of this answer:\n"
             f"{bullets}\n\n"
             "Treat the above as not done until confirmed."
         )
+        result.output = f"{result.output}{note}"
+        # Also stream it. The answer was already streamed token-by-token before this
+        # check ran, so appending to result.output alone means the reader never sees
+        # the warning live - only in the ledger afterwards. Same channel the
+        # Definition-of-Done note uses, so every client shows it without needing a
+        # dedicated handler.
+        await self._stream_manager.emit(task_id, "token", {"text": note})
         await self._write_ledger(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
@@ -2855,7 +2862,10 @@ class Orchestrator:
         gap = str(verdict.get("gap", "")).strip()
         if not gap:
             return
-        result.output = f"{result.output}\n\n> ⚠️ **Reviewer note:** {gap}"
+        note = f"\n\n> ⚠️ **Reviewer note:** {gap}"
+        result.output = f"{result.output}{note}"
+        # Streamed as well, for the same reason as the unverified-claims note.
+        await self._stream_manager.emit(task_id, "token", {"text": note})
         await self._write_ledger(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,

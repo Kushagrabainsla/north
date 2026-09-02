@@ -9,6 +9,7 @@ import os
 from typing import Any
 
 from mcp.models import McpCallResult, McpServerConfig, McpToolDefinition
+from utils.version import NORTH_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class McpClient:
                 {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "clientInfo": {"name": "north", "version": "1.3.6"},
+                    "clientInfo": {"name": "north", "version": NORTH_VERSION},
                 },
             )
             logger.info("MCP server %r initialized: %s", self.name, init_response.get("serverInfo", {}))

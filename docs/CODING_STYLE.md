@@ -1636,7 +1636,15 @@ Never commit API keys, tokens, or the `secret.key` file. The `secret.key` is gen
 - MINOR: new feature, new agent, new tool, new API endpoint
 - PATCH: bug fix, documentation update, dependency update
 
-Version is declared in `pyproject.toml` and in `CHANGELOG.md`.
+**`pyproject.toml` is the only place a version number is written.** `CHANGELOG.md`
+records release history against it; nothing else in the codebase hardcodes a version.
+
+**Why:** Copies drift silently - the MCP handshake advertised 1.3.6 for five releases.
+
+**How to apply:** Read `utils.version.NORTH_VERSION` wherever a version is needed
+(API apps, CLI, MCP client). It resolves from installed package metadata, falling back
+to reading `pyproject.toml` for a source checkout. Docs reference the file, never restate
+the number. `web/package.json` versions the frontend bundle independently and is unrelated.
 
 ---
 

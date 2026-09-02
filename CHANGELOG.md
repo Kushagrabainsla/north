@@ -3,6 +3,31 @@
 All notable changes to north are documented here.
 
 ## [Unreleased]
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+---
+
+## [1.4.2] - 2026-09-02
+### Added
+- **north's integrity signals are now visible** (`cli/tui.py`, `orchestrator/orchestrator.py`): 16 events were emitted, ledgered, and handled by no client - including every self-check north performs (`claims_unverified`, `self_repair_started`/`_done`, `critic_flagged`, `spec_critique`, `handoff_artifact_missing`, `conductor_review_unresolved`, `agent_skipped`, `task_stuck`, `best_of_n`, `worktree_integrated`, `skill_selected`). The TUI now renders all of them, so a run that did not earn a clean result says so instead of looking identical to one that did. Every emitted event except `model_response` (durable provider protocol metadata, not for display) now has a handler.
+- The unverified-claims and critic warnings are also streamed as `token` text, not only appended to the stored answer. The answer streams token-by-token *before* those checks run, so previously the warning existed only in the ledger and the reader never saw it live. This uses the same channel the Definition-of-Done note already used, so it reaches any client without a dedicated handler.
+
+### Changed
+- **One place declares the version** (`utils/version.py`, `mcp/client.py`, `docs/ARCHITECTURE.md`, `docs/CODING_STYLE.md`): `pyproject.toml` is the sole source and `utils.version.NORTH_VERSION` the sole reader. `utils/version.py` now prefers the adjacent `pyproject.toml` over installed package metadata, which is frozen at install time - an editable checkout was reporting 1.3.6 while `pyproject.toml` said 1.4.1. The MCP client handshake had hardcoded `1.3.6` and advertised it to every MCP server for five releases; `docs/ARCHITECTURE.md` restated it in two places. CODING_STYLE §21.5 records the rule.
+
+### Fixed
+
+### Removed
+
+---
+
+## [1.4.1] - 2026-09-02
 ### Changed
 - **SSE emit no longer blocks on a disk write** (`orchestrator/stream.py`): durable agent-run events were awaited inside `emit()`, putting a SQLite round trip in front of every `tool_called`/`tool_result` during a ReAct loop. They are now supervised fire-and-forget like ledger writes (§14.1) - 20 durable emits went from ≥400 ms of blocking to 0.2 ms. The only reader is the inspect-a-finished-run endpoint, so the brief write lag is immaterial; `utils/tasks.drain()` is called at shutdown so pending writes still land.
 - **Replay buffer merges runs of token events** (`orchestrator/stream.py`): a streamed answer arrives one token per event, so the 2048-entry buffer filled with fragments of a single reply and evicted the structural events a late subscriber needs. Consecutive tokens now merge into one entry (capped at 8 KB), preserving exact order and byte-identical text: a 20,000-token answer went from ~20,000 buffer entries to 5, with `agent_started` still retained.

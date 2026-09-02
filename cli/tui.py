@@ -729,6 +729,24 @@ class NorthApp(App[None]):
             "auto_verify": self._on_auto_verify,
             "dod_evaluated": self._on_dod_evaluated,
             "stream_reset": self._on_stream_reset,
+            # Integrity signals. north computes these and records them to the ledger;
+            # without handlers they were emitted to nobody, so the checks ran invisibly.
+            "claims_unverified": self._on_claims_unverified,
+            "self_repair_started": self._on_self_repair_started,
+            "self_repair_done": self._on_self_repair_done,
+            "critic_flagged": self._on_critic_flagged,
+            "agent_skipped": self._on_agent_skipped,
+            "conductor_review_missing_verdict": self._on_review_missing_verdict,
+            "conductor_review_unresolved": self._on_review_unresolved,
+            "north_star_check_failed": self._on_north_star_check_failed,
+            "task_stuck": self._on_task_stuck,
+            "conductor_review_skipped_model_unavailable": self._on_review_skipped,
+            "handoff_artifact_missing": self._on_handoff_artifact_missing,
+            "spec_critique": self._on_spec_critique,
+            "best_of_n": self._on_best_of_n,
+            "worktree_integrated": self._on_worktree_integrated,
+            "skill_selected": self._on_skill_selected,
+            "approval_responded": self._on_approval_responded,
         }
 
         # ── session metrics (drive the live status bar) ──────────────────────
@@ -1662,6 +1680,104 @@ class NorthApp(App[None]):
     async def _on_task_steered(self, task_id: str, data: dict) -> None:
         instruction = data.get("instruction", "")
         self._update_turn_phase(task_id, f"steered · {instruction}")
+
+    # ── integrity signals ────────────────────────────────────────────────
+    # north checks its own work (claims vs tool evidence, self-repair, a critic
+    # pass) and records the verdicts. These render them, so a run that did not
+    # earn a clean result says so rather than looking identical to one that did.
+
+    async def _on_claims_unverified(self, task_id: str, data: dict) -> None:
+        violations = data.get("violations") or []
+        agent = data.get("agent", "agent")
+        self._log(f"  [yellow]⚠ unverified[/yellow]  [bright_black]{agent}[/bright_black]")
+        for violation in violations:
+            self._log(f"    [bright_black]· {violation}[/bright_black]")
+        self._update_turn_phase(task_id, f"unverified claims · {len(violations)}")
+
+    async def _on_self_repair_started(self, task_id: str, data: dict) -> None:
+        agent = data.get("agent", "agent")
+        self._update_turn_phase(task_id, f"self-repair · {agent}")
+        self._set_status("correcting unverified claims…")
+
+    async def _on_self_repair_done(self, task_id: str, data: dict) -> None:
+        remaining = data.get("remaining") or []
+        agent = data.get("agent", "agent")
+        if remaining:
+            self._log(f"  [yellow]⚠ self-repair[/yellow]  {agent}: {len(remaining)} claim(s) still unsupported")
+        else:
+            self._log(f"  [green]✓ self-repair[/green]  [bright_black]{agent} corrected its claims[/bright_black]")
+
+    async def _on_critic_flagged(self, task_id: str, data: dict) -> None:
+        gap = data.get("gap", "")
+        self._log(f"  [yellow]⚠ reviewer[/yellow]  [bright_black]{gap}[/bright_black]")
+
+    async def _on_agent_skipped(self, task_id: str, data: dict) -> None:
+        agent = data.get("agent", "agent")
+        failed = ", ".join(data.get("failed_dependencies") or [])
+        self._log(f"  [yellow]⊘ skipped[/yellow]  {agent} [bright_black]· depends on {failed}[/bright_black]")
+
+    async def _on_review_missing_verdict(self, task_id: str, data: dict) -> None:
+        self._log("  [yellow]⚠ review[/yellow]  [bright_black]no machine-readable verdict - retrying[/bright_black]")
+
+    async def _on_review_unresolved(self, task_id: str, data: dict) -> None:
+        must_fix = data.get("must_fix") or []
+        self._log(f"  [yellow]⚠ review[/yellow]  {len(must_fix)} item(s) unresolved after the fix rounds")
+        for item in must_fix[:5]:
+            self._log(f"    [bright_black]· {item}[/bright_black]")
+
+    async def _on_north_star_check_failed(self, task_id: str, data: dict) -> None:
+        reason = data.get("reason", "")
+        self._log(f"  [yellow]⚠ goals[/yellow]  [bright_black]could not evaluate: {reason}[/bright_black]")
+
+    async def _on_task_stuck(self, task_id: str, data: dict) -> None:
+        self._log("  [red]✕ stuck[/red]  [bright_black]no progress - cancelled by the watchdog[/bright_black]")
+        self._update_turn_phase(task_id, "stuck")
+
+    async def _on_review_skipped(self, task_id: str, data: dict) -> None:
+        reason = data.get("reason", "no model available")
+        self._log(f"  [yellow]⚠ review skipped[/yellow]  [bright_black]{reason}[/bright_black]")
+
+    async def _on_handoff_artifact_missing(self, task_id: str, data: dict) -> None:
+        agent = data.get("agent", "agent")
+        artifact = data.get("artifact", "its handoff artifact")
+        self._log(f"  [yellow]⚠ handoff[/yellow]  {agent} finished without writing {artifact}")
+
+    async def _on_spec_critique(self, task_id: str, data: dict) -> None:
+        issues = data.get("issues") or []
+        independent = data.get("independent", False)
+        mark = "" if independent else " [bright_black](same model as the architect)[/bright_black]"
+        if not issues:
+            self._log(f"  [green]✓ spec review[/green]  [bright_black]no material flaws[/bright_black]{mark}")
+            return
+        self._log(f"  [yellow]⚠ spec review[/yellow]  {len(issues)} concern(s){mark}")
+        for issue in issues:
+            self._log(f"    [bright_black]· {issue}[/bright_black]")
+
+    async def _on_best_of_n(self, task_id: str, data: dict) -> None:
+        candidates = data.get("candidates", 0)
+        winner = data.get("winner")
+        viable = data.get("viable", False)
+        if not viable:
+            self._log(f"  [yellow]⚠ best-of-{candidates}[/yellow]  [bright_black]no viable candidate[/bright_black]")
+            return
+        self._log(f"  [bright_black]best-of-{candidates} · picked candidate {winner}[/bright_black]")
+
+    async def _on_worktree_integrated(self, task_id: str, data: dict) -> None:
+        agent = data.get("agent", "agent")
+        if data.get("conflicted"):
+            branch = data.get("branch", "")
+            self._log(f"  [yellow]⚠ conflict[/yellow]  {agent}'s changes kept on [bright_black]{branch}[/bright_black]")
+        elif data.get("changed"):
+            self._log(f"  [green]✓ integrated[/green]  [bright_black]{agent}'s isolated changes applied[/bright_black]")
+
+    async def _on_skill_selected(self, task_id: str, data: dict) -> None:
+        names = ", ".join(data.get("skills") or [])
+        if names:
+            self._log(f"  [bright_black]skills · {names}[/bright_black]")
+
+    async def _on_approval_responded(self, task_id: str, data: dict) -> None:
+        decision = data.get("chosen_option") or data.get("decision", "")
+        self._log(f"  [bright_black]decision · {decision}[/bright_black]")
 
     async def _on_stream_reset(self, task_id: str, data: dict) -> None:
         # Reset token buffer when tool calling is engaged mid-thought

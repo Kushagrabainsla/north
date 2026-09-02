@@ -1,6 +1,6 @@
 # north: System Specification
 ### Personal Life Operating System
-> Version 1.3.6 · May 2026
+> The running version lives in `pyproject.toml`; see `CHANGELOG.md` for release history.
 
 ---
 
@@ -1877,7 +1877,7 @@ NORTH_EXTRACTION_MAX_DAILY_COST_USD=0.10   # daily spend cap for the extraction 
 ```toml
 [project]
 name = "north"
-version = "1.3.6"
+version = "..."                # the single source of truth; read at runtime via utils/version.py
 requires-python = ">=3.12"
 
 [project.scripts]
