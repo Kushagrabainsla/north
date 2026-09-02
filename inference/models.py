@@ -88,9 +88,10 @@ class CompletionRequest(BaseModel):
     # json_object).  Only set this when the system prompt guarantees JSON output.
     json_mode: bool = False
     # Optional JSON Schema for structured output (response_format json_schema).
-    # When provided, takes precedence over json_mode and enforces the schema at
-    # the provider level. Schema must be a valid JSON Schema object with
-    # {"name": "...", "schema": {...}, "strict": true}.
+    # Takes precedence over json_mode and enforces the schema at the provider
+    # level. Either an OpenAI wrapper - {"name": ..., "schema": {...}, "strict":
+    # true} - or a bare JSON Schema, which is wrapped for you by
+    # ``structured_schema()``. Read it through that property, never directly.
     response_schema: dict | None = None
     # Model ids to keep out of candidate selection for this call. Used to force an
     # independent second opinion (e.g. a reviewer must not reuse the coder's model).
@@ -98,6 +99,66 @@ class CompletionRequest(BaseModel):
     exclude_models: list[str] = Field(default_factory=list)
     # Multimodal image input support: list of (base64_string, mime_type)
     images: list[tuple[str, str]] = Field(default_factory=list)
+
+    @property
+    def wants_json(self) -> bool:
+        """True when this call asked for JSON, by either mechanism.
+
+        The two ways of asking are a single question, so every check of "did the
+        caller want JSON?" reads this rather than testing one flag and silently
+        ignoring the other.
+        """
+        return self.json_mode or self.response_schema is not None
+
+    @property
+    def structured_schema(self) -> dict | None:
+        """The response schema in the wrapper providers expect, or None.
+
+        A bare JSON Schema (what ``Model.model_json_schema()`` returns) is not
+        what the OpenAI-compatible ``json_schema`` response format takes - it
+        wants the schema nested under a ``schema`` key. Callers get that wrong,
+        and a malformed schema is rejected with a 400 that reads like an
+        unrelated provider error, so the normalising happens here rather than at
+        each call site.
+        """
+        raw = self.response_schema
+        if raw is None:
+            return None
+        if isinstance(raw.get("schema"), dict):
+            return raw
+        body = {key: value for key, value in raw.items() if key not in ("name", "strict")}
+        return {
+            "name": raw.get("name") or "response",
+            "schema": body,
+            "strict": bool(raw.get("strict", False)),
+        }
+
+    def matches_schema(self, parsed: Any) -> bool:
+        """True when *parsed* looks like the answer this request's schema asked for.
+
+        A model that ignores the schema and narrates its reasoning usually still
+        has some balanced ``{...}`` span buried in the prose. That span parses
+        happily and carries none of the requested fields, so "is it JSON?" cannot
+        tell a real answer from a stray one - the schema's own field names can.
+
+        Judged on names only, never on types or values: the point is to catch a
+        response that is not an answer at all, not to re-implement validation
+        that the provider already enforces when it honours the schema.
+        """
+        wrapper = self.structured_schema
+        if wrapper is None:
+            return True
+        body = wrapper["schema"]
+        required = body.get("required")
+        if isinstance(required, list) and required:
+            return isinstance(parsed, dict) and set(required) <= parsed.keys()
+        # No required fields declared (Pydantic omits them when every field has a
+        # default). Fall back to the declared property names: a real answer has at
+        # least one of them, a stray object from prose almost never does.
+        properties = body.get("properties")
+        if not isinstance(properties, dict) or not properties:
+            return True
+        return isinstance(parsed, dict) and bool(properties.keys() & parsed.keys())
 
 
 class CompletionResponse(BaseModel):

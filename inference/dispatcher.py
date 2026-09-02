@@ -91,9 +91,29 @@ logger = logging.getLogger(__name__)
 _SCORE_FLUSH_INTERVAL_SECONDS = 30.0
 
 
+# Cooldown key for "this model cannot produce structured output". Kept separate
+# from ModelCapability because it is not a selection filter - any completion
+# model may be able to do it, and the only way to find out is to ask.
+_STRUCTURED_OUTPUT = "structured_output"
+
+
 def _completion_has_text(resp: Any) -> bool:
     """A completion is only usable if it actually returned text."""
     return bool(getattr(resp, "text", "") and resp.text.strip())
+
+
+def _satisfies_json_request(text: str, request: CompletionRequest) -> bool:
+    """True when *text* is the JSON this request asked for, not merely some JSON.
+
+    Lenient about form: a free model that cannot honour ``response_format`` often
+    still returns the right JSON as plain text, and discarding it would waste a
+    working model. Strict about substance: see ``CompletionRequest.matches_schema``.
+    """
+    try:
+        parsed = extract_json(text)
+    except Exception:
+        return False
+    return request.matches_schema(parsed)
 
 
 def _toolcall_has_output(resp: Any) -> bool:
@@ -248,30 +268,29 @@ class ModelDispatcher(InferenceRouter):
             return await provider.complete(model_id, request)
 
         def _valid(resp: Any) -> bool:
-            # A usable completion must have text, and - when JSON was requested -
-            # must actually be JSON. Models that ignore json_mode and return prose
-            # or a <thought> trace are treated as failures so the dispatcher falls
-            # through to a model that honours the request.
+            # A usable completion must have text, and - when JSON was requested by
+            # either mechanism - must actually be the JSON that was asked for.
+            # Models that ignore the request and return prose or a <thought> trace
+            # are treated as failures so the dispatcher falls through to a model
+            # that honours it.
             if not _completion_has_text(resp):
                 return False
-            if request.json_mode:
-                try:
-                    extract_json(resp.text)
-                except Exception:
-                    # Free-tier models that can't honour response_format often
-                    # still return the JSON as plain text. Accept it (Hermes-style
-                    # lenient parse) rather than discarding a working model.
-                    return False
+            if request.wants_json:
+                return _satisfies_json_request(resp.text, request)
             return True
 
-        sticky = self._sticky_key(request, ModelCapability.COMPLETION, priority)
+        # A model that cannot produce structured output is usually fine at plain
+        # completion, so failures here suspend STRUCTURED_OUTPUT rather than
+        # COMPLETION - otherwise one JSON request would evict a good chat model
+        # from the general pool for an hour.
+        capability = _STRUCTURED_OUTPUT if request.wants_json else ModelCapability.COMPLETION
         return await self._dispatch(
             candidates,
             _call,
             is_valid=_valid,
-            sticky_key=sticky,
+            sticky_key=self._sticky_key(request, capability, priority),
             fallback_candidates=fallback,
-            capability=ModelCapability.COMPLETION,
+            capability=capability,
         )
 
     async def complete_with_tools(

@@ -13,6 +13,31 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.10.0] - 2026-09-02
+### Fixed
+- **A model could ignore a JSON schema and have it recorded as a success** (`inference/models.py`, `inference/dispatcher.py`, `inference/providers/openai_compat.py`). Found by asking why a bootstrap run stored one fact from twenty-five files. Four defects, each hiding the next:
+  1. **The schema was malformed.** `CompletionRequest.response_schema` is documented as taking the OpenAI wrapper `{"name", "schema", "strict"}`, but a bare `model_json_schema()` was being passed, so `response_format` had no `schema` field and providers rejected it with a 400. `structured_schema` now normalises either shape at the boundary, so no caller has to know the wire format.
+  2. **The rejection was silent.** A 400 on a structured request retries once without `response_format` - which is right, it keeps free models usable - but nothing said so, and the caller got prose where it asked for JSON with no way to find out why. It now logs that the response is not schema-enforced.
+  3. **The validity gate was blind to the flag in use.** The dispatcher rejects a model that ignores `json_mode` and falls through to one that honours it. That check tested `json_mode` only, so a `response_schema` request was never checked at all. Both now read one `wants_json`.
+  4. **Any JSON counted as the right JSON.** A model that narrates its reasoning still leaves a balanced `{...}` somewhere in the prose, which parsed fine and carried none of the requested fields. `matches_schema` requires the schema's own field names, so a stray object is no longer mistaken for an answer.
+
+  The consequence of all four: a 2.6B free model answered a schema-enforced extraction with 10KB of reasoning prose, was recorded as a **success**, and had its score raised. A failure now suspends `structured_output` for that model rather than `completion` - it can still serve plain chat, which it is perfectly good at.
+
+- **Bootstrap extraction ran on the cheapest models available** (`bootstrap/onboarding.py`). Reading a document and filling in a schema is comprehension work; it was pinned to `PoolPriority.LOW`, the high-volume pool. It runs at `MEDIUM` now, and the token cap went from 2,500 - routinely spent before the answer began - to 4,000. On the resume that previously yielded nothing, extraction now returns 15 facts.
+
+- **A run that extracted almost nothing reported itself as done.** "stored 1 facts from 25 high-ROI files" was the only signal that 24 files had failed, in three different ways. Each file's outcome is now recorded, files that yield nothing are named, and a run where more than half produced nothing says so and points at the likely cause.
+
+### Added
+- **A survey pass between discovery and extraction** (`bootstrap/survey.py`). Discovery ranks files by their *names*, which cannot tell three copies of one transcript apart, cannot see that a PDF has no text layer, and cannot tell your resume from a colleague's. The survey reads each candidate once - which extraction has to do anyway, so the text is carried forward rather than read twice - and drops what cannot pay its way: no extractable text, byte-identical duplicates, personal documents that never mention the user, and surplus copies beyond what a document family is worth. Survivors are re-scored on what they *contain*.
+
+  On a real home directory this took the run from 25 files chosen by name - seven of them variants of one resume, three of them the same transcript, one of them somebody else's resume, three with no readable text - to 25 chosen from 89 candidates, with the offer letters, internship report, letter of recommendation and cover letter that the duplicate resumes had been crowding out.
+
+### Changed
+- **`_get_user_tokens` reads the account's full name** (GECOS), not just the login. A login of `jsmith` appears in no document; "John Smith" appears in every one that is actually about them. This is what lets the survey tell the user's resume from a colleague's.
+- **`_discover_files` returns a candidate pool rather than the final selection.** Choosing is now the survey's job, which is the only stage that has read the files.
+
+---
+
 ## [1.9.2] - 2026-09-02
 ### Fixed
 - **The dashboard said "North needs attention" on every restart** (`orchestrator/api/health.py`, `inference/dispatcher.py`, `web/src/hooks.ts`, `web/src/components.tsx`, `web/src/styles.css`). Provider catalogues are fetched over the network *after* the API starts serving - deliberately, so the API stays responsive - which means a freshly started North has zero models for a few seconds. `/health` reported that as `inference: failed` and the whole instance as `degraded`, so the banner cried wolf on every single start and there was nothing to distinguish it from a genuine outage.

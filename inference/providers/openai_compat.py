@@ -362,6 +362,16 @@ class OpenAICompatibleProvider:
         # We retry on ANY 400 for a structured request: providers (e.g. opencode_zen)
         # wrap the real error so the body rarely names response_format explicitly.
         if response.status_code == 400 and self._should_retry_without_format(response, request):
+            # Say so. The retry turns a schema-enforced call into a free-form one,
+            # and a caller that gets prose back where it asked for JSON has no
+            # other way to find out this is why. The dispatcher's validity gate
+            # rejects the prose and moves on, but the reason belongs in the log.
+            logger.warning(
+                "%s/%s rejected the requested response_format - retrying without it, "
+                "so this response is NOT schema-enforced",
+                self.name,
+                model_id,
+            )
             body.pop("response_format", None)
             response = await self._client.post("/chat/completions", json=body)
 
@@ -422,12 +432,10 @@ class OpenAICompatibleProvider:
             body["max_tokens"] = request.max_tokens
         if request.temperature is not None:
             body["temperature"] = request.temperature
-        if request.response_schema is not None:
+        schema = request.structured_schema
+        if schema is not None:
             # Structured output with JSON Schema (takes precedence over json_mode)
-            body["response_format"] = {
-                "type": "json_schema",
-                "json_schema": request.response_schema,
-            }
+            body["response_format"] = {"type": "json_schema", "json_schema": schema}
         elif request.json_mode:
             # Legacy JSON object mode
             body["response_format"] = {"type": "json_object"}

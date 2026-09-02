@@ -15,7 +15,10 @@ import asyncio
 import getpass
 import json
 import logging
+import os
+import pwd
 import re
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,6 +26,7 @@ from bootstrap.schema import (
     UNIFIED_EXTRACTION_JSON_SCHEMA,
     UserProfile,
 )
+from bootstrap.survey import survey_files
 from inference.base import InferenceRouter
 from inference.exceptions import AllModelsRateLimitedError
 from inference.models import CompletionRequest, PoolPriority
@@ -35,6 +39,9 @@ _BOOTSTRAPPED_MARKER = ".bootstrapped"
 _PROGRESS_FILE = ".bootstrap_progress.json"
 _BOOTSTRAP_VERSION = 3
 _MAX_FILES = 25
+# Candidates handed to the survey, which reads each one and keeps the best
+# _MAX_FILES. Names alone are a weak signal, so it needs room to discard.
+_CANDIDATE_POOL = _MAX_FILES * 4
 _SOURCE_QUOTAS = {
     "documents": 15,
     "desktop": 10,
@@ -45,6 +52,9 @@ _SOURCE_QUOTAS = {
 }
 _MAX_SOURCE_FILE_BYTES = 15 * 1024 * 1024
 _MAX_EXTRACTED_TEXT_CHARS = 100_000
+# Room for a filled-in profile across eight sections plus up to fifteen facts.
+# The old 2,500 was routinely spent before the answer began.
+_EXTRACTION_MAX_TOKENS = 4_000
 _MAX_DOCUMENT_PAGES = 30
 _BOOTSTRAP_DELAY_SECONDS = 2.0
 _SOURCE_DIRS = ("Downloads", "Documents", "Desktop")
@@ -325,23 +335,33 @@ File content:
 
 
 def _get_user_tokens() -> set[str]:
-    """Extract name tokens identifying the primary user from system/home environment."""
-    tokens = set()
-    try:
-        user = getpass.getuser().lower()
-        for part in re.split(r"[-_\s.0-9]+", user):
+    """Name tokens identifying the primary user, from the system account.
+
+    The account's full name is the valuable one: a login of ``jsmith`` appears in
+    no document, while "John Smith" appears in every one that is actually about
+    them. That is what lets the survey tell the user's resume from a colleague's.
+    """
+    tokens: set[str] = set()
+
+    def _add(raw: str) -> None:
+        for part in re.split(r"[-_\s.0-9]+", raw.lower()):
             if len(part) >= 2:
                 tokens.add(part)
-    except Exception:
-        pass
-    try:
-        home_name = Path.home().name.lower()
-        for part in re.split(r"[-_\s.0-9]+", home_name):
-            if len(part) >= 2:
-                tokens.add(part)
-    except Exception:
-        pass
+
+    for source in (_account_full_name, getpass.getuser, lambda: Path.home().name):
+        try:
+            value = source()
+        except Exception:
+            continue
+        if value:
+            _add(value)
     return tokens
+
+
+def _account_full_name() -> str:
+    """The account holder's real name, when the OS records one (GECOS on Unix)."""
+    full_name = pwd.getpwuid(os.getuid()).pw_gecos.split(",", 1)[0].strip()
+    return full_name
 
 
 def _tokenize_stem(stem: str) -> set[str]:
@@ -616,21 +636,12 @@ def _discover_files() -> list[Path]:
         key=lambda p: _rank_file(p, _get_source_group(p, home), user_tokens=user_tokens),
     )
 
-    # Stem-Cluster Deduplication: avoid 5 versions of the same resume/doc
-    seen_clusters: set[str] = set()
-    selected: list[Path] = []
-    for p in ranked_all:
-        cluster_key = _normalize_stem_cluster(p.stem)
-        is_clusterable = any(k in cluster_key for k in ("resume", "cv", "bio", "budget", "goals", "schedule"))
-        if is_clusterable:
-            if cluster_key in seen_clusters:
-                continue
-            seen_clusters.add(cluster_key)
-        selected.append(p)
-        if len(selected) >= _MAX_FILES:
-            break
-
-    return selected
+    # Return a pool rather than the final selection. Names alone cannot tell three
+    # copies of a transcript apart, spot a PDF with no text layer, or notice that a
+    # resume belongs to somebody else - the survey reads each file and decides
+    # that (bootstrap/survey.py). Handing it several times the budget is what
+    # gives it something to choose between.
+    return ranked_all[:_CANDIDATE_POOL]
 
 
 def _read_text(path: Path) -> str:
@@ -652,8 +663,11 @@ def _read_text(path: Path) -> str:
             reader = PdfReader(str(path))
             pages = reader.pages[:_MAX_DOCUMENT_PAGES]
             return "\n".join(page.extract_text() or "" for page in pages)[:_MAX_EXTRACTED_TEXT_CHARS]
-        except Exception:
-            logger.warning("bootstrap: failed to extract text from PDF %s", path.name, exc_info=True)
+        except Exception as exc:
+            # Expected while surveying: encrypted, scanned, or malformed PDFs are
+            # simply files with no text to read. The survey drops them and says
+            # so, so a stack trace per file would be noise, not information.
+            logger.debug("bootstrap: no text extractable from PDF %s (%s)", path.name, type(exc).__name__)
             return ""
 
     if suffix in (".docx",):
@@ -691,18 +705,28 @@ def _parse_json_lenient(raw: str) -> dict:
 async def _extract_unified(
     path: Path,
     router: InferenceRouter,
+    content: str | None = None,
 ) -> tuple[list[dict], str]:
-    """Single-pass extraction: returns atomic fact candidates and domain markdown summary."""
-    content = _read_text(path)
+    """Single-pass extraction: returns atomic fact candidates and domain markdown summary.
+
+    *content* is the already-read file text when the survey has read it, which is
+    the normal path; it is read here only when this is called on its own.
+    """
+    if content is None:
+        content = _read_text(path)
     if not content.strip():
         return [], ""
 
     prompt = _UNIFIED_PROMPT.format(content=content)
     req = CompletionRequest(
         prompt=prompt,
-        priority=PoolPriority.LOW,
+        # Reading a document and returning a filled-in schema is comprehension
+        # work, not bulk throughput. On LOW this went to whatever was cheapest -
+        # a 2.6B model that answered a schema-enforced request with prose - and
+        # the whole run stored one fact from 25 files.
+        priority=PoolPriority.MEDIUM,
         component="bootstrap",
-        max_tokens=2500,
+        max_tokens=_EXTRACTION_MAX_TOKENS,
         temperature=0.1,
         response_schema=UNIFIED_EXTRACTION_JSON_SCHEMA,
     )
@@ -948,27 +972,51 @@ async def run_bootstrap_if_needed(
         marker.touch()
         return
 
-    files = _discover_files()
+    candidates = _discover_files()
     if selected_paths:
-        files = [path for path in files if str(path.resolve()) in selected_paths]
-    if not files:
+        candidates = [path for path in candidates if str(path.resolve()) in selected_paths]
+    if not candidates:
         logger.info("bootstrap: no candidate files found — marking done")
         marker.touch()
         return
 
     completed_paths = {item["path"] for item in (progress or []) if item.get("status") == "completed"}
-    pending = [p for p in files if str(p.resolve()) not in completed_paths]
-    if not pending:
-        logger.info("bootstrap: all %d files already processed — marking done", len(files))
+    unprocessed = [p for p in candidates if str(p.resolve()) not in completed_paths]
+    if not unprocessed:
+        logger.info("bootstrap: all %d files already processed — marking done", len(candidates))
         marker.touch()
         return
 
+    # Read the candidates locally and keep only those worth a model call. Doing
+    # this first is what stops the run spending its budget on three copies of one
+    # transcript, a PDF with no text layer, and somebody else's resume.
+    survey = await asyncio.to_thread(
+        survey_files,
+        unprocessed,
+        read_text=_read_text,
+        user_tokens=_get_user_tokens(),
+        budget=_MAX_FILES,
+    )
+    logger.info("bootstrap: surveyed %d candidates — %s", len(unprocessed), survey.summary())
+    for path, reason in survey.dropped:
+        logger.debug("bootstrap: skipping %s (%s)", path.name, reason)
+
+    surveyed = survey.kept
+    if not surveyed:
+        logger.info("bootstrap: no file survived the survey — marking done")
+        marker.touch()
+        return
+
+    files = [item.path for item in surveyed]
+    pending = files
+    text_by_path = {item.path: item.text for item in surveyed}
     logger.info(
-        "bootstrap: scanning %d high-ROI files for facts (%d new, %d already done)",
-        len(files),
+        "bootstrap: extracting from %d files (%d already done): %s",
         len(pending),
         len(completed_paths),
+        ", ".join(p.name for p in pending[:5]) + ("…" if len(pending) > 5 else ""),
     )
+    outcomes: Counter[str] = Counter()
     total_facts = 0
     # Hash and stat each file once. The progress snapshot is rebuilt after every
     # file, and hashing reads the whole file, so recomputing per snapshot made
@@ -995,7 +1043,9 @@ async def run_bootstrap_if_needed(
 
         for attempt in range(max_file_retries):
             try:
-                candidates, _profile_md = await _extract_unified(path, inference_router)
+                candidates, _profile_md = await _extract_unified(
+                    path, inference_router, content=text_by_path.get(path)
+                )
                 file_extracted = True
                 break
             except AllModelsRateLimitedError as e:
@@ -1024,6 +1074,7 @@ async def run_bootstrap_if_needed(
             await _snapshot_progress()
             return
 
+        stored_here = 0
         for cand in candidates:
             try:
                 if await fact_store.add_fact_with_provenance(
@@ -1037,9 +1088,17 @@ async def run_bootstrap_if_needed(
                     source_mtime=cand["source_mtime"],
                     evidence=cand["evidence"],
                 ):
-                    total_facts += 1
+                    stored_here += 1
             except Exception:
                 logger.warning("bootstrap: failed to store fact from %s", path, exc_info=True)
+
+        total_facts += stored_here
+        # A file that yields nothing is a failure worth naming. Silently counting
+        # it as processed is how a run that extracted one fact from twenty-five
+        # files reported itself as done.
+        outcomes["yielded facts" if stored_here else "yielded nothing"] += 1
+        if not stored_here:
+            logger.warning("bootstrap: %s produced no usable facts", path.name)
 
         completed_paths.add(str(path.resolve()))
         await _snapshot_progress()
@@ -1055,4 +1114,21 @@ async def run_bootstrap_if_needed(
         encoding="utf-8",
     )
     await asyncio.to_thread((north_home / _PROGRESS_FILE).unlink, missing_ok=True)
-    logger.info("bootstrap: done — stored %d facts from %d high-ROI files", total_facts, len(pending))
+    productive = outcomes["yielded facts"]
+    logger.info(
+        "bootstrap: done — stored %d facts from %d of %d files (%d yielded nothing)",
+        total_facts,
+        productive,
+        len(pending),
+        outcomes["yielded nothing"],
+    )
+    if productive < len(pending) / 2:
+        # More than half the run produced nothing. That is a routing or extraction
+        # problem, not a property of the files, and it should be visible without
+        # anyone going through the log line by line.
+        logger.warning(
+            "bootstrap: only %d of %d files produced facts - check that a model honouring "
+            "the response schema was available",
+            productive,
+            len(pending),
+        )

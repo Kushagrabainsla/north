@@ -17,6 +17,7 @@ from bootstrap.onboarding import (
     _save_progress,
     run_bootstrap_if_needed,
 )
+from bootstrap.survey import survey_files
 from inference.base import InferenceRouter
 from inference.models import (
     CompletionRequest,
@@ -117,6 +118,16 @@ class _FakeFactStore(FactStore):
     ) -> bool:
         # Delegate to add_fact for testing
         return await self.add_fact(content, category)
+
+
+# Long enough to survive the survey, which skips files with no real content.
+_DOCUMENT_TEXT = (
+    "Kushagra Bainsla is a graduate student at San Jose State University studying "
+    "computer science. Employment: software engineer at an infrastructure company, "
+    "working on distributed systems and scheduling. Education: MS in progress, GPA 4.0. "
+    "Skills include Python, Go, and Kubernetes. Recurring commitments: a weekly lab "
+    "meeting every Tuesday and a monthly budget review.\n"
+)
 
 
 def _fake_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
@@ -347,7 +358,7 @@ async def test_bootstrap_skips_when_facts_exist_and_no_progress(
 ) -> None:
     home = tmp_path / "home"
     (home / "Documents").mkdir(parents=True)
-    (home / "Documents" / "a.txt").write_text("user data", encoding="utf-8")
+    (home / "Documents" / "a.txt").write_text(_DOCUMENT_TEXT, encoding="utf-8")
     _fake_home(monkeypatch, home)
     north_home = tmp_path / "north_home"
     north_home.mkdir()
@@ -362,7 +373,7 @@ async def test_bootstrap_runs_when_only_user_facts_exist(monkeypatch: pytest.Mon
     # Facts learned from conversation must not block a first-ever bootstrap.
     home = tmp_path / "home"
     (home / "Documents").mkdir(parents=True)
-    (home / "Documents" / "a.txt").write_text("user data", encoding="utf-8")
+    (home / "Documents" / "a.txt").write_text(_DOCUMENT_TEXT, encoding="utf-8")
     _fake_home(monkeypatch, home)
     north_home = tmp_path / "north_home"
     north_home.mkdir()
@@ -376,8 +387,8 @@ async def test_bootstrap_runs_when_only_user_facts_exist(monkeypatch: pytest.Mon
 async def test_bootstrap_resumes_interrupted_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / "Documents").mkdir(parents=True)
-    (home / "Documents" / "a.txt").write_text("user data a", encoding="utf-8")
-    (home / "Documents" / "b.txt").write_text("user data b", encoding="utf-8")
+    (home / "Documents" / "a.txt").write_text(_DOCUMENT_TEXT, encoding="utf-8")
+    (home / "Documents" / "b.txt").write_text(_DOCUMENT_TEXT + "Second document.", encoding="utf-8")
     _fake_home(monkeypatch, home)
     north_home = tmp_path / "north_home"
     north_home.mkdir()
@@ -396,8 +407,8 @@ async def test_bootstrap_resumes_interrupted_run(monkeypatch: pytest.MonkeyPatch
 async def test_bootstrap_fresh_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / "Documents").mkdir(parents=True)
-    (home / "Documents" / "a.txt").write_text("user data a", encoding="utf-8")
-    (home / "Documents" / "b.txt").write_text("user data b", encoding="utf-8")
+    (home / "Documents" / "a.txt").write_text(_DOCUMENT_TEXT, encoding="utf-8")
+    (home / "Documents" / "b.txt").write_text(_DOCUMENT_TEXT + "Second document.", encoding="utf-8")
     _fake_home(monkeypatch, home)
     north_home = tmp_path / "north_home"
     north_home.mkdir()
@@ -422,8 +433,8 @@ async def test_bootstrap_dedups_identical_facts_within_run(monkeypatch: pytest.M
     # (which needs no embeddings) collapses the duplicates.
     home = tmp_path / "home"
     (home / "Documents").mkdir(parents=True)
-    (home / "Documents" / "a.txt").write_text("user data a", encoding="utf-8")
-    (home / "Documents" / "b.txt").write_text("user data b", encoding="utf-8")
+    (home / "Documents" / "a.txt").write_text(_DOCUMENT_TEXT, encoding="utf-8")
+    (home / "Documents" / "b.txt").write_text(_DOCUMENT_TEXT + "Second document.", encoding="utf-8")
     _fake_home(monkeypatch, home)
     north_home = tmp_path / "north_home"
     north_home.mkdir()
@@ -616,7 +627,7 @@ async def test_bootstrap_pauses_without_marker_on_rate_limit(
 
     home = tmp_path / "home"
     (home / "Documents").mkdir(parents=True)
-    (home / "Documents" / "resume.md").write_text("User resume details", encoding="utf-8")
+    (home / "Documents" / "resume.md").write_text(_DOCUMENT_TEXT, encoding="utf-8")
     _fake_home(monkeypatch, home)
 
     north_home = tmp_path / "north_home"
@@ -630,28 +641,26 @@ async def test_bootstrap_pauses_without_marker_on_rate_limit(
     assert store.added == []
 
 
-def test_stem_cluster_deduplicates_versions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Multiple versions of a resume must be deduplicated to the newest."""
-    home = tmp_path / "home"
-    downloads = home / "Downloads"
-    downloads.mkdir(parents=True)
+def test_survey_caps_repeated_versions_of_one_document(tmp_path: Path) -> None:
+    """Seven versions of a resume are one document, and must not cost seven calls.
 
-    v1 = downloads / "resume_v1.pdf"
-    v2 = downloads / "resume_v2.pdf"
-    v1.write_bytes(b"pdf v1")
-    v2.write_bytes(b"pdf v2")
+    Discovery deliberately hands over a pool without deduplicating - names alone
+    cannot tell a variant from a different document - so the cap is the survey's
+    job and is asserted here rather than on _discover_files.
+    """
+    paths = []
+    for index in range(7):
+        path = tmp_path / f"Kushagra_Bainsla_Resume_{2020 + index}.pdf"
+        path.write_text(f"{_DOCUMENT_TEXT}\nVersion {index}.", encoding="utf-8")
+        paths.append(path)
 
-    import os
-    import time
-    # Make v2 newer
-    os.utime(v1, (time.time() - 1000, time.time() - 1000))
-    os.utime(v2, (time.time(), time.time()))
+    report = survey_files(
+        paths,
+        read_text=lambda p: p.read_text(encoding="utf-8"),
+        user_tokens={"kushagra", "bainsla"},
+        budget=25,
+    )
 
-    _fake_home(monkeypatch, home)
-    discovered = _discover_files()
-    discovered_names = [p.name for p in discovered]
-
-    # Only v2 should be selected
-    assert "resume_v2.pdf" in discovered_names
-    assert "resume_v1.pdf" not in discovered_names
+    assert [item.family for item in report.kept] == ["resume", "resume"]
+    assert report.drop_reasons["surplus resume"] == 5
 
