@@ -26,8 +26,8 @@ export function useResource<T>(path: string | null, refreshMs = 0) {
 }
 
 export function useHealth() {
-  const resource = useResource<{ status: string }>("/health", 5000);
+  const resource = useResource<{ status: string; checks?: Record<string, { status: string; detail?: string }> }>("/health", 5000);
   const online = resource.data?.status === "ok" && !resource.error;
-  const state = resource.loading && !resource.data ? "checking" : online ? "online" : "offline";
+  const state = resource.loading && !resource.data ? "checking" : online ? "online" : resource.data?.status === "degraded" ? "degraded" : "offline";
   return { ...resource, online, state };
 }

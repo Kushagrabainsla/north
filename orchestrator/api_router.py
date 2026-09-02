@@ -5,6 +5,7 @@ See README Section 6.8 and docs/CODING_STYLE.md Sections 12.1-12.4.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 from collections.abc import AsyncIterator
 from typing import Any
@@ -50,11 +51,55 @@ health_router = APIRouter(tags=["health"])
 
 @health_router.get("/health", include_in_schema=True)
 async def health_check() -> dict:
-    """Liveness probe - returns 200 {"status": "ok"} with no authentication.
+    """Readiness probe for the runtime components required to operate North.
 
-    Used by Docker HEALTHCHECK and any upstream load-balancer probe.
+    The route remains unauthenticated for Docker/load-balancer probes. It returns
+    HTTP 200 with status=degraded when the API is alive but a dependency is not
+    ready, allowing the browser to show the difference from an unreachable API.
     """
-    return {"status": "ok"}
+    checks: dict[str, dict[str, Any]] = {"api": {"status": "ok"}}
+
+    async def run_check(name: str, operation) -> None:
+        try:
+            await asyncio.wait_for(operation, timeout=1.0)
+            checks[name] = {"status": "ok"}
+        except Exception as exc:
+            checks[name] = {"status": "failed", "detail": f"{type(exc).__name__}: {exc}"}
+
+    if _orchestrator is None:
+        checks["orchestrator"] = {"status": "failed", "detail": "not configured"}
+    else:
+        await run_check("orchestrator", _orchestrator.list_active_tasks())
+    if _ledger is None:
+        checks["ledger"] = {"status": "failed", "detail": "not configured"}
+    else:
+        await run_check("ledger", _ledger.query(LedgerFilters(limit=1)))
+    if _context_store is None:
+        checks["memory"] = {"status": "failed", "detail": "not configured"}
+    else:
+        await run_check("memory", _context_store.read(ContextDocument.SOUL))
+    if _job_processor is None:
+        checks["scheduler"] = {"status": "failed", "detail": "not configured"}
+    else:
+        await run_check("scheduler", _job_processor.list_jobs(limit=1))
+    checks["event_stream"] = {
+        "status": "ok" if _stream_manager is not None else "failed",
+        **({} if _stream_manager is not None else {"detail": "not configured"}),
+    }
+    if _inference_router is None:
+        checks["inference"] = {"status": "failed", "detail": "not configured"}
+    else:
+        try:
+            summary = _inference_router.health_summary()
+            checks["inference"] = {
+                "status": "ok" if summary["ready"] else "failed",
+                **summary,
+            }
+        except Exception as exc:
+            checks["inference"] = {"status": "failed", "detail": f"{type(exc).__name__}: {exc}"}
+
+    status = "ok" if all(check["status"] == "ok" for check in checks.values()) else "degraded"
+    return {"status": status, "checks": checks}
 
 
 # Module-level singletons injected by app.py at startup

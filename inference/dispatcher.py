@@ -453,6 +453,25 @@ class ModelDispatcher(InferenceRouter):
             "free_fallback": ModelPool(name="free_fallback", models=_entries(free)),
         }
 
+    def health_summary(self) -> dict[str, int | bool]:
+        """Report models that are usable after provider and cooldown checks."""
+        completion = [
+            info
+            for info, _provider in self._registry.values()
+            if info.supports(ModelCapability.COMPLETION)
+        ]
+        available = [
+            info
+            for info in completion
+            if self._provider_health.is_available(info.provider_name)
+            and not self._cooldowns.is_active((info.model_id, info.provider_name))
+        ]
+        return {
+            "ready": bool(available),
+            "models": len(available),
+            "providers": len({info.provider_name for info in available}),
+        }
+
     # ---- EMA confidence tracking ----
 
     def _record_model_outcome(self, key: _CooldownKey, success: bool) -> None:
@@ -1116,4 +1135,3 @@ class ModelDispatcher(InferenceRouter):
             f"All {len(candidates)} candidate(s) exhausted - every model is rate-limited or has insufficient credits",
             retry_after=min_wait if min_wait > 0 else None,
         )
-

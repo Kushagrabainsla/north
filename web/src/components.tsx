@@ -56,9 +56,11 @@ export function ErrorNotice({ message }: { message: string }) { return <div clas
 
 export function HealthIndicator({ variant = "compact" }: { variant?: "compact" | "panel" | "hero" }) {
   const health = useHealth();
-  const label = health.state === "online" ? "North is operational" : health.state === "offline" ? "North is offline" : "Checking North";
-  if (variant === "hero") return <><span className={`online-orb health-${health.state}`} /><div><h2>{label}</h2><p>Live liveness check · REST + SSE</p></div></>;
-  return <div className={`health-indicator health-${health.state}`}><span className="health-dot"/><div><b>{label}</b><small>{health.state === "online" ? "Health check passed" : health.state === "offline" ? "Health check failed" : "Waiting for health check"}</small></div></div>;
+  const label = health.state === "online" ? "North is operational" : health.state === "degraded" ? "North needs attention" : health.state === "offline" ? "North is offline" : "Checking North";
+  const detail = health.state === "online" ? "All core checks passed" : health.state === "degraded" ? "One or more core checks failed" : health.state === "offline" ? "Health endpoint unreachable" : "Waiting for readiness check";
+  const checkTitle = health.data?.checks ? Object.entries(health.data.checks).map(([name, check]) => `${name}: ${check.status}${check.detail ? ` (${check.detail})` : ""}`).join("\n") : detail;
+  if (variant === "hero") return <><span className={`online-orb health-${health.state}`} title={checkTitle}/><div><h2>{label}</h2><p>Live readiness check · core services</p></div></>;
+  return <div className={`health-indicator health-${health.state}`} title={checkTitle} aria-label={`${label}. ${detail}`}><span className="health-dot"/><div><b>{label}</b><small>{detail}</small></div></div>;
 }
 
 export function Markdown({ children }: { children: string }) {
