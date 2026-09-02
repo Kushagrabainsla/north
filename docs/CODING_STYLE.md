@@ -29,6 +29,8 @@
 22. [What Not to Build](#22-what-not-to-build)
 23. [Working with Claude Code](#23-working-with-claude-code)
 
+Companion: [`docs/CLEAN_CODE.md`](CLEAN_CODE.md) - the general clean-code checklist behind Section 4.
+
 ---
 
 ## 1. Guiding Principles
@@ -36,7 +38,7 @@
 These principles govern every line of code in north. When in doubt, come back here.
 
 **Clean Code (Robert C. Martin)**
-Code is read far more than it is written. Every function, class, and module must be immediately understandable without explanation. Names explain intent. Functions do one thing. Classes have one reason to change.
+Code is clean if it can be understood easily by everyone on the team - read and enhanced by a developer other than its author. Code is read far more than it is written. Every function, class, and module must be immediately understandable without explanation. Names explain intent. Functions do one thing. Classes have one reason to change. The full checklist is [`docs/CLEAN_CODE.md`](CLEAN_CODE.md); Section 4 is how it applies here.
 
 **SOLID**
 The five object-oriented design principles that make code maintainable, extensible, and testable. Covered fully in Section 2.
@@ -163,6 +165,30 @@ Prefer positive predicates or extract to a named boolean. `if classification.is_
 ### 4.9 Early Return Over Nesting
 
 Return early on failure; do not nest the happy path. Reject invalid input, reject conflicts, reject anything that can't proceed - *then* run the success path at the bottom unindented.
+
+### 4.10 No Flag Arguments
+
+A boolean parameter that selects behaviour means the function does two things. Split it into two named functions and let the caller choose. Wrong: `run(payload, isolated=True)`. Right: `run_isolated(payload)` and `run_direct(payload)`.
+
+### 4.11 Law of Demeter
+
+A class talks to its direct collaborators only. `self._ledger.write(entry)` is fine; `self._deps.ledger.connection.execute(...)` is not - reaching through one object to get at another couples you to a structure you don't own.
+
+### 4.12 Value Objects Over Primitives
+
+When several primitives always travel together, or a `str` carries meaning a `str` can't enforce, give it a type. `LedgerFilters(task_id=..., limit=...)` beats four positional arguments; `ExecutionMode.SINGLE_TOOL` beats `"single_tool"`.
+
+### 4.13 Boundary Conditions Live in One Place
+
+Off-by-ones, empty collections, timeouts, and caps are where bugs hide. Encapsulate each in one named function or constant rather than re-deriving it at every call site.
+
+### 4.14 Polymorphism Over Type Switches
+
+An `if`/`elif` chain that branches on a kind is a class hierarchy or a dispatch table waiting to be written. A chain over *values* of one field is fine; a chain that grows a new branch every time a new kind is added is not.
+
+### 4.15 The Full Checklist
+
+Sections 4.1-4.14 are the rules this codebase enforces in review. The general checklist behind them - names, functions, comments, vertical structure, code smells - is `docs/CLEAN_CODE.md`. Read it once; come back to it when a change feels harder than it should be.
 
 ---
 

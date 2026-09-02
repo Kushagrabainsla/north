@@ -13,6 +13,28 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.9.0] - 2026-09-02
+### Added
+- **The clean-code bar is written down** (`docs/CLEAN_CODE.md`, `docs/CODING_STYLE.md` §4.10-4.15, `skills/builtin/clean-code-checklist/`). Code is clean if it can be understood easily by everyone on the team - read and enhanced by a developer other than its author. The general checklist behind that (names, functions, comments, vertical structure, objects vs data, the six code smells) now lives in one document, with the five rules the codebase was already enforcing informally added to Section 4 as real rules: no flag arguments, Law of Demeter, value objects over primitives, boundary conditions in one place, polymorphism over type switches. The same checklist ships as a skill, so north's own coding agents can fetch it the way they fetch `safe-refactoring`.
+- **`orchestrator/journal.py` - `TaskJournal`.** Every notable moment on a task has two audiences: the ledger, which keeps it durably, and the live stream, which shows it to whoever is watching. They were written as two adjacent statements in **17 places**, which is 17 chances to write one and forget the other. One `journal.record(...)` now does both, with keyword arguments mirroring `LedgerEntry`'s own fields, and the event name defaulting to the action - which is what makes the ledger history and the live stream tell the same story.
+
+### Changed
+- **`orchestrator.py` split, second pass** (`orchestrator/quality_gate.py`, `orchestrator/result_audit.py`): 2,586 -> 2,136 lines, 71 -> 59 methods (from 2,996 / 78 before the split began). Two collaborators, each of which now stands up without an Orchestrator:
+  - **`QualityGate`** owns the Definition-of-Done question - *does the evidence say this is really done?* It runs the project's own test command as an executable oracle and scores the recorded evidence (which model wrote the code, which reviewed it, whether a change was actually applied) against the pure evaluator in `dod.py`. Every path still fails open: an unrunnable command, a timeout, or any harness error is "unknown", never "failed".
+  - **`ResultAuditor`** owns the claims question - *does the answer match what the tools actually did?* Claims-vs-evidence verification, the engineering evidence gate (code changed but never checked; an edit attempted that never landed), the one-pass self-repair, and the opt-in critic.
+  - Both take a `TaskJournal` rather than a ledger *and* a stream manager - one direct dependency instead of two.
+- **The DoD and auditor tests build their collaborator directly.** They previously constructed a whole Orchestrator and then poked `orch._critic = True` / `orch._verify_command = "..."` after the fact; those settings are now constructor arguments on the thing being tested. As with `AgentIsolation` in 1.8.0: when a test stops needing to reach past a constructor, the seam is real.
+- **Names that cross a module boundary are no longer underscore-private.** The 21 constants and helpers `engineering_prompts.py` and `verify_command.py` export were left `_`-prefixed when they moved out of `orchestrator.py` in 1.8.0, so every import read as a reach into another module's internals. They are public names now; what is genuinely module-internal (`_AUTO_VERIFY_RULES`, `_SPEC_TASK_RE`, `_project_venv_python`) stayed private.
+
+### Fixed
+- **`AgentIsolation`'s method bodies were indented four spaces too deep** - valid Python, and invisible until the formatter reached the file, but wrong everywhere in a 305-line module extracted in 1.8.0.
+
+### Removed
+- **Dead copies of `_remove_handoff_dir` / `_promote_handoff_dir` in `orchestrator.py`.** Both moved to `isolation.py` in 1.8.0; the originals were left behind uncalled, so the same 20 lines existed twice with nothing to keep them in step.
+- **`Orchestrator._write_ledger`**, which became a one-line passthrough once the journal existed. Its 14 call sites write through `self._journal.write` directly.
+
+---
+
 ## [1.8.0] - 2026-09-02
 ### Changed
 - **`orchestrator.py` split, first pass** (`orchestrator/engineering_prompts.py`, `orchestrator/verify_command.py`, `orchestrator/isolation.py`): 2,996 -> 2,586 lines, 78 -> 71 methods. The engineering pipeline's prompts and framings (~200 lines of prose the orchestrator only formats), the safe verification-command detection and runner, and the whole worktree-isolation / best-of-N path now live in their own modules. `AgentIsolation` is a real collaborator, not a namespace: it takes the worktree settings, a stream manager, a ledger write, and one way to run an agent, and owns nothing about task lifecycle - which is why its tests now build it directly instead of `object.__new__(Orchestrator)`.

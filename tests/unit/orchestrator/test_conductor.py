@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from approval.store import ApprovalStore
 from orchestrator import orchestrator as orch_mod
-from orchestrator.orchestrator import _DESIGN_ARCHITECT_PREAMBLE, Orchestrator, _parse_spec_tasks
+from orchestrator.orchestrator import DESIGN_ARCHITECT_PREAMBLE, Orchestrator, parse_spec_tasks
 from orchestrator.review import ReviewResult
 
 _PASS = ReviewResult.parse({"status": "PASS", "must_fix": [], "tests": {"passed": True}})
@@ -203,17 +203,17 @@ def test_coder_preamble_for_agreed_spec_points_to_spec():
 
 def test_parse_spec_tasks_extracts_checkbox_items_under_tasks():
     spec = "## Why\nx\n## Tasks\n- [ ] 1. First step\n- [ ] Second step\nignored prose\n## Notes\n- [ ] not a task"
-    assert _parse_spec_tasks(spec) == ["First step", "Second step"]
+    assert parse_spec_tasks(spec) == ["First step", "Second step"]
 
 
 def test_parse_spec_tasks_empty_when_no_tasks_section():
-    assert _parse_spec_tasks("## Design\napproach only, no tasks section") == []
+    assert parse_spec_tasks("## Design\napproach only, no tasks section") == []
 
 
 def test_architect_preamble_requires_structured_spec():
     for section in ("## Why", "## Requirements", "## Design", "## Tasks"):
-        assert section in _DESIGN_ARCHITECT_PREAMBLE
-    assert "[ ]" in _DESIGN_ARCHITECT_PREAMBLE  # checkbox tasks
+        assert section in DESIGN_ARCHITECT_PREAMBLE
+    assert "[ ]" in DESIGN_ARCHITECT_PREAMBLE  # checkbox tasks
 
 
 def test_coder_spec_preamble_follows_the_seeded_plan():

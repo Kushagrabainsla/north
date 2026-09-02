@@ -11,7 +11,7 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-_VERIFY_COMMAND_TIMEOUT: int = 300
+VERIFY_COMMAND_TIMEOUT: int = 300
 
 _AUTO_VERIFY_RULES: tuple[tuple[str, str | None, str], ...] = (
     ("pytest.ini", None, "pytest -q"),
@@ -20,6 +20,7 @@ _AUTO_VERIFY_RULES: tuple[tuple[str, str | None, str], ...] = (
     ("go.mod", None, "go test ./..."),
     ("Cargo.toml", None, "cargo test"),
 )
+
 
 def _project_venv_python(root: Path) -> str | None:
     """Quoted path to a project-local virtualenv's Python, if one exists, else None.
@@ -35,7 +36,8 @@ def _project_venv_python(root: Path) -> str | None:
             return shlex.quote(str(candidate))
     return None
 
-def _detect_verify_command(workspace: str) -> str | None:
+
+def detect_verify_command(workspace: str) -> str | None:
     """Detect a SAFE, fixed test command from project markers, or None.
 
     Only well-known runners whose command string is a literal (never taken from

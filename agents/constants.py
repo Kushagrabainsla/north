@@ -8,6 +8,11 @@ MAX_DELEGATION_DEPTH = 10
 # Engineering agents must be found exactly - no silent fallback to general.
 ENGINEERING_AGENTS: frozenset[str] = frozenset({"researcher", "architect", "coder", "reviewer"})
 
+# Tools that change code, and the tools that check it. A run that used the first
+# without the second changed code no one verified - see orchestrator/result_audit.py.
+CODE_MUTATING_TOOLS: frozenset[str] = frozenset({"write_file", "patch_file", "rename_symbol"})
+CODE_VERIFY_TOOLS: frozenset[str] = frozenset({"check_types", "bash", "lint"})
+
 # Cap JSON-serialised tool results injected back into the conversation.
 # ~40k chars ≈ 10k tokens - generous but bounded.
 MAX_TOOL_RESULT_CHARS = 40_000

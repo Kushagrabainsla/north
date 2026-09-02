@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 from approval.store import ApprovalStore
 from ledger.models import LedgerEntry, LedgerSource
 from orchestrator.dod import evaluate_engineering_dod
+from orchestrator.journal import TaskJournal
 from orchestrator.orchestrator import Orchestrator
+from orchestrator.quality_gate import QualityGate
 from orchestrator.review import ReviewResult
 
 # ---------------------------------------------------------------- pure evaluator
@@ -28,17 +30,13 @@ def test_dod_passes_with_all_evidence():
 
 
 def test_dod_fails_without_change():
-    r = evaluate_engineering_dod(
-        change_applied=False, coder_models=["a"], reviewer_models=["b"], review=_PASS_REVIEW
-    )
+    r = evaluate_engineering_dod(change_applied=False, coder_models=["a"], reviewer_models=["b"], review=_PASS_REVIEW)
     assert r.passed is False
     assert any("no code change" in x for x in r.reasons)
 
 
 def test_dod_fails_without_review():
-    r = evaluate_engineering_dod(
-        change_applied=True, coder_models=["a"], reviewer_models=["b"], review=None
-    )
+    r = evaluate_engineering_dod(change_applied=True, coder_models=["a"], reviewer_models=["b"], review=None)
     assert r.passed is False
     assert any("no structured review" in x for x in r.reasons)
 
@@ -60,17 +58,13 @@ def test_dod_fails_on_same_model_review():
 
 
 def test_dod_fails_when_reviewer_model_unknown():
-    r = evaluate_engineering_dod(
-        change_applied=True, coder_models=["a"], reviewer_models=[], review=_PASS_REVIEW
-    )
+    r = evaluate_engineering_dod(change_applied=True, coder_models=["a"], reviewer_models=[], review=_PASS_REVIEW)
     assert r.passed is False
     assert any("reviewer model was not recorded" in x for x in r.reasons)
 
 
 def test_dod_fails_when_coder_model_unknown():
-    r = evaluate_engineering_dod(
-        change_applied=True, coder_models=[], reviewer_models=["b"], review=_PASS_REVIEW
-    )
+    r = evaluate_engineering_dod(change_applied=True, coder_models=[], reviewer_models=["b"], review=_PASS_REVIEW)
     assert r.passed is False
     assert any("coder model was not recorded" in x for x in r.reasons)
 
@@ -183,48 +177,58 @@ def test_dod_fail_open_when_auto_verify_unknown():
 
 
 def test_resolve_verify_command_prefers_explicit_setting(tmp_path):
-    orch, _, _ = _orchestrator([])
-    orch._verify_command = "make check"
+    gate, _, _ = _gate([], verify_command="make check")
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     # The explicit setting wins over auto-detection.
-    assert orch._resolve_verify_command(str(tmp_path)) == "make check"
+    assert gate.resolve_command(str(tmp_path)) == "make check"
 
 
 def test_resolve_verify_command_falls_back_to_detection(tmp_path):
-    orch, _, _ = _orchestrator([])
-    orch._verify_command = ""
+    gate, _, _ = _gate([])
     (tmp_path / "go.mod").write_text("module x\n", encoding="utf-8")
-    assert orch._resolve_verify_command(str(tmp_path)) == "go test ./..."
+    assert gate.resolve_command(str(tmp_path)) == "go test ./..."
 
 
 async def test_run_verify_command_reports_exit_code(tmp_path):
-    orch, _, _ = _orchestrator([])
-    assert await orch._run_verify_command(str(tmp_path), "true") is True
-    assert await orch._run_verify_command(str(tmp_path), "false") is False
+    gate, _, _ = _gate([])
+    assert await gate._run_command(str(tmp_path), "true") is True
+    assert await gate._run_command(str(tmp_path), "false") is False
 
 
 async def test_run_verify_command_not_found_is_fail_open(tmp_path):
     # A missing runner (exit 127) must be "unknown" (None), never a failure - so an
     # uninstalled pytest never fails the DoD. Regression for a live-found bug.
-    orch, _, _ = _orchestrator([])
-    assert await orch._run_verify_command(str(tmp_path), "definitely-not-a-real-command-xyz -q") is None
+    gate, _, _ = _gate([])
+    assert await gate._run_command(str(tmp_path), "definitely-not-a-real-command-xyz -q") is None
 
 
-async def test_auto_verify_records_and_returns(tmp_path, monkeypatch):
-    orch, ledger, stream = _orchestrator([])
-    orch._verify_command = "true"
-    result = await orch._auto_verify("t1", str(tmp_path))
+async def test_auto_verify_records_and_returns(tmp_path):
+    gate, ledger, stream = _gate([], verify_command="true")
+    result = await gate.run_verification("t1", str(tmp_path))
     assert result is True
     ledger.write.assert_awaited()
     assert any(c.args and c.args[1] == "auto_verify" for c in stream.emit.await_args_list)
 
 
 async def test_auto_verify_no_command_is_noop(tmp_path):
-    orch, ledger, _ = _orchestrator([])
-    orch._verify_command = ""  # and tmp_path has no project markers
-    assert await orch._auto_verify("t1", str(tmp_path)) is None
+    gate, ledger, _ = _gate([])  # no setting, and tmp_path has no project markers
+    assert await gate.run_verification("t1", str(tmp_path)) is None
     ledger.write.assert_not_called()
 
+
+def _gate(entries: list[LedgerEntry], verify_command: str = ""):
+    """A QualityGate over mocked evidence - no orchestrator needed to exercise it."""
+    ledger = MagicMock()
+    ledger.query_summaries = AsyncMock(return_value=entries)
+    ledger.write = AsyncMock()
+    stream_manager = MagicMock()
+    stream_manager.emit = AsyncMock()
+    gate = QualityGate(
+        ledger=ledger,
+        journal=TaskJournal(ledger=ledger, stream_manager=stream_manager),
+        verify_command=verify_command,
+    )
+    return gate, ledger, stream_manager
 
 
 def _orchestrator(entries: list[LedgerEntry]):
@@ -250,14 +254,18 @@ def _orchestrator(entries: list[LedgerEntry]):
 
 def _completed(agent: str, model: str, tools: list[str]) -> LedgerEntry:
     return LedgerEntry.new(
-        source=LedgerSource.AGENT, task_id="t1", agent=agent, action="agent_completed",
-        model_used=model, tools_used=tools,
+        source=LedgerSource.AGENT,
+        task_id="t1",
+        agent=agent,
+        action="agent_completed",
+        model_used=model,
+        tools_used=tools,
     )
 
 
 async def test_warn_only_skips_non_engineering():
-    orch, ledger, _ = _orchestrator([])
-    await orch._evaluate_dod("t1", "general")
+    gate, ledger, _ = _gate([])
+    await gate.evaluate("t1", "general")
     ledger.query_summaries.assert_not_called()
     ledger.write.assert_not_called()
 
@@ -271,8 +279,8 @@ async def test_warn_only_records_verdict_and_never_blocks(tmp_path, monkeypatch)
         _completed("coder", "model-a", ["patch_file"]),
         _completed("reviewer", "model-b", ["bash"]),
     ]
-    orch, ledger, stream = _orchestrator(entries)
-    await orch._evaluate_dod("t1", "engineering")
+    gate, ledger, stream = _gate(entries)
+    await gate.evaluate("t1", "engineering")
 
     dod_writes = [c.args[0] for c in ledger.write.call_args_list if c.args[0].action == "dod_evaluated"]
     assert len(dod_writes) == 1
@@ -281,10 +289,10 @@ async def test_warn_only_records_verdict_and_never_blocks(tmp_path, monkeypatch)
 
 
 async def test_warn_only_evaluation_error_is_swallowed():
-    orch, ledger, _ = _orchestrator([])
+    gate, ledger, _ = _gate([])
     ledger.query_summaries = AsyncMock(side_effect=RuntimeError("db down"))
     # Must not raise - DoD warn-only fails open.
-    await orch._evaluate_dod("t1", "engineering")
+    await gate.evaluate("t1", "engineering")
 
 
 # ---------------------------------------------------------------- DoD enforcement in _finish_task

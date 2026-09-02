@@ -8,13 +8,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import shutil
 import time
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
-from agents.constants import ENGINEERING_AGENTS
 from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier, UserInteraction
 from approval.approval_memory import ApprovalMemory
@@ -32,32 +30,31 @@ from orchestrator.constants import (
     QUEUE_POLL_INTERVAL_SECONDS,
     STRATEGY_CMD_RE,
 )
-from orchestrator.dod import DodResult, evaluate_engineering_dod
 from orchestrator.engineering_prompts import (
-    _CONDUCTOR_CODER_PREAMBLE,
-    _CONDUCTOR_CODER_PREAMBLE_SPEC,
-    _CONDUCTOR_CODER_PREAMBLES,
-    _CONDUCTOR_FIX_PREAMBLE,
-    _CONDUCTOR_MAX_FIX_ROUNDS,
-    _CONDUCTOR_REVIEW_PROMPT,
-    _CONDUCTOR_REVIEW_RETRY_PROMPT,
-    _CRITIC_PROMPT,
-    _DEPLOY_KINDS,
-    _DEPLOY_PREAMBLE,
-    _DESIGN_ARCHITECT_PREAMBLE,
-    _DESIGN_KINDS,
-    _DESIGN_RESEARCH_PREAMBLE,
-    _SPEC_CRITIQUE_INJECTION,
-    _SPEC_CRITIQUE_PROMPT,
-    _SPEC_CRITIQUE_TIMEOUT_S,
-    _SPEC_MIN_CHARS,
-    _clean_issues,
-    _parse_spec_tasks,
+    CONDUCTOR_CODER_PREAMBLE,
+    CONDUCTOR_CODER_PREAMBLE_SPEC,
+    CONDUCTOR_CODER_PREAMBLES,
+    CONDUCTOR_FIX_PREAMBLE,
+    CONDUCTOR_MAX_FIX_ROUNDS,
+    CONDUCTOR_REVIEW_PROMPT,
+    CONDUCTOR_REVIEW_RETRY_PROMPT,
+    DEPLOY_KINDS,
+    DEPLOY_PREAMBLE,
+    DESIGN_ARCHITECT_PREAMBLE,
+    DESIGN_KINDS,
+    DESIGN_RESEARCH_PREAMBLE,
+    SPEC_CRITIQUE_INJECTION,
+    SPEC_CRITIQUE_PROMPT,
+    SPEC_CRITIQUE_TIMEOUT_S,
+    SPEC_MIN_CHARS,
+    clean_issues,
+    parse_spec_tasks,
 )
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
 from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.isolation import AgentIsolation
+from orchestrator.journal import TaskJournal
 from orchestrator.models import (
     ExecutionMode,
     ExecutionPlan,
@@ -66,6 +63,8 @@ from orchestrator.models import (
     TaskResponse,
 )
 from orchestrator.north_star import NorthStarChecker
+from orchestrator.quality_gate import QualityGate
+from orchestrator.result_audit import ResultAuditor
 from orchestrator.review import read_review_result
 from orchestrator.router import ExecutionPlanner
 from orchestrator.running_tasks import RunningTaskStore
@@ -73,8 +72,6 @@ from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from orchestrator.tiering import resolve_model_pool
-from orchestrator.verification import verify_claims
-from orchestrator.verify_command import _VERIFY_COMMAND_TIMEOUT, _detect_verify_command
 from tools._path import handoff_dir_for
 from tools.exceptions import ToolNotFoundError
 from tools.models import ToolInput
@@ -89,22 +86,6 @@ logger = logging.getLogger(__name__)
 
 # Max characters of a handoff artifact injected into a downstream agent's context.
 _HANDOFF_ARTIFACT_MAX_CHARS: int = 6000
-
-# Engineering evidence gate (#1): a code change with no run of one of the verify
-# tools means the agent never checked its own work.
-_CODE_MUTATING_TOOLS: frozenset[str] = frozenset({"write_file", "patch_file", "rename_symbol"})
-_CODE_VERIFY_TOOLS: frozenset[str] = frozenset({"check_types", "bash", "lint"})
-# How many recent ledger entries to scan when gathering a task's code evidence.
-_LEDGER_SCAN_LIMIT: int = 200
-
-
-class _CodeEvidence(NamedTuple):
-    """The recorded evidence a Definition-of-Done verdict is computed from."""
-
-    coder_models: list[str]
-    reviewer_models: list[str]
-    change_applied: bool
-
 
 # Engineering conductor (2e): coder→reviewer fix rounds allowed after the first
 # review before the bounded loop stops and the DoD gate takes over.
@@ -192,38 +173,7 @@ def _read_artifact(path: Path | None, max_chars: int) -> str | None:
     return text
 
 
-def _remove_handoff_dir(path: Path) -> None:
-    """Delete a candidate's handoff directory. Blocking - call via to_thread."""
-    if path.exists():
-        shutil.rmtree(path, ignore_errors=True)
-
-
-def _promote_handoff_dir(winner: Path, canonical: Path) -> None:
-    """Move the winning candidate's handoff dir into the canonical task dir.
-
-    Blocking (a whole directory tree) - call via to_thread. Falls back to
-    copy+delete when the rename crosses a filesystem boundary.
-    """
-    if not winner.exists():
-        return
-    if canonical.exists():
-        shutil.rmtree(canonical, ignore_errors=True)
-    try:
-        winner.rename(canonical)
-    except OSError:
-        shutil.copytree(winner, canonical, dirs_exist_ok=True)
-        shutil.rmtree(winner, ignore_errors=True)
-
-
-
-
 # Checkbox task line under the spec's "## Tasks" heading, e.g. "- [ ] 1. Do X".
-
-
-
-
-
-
 
 
 # Ledger status recorded for each approval-card decision. Answers to questions are
@@ -233,7 +183,6 @@ _APPROVAL_DECISION_STATUS: dict[str, LedgerStatus] = {
     ApprovalDecision.REJECTED: LedgerStatus.REJECTED,
     ApprovalDecision.TIMEOUT_REJECTED: LedgerStatus.REJECTED,
 }
-
 
 
 class Orchestrator:
@@ -275,6 +224,9 @@ class Orchestrator:
         plan_store: Any | None = None,
     ) -> None:
         self._ledger = ledger
+        # Everything that reports on a task writes through one journal: durable
+        # ledger entry plus the live event, never one without the other.
+        self._journal = TaskJournal(ledger=ledger, stream_manager=stream_manager)
         self._agent_registry = agent_registry
         self._north_star_checker = north_star_checker
         self._execution_planner = execution_planner
@@ -331,8 +283,19 @@ class Orchestrator:
             best_of_n=self._best_of_n,
             test_command=best_of_n_test_command,
             stream_manager=stream_manager,
-            write_ledger=self._write_ledger,
+            write_ledger=self._journal.write,
             run_agent=self._run_agent_with_retry,
+        )
+        # Does the evidence say this is done? Runs the project's own tests and
+        # scores the recorded evidence against the Definition of Done.
+        self._quality_gate = QualityGate(ledger=ledger, journal=self._journal, verify_command=verify_command)
+        # Does the answer match what the tools actually did? Cross-checks claims,
+        # gives the agent one repair pass, and optionally runs the critic.
+        self._auditor = ResultAuditor(
+            journal=self._journal,
+            self_repair=self_repair,
+            critic=critic,
+            tracked_router=tracked_router,
         )
 
     def notify_model_recovery(self) -> None:
@@ -367,7 +330,7 @@ class Orchestrator:
             now = utcnow()
 
             # Await the initial write so get_task() never returns None for a live task.
-            await self._write_ledger(
+            await self._journal.write(
                 LedgerEntry(
                     id=generate_id(),
                     timestamp=now,
@@ -414,7 +377,7 @@ class Orchestrator:
                 logger.warning("resume_task: at capacity, leaving task %s registered for a later restart", task_id)
                 return False
 
-            await self._write_ledger(
+            await self._journal.write(
                 LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     task_id=task_id,
@@ -467,16 +430,13 @@ class Orchestrator:
                         if not claimed:
                             continue
                         logger.info("Resuming queued task %s (attempt %d)", rt.task_id, rt.attempt)
-                        await self._write_ledger(
-                            LedgerEntry.new(
-                                source=LedgerSource.SYSTEM,
-                                task_id=rt.task_id,
-                                input=rt.request.prompt,
-                                action="task_resumed",
-                                status=LedgerStatus.PENDING,
-                            )
+                        await self._journal.record(
+                            rt.task_id,
+                            "task_resumed",
+                            status=LedgerStatus.PENDING,
+                            input=rt.request.prompt,
+                            payload={"attempt": rt.attempt},
                         )
-                        await self._stream_manager.emit(rt.task_id, "task_resumed", {"attempt": rt.attempt})
                         task = asyncio.create_task(self._process_task(rt.task_id, rt.request))
                         self._active_tasks[rt.task_id] = task
                         task.add_done_callback(lambda _, tid=rt.task_id: self._active_tasks.pop(tid, None))
@@ -545,15 +505,7 @@ class Orchestrator:
         # the task is resumed next start.
         if self._running_task_store is not None:
             await self._running_task_store.clear(task_id)
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                action="task_cancelled",
-                status=LedgerStatus.CANCELLED,
-            )
-        )
-        await self._stream_manager.emit(task_id, "task_cancelled", {})
+        await self._journal.record(task_id, "task_cancelled", status=LedgerStatus.CANCELLED)
         await self._stream_manager.emit_done(task_id)
         return True
 
@@ -588,15 +540,7 @@ class Orchestrator:
             running.cancel()
         if self._tracked_router:
             self._tracked_router.pop_task_cost(task_id)
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                action="task_paused",
-                status=LedgerStatus.PENDING,
-            )
-        )
-        await self._stream_manager.emit(task_id, "task_paused", {})
+        await self._journal.record(task_id, "task_paused", status=LedgerStatus.PENDING)
         await self._stream_manager.emit_done(task_id)
         return True
 
@@ -621,7 +565,7 @@ class Orchestrator:
                 logger.warning("resume_paused_task: at capacity, leaving task %s paused", task_id)
                 await self._running_task_store.mark_paused(task_id)
                 return False
-            await self._write_ledger(
+            await self._journal.write(
                 LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     task_id=task_id,
@@ -684,25 +628,16 @@ class Orchestrator:
             # Learn from this human decision so autonomous mode can replay it later.
             if self._approval_memory is not None and card.type == CardType.APPROVAL:
                 self._approval_memory.record(card.agent, card.message, decision)
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=source,
-                task_id=card.task_id,
-                agent=card.agent,
-                action=action,
-                input=ledger_input,
-                output=f"chosen_option={chosen_option or decision}",
-                status=status,
-            )
-        )
-        await self._stream_manager.emit(
+        await self._journal.record(
             card.task_id,
-            "approval_responded",
-            {
-                "card_id": card_id,
-                "decision": decision,
-                "chosen_option": chosen_option,
-            },
+            action,
+            status=status,
+            source=source,
+            agent=card.agent,
+            input=ledger_input,
+            output=f"chosen_option={chosen_option or decision}",
+            event="approval_responded",
+            payload={"card_id": card_id, "decision": decision, "chosen_option": chosen_option},
         )
 
     async def emit_steer(self, task_id: str, instruction: str) -> None:
@@ -712,7 +647,7 @@ class Orchestrator:
             "task_steered",
             {"task_id": task_id, "instruction": instruction, "timestamp": format_timestamp(utcnow())},
         )
-        await self._write_ledger(
+        await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.CLARIFICATION,
                 task_id=task_id,
@@ -754,17 +689,14 @@ class Orchestrator:
         if self._running_task_store is not None:
             await self._running_task_store.clear(task_id)
 
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                action="task_stuck",
-                output=(f"No progress for over {self._stuck_task_max_age_seconds}s - cancelling as stuck (watchdog)."),
-                status=LedgerStatus.FAILED,
-                error_type="stuck_timeout",
-            )
+        await self._journal.record(
+            task_id,
+            "task_stuck",
+            status=LedgerStatus.FAILED,
+            output=f"No progress for over {self._stuck_task_max_age_seconds}s - cancelling as stuck (watchdog).",
+            error_type="stuck_timeout",
+            payload={"error": "stuck_timeout"},
         )
-        await self._stream_manager.emit(task_id, "task_stuck", {"error": "stuck_timeout"})
         await self._stream_manager.emit_done(task_id)
         return True
 
@@ -780,18 +712,6 @@ class Orchestrator:
     # ------------------------------------------------------------------ #
     #  Internal helpers                                                    #
     # ------------------------------------------------------------------ #
-
-    async def _write_ledger(self, entry: LedgerEntry) -> None:
-        """Ledger write with error logging; safe to fire-and-forget."""
-        try:
-            await self._ledger.write(entry)
-        except Exception as exc:
-            logger.error(
-                "Ledger write failed task=%s action=%s: %s",
-                entry.task_id,
-                entry.action,
-                exc,
-            )
 
     def _release_pending_cards(self, task_id: str) -> None:
         """Resolve any approval/question cards this finished task left pending.
@@ -845,7 +765,7 @@ class Orchestrator:
         Writes the same APPROVAL ledger entry a user decision would, so an
         auto-approved/rejected card stays fully traceable.
         """
-        await self._write_ledger(
+        await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.APPROVAL,
                 task_id=card.task_id,
@@ -884,17 +804,9 @@ class Orchestrator:
 
         self._north_settings.set_power(mode)
         msg = f"Strategy set to **{mode.value}**. {describe(mode)}"
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                action="agent_completed",
-                agent="orchestrator",
-                output=msg,
-                status=LedgerStatus.COMPLETED,
-            )
+        await self._journal.record(
+            task_id, "agent_completed", agent="orchestrator", output=msg, event="task_completed"
         )
-        await self._stream_manager.emit(task_id, "task_completed", {})
         await self._stream_manager.emit_done(task_id)
         return True
 
@@ -958,19 +870,15 @@ class Orchestrator:
                     )
                     if self._running_task_store is not None:
                         await self._running_task_store.mark_queued(task_id, attempt=current_attempt + 1)
-                    await self._write_ledger(
-                        LedgerEntry.new(
-                            source=LedgerSource.SYSTEM,
-                            task_id=task_id,
-                            action="task_queued",
-                            output=f"model pool unavailable - queued for retry (attempt {current_attempt + 1})",
-                            status=LedgerStatus.PENDING,
-                        )
-                    )
-                    await self._stream_manager.emit(
+                    await self._journal.record(
                         task_id,
                         "task_queued",
-                        {"reason": "model pool unavailable - queued for retry", "attempt": current_attempt + 1},
+                        status=LedgerStatus.PENDING,
+                        output=f"model pool unavailable - queued for retry (attempt {current_attempt + 1})",
+                        payload={
+                            "reason": "model pool unavailable - queued for retry",
+                            "attempt": current_attempt + 1,
+                        },
                     )
                     self._queue_wake_event.set()
                     return
@@ -1025,23 +933,15 @@ class Orchestrator:
 
         classification, plan = await self._execution_planner.plan_all(prompt, task_id=task_id, context=context)
 
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                action=f"classified_as_{'consequential' if classification.is_consequential else 'trivial'}",
-                output=classification.reasoning,
-                status=LedgerStatus.COMPLETED,
-                # Stamp the domain so the episode consolidator can tag each task's
-                # episode without re-deriving it (used for per-agent gating).
-                agent_output={"domain": classification.domain},
-            )
-        )
-
-        await self._stream_manager.emit(
+        await self._journal.record(
             task_id,
-            "classified",
-            {
+            f"classified_as_{'consequential' if classification.is_consequential else 'trivial'}",
+            output=classification.reasoning,
+            # Stamp the domain so the episode consolidator can tag each task's
+            # episode without re-deriving it (used for per-agent gating).
+            agent_output={"domain": classification.domain},
+            event="classified",
+            payload={
                 "is_consequential": classification.is_consequential,
                 "domain": classification.domain,
                 "reasoning": classification.reasoning,
@@ -1160,21 +1060,17 @@ class Orchestrator:
             # goal conflict. The task proceeds; the gap is recorded and surfaced so
             # the reader knows this run was not checked against their goals.
             logger.warning("North Star check could not run - proceeding unchecked: %s", e)
-            await self._write_ledger(
-                LedgerEntry.new(
-                    source=LedgerSource.SYSTEM,
-                    task_id=task_id,
-                    action="north_star_check_failed",
-                    output=f"Goal alignment was not verified for this task: {e}",
-                    status=LedgerStatus.COMPLETED,
-                    error_type="north_star_check_unavailable",
-                )
+            await self._journal.record(
+                task_id,
+                "north_star_check_failed",
+                output=f"Goal alignment was not verified for this task: {e}",
+                error_type="north_star_check_unavailable",
+                payload={"reason": str(e)},
             )
-            await self._stream_manager.emit(task_id, "north_star_check_failed", {"reason": str(e)})
             return
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
-        await self._write_ledger(
+        await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
@@ -1201,7 +1097,7 @@ class Orchestrator:
         # output errors out immediately instead of blocking until timeout.
         await self._task_context_store.update_agent_status(task_id, name, "failed")
         await self._stream_manager.emit(task_id, "agent_skipped", {"agent": name, "failed_dependencies": failed_deps})
-        await self._write_ledger(
+        await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.AGENT,
                 task_id=task_id,
@@ -1224,7 +1120,7 @@ class Orchestrator:
         """
         if domain != "engineering":
             return False
-        if plan.engineering_kind in _DEPLOY_KINDS:
+        if plan.engineering_kind in DEPLOY_KINDS:
             return False  # deploy/ship is a distinct human-gated flow, not a coding loop
         if "coder" not in plan.agents:
             return False
@@ -1234,7 +1130,7 @@ class Orchestrator:
         """True when this is an engineering deploy/ship task and the coder is available."""
         return (
             domain == "engineering"
-            and plan.engineering_kind in _DEPLOY_KINDS
+            and plan.engineering_kind in DEPLOY_KINDS
             and "coder" in set(self._agent_registry.names())
         )
 
@@ -1249,7 +1145,7 @@ class Orchestrator:
         PR) and a second explicit approval before any merge or production deploy.
         """
         coder = self._agent_registry.get("coder")
-        deploy_prompt = f"{_DEPLOY_PREAMBLE}\n\n{prompt}"
+        deploy_prompt = f"{DEPLOY_PREAMBLE}\n\n{prompt}"
         return await self._execute_agent_group(
             task_id, deploy_prompt, [coder], workspace, context=context, model_pool=model_pool
         )
@@ -1269,7 +1165,7 @@ class Orchestrator:
         architect registered.
         """
         return (
-            plan.engineering_kind in _DESIGN_KINDS
+            plan.engineering_kind in DESIGN_KINDS
             and self._human_available()
             and {"researcher", "architect"} <= set(self._agent_registry.names())
         )
@@ -1286,7 +1182,7 @@ class Orchestrator:
         await self._stream_manager.emit(task_id, "design_phase", {"step": "research"})
         r_fail = await self._execute_agent_group(
             task_id,
-            f"{_DESIGN_RESEARCH_PREAMBLE}\n\n{prompt}",
+            f"{DESIGN_RESEARCH_PREAMBLE}\n\n{prompt}",
             [researcher],
             workspace,
             context=context,
@@ -1301,7 +1197,7 @@ class Orchestrator:
         await self._stream_manager.emit(task_id, "design_phase", {"step": "design"})
         a_fail = await self._execute_agent_group(
             task_id,
-            f"{_DESIGN_ARCHITECT_PREAMBLE}\n\n{prompt}",
+            f"{DESIGN_ARCHITECT_PREAMBLE}\n\n{prompt}",
             [architect],
             workspace,
             context=design_ctx,
@@ -1312,7 +1208,7 @@ class Orchestrator:
         # A "successful" architect that wrote no usable spec must not send the coder to
         # implement a phantom file - treat a missing/trivial spec as a design failure.
         spec = await asyncio.to_thread(_read_artifact, Path(self._spec_path(task_id)), _HANDOFF_ARTIFACT_MAX_CHARS)
-        if not spec or len(spec.strip()) < _SPEC_MIN_CHARS:
+        if not spec or len(spec.strip()) < SPEC_MIN_CHARS:
             await self._warn_missing_handoff_artifact(task_id, "architect")
             return ["architect"]
         return []
@@ -1324,16 +1220,16 @@ class Orchestrator:
     def _coder_preamble_for_kind(self, kind: str) -> str:
         """The coder's framing for a code kind (debug = reproduce-first, test =
         tests-only); the default principal-engineer framing for anything else."""
-        return _CONDUCTOR_CODER_PREAMBLES.get(kind.strip().lower(), _CONDUCTOR_CODER_PREAMBLE)
+        return CONDUCTOR_CODER_PREAMBLES.get(kind.strip().lower(), CONDUCTOR_CODER_PREAMBLE)
 
     def _coder_preamble_for_agreed_spec(self, task_id: str, critique: list[str] | None = None) -> str:
         """The coder's framing when a design was agreed with the user: implement that
         spec as-is rather than redesign. Any pre-implementation critique concerns are
         appended as a bounded, within-spec checklist (never a licence to redesign)."""
-        preamble = _CONDUCTOR_CODER_PREAMBLE_SPEC.format(spec_path=self._spec_path(task_id))
+        preamble = CONDUCTOR_CODER_PREAMBLE_SPEC.format(spec_path=self._spec_path(task_id))
         if critique:
             issues = "\n".join(f"- {concern}" for concern in critique)
-            preamble += _SPEC_CRITIQUE_INJECTION.format(issues=issues)
+            preamble += SPEC_CRITIQUE_INJECTION.format(issues=issues)
         return preamble
 
     async def _seed_plan_from_spec(self, task_id: str) -> int:
@@ -1348,7 +1244,7 @@ class Orchestrator:
         spec = await asyncio.to_thread(_read_artifact, Path(self._spec_path(task_id)), _HANDOFF_ARTIFACT_MAX_CHARS)
         if not spec:
             return 0
-        tasks = _parse_spec_tasks(spec)
+        tasks = parse_spec_tasks(spec)
         if not tasks:
             return 0
         self._plan_store.set_plan(task_id, [{"content": task, "status": "pending"} for task in tasks])
@@ -1366,13 +1262,13 @@ class Orchestrator:
         if self._tracked_router is None:
             return []
         spec = await asyncio.to_thread(_read_artifact, Path(self._spec_path(task_id)), _HANDOFF_ARTIFACT_MAX_CHARS)
-        if not spec or len(spec.strip()) < _SPEC_MIN_CHARS:
+        if not spec or len(spec.strip()) < SPEC_MIN_CHARS:
             return []  # too little to critique; a truly absent spec is caught in _run_design_phase
         research = await asyncio.to_thread(
             _read_artifact, self._primary_artifact_path("researcher", task_id), _HANDOFF_ARTIFACT_MAX_CHARS
         )
         exclude = await self._models_used_by(task_id, {"architect"})
-        critique_prompt = _SPEC_CRITIQUE_PROMPT.format(
+        critique_prompt = SPEC_CRITIQUE_PROMPT.format(
             prompt=prompt[:1500], research=(research or "(none)")[:2000], spec=spec[:_HANDOFF_ARTIFACT_MAX_CHARS]
         )
         try:
@@ -1389,31 +1285,25 @@ class Orchestrator:
                         exclude_models=exclude,
                     )
                 ),
-                timeout=_SPEC_CRITIQUE_TIMEOUT_S,
+                timeout=SPEC_CRITIQUE_TIMEOUT_S,
             )
             verdict = extract_json(response.text)
         except Exception:
             logger.debug("spec critique skipped (error/timeout) for task %s", task_id, exc_info=True)
             return []
-        issues = _clean_issues(verdict.get("issues") if isinstance(verdict, dict) else None)
+        issues = clean_issues(verdict.get("issues") if isinstance(verdict, dict) else None)
         independent = bool(exclude) and response.model_used not in exclude
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                agent="spec_critic",
-                action="spec_critique",
-                output=("; ".join(issues) if issues else "spec sound"),
-                status=LedgerStatus.COMPLETED,
-                agent_output={
-                    "model_used": response.model_used,
-                    "independent": independent,
-                    "issue_count": len(issues),
-                },
-            )
-        )
-        await self._stream_manager.emit(
-            task_id, "spec_critique", {"issues": issues, "model": response.model_used, "independent": independent}
+        await self._journal.record(
+            task_id,
+            "spec_critique",
+            agent="spec_critic",
+            output="; ".join(issues) if issues else "spec sound",
+            agent_output={
+                "model_used": response.model_used,
+                "independent": independent,
+                "issue_count": len(issues),
+            },
+            payload={"issues": issues, "model": response.model_used, "independent": independent},
         )
         return issues
 
@@ -1445,8 +1335,8 @@ class Orchestrator:
         if failures:
             return failures  # coder failed - nothing to review
 
-        review_prompt = f"{prompt}\n\n{_CONDUCTOR_REVIEW_PROMPT}"
-        for fix_round in range(_CONDUCTOR_MAX_FIX_ROUNDS + 1):
+        review_prompt = f"{prompt}\n\n{CONDUCTOR_REVIEW_PROMPT}"
+        for fix_round in range(CONDUCTOR_MAX_FIX_ROUNDS + 1):
             review_failures = await self._execute_agent_group(
                 task_id,
                 review_prompt,
@@ -1467,7 +1357,7 @@ class Orchestrator:
                     await self._stream_manager.emit(
                         task_id, "conductor_review_skipped_model_unavailable", {"reason": _MODEL_SCARCITY_MESSAGE}
                     )
-                    await self._write_ledger(
+                    await self._journal.write(
                         LedgerEntry.new(
                             source=LedgerSource.SYSTEM,
                             task_id=task_id,
@@ -1491,19 +1381,19 @@ class Orchestrator:
                 # budget remains; otherwise stop and let the DoD gate flag the
                 # unverified result honestly.
                 await self._stream_manager.emit(task_id, "conductor_review_missing_verdict", {})
-                if fix_round >= _CONDUCTOR_MAX_FIX_ROUNDS:
+                if fix_round >= CONDUCTOR_MAX_FIX_ROUNDS:
                     return []
-                review_prompt = f"{prompt}\n\n{_CONDUCTOR_REVIEW_RETRY_PROMPT}"
+                review_prompt = f"{prompt}\n\n{CONDUCTOR_REVIEW_RETRY_PROMPT}"
                 continue  # re-run the reviewer; nothing structured for the coder to fix yet
 
             # review present and FAILED with must-fix items.
-            if fix_round >= _CONDUCTOR_MAX_FIX_ROUNDS:
+            if fix_round >= CONDUCTOR_MAX_FIX_ROUNDS:
                 await self._stream_manager.emit(task_id, "conductor_review_unresolved", {"must_fix": review.must_fix})
                 return []
 
             items = "\n".join(f"- {m}" for m in review.must_fix) or "(see the review report)"
             await self._stream_manager.emit(task_id, "conductor_fix_round", {"round": fix_round + 1})
-            fix_prompt = f"{prompt}\n\n{_CONDUCTOR_FIX_PREAMBLE.format(items=items[:_HANDOFF_ARTIFACT_MAX_CHARS])}"
+            fix_prompt = f"{prompt}\n\n{CONDUCTOR_FIX_PREAMBLE.format(items=items[:_HANDOFF_ARTIFACT_MAX_CHARS])}"
             fix_failures = await self._execute_agent_group(
                 task_id, fix_prompt, [coder], workspace, context=context, model_pool=model_pool
             )
@@ -1600,18 +1490,12 @@ class Orchestrator:
         path = self._primary_artifact_path(agent_name, task_id)
         artifact = path.name if path is not None else "its handoff artifact"
         logger.warning("handoff: %s completed without writing %s (task %s)", agent_name, artifact, task_id)
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                agent=agent_name,
-                action="handoff_artifact_missing",
-                output=f"{agent_name} finished without writing its expected handoff artifact ({artifact}).",
-                status=LedgerStatus.COMPLETED,
-            )
-        )
-        await self._stream_manager.emit(
-            task_id, "handoff_artifact_missing", {"agent": agent_name, "artifact": artifact}
+        await self._journal.record(
+            task_id,
+            "handoff_artifact_missing",
+            agent=agent_name,
+            output=f"{agent_name} finished without writing its expected handoff artifact ({artifact}).",
+            payload={"agent": agent_name, "artifact": artifact},
         )
 
     async def _execute_parallel_groups(
@@ -1640,7 +1524,7 @@ class Orchestrator:
         duration_ms = int((time.monotonic() - task_start) * 1000)
         task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
         action = "task_cancelled" if status == LedgerStatus.CANCELLED else "task_failed"
-        await self._write_ledger(
+        await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
@@ -1664,7 +1548,7 @@ class Orchestrator:
         """
         duration_ms = int((time.monotonic() - task_start) * 1000)
         task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
-        await self._write_ledger(
+        await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
@@ -1682,133 +1566,6 @@ class Orchestrator:
         names = ", ".join(f"`{n}`" for n in failures)
         note = f"\n\n> **Note:** {len(failures)} agent(s) did not complete: {names}. Partial results may be missing."
         await self._stream_manager.emit(task_id, "token", {"text": note})
-
-    def _resolve_verify_command(self, workspace: str) -> str | None:
-        """The verification command for a conductor task: the explicit setting if
-        configured, else a safe auto-detected one, else None (skip)."""
-        return self._verify_command or _detect_verify_command(workspace)
-
-    async def _run_verify_command(self, workspace: str, cmd: str) -> bool | None:
-        """Run *cmd* in *workspace*; True/False by exit code, None on error/timeout.
-
-        Fail-open: an infrastructure problem (timeout, OS error) returns None so the
-        DoD is never failed by the harness itself - only a clean non-zero exit is a
-        real failure signal. Output is discarded (only the exit code matters here).
-        """
-        if not workspace:
-            return None
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                cwd=workspace,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-        except (OSError, ValueError):
-            return None
-        try:
-            code = await asyncio.wait_for(proc.wait(), timeout=_VERIFY_COMMAND_TIMEOUT)
-        except TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            return None
-        if code in (126, 127):
-            # 127 = command not found, 126 = not executable. The runner could not be
-            # run at all (e.g. pytest isn't installed on PATH), which is "unknown",
-            # NOT a test failure - so a missing runner never fails the DoD (fail-open).
-            return None
-        return code == 0
-
-    async def _auto_verify(self, task_id: str, workspace: str) -> bool | None:
-        """Run the independent verification oracle for a conductor task, if a command
-        is known, recording an `auto_verify` ledger + stream event. Returns pass
-        (True) / fail (False) / unknown (None). Fail-open on every error path."""
-        try:
-            cmd = self._resolve_verify_command(workspace)
-            if not cmd:
-                return None
-            await self._stream_manager.emit(task_id, "auto_verify_started", {"command": cmd})
-            passed = await self._run_verify_command(workspace, cmd)
-            outcome = "passed" if passed else "failed" if passed is False else "could not run"
-            await self._write_ledger(
-                LedgerEntry.new(
-                    source=LedgerSource.SYSTEM,
-                    task_id=task_id,
-                    action="auto_verify",
-                    output=f"independent verification `{cmd}` {outcome}",
-                    status=LedgerStatus.COMPLETED,
-                    error_type=None if passed is not False else "auto_verify_failed",
-                )
-            )
-            await self._stream_manager.emit(task_id, "auto_verify", {"command": cmd, "passed": passed})
-            return passed
-        except Exception:
-            logger.debug("auto-verify failed for task %s", task_id, exc_info=True)
-            return None
-
-    async def _gather_code_evidence(self, task_id: str) -> _CodeEvidence:
-        """Read the code evidence for a task from the ledger: which model the coder
-        and reviewer used, and whether a code-mutating change was actually applied."""
-        entries = await self._ledger.query_summaries(LedgerFilters(task_id=task_id, limit=_LEDGER_SCAN_LIMIT))
-        coder_models: list[str] = []
-        reviewer_models: list[str] = []
-        change_applied = False
-        for entry in entries:  # most-recent-first
-            if entry.action != "agent_completed":
-                continue
-            models = [m.strip() for m in (entry.model_used or "").split(",") if m.strip()]
-            if entry.agent == "coder":
-                coder_models = coder_models or models
-                if set(entry.tools_used or []) & _CODE_MUTATING_TOOLS:
-                    change_applied = True
-            elif entry.agent == "reviewer":
-                reviewer_models = reviewer_models or models
-        return _CodeEvidence(coder_models, reviewer_models, change_applied)
-
-    async def _record_dod_result(self, task_id: str, result: DodResult) -> None:
-        """Record a DoD verdict to the ledger + stream (and log when unmet)."""
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                action="dod_evaluated",
-                output="Definition of Done met" if result.passed else "; ".join(result.reasons),
-                status=LedgerStatus.COMPLETED,
-                error_type=None if result.passed else "dod_unmet",
-            )
-        )
-        await self._stream_manager.emit(task_id, "dod_evaluated", {"passed": result.passed, "reasons": result.reasons})
-        if not result.passed:
-            logger.warning("DoD not met for task %s: %s", task_id, "; ".join(result.reasons))
-
-    async def _evaluate_dod(
-        self, task_id: str, domain: str, kind: str = "", auto_verify_passed: bool | None = None
-    ) -> DodResult | None:
-        """Evaluate the engineering Definition-of-Done from recorded evidence.
-
-        Gathers the code evidence from the ledger, evaluates the DoD, and records the
-        outcome to the ledger + stream. ``kind`` is the engineering_kind (e.g.
-        bugfix/debug) so the gate can apply kind-specific fix-evidence checks. Returns
-        the verdict (or None for non-engineering tasks / on error). Fails open: any
-        error is logged and the task is never broken by the gate.
-        """
-        if domain != "engineering":
-            return None
-        try:
-            evidence = await self._gather_code_evidence(task_id)
-            result = evaluate_engineering_dod(
-                change_applied=evidence.change_applied,
-                coder_models=evidence.coder_models,
-                reviewer_models=evidence.reviewer_models,
-                review=read_review_result(task_id),
-                kind=kind,
-                auto_verify_passed=auto_verify_passed,
-            )
-            await self._record_dod_result(task_id, result)
-            return result
-        except Exception:
-            logger.debug("DoD evaluation failed for task %s", task_id, exc_info=True)
-            return None
 
     async def _stage_execute(
         self,
@@ -1910,11 +1667,11 @@ class Orchestrator:
             # verification command itself (not the model's word) and feeds the result
             # into the DoD. Only runs when a code change was applied (else there is
             # nothing to verify), and only for real coding tasks (this branch).
-            auto_verify = await self._auto_verify(task_id, workspace) if not all_failures else None
-            dod = await self._evaluate_dod(task_id, domain, plan.engineering_kind, auto_verify)
+            auto_verify = await self._quality_gate.run_verification(task_id, workspace) if not all_failures else None
+            dod = await self._quality_gate.evaluate(task_id, domain, plan.engineering_kind, auto_verify)
             if dod is not None and not dod.passed:
                 dod_unmet_reasons = dod.reasons
-                await self._report_dod_unmet(task_id, dod.reasons)
+                await self._quality_gate.report_unmet(task_id, dod.reasons)
             # The conductor's own coder/reviewer output is streamed live; a synthesis
             # over plan.agents (which may name researcher/architect that never ran)
             # would summarise empty outputs, so it is skipped here.
@@ -1988,25 +1745,16 @@ class Orchestrator:
 
         await self._stream_manager.emit(task_id, "tool_result", {"tool": plan.direct_tool, "success": success})
 
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.AGENT,
-                task_id=task_id,
-                agent="tool_executor",
-                action="agent_completed",
-                output=output,
-                status=LedgerStatus.COMPLETED,
-            )
+        await self._journal.record(
+            task_id,
+            "agent_completed",
+            source=LedgerSource.AGENT,
+            agent="tool_executor",
+            output=output,
+            event="token",
+            payload={"text": output},
         )
-
-        await self._stream_manager.emit(task_id, "token", {"text": output})
         await self._finish_task(task_id, skip_extraction=True)
-
-    async def _report_dod_unmet(self, task_id: str, reasons: list[str]) -> None:
-        """Surface an unmet Definition of Done in the streamed answer (visible note)."""
-        bullets = "; ".join(reasons)
-        note = f"\n\n> ⚠️ **Definition of Done not met:** {bullets}. Treat this as not fully done until confirmed."
-        await self._stream_manager.emit(task_id, "token", {"text": note})
 
     async def _finish_task(
         self,
@@ -2050,7 +1798,7 @@ class Orchestrator:
             output_parts.append(f"Failed agents: {', '.join(failures)}")
         if dod_failed:
             output_parts.append(f"Definition of Done not met: {'; '.join(dod_unmet_reasons)}")
-        await self._write_ledger(
+        await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
@@ -2182,7 +1930,7 @@ class Orchestrator:
                     exc_info=result,
                 )
                 failed.append(AgentFailure(agent.name, error_type))
-                await self._write_ledger(
+                await self._journal.write(
                     LedgerEntry.new(
                         source=LedgerSource.AGENT,
                         task_id=task_id,
@@ -2252,13 +2000,6 @@ class Orchestrator:
 
         spawn(_refresh(), name="pool_refresh_after_failure")
 
-
-
-
-
-
-
-
     async def _run_agent_with_retry(self, agent: Agent, payload: AgentPayload) -> AgentResult:
         """Run an agent, retrying on failure up to the handler's max_retries."""
         task_id = payload.task_id
@@ -2326,202 +2067,11 @@ class Orchestrator:
                 payload = payload.model_copy(update={"run_id": generate_id(), "attempt": payload.attempt + 1})
                 self._maybe_refresh_pools_background()
 
-    def _add_evidence_gate_violations(self, agent: Agent, result: AgentResult, violations: list[str]) -> list[str]:
-        """Engineering evidence gate (#1): flag code changed with no verification,
-        or a code edit that was attempted but never landed.
-
-        When an engineering agent's run mutated code (write_file/patch_file) but ran
-        neither the type checker nor a test/command, its "done" is unverified.
-        And when it *attempted* a code edit that did not succeed (e.g. the approval
-        was denied), no change was applied at all - a "done" claim is simply false.
-        Either case is recorded as a violation, routing it through self-repair so the
-        agent must actually apply and verify the change before the answer is accepted.
-        """
-        if agent.name not in ENGINEERING_AGENTS:
-            return violations
-        succeeded = set(result.successful_tools or [])
-        attempted = set(result.tools_used or [])
-        if (attempted & _CODE_MUTATING_TOOLS) and not (succeeded & _CODE_MUTATING_TOOLS):
-            return [
-                *violations,
-                "attempted to modify code but the edit did not succeed (it may have been "
-                "denied or failed) - no change was applied",
-            ]
-        if (succeeded & _CODE_MUTATING_TOOLS) and not (succeeded & _CODE_VERIFY_TOOLS):
-            return [*violations, "modified code but ran no check_types or test to verify the change"]
-        return violations
-
-    async def _verify_agent_claims(
-        self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload | None = None
-    ) -> None:
-        """Flag final-answer claims unsupported by tool evidence, repairing first.
-
-        Agents narrate actions ("created the file", "tests pass") the model has no
-        way of knowing are true. This cross-checks such claims against the tools
-        that actually succeeded. When self-repair is on and a payload is available,
-        the agent gets one correction pass to either do the work or drop the claim
-        before the (remaining) violations are flagged. Non-fatal: it annotates the
-        output and records a ledger entry so a fabricated completion is visible.
-        """
-        # Only agentic agents report tool evidence (successful_tools is a list,
-        # possibly empty); questions/approvals carry no completion claims.
-        if result.successful_tools is None or result.requires_approval or result.has_question:
-            return
-        ws = payload.workspace if payload is not None else None
-        # verify_claims stats claimed paths on disk - off-thread so the check
-        # never blocks the event loop (CODING_STYLE §10.3).
-        violations = await asyncio.to_thread(verify_claims, result.output, result.successful_tools, ws)
-        violations = self._add_evidence_gate_violations(agent, result, violations)
-        if not violations:
-            return
-
-        if self._self_repair and payload is not None:
-            violations = await self._attempt_self_repair(task_id, agent, result, payload, violations)
-            if not violations:
-                return
-
-        bullets = "\n".join(f"- {v}" for v in violations)
-        note = (
-            "\n\n---\n"
-            "⚠️ **Unverified claims** - no tool evidence was found for part of this answer:\n"
-            f"{bullets}\n\n"
-            "Treat the above as not done until confirmed."
-        )
-        result.output = f"{result.output}{note}"
-        # Also stream it. The answer was already streamed token-by-token before this
-        # check ran, so appending to result.output alone means the reader never sees
-        # the warning live - only in the ledger afterwards. Same channel the
-        # Definition-of-Done note uses, so every client shows it without needing a
-        # dedicated handler.
-        await self._stream_manager.emit(task_id, "token", {"text": note})
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                agent=agent.name,
-                action="claims_unverified",
-                output="; ".join(violations),
-                status=LedgerStatus.COMPLETED,
-                error_type="unverified_claims",
-            )
-        )
-        await self._stream_manager.emit(task_id, "claims_unverified", {"agent": agent.name, "violations": violations})
-
-    async def _attempt_self_repair(
-        self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload, violations: list[str]
-    ) -> list[str]:
-        """Give *agent* one pass to fix unsupported claims; return remaining violations.
-
-        Adopts the corrected answer only if it has strictly fewer violations,
-        folding its cost/tokens into *result*. On any failure the original answer
-        and its violations are kept.
-        """
-        feedback = (
-            "A verification check found claims in your previous answer with no tool evidence:\n"
-            + "\n".join(f"- {v}" for v in violations)
-            + "\n\nEither actually perform those actions using your tools, or rewrite your answer to "
-            "remove any claim you did not verify with a tool. Never state something was done unless a tool did it."
-        )
-        repair_payload = payload.model_copy(
-            update={
-                "run_id": generate_id(),
-                "parent_run_id": result.run_id or payload.run_id,
-                "attempt": payload.attempt + 1,
-                "prompt": f"{payload.prompt}\n\n[correction required]\n{feedback}",
-            }
-        )
-        await self._stream_manager.emit(task_id, "self_repair_started", {"agent": agent.name, "violations": violations})
-        try:
-            repaired = await agent.run(repair_payload)
-        except Exception:
-            logger.warning("self-repair: agent %s failed during correction pass", agent.name, exc_info=True)
-            return violations
-        if repaired.successful_tools is None:
-            return violations
-
-        remaining = await asyncio.to_thread(
-            verify_claims, repaired.output, repaired.successful_tools, payload.workspace
-        )
-        if len(remaining) >= len(violations):
-            return violations  # no improvement - keep the original answer
-
-        result.output = repaired.output
-        result.summary = repaired.summary
-        result.data = repaired.data
-        result.successful_tools = repaired.successful_tools
-        result.tools_used = repaired.tools_used
-        result.cost_usd += repaired.cost_usd
-        result.tokens_in += repaired.tokens_in
-        result.tokens_out += repaired.tokens_out
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                agent=agent.name,
-                action="self_repair",
-                output=f"corrected {len(violations) - len(remaining)} unverified claim(s)",
-                status=LedgerStatus.COMPLETED,
-            )
-        )
-        await self._stream_manager.emit(task_id, "self_repair_done", {"agent": agent.name, "remaining": remaining})
-        return remaining
-
-    async def _critique_result(
-        self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload | None
-    ) -> None:
-        """Have a fast reviewer flag an answer that does not address the request.
-
-        Opt-in (settings.critic_enabled). Non-blocking: on a clear gap it appends a
-        short reviewer note and records a ``critic_flagged`` entry; it never rewrites
-        or retries. Fails open - any error leaves the answer untouched.
-        """
-        if not self._critic or payload is None or self._tracked_router is None:
-            return
-        if result.requires_approval or result.has_question or not result.output.strip():
-            return
-        prompt = _CRITIC_PROMPT.format(request=payload.prompt[:1500], answer=result.output[:3000])
-        try:
-            response = await self._tracked_router.complete(
-                CompletionRequest(
-                    prompt=prompt,
-                    priority=PoolPriority.MEDIUM,
-                    component="critic",
-                    task_id=task_id,
-                    json_mode=True,
-                )
-            )
-            verdict = extract_json(response.text)
-        except Exception:
-            logger.debug("critic: review failed for agent %s", agent.name, exc_info=True)
-            return
-
-        if verdict.get("adequate", True):
-            return
-        gap = str(verdict.get("gap", "")).strip()
-        if not gap:
-            return
-        note = f"\n\n> ⚠️ **Reviewer note:** {gap}"
-        result.output = f"{result.output}{note}"
-        # Streamed as well, for the same reason as the unverified-claims note.
-        await self._stream_manager.emit(task_id, "token", {"text": note})
-        await self._write_ledger(
-            LedgerEntry.new(
-                source=LedgerSource.SYSTEM,
-                task_id=task_id,
-                agent=agent.name,
-                action="critic_flagged",
-                output=gap,
-                status=LedgerStatus.COMPLETED,
-            )
-        )
-        await self._stream_manager.emit(task_id, "critic_flagged", {"agent": agent.name, "gap": gap})
-
     async def _handle_agent_result(
         self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload | None = None
     ) -> None:
         """Write result to task context, ledger, and notify user if needed."""
-        await self._verify_agent_claims(task_id, agent, result, payload)
-        await self._critique_result(task_id, agent, result, payload)
+        await self._auditor.audit(task_id, agent, result, payload)
         # Verification/self-repair can refine the result after Agent.run() first
         # persisted it. Keep the run index aligned with the final audited output.
         if result.run_id and agent.deps.agent_run_store is not None:
@@ -2541,7 +2091,7 @@ class Orchestrator:
             status="completed",
         )
 
-        await self._write_ledger(
+        await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.AGENT,
                 task_id=task_id,

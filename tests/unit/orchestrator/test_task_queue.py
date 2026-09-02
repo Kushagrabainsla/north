@@ -54,7 +54,7 @@ def _record_writes(orch):
     async def rec(entry):
         writes.append(entry)
 
-    orch._write_ledger = rec
+    orch._journal.write = rec
     return writes
 
 

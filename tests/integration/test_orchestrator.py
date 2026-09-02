@@ -24,8 +24,10 @@ from memory import FileContextStore, LocalMemoryGateway
 from memory.extraction import ExtractionPipeline
 from orchestrator.failure_handler import FailureHandler
 from orchestrator.isolation import AgentIsolation
+from orchestrator.journal import TaskJournal
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
+from orchestrator.result_audit import ResultAuditor
 from orchestrator.stream import EventStreamManager
 from orchestrator.task_context import TaskContextStore
 
@@ -60,6 +62,19 @@ async def _wait_for_ledger_action(
             return
         await asyncio.sleep(0.05)
     raise TimeoutError(f"Ledger action '{action}' never appeared for task '{task_id}' within {timeout}s")
+
+
+def _make_auditor(tmp_path: Path, *, self_repair: bool = True, critic: bool = False, tracked_router=None):
+    """A ResultAuditor over a real ledger - no orchestrator needed to exercise it."""
+    ledger = SQLiteLedgerWriter(tmp_path / "auditor_ledger.db")
+    stream = EventStreamManager()
+    auditor = ResultAuditor(
+        journal=TaskJournal(ledger=ledger, stream_manager=stream),
+        self_repair=self_repair,
+        critic=critic,
+        tracked_router=tracked_router,
+    )
+    return auditor, ledger, stream
 
 
 def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter, ApprovalStore]:
@@ -688,7 +703,7 @@ def _isolating_orchestrator(tmp_path: Path, best_of_n: int = 1):
         best_of_n=best_of_n,
         test_command="",
         stream_manager=orch._stream_manager,
-        write_ledger=orch._write_ledger,
+        write_ledger=orch._journal.write,
         run_agent=orch._run_agent_with_retry,
     )
     return orch, ledger
@@ -912,12 +927,12 @@ def _claimy_result() -> AgentResult:
 
 @pytest.mark.asyncio
 async def test_self_repair_drops_unverified_claim(tmp_path):
-    orch, ledger, _ = _make_orchestrator(tmp_path)
+    auditor, ledger, _ = _make_auditor(tmp_path)
     agent = _ClaimThenCorrectAgent()
     result = _claimy_result()
     payload = AgentPayload(task_id="t1", prompt="write foo")
 
-    await orch._verify_agent_claims("t1", agent, result, payload)
+    await auditor.verify_claims("t1", agent, result, payload)
 
     assert agent.runs == 1  # one correction pass
     assert "Unverified claims" not in result.output  # repaired rather than flagged
@@ -929,10 +944,10 @@ async def test_self_repair_drops_unverified_claim(tmp_path):
 
 @pytest.mark.asyncio
 async def test_self_repair_by_doing_the_work_substantiates_claim(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
+    auditor, _, _ = _make_auditor(tmp_path)
     result = _claimy_result()
 
-    await orch._verify_agent_claims("t1", _ClaimThenDoItAgent(), result, AgentPayload(task_id="t1", prompt="write foo"))
+    await auditor.verify_claims("t1", _ClaimThenDoItAgent(), result, AgentPayload(task_id="t1", prompt="write foo"))
 
     assert "Unverified claims" not in result.output
     assert result.successful_tools == ["write_file"]  # evidence now present
@@ -940,11 +955,11 @@ async def test_self_repair_by_doing_the_work_substantiates_claim(tmp_path):
 
 @pytest.mark.asyncio
 async def test_self_repair_no_improvement_flags_original(tmp_path):
-    orch, ledger, _ = _make_orchestrator(tmp_path)
+    auditor, ledger, _ = _make_auditor(tmp_path)
     agent = _StubbornClaimAgent()
     result = _claimy_result()
 
-    await orch._verify_agent_claims("t1", agent, result, AgentPayload(task_id="t1", prompt="write foo"))
+    await auditor.verify_claims("t1", agent, result, AgentPayload(task_id="t1", prompt="write foo"))
 
     assert agent.runs == 1  # tried once, no better
     assert "Unverified claims" in result.output  # original flagged
@@ -954,12 +969,11 @@ async def test_self_repair_no_improvement_flags_original(tmp_path):
 
 @pytest.mark.asyncio
 async def test_no_self_repair_when_disabled(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    orch._self_repair = False  # type: ignore[attr-defined]
+    auditor, _, _ = _make_auditor(tmp_path, self_repair=False)
     agent = _StubbornClaimAgent()
     result = _claimy_result()
 
-    await orch._verify_agent_claims("t1", agent, result, AgentPayload(task_id="t1", prompt="p"))
+    await auditor.verify_claims("t1", agent, result, AgentPayload(task_id="t1", prompt="p"))
 
     assert agent.runs == 0  # no correction pass
     assert "Unverified claims" in result.output
@@ -1041,12 +1055,11 @@ def _plain_result(output: str = "A partial answer.") -> AgentResult:
 
 @pytest.mark.asyncio
 async def test_critic_flags_inadequate_answer(tmp_path):
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    orch._critic = True  # type: ignore[attr-defined]
-    orch._tracked_router = _VerdictRouter('{"adequate": false, "gap": "Did not cover the second question."}')
+    router = _VerdictRouter('{"adequate": false, "gap": "Did not cover the second question."}')
+    auditor, ledger, _ = _make_auditor(tmp_path, critic=True, tracked_router=router)
 
     result = _plain_result()
-    await orch._critique_result("t1", _StubbornClaimAgent(), result, AgentPayload(task_id="t1", prompt="two things"))
+    await auditor.critique("t1", _StubbornClaimAgent(), result, AgentPayload(task_id="t1", prompt="two things"))
 
     assert "Reviewer note:" in result.output
     assert "second question" in result.output
@@ -1056,12 +1069,12 @@ async def test_critic_flags_inadequate_answer(tmp_path):
 
 @pytest.mark.asyncio
 async def test_critic_passes_adequate_answer(tmp_path):
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    orch._critic = True  # type: ignore[attr-defined]
-    orch._tracked_router = _VerdictRouter('{"adequate": true, "gap": ""}')
+    auditor, ledger, _ = _make_auditor(
+        tmp_path, critic=True, tracked_router=_VerdictRouter('{"adequate": true, "gap": ""}')
+    )
 
     result = _plain_result("Complete answer.")
-    await orch._critique_result("t1", _StubbornClaimAgent(), result, AgentPayload(task_id="t1", prompt="q"))
+    await auditor.critique("t1", _StubbornClaimAgent(), result, AgentPayload(task_id="t1", prompt="q"))
 
     assert result.output == "Complete answer."  # untouched
     actions = [e.action for e in await ledger.query(LedgerFilters(task_id="t1"))]
@@ -1070,13 +1083,11 @@ async def test_critic_passes_adequate_answer(tmp_path):
 
 @pytest.mark.asyncio
 async def test_critic_disabled_makes_no_call(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    orch._critic = False  # type: ignore[attr-defined]
     router = _VerdictRouter('{"adequate": false, "gap": "x"}')
-    orch._tracked_router = router
+    auditor, _, _ = _make_auditor(tmp_path, critic=False, tracked_router=router)
 
     result = _plain_result()
-    await orch._critique_result("t1", _StubbornClaimAgent(), result, AgentPayload(task_id="t1", prompt="q"))
+    await auditor.critique("t1", _StubbornClaimAgent(), result, AgentPayload(task_id="t1", prompt="q"))
 
     assert router.calls == 0
     assert result.output == "A partial answer."
@@ -1084,12 +1095,10 @@ async def test_critic_disabled_makes_no_call(tmp_path):
 
 @pytest.mark.asyncio
 async def test_critic_fails_open_on_bad_json(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    orch._critic = True  # type: ignore[attr-defined]
-    orch._tracked_router = _VerdictRouter("this is not json")
+    auditor, _, _ = _make_auditor(tmp_path, critic=True, tracked_router=_VerdictRouter("this is not json"))
 
     result = _plain_result()
-    await orch._critique_result("t1", _StubbornClaimAgent(), result, AgentPayload(task_id="t1", prompt="q"))
+    await auditor.critique("t1", _StubbornClaimAgent(), result, AgentPayload(task_id="t1", prompt="q"))
 
     assert result.output == "A partial answer."  # unchanged, no crash
 
@@ -1318,13 +1327,13 @@ def _tool_result(tools: list[str]) -> AgentResult:
 
 
 def test_evidence_gate_flags_unverified_code_change(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    v = orch._add_evidence_gate_violations(_NamedAgent("coder"), _tool_result(["patch_file"]), [])
+    auditor, _, _ = _make_auditor(tmp_path)
+    v = auditor._with_evidence_gate_violations(_NamedAgent("coder"), _tool_result(["patch_file"]), [])
     assert any("verify" in x for x in v)
 
 
 def test_evidence_gate_flags_attempted_but_denied_edit(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
+    auditor, _, _ = _make_auditor(tmp_path)
     # Attempted patch_file (in tools_used) but it never succeeded (not in successful_tools):
     # e.g. the approval was denied - no change was applied, so "done" is false.
     result = AgentResult(
@@ -1333,38 +1342,38 @@ def test_evidence_gate_flags_attempted_but_denied_edit(tmp_path):
         successful_tools=["read_file"],
         tools_used=["read_file", "patch_file"],
     )
-    v = orch._add_evidence_gate_violations(_NamedAgent("coder"), result, [])
+    v = auditor._with_evidence_gate_violations(_NamedAgent("coder"), result, [])
     assert any("did not succeed" in x for x in v)
 
 
 def test_evidence_gate_ok_when_edit_succeeded_and_verified(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
+    auditor, _, _ = _make_auditor(tmp_path)
     result = AgentResult(
         output="x", summary="x", successful_tools=["patch_file", "bash"], tools_used=["patch_file", "bash"]
     )
-    assert orch._add_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
+    assert auditor._with_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
 
 
 def test_evidence_gate_ok_when_typechecked(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
+    auditor, _, _ = _make_auditor(tmp_path)
     result = _tool_result(["patch_file", "check_types"])
-    assert orch._add_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
+    assert auditor._with_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
 
 
 def test_evidence_gate_ok_when_tested(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    assert orch._add_evidence_gate_violations(_NamedAgent("coder"), _tool_result(["write_file", "bash"]), []) == []
+    auditor, _, _ = _make_auditor(tmp_path)
+    assert auditor._with_evidence_gate_violations(_NamedAgent("coder"), _tool_result(["write_file", "bash"]), []) == []
 
 
 def test_evidence_gate_ignores_readonly(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
+    auditor, _, _ = _make_auditor(tmp_path)
     result = _tool_result(["read_file", "search_files"])
-    assert orch._add_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
+    assert auditor._with_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
 
 
 def test_evidence_gate_only_applies_to_engineering(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    assert orch._add_evidence_gate_violations(_NamedAgent("general"), _tool_result(["patch_file"]), []) == []
+    auditor, _, _ = _make_auditor(tmp_path)
+    assert auditor._with_evidence_gate_violations(_NamedAgent("general"), _tool_result(["patch_file"]), []) == []
 
 
 class _UnverifiedThenVerifiesCoder:
@@ -1380,16 +1389,15 @@ class _UnverifiedThenVerifiesCoder:
 
 @pytest.mark.asyncio
 async def test_evidence_gate_triggers_self_repair_to_verify(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
+    auditor, _, _ = _make_auditor(tmp_path)
     result = AgentResult(output="Fixed the bug.", summary="fixed", successful_tools=["patch_file"])
 
-    await orch._verify_agent_claims(
+    await auditor.verify_claims(
         "t1", _UnverifiedThenVerifiesCoder(), result, AgentPayload(task_id="t1", prompt="fix bug")
     )
 
     assert "Unverified" not in result.output  # gate forced a verification pass
     assert "check_types" in (result.successful_tools or [])
-
 
 
 # ---------------------------------------------------------------------------
