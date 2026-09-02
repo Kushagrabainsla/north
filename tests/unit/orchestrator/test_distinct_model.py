@@ -126,6 +126,8 @@ async def test_agent_threads_exclude_models_into_request(tmp_path):
 
 def _orch(entries):
     ledger = MagicMock()
+    # The orchestrator scans task history through the narrow projection.
+    ledger.query_summaries = AsyncMock(return_value=entries)
     ledger.query = AsyncMock(return_value=entries)
     ledger.write = AsyncMock()
     stream = MagicMock()
@@ -167,7 +169,7 @@ async def test_exclude_models_for_no_distinct_from_skips_query():
     orch = _orch([])
     coder = _agent("coder", [])
     assert await orch._exclude_models_for("t1", coder) == []
-    orch._ledger.query.assert_not_called()
+    orch._ledger.query_summaries.assert_not_called()
 
 
 async def test_exclude_models_for_dedups_multiple_models():

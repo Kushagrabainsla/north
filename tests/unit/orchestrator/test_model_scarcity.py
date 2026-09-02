@@ -135,7 +135,7 @@ async def test_get_task_reports_skipped_status():
         action="task_skipped_model_unavailable",
         status=LedgerStatus.FAILED,
     )
-    orch._ledger.query = AsyncMock(return_value=[entry])
+    orch._ledger.query_summaries = AsyncMock(return_value=[entry])
     resp = await orch.get_task("t1")
     assert resp is not None
     assert resp.status == "skipped"

@@ -13,8 +13,12 @@ from pathlib import Path
 
 from ledger.base import LedgerFilters, LedgerWriter, SearchResult
 from ledger.exceptions import LedgerReadError, LedgerWriteError
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from ledger.models import LedgerEntry, LedgerSource, LedgerStatus, LedgerSummary
 from utils.db import open_db_connection
+
+# Columns a LedgerSummary needs - deliberately excludes input/output/agent_output,
+# which are the large ones (a full agent answer each).
+_SUMMARY_COLUMNS = "id, timestamp, source, task_id, run_id, agent, action, tools_used, model_used, status, error_type"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ledger (
@@ -143,6 +147,9 @@ class SQLiteLedgerWriter(LedgerWriter):
             conn.execute(_SCHEMA)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_task_id ON ledger (task_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_timestamp ON ledger (timestamp DESC)")
+            # Every per-task read filters on task_id and orders by timestamp DESC;
+            # the composite lets SQLite satisfy both from the index alone.
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_task_timestamp ON ledger (task_id, timestamp DESC)")
             for migration in _MIGRATIONS:
                 with contextlib.suppress(sqlite3.OperationalError):
                     conn.execute(migration)
@@ -210,7 +217,9 @@ class SQLiteLedgerWriter(LedgerWriter):
             raise LedgerReadError(f"Failed to query ledger: {e}") from e
         return [self._row_to_entry(r) for r in rows]
 
-    def _query_sync(self, filters: LedgerFilters) -> list[sqlite3.Row]:
+    @staticmethod
+    def _build_query(columns: str, filters: LedgerFilters) -> tuple[str, list]:
+        """Build the SELECT and its parameters for *filters* over *columns*."""
         clauses: list[str] = []
         params: list = []
 
@@ -235,9 +244,23 @@ class SQLiteLedgerWriter(LedgerWriter):
 
         where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
         order_dir = "ASC" if filters.order_asc else "DESC"
-        sql = f"SELECT * FROM ledger {where}ORDER BY timestamp {order_dir} LIMIT ?"
         params.append(filters.limit)
+        return f"SELECT {columns} FROM ledger {where}ORDER BY timestamp {order_dir} LIMIT ?", params
 
+    def _query_sync(self, filters: LedgerFilters) -> list[sqlite3.Row]:
+        sql, params = self._build_query("*", filters)
+        with open_db_connection(self._db_path) as conn:
+            return list(conn.execute(sql, params).fetchall())
+
+    async def query_summaries(self, filters: LedgerFilters) -> list[LedgerSummary]:
+        try:
+            rows = await asyncio.to_thread(self._query_summaries_sync, filters)
+        except sqlite3.Error as e:
+            raise LedgerReadError(f"Failed to query ledger summaries: {e}") from e
+        return [self._row_to_summary(r) for r in rows]
+
+    def _query_summaries_sync(self, filters: LedgerFilters) -> list[sqlite3.Row]:
+        sql, params = self._build_query(_SUMMARY_COLUMNS, filters)
         with open_db_connection(self._db_path) as conn:
             return list(conn.execute(sql, params).fetchall())
 
@@ -476,8 +499,7 @@ class SQLiteLedgerWriter(LedgerWriter):
     ) -> list[SearchResult]:
         # Sanitise FTS5 query: extract non-empty tokens and wrap each in quotes
         tokens = [
-            t for t in query.replace("'", "").replace('"', "").replace("(", "").replace(")", "").split()
-            if t.strip()
+            t for t in query.replace("'", "").replace('"', "").replace("(", "").replace(")", "").split() if t.strip()
         ]
         if not tokens:
             return []
@@ -511,6 +533,22 @@ class SQLiteLedgerWriter(LedgerWriter):
             rows = conn.execute(sql, params + join_params + [limit]).fetchall()
 
         return [SearchResult(entry=self._row_to_entry(r), rank=r["rank"], snippet=r["snippet"]) for r in rows]
+
+    @staticmethod
+    def _row_to_summary(row: sqlite3.Row) -> LedgerSummary:
+        return LedgerSummary(
+            id=row["id"],
+            timestamp=datetime.fromisoformat(row["timestamp"]),
+            source=LedgerSource(row["source"]),
+            task_id=row["task_id"],
+            run_id=row["run_id"],
+            agent=row["agent"],
+            action=row["action"],
+            tools_used=json.loads(row["tools_used"]) if row["tools_used"] else [],
+            model_used=row["model_used"],
+            status=LedgerStatus(row["status"]) if row["status"] else None,
+            error_type=row["error_type"],
+        )
 
     @staticmethod
     def _row_to_entry(row: sqlite3.Row) -> LedgerEntry:

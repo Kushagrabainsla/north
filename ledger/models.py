@@ -41,6 +41,30 @@ class LedgerStatus(StrEnum):
     AWAITING_INPUT = "awaiting_input"
 
 
+class LedgerSummary(BaseModel):
+    """The narrow projection of a ledger row: everything except the bulk text.
+
+    Callers that scan a task's history to answer a structural question - what
+    status did it reach, which model did an agent use, which tools ran - need
+    none of `input`, `output`, or `agent_output`, and those are by far the
+    largest columns (a full agent answer each). Reading them back and building
+    a `LedgerEntry` per row costs far more than the question is worth, so those
+    call sites use `LedgerWriter.query_summaries()` and get this instead.
+    """
+
+    id: str
+    timestamp: datetime
+    source: LedgerSource
+    task_id: str | None = None
+    run_id: str | None = None
+    agent: str | None = None
+    action: str | None = None
+    tools_used: list[str] = Field(default_factory=list)
+    model_used: str | None = None
+    status: LedgerStatus | None = None
+    error_type: str | None = None
+
+
 class LedgerEntry(BaseModel):
     """One immutable record in the append-only audit trail.
 

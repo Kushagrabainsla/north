@@ -229,7 +229,7 @@ async def test_auto_verify_no_command_is_noop(tmp_path):
 
 def _orchestrator(entries: list[LedgerEntry]):
     ledger = MagicMock()
-    ledger.query = AsyncMock(return_value=entries)
+    ledger.query_summaries = AsyncMock(return_value=entries)
     ledger.write = AsyncMock()
     stream_manager = MagicMock()
     stream_manager.emit = AsyncMock()
@@ -258,7 +258,7 @@ def _completed(agent: str, model: str, tools: list[str]) -> LedgerEntry:
 async def test_warn_only_skips_non_engineering():
     orch, ledger, _ = _orchestrator([])
     await orch._evaluate_dod("t1", "general")
-    ledger.query.assert_not_called()
+    ledger.query_summaries.assert_not_called()
     ledger.write.assert_not_called()
 
 
@@ -282,7 +282,7 @@ async def test_warn_only_records_verdict_and_never_blocks(tmp_path, monkeypatch)
 
 async def test_warn_only_evaluation_error_is_swallowed():
     orch, ledger, _ = _orchestrator([])
-    ledger.query = AsyncMock(side_effect=RuntimeError("db down"))
+    ledger.query_summaries = AsyncMock(side_effect=RuntimeError("db down"))
     # Must not raise - DoD warn-only fails open.
     await orch._evaluate_dod("t1", "engineering")
 

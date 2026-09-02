@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from ledger.models import LedgerEntry, LedgerSource, LedgerStatus, LedgerSummary
 
 
 @dataclass
@@ -64,6 +64,32 @@ class LedgerWriter(ABC):
         Raises:
             LedgerReadError: if the underlying store fails.
         """
+
+    async def query_summaries(self, filters: LedgerFilters) -> list[LedgerSummary]:
+        """Like `query()`, but without the bulk text columns.
+
+        For callers that only need a row's shape (status, agent, model, tools),
+        not its content. The default projects `query()` in Python so in-memory
+        and fake stores work unchanged; SQL-backed stores override it with a
+        narrower SELECT so the large columns are never read at all.
+        """
+        entries = await self.query(filters)
+        return [
+            LedgerSummary(
+                id=e.id,
+                timestamp=e.timestamp,
+                source=e.source,
+                task_id=e.task_id,
+                run_id=e.run_id,
+                agent=e.agent,
+                action=e.action,
+                tools_used=e.tools_used,
+                model_used=e.model_used,
+                status=e.status,
+                error_type=e.error_type,
+            )
+            for e in entries
+        ]
 
     async def pending_task_ids(self, limit: int = 500) -> list[str]:
         """Return task_ids whose *latest* entry is still PENDING.

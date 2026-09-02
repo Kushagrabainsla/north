@@ -667,7 +667,7 @@ class Orchestrator:
         classified. We scan for the terminal action instead, and report "pending",
         "queued", or "paused" while the task is still in flight.
         """
-        entries = await self._ledger.query(LedgerFilters(task_id=task_id, limit=100))
+        entries = await self._ledger.query_summaries(LedgerFilters(task_id=task_id, limit=100))
         if not entries:
             return None
         # Check if currently queued or paused in running_task_store
@@ -1884,7 +1884,7 @@ class Orchestrator:
     async def _gather_code_evidence(self, task_id: str) -> _CodeEvidence:
         """Read the code evidence for a task from the ledger: which model the coder
         and reviewer used, and whether a code-mutating change was actually applied."""
-        entries = await self._ledger.query(LedgerFilters(task_id=task_id, limit=_LEDGER_SCAN_LIMIT))
+        entries = await self._ledger.query_summaries(LedgerFilters(task_id=task_id, limit=_LEDGER_SCAN_LIMIT))
         coder_models: list[str] = []
         reviewer_models: list[str] = []
         change_applied = False
@@ -2357,7 +2357,7 @@ class Orchestrator:
         if not agent_names:
             return []
         try:
-            entries = await self._ledger.query(LedgerFilters(task_id=task_id, limit=200))
+            entries = await self._ledger.query_summaries(LedgerFilters(task_id=task_id, limit=200))
         except Exception:
             logger.debug("model lookup failed for task %s", task_id, exc_info=True)
             return []

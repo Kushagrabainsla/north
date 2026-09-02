@@ -4,6 +4,8 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Changed
+- **Task-history scans no longer read the ledger's bulk text columns** (`ledger/models.py`, `ledger/base.py`, `ledger/sqlite_writer.py`, `orchestrator/orchestrator.py`): added `LedgerSummary` and `LedgerWriter.query_summaries()` - a narrow projection excluding `input`, `output`, and `agent_output` - with a default implementation over `query()` so non-SQL stores work unchanged, and a projected `SELECT` in the SQLite writer. `get_task()`, `_gather_code_evidence()`, and `_models_used_by()` use it: they only ever needed a row's status, agent, model, and tools, but were hydrating up to 200 full entries including every agent's complete answer. Added a composite `(task_id, timestamp DESC)` index so per-task reads are satisfied from the index with no sort step. Measured on 400 rows with 8 KB outputs: 3.2 MB of text no longer read per call, 2.7x faster.
+
 - **Recall path now embeds a task prompt once per agent run** (`config/dependencies.py`, `agents/base.py`, `memory/gateway.py`): added in-flight de-duplication to the shared `embed_fn` so the four concurrent recalls an agent run fans out (facts, episodes, skills, tool ranking) share one round trip instead of each missing the cache and paying its own; skill selection moved into `Agent._select_skills()` and is now performed once in `run()` and passed to both `_load_context` and `_load_tools` rather than run twice; dropped the redundant `FactStore.count()` pre-check, since `search()` already returns `[]` on an empty store. The embed cache is now a true LRU.
 
 ### Fixed
