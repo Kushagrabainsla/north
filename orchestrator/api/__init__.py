@@ -6,7 +6,19 @@ Importing a route module registers its routes on the shared `router` from
 
 from __future__ import annotations
 
-from orchestrator.api import confidence, health, inference, metrics, stream  # noqa: F401  (registers routes)
+from orchestrator.api import (  # noqa: F401  (importing registers each area's routes)
+    confidence,
+    context,
+    cron,
+    health,
+    inference,
+    jobs,
+    ledger,
+    metrics,
+    settings,
+    stream,
+    task,
+)
 from orchestrator.api.deps import configure, health_router, router
 from orchestrator.api.health import health_check
 

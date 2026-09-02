@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-import orchestrator.api_router as api
+import orchestrator.api.context as api
 from memory import FileContextStore
+from memory.models import ContextDocument
 from orchestrator.api_context import ApiServices, bind_services
 
 
@@ -22,7 +23,7 @@ async def test_read_context_soul_uses_shipped_default_when_override_missing(tmp_
 @pytest.mark.asyncio
 async def test_read_context_soul_prefers_user_override(tmp_path: Path) -> None:
     store = FileContextStore(tmp_path / "context")
-    await store.write(api.ContextDocument.SOUL, "Custom persona")
+    await store.write(ContextDocument.SOUL, "Custom persona")
 
     with bind_services(ApiServices(context_store=store)):
         result = await api.read_context("soul")
