@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api, post } from "../api";
 import { Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
@@ -110,12 +110,154 @@ export function SettingsPage() {
   return <div className="page"><PageHeader eyebrow="Configuration" title="Settings" subtitle="Control how North balances capability, cost, autonomy, and readability."/><div className="settings-grid"><Panel title="Power" label="Model strategy"><div className="segmented">{["eco","cruise","sport"].map(value => <button className={resource.data?.power === value ? "active" : ""} onClick={() => update({ power:value })} key={value}>{value}</button>)}</div><p className="muted">Choose how aggressively North selects capable models.</p></Panel><Panel title="Autonomy" label="Approval behavior"><div className="segmented">{["interactive","auto","autonomous"].map(value => <button className={resource.data?.autonomy === value ? "active" : ""} onClick={() => update({ autonomy:value })} key={value}>{value}</button>)}</div><p className="muted">Consequential and destructive actions remain governed by North's safety policy.</p></Panel><Panel title="Text size" label="Personal preference"><div className="segmented text-scale-selector">{[["compact","Compact"],["comfortable","Comfortable"],["large","Large"]].map(([value,label]) => <button className={typeScale === value ? "active" : ""} onClick={() => setTypeScale(value)} key={value}>{label}</button>)}</div><p className="muted">Choose the reading scale used throughout the web interface.</p></Panel></div></div>;
 }
 
+interface ProviderAuthState {
+  provider_id: string;
+  state: "starting" | "pending" | "connected" | "disconnected" | "cancelled" | "error";
+  configured: boolean;
+  detail: string;
+  authorization_url?: string;
+  account_hint?: string;
+}
+
 export function SystemPage() {
-  const overview = useResource<any>("/web/api/system", 8000); const metrics = useResource<any>("/orchestrator/metrics?days=30", 15000); const costs = useResource<any>("/orchestrator/inference/costs?period=month", 15000); const models = useResource<Record<string, any>>("/orchestrator/inference/models", 15000);
-  const [keys, setKeys] = useState<Record<string, string>>({}); const [providerMessage, setProviderMessage] = useState(""); const [expandedPool, setExpandedPool] = useState<string | null>(null);
-  const providers = overview.data?.providers || []; const totalCost = Number(costs.data?.total_cost_usd ?? metrics.data?.total_cost_usd ?? 0);
-  const saveProvider = async (id: string) => { try { await post(`/web/api/providers/${id}`, { api_key: keys[id] }); setKeys(current => ({ ...current, [id]: "" })); setProviderMessage("Provider credentials saved and runtime refreshed."); await overview.reload(); } catch (error) { setProviderMessage(String(error)); } };
-  return <div className="page"><PageHeader eyebrow="Runtime" title="System" subtitle="Every detail about North's runtime, providers, model pools, costs, and health."/><div className="system-hero"><HealthIndicator variant="hero"/></div><div className="metric-cards"><div><span>Tasks · 30 days</span><strong>{metrics.data?.total_tasks || 0}</strong></div><div><span>Input tokens</span><strong>{Number(metrics.data?.total_tokens_in || 0).toLocaleString()}</strong></div><div><span>Output tokens</span><strong>{Number(metrics.data?.total_tokens_out || 0).toLocaleString()}</strong></div><div><span>Model cost · month</span><strong>${totalCost.toFixed(4)}</strong></div></div><div className="two-column"><Panel title="Providers" label={`${providers.filter((p: any) => p.configured).length} configured`}>{providerMessage && <div className="notice">{providerMessage}</div>}<div className="provider-list">{providers.map((provider: any) => <div className="provider-row" key={provider.id}><div><b>{provider.name}</b><small>{provider.description} · {provider.auth_kind === "oauth_pkce" ? "Browser login" : provider.env_key}</small></div><div className="provider-controls"><span className={provider.configured ? "provider-state configured" : "provider-state"}>{provider.configured ? `Ready ${provider.credential_hint}` : "Not configured"}</span>{provider.env_key && <div className="provider-edit"><input type="password" placeholder="API key" value={keys[provider.id] || ""} onChange={event => setKeys(current => ({ ...current, [provider.id]: event.target.value }))}/><button className="ghost-button" disabled={!keys[provider.id]} onClick={() => saveProvider(provider.id)}>Save</button></div>}</div></div>)}</div></Panel><Panel title="Model pools" label="Available now"><div>{Object.entries(models.data || {}).map(([name, pool]: [string, any]) => <div className="model-pool" key={name}><button className="model-pool-toggle" onClick={() => setExpandedPool(expandedPool === name ? null : name)}><span><b>{name}</b><small>{pool.models?.length || 0} models available</small></span><span className="pool-availability">{expandedPool === name ? "Hide" : "Inspect"}</span></button>{expandedPool === name && <div className="model-list">{(pool.models || []).map((model: any) => <div className="model-row" key={`${model.provider}-${model.id}`}><b>{model.id}</b><span>{model.provider}</span></div>)}</div>}</div>)}</div></Panel></div><div className="two-column"><Panel title="Cost by model" label="Month to date">{Object.entries(costs.data?.by_model || {}).map(([name,value]) => <div className="list-row" key={name}><b>{name}</b><span>${Number(value).toFixed(4)}</span></div>)}{!Object.keys(costs.data?.by_model || {}).length && <Empty>No recorded inference costs yet.</Empty>}</Panel><Panel title="Runtime configuration"><div className="list-row"><b>Power</b><span>{overview.data?.settings?.power || "–"}</span></div><div className="list-row"><b>Autonomy</b><span>{overview.data?.settings?.autonomy || "–"}</span></div><div className="list-row"><b>Bootstrap</b><span>{overview.data?.bootstrap?.status || "–"}</span></div></Panel></div></div>;
+  const overview = useResource<any>("/web/api/system", 8000);
+  const metrics = useResource<any>("/orchestrator/metrics?days=30", 15000);
+  const costs = useResource<any>("/orchestrator/inference/costs?period=month", 15000);
+  const models = useResource<Record<string, any>>("/orchestrator/inference/models", 15000);
+  const [keys, setKeys] = useState<Record<string, string>>({});
+  const [providerMessage, setProviderMessage] = useState("");
+  const [providerAuth, setProviderAuth] = useState<Record<string, ProviderAuthState>>({});
+  const [expandedPool, setExpandedPool] = useState<string | null>(null);
+  const authWindows = useRef<Record<string, Window | null>>({});
+  const providers = overview.data?.providers || [];
+  const totalCost = Number(costs.data?.total_cost_usd ?? metrics.data?.total_cost_usd ?? 0);
+  const pendingAuthIds = Object.values(providerAuth)
+    .filter(state => state.state === "starting" || state.state === "pending")
+    .map(state => state.provider_id)
+    .sort()
+    .join(",");
+
+  const saveProvider = async (id: string) => {
+    try {
+      await post(`/web/api/providers/${id}`, { api_key: keys[id] });
+      setKeys(current => ({ ...current, [id]: "" }));
+      setProviderMessage("Provider credentials saved and runtime refreshed.");
+      await overview.reload();
+    } catch (error) {
+      setProviderMessage(String(error));
+    }
+  };
+
+  const connectProvider = async (id: string) => {
+    const popup = window.open("about:blank", `north-${id}-auth`, "popup,width=560,height=760");
+    authWindows.current[id] = popup;
+    if (popup) popup.document.body.textContent = "Preparing secure OpenAI login…";
+    setProviderAuth(current => ({
+      ...current,
+      [id]: { provider_id: id, state: "starting", configured: false, detail: "Preparing browser login…" },
+    }));
+    try {
+      const state = await post<ProviderAuthState>(`/web/api/providers/${id}/auth`, {});
+      setProviderAuth(current => ({ ...current, [id]: state }));
+      if (state.authorization_url && popup) {
+        popup.opener = null;
+        popup.location.replace(state.authorization_url);
+      } else if (state.authorization_url) {
+        setProviderMessage("Pop-up blocked. Use ‘Continue login’ below.");
+      } else if (popup) {
+        popup.close();
+      }
+      if (state.state === "connected") await overview.reload();
+    } catch (error) {
+      popup?.close();
+      setProviderAuth(current => ({
+        ...current,
+        [id]: { provider_id: id, state: "error", configured: false, detail: String(error) },
+      }));
+    }
+  };
+
+  const disconnectProvider = async (id: string) => {
+    try {
+      const state = await api<ProviderAuthState>(`/web/api/providers/${id}/auth`, { method: "DELETE" });
+      setProviderAuth(current => ({ ...current, [id]: state }));
+      setProviderMessage("OpenAI Codex disconnected.");
+      await overview.reload();
+    } catch (error) {
+      setProviderMessage(String(error));
+    }
+  };
+
+  useEffect(() => {
+    const ids = pendingAuthIds ? pendingAuthIds.split(",") : [];
+    if (!ids.length) return;
+    let stopped = false;
+    const poll = async () => {
+      for (const id of ids) {
+        try {
+          const state = await api<ProviderAuthState>(`/web/api/providers/${id}/auth`);
+          if (stopped) return;
+          setProviderAuth(current => ({ ...current, [id]: state }));
+          if (!["starting", "pending"].includes(state.state)) {
+            authWindows.current[id]?.close();
+            delete authWindows.current[id];
+            await overview.reload();
+          }
+        } catch (error) {
+          if (!stopped) setProviderMessage(String(error));
+        }
+      }
+    };
+    const timer = window.setInterval(poll, 1500);
+    void poll();
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [pendingAuthIds]);
+
+  return <div className="page">
+    <PageHeader eyebrow="Runtime" title="System" subtitle="Every detail about North's runtime, providers, model pools, costs, and health."/>
+    <div className="system-hero"><HealthIndicator variant="hero"/></div>
+    <div className="metric-cards">
+      <div><span>Tasks · 30 days</span><strong>{metrics.data?.total_tasks || 0}</strong></div>
+      <div><span>Input tokens</span><strong>{Number(metrics.data?.total_tokens_in || 0).toLocaleString()}</strong></div>
+      <div><span>Output tokens</span><strong>{Number(metrics.data?.total_tokens_out || 0).toLocaleString()}</strong></div>
+      <div><span>Model cost · month</span><strong>${totalCost.toFixed(4)}</strong></div>
+    </div>
+    <div className="two-column">
+      <Panel title="Providers" label={`${providers.filter((provider: any) => provider.configured).length} configured`}>
+        {providerMessage && <div className="notice">{providerMessage}</div>}
+        <div className="provider-list">{providers.map((provider: any) => {
+          const auth = providerAuth[provider.id];
+          const waiting = auth?.state === "starting" || auth?.state === "pending";
+          const configured = auth ? auth.configured : provider.configured;
+          return <div className="provider-row" key={provider.id}>
+            <div><b>{provider.name}</b><small>{provider.description} · {provider.auth_kind === "oauth_pkce" ? "Browser login" : provider.env_key}</small></div>
+            <div className="provider-controls">
+              <span className={configured ? "provider-state configured" : "provider-state"}>
+                {waiting ? "Waiting for browser login" : configured ? `Ready ${auth?.account_hint || provider.credential_hint}` : "Not configured"}
+              </span>
+              {provider.env_key && <div className="provider-edit">
+                <input type="password" placeholder="API key" value={keys[provider.id] || ""} onChange={event => setKeys(current => ({ ...current, [provider.id]: event.target.value }))}/>
+                <button className="ghost-button" disabled={!keys[provider.id]} onClick={() => saveProvider(provider.id)}>Save</button>
+              </div>}
+              {provider.auth_kind === "oauth_pkce" && <div className="provider-auth">
+                <div className="provider-auth-actions">
+                  <button className={configured ? "ghost-button" : "primary-button"} disabled={waiting} onClick={() => connectProvider(provider.id)}>{waiting ? "Waiting…" : configured ? "Reconnect" : "Connect"}</button>
+                  {configured && <button className="ghost-button" onClick={() => disconnectProvider(provider.id)}>Disconnect</button>}
+                  {auth?.authorization_url && <a href={auth.authorization_url} target="_blank" rel="noreferrer">Continue login</a>}
+                </div>
+                {auth?.detail && <small className={auth.state === "error" ? "provider-auth-error" : "provider-auth-detail"}>{auth.detail}</small>}
+              </div>}
+            </div>
+          </div>;
+        })}</div>
+      </Panel>
+      <Panel title="Model pools" label="Available now"><div>{Object.entries(models.data || {}).map(([name, pool]: [string, any]) => <div className="model-pool" key={name}><button className="model-pool-toggle" onClick={() => setExpandedPool(expandedPool === name ? null : name)}><span><b>{name}</b><small>{pool.models?.length || 0} models available</small></span><span className="pool-availability">{expandedPool === name ? "Hide" : "Inspect"}</span></button>{expandedPool === name && <div className="model-list">{(pool.models || []).map((model: any) => <div className="model-row" key={`${model.provider}-${model.id}`}><b>{model.id}</b><span>{model.provider}</span></div>)}</div>}</div>)}</div></Panel>
+    </div>
+    <div className="two-column">
+      <Panel title="Cost by model" label="Month to date">{Object.entries(costs.data?.by_model || {}).map(([name,value]) => <div className="list-row" key={name}><b>{name}</b><span>${Number(value).toFixed(4)}</span></div>)}{!Object.keys(costs.data?.by_model || {}).length && <Empty>No recorded inference costs yet.</Empty>}</Panel>
+      <Panel title="Runtime configuration"><div className="list-row"><b>Power</b><span>{overview.data?.settings?.power || "–"}</span></div><div className="list-row"><b>Autonomy</b><span>{overview.data?.settings?.autonomy || "–"}</span></div><div className="list-row"><b>Bootstrap</b><span>{overview.data?.bootstrap?.status || "–"}</span></div></Panel>
+    </div>
+  </div>;
 }
 
 export function Bootstrap({ embedded = false }: { embedded?: boolean }) {

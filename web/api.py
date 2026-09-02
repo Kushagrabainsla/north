@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import mimetypes
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
-from inference.registry import PROVIDER_DEFINITIONS
+from inference.codex_auth import CodexCredentialProvider
+from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
 from ledger.base import LedgerFilters
 from orchestrator.models import TaskRequest
 from utils.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
@@ -38,6 +40,20 @@ _fact_store = None
 _inference_router = None
 _skill_registry = None
 _bootstrap_task: asyncio.Task | None = None
+
+
+@dataclass
+class ProviderAuthSession:
+    """Non-secret state for one dashboard-managed browser login."""
+
+    provider_id: str
+    state: str = "starting"
+    authorization_url: str = ""
+    detail: str = "Preparing browser login…"
+    task: asyncio.Task | None = field(default=None, repr=False)
+
+
+_provider_auth_sessions: dict[str, ProviderAuthSession] = {}
 
 
 def configure(
@@ -424,11 +440,143 @@ class ProviderCredentialUpdate(BaseModel):
     api_key: str = Field(min_length=1, max_length=512)
 
 
-@router.post("/providers/{provider_id}")
-async def update_provider(provider_id: str, body: ProviderCredentialUpdate) -> dict[str, Any]:
-    definition = next((item for item in PROVIDER_DEFINITIONS if item.id == provider_id), None)
+def _provider_definition(provider_id: str) -> ProviderDefinition:
+    normalized = provider_id.strip().lower().replace("-", "_")
+    definition = next((item for item in PROVIDER_DEFINITIONS if item.id == normalized), None)
     if definition is None:
         raise HTTPException(status_code=404, detail="Unknown provider")
+    return definition
+
+
+async def _refresh_inference_runtime() -> None:
+    """Rebuild the live router after provider credentials change."""
+    global _inference_router
+
+    from config.runtime import get_runtime
+    from config.settings import reload_settings, settings
+    from inference.factory import build_router
+
+    reload_settings()
+    runtime = get_runtime()
+    if runtime is None:
+        return
+    new_router = build_router(
+        openrouter_api_key=settings.openrouter_api_key,
+        north_settings=runtime.north_settings,
+        groq_api_key=settings.groq_api_key,
+        gemini_api_key=settings.gemini_api_key,
+        opencode_zen_api_key=settings.opencode_zen_api_key,
+        provider_settings=settings,
+        confidence_tracker=runtime.confidence_tracker,
+        cooldowns_path=settings.north_home / "cooldowns.json",
+    )
+    runtime.inference_router = new_router
+    runtime.cost_tracker.set_inner(new_router)
+    _inference_router = new_router
+
+
+def _provider_auth_payload(definition: ProviderDefinition) -> dict[str, Any]:
+    credentials = CodexCredentialProvider()
+    status = credentials.status()
+    session = _provider_auth_sessions.get(definition.id)
+    state = session.state if session else ("connected" if status.configured else "disconnected")
+    detail = session.detail if session else status.detail
+    if session and session.state == "connected" and not status.configured:
+        state = "disconnected"
+        detail = status.detail
+    account_hint = (
+        f"…{status.account_id[-6:]}"
+        if status.account_id and len(status.account_id) > 6
+        else status.account_id
+    )
+    return {
+        "provider_id": definition.id,
+        "state": state,
+        "configured": status.configured,
+        "needs_login": status.needs_login,
+        "detail": detail,
+        "authorization_url": session.authorization_url if session and state in {"starting", "pending"} else "",
+        "account_hint": account_hint or "",
+        "expires_at": status.expires_at.isoformat() if status.expires_at else None,
+    }
+
+
+@router.post("/providers/{provider_id}/auth")
+async def start_provider_auth(provider_id: str) -> dict[str, Any]:
+    definition = _provider_definition(provider_id)
+    if definition.auth_kind is not AuthKind.OAUTH_PKCE or definition.id != "openai_codex":
+        raise HTTPException(status_code=400, detail="This provider does not support browser login")
+
+    existing = _provider_auth_sessions.get(definition.id)
+    if existing and existing.task and not existing.task.done():
+        return _provider_auth_payload(definition)
+
+    ready = asyncio.Event()
+    session = ProviderAuthSession(provider_id=definition.id)
+    _provider_auth_sessions[definition.id] = session
+
+    def authorization_ready(url: str) -> None:
+        session.authorization_url = url
+        session.state = "pending"
+        session.detail = "Complete the OpenAI login in the browser window."
+        ready.set()
+
+    credentials = CodexCredentialProvider(authorization_callback=authorization_ready)
+
+    async def run_login() -> None:
+        try:
+            status = await credentials.login(open_browser=False)
+            session.state = "connected"
+            session.detail = status.detail or "Logged in"
+            await _refresh_inference_runtime()
+        except asyncio.CancelledError:
+            session.state = "cancelled"
+            session.detail = "Login cancelled"
+            raise
+        except Exception as exc:
+            session.state = "error"
+            session.detail = str(exc)
+        finally:
+            ready.set()
+
+    session.task = asyncio.create_task(run_login(), name=f"provider-auth-{definition.id}")
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=3)
+    except TimeoutError:
+        session.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await session.task
+        session.state = "error"
+        session.detail = "Browser login could not be started"
+    return _provider_auth_payload(definition)
+
+
+@router.get("/providers/{provider_id}/auth")
+async def provider_auth_status(provider_id: str) -> dict[str, Any]:
+    definition = _provider_definition(provider_id)
+    if definition.auth_kind is not AuthKind.OAUTH_PKCE or definition.id != "openai_codex":
+        raise HTTPException(status_code=400, detail="This provider does not support browser login")
+    return _provider_auth_payload(definition)
+
+
+@router.delete("/providers/{provider_id}/auth")
+async def logout_provider(provider_id: str) -> dict[str, Any]:
+    definition = _provider_definition(provider_id)
+    if definition.auth_kind is not AuthKind.OAUTH_PKCE or definition.id != "openai_codex":
+        raise HTTPException(status_code=400, detail="This provider does not support browser login")
+    session = _provider_auth_sessions.pop(definition.id, None)
+    if session and session.task and not session.task.done():
+        session.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await session.task
+    await CodexCredentialProvider().logout()
+    await _refresh_inference_runtime()
+    return _provider_auth_payload(definition)
+
+
+@router.post("/providers/{provider_id}")
+async def update_provider(provider_id: str, body: ProviderCredentialUpdate) -> dict[str, Any]:
+    definition = _provider_definition(provider_id)
     if not definition.env_key:
         raise HTTPException(status_code=400, detail="This provider uses browser authentication; use the CLI login flow")
     home = _require(_north_home, "North home")
@@ -446,24 +594,7 @@ async def update_provider(provider_id: str, body: ProviderCredentialUpdate) -> d
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     env_path.chmod(0o600)
     os.environ[definition.env_key] = body.api_key.strip()
-    from config.runtime import get_runtime
-    from config.settings import reload_settings, settings
-    from inference.factory import build_router
-
-    reload_settings()
-    runtime = get_runtime()
-    if runtime is not None:
-        new_router = build_router(
-            openrouter_api_key=settings.openrouter_api_key,
-            north_settings=runtime.north_settings,
-            groq_api_key=settings.groq_api_key,
-            gemini_api_key=settings.gemini_api_key,
-            opencode_zen_api_key=settings.opencode_zen_api_key,
-            provider_settings=settings,
-            confidence_tracker=runtime.confidence_tracker,
-            cooldowns_path=settings.north_home / "cooldowns.json",
-        )
-        runtime.cost_tracker.set_inner(new_router)
+    await _refresh_inference_runtime()
     return {"id": definition.id, "configured": True, "credential_hint": body.api_key[:4] + "…" + body.api_key[-4:]}
 
 

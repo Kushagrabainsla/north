@@ -23,7 +23,7 @@ The installer configures an inference provider. One provider is enough to start:
 | Groq | `NORTH_GROQ_API_KEY` | [console.groq.com/keys](https://console.groq.com/keys) |
 | Gemini | `NORTH_GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | [opencode.ai/auth](https://opencode.ai/auth) |
-| OpenAI Codex | Browser OAuth | `north auth login openai-codex` |
+| OpenAI Codex | Browser OAuth | **System → Providers → Connect**, or `north auth login openai-codex` |
 
 To add or change provider keys later, run `north web` and use the cockpit's
 **System → Providers** controls. For advanced/headless setups, you can still
@@ -37,8 +37,9 @@ NORTH_OPENCODE_ZEN_API_KEY=...
 ```
 
 North stores its own OpenAI Codex OAuth token under `~/.north/credentials/`
-with private file permissions. Use `north auth status` to inspect provider
-configuration and `north auth logout openai-codex` to remove the token.
+with private file permissions. The dashboard can connect, reconnect, show login
+progress, and disconnect Codex. The `north auth` commands remain available for
+headless setups.
 
 ---
 
