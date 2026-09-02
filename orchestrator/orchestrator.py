@@ -43,7 +43,6 @@ from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.models import (
     ExecutionMode,
-    ExecutionPath,
     ExecutionPlan,
     IntentClassification,
     TaskRequest,
@@ -56,6 +55,7 @@ from orchestrator.running_tasks import RunningTaskStore
 from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
+from orchestrator.tiering import resolve_model_pool
 from orchestrator.verification import verify_claims
 from orchestrator.worktree import GitWorktreeManager, IntegrationResult, Worktree, WorktreeError
 from tools._path import handoff_dir_for
@@ -1085,6 +1085,7 @@ class Orchestrator:
                 request.workspace,
                 domain=classification.domain,
                 context=request.context,
+                confidence=classification.confidence,
             )
         except asyncio.CancelledError:
             # cancel_task() already wrote the ledger entry and emitted events.
@@ -1210,26 +1211,16 @@ class Orchestrator:
         await self._task_context_store.initialize_task(task_id, plan.agents)
         return classification, plan
 
-    def _resolve_task_model_pool(self, plan: ExecutionPlan | None = None, domain: str = "") -> str:
-        """Dynamically select model pool based on task complexity, power mode, and domain."""
-        power_mode = self._north_settings.power if self._north_settings is not None else StrategyMode.CRUISE
-        if power_mode == StrategyMode.SPORT:
-            return "reasoning"
-        if power_mode == StrategyMode.ECO:
-            return "speed"
+    def _resolve_task_model_pool(
+        self, plan: ExecutionPlan | None = None, domain: str = "", confidence: float = 1.0
+    ) -> str:
+        """The model pool for this task's agent runs - see `orchestrator/tiering.py`.
 
-        if plan is not None:
-            if plan.execution_path == ExecutionPath.DEEP or plan.mode in (
-                ExecutionMode.HIERARCHICAL,
-                ExecutionMode.PARALLEL,
-            ):
-                return "reasoning"
-            if plan.engineering_kind in ("feature", "refactor", "bugfix", "research"):
-                return "reasoning"
-        if domain in ("engineering", "research"):
-            return "reasoning"
-
-        return "reasoning"
+        The power dial is deliberately not applied here: `ModelDispatcher` already
+        forces the pool for eco and sport when the request is dispatched, so
+        handling it twice would just be two places to disagree.
+        """
+        return resolve_model_pool(plan, domain, confidence)
 
     async def _run_forced_agent(self, task_id: str, request: TaskRequest) -> None:
         """Run a single named agent directly, bypassing classification and the planner.
@@ -1979,6 +1970,7 @@ class Orchestrator:
         workspace: str = "",
         domain: str = "general",
         context: str = "",
+        confidence: float = 1.0,
     ) -> None:
         """Stage 4: execute the task, then optionally synthesize.
 
@@ -2010,7 +2002,7 @@ class Orchestrator:
         use_conductor = self._use_conductor(domain, plan)
         use_deploy = self._use_deploy_flow(domain, plan)
         use_design = use_conductor and self._use_design_phase(plan)
-        model_pool = self._resolve_task_model_pool(plan, domain)
+        model_pool = self._resolve_task_model_pool(plan, domain, confidence)
         if use_deploy:
             all_failures = await self._run_deploy_flow(
                 task_id, prompt, workspace, context=context, model_pool=model_pool

@@ -13,6 +13,20 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.5.0] - 2026-09-02
+### Added
+- **Task-shaped model tiering** (`orchestrator/tiering.py`): the pool now follows the *work*, not the agent, decided from the plan the planner already produces. `question`/`test`/single-tool run on `high_volume`; `bugfix`/`debug`/`deploy`/`ship`/`research` on `speed`; `feature`/`refactor` on `reasoning`. Anything DEEP, parallel, hierarchical, or planned below 0.6 confidence is promoted to `reasoning` whatever its kind - promotion only, so a cheap tier is chosen only when every signal agrees the work is small. Deliberately conservative: the dispatcher cools down models that return degenerate output, so a weak model driving a long ReAct loop can cost more in retries than the tier saves.
+
+### Changed
+
+### Fixed
+- **Every agent run no longer forces the reasoning pool** (`orchestrator/orchestrator.py`): `_resolve_task_model_pool` read like a real policy - branching on execution path, mode, engineering kind, and domain - but every branch returned `"reasoning"`, and no agent `config.yaml` declares a pool either, so the `POOL_TO_PRIORITY` fallback also landed on `HIGH`. Every agent call in North therefore ran at `HIGH` priority and `cruise` mode's respect-the-caller behaviour was inert for the whole agent layer. It now delegates to `orchestrator/tiering.py`.
+- **The power dial is applied once** (`orchestrator/orchestrator.py`): `_resolve_task_model_pool` forced a pool for `sport`/`eco` even though `ModelDispatcher._effective_priority` already does exactly that at dispatch time - two places to disagree about the same setting. Tiering now answers only "what shape of work is this?".
+
+### Removed
+
+---
+
 ## [1.4.3] - 2026-09-02
 ### Added
 - **The web cockpit renders North's self-checks** (`web/src/pages/Chat.tsx`, `web/src/types.ts`, `web/src/styles.css`): the browser client subscribed to `token` and five lifecycle events only, so every integrity signal was invisible there. All 16 now stream into a per-turn signal strip beside the answer - warnings shown unprompted, passing checks collapsed behind a summary - so a run that failed a check never looks like one that passed.
