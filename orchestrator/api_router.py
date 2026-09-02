@@ -1,187 +1,45 @@
-"""FastAPI APIRouter for all Orchestrator endpoints.
+"""Orchestrator API routes not yet moved into `orchestrator/api/`.
 
-See README Section 6.8 and docs/CODING_STYLE.md Sections 12.1-12.4.
+Routes are being split per area (CODING_STYLE §12.4). Areas already moved live
+in `orchestrator/api/`; this module keeps the rest and re-exports the package's
+router objects so importers keep working during the move.
 """
 
 from __future__ import annotations
 
-import asyncio
 import datetime
-from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, field_validator
 
 from agents.exceptions import AgentNotFoundError
-from agents.registry import AgentRegistry
 from approval.mode import parse_approval_mode
 from config.strategy import NorthSettings, StrategyMode
-from inference.base import InferenceRouter
-from inference.models import CompletionRequest, CostSummary, ModelEntry, PoolPriority, TranscriptionRequest
-from jobs.base import JobProcessor
-from jobs.cron_store import UserCronStore
+from inference.models import CompletionRequest, PoolPriority, TranscriptionRequest
 from jobs.models import Job, JobPriority, JobStatus, JobType
-from ledger.base import LedgerFilters, LedgerWriter
+from ledger.base import LedgerFilters
 from ledger.models import LedgerEntry, LedgerSource
-from memory.base import ContextStore
 from memory.gateway import LocalMemoryGateway
-from memory.injection import ContextInjector
 from memory.models import ContextDocument
-from orchestrator.agent_runs import AgentRunStore
-from orchestrator.api_context import (
-    bind_request_services,
-    current_services,
-    merge,
-    services_of,
+from orchestrator.api import health_check, health_router, router  # noqa: F401  (re-exported)
+from orchestrator.api.deps import (
+    _get_agent_registry,
+    _get_agent_run_store,
+    _get_context_injector,
+    _get_context_store,
+    _get_cron_store,
+    _get_inference_router,
+    _get_job_processor,
+    _get_ledger,
+    _get_orchestrator,
+    configure,  # noqa: F401  (re-exported)
 )
+from orchestrator.api_context import current_services
 from orchestrator.models import TaskRequest, TaskResponse
-from orchestrator.orchestrator import Orchestrator
-from orchestrator.stream import EventStreamManager
-from tools.confidence import ConfidenceTracker
 from utils.ids import generate_id
-from utils.security import verify_api_access, verify_secret
+from utils.security import verify_secret
 from utils.time import utcnow
-
-router = APIRouter(
-    prefix="/orchestrator",
-    tags=["orchestrator"],
-    # bind_request_services first so route bodies (and the helpers they call)
-    # can reach this app's wiring through current_services().
-    dependencies=[Depends(bind_request_services), Depends(verify_api_access)],
-)
-
-# Unauthenticated router - only hosts /health so Docker / load-balancer probes
-# don't need the API secret.
-health_router = APIRouter(tags=["health"])
-
-
-@health_router.get("/health", include_in_schema=True)
-async def health_check(request: Request = None) -> dict:  # noqa: RUF013 - callable directly in tests
-    """Readiness probe for the runtime components required to operate North.
-
-    The route remains unauthenticated for Docker/load-balancer probes, so it is
-    not covered by the router-level services binding and reads them from the app
-    directly. It returns HTTP 200 with status=degraded when the API is alive but a
-    dependency is not ready, letting the browser tell that apart from an
-    unreachable API.
-    """
-    services = services_of(request.app) if request is not None else current_services()
-    checks: dict[str, dict[str, Any]] = {"api": {"status": "ok"}}
-
-    async def run_check(name: str, operation) -> None:
-        try:
-            await asyncio.wait_for(operation, timeout=1.0)
-            checks[name] = {"status": "ok"}
-        except Exception as exc:
-            checks[name] = {"status": "failed", "detail": f"{type(exc).__name__}: {exc}"}
-
-    async def probe(name: str, component: Any, operation) -> None:
-        if component is None:
-            checks[name] = {"status": "failed", "detail": "not configured"}
-            return
-        await run_check(name, operation())
-
-    await probe("orchestrator", services.orchestrator, lambda: services.orchestrator.list_active_tasks())
-    await probe("ledger", services.ledger, lambda: services.ledger.query(LedgerFilters(limit=1)))
-    await probe("memory", services.context_store, lambda: services.context_store.read(ContextDocument.SOUL))
-    await probe("scheduler", services.job_processor, lambda: services.job_processor.list_jobs(limit=1))
-
-    checks["event_stream"] = (
-        {"status": "ok"} if services.stream_manager is not None else {"status": "failed", "detail": "not configured"}
-    )
-
-    if services.inference_router is None:
-        checks["inference"] = {"status": "failed", "detail": "not configured"}
-    else:
-        try:
-            summary = services.inference_router.health_summary()
-            checks["inference"] = {"status": "ok" if summary["ready"] else "failed", **summary}
-        except Exception as exc:
-            checks["inference"] = {"status": "failed", "detail": f"{type(exc).__name__}: {exc}"}
-
-    status = "ok" if all(check["status"] == "ok" for check in checks.values()) else "degraded"
-    return {"status": status, "checks": checks}
-
-
-def configure(
-    app: FastAPI,
-    orchestrator: Orchestrator,
-    stream_manager: EventStreamManager,
-    ledger: LedgerWriter,
-    agent_registry: AgentRegistry,
-    context_store: ContextStore,
-    context_injector: ContextInjector,
-    job_processor: JobProcessor,
-    inference_router: InferenceRouter,
-    confidence_tracker: ConfidenceTracker,
-    cron_store: UserCronStore | None = None,
-    north_settings: NorthSettings | None = None,
-    agent_run_store: AgentRunStore | None = None,
-) -> None:
-    """Attach this app's wiring. Called once in the lifespan.
-
-    The components live on ``app.state`` rather than in module globals, so two
-    apps can coexist and a test can wire its own without mutating import-time
-    state (CODING_STYLE §22).
-    """
-    merge(
-        app,
-        orchestrator=orchestrator,
-        stream_manager=stream_manager,
-        ledger=ledger,
-        agent_registry=agent_registry,
-        context_store=context_store,
-        context_injector=context_injector,
-        job_processor=job_processor,
-        inference_router=inference_router,
-        confidence_tracker=confidence_tracker,
-        cron_store=cron_store,
-        north_settings=north_settings,
-        agent_run_store=agent_run_store,
-    )
-
-
-def _get_orchestrator() -> Orchestrator:
-    return current_services().require("orchestrator")
-
-
-def _get_stream_manager() -> EventStreamManager:
-    return current_services().require("stream_manager")
-
-
-def _get_ledger() -> LedgerWriter:
-    return current_services().require("ledger")
-
-
-def _get_agent_run_store() -> AgentRunStore:
-    return current_services().require("agent_run_store")
-
-
-def _get_agent_registry() -> AgentRegistry:
-    return current_services().require("agent_registry")
-
-
-def _get_context_store() -> ContextStore:
-    return current_services().require("context_store")
-
-
-def _get_context_injector() -> ContextInjector:
-    return current_services().require("context_injector")
-
-
-def _get_job_processor() -> JobProcessor:
-    return current_services().require("job_processor")
-
-
-def _get_inference_router() -> InferenceRouter:
-    return current_services().require("inference_router")
-
-
-def _get_confidence_tracker() -> ConfidenceTracker:
-    return current_services().require("confidence_tracker")
-
 
 # ── Transcription endpoint ────────────────────────────────────────────────────
 
@@ -312,57 +170,6 @@ async def cancel_any(target_id: str) -> dict[str, str]:
     raise HTTPException(
         status_code=404, detail=f"{target_id!r} is not an active task or a pending/running job."
     )
-
-
-# ── SSE stream ────────────────────────────────────────────────────────────────
-
-
-@router.get("/stream/{task_id}")
-async def stream_task_events(task_id: str) -> StreamingResponse:
-    """Server-Sent Events stream for real-time task progress."""
-
-    async def _event_generator() -> AsyncIterator[str]:
-        async for chunk in _get_stream_manager().subscribe(task_id):
-            yield chunk
-
-    return StreamingResponse(
-        _event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.get("/stream")
-async def stream_global_events() -> StreamingResponse:
-    """Global SSE stream - all events across all tasks.
-
-    Used by the TUI to receive a single persistent connection for every task
-    without needing to subscribe per task_id.
-    """
-
-    async def _global_generator() -> AsyncIterator[str]:
-        async for chunk in _get_stream_manager().subscribe_global():
-            yield chunk
-
-    return StreamingResponse(
-        _global_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-# ── Metrics endpoint ──────────────────────────────────────────────────────────
-
-
-@router.get("/metrics")
-async def get_metrics(days: int = 7) -> dict:
-    """Return aggregated system performance metrics.
-
-    Query params:
-        days: look-back window in days (default 7; max 365)
-    """
-    days = max(1, min(days, 365))
-    return await _get_ledger().get_metrics(days=days)
 
 
 # ── Ledger endpoints ──────────────────────────────────────────────────────────
@@ -633,10 +440,6 @@ async def cancel_job(job_id: str) -> None:
 # ── Cron endpoints ────────────────────────────────────────────────────────────
 
 
-def _get_cron_store() -> UserCronStore:
-    return current_services().require("cron_store")
-
-
 class CronEntryOut(BaseModel):
     name: str
     agent: str
@@ -686,47 +489,6 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
 async def delete_cron_entry(name: str) -> None:
     """Remove a user-defined recurring schedule by name."""
     await _get_cron_store().remove(name)
-
-
-# ── Inference endpoints ───────────────────────────────────────────────────────
-
-
-@router.get("/inference/costs", response_model=CostSummary)
-async def inference_costs(
-    period: str = "week",
-    agent: str | None = None,
-) -> CostSummary:
-    """Aggregated inference costs over a period (day/week/month)."""
-    now = utcnow()
-    days = {"day": 1, "week": 7, "month": 30}.get(period, 7)
-    since = now - datetime.timedelta(days=days)
-
-    # Aggregation happens in the ledger (SQL GROUP BY for the SQLite store)
-    # instead of summing up to 10k fetched rows here.
-    breakdown = await _get_ledger().cost_breakdown(
-        since=since,
-        source=LedgerSource.INFERENCE_ROUTER,
-        agent=agent,
-    )
-
-    return CostSummary(
-        period=period,
-        total_cost_usd=round(breakdown["total"], 6),
-        by_component={k: round(v, 6) for k, v in breakdown["by_component"].items()},
-        by_model={k: round(v, 6) for k, v in breakdown["by_model"].items()},
-    )
-
-
-class ModelPoolOut(BaseModel):
-    name: str
-    models: list[ModelEntry]
-
-
-@router.get("/inference/models", response_model=dict[str, ModelPoolOut])
-async def inference_models() -> dict[str, ModelPoolOut]:
-    """Current model pool state."""
-    pools = _get_inference_router().current_pools()
-    return {name: ModelPoolOut(name=pool.name, models=pool.models) for name, pool in pools.items()}
 
 
 # ── Agent run inspection ──────────────────────────────────────────────────────
@@ -779,48 +541,6 @@ async def agent_run_events(run_id: str) -> list[dict[str, Any]]:
     if await _get_agent_run_store().get(run_id) is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
     return await _get_agent_run_store().list_events(run_id)
-
-
-# ── Tools confidence endpoint ─────────────────────────────────────────────────
-
-
-class ToolConfidenceOut(BaseModel):
-    agent: str
-    tool: str
-    confidence: float
-
-
-@router.get("/tools/confidence", response_model=list[ToolConfidenceOut])
-async def tool_confidence(agent: str | None = None) -> list[ToolConfidenceOut]:
-    """Tool confidence scores, optionally filtered by agent."""
-    tracker = _get_confidence_tracker()
-    registry = _get_agent_registry()
-
-    agents_list = [agent] if agent is not None else registry.names()
-    results: list[ToolConfidenceOut] = []
-
-    for agent_name in agents_list:
-        try:
-            agent_instance = registry.get(agent_name)
-            allowed_tools = agent_instance.deps.tool_registry.tools_for_agent(agent_name)
-        except Exception:
-            continue
-
-        agent_results = []
-        for tool in allowed_tools:
-            confidence_score = await tracker.get_score(agent_name, tool.name)
-            agent_results.append(
-                ToolConfidenceOut(
-                    agent=agent_name,
-                    tool=tool.name,
-                    confidence=confidence_score,
-                )
-            )
-
-        agent_results.sort(key=lambda item: (-item.confidence, item.tool))
-        results.extend(agent_results)
-
-    return results
 
 
 # ── Agent create endpoint ─────────────────────────────────────────────────────

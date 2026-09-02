@@ -4,6 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **Orchestrator routes are being split per area** (`orchestrator/api/`): the first areas - health, metrics, SSE streams, inference, and tool confidence - now live in their own modules alongside a shared `deps.py` holding the routers and accessors (CODING_STYLE §12.4). `api_router.py` keeps the remaining areas and re-exports the package's router objects, so `app.py` and every importer are unchanged. 1031 -> 751 lines so far; the route table is verified to hold the same 69 routes with no parameterised path shadowing a literal one.
 
 ### Changed
 
