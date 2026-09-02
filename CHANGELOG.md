@@ -3,6 +3,17 @@
 All notable changes to north are documented here.
 
 ## [Unreleased]
+### Changed
+- **SSE emit no longer blocks on a disk write** (`orchestrator/stream.py`): durable agent-run events were awaited inside `emit()`, putting a SQLite round trip in front of every `tool_called`/`tool_result` during a ReAct loop. They are now supervised fire-and-forget like ledger writes (§14.1) - 20 durable emits went from ≥400 ms of blocking to 0.2 ms. The only reader is the inspect-a-finished-run endpoint, so the brief write lag is immaterial; `utils/tasks.drain()` is called at shutdown so pending writes still land.
+- **Replay buffer merges runs of token events** (`orchestrator/stream.py`): a streamed answer arrives one token per event, so the 2048-entry buffer filled with fragments of a single reply and evicted the structural events a late subscriber needs. Consecutive tokens now merge into one entry (capped at 8 KB), preserving exact order and byte-identical text: a 20,000-token answer went from ~20,000 buffer entries to 5, with `agent_started` still retained.
+- **Dispatcher builds the free-tier fallback only when it is needed** (`inference/dispatcher.py`): the fallback list - a full registry scan, quality score per model, sort and shuffle - was built on *every* `complete()`/`complete_with_tools()` call and discarded unless the primary chain was exhausted. It is now deferred and memoised, so a successful call builds it zero times.
+- **Capability filtering cached per registry generation** (`inference/dispatcher.py`): which models support a given capability pair is a pure function of the catalog, but was recomputed on every inference call (and so on every ReAct turn). It is now cached and invalidated when the registry is rebuilt. Every dynamic check - capability cooldowns, rate limits, provider health - still runs per call, so a model that starts cooling down after the cache was built is still excluded.
+- **Context-window lookups are indexed** (`inference/dispatcher.py`): `get_context_window` ran two linear scans with substring matching over the whole catalog, once per turn from context compaction. It now reads a table built with the registry.
+
+### Fixed
+- **Model scores can no longer be left unflushed** (`inference/dispatcher.py`): the batching loop checked for dirty scores *before* flushing, so a score marked dirty between the check and the task exiting stayed unwritten until something restarted the loop.
+- **Fire-and-forget writes are drained at shutdown** (`utils/tasks.py`, `orchestrator/app.py`): added `drain()` and called it during shutdown, so ledger entries and agent-run events spawned but not yet written are given a chance to land before connections close.
+
 ### Removed
 - **Unreachable image-synthesis branch in the single-tool path** (`orchestrator/orchestrator.py`): `_execute_single_tool` held a block referencing `self._inference_router`, an attribute the `Orchestrator` never assigns. It was dead code, not a broken feature - every image-producing tool (`take_screenshot`, `take_photo`) is in the planner's `_INTERPRETATION_TOOLS` set and so can never be routed to single-tool mode; images are handled correctly inside the agent's ReAct loop. Removed along with the `AttributeError` it would have raised for any future vision tool added outside that set.
 

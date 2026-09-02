@@ -74,6 +74,7 @@ from tools.universal.update_plan import UpdatePlanTool
 from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
+from utils.tasks import drain
 from utils.time import utcnow
 from utils.version import NORTH_VERSION
 from web.api import configure as configure_web
@@ -536,6 +537,9 @@ async def _shutdown(
     for task in background_tasks:
         task.cancel()
     await asyncio.gather(*background_tasks, return_exceptions=True)
+    # Fire-and-forget writes (ledger entries, agent-run events) are not awaited by
+    # their callers, so give them a chance to land before connections close.
+    await drain()
     if tool_registry is not None:
         await tool_registry.aclose()
     await deps.cost_tracker.aclose()

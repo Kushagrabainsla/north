@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from utils.execution_context import current_execution
+from utils.tasks import spawn
 from utils.time import format_timestamp, utcnow
 
 logger = logging.getLogger(__name__)
@@ -29,18 +30,26 @@ _HISTORY_MAX_TASKS = 500
 _SSE_HEARTBEAT_SECONDS = 15.0
 _SSE_HEARTBEAT = ": keep-alive\n\n"
 
-_DURABLE_EVENTS = frozenset({
-    "agent_started",
-    "agent_completed",
-    "agent_failed",
-    "tool_called",
-    "tool_result",
-    "skill_selected",
-    "model",
-    "model_response",
-    "compaction",
-    "stream_reset",
-})
+# A streamed answer arrives one token per event, so an unmerged buffer spends its
+# whole 2048-entry budget on fragments of a single reply and evicts the structural
+# events a late subscriber actually needs. Consecutive token events are merged into
+# one replay entry, up to this many characters, then a fresh entry starts.
+_TOKEN_CHUNK_MAX_CHARS = 8_000
+
+_DURABLE_EVENTS = frozenset(
+    {
+        "agent_started",
+        "agent_completed",
+        "agent_failed",
+        "tool_called",
+        "tool_result",
+        "skill_selected",
+        "model",
+        "model_response",
+        "compaction",
+        "stream_reset",
+    }
+)
 
 
 class EventStreamManager:
@@ -67,6 +76,9 @@ class EventStreamManager:
         # Bounded ring buffer of recently finished task_ids (survives eviction from _history)
         self._recently_finished: deque[str] = deque(maxlen=_HISTORY_MAX_TASKS * 2)
         self._run_store = run_store
+        # task_id → the payload of the trailing token entry in its history, kept so
+        # the next token event can be merged into it instead of appending a new one.
+        self._token_tail: dict[str, dict[str, Any]] = {}
 
     def _ensure_history(self, task_id: str) -> deque[str]:
         history = self._history.get(task_id)
@@ -76,12 +88,35 @@ class EventStreamManager:
         while len(self._history) >= _HISTORY_MAX_TASKS:
             evicted_id, _ = self._history.popitem(last=False)
             self._done.discard(evicted_id)
+            self._token_tail.pop(evicted_id, None)
         history = deque(maxlen=_HISTORY_MAX_EVENTS)
         self._history[task_id] = history
         return history
 
-    def _record_history(self, task_id: str, message: str) -> None:
-        self._ensure_history(task_id).append(message)
+    def _record_history(self, task_id: str, event: str, payload: dict[str, Any], message: str) -> None:
+        """Append *message* to the task's replay buffer, merging runs of tokens.
+
+        Order is preserved exactly: a token event either extends the entry it
+        directly follows or starts a new one, so replay reads the same as the
+        live stream did - just with fewer, larger token entries.
+        """
+        history = self._ensure_history(task_id)
+        if event != "token":
+            self._token_tail.pop(task_id, None)
+            history.append(message)
+            return
+
+        tail = self._token_tail.get(task_id)
+        text = str(payload.get("text", ""))
+        if tail is not None and history and len(tail["text"]) + len(text) <= _TOKEN_CHUNK_MAX_CHARS:
+            tail["text"] += text
+            history[-1] = _SSE_TEMPLATE.format(event="token", data=json.dumps(tail))
+            return
+
+        merged = dict(payload)
+        merged["text"] = text
+        self._token_tail[task_id] = merged
+        history.append(message)
 
     @property
     def tui_connected(self) -> bool:
@@ -120,13 +155,20 @@ class EventStreamManager:
             payload["attempt"] = attempt
 
         if self._run_store is not None and run_id and event in _DURABLE_EVENTS:
-            await self._run_store.record_event(run_id, task_id, event, payload)
+            # Fire-and-forget: this is a SQLite write, and awaiting it here put a
+            # disk round trip in front of every tool_called/tool_result during a
+            # ReAct loop. Durable-event writes are a side effect like ledger
+            # writes, so they follow the same rule (CODING_STYLE §14.1).
+            spawn(
+                self._run_store.record_event(run_id, task_id, event, payload),
+                name=f"record_event:{event}",
+            )
         message = _SSE_TEMPLATE.format(
             event=event,
             data=json.dumps(payload),
         )
 
-        self._record_history(task_id, message)
+        self._record_history(task_id, event, payload, message)
 
         queues = list(self._subscribers.get(task_id, []))
         # Multiplex candidate events to the parent task subscriber queue
@@ -171,6 +213,9 @@ class EventStreamManager:
         self._ensure_history(task_id)  # eviction of the history entry also clears the done flag
         self._done.add(task_id)
         self._recently_finished.append(task_id)
+        # The stream is over, so nothing more will merge into the trailing token
+        # entry; drop the reference rather than hold it until history eviction.
+        self._token_tail.pop(task_id, None)
         queues = self._subscribers.get(task_id, [])
         for q in queues:
             try:

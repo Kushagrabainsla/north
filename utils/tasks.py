@@ -52,3 +52,21 @@ def spawn(
 
     task.add_done_callback(_on_done)
     return task
+
+
+async def drain(timeout: float = 5.0) -> int:
+    """Wait for the currently outstanding spawned tasks to finish.
+
+    Fire-and-forget work is mostly durable writes (ledger entries, agent-run
+    events), so on shutdown they need a chance to land before the process exits
+    and connections close. Returns the number of tasks waited on. Never raises:
+    a task that fails has already been logged by its own done-callback, and a
+    task still running at *timeout* is left alone rather than cancelled.
+    """
+    pending = [task for task in _TASKS if not task.done()]
+    if not pending:
+        return 0
+    done, still_running = await asyncio.wait(pending, timeout=timeout)
+    if still_running:
+        _logger.warning("drain: %d background task(s) still running after %.1fs", len(still_running), timeout)
+    return len(done)

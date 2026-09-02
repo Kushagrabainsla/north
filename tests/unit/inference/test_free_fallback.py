@@ -78,6 +78,10 @@ def _make_dispatcher() -> ModelDispatcher:
     d._providers = []
     d._scorer = ModelScorer(config=ScoringConfig())
     d._sticky = {}
+    d._generation = 0
+    d._candidate_cache = {}
+    # Build the lookups derived from _registry, exactly as _build_registry does.
+    d._index_registry()
     return d
 
 

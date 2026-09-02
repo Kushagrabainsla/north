@@ -6,6 +6,7 @@ from agents.models import AgentPayload, AgentResult
 from orchestrator.agent_runs import AgentRunStore
 from orchestrator.stream import EventStreamManager
 from utils.execution_context import ExecutionIdentity, bind_execution
+from utils.tasks import drain
 
 
 async def test_run_store_preserves_hierarchy_skills_outcome_and_events(tmp_path) -> None:
@@ -55,6 +56,10 @@ async def test_run_store_preserves_hierarchy_skills_outcome_and_events(tmp_path)
     assert run.status == "completed"
     assert run.skills == ({"name": "research", "version": "2.0.0", "source": "learned"},)
     assert run.provider_state["openai_codex"][0]["response_id"] == "resp-1"
+
+    # emit() records durable events fire-and-forget so it never blocks the stream
+    # on a disk write; wait for those writes before reading them back.
+    await drain()
 
     events = await store.list_events(payload.run_id)
     assert events[0]["event"] == "tool_called"

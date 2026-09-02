@@ -76,6 +76,11 @@ from utils.text import extract_json
 # (e.g. Groq free) out of candidate selection for large prompts that would 413.
 _SYSTEM_PROMPT_CHARS = 8_000
 
+# Assumed window for a model absent from the live catalog (an id the provider
+# reported for a call but not in /models). Conservative enough that compaction
+# still triggers before a genuinely smaller model overflows.
+_DEFAULT_CONTEXT_WINDOW = 128_000
+
 if TYPE_CHECKING:
     from tools.confidence import ConfidenceTracker
 
@@ -101,6 +106,26 @@ def _toolcall_has_output(resp: Any) -> bool:
     reasoning = getattr(resp, "reasoning", None)
     return bool(reasoning and reasoning.strip())
 
+
+class _Deferred:
+    """A candidate list built only if it is actually needed, then memoised.
+
+    The free-tier fallback is consulted only when the primary chain is exhausted,
+    which is the rare path - but building it costs a full registry scan, a quality
+    score per model, a sort and a shuffle. Wrapping it keeps that cost off every
+    successful call while leaving the exhaustion path unchanged.
+    """
+
+    __slots__ = ("_build", "_value")
+
+    def __init__(self, build: Callable[[], list[_Candidate]]) -> None:
+        self._build = build
+        self._value: list[_Candidate] | None = None
+
+    def get(self) -> list[_Candidate]:
+        if self._value is None:
+            self._value = self._build()
+        return self._value
 
 
 class ModelDispatcher(InferenceRouter):
@@ -135,6 +160,12 @@ class ModelDispatcher(InferenceRouter):
         # (model_id, provider_name) of the first model that succeeded, reused for
         # that task's later steps. Bounded LRU (see _remember_sticky).
         self._sticky: OrderedDict[tuple[str, str, str, str], tuple[str, str]] = OrderedDict()
+        # Bumped whenever the registry is rebuilt (a pool refresh or provider swap),
+        # which is the only thing that invalidates a cached candidate list.
+        self._generation: int = 0
+        self._candidate_cache: dict[tuple, tuple[int, list[_Candidate]]] = {}
+        self._context_windows: dict[str, int] = {}
+        self._context_windows_normalised: dict[str, int] = {}
         self._build_registry()
         self._cooldowns.load()
         self._rate_limit_status.load()
@@ -156,6 +187,26 @@ class ModelDispatcher(InferenceRouter):
                 key = (info.provider_name, model_id)
                 if key not in self._registry:
                     self._registry[key] = (info, provider)
+        self._index_registry()
+
+    def _index_registry(self) -> None:
+        """Rebuild the lookups derived from the registry.
+
+        Bumps the generation so any per-call candidate cache keyed on it is
+        invalidated in one step, and rebuilds the context-window tables that
+        `get_context_window` reads on every turn.
+        """
+        self._generation += 1
+        self._candidate_cache.clear()
+        self._context_windows = {}
+        self._context_windows_normalised = {}
+        # Keyed off info.model_id, not the registry key: every other read path uses
+        # .values(), so the value is the authoritative identity here.
+        for info, _provider in self._registry.values():
+            if info.context_window <= 0:
+                continue
+            self._context_windows.setdefault(info.model_id, info.context_window)
+            self._context_windows_normalised.setdefault(info.model_id.lower().strip(), info.context_window)
 
     def _effective_priority(self, requested: PoolPriority) -> PoolPriority:
         """Apply the user's strategy setting to the requested priority.
@@ -179,11 +230,13 @@ class ModelDispatcher(InferenceRouter):
         estimated = len(request.prompt) // 4
         priority = self._effective_priority(request.priority)
         candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated, pool=request.pool)
-        fallback = self._free_fallback_candidates(ModelCapability.COMPLETION, estimated) if candidates else None
+        # Deferred: building the free-tier list is a full registry scan, score, sort
+        # and shuffle, and it is only consulted when the primary chain is exhausted.
+        fallback = _Deferred(lambda: self._free_fallback_candidates(ModelCapability.COMPLETION, estimated))
         if not candidates:
             # Primary pool exhausted (out of credits / all rate-limited / down) -
             # fall back to the free tier so the request still completes.
-            candidates = fallback or self._free_fallback_candidates(ModelCapability.COMPLETION, estimated)
+            candidates = fallback.get()
             fallback = None
         candidates = self._apply_exclusions(candidates, request.exclude_models)
 
@@ -246,9 +299,9 @@ class ModelDispatcher(InferenceRouter):
             estimated += tools_chars // 4
         priority = self._effective_priority(request.priority)
         candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated, pool=request.pool)
-        fallback = self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated) if candidates else None
+        fallback = _Deferred(lambda: self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated))
         if not candidates:
-            candidates = fallback or self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated)
+            candidates = fallback.get()
             fallback = None
         candidates = self._apply_exclusions(candidates, request.exclude_models)
 
@@ -313,24 +366,31 @@ class ModelDispatcher(InferenceRouter):
         return candidates[0][0].model_id
 
     def get_context_window(self, model_id: str) -> int:
-        """Return the published context window (tokens) for model_id from the live registry."""
+        """Return the published context window (tokens) for model_id from the live registry.
+
+        Called once per ReAct turn by context compaction, so exact and normalised
+        lookups come from a table built with the registry rather than two linear
+        scans over every known model.
+        """
         if not model_id:
-            return 128_000
+            return _DEFAULT_CONTEXT_WINDOW
 
-        # 1. Exact model_id match
-        for (_provider_name, reg_model_id), (info, _) in self._registry.items():
-            if reg_model_id == model_id and info.context_window > 0:
-                return info.context_window
+        window = self._context_windows.get(model_id)
+        if window:
+            return window
 
-        # 2. Case-insensitive or normalized / substring match
         norm = model_id.lower().strip()
-        for (_provider_name, reg_model_id), (info, _) in self._registry.items():
-            reg_norm = reg_model_id.lower().strip()
-            if (norm == reg_norm or norm.endswith(reg_norm) or reg_norm.endswith(norm)) and info.context_window > 0:
-                return info.context_window
+        window = self._context_windows_normalised.get(norm)
+        if window:
+            return window
 
-        return 128_000
+        # Suffix match (e.g. "openai/gpt-4o" against a registry entry "gpt-4o").
+        # Rare, so the scan stays here rather than in the indexed path.
+        for reg_norm, reg_window in self._context_windows_normalised.items():
+            if norm.endswith(reg_norm) or reg_norm.endswith(norm):
+                return reg_window
 
+        return _DEFAULT_CONTEXT_WINDOW
 
     async def aclose(self) -> None:
         """Close all provider HTTPX clients. Call on application shutdown."""
@@ -399,9 +459,7 @@ class ModelDispatcher(InferenceRouter):
         completion-capable models in the registry. Lets the UI report how many models
         have never been probed (and are therefore 'unknown', not 'available').
         """
-        pool_total = sum(
-            1 for info, _ in self._registry.values() if info.supports(ModelCapability.COMPLETION)
-        )
+        pool_total = sum(1 for info, _ in self._registry.values() if info.supports(ModelCapability.COMPLETION))
         return {"checked": self._rate_limit_status.checked_count(), "pool_total": pool_total}
 
     def current_pools(self) -> dict[str, ModelPool]:
@@ -420,9 +478,7 @@ class ModelDispatcher(InferenceRouter):
                 free.append(info)
             if info.supports(ModelCapability.REASONING) or info.base_quality >= _QUALITY_TIER_HIGH:
                 reasoning.append(info)
-            if info.supports(ModelCapability.SPEED) or (
-                _QUALITY_TIER_MEDIUM <= info.base_quality < _QUALITY_TIER_HIGH
-            ):
+            if info.supports(ModelCapability.SPEED) or (_QUALITY_TIER_MEDIUM <= info.base_quality < _QUALITY_TIER_HIGH):
                 speed.append(info)
             if info.supports(ModelCapability.TOOL_CALLS):
                 tools.append(info)
@@ -455,11 +511,7 @@ class ModelDispatcher(InferenceRouter):
 
     def health_summary(self) -> dict[str, int | bool]:
         """Report models that are usable after provider and cooldown checks."""
-        completion = [
-            info
-            for info, _provider in self._registry.values()
-            if info.supports(ModelCapability.COMPLETION)
-        ]
+        completion = [info for info, _provider in self._registry.values() if info.supports(ModelCapability.COMPLETION)]
         available = [
             info
             for info in completion
@@ -498,9 +550,12 @@ class ModelDispatcher(InferenceRouter):
     async def _flush_scores_after_delay(self) -> None:
         while True:
             await asyncio.sleep(_SCORE_FLUSH_INTERVAL_SECONDS)
+            # Flush before deciding to stop: checking first left any score marked
+            # dirty between the check and the task ending unwritten until the next
+            # call happened to restart the loop.
+            await self._flush_dirty_scores()
             if not self._dirty_scores:
                 break
-            await self._flush_dirty_scores()
 
     async def _flush_dirty_scores(self) -> None:
         if self._confidence_tracker is None or not self._dirty_scores:
@@ -554,6 +609,27 @@ class ModelDispatcher(InferenceRouter):
 
     # ---- Candidate selection ----
 
+    def _capability_supported(self, req_cap: ModelCapability, capability: ModelCapability) -> list[_Candidate]:
+        """Registry entries supporting both capabilities, cached per generation.
+
+        Pure over the registry, so it is rebuilt only when the catalog is (a pool
+        refresh or a provider swap) rather than rescanned on every inference call.
+        """
+        cache_key = (req_cap, capability)
+        cached = self._candidate_cache.get(cache_key)
+        if cached is not None and cached[0] == self._generation:
+            return cached[1]
+        supported = [
+            pair for pair in self._registry.values() if pair[0].supports(req_cap) and pair[0].supports(capability)
+        ]
+        self._candidate_cache[cache_key] = (self._generation, supported)
+        return supported
+
+    def _capability_cooled(self, info: ModelInfo, *capabilities: ModelCapability) -> bool:
+        """True when *info* is under a capability cooldown for any of *capabilities*."""
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        return any(self._cooldowns.is_capability_active(key, str(cap)) for cap in capabilities)
+
     def _candidates(
         self,
         capability: ModelCapability,
@@ -575,19 +651,15 @@ class ModelDispatcher(InferenceRouter):
         else:
             req_cap = capability
 
-        # Filter by capability; fall back to base capability if specific pool has no candidates
-        capable = [
-            pair for pair in self._registry.values()
-            if pair[0].supports(req_cap) and pair[0].supports(capability)
-            and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(req_cap))
-            and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(capability))
-        ]
+        # Which models *can* serve this (req_cap, capability) pair is a pure function
+        # of the registry, so it is cached per registry generation; every dynamic
+        # check (capability cooldowns, rate limits, provider health) still runs below
+        # on each call, so a cooling-down model is never served from cache.
+        supports_both = self._capability_supported(req_cap, capability)
+        capable = [pair for pair in supports_both if not self._capability_cooled(pair[0], req_cap, capability)]
         if not capable:
-            capable = [
-                pair for pair in self._registry.values()
-                if pair[0].supports(capability)
-                and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(capability))
-            ]
+            supports_base = self._capability_supported(capability, capability)
+            capable = [pair for pair in supports_base if not self._capability_cooled(pair[0], capability)]
         if not capable:
             return []
 
@@ -677,9 +749,7 @@ class ModelDispatcher(InferenceRouter):
 
         return self._promote_preferred(available, capability, priority)
 
-    def _free_fallback_candidates(
-        self, capability: ModelCapability, estimated_tokens: int
-    ) -> list[_Candidate]:
+    def _free_fallback_candidates(self, capability: ModelCapability, estimated_tokens: int) -> list[_Candidate]:
         """All free, healthy, context-fitting models - the safety net.
 
         Used when a priority pool (e.g. reasoning/fast_cheap) is entirely
@@ -690,7 +760,8 @@ class ModelDispatcher(InferenceRouter):
         provider breaker, and respects the payload-size cap.
         """
         capable = [
-            pair for pair in self._registry.values()
+            pair
+            for pair in self._registry.values()
             if pair[0].supports(capability)
             and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(capability))
         ]
@@ -907,15 +978,23 @@ class ModelDispatcher(InferenceRouter):
         call_fn: Callable[[Provider, str], Awaitable],
         is_valid: Callable[[Any], bool] | None = None,
         sticky_key: tuple[str, str, str, str] | None = None,
-        fallback_candidates: list[_Candidate] | None = None,
+        fallback_candidates: list[_Candidate] | _Deferred | None = None,
         allow_wait: bool = True,
         capability: ModelCapability | str | None = None,
     ):
+        # Resolved only where it is used, so a deferred fallback stays unbuilt on
+        # the common path where the primary chain succeeds.
+        def _fallback() -> list[_Candidate]:
+            if fallback_candidates is None:
+                return []
+            return fallback_candidates.get() if isinstance(fallback_candidates, _Deferred) else fallback_candidates
+
         if not candidates:
             # Nothing in the primary pool - go straight to the fallback (free tier)
             # if one was supplied, otherwise fail fast.
-            if fallback_candidates:
-                candidates = fallback_candidates
+            resolved = _fallback()
+            if resolved:
+                candidates = resolved
                 used_fallback = True
             else:
                 raise AllModelsRateLimitedError("No models available for this request")
@@ -1033,9 +1112,7 @@ class ModelDispatcher(InferenceRouter):
                 )
             except ProviderAuthError:
                 self._provider_health.mark_down(info.provider_name, "provider auth failed")
-                self._rate_limit_status.record_provider_down(
-                    info.provider_name, "provider auth failed"
-                )
+                self._rate_limit_status.record_provider_down(info.provider_name, "provider auth failed")
                 logger.warning(
                     "Provider auth failed: %s/%s - skipping provider for 24 h",
                     info.provider_name,
@@ -1045,9 +1122,7 @@ class ModelDispatcher(InferenceRouter):
                 self._record_model_outcome(key, False)
                 self._persist_model_score(key)
                 state = self._provider_health.mark_degraded(info.provider_name, str(e) or "server outage")
-                self._rate_limit_status.record_provider_down(
-                    info.provider_name, str(e) or "server outage"
-                )
+                self._rate_limit_status.record_provider_down(info.provider_name, str(e) or "server outage")
                 logger.warning(
                     "Provider degraded: %s - circuit %s (%s)",
                     info.provider_name,
@@ -1091,10 +1166,12 @@ class ModelDispatcher(InferenceRouter):
 
         # Primary pool exhausted (all paid models out of credits / rate-limited /
         # down). If a free-tier fallback was supplied, try it before giving up.
-        if fallback_candidates and not used_fallback:
+        # This is the first point that needs the fallback, so it is built here.
+        resolved_fallback = _fallback() if not used_fallback else []
+        if resolved_fallback:
             logger.info("Primary pool exhausted - falling back to free-tier models")
             return await self._dispatch(
-                fallback_candidates,
+                resolved_fallback,
                 call_fn,
                 is_valid=is_valid,
                 sticky_key=sticky_key,
@@ -1104,7 +1181,7 @@ class ModelDispatcher(InferenceRouter):
             )
 
         # Check for transient rate limit cooldowns across all evaluated candidates
-        all_evaluated = candidates + (fallback_candidates or [])
+        all_evaluated = candidates + resolved_fallback
         transient_waits: list[float] = []
         for info, _ in all_evaluated:
             key = (info.model_id, info.provider_name)
