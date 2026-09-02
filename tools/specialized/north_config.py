@@ -11,6 +11,7 @@ immediately (the inference router is rebuilt in place — no restart needed).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from pathlib import Path
@@ -20,19 +21,36 @@ from inference.registry import PROVIDER_DEFINITIONS
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
+
+def _upsert_env_key(path: Path, key: str, value: str) -> None:
+    """Set `key=value` in the .env at *path*, replacing any existing line.
+
+    Blocking - call via to_thread.
+    """
+    current = path.read_text(encoding="utf-8") if path.exists() else ""
+    pattern = re.compile(rf"^{re.escape(key)}=.*", re.MULTILINE)
+    if pattern.search(current):
+        new_text = pattern.sub(f"{key}={value}", current)
+    else:
+        trailing = "\n" if current and not current.endswith("\n") else ""
+        new_text = current + f"{trailing}{key}={value}\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new_text, encoding="utf-8")
+
+
 # Keys whose values should be masked in output (secrets)
-_SECRET_KEYS = frozenset({
-    *(definition.env_key for definition in PROVIDER_DEFINITIONS if definition.env_key),
-    "NORTH_TELEGRAM_BOT_TOKEN",
-    "NORTH_SECRET",
-    "NORTH_ANTHROPIC_API_KEY",
-    "NORTH_OPENAI_API_KEY",
-})
+_SECRET_KEYS = frozenset(
+    {
+        *(definition.env_key for definition in PROVIDER_DEFINITIONS if definition.env_key),
+        "NORTH_TELEGRAM_BOT_TOKEN",
+        "NORTH_SECRET",
+        "NORTH_ANTHROPIC_API_KEY",
+        "NORTH_OPENAI_API_KEY",
+    }
+)
 
 # Keys that affect the live inference router and need a rebuild on change.
-_INFERENCE_KEYS = frozenset(
-    definition.env_key for definition in PROVIDER_DEFINITIONS if definition.env_key
-)
+_INFERENCE_KEYS = frozenset(definition.env_key for definition in PROVIDER_DEFINITIONS if definition.env_key)
 
 
 class NorthConfigTool(Tool):
@@ -91,13 +109,13 @@ class NorthConfigTool(Tool):
                 "description": "scoring action: weight for the curated preferred-model boost (0..1+)",
             },
             "family_tiers": {
-                            "type": "object",
-                            "additionalProperties": {"type": "number"},
-                            "description": (
-                                "scoring action: per-family quality overrides (substring -> 0..1). "
-                                "E.g. {\"opus\": 0.97, \"custom-model\": 0.85}"
-                            ),
-                        },
+                "type": "object",
+                "additionalProperties": {"type": "number"},
+                "description": (
+                    "scoring action: per-family quality overrides (substring -> 0..1). "
+                    'E.g. {"opus": 0.97, "custom-model": 0.85}'
+                ),
+            },
         },
         "required": ["action"],
     }
@@ -188,8 +206,7 @@ class NorthConfigTool(Tool):
             key = data.get("key", "")
             value = data.get("value", "")
             note = data.get("note", "")
-            return f"✅ Written `{key}={self._mask(key, value)}` to " \
-                   f"`{self._env_path()}`.{note}"
+            return f"✅ Written `{key}={self._mask(key, value)}` to `{self._env_path()}`.{note}"
         elif action == "scoring":
             cfg = data.get("config", {})
             note = data.get("note", "")
@@ -271,23 +288,8 @@ class NorthConfigTool(Tool):
                     error="Value cannot be empty.",
                 )
 
-            # Read current .env content
-            path = self._env_path()
-            current = ""
-            if path.exists():
-                current = path.read_text(encoding="utf-8")
-
-            # Replace existing key or append
-            pattern = re.compile(rf"^{re.escape(key)}=.*", re.MULTILINE)
-            if pattern.search(current):
-                new_text = pattern.sub(f"{key}={value}", current)
-            else:
-                trailing = "\n" if current and not current.endswith("\n") else ""
-                new_text = current + f"{trailing}{key}={value}\n"
-
-            # Write
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(new_text, encoding="utf-8")
+            # Upsert the key in .env off-thread (CODING_STYLE §10.3).
+            await asyncio.to_thread(_upsert_env_key, self._env_path(), key, value)
 
             note = self._apply_runtime(key)
 
@@ -306,10 +308,7 @@ class NorthConfigTool(Tool):
             # Use NorthSettings (which has the scoring property) not config.settings
             ns = NorthSettings(self._settings_path())
             reload_settings()  # still reload .env for any API key changes
-            if any(
-                k in input.params
-                for k in ("family_weight", "ema_weight", "curation_weight", "family_tiers")
-            ):
+            if any(k in input.params for k in ("family_weight", "ema_weight", "curation_weight", "family_tiers")):
                 cur = ns.scoring
                 new = ScoringConfig(
                     family_weight=float(input.params.get("family_weight", cur.family_weight)),
@@ -339,6 +338,7 @@ class NorthConfigTool(Tool):
         # ── power ──────────────────────────────────────────────────────────
         if action == "power":
             from config.strategy import NorthSettings, StrategyMode
+
             ns = NorthSettings(self._settings_path())
             if "value" in input.params and input.params["value"]:
                 val = (input.params["value"] or "").strip().lower()
@@ -363,6 +363,7 @@ class NorthConfigTool(Tool):
         if action == "autonomy":
             from approval.mode import parse_approval_mode
             from config.strategy import NorthSettings
+
             ns = NorthSettings(self._settings_path())
             if "value" in input.params and input.params["value"]:
                 val = (input.params["value"] or "").strip().lower()

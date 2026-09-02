@@ -272,36 +272,48 @@ async def approvals(limit: int = 100) -> list[dict[str, Any]]:
     return [card.model_dump(mode="json") for card in _require(_approval_store, "ApprovalStore").all(limit)]
 
 
+def _bootstrap_overview(home: Path) -> tuple[list, list[str], bool]:
+    """Read bootstrap state from disk: (progress, candidate paths, completed?).
+
+    Blocking - `_discover_files()` walks the filesystem, so call via to_thread.
+    """
+    progress = _load_progress(home) or []
+    candidates = [str(path.resolve()) for path in _discover_files()]
+    return progress, candidates, (home / ".bootstrapped").exists()
+
+
 @router.get("/system")
 async def system_overview() -> dict[str, Any]:
     settings = _require(_north_settings, "North settings")
     providers = []
     for definition in PROVIDER_DEFINITIONS:
         credential = definition.resolve_credential(settings)
-        providers.append({
-            "id": definition.id,
-            "name": definition.display_name,
-            "description": definition.description,
-            "auth_kind": definition.auth_kind.value,
-            "configured": definition.is_configured(settings),
-            "env_key": definition.env_key,
-            "setup_url": definition.setup_url,
-            "credential_hint": (
-                credential[:4] + "…" + credential[-4:]
-                if len(credential) > 8
-                else ("configured" if credential else "")
-            ),
-        })
+        providers.append(
+            {
+                "id": definition.id,
+                "name": definition.display_name,
+                "description": definition.description,
+                "auth_kind": definition.auth_kind.value,
+                "configured": definition.is_configured(settings),
+                "env_key": definition.env_key,
+                "setup_url": definition.setup_url,
+                "credential_hint": (
+                    credential[:4] + "…" + credential[-4:]
+                    if len(credential) > 8
+                    else ("configured" if credential else "")
+                ),
+            }
+        )
     home = _require(_north_home, "North home")
-    progress = _load_progress(home) or []
-    candidates = [str(path.resolve()) for path in _discover_files()]
-    marker = home / ".bootstrapped"
-    completed = progress or ([{"path": path, "status": "completed"} for path in candidates] if marker.exists() else [])
+    # _discover_files() walks the user's home directory - off-thread so this
+    # GET never stalls the event loop (CODING_STYLE §10.3).
+    progress, candidates, bootstrapped = await asyncio.to_thread(_bootstrap_overview, home)
+    completed = progress or ([{"path": path, "status": "completed"} for path in candidates] if bootstrapped else [])
     return {
         "providers": providers,
         "settings": {"power": settings.power.value, "autonomy": settings.autonomy.value},
         "bootstrap": {
-            "status": "complete" if marker.exists() else ("in_progress" if progress else "not_started"),
+            "status": "complete" if bootstrapped else ("in_progress" if progress else "not_started"),
             "completed": completed,
             "candidates": candidates,
             "candidate_count": len(candidates),
@@ -485,9 +497,7 @@ def _provider_auth_payload(definition: ProviderDefinition) -> dict[str, Any]:
         state = "disconnected"
         detail = status.detail
     account_hint = (
-        f"…{status.account_id[-6:]}"
-        if status.account_id and len(status.account_id) > 6
-        else status.account_id
+        f"…{status.account_id[-6:]}" if status.account_id and len(status.account_id) > 6 else status.account_id
     )
     return {
         "provider_id": definition.id,
@@ -574,17 +584,16 @@ async def logout_provider(provider_id: str) -> dict[str, Any]:
     return _provider_auth_payload(definition)
 
 
-@router.post("/providers/{provider_id}")
-async def update_provider(provider_id: str, body: ProviderCredentialUpdate) -> dict[str, Any]:
-    definition = _provider_definition(provider_id)
-    if not definition.env_key:
-        raise HTTPException(status_code=400, detail="This provider uses browser authentication; use the CLI login flow")
-    home = _require(_north_home, "North home")
+def _write_env_key(home: Path, env_key: str, value: str) -> None:
+    """Upsert `env_key=value` in ~/.north/.env with private permissions.
+
+    Blocking - call via to_thread so a request handler never stalls the loop.
+    """
     home.mkdir(parents=True, exist_ok=True)
     env_path = home / ".env"
     lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    prefix = f"{definition.env_key}="
-    replacement = f"{definition.env_key}={body.api_key.strip()}"
+    prefix = f"{env_key}="
+    replacement = f"{env_key}={value}"
     for index, line in enumerate(lines):
         if line.startswith(prefix):
             lines[index] = replacement
@@ -593,6 +602,15 @@ async def update_provider(provider_id: str, body: ProviderCredentialUpdate) -> d
         lines.append(replacement)
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     env_path.chmod(0o600)
+
+
+@router.post("/providers/{provider_id}")
+async def update_provider(provider_id: str, body: ProviderCredentialUpdate) -> dict[str, Any]:
+    definition = _provider_definition(provider_id)
+    if not definition.env_key:
+        raise HTTPException(status_code=400, detail="This provider uses browser authentication; use the CLI login flow")
+    home = _require(_north_home, "North home")
+    await asyncio.to_thread(_write_env_key, home, definition.env_key, body.api_key.strip())
     os.environ[definition.env_key] = body.api_key.strip()
     await _refresh_inference_runtime()
     return {"id": definition.id, "configured": True, "credential_hint": body.api_key[:4] + "…" + body.api_key[-4:]}

@@ -129,7 +129,7 @@ class GitWorktreeManager:
         slug = _slug(label)
         uniq = uuid.uuid4().hex[:8]
         branch = f"north/wt-{slug}-{uniq}"
-        self._root.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(self._root.mkdir, parents=True, exist_ok=True)
         path = str((self._root / f"{slug}-{uniq}").resolve())
 
         code, _, err = await _run_git(["worktree", "add", "-b", branch, path, base_sha], self._base)
@@ -230,4 +230,3 @@ class GitWorktreeManager:
                 deleted = int(parts[1]) if parts[1].isdigit() else 0
                 total += added + deleted
         return total
-

@@ -6,6 +6,7 @@ Writes SKILL.md to North's learned skills directory and reloads the SkillRegistr
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -25,6 +26,12 @@ _SLUG_RE = re.compile(r"[^a-z0-9_]+")
 def _slug(name: str) -> str:
     s = _SLUG_RE.sub("-", name.lower().strip()).strip("-")
     return s or "skill"
+
+
+def _write_skill_file(skill_dir: Path, skill_file: Path, document: str) -> None:
+    """Create the skill directory and write its SKILL.md. Blocking - use to_thread."""
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text(document, encoding="utf-8")
 
 
 class CreateSkillTool(Tool):
@@ -78,7 +85,6 @@ class CreateSkillTool(Tool):
 
         slug_name = _slug(raw_name)
         skill_dir = self._learned_dir / slug_name
-        skill_dir.mkdir(parents=True, exist_ok=True)
         skill_file = skill_dir / SKILL_FILENAME
 
         frontmatter = yaml.safe_dump(
@@ -93,7 +99,8 @@ class CreateSkillTool(Tool):
         document = f"---\n{frontmatter}---\n\n{instructions}\n"
 
         try:
-            skill_file.write_text(document, encoding="utf-8")
+            # mkdir + write off-thread so the agent loop is never blocked on disk.
+            await asyncio.to_thread(_write_skill_file, skill_dir, skill_file, document)
             if hasattr(self._registry, "reload"):
                 self._registry.reload()
             return ToolOutput(

@@ -295,6 +295,29 @@ def _read_artifact(path: Path | None, max_chars: int) -> str | None:
     return text
 
 
+def _remove_handoff_dir(path: Path) -> None:
+    """Delete a candidate's handoff directory. Blocking - call via to_thread."""
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _promote_handoff_dir(winner: Path, canonical: Path) -> None:
+    """Move the winning candidate's handoff dir into the canonical task dir.
+
+    Blocking (a whole directory tree) - call via to_thread. Falls back to
+    copy+delete when the rename crosses a filesystem boundary.
+    """
+    if not winner.exists():
+        return
+    if canonical.exists():
+        shutil.rmtree(canonical, ignore_errors=True)
+    try:
+        winner.rename(canonical)
+    except OSError:
+        shutil.copytree(winner, canonical, dirs_exist_ok=True)
+        shutil.rmtree(winner, ignore_errors=True)
+
+
 def _clean_issues(raw: object) -> list[str]:
     """Keep only concrete, non-trivial, de-duplicated critique issues, capped.
 
@@ -645,9 +668,7 @@ class Orchestrator:
                                 status=LedgerStatus.PENDING,
                             )
                         )
-                        await self._stream_manager.emit(
-                            rt.task_id, "task_resumed", {"attempt": rt.attempt}
-                        )
+                        await self._stream_manager.emit(rt.task_id, "task_resumed", {"attempt": rt.attempt})
                         task = asyncio.create_task(self._process_task(rt.task_id, rt.request))
                         self._active_tasks[rt.task_id] = task
                         task.add_done_callback(lambda _, tid=rt.task_id: self._active_tasks.pop(tid, None))
@@ -2517,21 +2538,14 @@ class Orchestrator:
                     await self._emit_integration(payload.task_id, agent.name, integration)
                     winner_result = results[i]  # type: ignore[assignment]
                     # Promote winning candidate handoff directory to canonical task directory
-                    winner_handoff = Path(handoff_dir_for(cand_task_id))
-                    canonical_handoff = Path(handoff_dir_for(payload.task_id))
-                    if winner_handoff.exists():
-                        if canonical_handoff.exists():
-                            shutil.rmtree(canonical_handoff, ignore_errors=True)
-                        try:
-                            winner_handoff.rename(canonical_handoff)
-                        except OSError:
-                            shutil.copytree(winner_handoff, canonical_handoff, dirs_exist_ok=True)
-                            shutil.rmtree(winner_handoff, ignore_errors=True)
+                    await asyncio.to_thread(
+                        _promote_handoff_dir,
+                        Path(handoff_dir_for(cand_task_id)),
+                        Path(handoff_dir_for(payload.task_id)),
+                    )
                 else:
                     await self._discard_worktree(manager, wt)
-                    cand_handoff = Path(handoff_dir_for(cand_task_id))
-                    if cand_handoff.exists():
-                        shutil.rmtree(cand_handoff, ignore_errors=True)
+                    await asyncio.to_thread(_remove_handoff_dir, Path(handoff_dir_for(cand_task_id)))
 
             if winner_result is not None:
                 return winner_result
@@ -2542,12 +2556,13 @@ class Orchestrator:
             return first  # type: ignore[return-value]
         finally:
             # Guarantee any worktrees and scratch directories left undiscarded are cleaned up
+            canonical = Path(handoff_dir_for(payload.task_id))
             for wt, _, cand_task_id in pairs:
                 if wt is not integrated_wt:
                     await self._discard_worktree(manager, wt)
                 cand_handoff = Path(handoff_dir_for(cand_task_id))
-                if cand_handoff.exists() and cand_handoff != Path(handoff_dir_for(payload.task_id)):
-                    shutil.rmtree(cand_handoff, ignore_errors=True)
+                if cand_handoff != canonical:
+                    await asyncio.to_thread(_remove_handoff_dir, cand_handoff)
 
     async def _candidate_tests_pass(self, wt: Worktree) -> bool | None:
         """Run the configured best-of-N test command in *wt*; True/False, or None if unset."""
@@ -2683,9 +2698,7 @@ class Orchestrator:
                         "attempt": payload.attempt,
                     },
                 )
-                payload = payload.model_copy(
-                    update={"run_id": generate_id(), "attempt": payload.attempt + 1}
-                )
+                payload = payload.model_copy(update={"run_id": generate_id(), "attempt": payload.attempt + 1})
                 self._maybe_refresh_pools_background()
 
     def _add_evidence_gate_violations(self, agent: Agent, result: AgentResult, violations: list[str]) -> list[str]:
@@ -2730,7 +2743,9 @@ class Orchestrator:
         if result.successful_tools is None or result.requires_approval or result.has_question:
             return
         ws = payload.workspace if payload is not None else None
-        violations = verify_claims(result.output, result.successful_tools, workspace=ws)
+        # verify_claims stats claimed paths on disk - off-thread so the check
+        # never blocks the event loop (CODING_STYLE §10.3).
+        violations = await asyncio.to_thread(verify_claims, result.output, result.successful_tools, ws)
         violations = self._add_evidence_gate_violations(agent, result, violations)
         if not violations:
             return
@@ -2792,7 +2807,9 @@ class Orchestrator:
         if repaired.successful_tools is None:
             return violations
 
-        remaining = verify_claims(repaired.output, repaired.successful_tools, workspace=payload.workspace)
+        remaining = await asyncio.to_thread(
+            verify_claims, repaired.output, repaired.successful_tools, payload.workspace
+        )
         if len(remaining) >= len(violations):
             return violations  # no improvement - keep the original answer
 

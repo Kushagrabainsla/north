@@ -50,131 +50,143 @@ _BOOTSTRAP_DELAY_SECONDS = 2.0
 _SOURCE_DIRS = ("Downloads", "Documents", "Desktop")
 
 # Tokenized keyword dictionaries for word-boundary matching
-_TIER1_KEYWORDS = frozenset({
-    "resume",
-    "cv",
-    "bio",
-    "profile",
-    "portfolio",
-    "coverletter",
-    "about",
-    "aboutme",
-    "application",
-    "vitae",
-})
+_TIER1_KEYWORDS = frozenset(
+    {
+        "resume",
+        "cv",
+        "bio",
+        "profile",
+        "portfolio",
+        "coverletter",
+        "about",
+        "aboutme",
+        "application",
+        "vitae",
+    }
+)
 
-_TIER2_KEYWORDS = frozenset({
-    "goals",
-    "goal",
-    "habits",
-    "habit",
-    "routine",
-    "routines",
-    "health",
-    "fitness",
-    "workout",
-    "diet",
-    "nutrition",
-    "budget",
-    "budgets",
-    "finances",
-    "finance",
-    "expenses",
-    "expense",
-    "spending",
-    "tax",
-    "taxes",
-    "journal",
-    "diary",
-    "preferences",
-    "preference",
-    "personal",
-    "schedule",
-    "schedules",
-    "todo",
-    "todos",
-})
+_TIER2_KEYWORDS = frozenset(
+    {
+        "goals",
+        "goal",
+        "habits",
+        "habit",
+        "routine",
+        "routines",
+        "health",
+        "fitness",
+        "workout",
+        "diet",
+        "nutrition",
+        "budget",
+        "budgets",
+        "finances",
+        "finance",
+        "expenses",
+        "expense",
+        "spending",
+        "tax",
+        "taxes",
+        "journal",
+        "diary",
+        "preferences",
+        "preference",
+        "personal",
+        "schedule",
+        "schedules",
+        "todo",
+        "todos",
+    }
+)
 
-_TIER3_KEYWORDS = frozenset({
-    "transcript",
-    "offer",
-    "contract",
-    "coursework",
-    "summary",
-    "notes",
-    "note",
-    "eval",
-    "review",
-})
+_TIER3_KEYWORDS = frozenset(
+    {
+        "transcript",
+        "offer",
+        "contract",
+        "coursework",
+        "summary",
+        "notes",
+        "note",
+        "eval",
+        "review",
+    }
+)
 
-_NOISE_KEYWORDS = frozenset({
-    "readme",
-    "license",
-    "licence",
-    "changelog",
-    "contributing",
-    "api",
-    "spec",
-    "architecture",
-    "docker",
-    "dockerfile",
-    "dataset",
-    "datasets",
-    "dump",
-    "dumps",
-    "export",
-    "exports",
-    "log",
-    "logs",
-    "sample",
-    "samples",
-    "assignment",
-    "assignments",
-    "lab",
-    "labs",
-    "homework",
-    "syllabus",
-    "fixture",
-    "fixtures",
-    "test",
-    "tests",
-    "benchmark",
-    "benchmarks",
-})
+_NOISE_KEYWORDS = frozenset(
+    {
+        "readme",
+        "license",
+        "licence",
+        "changelog",
+        "contributing",
+        "api",
+        "spec",
+        "architecture",
+        "docker",
+        "dockerfile",
+        "dataset",
+        "datasets",
+        "dump",
+        "dumps",
+        "export",
+        "exports",
+        "log",
+        "logs",
+        "sample",
+        "samples",
+        "assignment",
+        "assignments",
+        "lab",
+        "labs",
+        "homework",
+        "syllabus",
+        "fixture",
+        "fixtures",
+        "test",
+        "tests",
+        "benchmark",
+        "benchmarks",
+    }
+)
 
 # Backward compatibility alias
 _BOOST_FILENAMES = _TIER1_KEYWORDS | _TIER2_KEYWORDS
 _DEPRIORITIZE_FILENAMES = _NOISE_KEYWORDS
 
-_SKIP_DIRS = frozenset({
-    ".git",
-    "node_modules",
-    ".venv",
-    "venv",
-    "__pycache__",
-    ".config",
-    ".ssh",
-    ".aws",
-    ".cache",
-    ".npm",
-    ".cargo",
-    ".rustup",
-    ".local",
-    ".Trash",
-    "build",
-    "dist",
-})
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".config",
+        ".ssh",
+        ".aws",
+        ".cache",
+        ".npm",
+        ".cargo",
+        ".rustup",
+        ".local",
+        ".Trash",
+        "build",
+        "dist",
+    }
+)
 
-_EXTENSIONS = frozenset({
-    ".csv",
-    ".txt",
-    ".md",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".pdf",
-    ".docx",
-})
+_EXTENSIONS = frozenset(
+    {
+        ".csv",
+        ".txt",
+        ".md",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".pdf",
+        ".docx",
+    }
+)
 
 # Path fragments that indicate low-value / noisy files
 _DENY_PATH_FRAGMENTS = (
@@ -716,6 +728,10 @@ async def _extract_unified(
     fact_items = parsed.get("facts", []) if isinstance(parsed, dict) else []
     candidates: list[dict] = []
     seen_facts: set[str] = set()
+    # Every candidate records the same source fingerprint, and hashing reads the
+    # whole file - so do it once here rather than once per extracted fact.
+    source_hash, source_mtime = await asyncio.to_thread(_fingerprint, path)
+    source_path = str(path)
 
     for item in fact_items:
         if isinstance(item, dict):
@@ -724,15 +740,17 @@ async def _extract_unified(
             text = _clean_fact(item.get("content", ""))
             if text and text not in seen_facts:
                 seen_facts.add(text)
-                candidates.append({
-                    "content": text,
-                    "subject": "user",
-                    "confidence": float(item.get("confidence", 0.8)),
-                    "source_path": str(path),
-                    "source_hash": _file_hash(path),
-                    "source_mtime": path.stat().st_mtime,
-                    "evidence": item.get("evidence"),
-                })
+                candidates.append(
+                    {
+                        "content": text,
+                        "subject": "user",
+                        "confidence": float(item.get("confidence", 0.8)),
+                        "source_path": source_path,
+                        "source_hash": source_hash,
+                        "source_mtime": source_mtime,
+                        "evidence": item.get("evidence"),
+                    }
+                )
 
     # 2. Parse profile sections (supports nested {"profile": {...}} and top-level profile dicts)
     raw_profile = parsed.get("profile") if isinstance(parsed, dict) else None
@@ -754,15 +772,17 @@ async def _extract_unified(
                 text = _clean_fact(item)
                 if text and text not in seen_facts:
                     seen_facts.add(text)
-                    candidates.append({
-                        "content": text,
-                        "subject": "user",
-                        "confidence": 0.85,
-                        "source_path": str(path),
-                        "source_hash": _file_hash(path),
-                        "source_mtime": path.stat().st_mtime,
-                        "evidence": None,
-                    })
+                    candidates.append(
+                        {
+                            "content": text,
+                            "subject": "user",
+                            "confidence": 0.85,
+                            "source_path": source_path,
+                            "source_hash": source_hash,
+                            "source_mtime": source_mtime,
+                            "evidence": None,
+                        }
+                    )
         profile_md = "\n\n".join(sections)
     else:
         profile_md = ""
@@ -796,10 +816,22 @@ def _synthesize_profile(profile_sections: list[str]) -> str:
 def _file_hash(path: Path) -> str:
     """SHA-256 hash of file contents."""
     import hashlib
+
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except Exception:
         return ""
+
+
+def _fingerprint(path: Path) -> tuple[str, float]:
+    """(sha256, mtime) for one file - the pair the progress checkpoint stores.
+
+    Reads the whole file, so call via to_thread and cache the result per path.
+    """
+    try:
+        return _file_hash(path), path.stat().st_mtime
+    except OSError:
+        return "", 0.0
 
 
 def _clean_fact(fact: object) -> str | None:
@@ -845,9 +877,7 @@ _SECRET_RE = re.compile(
     """,
 )
 
-_CC_RE = re.compile(
-    r"\b(?:\d[ -]*?){13,19}\b"
-)
+_CC_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 
 _USER_REF_RE = re.compile(
     r"\b(?:user|kushagra|bainsla|he|his|him|she|her|their|they|employee)\b",
@@ -940,6 +970,23 @@ async def run_bootstrap_if_needed(
         len(completed_paths),
     )
     total_facts = 0
+    # Hash and stat each file once. The progress snapshot is rebuilt after every
+    # file, and hashing reads the whole file, so recomputing per snapshot made
+    # this O(files²) reads for no benefit.
+    fingerprints: dict[str, tuple[str, float]] = {}
+
+    async def _snapshot_progress() -> None:
+        """Persist the completed-file checkpoint, off the event loop."""
+        items = []
+        for p in files:
+            resolved = str(p.resolve())
+            if resolved not in completed_paths:
+                continue
+            if resolved not in fingerprints:
+                fingerprints[resolved] = await asyncio.to_thread(_fingerprint, p)
+            file_hash, mtime = fingerprints[resolved]
+            items.append({"path": resolved, "hash": file_hash, "mtime": mtime, "status": "completed"})
+        await asyncio.to_thread(_save_progress, north_home, items)
 
     for path in pending:
         candidates = []
@@ -974,11 +1021,7 @@ async def run_bootstrap_if_needed(
                 path,
                 len(pending) - len(completed_paths),
             )
-            progress_items = [
-                {"path": str(p.resolve()), "hash": _file_hash(p), "mtime": p.stat().st_mtime, "status": "completed"}
-                for p in files if str(p.resolve()) in completed_paths
-            ]
-            _save_progress(north_home, progress_items)
+            await _snapshot_progress()
             return
 
         for cand in candidates:
@@ -999,20 +1042,17 @@ async def run_bootstrap_if_needed(
                 logger.warning("bootstrap: failed to store fact from %s", path, exc_info=True)
 
         completed_paths.add(str(path.resolve()))
-        progress_items = [
-            {"path": str(p.resolve()), "hash": _file_hash(p), "mtime": p.stat().st_mtime, "status": "completed"}
-            for p in files if str(p.resolve()) in completed_paths
-        ]
-        _save_progress(north_home, progress_items)
+        await _snapshot_progress()
         await asyncio.sleep(_BOOTSTRAP_DELAY_SECONDS)
 
     # Keep the fact store atomic: profile markdown is written to context docs,
     # while each durable fact remains a single claim rather than a paragraph.
 
     # Write versioned marker only on clean completion
-    marker.write_text(
+    await asyncio.to_thread(
+        marker.write_text,
         json.dumps({"bootstrap_version": _BOOTSTRAP_VERSION, "completed_at": datetime.now(UTC).isoformat()}),
         encoding="utf-8",
     )
-    (north_home / _PROGRESS_FILE).unlink(missing_ok=True)
+    await asyncio.to_thread((north_home / _PROGRESS_FILE).unlink, missing_ok=True)
     logger.info("bootstrap: done — stored %d facts from %d high-ROI files", total_facts, len(pending))
