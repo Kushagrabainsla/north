@@ -19,9 +19,9 @@ async def health_check(request: Request = None) -> dict:  # noqa: RUF013 - calla
 
     The route remains unauthenticated for Docker/load-balancer probes, so it is
     not covered by the router-level services binding and reads them from the app
-    directly. It returns HTTP 200 with status=degraded when the API is alive but a
-    dependency is not ready, letting the browser tell that apart from an
-    unreachable API.
+    directly. It always returns HTTP 200 so the browser can tell a struggling API
+    apart from an unreachable one: status=starting while a dependency is still
+    warming up, degraded once something has actually failed.
     """
     services = services_of(request.app) if request is not None else current_services()
     checks: dict[str, dict[str, Any]] = {"api": {"status": "ok"}}
@@ -53,9 +53,31 @@ async def health_check(request: Request = None) -> dict:  # noqa: RUF013 - calla
     else:
         try:
             summary = services.inference_router.health_summary()
-            checks["inference"] = {"status": "ok" if summary["ready"] else "failed", **summary}
+            checks["inference"] = {"status": _inference_status(summary), **summary}
         except Exception as exc:
             checks["inference"] = {"status": "failed", "detail": f"{type(exc).__name__}: {exc}"}
 
-    status = "ok" if all(check["status"] == "ok" for check in checks.values()) else "degraded"
-    return {"status": status, "checks": checks}
+    return {"status": _overall_status(checks), "checks": checks}
+
+
+def _inference_status(summary: dict[str, Any]) -> str:
+    """ok once models are usable, starting until the first catalogue fetch returns.
+
+    Provider catalogues are fetched over the network *after* the API begins
+    serving, so a freshly started North has no models for a few seconds. Calling
+    that "failed" cries wolf on every restart. A router that does not report
+    ``catalog_loaded`` is treated as loaded, so its behaviour is unchanged.
+    """
+    if summary.get("ready"):
+        return "ok"
+    return "failed" if summary.get("catalog_loaded", True) else "starting"
+
+
+def _overall_status(checks: dict[str, dict[str, Any]]) -> str:
+    """ok when everything passed, starting when the only gap is still warming up."""
+    statuses = {check["status"] for check in checks.values()}
+    if statuses == {"ok"}:
+        return "ok"
+    if statuses <= {"ok", "starting"}:
+        return "starting"
+    return "degraded"

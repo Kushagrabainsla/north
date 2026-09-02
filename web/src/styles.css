@@ -86,7 +86,9 @@ a { color: inherit; text-decoration: none; }
 .online-orb { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ddffb7, var(--accent) 35%, #426c26 70%); box-shadow: 0 0 25px rgba(181,243,109,.24); }
 .online-orb.health-offline, .health-offline .health-dot { background: #ff7777; box-shadow: 0 0 18px rgba(255,119,119,.25); }
 .online-orb.health-checking, .health-checking .health-dot { background: var(--amber); box-shadow: 0 0 18px rgba(255,201,105,.2); }
+.online-orb.health-starting, .health-starting .health-dot { background: var(--amber); box-shadow: 0 0 18px rgba(255,201,105,.2); animation: health-pulse 1.4s ease-in-out infinite; }
 .online-orb.health-degraded, .health-degraded .health-dot { background: var(--amber); box-shadow: 0 0 18px rgba(255,201,105,.2); }
+@keyframes health-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 .health-indicator { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .health-indicator b, .health-indicator small { display: block; }
 .health-indicator b { font-size: 10px; white-space: nowrap; }

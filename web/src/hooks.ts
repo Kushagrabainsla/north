@@ -28,6 +28,13 @@ export function useResource<T>(path: string | null, refreshMs = 0) {
 export function useHealth() {
   const resource = useResource<{ status: string; checks?: Record<string, { status: string; detail?: string }> }>("/health", 5000);
   const online = resource.data?.status === "ok" && !resource.error;
-  const state = resource.loading && !resource.data ? "checking" : online ? "online" : resource.data?.status === "degraded" ? "degraded" : "offline";
+  // "starting" is North warming up (provider catalogues load after the API is
+  // serving), not a fault - it must not read the same as "degraded".
+  const reported = resource.error ? undefined : resource.data?.status;
+  const state = resource.loading && !resource.data ? "checking"
+    : online ? "online"
+    : reported === "starting" ? "starting"
+    : reported === "degraded" ? "degraded"
+    : "offline";
   return { ...resource, online, state };
 }

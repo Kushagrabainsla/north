@@ -54,10 +54,20 @@ export function Empty({ children = "Nothing here yet." }: { children?: ReactNode
 export function Loading() { return <div className="loading"><span className="pulse"/>Loading</div>; }
 export function ErrorNotice({ message }: { message: string }) { return <div className="error-notice">{message}</div>; }
 
+// What each health state says to the reader. "starting" is North warming up -
+// the provider catalogues load after the API is serving - so it must read as
+// progress, not as a fault.
+const HEALTH_TEXT: Record<string, { label: string; detail: string }> = {
+  online: { label: "North is operational", detail: "All core checks passed" },
+  starting: { label: "North is starting", detail: "Loading models - this takes a few seconds" },
+  degraded: { label: "North needs attention", detail: "One or more core checks failed" },
+  offline: { label: "North is offline", detail: "Health endpoint unreachable" },
+  checking: { label: "Checking North", detail: "Waiting for readiness check" },
+};
+
 export function HealthIndicator({ variant = "compact" }: { variant?: "compact" | "panel" | "hero" }) {
   const health = useHealth();
-  const label = health.state === "online" ? "North is operational" : health.state === "degraded" ? "North needs attention" : health.state === "offline" ? "North is offline" : "Checking North";
-  const detail = health.state === "online" ? "All core checks passed" : health.state === "degraded" ? "One or more core checks failed" : health.state === "offline" ? "Health endpoint unreachable" : "Waiting for readiness check";
+  const { label, detail } = HEALTH_TEXT[health.state] ?? HEALTH_TEXT.checking;
   const checkTitle = health.data?.checks ? Object.entries(health.data.checks).map(([name, check]) => `${name}: ${check.status}${check.detail ? ` (${check.detail})` : ""}`).join("\n") : detail;
   if (variant === "hero") return <><span className={`online-orb health-${health.state}`} title={checkTitle}/><div><h2>{label}</h2><p>Live readiness check · core services</p></div></>;
   return <div className={`health-indicator health-${health.state}`} title={checkTitle} aria-label={`${label}. ${detail}`}><span className="health-dot"/><div><b>{label}</b><small>{detail}</small></div></div>;

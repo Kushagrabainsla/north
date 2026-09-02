@@ -166,6 +166,10 @@ class ModelDispatcher(InferenceRouter):
         self._candidate_cache: dict[tuple, tuple[int, list[_Candidate]]] = {}
         self._context_windows: dict[str, int] = {}
         self._context_windows_normalised: dict[str, int] = {}
+        # Provider catalogues are fetched over the network after construction, so
+        # until the first refresh_pools() returns an empty registry means "not
+        # loaded yet" rather than "no models available".
+        self._catalog_refreshed: bool = False
         self._build_registry()
         self._cooldowns.load()
         self._rate_limit_status.load()
@@ -415,6 +419,10 @@ class ModelDispatcher(InferenceRouter):
                     res,
                 )
         self._build_registry()
+        # The first refresh has now finished, whether or not any provider
+        # answered. An empty catalogue from here on is a real fault, not a
+        # not-yet-loaded one - see health_summary().
+        self._catalog_refreshed = True
         self._validate_preferred()
 
     def rebuild(self, providers: list[Provider]) -> None:
@@ -522,6 +530,7 @@ class ModelDispatcher(InferenceRouter):
             "ready": bool(available),
             "models": len(available),
             "providers": len({info.provider_name for info in available}),
+            "catalog_loaded": self._catalog_refreshed,
         }
 
     # ---- EMA confidence tracking ----

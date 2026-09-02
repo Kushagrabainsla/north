@@ -13,6 +13,17 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.9.2] - 2026-09-02
+### Fixed
+- **The dashboard said "North needs attention" on every restart** (`orchestrator/api/health.py`, `inference/dispatcher.py`, `web/src/hooks.ts`, `web/src/components.tsx`, `web/src/styles.css`). Provider catalogues are fetched over the network *after* the API starts serving - deliberately, so the API stays responsive - which means a freshly started North has zero models for a few seconds. `/health` reported that as `inference: failed` and the whole instance as `degraded`, so the banner cried wolf on every single start and there was nothing to distinguish it from a genuine outage.
+
+  `/health` now has a third state. The dispatcher tracks whether its first `refresh_pools()` has returned, and an empty catalogue reports `starting` until it has and `failed` after - so a restart shows "North is starting · loading models", while an empty catalogue once the fetch has actually run still reports `degraded` as before. A real failure in any other check outranks a warming one. A router that does not report `catalog_loaded` is treated as loaded, so nothing else changes behaviour.
+
+### Changed
+- **The health indicator's labels are a lookup table** (`web/src/components.tsx`). They were two four-deep nested ternaries over the same state, which this change would have made five-deep each. One `HEALTH_TEXT` map keyed by state replaces both (CODING_STYLE §4.14).
+
+---
+
 ## [1.9.1] - 2026-09-02
 ### Fixed
 - **`north reset` destroyed every provider login** (`cli/main.py`, `inference/codex_auth.py`). The command promises "your API key in .env is kept unless you pass `--all`", but it preserved *only* `.env` before deleting `~/.north` - so `~/.north/credentials/`, where OAuth logins like OpenAI Codex live, was wiped by a reset that said it was keeping your credentials. The only symptom was the provider quietly reporting "not configured" afterwards, with nothing to connect it to the reset.
