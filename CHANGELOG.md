@@ -3,6 +3,12 @@
 All notable changes to north are documented here.
 
 ## [Unreleased]
+### Changed
+- **Recall path now embeds a task prompt once per agent run** (`config/dependencies.py`, `agents/base.py`, `memory/gateway.py`): added in-flight de-duplication to the shared `embed_fn` so the four concurrent recalls an agent run fans out (facts, episodes, skills, tool ranking) share one round trip instead of each missing the cache and paying its own; skill selection moved into `Agent._select_skills()` and is now performed once in `run()` and passed to both `_load_context` and `_load_tools` rather than run twice; dropped the redundant `FactStore.count()` pre-check, since `search()` already returns `[]` on an empty store. The embed cache is now a true LRU.
+
+### Fixed
+- **Short embedding responses no longer silently misalign vectors** (`config/dependencies.py`, `inference/exceptions.py`): `embed_fn` now requires one vector per input text and raises the new `EmbeddingCountMismatchError` otherwise. Previously a provider returning fewer vectors than requested had the gaps dropped and every later vector shifted onto the wrong item, so callers that zip the result against their own lists (skills, tool descriptions, code chunks) would rank against a corrupted mapping with no error.
+
 ### Added
 - **`browser` Universal Tool & Browser Research Skill** (`tools/universal/browser.py`, `skills/builtin/browser-research-and-extraction/SKILL.md`, `tests/unit/tools/test_browser.py`):
   - Added high-performance browser automation and structured web extraction tool wrapping `chrome-agent` (3 MB Rust CDP binary), available universally to **all** agents (`general`, `researcher`, `coder`, `news_briefing`, `wellness`, `home`, etc.).

@@ -11,7 +11,9 @@ See docs/CODING_STYLE.md Section 6.3.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -21,6 +23,7 @@ from approval.store import ApprovalStore
 from config.settings import settings
 from config.strategy import NorthSettings
 from inference import InferenceRouter
+from inference.exceptions import EmbeddingCountMismatchError
 from inference.factory import build_router
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
@@ -149,30 +152,73 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     )
     cost_tracker = CostTracker(base_router)
 
-    _embed_cache: dict[str, list[float]] = {}
+    _embed_cache: OrderedDict[str, list[float]] = OrderedDict()
     _EMBED_CACHE_MAX_SIZE = 512
+    # Text → the in-flight request already embedding it. An agent run fans out
+    # four concurrent recalls (facts, episodes, skills ×2) for the *same* prompt;
+    # without this they all miss the cache and each pays a round trip.
+    _embed_inflight: dict[str, asyncio.Future[list[float]]] = {}
+
+    def _cache_put(text: str, emb: list[float]) -> None:
+        _embed_cache[text] = emb
+        _embed_cache.move_to_end(text)
+        while len(_embed_cache) > _EMBED_CACHE_MAX_SIZE:
+            _embed_cache.popitem(last=False)
+
+    async def _embed_uncached(texts: list[str]) -> list[list[float]]:
+        """Embed *texts*, returning exactly one vector per input, in order."""
+        resp = await cost_tracker.embed(EmbedRequest(texts=texts, component="embed"))
+        embeddings = list(resp.embeddings)
+        if len(embeddings) != len(texts):
+            # Callers zip these against their own lists (skills, tool descriptions,
+            # code chunks). A short response silently shifts every later vector onto
+            # the wrong item, so refuse it rather than corrupt the mapping.
+            raise EmbeddingCountMismatchError(expected=len(texts), received=len(embeddings))
+        return embeddings
 
     async def _embed_fn(texts: list[str]) -> list[list[float]]:
-        missing_indices: list[int] = []
-        missing_texts: list[str] = []
         results: list[list[float] | None] = [None] * len(texts)
+        awaited: dict[str, asyncio.Future[list[float]]] = {}
+        missing_texts: list[str] = []
 
         for i, text in enumerate(texts):
             cached = _embed_cache.get(text)
             if cached is not None:
+                _embed_cache.move_to_end(text)
                 results[i] = cached
-            else:
-                missing_indices.append(i)
+                continue
+            inflight = _embed_inflight.get(text)
+            if inflight is not None:
+                awaited[text] = inflight
+            elif text not in awaited:
+                awaited[text] = asyncio.get_running_loop().create_future()
+                _embed_inflight[text] = awaited[text]
                 missing_texts.append(text)
 
+        # Only the texts this call claimed are embedded; duplicates within the
+        # batch and texts another coroutine is already fetching are awaited below.
         if missing_texts:
-            resp = await cost_tracker.embed(EmbedRequest(texts=missing_texts, component="embed"))
-            for idx, emb in zip(missing_indices, resp.embeddings, strict=False):
-                results[idx] = emb
-                if len(_embed_cache) >= _EMBED_CACHE_MAX_SIZE:
-                    first_key = next(iter(_embed_cache))
-                    del _embed_cache[first_key]
-                _embed_cache[texts[idx]] = emb
+            try:
+                embeddings = await _embed_uncached(missing_texts)
+            except BaseException as exc:
+                for text in missing_texts:
+                    future = _embed_inflight.pop(text, None)
+                    if future is not None and not future.done():
+                        future.set_exception(exc)
+                        # This caller re-raises rather than awaiting its own future,
+                        # so consume the result here; otherwise asyncio logs a
+                        # "Future exception was never retrieved" warning per text.
+                        future.exception()
+                raise
+            for text, emb in zip(missing_texts, embeddings, strict=True):
+                _cache_put(text, emb)
+                future = _embed_inflight.pop(text, None)
+                if future is not None and not future.done():
+                    future.set_result(emb)
+
+        for i, text in enumerate(texts):
+            if results[i] is None:
+                results[i] = await awaited[text]
 
         return [r for r in results if r is not None]
 

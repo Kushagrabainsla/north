@@ -90,8 +90,8 @@ class LocalMemoryGateway(MemoryGateway):
         if self._fact_store is None:
             return []
         try:
-            if await self._fact_store.count() <= 0:
-                return []
+            # No count() pre-check: search() already returns [] on an empty store,
+            # and the extra round trip ran on every agent's recall path.
             return await self._fact_store.search(query, max_results=limit)
         except Exception:
             logger.warning("MemoryGateway: fact search failed", exc_info=True)

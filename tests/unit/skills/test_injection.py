@@ -30,6 +30,18 @@ class _StubAgent(Agent):
         return {}
 
 
+async def _skills_block(agent: Agent, prompt: str) -> str:
+    """Select then render, the way `Agent.run()` does it.
+
+    Selection is a separate step so a run embeds the prompt once and shares the
+    result with tool ranking; these tests exercise both halves together.
+    """
+    return await agent._load_skills_block(
+        AgentPayload(task_id="t", prompt=prompt),
+        await agent._select_skills(prompt),
+    )
+
+
 def _write_skill(base: Path, name: str, description: str, domains: list[str] | None = None) -> None:
     directory = base / name
     directory.mkdir(parents=True)
@@ -59,7 +71,7 @@ async def test_injects_selected_skill_body(tmp_path):
     selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.5)
     agent = _agent(registry, selector)
 
-    block = await agent._load_skills_block(AgentPayload(task_id="t", prompt="add a database migration"))
+    block = await _skills_block(agent, "add a database migration")
 
     assert "BODY-db-migration" in block  # selected skill injected in full
     assert "advisory" in block.lower()  # framed as advisory, not authoritative
@@ -71,7 +83,7 @@ async def test_no_skills_returns_empty(tmp_path):
     registry = SkillRegistry(builtin_dir=tmp_path)  # empty dir
     selector = SkillSelector(registry, embed_fn=_fake_embed)
     agent = _agent(registry, selector)
-    assert await agent._load_skills_block(AgentPayload(task_id="t", prompt="anything")) == ""
+    assert await _skills_block(agent, "anything") == ""
 
 
 async def test_nothing_selected_still_lists_available(tmp_path):
@@ -80,7 +92,7 @@ async def test_nothing_selected_still_lists_available(tmp_path):
     selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.5)
     agent = _agent(registry, selector)
 
-    block = await agent._load_skills_block(AgentPayload(task_id="t", prompt="totally unrelated banana"))
+    block = await _skills_block(agent, "totally unrelated banana")
 
     assert "Other skills available" in block
     assert "add-tool" in block
@@ -141,10 +153,10 @@ async def test_load_skills_block_filters_by_agent_domain(tmp_path):
     selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.4)
     general = _agent_for_domain("general", registry, selector)
 
-    migration_block = await general._load_skills_block(AgentPayload(task_id="t", prompt="add a database migration"))
+    migration_block = await _skills_block(general, "add a database migration")
     assert "db-migration" not in migration_block  # engineering-only: not eligible, not even listed
 
-    tool_block = await general._load_skills_block(AgentPayload(task_id="t", prompt="add a tool"))
+    tool_block = await _skills_block(general, "add a tool")
     assert "BODY-add-tool" in tool_block  # general-eligible skill is injected
 
 

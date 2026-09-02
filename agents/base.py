@@ -72,9 +72,12 @@ class Agent(ABC):
         started = time.monotonic()
         with bind_execution(identity):
             try:
+                # Selected once and shared: _load_context and _load_tools both need
+                # the task's skills, and each selection costs an embedding call.
+                selected_skills = await self._select_skills(payload.prompt)
                 context, scored_tools = await asyncio.gather(
-                    self._load_context(payload),
-                    self._load_tools(payload.prompt),
+                    self._load_context(payload, selected_skills),
+                    self._load_tools(selected_skills),
                 )
                 raw = await self._execute(payload, context, scored_tools)
                 result = self._format_result(raw).model_copy(
@@ -121,7 +124,27 @@ class Agent(ABC):
             self._deps.episodic_store,
         )
 
-    async def _load_context(self, payload: AgentPayload) -> str:
+    async def _select_skills(self, task_prompt: str) -> list[Any]:
+        """Skills relevant to this task, selected once per run.
+
+        Selection embeds the prompt, so it is done here and passed to both
+        `_load_context` (which injects the skill bodies) and `_load_tools` (which
+        boosts the tools those skills name) rather than run twice.
+        """
+        registry = self._deps.skill_registry
+        selector = self._deps.skill_selector
+        if registry is None or selector is None or not task_prompt:
+            return []
+        candidates = [skill for skill in registry.all() if skill.available_to(self.domain)]
+        if not candidates:
+            return []
+        try:
+            return await selector.select(task_prompt, candidates=candidates)
+        except Exception:
+            logger.debug("Skill selection failed for agent %s", self.name, exc_info=True)
+            return []
+
+    async def _load_context(self, payload: AgentPayload, selected_skills: list[Any] | None = None) -> str:
         """Load gated context for this agent.
 
         Assembly order:
@@ -129,6 +152,11 @@ class Agent(ABC):
         2. repo conventions - AGENTS.md/CLAUDE.md/etc from the workspace
         3. gated memory - facts (or document fallback) plus episodic, filtered by
            the memory gateway to what this agent is permitted to read
+
+        `selected_skills` is the run's already-selected skills, passed by `run()`
+        so selection happens once. `None` means "not selected yet" and this method
+        selects them itself, so it stays correct when called on its own; an empty
+        list means selection ran and chose nothing.
         """
         parts: list[str] = []
 
@@ -178,13 +206,15 @@ class Agent(ABC):
         # open-ended work (e.g. scouting OSS contributions), and the top-2 +
         # similarity threshold inject nothing when no skill is relevant enough.
         if self.domain in _SKILLS_ENABLED_DOMAINS:
-            skills_block = await self._load_skills_block(payload)
+            if selected_skills is None:
+                selected_skills = await self._select_skills(payload.prompt)
+            skills_block = await self._load_skills_block(payload, selected_skills)
             if skills_block:
                 parts.append(skills_block)
         return "\n\n".join(p for p in parts if p)
 
-    async def _load_skills_block(self, payload: AgentPayload) -> str:
-        """Select and render procedural skills for this task.
+    async def _load_skills_block(self, payload: AgentPayload, selected: list[Any]) -> str:
+        """Render the already-selected procedural skills for this task.
 
         Semantically-selected skills are injected in full as advisory context (the
         primary path); any remaining skills are listed by name so the agent can pull
@@ -200,8 +230,6 @@ class Agent(ABC):
         if not skills:
             return ""
 
-        selector = self._deps.skill_selector
-        selected = await selector.select(payload.prompt, candidates=skills) if selector is not None else []
         selected_names = {skill.name for skill in selected}
 
         sections: list[str] = []
@@ -252,31 +280,23 @@ class Agent(ABC):
             except Exception:
                 logger.debug("skill_selected ledger write failed for task %s", payload.task_id, exc_info=True)
 
-    async def _load_tools(self, task_prompt: str = "") -> list[tuple[Tool, float]]:
+    async def _load_tools(self, selected_skills: list[Any] | None = None) -> list[tuple[Tool, float]]:
         """Return (tool, confidence_score) pairs for this agent, sorted by score descending.
 
         All tools registered for the agent (universal + specialized) are available without
-        artificial capping or accidental filter dropouts. When skills or semantic search
-        identify tools relevant to the task, their ranking scores are prioritized.
+        artificial capping or accidental filter dropouts. Tools named by the skills already
+        selected for this task (passed in by `run()`) are boosted in the ranking.
         """
         registry_tools = self._deps.tool_registry.tools_for_agent(self.name)
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
 
-        # Check required/selected skills for this task prompt to prioritize their tools
-        skill_tools: set[str] = set()
-        if task_prompt and self._deps.skill_registry is not None:
-            skills = [s for s in self._deps.skill_registry.all() if s.available_to(self.domain)]
-            selected = []
-            if self._deps.skill_selector is not None:
-                try:
-                    selected = await self._deps.skill_selector.select(task_prompt, candidates=skills)
-                except Exception:
-                    selected = []
-            all_tool_names = {t.name for t in registry_tools}
-            for skill in selected:
-                for t_name in all_tool_names:
-                    if t_name in skill.body or t_name in skill.description:
-                        skill_tools.add(t_name)
+        all_tool_names = {t.name for t in registry_tools}
+        skill_tools: set[str] = {
+            name
+            for skill in (selected_skills or [])
+            for name in all_tool_names
+            if name in skill.body or name in skill.description
+        }
 
         scored: list[tuple[Tool, float]] = []
         for t in registry_tools:

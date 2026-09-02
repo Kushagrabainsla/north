@@ -9,6 +9,7 @@ from inference.dispatcher import ModelDispatcher
 from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
+    EmbeddingCountMismatchError,
     InferenceError,
     ModelNotFoundError,
     ModelRateLimitedError,
@@ -72,6 +73,7 @@ __all__ = [
     "ProviderAuthError",
     "ProviderUnavailableError",
     "PoolPriority",
+    "EmbeddingCountMismatchError",
     "PoolRefreshError",
     "Provider",
     "ToolCall",

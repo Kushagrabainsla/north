@@ -472,7 +472,7 @@ async def test_core_tools_never_dropped_by_semantic_filter(tmp_path):
     index.search_tools = AsyncMock(return_value=["web_search", "kasa", "git"])
     agent._deps.tool_index = index
 
-    selected = {t.name for t, _ in await agent._load_tools("do something with the code")}
+    selected = {t.name for t, _ in await agent._load_tools()}
 
     # Core read/search/edit/verify tools are forced in despite ranking...
     assert {"read_file", "patch_file", "check_types", "bash"} <= selected
@@ -648,7 +648,8 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
     # No semantic tool index wired (fallback mode)
     agent._deps.tool_index = None
 
-    loaded = await agent._load_tools("check my screen")
+    # run() selects once and passes the result in; do the same here.
+    loaded = await agent._load_tools(await agent._select_skills("check my screen"))
     loaded_names = {t.name for t, _ in loaded}
 
     # All 15 tools are available without a 10-tool cap

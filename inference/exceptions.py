@@ -17,7 +17,6 @@ class AllModelsRateLimitedError(InferenceError):
         self.retry_after = retry_after
 
 
-
 class ModelRateLimitedError(InferenceError):
     """A specific (model, provider) pair returned a rate-limit response.
 
@@ -178,6 +177,21 @@ class ContextTooLargeError(InferenceError):
         )
         self.estimated_tokens = estimated_tokens
         self.largest_context = largest_context
+
+
+class EmbeddingCountMismatchError(InferenceError):
+    """A provider returned a different number of vectors than texts sent.
+
+    Callers zip the result against their own lists (skills, tool descriptions,
+    code chunks), so a short response would silently shift every later vector
+    onto the wrong item. Raised instead, so the caller falls back rather than
+    ranking against a corrupted mapping.
+    """
+
+    def __init__(self, expected: int, received: int) -> None:
+        super().__init__(f"Embedding provider returned {received} vectors for {expected} texts")
+        self.expected = expected
+        self.received = received
 
 
 class PoolRefreshError(InferenceError):
