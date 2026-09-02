@@ -229,3 +229,18 @@ body { font-size: 13px; }
 .fact-editor { display: flex; gap: 8px; margin-bottom: 10px; }.fact-editor input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--text); padding: 9px 10px; }.fact-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }.fact-actions button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }.fact-actions button:hover { color: var(--accent); }.fact-actions button:last-child:hover { color: var(--red); }
 .primary-button, .new-chat { box-shadow: 0 0 18px rgba(181,243,109,.18); }
 html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfortable"] body { zoom: 1; }html[data-type-scale="large"] body { zoom: 1.1; }
+
+/* North's self-checks, surfaced with the answer rather than buried in the ledger. */
+.signal-strip { margin: 10px 0 2px; display: flex; flex-direction: column; gap: 5px; }
+.signal-row { display: flex; gap: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-soft); background: rgba(7,9,11,.35); }
+.signal-row b { display: block; font-weight: 500; font-size: 11px; }
+.signal-row small { display: block; color: var(--faint); font: 8px "DM Mono", monospace; text-transform: uppercase; margin-top: 2px; }
+.signal-row p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.signal-mark { flex: none; line-height: 1.4; }
+.signal-warn { border-color: rgba(255,201,105,.35); background: rgba(42,34,20,.4); }
+.signal-warn .signal-mark { color: var(--amber); }
+.signal-ok .signal-mark { color: var(--accent); }
+.signal-info .signal-mark { color: var(--blue); }
+.signal-passed summary { cursor: pointer; list-style: none; color: var(--faint); font: 9px "DM Mono", monospace; padding: 4px 2px; }
+.signal-passed summary::-webkit-details-marker { display: none; }
+.signal-passed > div { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import re
 import shlex
@@ -66,6 +65,7 @@ from tools.registry import ToolRegistry
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
 from utils.tasks import spawn
+from utils.text import extract_json
 from utils.time import format_timestamp, utcnow
 
 logger = logging.getLogger(__name__)
@@ -1314,20 +1314,25 @@ class Orchestrator:
         try:
             aligned, tension, reasoning = await self._north_star_checker.check_alignment(prompt, task_id=task_id)
         except OrchestratorError as e:
-            logger.warning("North Star check failed - blocking task (fail closed): %s", e)
+            # Fail open, visibly. This error means the check could not be *run* - a
+            # malformed JSON reply, an unreachable model - not that a conflict was
+            # found. Blocking on it made a flaky cheap model able to kill any
+            # consequential task, and a harness fault is far likelier than a real
+            # goal conflict. The task proceeds; the gap is recorded and surfaced so
+            # the reader knows this run was not checked against their goals.
+            logger.warning("North Star check could not run - proceeding unchecked: %s", e)
             await self._write_ledger(
                 LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     task_id=task_id,
                     action="north_star_check_failed",
-                    output=str(e),
-                    status=LedgerStatus.FAILED,
+                    output=f"Goal alignment was not verified for this task: {e}",
+                    status=LedgerStatus.COMPLETED,
+                    error_type="north_star_check_unavailable",
                 )
             )
             await self._stream_manager.emit(task_id, "north_star_check_failed", {"reason": str(e)})
-            raise NorthStarConflictError(
-                f"North Star alignment could not be evaluated - task blocked (fail closed): {e}"
-            ) from e
+            return
 
         check_action = "north_star_check_aligned" if aligned else "north_star_check_conflict"
         await self._write_ledger(
@@ -1547,7 +1552,7 @@ class Orchestrator:
                 ),
                 timeout=_SPEC_CRITIQUE_TIMEOUT_S,
             )
-            verdict = json.loads(response.text.strip())
+            verdict = extract_json(response.text)
         except Exception:
             logger.debug("spec critique skipped (error/timeout) for task %s", task_id, exc_info=True)
             return []
@@ -2852,7 +2857,7 @@ class Orchestrator:
                     json_mode=True,
                 )
             )
-            verdict = json.loads(response.text.strip())
+            verdict = extract_json(response.text)
         except Exception:
             logger.debug("critic: review failed for agent %s", agent.name, exc_info=True)
             return

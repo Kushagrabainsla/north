@@ -4,10 +4,32 @@ import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { api, patch, post } from "../api";
 import { Empty, ErrorNotice, Loading, Markdown, PageHeader, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
-import type { Approval, Conversation, LedgerEntry, TaskDetail, Turn } from "../types";
+import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn } from "../types";
+
+/** North's self-checks, rendered live rather than only reachable in the ledger.
+ *  Each entry turns one SSE payload into a one-line verdict plus its details. */
+const SIGNALS: Record<string, (data: any) => Omit<Signal, "event" | "timestamp">> = {
+  claims_unverified: d => ({ agent: d.agent, tone: "warn", text: "Claims with no tool evidence", details: d.violations || [] }),
+  self_repair_started: d => ({ agent: d.agent, tone: "info", text: "Correcting unsupported claims…", details: [] }),
+  self_repair_done: d => ({ agent: d.agent, tone: (d.remaining || []).length ? "warn" : "ok", text: (d.remaining || []).length ? `${d.remaining.length} claim(s) still unsupported` : "Claims corrected", details: d.remaining || [] }),
+  critic_flagged: d => ({ agent: d.agent, tone: "warn", text: "Reviewer flagged a gap", details: d.gap ? [d.gap] : [] }),
+  dod_evaluated: d => ({ tone: d.passed ? "ok" : "warn", text: d.passed ? "Definition of Done met" : "Definition of Done not met", details: d.reasons || [] }),
+  auto_verify: d => ({ tone: d.passed ? "ok" : d.passed === false ? "warn" : "info", text: `Verification \`${d.command}\` ${d.passed ? "passed" : d.passed === false ? "failed" : "could not run"}`, details: [] }),
+  spec_critique: d => ({ tone: (d.issues || []).length ? "warn" : "ok", text: (d.issues || []).length ? `Spec review raised ${d.issues.length} concern(s)` : "Spec review found no material flaws", details: d.issues || [] }),
+  handoff_artifact_missing: d => ({ agent: d.agent, tone: "warn", text: `Finished without writing ${d.artifact || "its handoff artifact"}`, details: [] }),
+  conductor_review_unresolved: d => ({ tone: "warn", text: "Review items unresolved after the fix rounds", details: d.must_fix || [] }),
+  conductor_review_missing_verdict: () => ({ tone: "warn", text: "Reviewer produced no machine-readable verdict", details: [] }),
+  conductor_review_skipped_model_unavailable: d => ({ tone: "warn", text: "Independent review skipped", details: d.reason ? [d.reason] : [] }),
+  agent_skipped: d => ({ agent: d.agent, tone: "warn", text: "Skipped - a dependency failed", details: d.failed_dependencies || [] }),
+  worktree_integrated: d => ({ agent: d.agent, tone: d.conflicted ? "warn" : "ok", text: d.conflicted ? `Changes conflicted - kept on ${d.branch}` : "Isolated changes applied", details: [] }),
+  best_of_n: d => ({ tone: d.viable ? "info" : "warn", text: d.viable ? `Best of ${d.candidates} - picked candidate ${d.winner}` : `Best of ${d.candidates} - no viable candidate`, details: [] }),
+  task_stuck: () => ({ tone: "warn", text: "No progress - cancelled by the watchdog", details: [] }),
+  north_star_check_failed: d => ({ tone: "warn", text: "Goal alignment could not be evaluated", details: d.reason ? [d.reason] : [] }),
+};
 
 function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprovals: () => Promise<void>) {
   const [live, setLive] = useState<Record<string, string>>({});
+  const [signals, setSignals] = useState<Record<string, Signal[]>>({});
   const ids = turns.filter(t => t.task_id && !["completed", "failed", "cancelled"].includes(t.detail?.task.status || "")).map(t => t.task_id!);
   useEffect(() => {
     const streams = ids.map(taskId => {
@@ -16,6 +38,13 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
         const payload = JSON.parse((event as MessageEvent).data);
         setLive(current => ({ ...current, [taskId]: (current[taskId] || "") + (payload.text || "") }));
       });
+      for (const [eventName, build] of Object.entries(SIGNALS)) {
+        stream.addEventListener(eventName, event => {
+          const payload = JSON.parse((event as MessageEvent).data);
+          const signal: Signal = { event: eventName, timestamp: payload.timestamp, ...build(payload) };
+          setSignals(current => ({ ...current, [taskId]: [...(current[taskId] || []), signal] }));
+        });
+      }
       for (const eventName of ["task_completed", "task_failed", "task_cancelled", "task_skipped", "task_rejected"]) {
         stream.addEventListener(eventName, () => { stream.close(); void reload(); });
       }
@@ -26,7 +55,7 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
     });
     return () => streams.forEach(stream => stream.close());
   }, [ids.join("|"), reload, reloadApprovals]);
-  return live;
+  return { live, signals };
 }
 
 function ApprovalCard({ card, respond }: { card: Approval; respond: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
@@ -45,7 +74,23 @@ function DetailSection({ title, count, children, open }: { title: string; count?
   return <details className="detail-section" open={open}><summary><span>{title}</span>{count !== undefined && <em>{count}</em>}<i>⌄</i></summary><div>{children}</div></details>;
 }
 
-function TurnBundle({ turn, streamed, expandAll, reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; expandAll: boolean; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
+/** North's self-checks for one turn. Warnings show unprompted; clean results stay
+ *  behind a summary, so a run that failed a check never looks like one that passed. */
+function SignalStrip({ signals }: { signals: Signal[] }) {
+  if (!signals.length) return null;
+  const warnings = signals.filter(signal => signal.tone === "warn");
+  const rest = signals.filter(signal => signal.tone !== "warn");
+  const row = (signal: Signal, index: number) => <div className={`signal-row signal-${signal.tone}`} key={`${signal.event}-${index}`}>
+    <span className="signal-mark">{signal.tone === "warn" ? "⚠" : signal.tone === "ok" ? "✓" : "•"}</span>
+    <div><b>{signal.text}</b>{signal.agent && <small>{signal.agent}</small>}{signal.details.map((detail, i) => <p key={i}>{detail}</p>)}</div>
+  </div>;
+  return <div className="signal-strip">
+    {warnings.map(row)}
+    {rest.length > 0 && <details className="signal-passed"><summary>{rest.length} check{rest.length === 1 ? "" : "s"} passed</summary><div>{rest.map(row)}</div></details>}
+  </div>;
+}
+
+function TurnBundle({ turn, streamed, signals = [], expandAll, reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; expandAll: boolean; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
   const detail = turn.detail;
   const status = pendingApprovals.length ? "waiting_for_approval" : (detail?.task.status || "pending");
   const entries = detail?.entries || [];
@@ -53,7 +98,9 @@ function TurnBundle({ turn, streamed, expandAll, reload, pendingApprovals, respo
   const agents = [...new Set(runs.map(run => run.agent))];
   const tools = entries.filter(entry => entry.action?.includes("tool") || (entry.tools_used?.length || 0) > 0);
   const approvals = entries.filter(entry => entry.source === "approval" || entry.action?.includes("approval"));
-  const verification = entries.filter(entry => /verify|dod|review|repair/.test(entry.action || ""));
+  // "unverified" does not contain "verify", so claims_unverified and critic_flagged
+  // were both missing from this section even though they are its whole point.
+  const verification = entries.filter(entry => /verif|dod|review|repair|critic|handoff|auto_verify/.test(entry.action || ""));
   const cost = runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
   const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued"].includes(status);
   const control = async (action: "pause" | "resume" | "cancel") => {
@@ -74,6 +121,7 @@ function TurnBundle({ turn, streamed, expandAll, reload, pendingApprovals, respo
       {isActive && <div className={`thinking thinking-${status}`}><span className="pulse"/>{status === "waiting_for_approval" ? "North is waiting for you" : status === "paused" ? "Task paused" : "North is working on this prompt"}</div>}
       {(streamed || detail?.output) && <Markdown>{streamed || detail?.output || ""}</Markdown>}
       {!isActive && !(streamed || detail?.output) && <Empty>No response was recorded for this task.</Empty>}
+      <SignalStrip signals={signals}/>
       <div className="turn-summary"><span>{agents.length || "–"} agents</span><span>{tools.length} tool events</span><span>{runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0).toLocaleString()} tokens</span><span>${cost.toFixed(4)}</span></div>
       <div className="execution-details">
         <DetailSection title="Plan and routing" count={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || "")).length} open={expandAll}>
@@ -115,7 +163,7 @@ export function Chat() {
   const chatRoom = useRef<HTMLElement>(null);
   const openedAtBottom = useRef<string | null>(null);
   const visibleChats = useMemo(() => (chats.data || []).filter(chat => chat.title.toLowerCase().includes(search.toLowerCase())), [chats.data, search]);
-  const live = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
+  const { live, signals } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
   useEffect(() => {
     if (!conversationId) { openedAtBottom.current = null; return; }
@@ -216,7 +264,7 @@ export function Chat() {
     <section className="chat-room" ref={chatRoom}>
       {!conversationId ? <div className="chat-welcome"><div className="north-symbol">N</div><h1>What are we working on?</h1><p>Start a new conversation or return to one of your previous rooms.</p><button className="primary-button" onClick={createChat}>New conversation</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Conversation unavailable"}/> : <>
         <PageHeader eyebrow="Conversation" title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<><button className="ghost-button" onClick={() => setExpandAll(v => !v)}>{expandAll ? "Collapse all" : "Expand all"}</button><button className="ghost-button" onClick={rename}>Rename</button></>}/>
-        <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} expandAll={expandAll} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
+        <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} expandAll={expandAll} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
         <form className="composer" onSubmit={submit}><textarea value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={2} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div><small>Enter to send · Shift Enter for a new line · /help for commands</small><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}

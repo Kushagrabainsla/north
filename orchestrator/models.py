@@ -61,8 +61,10 @@ class IntentClassification(BaseModel):
     reasoning: str
     confidence: float = 1.0  # 0–1; below 0.7 skips the north star check to avoid false interruptions
     execution_path: ExecutionPath = ExecutionPath.FAST
-    north_star_aligned: bool = True
-    north_star_tension: str | None = None
+    # No north-star fields here on purpose. The planner prompt is never given the
+    # user's goals, so anything it said about alignment was a guess with no input;
+    # those fields sat on this model unread, waiting for someone to trust them.
+    # NorthStarChecker reads north_stars.md and makes that judgement (Stage 2).
 
 
 class ExecutionPlan(BaseModel):

@@ -13,7 +13,6 @@ See README Sections 9.4 and 9.5.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 
@@ -23,6 +22,7 @@ from approval.models import Card, CardType
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from memory import ContextDocument, MemoryGateway
+from utils.text import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ class JudgementFilter:
                     json_mode=True,
                 )
             )
-            result = json.loads(response.text.strip())
+            result = extract_json(response.text)
         except Exception:
             logger.debug("JudgementFilter: LLM call failed, surfacing card %s", card.id)
             return None, ""

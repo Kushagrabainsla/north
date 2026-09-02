@@ -22,7 +22,7 @@ from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory.base import ContextStore
 from memory.models import ContextDocument
 from utils.ids import generate_id
-from utils.text import STOPWORDS
+from utils.text import STOPWORDS, extract_json
 from utils.time import utcnow
 
 if TYPE_CHECKING:
@@ -330,7 +330,7 @@ class ExtractionPipeline:
         )
 
         try:
-            result = json.loads(response.text.strip())
+            result = extract_json(response.text)
         except (json.JSONDecodeError, ValueError):
             return False
 
@@ -439,7 +439,7 @@ class ExtractionPipeline:
                         max_tokens=20,
                     )
                 )
-                return bool(json.loads(resp.text.strip()).get("duplicate", False))
+                return bool(extract_json(resp.text).get("duplicate", False))
             except Exception:
                 return False
         return False

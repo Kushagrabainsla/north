@@ -13,6 +13,21 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.4.3] - 2026-09-02
+### Added
+- **The web cockpit renders North's self-checks** (`web/src/pages/Chat.tsx`, `web/src/types.ts`, `web/src/styles.css`): the browser client subscribed to `token` and five lifecycle events only, so every integrity signal was invisible there. All 16 now stream into a per-turn signal strip beside the answer - warnings shown unprompted, passing checks collapsed behind a summary - so a run that failed a check never looks like one that passed.
+
+### Changed
+- **One north-star mechanism, not two** (`orchestrator/models.py`, `orchestrator/router.py`): the planner returned `north_star_aligned`/`north_star_tension` on every task and nothing ever read them - and it could not have judged alignment anyway, since `plan_all`'s `goals` parameter was never passed by any caller, so the goals were absent from its prompt. Both fields and the dead parameter are gone; `NorthStarChecker`, which actually reads `north_stars.md`, remains the single source of that judgement.
+
+### Fixed
+- **A model reply the router accepted could still fail in the caller** (`orchestrator/north_star.py`, `orchestrator/orchestrator.py`, `approval/judgement_filter.py`, `memory/extraction.py`): `ModelDispatcher` validates a `json_mode` response with `extract_json`, but four callers then parsed it with the stricter `json.loads`. A fenced, prose-prefixed, or reasoning-trace reply therefore passed validation and failed at the call site. All callers now use `extract_json`.
+- **The north-star check fails open, visibly** (`orchestrator/orchestrator.py`): an `OrchestratorError` there means the check could not be *run*, not that a conflict was found, yet it blocked the task - so one flaky free model could kill any consequential task. It now proceeds and records `north_star_check_failed` to the ledger and the stream (rendered by both clients), so the unchecked run is visible. A genuine conflict still surfaces a card and still blocks on rejection; permission for consequential actions was never this gate's job and is unchanged.
+
+### Removed
+
+---
+
 ## [1.4.2] - 2026-09-02
 ### Added
 - **north's integrity signals are now visible** (`cli/tui.py`, `orchestrator/orchestrator.py`): 16 events were emitted, ledgered, and handled by no client - including every self-check north performs (`claims_unverified`, `self_repair_started`/`_done`, `critic_flagged`, `spec_critique`, `handoff_artifact_missing`, `conductor_review_unresolved`, `agent_skipped`, `task_stuck`, `best_of_n`, `worktree_integrated`, `skill_selected`). The TUI now renders all of them, so a run that did not earn a clean result says so instead of looking identical to one that did. Every emitted event except `model_response` (durable provider protocol metadata, not for display) now has a handler.

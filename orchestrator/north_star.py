@@ -5,13 +5,11 @@ See docs/CODING_STYLE.md Sections 5.3, 6.4, 9.7, 13.
 
 from __future__ import annotations
 
-import json
-
 from inference import CompletionRequest, InferenceRouter, PoolPriority
 from memory import ContextDocument, MemoryGateway
 from orchestrator.exceptions import OrchestratorError
 from utils.prompts import load_prompt
-from utils.text import strip_code_fences
+from utils.text import extract_json
 
 
 class NorthStarChecker:
@@ -63,11 +61,15 @@ class NorthStarChecker:
         except Exception as e:
             raise OrchestratorError(f"Inference call failed during North Star check: {e}") from e
 
-        text = strip_code_fences(response.text)
+        # extract_json, not json.loads: it is the same parser ModelDispatcher uses to
+        # decide a json_mode response is valid, so a reply the router already accepted
+        # cannot then fail to parse here (it tolerates fences and reasoning traces).
         try:
-            data = json.loads(text)
-        except json.JSONDecodeError as e:
-            raise OrchestratorError(f"Failed to parse North Star checker output as JSON: {text}. Error: {e}") from e
+            data = extract_json(response.text)
+        except Exception as e:
+            raise OrchestratorError(
+                f"Failed to parse North Star checker output as JSON: {response.text[:400]}. Error: {e}"
+            ) from e
 
         for field in ("aligned", "reasoning"):
             if field not in data:

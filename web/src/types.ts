@@ -53,6 +53,16 @@ export interface TaskDetail {
   runs?: AgentRun[];
 }
 
+/** One of North's self-checks, captured live from the task stream. */
+export interface Signal {
+  event: string;
+  agent?: string;
+  tone: "warn" | "ok" | "info";
+  text: string;
+  details: string[];
+  timestamp: string;
+}
+
 export interface Turn {
   id: string;
   conversation_id: string;

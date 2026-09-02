@@ -4,11 +4,12 @@ and approval-response binding (review findings R3#16, R3#17, R3#20)."""
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from approval.models import Card, CardType
+from approval.models import ApprovalDecision, Card, CardType
 from approval.store import ApprovalStore
 from orchestrator.constants import MAX_CONCURRENT_TASKS
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
@@ -35,15 +36,41 @@ def _orchestrator(approval_store: ApprovalStore | None = None) -> Orchestrator:
     )
 
 
-# ── #16: North Star fails closed ─────────────────────────────────────────────
+# ── #16: North Star check ────────────────────────────────────────────────────
 
 
-async def test_north_star_inference_failure_blocks_task() -> None:
+async def test_north_star_inference_failure_proceeds_but_records_the_gap() -> None:
+    """A checker that cannot RUN must not block the task - but must say so.
+
+    This error means the check failed to execute (unreachable model, unparseable
+    reply), not that a conflict was found. Blocking on it let one flaky cheap model
+    kill any consequential task, and a harness fault is far likelier than a real
+    goal conflict. Permission for consequential actions is enforced by the approval
+    layer, which is unaffected; what is lost here is only the goal check, so the
+    gap is recorded and streamed rather than silently swallowed.
+    """
     orch = _orchestrator()
     orch._north_star_checker.check_alignment = AsyncMock(side_effect=OrchestratorError("inference down"))
     classification = IntentClassification(is_consequential=True, domain="finance", reasoning="r", confidence=1.0)
 
-    with pytest.raises(NorthStarConflictError, match="fail closed"):
+    await orch._stage_north_star("t1", "wire money", classification)  # must not raise
+
+    actions = [call.args[0].action for call in orch._ledger.write.call_args_list]
+    assert "north_star_check_failed" in actions
+    events = [call.args[1] for call in orch._stream_manager.emit.call_args_list]
+    assert "north_star_check_failed" in events
+
+
+async def test_north_star_conflict_still_blocks_the_task() -> None:
+    """A real conflict is unchanged: it surfaces a card and blocks on rejection."""
+    orch = _orchestrator()
+    orch._north_star_checker.check_alignment = AsyncMock(return_value=(False, "conflicts with savings goal", "r"))
+    orch._interaction.request_decision = AsyncMock(
+        return_value=SimpleNamespace(status=ApprovalDecision.REJECTED)
+    )
+    classification = IntentClassification(is_consequential=True, domain="finance", reasoning="r", confidence=1.0)
+
+    with pytest.raises(NorthStarConflictError):
         await orch._stage_north_star("t1", "wire money", classification)
 
 

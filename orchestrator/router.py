@@ -188,7 +188,7 @@ class ExecutionPlanner:
         self._plan_cache: dict[str, tuple[float, IntentClassification, ExecutionPlan]] = {}
 
     async def plan_all(
-        self, prompt: str, task_id: str, context: str = "", goals: str = ""
+        self, prompt: str, task_id: str, context: str = ""
     ) -> tuple[IntentClassification, ExecutionPlan]:
         """Single LLM call that classifies the task AND builds the execution plan.
 
@@ -201,7 +201,7 @@ class ExecutionPlanner:
             raise RoutingError("No agents are registered.")
 
         conversation = _recent_conversation(context)
-        cache_key = _plan_cache_key(prompt, f"{conversation}:{goals}")
+        cache_key = _plan_cache_key(prompt, conversation)
         cached = self._plan_cache.get(cache_key)
         if cached is not None:
             insert_ts, cached_cls, cached_plan = cached
@@ -237,11 +237,6 @@ class ExecutionPlanner:
             if conversation
             else ""
         )
-        goals_block = (
-            f"=== Active Goals (north_stars.md) ===\n{goals}\n\n"
-            if goals.strip()
-            else ""
-        )
 
         full_prompt = (
             f"{system_prompt}\n\n"
@@ -249,7 +244,6 @@ class ExecutionPlanner:
             f"=== Available Agents ===\n{json.dumps(agents_info, indent=2)}\n\n"
             f"=== Available Tools ===\n{json.dumps(tools_info, indent=2)}\n\n"
             f"{conversation_block}"
-            f"{goals_block}"
             f"=== User Task ===\n{prompt}"
         )
 
@@ -260,20 +254,11 @@ class ExecutionPlanner:
             confidence = max(0.0, min(1.0, float(raw_confidence)))
         except (TypeError, ValueError):
             confidence = 0.9
-        aligned = data.get("north_star_aligned", True)
-        if not isinstance(aligned, bool):
-            aligned = True
-        tension = data.get("north_star_tension")
-        if tension is not None and not isinstance(tension, str):
-            tension = str(tension)
-
         classification = IntentClassification(
             is_consequential=bool(data.get("is_consequential", False)),
             domain=str(data.get("domain", "general")),
             reasoning=str(data.get("reasoning", "")),
             confidence=confidence,
-            north_star_aligned=aligned,
-            north_star_tension=tension,
         )
         if classification.domain == "engineering":
             # Deterministic engineering chain (#4): ignore any LLM-invented agent
