@@ -41,7 +41,6 @@ def _orch():
         stream_manager=stream,
         approval_store=ApprovalStore(),
     )
-    orch._task_context_store.release_conditions = MagicMock()
     return orch
 
 

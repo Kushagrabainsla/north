@@ -247,9 +247,16 @@ def _build_tool_index(deps) -> ToolIndex | None:
 
 
 async def _populate_tool_index(tool_index: ToolIndex, tool_registry: ToolRegistry) -> None:
-    """Embed every registered tool description so agents can do semantic selection."""
-    for tool in tool_registry.all_tools():
-        await tool_index.update_tool(tool.name, tool.description)
+    """Embed every registered tool description so agents can do semantic selection.
+
+    One batched call, and it runs *after* the server starts accepting requests: a
+    first boot would otherwise embed every tool before answering anything. Until it
+    finishes, `search_tools` returns nothing and agents fall back to their full tool
+    set - correct, just not semantically ranked.
+    """
+    indexed = await tool_index.update_tools([(tool.name, tool.description) for tool in tool_registry.all_tools()])
+    if indexed:
+        logger.info("Tool index: embedded %d new or changed tool description(s)", indexed)
 
 
 def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
@@ -605,10 +612,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("refreshing inference pools")
     await deps.inference_router.refresh_pools()
 
+    # Built now so agents can hold the reference; populated in the background
+    # below, once the server is already serving.
     _step("building tool index")
     tool_index = _build_tool_index(deps)
-    if tool_index is not None:
-        await _populate_tool_index(tool_index, tool_registry)
 
     _step("scanning agent registry")
     agent_deps = _build_agent_deps(deps, tool_registry)
@@ -660,6 +667,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         callback_server,
         telegram_gateway=telegram_gateway,
     )
+    if tool_index is not None:
+        background_tasks.append(
+            asyncio.create_task(
+                _guarded(_populate_tool_index(tool_index, tool_registry), "tool_index"),
+                name="tool_index",
+            )
+        )
 
     _step("startup complete - yielding to server")
     try:

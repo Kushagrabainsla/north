@@ -45,7 +45,6 @@ def _orch(running_task_store: RunningTaskStore | None = None):
         approval_store=ApprovalStore(),
         running_task_store=running_task_store,
     )
-    orch._task_context_store.release_conditions = MagicMock()
     return orch
 
 

@@ -503,68 +503,50 @@ Groups run in order. Within each group, agents run simultaneously. Dependencies 
 
 ### 6.6 Task Context Object
 
-The Task Context Object is a SQLite database scoped to a single `task_id`. It is the shared workspace for all agents in a task. Agents never communicate directly. All reads and writes go through the Orchestrator.
+The Task Context Object is the shared scratch space for the agents in one task.
+Each agent's result is written here; the Orchestrator reads them back. Agents never
+communicate directly and never block on one another.
 
 ```sql
 CREATE TABLE task_state (
+  task_id       TEXT NOT NULL,
   agent         TEXT NOT NULL,
   key           TEXT NOT NULL,
   value         JSON,
   status        TEXT,           -- pending | completed | failed | awaiting_input
   written_at    DATETIME,
-  PRIMARY KEY (agent, key)
+  PRIMARY KEY (task_id, agent, key)
 )
 ```
 
-All tasks share one SQLite file at `~/.north/tasks/tasks.db`, with a `task_id` column scoping each task's rows. Earlier versions used one file per task.
+All tasks share one SQLite file at `~/.north/tasks/tasks.db`, with a `task_id` column
+scoping each task's rows. Earlier versions used one file per task.
 
-**Locking model: standard database principles**
+**The interface is write-and-collect, not request-response.**
 
-- **Shared lock (read):** multiple agents can read simultaneously. Blocks only if an exclusive lock is held.
-- **Exclusive lock (write):** one writer at a time. Blocks all readers and writers until complete. Released immediately after write.
-- SQLite WAL mode handles this natively. No custom locking implementation needed.
-
-**Read request flow:**
 ```python
-response = orchestrator.read(
-  task_id="abc123",
-  requesting_agent="job",
-  key="finance.budget",
-  timeout=30,       # seconds to wait if key not yet available
-  required=True     # if False, agent proceeds with a logged assumption on timeout
-)
+await task_context.write(task_id, agent="coder", key="output", value=..., status="completed")
+await task_context.update_agent_status(task_id, "reviewer", "failed")
+everything = await task_context.get_all(task_id)   # {agent: {key: value}}
 ```
 
-If the key is not yet available:
-- Orchestrator polls every 2 seconds until timeout
-- On timeout: checks source agent status
-  - still running: extend timeout, notify user
-  - failed: trigger failure handling flow
-  - completed but key missing: log error, notify user
+There is deliberately **no blocking read**. An earlier design had agents call
+`read(key, timeout=...)` and suspend on a condition variable until a peer wrote
+that key. Nothing ever used it, because the pipeline is sequenced rather than
+concurrent-with-dependencies: `ExecutionPlan.dependencies` orders the *groups*
+(`_compute_parallel_groups`), and each group's results are injected into the next
+group's prompt as text (`_execute_hierarchical_groups`), alongside the handoff
+artifacts each stage writes to `<NORTH_HOME>/tasks/{task_id}/`. That is easier to
+follow and to debug than agents suspended on each other, and it is what actually
+runs. If genuine parallel-with-dependencies execution is ever needed - two agents
+running while a third waits on both - the wait can be rebuilt against this store,
+which already holds the state.
 
-**Write request flow:**
-```python
-orchestrator.write(
-  task_id="abc123",
-  agent="finance",
-  key="budget",
-  value=28000,
-  status="completed"
-)
-```
+`get_all()` also backs failure recovery: `FailureHandler` reconstructs a partial
+Task Context from the Ledger so a retry never re-runs agents that already
+succeeded (§6.7).
 
-**Question request flow:**
-```python
-orchestrator.ask(
-  task_id="abc123",
-  agent="job",
-  question="Which role should I prioritize for LinkedIn internship prep?",
-  options=["Distributed Systems", "ML Infrastructure", "Both equally"],
-  blocks_execution=True
-)
-```
-
-Every read, write, and question is logged to the Ledger with `source: system`.
+Every write is logged to the Ledger with `source: system`.
 
 **Task Context Object cleanup policy:**
 
@@ -889,9 +871,9 @@ Agents follow a clear decision hierarchy when they encounter ambiguity:
 
 1. Check Context Layer and `judgement_rules.md` first. The answer is probably already there.
 2. Make a reasonable default, proceed, and flag it clearly in the output for the user to override via the Approval card.
-3. If the decision is consequential and no clear default exists: stop and raise a Question through `orchestrator.ask()`.
+3. If the decision is consequential and no clear default exists: stop and ask, by calling the `ask_user` tool that is injected into every agent's tool list (`agents/agentic_llm_agent.py:_ask_user`).
 
-When an agent raises a question, it sets `status: awaiting_input` in its Task Context Object row. The Orchestrator surfaces a Question card. The user answers via notification buttons, the CLI, or the TUI. The answer is written back to the Task Context Object, the agent resumes, and the answered question is appended to `judgement_rules.md` so it is never asked again.
+`ask_user` routes through the shared `UserInteraction` mediator: it surfaces a Question card, fires the notifier, and suspends that agent until the user answers or the timeout elapses. The answer is returned to the agent as the tool result, so it continues with the real value rather than an assumption. A learned judgement rule may answer it automatically, and in autonomous mode no card is raised at all - the agent is told to decide with its best judgement and state the assumption. Every answer is written to the Ledger from a *learnable* source (`clarification`), so the extraction pipeline folds it into `judgement_rules.md` and the same question is not asked twice.
 
 ---
 

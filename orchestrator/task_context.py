@@ -1,8 +1,17 @@
 """Task Context Object Store (Stage 4).
 
+Shared scratch space for a task's agents: each agent writes its result here, and
+the orchestrator reads them back to build handoff context, synthesise a final
+answer, and reconstruct state when a run is retried.
+
 Uses a single shared SQLite database (tasks.db) with a task_id column instead
 of one file per task.  This eliminates unbounded file accumulation and makes
 cleanup a single DELETE statement rather than a filesystem scan.
+
+Writes only - there is no blocking read. Agents never wait on each other here:
+the orchestrator sequences them and passes predecessors' output forward in the
+next prompt (see `_execute_hierarchical_groups`), which is simpler to follow and
+to debug than agents suspended on a condition variable.
 
 See docs/CODING_STYLE.md Sections 5.2, 6.6, 9.7, 10.3, 11, 13.
 """
@@ -16,7 +25,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from orchestrator.exceptions import OrchestratorError
 from utils.db import open_db_connection
 from utils.time import format_timestamp, utcnow
 
@@ -55,13 +63,6 @@ class TaskContextStore:
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
             conn.execute(_SCHEMA_INDEX)
-        # Per-task condition variables: write() notifies, read() waits.
-        self._conditions: dict[str, asyncio.Condition] = {}
-
-    def _get_condition(self, task_id: str) -> asyncio.Condition:
-        if task_id not in self._conditions:
-            self._conditions[task_id] = asyncio.Condition()
-        return self._conditions[task_id]
 
     async def initialize_task(self, task_id: str, agents: list[str]) -> None:
         """Insert pending status rows for every agent in this task."""
@@ -79,86 +80,6 @@ class TaskContextStore:
                 )
 
         await asyncio.to_thread(_run)
-
-    async def read(
-        self,
-        task_id: str,
-        requesting_agent: str,
-        key: str,
-        timeout: int = 30,
-        required: bool = True,
-    ) -> Any:
-        """Read a key, waiting until the value is written or timeout expires."""
-        if "." in key:
-            source_agent, actual_key = key.split(".", 1)
-        else:
-            source_agent = requesting_agent
-            actual_key = key
-
-        loop = asyncio.get_running_loop()
-        start_time = loop.time()
-        # write() notifies the Condition, so the wait normally wakes instantly.
-        # The poll is only a safety net for a missed notification (e.g. the
-        # Condition was replaced by release_conditions mid-wait) - keep it slow
-        # so waiting readers don't hammer the DB.
-        poll_interval = 0.25
-        condition = self._get_condition(task_id)
-
-        while True:
-
-            def _check() -> tuple[sqlite3.Row | None, str]:
-                with open_db_connection(self._db_path) as conn:
-                    try:
-                        key_row = conn.execute(
-                            "SELECT value, status FROM task_state WHERE task_id = ? AND agent = ? AND key = ?",
-                            (task_id, source_agent, actual_key),
-                        ).fetchone()
-                        status_row = conn.execute(
-                            "SELECT status FROM task_state WHERE task_id = ? AND agent = ? AND key = '_status'",
-                            (task_id, source_agent),
-                        ).fetchone()
-                        agent_status = status_row["status"] if status_row else "unknown"
-                        return key_row, agent_status
-                    except sqlite3.OperationalError:
-                        return None, "unknown"
-
-            row, agent_status = await asyncio.to_thread(_check)
-            if row:
-                status = row["status"]
-                if status == "completed":
-                    val_str = row["value"]
-                    if val_str is None:
-                        return None
-                    try:
-                        return json.loads(val_str)
-                    except json.JSONDecodeError:
-                        return None
-                elif status == "failed":
-                    raise OrchestratorError(f"Source agent '{source_agent}' failed. Cannot read '{key}'.")
-            elif agent_status == "failed":
-                raise OrchestratorError(f"Source agent '{source_agent}' failed. Key '{key}' is unavailable.")
-
-            elapsed = loop.time() - start_time
-            if elapsed >= timeout:
-                if agent_status in ("pending", "running"):
-                    if required:
-                        raise OrchestratorError(
-                            f"Timeout: agent '{source_agent}' is still running but '{key}' is not ready."
-                        )
-                    return None
-                elif agent_status == "failed":
-                    raise OrchestratorError(f"Agent '{source_agent}' failed. Key '{key}' is unavailable.")
-                else:
-                    if required:
-                        raise OrchestratorError(f"Timeout: key '{key}' is missing (agent status: {agent_status}).")
-                    return None
-
-            remaining = timeout - elapsed
-            try:
-                async with condition:
-                    await asyncio.wait_for(condition.wait(), timeout=min(remaining, poll_interval))
-            except TimeoutError:
-                pass
 
     async def write(
         self,
@@ -184,9 +105,6 @@ class TaskContextStore:
                 )
 
         await asyncio.to_thread(_run)
-        condition = self._get_condition(task_id)
-        async with condition:
-            condition.notify_all()
 
     async def update_agent_status(self, task_id: str, agent: str, status: str) -> None:
         """Convenience: set an agent's run status."""
@@ -222,14 +140,6 @@ class TaskContextStore:
 
         return await asyncio.to_thread(_run)
 
-    def release_conditions(self, task_id: str) -> None:
-        """Drop the in-memory Condition for a finished task. DB rows are preserved.
-
-        Call this when a task completes so the conditions dict doesn't grow
-        unboundedly. cleanup_stale_tasks() handles periodic DB pruning separately.
-        """
-        self._conditions.pop(task_id, None)
-
     async def delete_task(self, task_id: str) -> None:
         """Delete all rows belonging to a task_id."""
 
@@ -238,7 +148,6 @@ class TaskContextStore:
                 conn.execute("DELETE FROM task_state WHERE task_id = ?", (task_id,))
 
         await asyncio.to_thread(_run)
-        self._conditions.pop(task_id, None)
 
     async def cleanup_stale_tasks(
         self,
@@ -303,7 +212,5 @@ class TaskContextStore:
                 )
                 return to_delete, result.rowcount
 
-        deleted_ids, count = await asyncio.to_thread(_run)
-        for task_id in deleted_ids:
-            self._conditions.pop(task_id, None)
+        _deleted_ids, count = await asyncio.to_thread(_run)
         return count

@@ -289,12 +289,24 @@ async def test_north_star_skipped_on_low_confidence(tmp_path):
 
 @pytest.mark.asyncio
 async def test_task_context_write_and_read(tmp_path):
-    """write() followed by read() must return the same value."""
+    """What an agent writes must come back through get_all(), grouped by agent.
+
+    get_all() is the read path the orchestrator actually uses - for handoff
+    context, synthesis, and retry reconstruction. The store has no blocking
+    read: agents are sequenced by the orchestrator, never suspended on
+    each other here.
+    """
     store = TaskContextStore(db_path=tmp_path / "tasks.db")
-    await store.initialize_task("t1", ["agent_a"])
+    await store.initialize_task("t1", ["agent_a", "agent_b"])
     await store.write("t1", "agent_a", "answer", 42)
-    result = await store.read("t1", "agent_a", "answer", timeout=5)
-    assert result == 42
+    await store.write("t1", "agent_b", "output", {"text": "done"})
+
+    everything = await store.get_all("t1")
+
+    assert everything["agent_a"]["answer"] == 42
+    assert everything["agent_b"]["output"] == {"text": "done"}
+    # _status bookkeeping rows stay out of the returned payload.
+    assert "_status" not in everything["agent_a"]
 
 
 @pytest.mark.asyncio

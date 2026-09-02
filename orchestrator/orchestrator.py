@@ -2244,9 +2244,6 @@ class Orchestrator:
                 },
             )
         await self._stream_manager.emit_done(task_id)
-        # Release the in-memory Condition for this task; DB rows are kept for
-        # the retention window but no more readers will wait on this task_id.
-        self._task_context_store.release_conditions(task_id)
         # Trigger extraction immediately after agent tasks so preferences stated
         # mid-task land in judgement_rules.md before the next task starts.
         # Single-tool tasks (deterministic, no agent reasoning) are skipped  -

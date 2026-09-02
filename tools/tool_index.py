@@ -71,6 +71,32 @@ class ToolIndex:
         await asyncio.to_thread(self._upsert_sync, name, description, emb_json)
         self._cache = None
 
+    async def update_tools(self, tools: list[tuple[str, str]]) -> int:
+        """Index many `(name, description)` pairs in one embedding call.
+
+        Startup indexes the whole registry, and doing that one tool at a time was
+        one network round trip per tool on a first boot. Unchanged descriptions are
+        skipped, so later boots do no embedding work at all. Returns the number of
+        tools actually re-embedded.
+        """
+        stored = await asyncio.to_thread(self._all_descriptions_sync)
+        changed = [(name, desc) for name, desc in tools if stored.get(name) != desc]
+        if not changed:
+            return 0
+        try:
+            embeddings = await self._embed_fn([desc for _, desc in changed])
+        except Exception:
+            logger.warning("ToolIndex: batch embed failed - %d tool(s) not indexed", len(changed))
+            return 0
+        if len(embeddings) != len(changed):
+            logger.warning("ToolIndex: embed returned %d vectors for %d tools - skipping batch",
+                           len(embeddings), len(changed))
+            return 0
+        rows = [(name, desc, json.dumps(vec)) for (name, desc), vec in zip(changed, embeddings, strict=True)]
+        await asyncio.to_thread(self._upsert_many_sync, rows)
+        self._cache = None
+        return len(rows)
+
     async def remove_tool(self, name: str) -> None:
         await asyncio.to_thread(self._delete_sync, name)
         self._cache = None
@@ -117,6 +143,27 @@ class ToolIndex:
                 "updated_at=excluded.updated_at",
                 (name, description, emb_json, now),
             )
+
+    def _upsert_many_sync(self, rows: list[tuple[str, str, str]]) -> None:
+        """Upsert a batch in one transaction."""
+        from utils.time import utcnow
+
+        now = utcnow().isoformat()
+        with open_db_connection(self._db_path) as conn:
+            conn.executemany(
+                "INSERT INTO tool_embeddings (name, description, embedding, updated_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET "
+                "description=excluded.description, "
+                "embedding=excluded.embedding, "
+                "updated_at=excluded.updated_at",
+                [(name, desc, emb, now) for name, desc, emb in rows],
+            )
+
+    def _all_descriptions_sync(self) -> dict[str, str]:
+        """Every indexed tool's stored description, for the batch freshness check."""
+        with open_db_connection(self._db_path) as conn:
+            return {r["name"]: r["description"] for r in conn.execute("SELECT name, description FROM tool_embeddings")}
 
     def _get_description_sync(self, name: str) -> str | None:
         with open_db_connection(self._db_path) as conn:

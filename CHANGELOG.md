@@ -13,6 +13,20 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.5.1] - 2026-09-02
+### Added
+
+### Changed
+- **Tool indexing is batched and no longer delays startup** (`tools/tool_index.py`, `orchestrator/app.py`): `update_tools()` indexes the whole registry in one embedding call instead of one call per tool, and runs as a supervised background task after the server is already serving. A first boot previously embedded every tool description serially before answering anything (40 tools → 1 call; a later boot with unchanged descriptions does no embedding at all). Until it finishes, `search_tools` returns nothing and agents fall back to their full tool set - correct, just not semantically ranked. `refresh_pools()` deliberately stays on the blocking path: it is correctness-critical and already runs concurrently across providers.
+- **ARCHITECTURE §6.6 and §7.7 describe what actually runs** (`docs/ARCHITECTURE.md`): §6.6 documented `orchestrator.read()`, `.write()`, and `.ask()` as the inter-agent communication mechanism - none of which exist on `Orchestrator`. It now describes the write-and-collect store that does, and why there is no blocking read. §7.7 pointed at `orchestrator.ask()`; it now describes the `ask_user` tool that agents really call.
+
+### Fixed
+
+### Removed
+- **The unused blocking-read layer in the task context store** (`orchestrator/task_context.py`): `read()` and its `asyncio.Condition` machinery let an agent suspend until a peer wrote a given key. Nothing ever called it - the pipeline sequences agents and passes each stage's output forward in the next prompt - so `_get_condition`, the `notify_all` in `write()`, and `release_conditions()` existed only to serve it (309 → 216 lines). The store itself is unchanged and still load-bearing for handoff context, synthesis, and retry reconstruction.
+
+---
+
 ## [1.5.0] - 2026-09-02
 ### Added
 - **Task-shaped model tiering** (`orchestrator/tiering.py`): the pool now follows the *work*, not the agent, decided from the plan the planner already produces. `question`/`test`/single-tool run on `high_volume`; `bugfix`/`debug`/`deploy`/`ship`/`research` on `speed`; `feature`/`refactor` on `reasoning`. Anything DEEP, parallel, hierarchical, or planned below 0.6 confidence is promoted to `reasoning` whatever its kind - promotion only, so a cheap tier is chosen only when every signal agrees the work is small. Deliberately conservative: the dispatcher cools down models that return degenerate output, so a weak model driving a long ReAct loop can cost more in retries than the tier saves.
