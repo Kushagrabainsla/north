@@ -120,6 +120,23 @@ def handoff_dir_for(task_id: str) -> str:
     return f"{_handoff_root()}/{task_id}"
 
 
+def ensure_handoff_dir(task_id: str) -> str:
+    """Create this task's handoff directory and return its path.
+
+    Agents are handed this path in their system context as somewhere they can
+    read and write, and several of them check it before doing anything. Nothing
+    created it: it appeared only as a side effect of whichever component happened
+    to write a file there first, so a pipeline whose *first* step reads - the
+    researcher looking for prior context - found it missing and stopped the task.
+
+    Called once when a task starts, so the promise made to every agent is true
+    before any of them acts on it.
+    """
+    path = Path(handoff_dir_for(task_id))
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 # Personal-data subdirectories inside NORTH_HOME that agents are allowed to
 # write to (news digests, wellness logs, general notes). The rest of ~/.north
 # stays blocked (secret.key, .env, ledger/jobs/facts DBs). Kept in sync with

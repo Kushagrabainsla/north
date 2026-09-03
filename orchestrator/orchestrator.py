@@ -72,7 +72,7 @@ from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from orchestrator.tiering import resolve_model_pool
-from tools._path import handoff_dir_for
+from tools._path import ensure_handoff_dir, handoff_dir_for
 from tools.exceptions import ToolNotFoundError
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
@@ -813,6 +813,10 @@ class Orchestrator:
     async def _process_task(self, task_id: str, request: TaskRequest) -> None:
         """Full pipeline: classify → north-star → route → execute."""
         bind_task_id(task_id)  # attach correlation ID to every log line in this context
+        # Agents are told this directory exists before they are asked to use it.
+        # Creating it lazily, wherever a write happened to land first, meant a
+        # pipeline that starts by *reading* found nothing and stopped the task.
+        await asyncio.to_thread(ensure_handoff_dir, task_id)
         task_start = time.monotonic()
         try:
             # Strategy command shortcut - handle before full pipeline

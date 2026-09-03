@@ -250,16 +250,23 @@ class ModelDispatcher(InferenceRouter):
     ) -> ChainRouter | None:
         """Assemble the facts-driven router, or None to stay on the pool router.
 
-        Returns None rather than raising when the store cannot be opened: routing
-        is the one thing north cannot do without, so a broken models.db degrades
-        to the pool router instead of taking the process down.
+        Returns None rather than raising when no store is configured or it cannot
+        be opened: routing is the one thing north cannot do without, so a missing
+        or broken models.db degrades to the pool router instead of taking the
+        process down.
         """
         if mode not in ("chain", "shadow"):
             logger.info("Model routing: legacy pool router (NORTH_ROUTING=%s)", mode)
             return None
-        db_path = models_db_path or (
-            cooldowns_path.parent / "models.db" if cooldowns_path is not None else Path.home() / ".north" / "models.db"
-        )
+        db_path = models_db_path or (cooldowns_path.parent / "models.db" if cooldowns_path is not None else None)
+        if db_path is None:
+            # No path was given, which is how this dispatcher says "do not persist"
+            # - CooldownStore(None) is already memory-only on the same signal.
+            # Reaching for ~/.north here instead meant a dispatcher constructed in
+            # a test or a script silently read and wrote the user's real catalog,
+            # and behaved differently depending on what was in it.
+            logger.debug("Model routing: no models.db path given - staying on the pool router")
+            return None
         try:
             catalog = FactsCatalog(ModelFactsStore(db_path))
             decisions = DecisionLog(db_path)

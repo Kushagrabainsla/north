@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from tools._path import (
+    _handoff_root,
+    ensure_handoff_dir,
     find_project_root,
+    handoff_dir_for,
     is_sensitive_path,
     references_sensitive_path,
     resolve_path,
@@ -143,3 +146,45 @@ class TestFindProjectRoot:
         file.write_text("x = 1\n", encoding="utf-8")
         root = find_project_root(file, markers=("definitely-not-present",))
         assert root == tmp_path
+
+
+class TestHandoffDirectory:
+    """The per-task handoff directory agents are told they can use.
+
+    Agents receive this path in their system context and several of them check it
+    before doing anything. Nothing created it - it appeared only as a side effect
+    of whichever component happened to write there first - so a pipeline whose
+    first step *reads* (the researcher looking for prior context) found it missing
+    and stopped the task with "the required handoff directory does not exist".
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        """Point NORTH_HOME at tmp_path for real.
+
+        ``_handoff_root`` is lru_cached, so setting the env var alone does not
+        move it - without clearing the cache these tests write to the developer's
+        actual ~/.north.
+        """
+        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+        _handoff_root.cache_clear()
+        yield
+        _handoff_root.cache_clear()
+
+    def test_the_directory_agents_are_promised_actually_exists(self, tmp_path: Path) -> None:
+        created = ensure_handoff_dir("task_abc123")
+        assert Path(created).is_dir()
+        assert created == handoff_dir_for("task_abc123")
+        assert Path(created).is_relative_to(tmp_path)  # and it is the isolated one
+
+    def test_creating_it_twice_is_harmless(self) -> None:
+        first = ensure_handoff_dir("task_abc123")
+        (Path(first) / "research").mkdir()
+        assert ensure_handoff_dir("task_abc123") == first
+        assert (Path(first) / "research").is_dir()  # nothing already there is disturbed
+
+    def test_it_stays_writable_by_agents(self) -> None:
+        """Creating it must not put it outside the handoff carve-out."""
+        created = ensure_handoff_dir("task_abc123")
+        target = f"{created}/research/context.md"
+        assert resolve_path(target, "/srv/project") == Path(target)

@@ -13,6 +13,13 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.12.2] - 2026-09-03
+### Fixed
+- **The per-task handoff directory now exists before agents are told to use it** (`tools/_path.py`, `orchestrator/orchestrator.py`). Every agent is handed `~/.north/tasks/<task_id>` in its system context, and several check it before acting - but nothing ever created it. It appeared only as a side effect of whichever component happened to write there first, so a pipeline whose *first* step reads (the researcher looking for prior context) found it missing and stopped: *"Research stopped because the required handoff directory does not exist"*. Reproduced on two consecutive engineering tasks. `ensure_handoff_dir()` is now called once when a task starts, which covers submit, resume, recovery and paused-resume alike.
+- **A dispatcher built without an explicit path no longer reads the user's real `~/.north/models.db`** (`inference/dispatcher.py`). Omitting a path is already how this dispatcher says "do not persist" - `CooldownStore(None)` is memory-only on the same signal - but chain routing reached for the home directory anyway, so a dispatcher constructed in a test or a script silently read and wrote the live catalog and behaved differently depending on what was in it. No path now means the pool router, and production wiring passes one explicitly.
+
+---
+
 ## [1.12.1] - 2026-09-03
 ### Fixed
 - **A chain can no longer offer a model that does not answer completions** (`inference/facts/`, `inference/routing/chain.py`). Embedding, transcription, image and moderation models sit in the same catalogs and provider registries as chat models and are far cheaper, and nothing in the chain asserted "can produce a completion" - so a part that states no capability requirement ranked them alongside chat models. Ordered cheapest-first they won: on an install with no free chat models, `coder:compact` selected **Whisper**. Model facts now carry `supports_completion`, declared by every source, and it is checked for every chain rather than being a per-part option.
