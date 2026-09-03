@@ -13,6 +13,17 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.13.0] - 2026-09-03
+### Added
+- **Embeddings now run on-device and need no API key** (`inference/providers/local_embeddings.py`, `inference/registry.py`). Embeddings back tool selection, the code index and memory recall, and of the providers north talks to only Gemini sells them - OpenRouter's catalog has none, Groq has none, Codex refuses outright. So a single empty `NORTH_GEMINI_API_KEY` silently disabled every semantic index: north kept working, but fell back to keyword overlap for memory and to injecting all 38 tools into every prompt. A local provider now serves the EMBEDDING capability from a static embedding model - inference is numpy over a lookup table, so the new dependency brings a tokenizer and safetensors but **no torch and no ONNX runtime**. A batch of 200 texts takes ~2 ms against a network round trip. Weights are fetched once and cached; if that fails the provider reports no models and north degrades exactly as it did before. Remote embedding providers stay as a fallback.
+- **One embedding space per vector store** (`utils/vector_space.py`). Similarity only means something between vectors from the same model; compare across two and cosine similarity returns a confident, meaningless number. No store recorded which model produced a row, so changing or losing an embedding provider would have silently poisoned every search against it. Each store is now stamped with its model and clears itself when that changes - safe because every vector north keeps is derived data, still on disk in its original form. A store that has never been stamped is adopted rather than wiped, so upgrading does not force a full re-index.
+
+### Changed
+- Embedding selection is deterministic and local-first (`ModelDispatcher._prefer_local`). This is the one place where the usual tie-break between equal-looking candidates would be actively harmful: alternating between two embedding models would empty and rebuild every index in turn.
+- `InferenceRouter.embedding_model_id()` reports the model embeddings will come from, resolvable before the first call so vector stores can stamp themselves at startup.
+
+---
+
 ## [1.12.2] - 2026-09-03
 ### Fixed
 - **The per-task handoff directory now exists before agents are told to use it** (`tools/_path.py`, `orchestrator/orchestrator.py`). Every agent is handed `~/.north/tasks/<task_id>` in its system context, and several check it before acting - but nothing ever created it. It appeared only as a side effect of whichever component happened to write there first, so a pipeline whose *first* step reads (the researcher looking for prior context) found it missing and stopped: *"Research stopped because the required handoff directory does not exist"*. Reproduced on two consecutive engineering tasks. `ensure_handoff_dir()` is now called once when a task starts, which covers submit, resume, recovery and paused-resume alike.

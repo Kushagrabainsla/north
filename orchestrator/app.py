@@ -125,6 +125,7 @@ def _attach_embedding_index(deps) -> None:
     embedding_index = EmbeddingIndex(
         db_path=settings.north_home / "embeddings.db",
         embed_fn=deps.embed_fn,
+        embedding_model=deps.embedding_model,
     )
     deps.context_store.attach_embedding_index(embedding_index)
 
@@ -253,6 +254,7 @@ def _build_tool_index(deps) -> ToolIndex | None:
     return ToolIndex(
         db_path=settings.north_home / "tool_index.db",
         embed_fn=deps.embed_fn,
+        embedding_model=deps.embedding_model,
     )
 
 

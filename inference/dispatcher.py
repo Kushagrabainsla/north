@@ -72,6 +72,7 @@ from inference.models import (
 )
 from inference.provider import Provider
 from inference.provider_health import ProviderHealthTracker
+from inference.providers.local_embeddings import PROVIDER_NAME as LOCAL_EMBEDDINGS
 from inference.rate_limit_status import _PAYLOAD_TOO_LARGE_SECS, RateLimitStatusStore
 from inference.routing import _Candidate, shuffle_groups
 from inference.routing.availability import AvailabilityView, EntitlementLedger
@@ -606,12 +607,44 @@ class ModelDispatcher(InferenceRouter):
         return response
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
-        candidates = self._candidates(ModelCapability.EMBEDDING, PoolPriority.MEDIUM, 0)
+        candidates = self._prefer_local(self._candidates(ModelCapability.EMBEDDING, PoolPriority.MEDIUM, 0))
 
         async def _call(provider: Provider, model_id: str) -> EmbedResponse:
             return await provider.embed(model_id, request)
 
         return await self._dispatch(candidates, _call, capability=ModelCapability.EMBEDDING)
+
+    def embedding_model_id(self) -> str:
+        """The model embeddings will come from, resolvable before the first call.
+
+        Vector stores stamp themselves with this at construction so they can drop
+        vectors from a previous model rather than silently comparing across two
+        embedding spaces. That happens at startup, before any catalog refresh, so
+        the answer comes from the local provider's own declaration rather than
+        from the registry.
+        """
+        for provider in self._providers:
+            model_id = getattr(provider, "model_id", "")
+            if provider.name == LOCAL_EMBEDDINGS and model_id:
+                return str(model_id)
+        for info, _provider in self._registry.values():
+            if info.supports(ModelCapability.EMBEDDING):
+                return info.model_id
+        return ""
+
+    @staticmethod
+    def _prefer_local(candidates: list[_Candidate]) -> list[_Candidate]:
+        """Put on-device embeddings first, deterministically.
+
+        Which model produced a vector decides which other vectors it can be
+        compared against (see utils/vector_space.py), so this is the one place
+        where an arbitrary tie-break between equal-looking candidates would be
+        actively harmful: alternating between two embedding models would empty and
+        rebuild every index in turn. The local model is always present and costs
+        nothing, so it leads and the remote ones stay as the fallback.
+        """
+        local = [pair for pair in candidates if pair[0].provider_name == LOCAL_EMBEDDINGS]
+        return local + [pair for pair in candidates if pair[0].provider_name != LOCAL_EMBEDDINGS]
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         if request.model:

@@ -16,6 +16,7 @@ from pathlib import Path
 from config.dependencies import EmbedFn
 from utils.db import open_db_connection
 from utils.math import cosine_similarity
+from utils.vector_space import ensure_vector_space
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class ToolIndex:
     search_tools() is called in _load_tools() to get the top-K relevant tools.
     """
 
-    def __init__(self, db_path: Path, embed_fn: EmbedFn) -> None:
+    def __init__(self, db_path: Path, embed_fn: EmbedFn, embedding_model: str = "") -> None:
         self._db_path = db_path
         self._embed_fn = embed_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +48,9 @@ class ToolIndex:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute(_SCHEMA)
+        # A change of embedding model invalidates every stored vector; the tool
+        # descriptions they were built from are re-read at every startup.
+        ensure_vector_space(self._db_path, embedding_model, ("tool_embeddings",))
         # (tool_name, embedding_vector) - rebuilt lazily, invalidated on update.
         self._cache: list[tuple[str, list[float]]] | None = None
 

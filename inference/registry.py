@@ -13,6 +13,7 @@ from inference.codex_auth import CodexCredentialProvider
 from inference.provider import Provider
 from inference.providers.gemini import GeminiRouter
 from inference.providers.groq import GroqRouter
+from inference.providers.local_embeddings import LocalEmbeddingProvider
 from inference.providers.openai_codex import OpenAICodexProvider
 from inference.providers.opencode_zen import OpenCodeZenRouter
 from inference.providers.openrouter import OpenRouterRouter
@@ -21,6 +22,8 @@ from inference.providers.openrouter import OpenRouterRouter
 class AuthKind(StrEnum):
     API_KEY = "api_key"
     OAUTH_PKCE = "oauth_pkce"
+    # Runs in this process. Nothing to authenticate, so it is always configured.
+    LOCAL = "local"
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,8 @@ class ProviderDefinition:
         return self.factory(credential)
 
     def is_configured(self, settings: object | None = None) -> bool:
+        if self.auth_kind is AuthKind.LOCAL:
+            return True
         if self.auth_kind is AuthKind.API_KEY:
             return bool(self.resolve_credential(settings))
         if self.id == "openai_codex":
@@ -77,6 +82,18 @@ class ProviderDefinition:
 
 
 PROVIDER_DEFINITIONS: tuple[ProviderDefinition, ...] = (
+    ProviderDefinition(
+        id="local",
+        display_name="Local embeddings",
+        description="On-device embeddings for tool, code and memory search - no key required",
+        auth_kind=AuthKind.LOCAL,
+        # First in the fallback order: embeddings must come from one model
+        # consistently (see utils/vector_space.py), and the local one is the only
+        # provider guaranteed to be there. It serves no chat models, so this does
+        # not affect completion routing at all.
+        fallback_order=1,
+        factory=lambda _="": LocalEmbeddingProvider(),
+    ),
     ProviderDefinition(
         id="groq",
         display_name="Groq",

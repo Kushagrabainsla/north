@@ -133,7 +133,12 @@ def test_factory_activates_codex_from_north_owned_token(tmp_path, monkeypatch) -
 
     router = build_router(openrouter_api_key="")
 
-    assert [provider.name for provider in router._providers] == ["openai_codex"]
+    names = [provider.name for provider in router._providers]
+    # A saved token is enough to activate Codex with no API key configured.
+    assert "openai_codex" in names
+    # The local embedding provider needs no credential, so it is always present;
+    # it serves no chat models and does not affect completion routing.
+    assert names == ["local", "openai_codex"]
 
 
 def test_message_conversion_preserves_tool_call_continuity() -> None:

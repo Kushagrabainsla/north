@@ -31,6 +31,7 @@ from pathlib import Path
 from context.repo_map import _collect_source_files
 from utils.db import open_db_connection
 from utils.math import cosine_similarity
+from utils.vector_space import ensure_vector_space
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +210,7 @@ def _chunk_file(rel: str, text: str) -> list[tuple[int, int, str, str]]:
 class CodeIndex:
     """Embeds source chunks per workspace for semantic retrieval; incremental by file hash."""
 
-    def __init__(self, db_path: Path, embed_fn: EmbedFn) -> None:
+    def __init__(self, db_path: Path, embed_fn: EmbedFn, embedding_model: str = "") -> None:
         self._db_path = db_path
         self._embed_fn = embed_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -217,6 +218,9 @@ class CodeIndex:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.executescript(_SCHEMA)
+        # Both tables: clearing the chunks without clearing the file hashes would
+        # leave every file looking already-indexed and the index permanently empty.
+        ensure_vector_space(self._db_path, embedding_model, ("code_chunks", "code_files"))
         # workspace -> parsed [(path, start, end, symbol, text, vec)], invalidated on update.
         self._cache: dict[str, list[tuple[str, int, int, str, str, list[float]]]] = {}
         self._locks: dict[str, asyncio.Lock] = {}

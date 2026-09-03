@@ -70,6 +70,15 @@ class InferenceRouter(ABC):
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         """Embed a batch of texts and return one float vector per input."""
 
+    def embedding_model_id(self) -> str:
+        """The model embeddings come from, or "" when it cannot be determined.
+
+        Vector stores use this to detect a change of embedding model, which
+        invalidates every vector they hold - similarity across two models is
+        meaningless. See utils/vector_space.py.
+        """
+        return ""
+
     def get_context_window(self, model_id: str) -> int:
         """Return the published context window (in tokens) for model_id from the live registry."""
         return 128_000

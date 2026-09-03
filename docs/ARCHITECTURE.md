@@ -892,6 +892,7 @@ Inference is served by a `ModelDispatcher` that fans out across multiple provide
 | Groq | `NORTH_GROQ_API_KEY` | Optional. Free-tier fast completions; Whisper transcription. |
 | Gemini | `NORTH_GEMINI_API_KEY` | Optional. Free-tier completions; embeddings. |
 | OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | Optional. Free and paid completion models. |
+| Local embeddings | none | Always present. Serves the EMBEDDING capability on-device (model2vec static embeddings, numpy inference - no torch, no ONNX). No chat models, so completion routing is unaffected. |
 | OpenAI Codex | Browser OAuth | Experimental Responses transport; North retains its own tool loop and locally records response/item/request IDs, event types, and rate-limit metadata per agent run. |
 
 All providers share the same `Provider` protocol (`inference/provider.py`) and are registered into a single `ModelDispatcher` at startup via `inference/factory.py:build_router()`. OAuth tokens are owned by North, atomically persisted with private permissions, and refreshed per request through the shared credential interface.
@@ -1065,6 +1066,14 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
 `embed` calls `POST /api/v1/embeddings` with `openai/text-embedding-3-small`.  Used by `EmbeddingIndex` (§5.7) and `EpisodicStore` (§5.8).
 
 ### 8.8 Audio Transcription
+
+### 8.9 Embeddings
+
+Embeddings back tool selection, the code index and memory recall - all of it high volume, latency sensitive, and about the user's own data. Of the remote providers north talks to, **only Gemini sells embeddings**: OpenRouter's catalog has none, Groq has none, and Codex refuses outright. One empty key therefore used to disable every semantic index at once; north kept working but fell back to keyword overlap and to injecting all tools into every prompt.
+
+They are now served on-device by default (`inference/providers/local_embeddings.py`). The model is a *static* embedding model - inference is numpy over a lookup table, so the dependency brings a tokenizer and safetensors but no torch and no ONNX runtime. A batch of 200 texts takes ~2 ms. The weights are fetched once on first use and cached on disk; if that fails the provider reports no models and north degrades exactly as before. Remote embedding providers remain as a fallback.
+
+**One embedding space per store** (`utils/vector_space.py`). Similarity is only meaningful between vectors from the same model - compare across two and cosine similarity returns a confident, meaningless number. No store recorded which model produced a row, so a change of embedding provider would have silently poisoned every search. Each store is now stamped with its model and clears itself when that changes; every vector north keeps is derived data (tool descriptions, code chunks, document chunks are all still on disk), so a space change discards a cache rather than losing anything. An unstamped store is adopted rather than wiped, so upgrading does not force a full re-index. Because of this invariant, embedding selection is deliberately *not* subject to the usual tie-break: `ModelDispatcher._prefer_local` puts the local model first every time, since alternating between two embedding models would empty and rebuild every index in turn.
 
 The Inference Router also owns audio transcription via OpenRouter's `POST /api/v1/audio/transcriptions` endpoint (see Section 16.6). The same client, the same `NORTH_OPENROUTER_API_KEY`, the same fallback semantics, and the same Ledger logging (`source: inference_router`) apply. Transcription is a separate code path from chat-completion (different endpoint, different request shape) but shares all infrastructure.
 

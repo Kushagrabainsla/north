@@ -17,6 +17,7 @@ from pathlib import Path
 
 from utils.db import open_db_connection
 from utils.math import cosine_similarity
+from utils.vector_space import ensure_vector_space
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,15 @@ class EmbeddingIndex:
     is invalidated per-document whenever ``update_document`` is called.
     """
 
-    def __init__(self, db_path: Path, embed_fn: EmbedFn) -> None:
+    def __init__(self, db_path: Path, embed_fn: EmbedFn, embedding_model: str = "") -> None:
         self._db_path = db_path
         self._embed_fn = embed_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
+        # Vectors from two embedding models cannot be compared, so a change of
+        # model clears them; the documents they came from are still on disk.
+        ensure_vector_space(self._db_path, embedding_model, ("context_embeddings",))
         # (doc, chunk_text, embedding_vector) - rebuilt lazily, invalidated on update.
         self._cache: list[tuple[str, str, list[float]]] | None = None
 

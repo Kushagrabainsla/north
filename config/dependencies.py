@@ -77,6 +77,10 @@ class Dependencies:
     # Shared async callable used by EpisodicStore, EmbeddingIndex, ToolIndex,
     # and FactStore - guarantees a single embedding model and billing surface.
     embed_fn: EmbedFn | None = field(default=None)
+    # The model behind embed_fn. Vector stores stamp themselves with it and drop
+    # their contents when it changes, because vectors from two embedding models
+    # cannot meaningfully be compared (see utils/vector_space.py).
+    embedding_model: str = ""
     fact_store: FactStore | None = field(default=None)
     # Semantic code index (#2 code RAG). Present only when embeddings are available;
     # backs the search_code tool. None when no embed_fn is wired.
@@ -226,7 +230,12 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
 
     episodic_store = EpisodicStore(db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn)
     fact_store = FactStore(db_path=settings.north_home / "facts.db", embed_fn=_embed_fn)
-    code_index = CodeIndex(db_path=settings.north_home / "code_index.db", embed_fn=_embed_fn)
+    # Which model produced a vector decides which vectors it can be compared
+    # against, so every store is stamped with it and clears itself on a change.
+    embedding_model = base_router.embedding_model_id()
+    code_index = CodeIndex(
+        db_path=settings.north_home / "code_index.db", embed_fn=_embed_fn, embedding_model=embedding_model
+    )
     memory = LocalMemoryGateway(
         context_store=context_store,
         fact_store=fact_store,
@@ -239,6 +248,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         context_store=context_store,
         ledger=ledger,
         inference_router=base_router,
+        embedding_model=embedding_model,
         notifier=TerminalNotifier(),
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
         cost_tracker=cost_tracker,
