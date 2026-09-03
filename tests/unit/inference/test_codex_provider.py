@@ -257,3 +257,77 @@ async def test_codex_tool_stream_normalizes_function_call() -> None:
     assert response.calls[0].call_id == "call-1"
     assert response.calls[0].params == {"path": "README.md"}
     await client.aclose()
+
+
+def _ok_sse() -> bytes:
+    return _sse(
+        {"type": "response.output_text.delta", "delta": "{}"},
+        {
+            "type": "response.completed",
+            "response": {"id": "r", "model": "codex-model", "output": [], "usage": {}},
+        },
+    )
+
+
+async def _capture_body(request: CompletionRequest) -> dict:
+    """Run one completion against a mock transport and return the body sent."""
+    sent: dict = {}
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        sent.update(json.loads(await http_request.aread()))
+        return httpx.Response(200, content=_ok_sse())
+
+    client = httpx.AsyncClient(base_url="https://example.test", transport=httpx.MockTransport(handler))
+    provider = OpenAICodexProvider(ApiKeyCredentialProvider("test", "token"), client=client)
+    await provider.complete("codex-model", request)
+    await client.aclose()
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_a_bare_json_schema_is_sent_in_the_shape_responses_expects() -> None:
+    """A bare schema carries its own "type": "object".
+
+    Spreading the raw field overwrote "type": "json_schema" with it, and Codex
+    answered every schema-enforced request with 400 Bad Request. The router read
+    that as the model being unable to do structured output, so it routed every
+    such part away from the subscription - which is how bootstrap ended up
+    running entirely on free models.
+    """
+    bare_schema = {
+        "type": "object",
+        "title": "extraction",
+        "properties": {"facts": {"type": "array", "items": {"type": "string"}}},
+        "required": ["facts"],
+    }
+    body = await _capture_body(
+        CompletionRequest(prompt="hi", component="bootstrap", response_schema=bare_schema)
+    )
+
+    fmt = body["text"]["format"]
+    assert fmt["type"] == "json_schema", "the schema's own type must never overwrite the format type"
+    assert fmt["schema"] == bare_schema, "the schema belongs nested under 'schema', not spread"
+    assert fmt["name"], "Responses requires a name alongside the schema"
+
+
+@pytest.mark.asyncio
+async def test_an_already_wrapped_schema_is_passed_through() -> None:
+    wrapped = {"name": "answer", "schema": {"type": "object", "properties": {}}, "strict": True}
+    fmt = (await _capture_body(
+        CompletionRequest(prompt="hi", component="critic", response_schema=wrapped)
+    ))["text"]["format"]
+
+    assert fmt == {"type": "json_schema", **wrapped}
+
+
+@pytest.mark.asyncio
+async def test_json_mode_still_asks_for_a_plain_json_object() -> None:
+    """The unenforced path was never broken and must stay as it is."""
+    body = await _capture_body(CompletionRequest(prompt="hi", component="planner", json_mode=True))
+    assert body["text"]["format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_an_unstructured_request_asks_for_no_format_at_all() -> None:
+    body = await _capture_body(CompletionRequest(prompt="hi", component="coder"))
+    assert "text" not in body

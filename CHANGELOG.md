@@ -13,6 +13,14 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.13.1] - 2026-09-03
+### Fixed
+- **Every schema-enforced request to the Codex subscription was rejected with 400** (`inference/providers/openai_codex.py`). The provider read `CompletionRequest.response_schema` directly and spread it into the request body, but that field may be a *bare* JSON Schema carrying its own `"type": "object"` - which silently overwrote `"type": "json_schema"`. The field's own docstring says to read it through `structured_schema` and never directly; every other provider does.
+
+  The damage was indirect and worth spelling out. A 400 rejecting a declared capability is classified as a `MODEL_CAPABILITY` failure, so the router concluded the Codex models could not do structured output at all and routed every schema-enforced part away from them. On an account whose paid endpoints need billing, that left first-run bootstrap running entirely on free and low-cost models - several of which drop `response_format` and answer with prose. Six of twenty-five files then yielded no facts, including the user's own resume. Only the subscription was affected; the two-witness contradiction rule correctly refused to demote the models' facts on one provider's evidence.
+
+---
+
 ## [1.13.0] - 2026-09-03
 ### Added
 - **Embeddings now run on-device and need no API key** (`inference/providers/local_embeddings.py`, `inference/registry.py`). Embeddings back tool selection, the code index and memory recall, and of the providers north talks to only Gemini sells them - OpenRouter's catalog has none, Groq has none, Codex refuses outright. So a single empty `NORTH_GEMINI_API_KEY` silently disabled every semantic index: north kept working, but fell back to keyword overlap for memory and to injecting all 38 tools into every prompt. A local provider now serves the EMBEDDING capability from a static embedding model - inference is numpy over a lookup table, so the new dependency brings a tokenizer and safetensors but **no torch and no ONNX runtime**. A batch of 200 texts takes ~2 ms against a network round trip. Weights are fetched once and cached; if that fails the provider reports no models and north degrades exactly as it did before. Remote embedding providers stay as a fallback.

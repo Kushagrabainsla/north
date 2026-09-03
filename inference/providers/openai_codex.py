@@ -206,8 +206,17 @@ class OpenAICodexProvider:
             "stream": True,
             "input": [{"role": "user", "content": content}],
         }
-        if request.response_schema is not None:
-            body["text"] = {"format": {"type": "json_schema", **request.response_schema}}
+        # Read through structured_schema, never response_schema directly: the raw
+        # field may be a *bare* JSON Schema carrying its own "type": "object",
+        # which spread into this dict silently overwrote "type": "json_schema".
+        # Every such request was rejected with 400, which is a declared-capability
+        # failure - so the router concluded these models could not do structured
+        # output at all and routed every schema-enforced part away from the
+        # subscription. Responses wants name/schema/strict flattened beside the
+        # type, which is exactly the shape structured_schema returns.
+        schema = request.structured_schema
+        if schema is not None:
+            body["text"] = {"format": {"type": "json_schema", **schema}}
         elif request.json_mode:
             body["text"] = {"format": {"type": "json_object"}}
         result = await self._stream(model_id, body, run_id=request.run_id)
