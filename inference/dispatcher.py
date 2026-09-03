@@ -90,6 +90,11 @@ logger = logging.getLogger(__name__)
 # call; writing each one individually doubles the DB traffic for no benefit.
 _SCORE_FLUSH_INTERVAL_SECONDS = 30.0
 
+# Below this many name-tagged REASONING models, the reasoning pool is widened to
+# every tool-capable model. A pool of one or two is not a choice, and the tag is
+# a naming heuristic that lags every new model family.
+_MIN_REASONING_CANDIDATES = 4
+
 
 # Cooldown key for "this model cannot produce structured output". Kept separate
 # from ModelCapability because it is not a selection filter - any completion
@@ -700,6 +705,20 @@ class ModelDispatcher(InferenceRouter):
         # on each call, so a cooling-down model is never served from cache.
         supports_both = self._capability_supported(req_cap, capability)
         capable = [pair for pair in supports_both if not self._capability_cooled(pair[0], req_cap, capability)]
+        # REASONING is inferred from model *names*, which ages badly: on a free-tier
+        # catalog only one of nineteen tool-capable models carried the tag, so the
+        # reasoning pool was a single model and every real choice happened in the
+        # unranked fallback instead. When the pool is this thin, widen to the base
+        # capability and let quality ranking and preferences decide. Widening only
+        # appends candidates behind the tagged ones, so a strong model still wins.
+        if len(capable) < _MIN_REASONING_CANDIDATES and req_cap is ModelCapability.REASONING:
+            tagged = {(i.model_id, i.provider_name) for i, _ in capable}
+            capable += [
+                pair
+                for pair in self._capability_supported(capability, capability)
+                if (pair[0].model_id, pair[0].provider_name) not in tagged
+                and not self._capability_cooled(pair[0], capability)
+            ]
         if not capable:
             supports_base = self._capability_supported(capability, capability)
             capable = [pair for pair in supports_base if not self._capability_cooled(pair[0], capability)]

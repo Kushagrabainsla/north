@@ -57,6 +57,13 @@ MODEL_FAMILY_TIERS: dict[str, float] = {
     "claude-sonnet": 0.85,
     "gemini-2.0-pro": 0.80,
     "gpt-oss-120b": 0.80,
+    # Current strong open models. Free-tier installs run on these, and leaving them
+    # at the unknown-family floor made a 550B model rank like a 7B one.
+    "minimax-m3": 0.82,
+    "glm-5": 0.80,
+    "nemotron-3-ultra": 0.80,
+    "minimax-m2.7": 0.76,
+    "nemotron-3-super": 0.74,
     "deepseek-r1": 0.78,
     "gemini-pro": 0.78,   # generic pro catch-all
     "claude": 0.75,        # generic claude catch-all

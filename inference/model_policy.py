@@ -46,6 +46,13 @@ DEFAULT_PREFERRED_MODELS: dict[str, list[str]] = {
         "gpt-5-codex",
         "claude-sonnet",
         "gemini-3.1-pro",
+        # Free-tier tail: reached only when none of the above is available (no
+        # credits, no key, rate-limited). Without it an unfunded install picks its
+        # coder by shuffle. Entries that do not exist cost nothing.
+        "minimax-m3",
+        "glm-5",
+        "nemotron-3-ultra",
+        "minimax-m2.7",
     ],
     "speed": [],
     "fast_cheap": [],

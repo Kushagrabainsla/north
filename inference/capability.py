@@ -120,7 +120,12 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
     )
     reasoning_keywords = [
         "deepseek-r1", "deepseek-chat", "deepseek-v3", "qwen3-coder", "qwen-2.5-coder",
-        "qwen3.6-27b", *alpha_variants,
+        "qwen3.6-27b",
+        # Current strong open families. Without these the free tier had exactly one
+        # reasoning-tagged model, so no real choice was ever made in the pool.
+        "minimax-m", "glm-4.6", "glm-5", "kimi-k", "nemotron-3-ultra", "nemotron-3-super",
+        "inkling", "laguna-s", "laguna-xs",
+        *alpha_variants,
     ]
     is_reasoning = _family_matches(lower, tokens, reasoning_tokens) or any(k in lower for k in reasoning_keywords)
     is_mini_nano = (

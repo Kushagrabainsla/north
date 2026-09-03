@@ -147,7 +147,7 @@ class OpenAICompatibleProvider:
 
     @staticmethod
     def _is_billing_exhausted(status_code: int, body: dict | None, headers: dict) -> bool:
-        """True when a 429/403 is permanent billing exhaustion, not a rate limit.
+        """True when a 401/429/403 is a billing problem, not auth or a rate limit.
 
         Gemini (and some other Google-fronted providers) return 429 with
         ``status: RESOURCE_EXHAUSTED`` and a body like "Your prepayment credits are
@@ -155,23 +155,30 @@ class OpenAICompatibleProvider:
         reset window - retrying after a guessed 60s never helps. Treat these as
         PaymentRequiredError (long cooldown + surfaced as "credits needed") so
         ``north limits`` shows an honest "needs billing", not a fake countdown.
+
+        401 is included because OpenCode Zen bills that way: an un-funded account
+        gets ``401 {"error": {"type": "CreditsError", "message": "No payment
+        method..."}}`` for its *paid* models. Read as auth, one such reply marked
+        the whole provider down for 24 h and took its working free models with it.
         """
-        if status_code not in (429, 402, 403):
+        if status_code not in (401, 429, 402, 403):
             return False
         # An explicit reset signal means it IS a transient rate limit.
         if headers.get("retry-after") or OpenAICompatibleProvider._parse_gemini_retry_delay(body) is not None:
             return False
         msg = ""
         status = ""
+        error_type = ""
         if isinstance(body, dict):
             error = body.get("error")
             if isinstance(error, dict):
                 msg = (error.get("message") or "").lower()
                 status = (error.get("status") or "").upper()
-        billing_markers = ("credit", "billing", "prepay", "quota", "exhausted", "insufficient")
+                error_type = (error.get("type") or "").lower()
+        billing_markers = ("credit", "billing", "prepay", "quota", "exhausted", "insufficient", "payment")
         if status == "RESOURCE_EXHAUSTED" and not msg:
             return True
-        return any(marker in msg for marker in billing_markers)
+        return any(marker in msg or marker in error_type for marker in billing_markers)
 
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
         """Map HTTP status codes to typed exceptions for ModelDispatcher cooldown handling.
@@ -182,13 +189,15 @@ class OpenAICompatibleProvider:
         404 (model not found) maps to a long model cooldown without degrading the provider.
         413 (request/token-rate too large) and 429 (rate limited) map to model-level cooldowns.
         """
-        if response.status_code == 401:
+        if response.status_code == 401 and not self._is_billing_exhausted(
+            401, self._safe_json(response), dict(response.headers)
+        ):
             raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
         if response.status_code in (502, 503, 504):
             raise ProviderUnavailableError(
                 f"{self.name} returned {response.status_code} - gateway/server outage"
             )
-        if response.status_code in (402, 403):
+        if response.status_code in (401, 402, 403):
             raise PaymentRequiredError(
                 model_id,
                 self.name,
@@ -255,13 +264,14 @@ class OpenAICompatibleProvider:
     async def _raise_for_stream_status(self, resp: httpx.Response, model_id: str) -> None:
         if resp.status_code == 401:
             await resp.aread()
-            raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
+            if not self._is_billing_exhausted(401, self._safe_json(resp), dict(resp.headers)):
+                raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
         if resp.status_code in (502, 503, 504):
             await resp.aread()
             raise ProviderUnavailableError(
                 f"{self.name} returned {resp.status_code} - gateway/server outage"
             )
-        if resp.status_code in (402, 403):
+        if resp.status_code in (401, 402, 403):
             await resp.aread()
             raise PaymentRequiredError(
                 model_id,
