@@ -13,6 +13,12 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.13.2] - 2026-09-03
+### Fixed
+- **The bootstrap schemas now satisfy the strict contract they declare** (`bootstrap/schema.py`). With the payload shape fixed in 1.13.1, Codex got far enough to validate the schema itself and rejected it twice more: strict structured output requires every object to set `additionalProperties: false` and to list every property in `required`, and forbids any sibling keyword beside a `$ref`. Pydantic emits none of that - it omits `additionalProperties`, leaves defaulted fields out of `required`, and writes `default`/`description` next to a `$ref`. So `strict = True` was a promise the schemas never kept: hard-rejected by the one provider that enforces it, silently ignored by the rest, and therefore never actually enforced anywhere. Requiring a defaulted field is safe for these models - `evidence` is nullable, an empty profile section is an empty list - and Python-side defaults are untouched. Verified live: the same schema-enforced call that returned 400 now returns 200 with a schema-conforming extraction.
+
+---
+
 ## [1.13.1] - 2026-09-03
 ### Fixed
 - **Every schema-enforced request to the Codex subscription was rejected with 400** (`inference/providers/openai_codex.py`). The provider read `CompletionRequest.response_schema` directly and spread it into the request body, but that field may be a *bare* JSON Schema carrying its own `"type": "object"` - which silently overwrote `"type": "json_schema"`. The field's own docstring says to read it through `structured_schema` and never directly; every other provider does.

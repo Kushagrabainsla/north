@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -108,15 +109,68 @@ class UnifiedBootstrapExtraction(BaseModel):
     )
 
 
+def _as_strict(schema: dict, name: str) -> dict:
+    """Make a Pydantic JSON Schema satisfy strict structured-output mode.
+
+    Declaring ``strict`` is a promise about the *schema*, not just a flag: every
+    object must set ``additionalProperties: false`` and list every property in
+    ``required``. Pydantic emits neither - it omits ``additionalProperties`` and
+    leaves defaulted fields out of ``required`` - so a schema marked strict here
+    was rejected outright by the one provider that actually enforces the contract
+    ("'additionalProperties' is required to be supplied and to be false"), while
+    lenient providers ignored the flag entirely. It has therefore never been
+    enforced anywhere; this makes the promise true.
+
+    Requiring a defaulted field is safe for these models: it asks the model to
+    always emit the key (``evidence`` is already nullable, and an empty profile
+    section is an empty list, which the model is told is fine). Python-side
+    defaults are unaffected - callers still read the parsed result with ``.get``.
+    """
+    strict = deepcopy(schema)
+    for node in _object_nodes(strict):
+        node["additionalProperties"] = False
+        node["required"] = list(node.get("properties", {}))
+    _drop_ref_siblings(strict)
+    strict["name"] = name
+    strict["strict"] = True
+    return strict
+
+
+# Keywords Pydantic writes next to a "$ref" (for a field that points at an enum or
+# a nested model and also carries a default or a description). Strict mode rejects
+# a "$ref" with any sibling at all; the referenced definition keeps its own
+# description, and a default is meaningless once every property is required.
+_REF_SIBLINGS = ("default", "description", "title")
+
+
+def _drop_ref_siblings(node: object) -> None:
+    """Strip the keywords strict mode forbids alongside a ``$ref``."""
+    if isinstance(node, dict):
+        if "$ref" in node:
+            for keyword in _REF_SIBLINGS:
+                node.pop(keyword, None)
+        for value in node.values():
+            _drop_ref_siblings(value)
+    elif isinstance(node, list):
+        for value in node:
+            _drop_ref_siblings(value)
+
+
+def _object_nodes(node: object):
+    """Every object-typed subschema, including those under ``$defs``."""
+    if isinstance(node, dict):
+        if node.get("type") == "object" and "properties" in node:
+            yield node
+        for value in node.values():
+            yield from _object_nodes(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _object_nodes(value)
+
+
 # JSON Schema for OpenAI-compatible structured output (response_format)
-EXTRACTED_FACTS_JSON_SCHEMA = ExtractedFacts.model_json_schema()
-EXTRACTED_FACTS_JSON_SCHEMA["name"] = "extracted_facts"
-EXTRACTED_FACTS_JSON_SCHEMA["strict"] = True
-
-USER_PROFILE_JSON_SCHEMA = UserProfile.model_json_schema()
-USER_PROFILE_JSON_SCHEMA["name"] = "user_profile"
-USER_PROFILE_JSON_SCHEMA["strict"] = True
-
-UNIFIED_EXTRACTION_JSON_SCHEMA = UnifiedBootstrapExtraction.model_json_schema()
-UNIFIED_EXTRACTION_JSON_SCHEMA["name"] = "unified_bootstrap_extraction"
-UNIFIED_EXTRACTION_JSON_SCHEMA["strict"] = True
+EXTRACTED_FACTS_JSON_SCHEMA = _as_strict(ExtractedFacts.model_json_schema(), "extracted_facts")
+USER_PROFILE_JSON_SCHEMA = _as_strict(UserProfile.model_json_schema(), "user_profile")
+UNIFIED_EXTRACTION_JSON_SCHEMA = _as_strict(
+    UnifiedBootstrapExtraction.model_json_schema(), "unified_bootstrap_extraction"
+)
