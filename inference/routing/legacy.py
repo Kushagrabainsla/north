@@ -1,4 +1,10 @@
-"""Routing utilities for ModelDispatcher candidate selection."""
+"""Helpers for the pre-chain pool router.
+
+The pool router shuffles among models it considers equal in quality, because a
+price-derived score genuinely could not tell them apart. The chain router does
+not need this: it ranks on measured scores and is deliberately deterministic.
+This module goes when ``NORTH_ROUTING=legacy`` does.
+"""
 
 from __future__ import annotations
 

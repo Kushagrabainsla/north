@@ -78,11 +78,37 @@ class OpenRouterRouter(OpenAICompatibleProvider):
         if client is not None:
             self._client = client
         self._models: dict[str, ModelInfo] = {}
+        # The last raw /models payload. It carries far more than ModelInfo can
+        # hold - measured coding/agentic indices, declared parameters, modalities -
+        # and the facts layer reads it from here rather than fetching it twice.
+        self._raw_catalog: list[dict] = []
 
     # ---- Provider protocol ----
 
     def get_models(self) -> dict[str, ModelInfo]:
         return dict(self._models)
+
+    # ---- CatalogFactSource (see inference/facts/catalog.py) ----
+
+    def raw_catalog(self) -> list[dict] | None:
+        """The last /models payload, for the facts layer to parse."""
+        return self._raw_catalog or None
+
+    async def fetch_model_endpoints(self, model_id: str) -> dict | None:
+        """Per-upstream detail for one model: price, quantization, uptime.
+
+        One request per model, so the caller fetches only the models a chain
+        actually reaches. Never raises - detail is an enrichment, not a
+        dependency.
+        """
+        try:
+            response = await self._client.get(f"/models/{model_id}/endpoints")
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            logger.debug("OpenRouter endpoint detail for %s unavailable: %s", model_id, exc)
+            return None
+        return payload if isinstance(payload, dict) else None
 
     async def refresh(self) -> None:
         """Fetch the live model catalogue from OpenRouter and replace self._models."""
@@ -100,6 +126,7 @@ class OpenRouterRouter(OpenAICompatibleProvider):
         except ValueError as e:
             raise PoolRefreshError("OpenRouter response was not JSON") from e
 
+        self._raw_catalog = [m for m in raw_models if isinstance(m, dict)]
         self._models = self._build_model_info(raw_models)
 
     # ---- OpenRouter-specific request body ----
@@ -167,6 +194,9 @@ class OpenRouterRouter(OpenAICompatibleProvider):
         result: dict[str, ModelInfo] = {}
         for m in raw_models:
             model_id = m.get("id")
+            # ``:batch`` ids are asynchronous endpoints; north has no batch call
+            # path, so they are not registry entries. Their *facts* still reach
+            # the facts layer via raw_catalog() and merge onto the same model.
             if not isinstance(model_id, str) or ":batch" in model_id:
                 continue
             cost = _cost_from_api(m)

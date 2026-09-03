@@ -31,9 +31,11 @@ _RENDER_PREVIEW_CHARS: int = 200
 _COMPACT_TRUNCATE_THRESHOLD: int = 500  # skip outputs shorter than this
 _COMPACT_TRUNCATE_KEEP: int = 300  # chars kept from oversized outputs
 
+# Last resort, used only when no router is available to answer from fetched
+# facts (see ModelDispatcher.get_context_window). A published window is a fact
+# north downloads; this table is a guess that ages badly, so it exists to keep
+# compaction working in isolation - tests, offline tools - and nowhere else.
 # Ordered from most-specific to least-specific so the first match wins.
-# Covers provider-prefixed IDs (e.g. "anthropic/claude-3-haiku") as well as
-# bare names.
 _CONTEXT_WINDOW_TABLE: tuple[tuple[str, int], ...] = (
     ("gemini-2", 1_000_000),
     ("gemini-1.5", 1_000_000),
@@ -88,9 +90,10 @@ def estimate_messages_tokens(messages: list[dict]) -> int:
 def context_window_for(model: str, router: Any = None) -> int:
     """Return the published context-window size (tokens) for a model identifier.
 
-    Prioritizes querying the router's live registry (populated from provider APIs
-    like OpenRouter and OpenCode Zen). Falls back to published family sizes if
-    the router is unavailable or returns 0.
+    Asks the router first: it answers from merged model facts, which join across
+    catalog sources on the canonical id, so a model whose own provider publishes
+    nothing still gets its real window. The name table below is the fallback for
+    when there is no router at all.
     """
     if router is not None and hasattr(router, "get_context_window"):
         try:

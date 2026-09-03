@@ -86,6 +86,10 @@ class NorthSettings:
         from inference.model_scorer import ScoringConfig
 
         self._scoring: ScoringConfig = ScoringConfig()
+        # Per-part routing overrides (see inference/routing/parts.py). Profiles are
+        # data, so an install can retune which part gets which model without a code
+        # change. Persisted only when deliberately set, like scoring above.
+        self._routing_parts: dict[str, object] = {}
         self._load()
 
     def _load(self) -> None:
@@ -107,6 +111,9 @@ class NorthSettings:
                 from inference.model_scorer import ScoringConfig
 
                 self._scoring = ScoringConfig.from_dict(data.get("scoring"))
+            routing = data.get("routing")
+            if isinstance(routing, dict) and isinstance(routing.get("parts"), dict):
+                self._routing_parts = routing["parts"]
         except Exception as exc:
             logger.warning(
                 "settings.json is unreadable - resetting to defaults (%s): %s",
@@ -135,6 +142,15 @@ class NorthSettings:
     def scoring(self) -> ScoringConfig:
         """Model-quality scoring weights. Live-reloadable via set_scoring()."""
         return self._scoring
+
+    @property
+    def routing_parts(self) -> dict[str, object]:
+        """Raw per-part routing overrides; parsed by inference.routing.parts."""
+        return self._routing_parts
+
+    def set_routing_parts(self, parts: dict[str, object]) -> None:
+        self._routing_parts = parts if isinstance(parts, dict) else {}
+        self._save()
 
     def set_scoring(self, config: ScoringConfig) -> None:
         self._scoring = config
@@ -172,6 +188,8 @@ class NorthSettings:
             # default improvements from reaching this install.
             if self._preferred_explicit:
                 data["preferred_models"] = self._preferred_models
+            if self._routing_parts:
+                data["routing"] = {"parts": self._routing_parts}
             # Persist scoring only when the user overrode the default weights, so a
             # routine save doesn't freeze the built-in defaults.
             if data.get("scoring") is not None or self._scoring != ScoringConfig():

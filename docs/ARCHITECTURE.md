@@ -880,7 +880,7 @@ Agents follow a clear decision hierarchy when they encounter ambiguity:
 
 ## 8. Inference Router
 
-The Inference Router selects the appropriate LLM for every inference call in the system. Fully dynamic: no hardcoded model names in application code, no static config file for model assignments. Model selection is driven by task priority and the active inference strategy.
+The Inference Router selects the appropriate LLM for every inference call in the system. Fully dynamic: no hardcoded model names in application code, no static config file for model assignments, and no quality table maintained by hand. Which model serves a call is decided from **downloaded model data** - measured coding and agentic scores, declared capabilities, published context windows and prices - ranked per part of the task.
 
 ### 8.1 Providers
 
@@ -896,9 +896,49 @@ Inference is served by a `ModelDispatcher` that fans out across multiple provide
 
 All providers share the same `Provider` protocol (`inference/provider.py`) and are registered into a single `ModelDispatcher` at startup via `inference/factory.py:build_router()`. OAuth tokens are owned by North, atomically persisted with private permissions, and refreshed per request through the shared credential interface.
 
-### 8.2 Dynamic Model Pools
+### 8.2 Model Routing
 
-Each provider exposes a `refresh()` method that fetches its live model list from the provider's API.  `ModelDispatcher.refresh_pools()` calls every registered provider in sequence and rebuilds its internal registry.  Pools refresh every 6 hours via a background task and once at startup.
+Selection is driven by fetched facts, not by model names. `NORTH_ROUTING` picks the router: `chain` (default), `legacy` (the pool router below), or `shadow` (route on legacy, record where chain would have differed).
+
+**The facts layer (`inference/facts/`).** Two catalog sources are merged onto a canonical model identity:
+
+| Source | Supplies | Rank |
+|---|---|---|
+| OpenRouter `/models` | context, price, `supported_parameters` (tools / reasoning / structured), modalities, Artificial Analysis coding / agentic / intelligence indices | declared |
+| LiteLLM `model_prices_and_context_window.json` | context, price, function-calling / reasoning / response-schema support across 40+ providers | declared |
+| OpenRouter `/models/{id}/endpoints` | per-upstream price, quantization, uptime | declared |
+| Provider catalogs | which models exist where, and on what terms | declared |
+| Runtime observation | contradictions only - a declared capability that fails twice | observed |
+| `capabilities_from_model_id` | last resort for models no source describes | inferred |
+
+Merge rules: highest rank wins, ties break on recency; a declared value is believed **in both directions**, so a source that lists a model's parameters and omits tools is saying it has no tools; observation can only contradict a declared capability, never assert one, and needs two independent failures; facts cross providers, endpoint terms (price, limits, entitlement) never do. Everything is persisted to `~/.north/models.db` with per-field provenance, so North keeps routing when a refresh fails or the machine is offline, and `updated_at` makes staleness visible.
+
+**Canonical identity (`inference/facts/identity.py`).** `openai/gpt-5.1-codex`, `gpt-5.1-codex` and `anthropic.claude-opus-5` all reduce to one join key. Only *known variant* suffixes are stripped (`:free`, `:batch`, `-preview`, `-free`) - never version or size tokens, so `gpt-5.1-codex` and `gpt-5.1-codex-max` stay distinct. Over-merging silently routes work to a different model than intended, so the rule is deliberately conservative.
+
+**Parts (`inference/routing/parts.py`).** Every LLM call already carries a `component` label; it is now the routing key. The coder is ranked on measured `coding_score`, the architect on `intelligence_score`, the planner on cheapest-above-a-quality-floor, and `coder:compact` - which runs *inside* the coder's own loop - on cheapest, so the coder gets the best model while its own summaries run free. Profiles are data, overridable per install under a `routing` key in `settings.json`. Requirements the profile does not state are derived from the request: a call carrying tools needs tool support, a 47k-token prompt needs a 47k window, `json_mode` needs structured output.
+
+**Chains (`inference/routing/chain.py`).** A chain is *every* qualifying model for a part, ordered best first, with the free tier as its tail rather than a separate fallback list - two lists is how a reviewer forced off the coder's model silently got it back once the primary ran dry. One ranking axis per part; cost is a filter (`max_price`) and the tie-break, never blended into the score. Ordering is deterministic, so per-task stickiness is redundant. Models with no measured score are ranked by a price-percentile prior derived from the catalog's own score distribution, capped at the measured median so a guess can never lead a chain.
+
+Chains are rebuilt only when the catalog is, so the hot path never touches SQLite; a call only *narrows* its part's cached chain.
+
+**Failure scope (`inference/failure.py`).** Every failure declares what it implicates, decided from the response's own evidence rather than from the exception type, and wider scopes require more evidence:
+
+```
+REQUEST           this call only - nothing is cooled
+MODEL_CAPABILITY  this model cannot do tools / JSON -> an OBSERVED contradiction
+MODEL             404, deprecated, model-level rate limit
+ACCOUNT_PAID      paid endpoints on this provider only - the free tier keeps working
+PROVIDER_AUTH     genuinely bad key; needs an action, so no retry timer
+PROVIDER_DOWN     only by corroboration - N distinct models in a window
+```
+
+A 401 carrying a billing marker is an entitlement fact about the account, not an auth failure: it marks that provider's *paid* endpoints and leaves its free models untouched. `PROVIDER_DOWN` is unreachable from a single call.
+
+**Decision log (`inference/decisions.py`).** One row per selection in `models.db`: the part, the derived requirements, how many models were considered, every skip with its reason, the winner and the outcome. "Why did the coder run on a free model?" is one query. Exhaustion reports itself - *"47 considered: 30 need billing, 12 rate-limited, 5 context too small"* - rather than a bare count. Retention follows the task-cleanup window.
+
+### 8.2.1 Model Pools (legacy, `NORTH_ROUTING=legacy`)
+
+The pre-facts router, kept for one release. Each provider exposes a `refresh()` method that fetches its live model list; `ModelDispatcher.refresh_pools()` calls every registered provider and rebuilds its internal registry. Pools refresh every 6 hours via a background task and once at startup (both routers share this refresh).
 
 Models are assigned a continuous `base_quality` score (0–1) derived from their output price via `quality_from_cost()` in `inference/capability.py` - log-scale normalisation over the ~$0.000001–$0.015/token pricing range.  `current_pools()` then bins by threshold for the CLI display:
 
@@ -909,7 +949,7 @@ high_volume pool:  base_quality < 0.40  (cheapest)
 free_fallback:     cost_per_token == 0  (free models, any quality)
 ```
 
-A model can appear in both `free_fallback` and a quality tier.  Actual ranking within each pool blends `base_quality` with a live per-model EMA success rate (`_effective_quality()`).  When a new model releases or pricing changes, it enters the correct tier automatically without any manual action.
+A model can appear in both `free_fallback` and a quality tier.  Actual ranking within each pool blends `base_quality` with a live per-model EMA success rate (`_effective_quality()`).
 
 **Pool refresh failure handling:** if a provider's refresh call fails, `ModelDispatcher.refresh_pools()` logs a warning and retains the previously-loaded model registry for that provider. The Orchestrator continues accepting tasks in all cases.
 
@@ -920,6 +960,8 @@ A model can appear in both `free_fallback` and a quality tier.  Actual ranking w
 ### 8.3 Inference Strategy
 
 The active strategy controls how models are ordered in the fallback chain for every call. Set via natural language ("switch to eco mode") or `POST /orchestrator/settings`. Persisted to `~/.north/settings.json`. Default: **cruise**.
+
+Under chain routing the dial reshapes a part's *ordering* and never its requirements: `eco` orders every part cheapest-first while keeping its quality floor, `cruise` uses each part's own profile, and `sport` orders every part on quality and drops the cheapest-first profiles. A part that needs tools still needs tools at every setting. Redesigning the dial itself is parked; the pool semantics below are what it means under `NORTH_ROUTING=legacy`.
 
 ```
 eco     Forces every call to the lowest-cost pool, regardless of the

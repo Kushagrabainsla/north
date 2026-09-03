@@ -149,6 +149,8 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         provider_settings=settings,
         confidence_tracker=confidence_tracker,
         cooldowns_path=settings.north_home / "cooldowns.json",
+        models_db_path=settings.north_home / "models.db",
+        routing_mode=settings.routing,
     )
     cost_tracker = CostTracker(base_router)
 

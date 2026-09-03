@@ -452,6 +452,17 @@ async def _pool_refresh_loop(deps, orchestrator: Orchestrator | None = None) -> 
             logger.warning("Inference pool refresh failed", exc_info=True)
 
 
+def _prune_routing_decisions(deps, retention_days: int) -> int:
+    """Drop routing decisions past the task retention window.
+
+    The log explains why each part ran where it ran, so it is only useful for as
+    long as the task it explains is - it shares that window rather than growing
+    its own policy.
+    """
+    prune = getattr(deps.inference_router, "prune_routing_decisions", None)
+    return prune(retention_days) if prune is not None else 0
+
+
 def _launch_background_tasks(
     deps,
     orchestrator: Orchestrator,
@@ -469,10 +480,15 @@ def _launch_background_tasks(
             completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)
             failed_before = now - datetime.timedelta(days=settings.task_cleanup_failed_days)
             pruned = await deps.ledger.prune(completed_before, failed_before)
+            # Routing decisions age out with the tasks they explain.
+            decisions = _prune_routing_decisions(deps, settings.task_cleanup_completed_days)
             await deps.ledger.write(
                 LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
-                    action=(f"task_context_cleanup: removed {n} stale rows, pruned {pruned} ledger entries"),
+                    action=(
+                        f"task_context_cleanup: removed {n} stale rows, pruned {pruned} ledger entries"
+                        f", {decisions} routing decisions"
+                    ),
                     status=LedgerStatus.COMPLETED,
                 )
             )

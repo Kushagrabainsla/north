@@ -13,6 +13,38 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.12.0] - 2026-09-03
+### Added
+- **north now picks models from downloaded data instead of guessing from their names** (`inference/facts/`, `inference/routing/`, `inference/failure.py`, `inference/decisions.py`). Three guesses sat in the routing path and all three were wrong in production. What a model *is* was inferred from its id by token matching - `"gpt-5"`, `"gpt-4o"` and `"gpt-4.1"` were matched against tokens split on `-` and `.`, so they could never match, and every `-codex` model was invisible to the coder. How *good* it is came from a ~45-row substring table that ranked `claude-opus-5` (measured coding 78.0) above `claude-fable-5.1` (81.6) and `minimax-m3:free` (58.6) above `glm-5.2:free` (68.8). Those tiers were hand-written two commits earlier, carefully and with current knowledge; measured data contradicted them on both the paid and the free winner.
+
+  Model facts are now fetched from OpenRouter's catalog (context, price, declared parameters, modalities, and Artificial Analysis coding / agentic / intelligence indices) and LiteLLM's price table (which uniquely describes the `gpt-5-codex` line north most wants), merged on a canonical model identity by how trustworthy each source is, and persisted with per-field provenance to `~/.north/models.db` so north keeps routing when a refresh fails or the machine is offline. A declared capability is believed in both directions, so a source that lists a model's parameters and omits tools is saying it has no tools; a model no source describes is ranked by a price-percentile prior taken from the catalog's own score distribution rather than excluded.
+
+- **Each part of a task gets its own model preference** (`inference/routing/parts.py`). Every north LLM call already carried a `component` label - it had been threaded through for cost attribution since the router was written, and had never been used to pick the model. It is now the routing key: the coder is ranked on measured coding score, the architect on intelligence, the planner on cheapest-above-a-quality-floor, and `coder:compact` - which runs several times per task *inside* the coder's own loop - on cheapest. The coder gets the best model while its own summaries run free. Profiles are data, overridable per install under a `routing` key in `settings.json`; requirements the profile does not state are derived from the request itself.
+
+- **A routing decision log that answers "why did the coder run on a free model?"** (`inference/decisions.py`). One row per selection in `models.db`: the part, the derived requirements, how many models were considered, every skip with its reason, the winner and the outcome. That question previously had no answer short of reading the dispatcher. Exhaustion now reports itself - *"47 considered: 30 need billing, 12 rate-limited, 5 context too small"* - instead of a bare `All N candidate(s) exhausted`. Retention follows the existing task-cleanup window.
+
+- **`NORTH_ROUTING`** selects the router: `chain` (default), `legacy` (the previous pool router, kept for one release), or `shadow`, which routes on legacy and records where chain would have chosen differently, so the switch can be audited on live traffic before it is made.
+
+### Changed
+- **A failure now affects only what it is actually about** (`inference/failure.py`). Blast radius was inferred from the exception's Python type, so a single `401` carrying a billing message benched an entire provider for 24 hours - and took its eight working free models with it. Scope is now decided from the response's own evidence, and wider scopes require more evidence: a 401 with a billing marker is an entitlement fact about the *account*, marking that provider's paid endpoints while its free tier keeps working; a 401 without one is a bad key, which needs an action rather than a timer; and `PROVIDER_DOWN` is unreachable from a single call, requiring several distinct models to fail with a provider-level signal inside one window. `north limits` can now say "paid models need billing; 8 free models still available" instead of going silent for a day.
+
+- **There is one candidate list, not two** (`inference/routing/chain.py`). Selection kept an exclusion-filtered primary pool and a separate, unfiltered free-tier fallback. That is how a reviewer forced off the coder's model silently got it back in 3 of 4 benchmark tasks the moment the primary pool ran dry. A chain is now every qualifying model for a part, ordered best first, with the free tier as its tail - there is no second list to drift out of sync. Ordering is deterministic and uses one axis per part, with cost as a filter and the tie-break rather than blended into the score; per-task model stickiness is redundant as a result. Chains are rebuilt only when the catalog is, so the hot path never touches SQLite.
+
+- The power dial keeps working under chain routing: `eco` orders every part cheapest-first, `sport` orders every part on quality, `cruise` uses each part's own profile. The dial never relaxes a requirement.
+
+- Context windows for compaction now come from merged model facts, which join across sources on the canonical id, so a model whose own provider publishes nothing still gets its real window instead of a name-table guess.
+
+### Fixed
+- OpenCode Zen no longer presents a guessed price as a fact. Its catalog publishes ids and little else, so an unpriced paid model was given a $2,000/Mtok stand-in; read as real, that put a phantom near the head of a chain. The stand-in still orders the legacy pools but is flagged, and routing ranks the model by prior instead.
+- OpenRouter's meta-routers publish a negative price to mean "varies". Read literally, that made them the cheapest models in the catalog and put them at the head of every cost-ranked chain.
+- `:batch` model ids were dropped outright by the OpenRouter parser, discarding the facts they carry about models north does use. Their facts now merge onto the canonical record; they remain un-dialable because north has no asynchronous batch call path.
+- OpenCode Zen writes its free tier as a `-free` suffix where OpenRouter writes it as a `:free` variant. They are the same weights, and keeping them apart left Zen's entire free tier borrowing no facts from anyone.
+
+### Removed
+- Nothing yet. The hand-written `MODEL_FAMILY_TIERS` table, the name-based capability heuristic, the pool machinery and the free-tier fallback list are all superseded but still reachable behind `NORTH_ROUTING=legacy`; they go once the shadow-mode divergence log is quiet.
+
+---
+
 ## [1.11.0] - 2026-09-02
 ### Added
 - **Schedules are now the user's to change, not just to create** (`tools/universal/list_schedules.py`, `update_schedule.py`, `cancel_schedule.py`, `orchestrator/api/cron.py`, `cli/main.py`). Creating a schedule was one sentence; removing one meant knowing the generated name and calling the API by hand, because `north cancel` only stops a run in flight. All four verbs now exist in all three surfaces - `list_schedules` / `update_schedule` / `cancel_schedule` alongside `schedule_task`, `north cron [list|add|set|rm]`, and `PATCH /orchestrator/cron/{name}` next to the existing GET/POST/DELETE. The tools are universal, so any agent that can create a schedule can also show, move and delete one. Deleting or updating a schedule that does not exist is now a 404 rather than a silent success. Listings include the built-in schedules, marked as such - asking "what is scheduled?" and being shown only your own half of the answer was misleading - and editing one is refused with a reason rather than a "not found".

@@ -174,6 +174,11 @@ class ModelInfo:
     # system-prompt + context, so they 413 on normal prompts; marking a low cap
     # here lets the dispatcher route large prompts to models that accept them.
     max_payload_chars: int | None = None
+    # False when cost_per_token is the provider's stand-in rather than a published
+    # figure. A catalog that lists ids and nothing else still needs *some* number
+    # for price-ranked pools, but routing must not present a guess as a fact: the
+    # facts layer records an unknown price instead, and ranks the model by prior.
+    price_known: bool = True
 
     @property
     def is_free(self) -> bool:

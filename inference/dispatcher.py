@@ -21,6 +21,7 @@ import json
 import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +38,7 @@ from inference.constants import (
     _STICKY_MAX_ENTRIES,
 )
 from inference.cooldowns import CooldownStore, _CooldownKey
+from inference.decisions import DIVERGED, DecisionLog, RoutingDecision
 from inference.exceptions import (
     AllModelsRateLimitedError,
     ContextTooLargeError,
@@ -49,6 +51,9 @@ from inference.exceptions import (
     ProviderAuthError,
     ProviderUnavailableError,
 )
+from inference.facts.catalog import FactsCatalog
+from inference.facts.identity import canonical
+from inference.facts.store import ModelFactsStore
 from inference.model_policy import model_matches
 from inference.model_scorer import ModelScorer, ScoringConfig
 from inference.models import (
@@ -69,6 +74,10 @@ from inference.provider import Provider
 from inference.provider_health import ProviderHealthTracker
 from inference.rate_limit_status import _PAYLOAD_TOO_LARGE_SECS, RateLimitStatusStore
 from inference.routing import _Candidate, shuffle_groups
+from inference.routing.availability import AvailabilityView, EntitlementLedger
+from inference.routing.chain import Requirements
+from inference.routing.parts import parse_profiles
+from inference.routing.router import ChainRouter, requirements_from
 from utils.text import extract_json
 
 # Allowance (chars) for north's system prompt when estimating total request size
@@ -156,12 +165,22 @@ class _Deferred:
 class ModelDispatcher(InferenceRouter):
     """Routes inference calls across multiple providers with per-model cooldowns."""
 
+    # Chain routing is assembled in __init__ and is absent on the legacy path, so
+    # these carry class-level defaults rather than being read through getattr at
+    # every use site.
+    _chain_router: ChainRouter | None = None
+    _decisions: DecisionLog | None = None
+    _availability: AvailabilityView | None = None
+    _shadow_routing: bool = False
+
     def __init__(
         self,
         providers: list[Provider],
         north_settings: NorthSettings | None = None,
         confidence_tracker: ConfidenceTracker | None = None,
         cooldowns_path: Path | None = None,
+        models_db_path: Path | None = None,
+        routing_mode: str = "chain",
     ) -> None:
         self._providers = providers
         self._north_settings = north_settings
@@ -207,6 +226,127 @@ class ModelDispatcher(InferenceRouter):
             tiers_path=_tiers,
         )
         self._validate_preferred()
+        mode = routing_mode.strip().lower()
+        self._shadow_routing = mode == "shadow"
+        self._chain_router = self._build_chain_router(models_db_path, cooldowns_path, mode)
+
+    def _build_chain_router(
+        self, models_db_path: Path | None, cooldowns_path: Path | None, mode: str
+    ) -> ChainRouter | None:
+        """Assemble the facts-driven router, or None to stay on the pool router.
+
+        Returns None rather than raising when the store cannot be opened: routing
+        is the one thing north cannot do without, so a broken models.db degrades
+        to the pool router instead of taking the process down.
+        """
+        if mode not in ("chain", "shadow"):
+            logger.info("Model routing: legacy pool router (NORTH_ROUTING=%s)", mode)
+            return None
+        db_path = models_db_path or (
+            cooldowns_path.parent / "models.db" if cooldowns_path is not None else Path.home() / ".north" / "models.db"
+        )
+        try:
+            catalog = FactsCatalog(ModelFactsStore(db_path))
+            decisions = DecisionLog(db_path)
+        except Exception:
+            logger.warning("Could not open %s - falling back to the pool router", db_path, exc_info=True)
+            return None
+        self._decisions = decisions
+        self._availability = AvailabilityView(
+            self._cooldowns, self._provider_health, EntitlementLedger(), self._rate_limit_status
+        )
+        return ChainRouter(
+            catalog,
+            decisions,
+            self._availability,
+            self._provider_by_name,
+            profiles=self._routing_profiles(),
+            on_outcome=self._record_chain_outcome,
+            demoted=self._is_demoted,
+            power=self._power_mode,
+        )
+
+    def _power_mode(self) -> str | None:
+        """The user's current power setting, read live so a change needs no restart."""
+        return self._north_settings.power.value if self._north_settings is not None else None
+
+    # ---- chain routing support ----
+
+    def _provider_by_name(self, name: str) -> Provider | None:
+        return next((p for p in self._providers if p.name == name), None)
+
+    def _routing_profiles(self) -> dict:
+        """Per-part overrides from settings.json, re-read whenever they may have changed."""
+        if self._north_settings is None:
+            return {}
+        return parse_profiles(self._north_settings.routing_parts)
+
+    def _record_chain_outcome(self, model_id: str, provider_name: str, success: bool) -> None:
+        key: _CooldownKey = (model_id, provider_name)
+        self._record_model_outcome(key, success)
+        self._persist_model_score(key)
+
+    def _is_demoted(self, canonical_id: str) -> bool:
+        """True when this install's own history says a model belongs in the tail.
+
+        The signal is the existing per-model success EMA: a model north has tried
+        enough times here, and that keeps failing here, is ranked below its
+        measured score - but kept in the chain, because "worse on this install" is
+        not "unusable".
+        """
+        scores = [
+            (ema, uses)
+            for (model_id, _provider), (ema, uses) in self._model_confidence.items()
+            if canonical(model_id) == canonical_id
+        ]
+        if not scores:
+            return False
+        return all(uses >= _PREFERRED_MIN_USES and ema < _PREFERRED_HEALTH_FLOOR for ema, uses in scores)
+
+    @property
+    def uses_chain_routing(self) -> bool:
+        """True when this call will be routed from fetched facts rather than pools."""
+        return not self._shadow_routing and self._chain_router is not None and self._chain_router.is_ready
+
+    def _record_divergence(self, component: str, requirements: Requirements, served_model: str) -> None:
+        """Shadow mode: note where the new router would have chosen differently.
+
+        The old router still serves the call. Each divergence is then triaged as
+        "the new one is right" - the codex line, the tier inversions - or as a
+        real defect, which is what makes switching a decision rather than a leap.
+        """
+        if not self._shadow_routing or self._chain_router is None or self._decisions is None:
+            return
+        try:
+            chain, profile = self._chain_router.chain_for(component, requirements)
+        except InferenceError:
+            return
+        would_choose = next(
+            (e.provider_model_id for c in chain[:1] for e in c.endpoints), None
+        )
+        if would_choose is None or would_choose == served_model:
+            return
+        decision = RoutingDecision(
+            part=profile.part,
+            requirements={"served_by_legacy": served_model},
+            considered=len(chain),
+            chosen_model=would_choose,
+            chosen_provider=chain[0].endpoints[0].provider,
+            outcome=DIVERGED,
+        )
+        self._decisions.record(decision)
+
+    def routing_decisions(self, *, task_id: str | None = None, part: str | None = None, limit: int = 50) -> list[dict]:
+        """Recent routing decisions - "why did the coder run on a free model?"."""
+        if self._decisions is None:
+            return []
+        return self._decisions.recent(task_id=task_id, part=part, limit=limit)
+
+    def prune_routing_decisions(self, retention_days: int) -> int:
+        """Drop decisions older than *retention_days*. Called by the cleanup job."""
+        if self._decisions is None:
+            return 0
+        return self._decisions.prune(timedelta(days=max(0, retention_days)))
 
     def _build_registry(self) -> None:
         """Merge models from all providers. Each entry is keyed by (provider_name, model_id)."""
@@ -257,26 +397,6 @@ class ModelDispatcher(InferenceRouter):
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         estimated = len(request.prompt) // 4
-        priority = self._effective_priority(request.priority)
-        candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated, pool=request.pool)
-        # Deferred: building the free-tier list is a full registry scan, score, sort
-        # and shuffle, and it is only consulted when the primary chain is exhausted.
-        # Exclusions are applied *inside* the thunk so the fallback honours them too -
-        # otherwise a reviewer forced off the coder's model silently gets it back the
-        # moment the primary pool runs dry.
-        free_tier = _Deferred(
-            lambda: self._apply_exclusions(
-                self._free_fallback_candidates(ModelCapability.COMPLETION, estimated),
-                request.exclude_models,
-            )
-        )
-        fallback: _Deferred | None = free_tier
-        if not candidates:
-            # Primary pool exhausted (out of credits / all rate-limited / down) -
-            # fall back to the free tier so the request still completes.
-            candidates = free_tier.get()
-            fallback = None
-        candidates = self._apply_exclusions(candidates, request.exclude_models)
 
         async def _call(provider: Provider, model_id: str) -> CompletionResponse:
             return await provider.complete(model_id, request)
@@ -298,7 +418,43 @@ class ModelDispatcher(InferenceRouter):
         # COMPLETION - otherwise one JSON request would evict a good chat model
         # from the general pool for an hour.
         capability = _STRUCTURED_OUTPUT if request.wants_json else ModelCapability.COMPLETION
-        return await self._dispatch(
+        if self.uses_chain_routing:
+            return await self._chain_router.dispatch(
+                component=request.component,
+                requirements=requirements_from(
+                    estimated_tokens=estimated,
+                    payload_chars=len(request.prompt) + _SYSTEM_PROMPT_CHARS,
+                    needs_structured=request.wants_json,
+                    needs_vision=bool(request.images),
+                    exclude_models=request.exclude_models,
+                ),
+                call_fn=_call,
+                is_valid=_valid,
+                capability=str(capability),
+                task_id=request.task_id,
+            )
+
+        priority = self._effective_priority(request.priority)
+        candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated, pool=request.pool)
+        # Deferred: building the free-tier list is a full registry scan, score, sort
+        # and shuffle, and it is only consulted when the primary chain is exhausted.
+        # Exclusions are applied *inside* the thunk so the fallback honours them too -
+        # otherwise a reviewer forced off the coder's model silently gets it back the
+        # moment the primary pool runs dry.
+        free_tier = _Deferred(
+            lambda: self._apply_exclusions(
+                self._free_fallback_candidates(ModelCapability.COMPLETION, estimated),
+                request.exclude_models,
+            )
+        )
+        fallback: _Deferred | None = free_tier
+        if not candidates:
+            # Primary pool exhausted (out of credits / all rate-limited / down) -
+            # fall back to the free tier so the request still completes.
+            candidates = free_tier.get()
+            fallback = None
+        candidates = self._apply_exclusions(candidates, request.exclude_models)
+        response = await self._dispatch(
             candidates,
             _call,
             is_valid=_valid,
@@ -306,6 +462,17 @@ class ModelDispatcher(InferenceRouter):
             fallback_candidates=fallback,
             capability=capability,
         )
+        self._record_divergence(
+            request.component,
+            requirements_from(
+                estimated_tokens=estimated,
+                needs_structured=request.wants_json,
+                needs_vision=bool(request.images),
+                exclude_models=request.exclude_models,
+            ),
+            response.model_used,
+        )
+        return response
 
     async def complete_with_tools(
         self,
@@ -334,20 +501,6 @@ class ModelDispatcher(InferenceRouter):
         if request.tools:
             tools_chars = sum(len(json.dumps(t)) for t in request.tools)
             estimated += tools_chars // 4
-        priority = self._effective_priority(request.priority)
-        candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated, pool=request.pool)
-        free_tier = _Deferred(
-            lambda: self._apply_exclusions(
-                self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated),
-                request.exclude_models,
-            )
-        )
-        fallback: _Deferred | None = free_tier
-        if not candidates:
-            candidates = free_tier.get()
-            fallback = None
-        candidates = self._apply_exclusions(candidates, request.exclude_models)
-
         forwarded = False
         wrapped_cb: Callable[[str], Awaitable[None]] | None = None
         if token_callback is not None:
@@ -369,8 +522,36 @@ class ModelDispatcher(InferenceRouter):
                 forwarded = False
             return await provider.complete_with_tools(model_id, request, wrapped_cb)
 
+        if self.uses_chain_routing:
+            return await self._chain_router.dispatch(
+                component=request.component,
+                requirements=requirements_from(
+                    estimated_tokens=estimated,
+                    payload_chars=(estimated * 4) + _SYSTEM_PROMPT_CHARS,
+                    needs_tools=bool(request.tools),
+                    exclude_models=request.exclude_models,
+                ),
+                call_fn=_call,
+                is_valid=_toolcall_has_output,
+                capability=str(ModelCapability.TOOL_CALLS),
+                task_id=request.task_id,
+            )
+
+        priority = self._effective_priority(request.priority)
+        candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated, pool=request.pool)
+        free_tier = _Deferred(
+            lambda: self._apply_exclusions(
+                self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated),
+                request.exclude_models,
+            )
+        )
+        fallback: _Deferred | None = free_tier
+        if not candidates:
+            candidates = free_tier.get()
+            fallback = None
+        candidates = self._apply_exclusions(candidates, request.exclude_models)
         sticky = self._sticky_key(request, ModelCapability.TOOL_CALLS, priority)
-        return await self._dispatch(
+        response = await self._dispatch(
             candidates,
             _call,
             is_valid=_toolcall_has_output,
@@ -378,6 +559,16 @@ class ModelDispatcher(InferenceRouter):
             fallback_candidates=fallback,
             capability=ModelCapability.TOOL_CALLS,
         )
+        self._record_divergence(
+            request.component,
+            requirements_from(
+                estimated_tokens=estimated,
+                needs_tools=bool(request.tools),
+                exclude_models=request.exclude_models,
+            ),
+            response.model_used,
+        )
+        return response
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         candidates = self._candidates(ModelCapability.EMBEDDING, PoolPriority.MEDIUM, 0)
@@ -418,6 +609,10 @@ class ModelDispatcher(InferenceRouter):
         if not model_id:
             return _DEFAULT_CONTEXT_WINDOW
 
+        window = self._facts_context_window(model_id)
+        if window:
+            return window
+
         window = self._context_windows.get(model_id)
         if window:
             return window
@@ -435,11 +630,26 @@ class ModelDispatcher(InferenceRouter):
 
         return _DEFAULT_CONTEXT_WINDOW
 
+    def _facts_context_window(self, model_id: str) -> int:
+        """The declared window for *model_id*, from the merged facts.
+
+        Preferred over the registry because facts join across sources on the
+        canonical id: a model whose provider publishes nothing still gets its real
+        window from whichever source does describe it, instead of a name-table
+        guess that compaction then sizes history against.
+        """
+        if self._chain_router is None:
+            return 0
+        record = self._chain_router.catalog.snapshot.facts.get(canonical(model_id))
+        return int(record.value("context_window") or 0) if record is not None else 0
+
     async def aclose(self) -> None:
         """Close all provider HTTPX clients. Call on application shutdown."""
         if self._flush_task is not None and not self._flush_task.done():
             self._flush_task.cancel()
         await self._flush_dirty_scores()  # don't lose scores batched since the last flush
+        if self._decisions is not None:
+            await self._decisions.flush()
         for provider in self._providers:
             if hasattr(provider, "aclose"):
                 await provider.aclose()
@@ -463,6 +673,27 @@ class ModelDispatcher(InferenceRouter):
         # not-yet-loaded one - see health_summary().
         self._catalog_refreshed = True
         self._validate_preferred()
+        await self._refresh_facts()
+
+    async def _refresh_facts(self) -> None:
+        """Rebuild the fetched-facts catalog and every part's chain.
+
+        Runs on the same cadence as the pool refresh, and reuses the catalogs the
+        providers just fetched rather than asking for them again. Never raises:
+        a failed refresh keeps the last snapshot, which is the point of persisting
+        it.
+        """
+        if self._chain_router is None:
+            return
+        self._chain_router.set_profiles(self._routing_profiles())
+        await self._chain_router.catalog.refresh(self._providers, self._models_by_provider())
+
+    def _models_by_provider(self) -> dict[str, dict[str, ModelInfo]]:
+        """The live registry regrouped as ``{provider: {model_id: info}}``."""
+        grouped: dict[str, dict[str, ModelInfo]] = {}
+        for info, _provider in self._registry.values():
+            grouped.setdefault(info.provider_name, {})[info.model_id] = info
+        return grouped
 
     def rebuild(self, providers: list[Provider]) -> None:
         """Swap in a fresh provider list in place (no restart needed).
@@ -489,6 +720,11 @@ class ModelDispatcher(InferenceRouter):
         self._providers = providers
         self._build_registry()
         self._validate_preferred()
+        if self._availability is not None:
+            # A new key is exactly the action a FORBIDDEN provider was waiting for,
+            # so a provider swap clears what the old key proved.
+            for provider in providers:
+                self._availability.entitlements.clear(provider.name)
 
     def rate_limit_status(self) -> list[dict]:
         """Snapshot of currently-unavailable (provider, model) pairs.

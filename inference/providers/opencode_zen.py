@@ -22,6 +22,11 @@ from inference.providers.openai_compat import OpenAICompatibleProvider
 logger = logging.getLogger(__name__)
 
 
+# Stand-in output price for a paid Zen model whose price the catalog omits. Only
+# ever used to keep the price-ranked pools ordered - never presented as a fact.
+_ASSUMED_PAID_COST = 0.002
+
+
 def _is_free_opencode_model(model_id: str) -> bool:
     """True if model_id is a known free-tier model on OpenCode Zen."""
     lower = model_id.lower()
@@ -78,6 +83,30 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
             )
         super()._raise_cooldown_status(response, model_id)
 
+    @staticmethod
+    def _price_of(model: dict, model_id: str) -> tuple[float, bool]:
+        """This model's output price, and whether Zen actually published one.
+
+        Zen's catalog is ``{id, object, created, owned_by}`` for most entries, so
+        a paid model usually carries no price at all. The stand-in keeps the
+        price-ranked pools working, but it is flagged as a guess: presenting it
+        as a fact once put a $2,000/Mtok phantom near the top of a chain.
+        """
+        free = _is_free_opencode_model(model_id)
+        pricing = model.get("pricing") if isinstance(model.get("pricing"), dict) else {}
+        if pricing:
+            try:
+                return max(float(pricing.get("completion", 0) or 0), float(pricing.get("prompt", 0) or 0)), True
+            except (TypeError, ValueError):
+                pass
+        elif "cost" in model:
+            try:
+                return float(model["cost"]), True
+            except (TypeError, ValueError):
+                pass
+        # Free is a fact Zen states through the model id; a paid price is not.
+        return (0.0, True) if free else (_ASSUMED_PAID_COST, False)
+
     async def refresh(self) -> None:
         """Fetch the live model list from OpenCode Zen."""
         try:
@@ -100,21 +129,7 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
                 continue
             caps = capabilities_from_model_id(model_id)
             ctx = int(m.get("context_window") or 128_000)
-            pricing = m.get("pricing") if isinstance(m.get("pricing"), dict) else {}
-            if pricing:
-                try:
-                    comp = float(pricing.get("completion", 0) or 0)
-                    prompt = float(pricing.get("prompt", 0) or 0)
-                    cost = max(comp, prompt)
-                except (TypeError, ValueError):
-                    cost = 0.0 if _is_free_opencode_model(model_id) else 0.002
-            elif "cost" in m:
-                try:
-                    cost = float(m["cost"])
-                except (TypeError, ValueError):
-                    cost = 0.0 if _is_free_opencode_model(model_id) else 0.002
-            else:
-                cost = 0.0 if _is_free_opencode_model(model_id) else 0.002
+            cost, price_known = self._price_of(m, model_id)
             live[model_id] = ModelInfo(
                 model_id=model_id,
                 provider_name="opencode_zen",
@@ -122,6 +137,7 @@ class OpenCodeZenRouter(OpenAICompatibleProvider):
                 context_window=ctx,
                 cost_per_token=cost,
                 base_quality=quality_from_cost(cost),
+                price_known=price_known,
             )
 
         if live:
