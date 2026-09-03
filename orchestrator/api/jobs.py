@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
 from typing import Any
 
 from fastapi import HTTPException
@@ -11,10 +10,13 @@ from pydantic import BaseModel
 from jobs.models import Job, JobPriority, JobStatus, JobType
 from orchestrator.api.deps import _get_job_processor, router
 from utils.ids import generate_id
-from utils.time import utcnow
+from utils.time import format_local, from_epoch, parse_local, to_epoch, utcnow
 
 
 class JobOut(BaseModel):
+    """One queued job. Instants are epoch seconds, plus the local-time rendering
+    a person reads - the ISO fields stay for existing callers."""
+
     job_id: str
     type: str
     agent: str
@@ -23,6 +25,9 @@ class JobOut(BaseModel):
     priority: int
     scheduled_at: str
     created_at: str | None
+    scheduled_epoch: float
+    scheduled_local: str
+    created_epoch: float | None
 
 
 class JobCreateRequest(BaseModel):
@@ -43,6 +48,9 @@ def _job_to_out(j: Job) -> JobOut:
         priority=int(j.priority),
         scheduled_at=j.scheduled_at.isoformat(),
         created_at=j.created_at.isoformat() if j.created_at else None,
+        scheduled_epoch=to_epoch(j.scheduled_at),
+        scheduled_local=format_local(j.scheduled_at),
+        created_epoch=to_epoch(j.created_at) if j.created_at else None,
     )
 
 
@@ -68,7 +76,8 @@ async def list_jobs(
 @router.post("/jobs", response_model=JobOut, status_code=201)
 async def create_job(body: JobCreateRequest) -> JobOut:
     """Create and enqueue a new job."""
-    scheduled = datetime.datetime.fromisoformat(body.scheduled_at) if body.scheduled_at else utcnow()
+    # A naive timestamp from a caller means the user's local time, not UTC.
+    scheduled = from_epoch(parse_local(body.scheduled_at)) if body.scheduled_at else utcnow()
     job = Job(
         job_id=generate_id(),
         type=JobType.ASYNC,
@@ -86,5 +95,3 @@ async def create_job(body: JobCreateRequest) -> JobOut:
 async def cancel_job(job_id: str) -> None:
     """Cancel a pending or running job."""
     await _get_job_processor().cancel(job_id)
-
-

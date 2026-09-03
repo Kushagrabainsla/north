@@ -63,14 +63,17 @@ from tools.specialized.kasa_tool import KasaTool
 from tools.specialized.patch_file import PatchFileTool
 from tools.specialized.shell_tool import ShellTool
 from tools.tool_index import ToolIndex
+from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_agent import CreateAgentTool
 from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
 from tools.universal.get_active_sessions import GetActiveSessionsTool
 from tools.universal.get_task_status import GetTaskStatusTool
+from tools.universal.list_schedules import ListSchedulesTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from tools.universal.update_plan import UpdatePlanTool
+from tools.universal.update_schedule import UpdateScheduleTool
 from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
 from utils.security import load_secret
@@ -133,8 +136,15 @@ def _build_tool_registry(
     # Live approval mode: read from NorthSettings at decision time so a runtime change
     # (via the settings API) takes effect immediately, no restart.
     mode_provider = lambda: deps.north_settings.autonomy  # noqa: E731
+    # The four schedule verbs travel together: an agent that can create a
+    # schedule must also be able to show, change and remove one, or the user can
+    # only ever add.
     tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
-    tool_registry.make_universal("schedule_task")
+    tool_registry.register(ListSchedulesTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
+    tool_registry.register(UpdateScheduleTool(cron_store=deps.cron_store))
+    tool_registry.register(CancelScheduleTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
+    for schedule_tool in ("schedule_task", "list_schedules", "update_schedule", "cancel_schedule"):
+        tool_registry.make_universal(schedule_tool)
     # create/update actions are gated behind a user approval card inside the
     # tool itself, so every entry point (agent loop, delegation, direct-tool
     # execution) sees the same gate.

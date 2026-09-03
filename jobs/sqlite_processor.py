@@ -16,9 +16,13 @@ from jobs.base import JobProcessor
 from jobs.exceptions import JobProcessingError
 from jobs.models import Job, JobPriority, JobStatus, JobType
 from utils.db import open_db_connection
+from utils.time import from_epoch, now_epoch, to_epoch
 
 logger = logging.getLogger(__name__)
 
+# Every time column is Unix epoch seconds (UTC). Epochs sort and compare
+# numerically, carry no offset to lose, and are rendered in the user's local
+# zone at the edges (see utils/time.py).
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS job_queue (
     job_id          TEXT PRIMARY KEY,
@@ -28,15 +32,26 @@ CREATE TABLE IF NOT EXISTS job_queue (
     payload         JSON,
     status          TEXT NOT NULL,
     priority        INTEGER NOT NULL,
-    scheduled_at    DATETIME NOT NULL,
-    started_at      DATETIME,
-    completed_at    DATETIME,
+    scheduled_epoch REAL NOT NULL,
+    started_epoch   REAL,
+    completed_epoch REAL,
     retry_count     INTEGER DEFAULT 0,
     max_retries     INTEGER DEFAULT 3,
-    retry_after     DATETIME,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    retry_epoch     REAL,
+    created_epoch   REAL NOT NULL
 )
 """
+
+# The v1 table stored ISO-8601 text in these columns; each maps to the epoch
+# column that replaced it. Databases created before this change are rebuilt once,
+# on construction, by _migrate_iso_columns_to_epoch().
+_LEGACY_TIME_COLUMNS = {
+    "scheduled_at": "scheduled_epoch",
+    "started_at": "started_epoch",
+    "completed_at": "completed_epoch",
+    "retry_after": "retry_epoch",
+    "created_at": "created_epoch",
+}
 
 _TERMINAL_STATUSES = (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
 
@@ -61,6 +76,81 @@ def _retry_delay_seconds(retry_count: int) -> int:
     return min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
 
 
+def _optional_epoch(dt: datetime | None) -> float | None:
+    return to_epoch(dt) if dt is not None else None
+
+
+def _optional_datetime(epoch: float | None) -> datetime | None:
+    return from_epoch(epoch) if epoch is not None else None
+
+
+def _legacy_text_to_epoch(text: str | None) -> float | None:
+    """Convert one v1 ISO-8601 cell to epoch seconds.
+
+    SQLite's CURRENT_TIMESTAMP default wrote naive UTC ("2026-05-21 07:00:00"),
+    while Python wrote offset-aware ISO, so a naive value is read as UTC here -
+    which is what it was. An unparseable cell becomes NULL rather than failing
+    the migration and locking the user out of their queue.
+    """
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(text))
+    except ValueError:
+        logger.warning("JobProcessor: dropping unparseable legacy timestamp %r", text)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+def _migrate_iso_columns_to_epoch(conn: sqlite3.Connection) -> None:
+    """Rebuild a v1 job_queue whose time columns hold ISO-8601 text.
+
+    Column types cannot be changed in place, so the old rows are copied into the
+    epoch-shaped table and the old one dropped - once, on the first construction
+    against an old database. Later constructions see no legacy column and return.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(job_queue)")}
+    if not columns & _LEGACY_TIME_COLUMNS.keys():
+        return
+    logger.info("JobProcessor: migrating job_queue timestamps to epoch seconds")
+    conn.execute("ALTER TABLE job_queue RENAME TO job_queue_legacy")
+    conn.execute("DROP INDEX IF EXISTS idx_job_queue_pending")
+    conn.execute("DROP INDEX IF EXISTS idx_job_queue_agent_task")
+    conn.execute(_SCHEMA)
+    rows = conn.execute("SELECT * FROM job_queue_legacy").fetchall()
+    for row in rows:
+        epochs = {new: _legacy_text_to_epoch(row[old]) for old, new in _LEGACY_TIME_COLUMNS.items()}
+        conn.execute(
+            """
+            INSERT INTO job_queue (
+                job_id, type, agent, task, payload, status, priority,
+                scheduled_epoch, started_epoch, completed_epoch,
+                retry_count, max_retries, retry_epoch, created_epoch
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["job_id"],
+                row["type"],
+                row["agent"],
+                row["task"],
+                row["payload"],
+                row["status"],
+                row["priority"],
+                epochs["scheduled_epoch"] if epochs["scheduled_epoch"] is not None else 0.0,
+                epochs["started_epoch"],
+                epochs["completed_epoch"],
+                row["retry_count"],
+                row["max_retries"],
+                epochs["retry_epoch"],
+                epochs["created_epoch"] if epochs["created_epoch"] is not None else now_epoch(),
+            ),
+        )
+    conn.execute("DROP TABLE job_queue_legacy")
+    logger.info("JobProcessor: migrated %d job(s) to epoch timestamps", len(rows))
+
+
 class SQLiteJobProcessor(JobProcessor):
     """Persistent job queue backed by a SQLite file.
 
@@ -81,10 +171,11 @@ class SQLiteJobProcessor(JobProcessor):
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
+            _migrate_iso_columns_to_epoch(conn)
             # Indexes for the hot paths: claim_next (pending eligibility + ordering)
             # and the cron duplicate-run guard (agent + task + status).
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_job_queue_pending ON job_queue (status, priority, scheduled_at)"
+                "CREATE INDEX IF NOT EXISTS idx_job_queue_pending ON job_queue (status, priority, scheduled_epoch)"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_job_queue_agent_task ON job_queue (agent, task, status)")
 
@@ -102,9 +193,9 @@ class SQLiteJobProcessor(JobProcessor):
                 """
                 INSERT INTO job_queue (
                     job_id, type, agent, task, payload, status, priority,
-                    scheduled_at, started_at, completed_at,
-                    retry_count, max_retries, retry_after
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    scheduled_epoch, started_epoch, completed_epoch,
+                    retry_count, max_retries, retry_epoch, created_epoch
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job.job_id,
@@ -114,12 +205,13 @@ class SQLiteJobProcessor(JobProcessor):
                     json.dumps(job.payload),
                     job.status.value,
                     int(job.priority),
-                    job.scheduled_at.isoformat(),
-                    job.started_at.isoformat() if job.started_at else None,
-                    job.completed_at.isoformat() if job.completed_at else None,
+                    to_epoch(job.scheduled_at),
+                    _optional_epoch(job.started_at),
+                    _optional_epoch(job.completed_at),
                     job.retry_count,
                     job.max_retries,
-                    job.retry_after.isoformat() if job.retry_after else None,
+                    _optional_epoch(job.retry_after),
+                    to_epoch(job.created_at) if job.created_at else now_epoch(),
                 ),
             )
 
@@ -136,15 +228,15 @@ class SQLiteJobProcessor(JobProcessor):
         return self._row_to_job(row) if row is not None else None
 
     def _claim_next_sync(self) -> sqlite3.Row | None:
-        now = datetime.now(UTC).isoformat()
+        now = now_epoch()
         with open_db_connection(self._db_path) as conn:
             row = conn.execute(
                 """
                 SELECT * FROM job_queue
                 WHERE status = ?
-                  AND scheduled_at <= ?
-                  AND (retry_after IS NULL OR retry_after <= ?)
-                ORDER BY priority ASC, scheduled_at ASC
+                  AND scheduled_epoch <= ?
+                  AND (retry_epoch IS NULL OR retry_epoch <= ?)
+                ORDER BY priority ASC, scheduled_epoch ASC
                 LIMIT 1
                 """,
                 (JobStatus.PENDING.value, now, now),
@@ -152,7 +244,7 @@ class SQLiteJobProcessor(JobProcessor):
             if row is None:
                 return None
             conn.execute(
-                "UPDATE job_queue SET status = ?, started_at = ? WHERE job_id = ?",
+                "UPDATE job_queue SET status = ?, started_epoch = ? WHERE job_id = ?",
                 (JobStatus.RUNNING.value, now, row["job_id"]),
             )
             return conn.execute("SELECT * FROM job_queue WHERE job_id = ?", (row["job_id"],)).fetchone()
@@ -173,17 +265,17 @@ class SQLiteJobProcessor(JobProcessor):
                 if row and row["retry_count"] >= row["max_retries"]:
                     # Max retries exhausted - mark terminal instead of re-queuing.
                     conn.execute(
-                        "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
-                        (JobStatus.FAILED.value, datetime.now(UTC).isoformat(), job_id),
+                        "UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ?",
+                        (JobStatus.FAILED.value, now_epoch(), job_id),
                     )
                     return
                 conn.execute(
                     """
                     UPDATE job_queue
-                    SET status = ?, retry_after = ?, retry_count = retry_count + 1
+                    SET status = ?, retry_epoch = ?, retry_count = retry_count + 1
                     WHERE job_id = ?
                     """,
-                    (JobStatus.PENDING.value, retry_after.isoformat(), job_id),
+                    (JobStatus.PENDING.value, to_epoch(retry_after), job_id),
                 )
             return
         self._set_terminal_sync(job_id, JobStatus.FAILED)
@@ -196,13 +288,13 @@ class SQLiteJobProcessor(JobProcessor):
             conn.execute(
                 """
                 UPDATE job_queue
-                SET status = ?, completed_at = ?
+                SET status = ?, completed_epoch = ?
                 WHERE job_id = ?
                   AND status NOT IN (?, ?, ?)
                 """,
                 (
                     JobStatus.CANCELLED.value,
-                    datetime.now(UTC).isoformat(),
+                    now_epoch(),
                     job_id,
                     JobStatus.COMPLETED.value,
                     JobStatus.FAILED.value,
@@ -215,8 +307,8 @@ class SQLiteJobProcessor(JobProcessor):
             raise ValueError(f"{status!r} is not a terminal status; expected one of {_TERMINAL_STATUSES}")
         with open_db_connection(self._db_path) as conn:
             conn.execute(
-                "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
-                (status.value, datetime.now(UTC).isoformat(), job_id),
+                "UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ?",
+                (status.value, now_epoch(), job_id),
             )
 
     async def has_active_job(self, agent: str, task: str) -> bool:
@@ -246,26 +338,26 @@ class SQLiteJobProcessor(JobProcessor):
         return await asyncio.to_thread(self._reap_stale_running_sync, lease_seconds)
 
     def _reap_stale_running_sync(self, lease_seconds: int) -> int:
-        now = datetime.now(UTC)
-        cutoff = (now - timedelta(seconds=lease_seconds)).isoformat()
+        now = now_epoch()
+        cutoff = now - lease_seconds
         requeued = 0
         failed = 0
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
                 "SELECT job_id, retry_count, max_retries FROM job_queue "
-                "WHERE status = ? AND (started_at IS NULL OR started_at <= ?)",
+                "WHERE status = ? AND (started_epoch IS NULL OR started_epoch <= ?)",
                 (JobStatus.RUNNING.value, cutoff),
             ).fetchall()
             for row in rows:
                 if row["retry_count"] >= row["max_retries"]:
                     conn.execute(
-                        "UPDATE job_queue SET status = ?, completed_at = ? WHERE job_id = ?",
-                        (JobStatus.FAILED.value, now.isoformat(), row["job_id"]),
+                        "UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ?",
+                        (JobStatus.FAILED.value, now, row["job_id"]),
                     )
                     failed += 1
                 else:
                     conn.execute(
-                        "UPDATE job_queue SET status = ?, started_at = NULL, "
+                        "UPDATE job_queue SET status = ?, started_epoch = NULL, "
                         "retry_count = retry_count + 1 WHERE job_id = ?",
                         (JobStatus.PENDING.value, row["job_id"]),
                     )
@@ -339,9 +431,9 @@ class SQLiteJobProcessor(JobProcessor):
     def _list_sync(self, status: JobStatus | None, limit: int) -> list[sqlite3.Row]:
         with open_db_connection(self._db_path) as conn:
             if status is None:
-                sql = "SELECT * FROM job_queue ORDER BY scheduled_at DESC LIMIT ?"
+                sql = "SELECT * FROM job_queue ORDER BY scheduled_epoch DESC LIMIT ?"
                 return list(conn.execute(sql, (limit,)).fetchall())
-            sql = "SELECT * FROM job_queue WHERE status = ? ORDER BY scheduled_at DESC LIMIT ?"
+            sql = "SELECT * FROM job_queue WHERE status = ? ORDER BY scheduled_epoch DESC LIMIT ?"
             return list(conn.execute(sql, (status.value, limit)).fetchall())
 
     @staticmethod
@@ -354,11 +446,11 @@ class SQLiteJobProcessor(JobProcessor):
             payload=json.loads(row["payload"]) if row["payload"] else {},
             status=JobStatus(row["status"]),
             priority=JobPriority(row["priority"]),
-            scheduled_at=datetime.fromisoformat(row["scheduled_at"]),
-            started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
-            completed_at=(datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None),
+            scheduled_at=from_epoch(row["scheduled_epoch"]),
+            started_at=_optional_datetime(row["started_epoch"]),
+            completed_at=_optional_datetime(row["completed_epoch"]),
             retry_count=row["retry_count"],
             max_retries=row["max_retries"],
-            retry_after=(datetime.fromisoformat(row["retry_after"]) if row["retry_after"] else None),
-            created_at=(datetime.fromisoformat(row["created_at"]) if row["created_at"] else None),
+            retry_after=_optional_datetime(row["retry_epoch"]),
+            created_at=_optional_datetime(row["created_epoch"]),
         )

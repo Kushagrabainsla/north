@@ -9,24 +9,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from jobs.base import JobProcessor
 from jobs.models import Job, JobPriority, JobType
 from utils.ids import generate_id
+from utils.time import from_epoch, local_timezone_name, now_epoch, resolve_timezone, to_epoch
 
 if TYPE_CHECKING:
     from jobs.cron_store import UserCronStore
 
 logger = logging.getLogger(__name__)
 
+WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
 
 @dataclass(frozen=True)
 class CronEntry:
-    """One scheduled job. `weekday` is 0=Mon..6=Sun, or None for daily."""
+    """One scheduled job. `weekday` is 0=Mon..6=Sun, or None for daily.
+
+    `hour`/`minute` are wall-clock time in `tz` (an IANA name; None means the
+    machine's own zone), never UTC. A recurrence is a rule, not an instant, so
+    it cannot be an epoch: "07:00 in Asia/Kolkata" stays 07:00 across a DST
+    shift, where a fixed epoch interval would slide to 06:00 or 08:00. Every
+    *instant* the rule produces - the next firing, the job it enqueues - is an
+    epoch, and is rendered in local time for the user.
+    """
 
     name: str
     agent: str
@@ -34,6 +45,7 @@ class CronEntry:
     hour: int
     minute: int
     weekday: int | None = None
+    tz: str | None = None
 
     def __post_init__(self) -> None:
         if not (0 <= self.hour <= 23):
@@ -43,6 +55,36 @@ class CronEntry:
         if self.weekday is not None and not (0 <= self.weekday <= 6):
             raise ValueError(f"weekday must be in [0, 6] or None, got {self.weekday}")
 
+    @classmethod
+    def from_row(cls, row: Mapping[str, Any]) -> CronEntry:
+        """Build an entry from a `UserCronStore` row."""
+        return cls(
+            name=row["name"],
+            agent=row["agent"],
+            task=row["task"],
+            hour=row["hour"],
+            minute=row["minute"],
+            weekday=row["weekday"],
+            tz=row.get("tz"),
+        )
+
+    @property
+    def zone_name(self) -> str:
+        """The IANA zone this entry's wall-clock time is read in."""
+        return self.tz or local_timezone_name()
+
+    def describe(self) -> str:
+        """One line a person can check: "daily at 07:00 (Asia/Kolkata)"."""
+        when = f"{self.hour:02d}:{self.minute:02d}"
+        cadence = "daily" if self.weekday is None else f"every {WEEKDAY_NAMES[self.weekday]}"
+        return f"{cadence} at {when} ({self.zone_name})"
+
+
+def _wall_clock(entry: CronEntry, reference: datetime) -> datetime:
+    """Return `reference` moved to this entry's wall-clock hour:minute in its zone."""
+    local = reference.astimezone(resolve_timezone(entry.tz))
+    return local.replace(hour=entry.hour, minute=entry.minute, second=0, microsecond=0)
+
 
 def next_firing(entry: CronEntry, after: datetime) -> datetime:
     """Return the first firing time strictly after `after` for `entry`.
@@ -50,8 +92,12 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
     Pure function - no side effects, no I/O. Same `after` always yields the
     same answer, which makes the scheduler testable without mocking the clock
     in the surrounding async code.
+
+    The arithmetic runs on the wall clock of the entry's zone, so a daily 07:00
+    stays 07:00 through a DST shift rather than sliding by an hour. The returned
+    datetime is aware, so callers comparing it to a UTC clock compare instants.
     """
-    candidate = after.replace(hour=entry.hour, minute=entry.minute, second=0, microsecond=0)
+    candidate = _wall_clock(entry, after)
     if candidate <= after:
         candidate = candidate + timedelta(days=1)
     if entry.weekday is None:
@@ -66,13 +112,18 @@ def previous_firing(entry: CronEntry, at: datetime) -> datetime:
     The inverse of `next_firing`: used on startup to find the slot a cron should
     have run in, so a firing missed while north was down can be caught up.
     """
-    candidate = at.replace(hour=entry.hour, minute=entry.minute, second=0, microsecond=0)
+    candidate = _wall_clock(entry, at)
     if candidate > at:
         candidate = candidate - timedelta(days=1)
     if entry.weekday is None:
         return candidate
     days_back = (candidate.weekday() - entry.weekday) % 7
     return candidate - timedelta(days=days_back)
+
+
+def next_firing_epoch(entry: CronEntry, after_epoch: float | None = None) -> float:
+    """Return the entry's next firing as an epoch - the storage/display currency."""
+    return to_epoch(next_firing(entry, from_epoch(after_epoch if after_epoch is not None else now_epoch())))
 
 
 def next_due_entry(entries: list[CronEntry], after: datetime) -> tuple[CronEntry, datetime] | None:
@@ -109,17 +160,7 @@ class CronScheduler:
         if self._cron_store is not None:
             try:
                 user = await self._cron_store.list()
-                for u in user:
-                    entries.append(
-                        CronEntry(
-                            name=u["name"],
-                            agent=u["agent"],
-                            task=u["task"],
-                            hour=u["hour"],
-                            minute=u["minute"],
-                            weekday=u["weekday"],
-                        )
-                    )
+                entries.extend(CronEntry.from_row(u) for u in user)
             except Exception:
                 logger.exception("CronScheduler: failed to load user cron entries")
         return entries
@@ -226,8 +267,11 @@ class CronScheduler:
             await self._execute_due_entry(due, now, entries)
 
 
-# V1 schedule - see README Section 11.3.
-# weekday: 0=Mon … 6=Sun, None = daily.
+# V1 schedule - see docs/ARCHITECTURE.md Section 11.3.
+# weekday: 0=Mon … 6=Sun, None = daily. tz is unset, so the hours below are the
+# user's own local wall clock: a briefing at 08:00 means 08:00 where they live.
+# Only what north needs to run itself, plus the daily briefing, ships built in -
+# anything tied to one person's routine is theirs to add (`schedule_task`).
 V1_CRON_ENTRIES: list[CronEntry] = [
     CronEntry(
         name="news_daily_briefing",
@@ -238,6 +282,5 @@ V1_CRON_ENTRIES: list[CronEntry] = [
         hour=8,
         minute=0,
     ),
-    CronEntry(name="wellness_daily_meal_plan", agent="wellness", task="Generate today's meal plan", hour=7, minute=0),
     CronEntry(name="task_context_cleanup", agent="system", task="task_context_cleanup", hour=3, minute=0),
 ]

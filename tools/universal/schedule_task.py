@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import re
-from datetime import datetime
-
 from jobs.models import Job, JobPriority, JobType
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.universal._schedules import entry_view, resolve_zone_name, schedule_name
 from utils.ids import generate_id
-
-_WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+from utils.time import format_local, from_epoch, parse_local
 
 
 class ScheduleTaskTool(Tool):
@@ -18,11 +15,14 @@ class ScheduleTaskTool(Tool):
     description = (
         "Schedule a task for north to run later in the background, even when the user is "
         "not chatting. Give the work as a natural-language prompt in 'task'; it runs at the "
-        "scheduled time under the named agent. For a single future run, pass run_at as an "
-        "ISO-8601 UTC timestamp (e.g. '2026-07-15T14:30:00Z'). For a repeating run, pass hour "
-        "(0-23) plus optional minute (0-59) and weekday (0=Mon … 6=Sun; omit for daily). All "
-        "times are UTC - convert from the user's local time first. Good for reminders, "
-        "digests, and check-ins; the user can review or stop scheduled tasks with 'north cancel'."
+        "scheduled time under the named agent. Times are the USER'S LOCAL TIME - pass the "
+        "hour they said, do not convert to UTC. For a single future run, pass run_at as "
+        "'YYYY-MM-DDTHH:MM' local (an explicit offset or trailing Z is honoured if given). "
+        "For a repeating run, pass hour (0-23) plus optional minute (0-59) and weekday "
+        "(0=Mon … 6=Sun; omit for daily). Pass tz only to schedule in a zone other than the "
+        "user's own, as an IANA name like 'Asia/Kolkata'. Good for reminders, digests, and "
+        "check-ins. Use list_schedules to see what is scheduled, update_schedule to change "
+        "one, and cancel_schedule to remove one."
     )
     parameters_schema = {
         "type": "object",
@@ -33,10 +33,11 @@ class ScheduleTaskTool(Tool):
                 "description": "Agent to run it (default 'general')",
                 "default": "general",
             },
-            "run_at": {"type": "string", "description": "ISO 8601 UTC datetime for one-shot"},
-            "hour": {"type": "integer", "description": "Hour (0-23) for recurring schedule"},
+            "run_at": {"type": "string", "description": "Local ISO 8601 datetime for a one-shot run"},
+            "hour": {"type": "integer", "description": "Hour (0-23), local, for a recurring schedule"},
             "minute": {"type": "integer", "description": "Minute (0-59, default 0)"},
             "weekday": {"type": "integer", "description": "Weekday 0=Mon…6=Sun (omit for daily)"},
+            "tz": {"type": "string", "description": "IANA zone, only if not the user's own"},
         },
         "required": ["task"],
     }
@@ -65,7 +66,7 @@ class ScheduleTaskTool(Tool):
 
     async def _one_shot(self, task: str, agent: str, run_at: str) -> ToolOutput:
         try:
-            scheduled_at = datetime.fromisoformat(run_at.replace("Z", "+00:00"))
+            epoch = parse_local(run_at)
         except ValueError as exc:
             return ToolOutput(success=False, error=f"Invalid run_at: {exc}")
 
@@ -76,7 +77,7 @@ class ScheduleTaskTool(Tool):
             task=task,
             payload={"scheduled_by": "schedule_task"},
             priority=JobPriority.MEDIUM,
-            scheduled_at=scheduled_at,
+            scheduled_at=from_epoch(epoch),
         )
         await self._job_processor.enqueue(job)
         return ToolOutput(
@@ -84,7 +85,8 @@ class ScheduleTaskTool(Tool):
             data={
                 "type": "one-shot",
                 "job_id": job.job_id,
-                "scheduled_at": scheduled_at.isoformat(),
+                "runs_at": format_local(epoch),
+                "runs_at_epoch": epoch,
                 "task": task,
                 "agent": agent,
             },
@@ -93,20 +95,19 @@ class ScheduleTaskTool(Tool):
     async def _recurring(self, task: str, agent: str, params: dict) -> ToolOutput:
         from jobs.scheduler import CronEntry
 
+        tz = resolve_zone_name(params.get("tz"))
         try:
-            hour = int(params["hour"])
-            minute = int(params.get("minute", 0))
             weekday_raw = params.get("weekday")
-            weekday = int(weekday_raw) if weekday_raw is not None else None
             entry = CronEntry(
-                name="user_" + re.sub(r"[^a-z0-9]+", "_", task.lower())[:40].strip("_"),
+                name=schedule_name(task),
                 agent=agent,
                 task=task,
-                hour=hour,
-                minute=minute,
-                weekday=weekday,
+                hour=int(params["hour"]),
+                minute=int(params.get("minute", 0)),
+                weekday=int(weekday_raw) if weekday_raw is not None else None,
+                tz=tz,
             )
-        except (ValueError, KeyError) as exc:
+        except (ValueError, KeyError, TypeError) as exc:
             return ToolOutput(success=False, error=str(exc))
 
         await self._cron_store.add(
@@ -116,20 +117,12 @@ class ScheduleTaskTool(Tool):
             hour=entry.hour,
             minute=entry.minute,
             weekday=entry.weekday,
+            tz=entry.tz,
         )
+        row = await self._cron_store.get(entry.name)
+        return ToolOutput(success=True, data={"type": "recurring", **entry_view(row)})
 
-        if weekday is None:
-            schedule = f"daily at {hour:02d}:{minute:02d} UTC"
-        else:
-            schedule = f"every {_WEEKDAY_NAMES[weekday]} at {hour:02d}:{minute:02d} UTC"
-
-        return ToolOutput(
-            success=True,
-            data={
-                "type": "recurring",
-                "cron_name": entry.name,
-                "schedule": schedule,
-                "task": task,
-                "agent": agent,
-            },
-        )
+    def format_output(self, data: dict) -> str:
+        if data.get("type") == "one-shot":
+            return f"Scheduled once: {data['task']} - runs {data['runs_at']} (job {data['job_id']})."
+        return f"Scheduled {data['schedule']}: {data['task']} - next run {data['next_run']}."

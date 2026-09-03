@@ -13,6 +13,20 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.11.0] - 2026-09-02
+### Added
+- **Schedules are now the user's to change, not just to create** (`tools/universal/list_schedules.py`, `update_schedule.py`, `cancel_schedule.py`, `orchestrator/api/cron.py`, `cli/main.py`). Creating a schedule was one sentence; removing one meant knowing the generated name and calling the API by hand, because `north cancel` only stops a run in flight. All four verbs now exist in all three surfaces - `list_schedules` / `update_schedule` / `cancel_schedule` alongside `schedule_task`, `north cron [list|add|set|rm]`, and `PATCH /orchestrator/cron/{name}` next to the existing GET/POST/DELETE. The tools are universal, so any agent that can create a schedule can also show, move and delete one. Deleting or updating a schedule that does not exist is now a 404 rather than a silent success. Listings include the built-in schedules, marked as such - asking "what is scheduled?" and being shown only your own half of the answer was misleading - and editing one is refused with a reason rather than a "not found".
+
+### Changed
+- **north is temporally aware: epochs in storage, local time everywhere a person looks** (`utils/time.py`, `jobs/sqlite_processor.py`, `jobs/cron_store.py`, `jobs/scheduler.py`). Every instant in `job_queue` is a `REAL` epoch instead of ISO-8601 text - existing databases are rebuilt once on startup, converting each timestamp (a naive `CURRENT_TIMESTAMP` value is read as the UTC it always was). Times shown to the user, and times the user gives, are their local zone: `schedule_task` no longer instructs the model to convert to UTC first, which was a standing correctness risk, and `north jobs` and `north cron` print local wall clock with the zone named.
+
+  A recurrence is a rule, not an instant, so a cron entry stores wall-clock `hour`/`minute` plus an IANA `tz` (defaulting to the machine's zone) rather than an epoch: 07:00 stays 07:00 across a DST shift, where a fixed epoch interval would slide by an hour. The firing math runs in that zone. **The two built-in schedules changed meaning as a result** - the 08:00 news briefing and the 03:00 cleanup previously fired at 08:00 and 03:00 *UTC*, and now fire at those hours where the user actually is. Entries stored before this release are read in the local zone, which is how the old scheduler already treated them.
+
+### Removed
+- **The daily meal-plan cron is no longer built in** (`jobs/scheduler.py`). Every fresh install was generating a meal plan at 7:00 AM for a user who had never asked for one - a domain assumption baked into the runtime. Meal plans, workouts and the like are personal routines, so they belong in the user-defined schedules the `schedule_task` tool and `POST /orchestrator/cron` already create ("plan my meals every morning at 7" still works, it just has to be asked for). The wellness agent is untouched and still answers on demand. The built-in list now holds only the daily news briefing and `task_context_cleanup`.
+
+---
+
 ## [1.10.0] - 2026-09-02
 ### Fixed
 - **A model could ignore a JSON schema and have it recorded as a success** (`inference/models.py`, `inference/dispatcher.py`, `inference/providers/openai_compat.py`). Found by asking why a bootstrap run stored one fact from twenty-five files. Four defects, each hiding the next:

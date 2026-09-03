@@ -15,7 +15,16 @@ AGENTS_DIR = Path(__file__).resolve().parents[3] / "agents"
 _AGENT_BUILTINS = {"delegate_task", "request_approval", "ask_user"}
 # Tools that need constructor dependencies and are registered manually in
 # orchestrator/app.py::_build_tool_registry rather than auto-discovered.
-_MANUALLY_REGISTERED = {"bash", "shell", "schedule_task", "create_agent", "query_metrics"}
+_MANUALLY_REGISTERED = {
+    "bash",
+    "shell",
+    "schedule_task",
+    "list_schedules",
+    "update_schedule",
+    "cancel_schedule",
+    "create_agent",
+    "query_metrics",
+}
 
 # Matches tool-call syntax in prompt code examples: name(param=... or name(\n  param=
 _TOOL_CALL_RE = re.compile(r"\b([a-z][a-z0-9_]{2,})\(\s*\n?\s*[a-z_]+\s*=", re.MULTILINE)

@@ -14,6 +14,10 @@ Usage:
     north ledger [--task <id>] [--agent <name>] [--source <src>]
     north jobs [--status pending]
     north job cancel <id>
+    north cron [list]
+    north cron add "Plan my meals" --hour 7 [--minute 30] [--day mon] [--agent wellness]
+    north cron set <name> [--hour 8] [--task "..."]
+    north cron rm <name>
     north agents
     north agent run <name> <task>
     north inference costs [--period week] [--agent finance]
@@ -75,6 +79,7 @@ from cli.constants import (
 from cli.formatting import _build_steps_table, _reconstruct_task_output
 from cli.tui import run as _tui_run
 from utils.security import load_secret
+from utils.time import local_timezone_name
 from utils.version import NORTH_VERSION
 
 _console = Console(force_terminal=sys.stdout.isatty())
@@ -818,7 +823,8 @@ def show_jobs(
         _console.print(
             f"  [bright_black]{job['job_id']}[/bright_black]  "
             f"[{status_style}]{status}[/{status_style}]  "
-            f"[dim]{job['type']}[/dim]  {job['agent']}"
+            f"[dim]{job['type']}[/dim]  {job['agent']}  "
+            f"[bright_black]{job.get('scheduled_local', '')}[/bright_black]"
         )
     _console.print()
 
@@ -844,7 +850,7 @@ def cancel_any(
     """Stop anything: a task or job by ID, or everything in flight with --all.
 
     A running scheduled (cron) job is just an active task/job, so this stops it too.
-    To stop *future* recurring runs, use `north stop` (halts the scheduler).
+    To stop a recurring schedule from ever firing again, use `north cron rm <name>`.
     """
     if all_:
         data = _api("POST", "/orchestrator/cancel-all").json()
@@ -858,6 +864,123 @@ def cancel_any(
         raise typer.Exit(1)
     data = _api("POST", f"/orchestrator/cancel/{target}").json()
     typer.secho(f"✓ Cancelled {data['cancelled']} {data['id']}.", fg=typer.colors.YELLOW)
+
+
+# ── schedules ─────────────────────────────────────────────────────────────────
+
+cron_app = typer.Typer(help="Recurring schedules: list, add, change, remove.", invoke_without_command=True)
+app.add_typer(cron_app, name="cron")
+
+# Days as a person writes them, mapped to the scheduler's 0=Mon..6=Sun.
+_WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def _weekday_number(day: str | None) -> int | None:
+    """Turn --day mon into 0. Anything unrecognized is the user's typo, not a daily schedule."""
+    if day is None:
+        return None
+    number = _WEEKDAYS.get(day.strip().lower()[:3])
+    if number is None:
+        typer.secho(f"Unknown day {day!r}. Use one of: {', '.join(_WEEKDAYS)}.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    return number
+
+
+def _print_cron_entries(entries: list[dict]) -> None:
+    if not entries:
+        _console.print("  [dim]no schedules - add one with `north cron add`[/dim]")
+        return
+    # The footer names the local zone once, so a row only spells out its own zone
+    # when the schedule is in a different one - that is the case worth reading.
+    local_suffix = f" ({local_timezone_name()})"
+    table = Table(box=None, padding=(0, 2), show_header=True, header_style="dim")
+    table.add_column("name", no_wrap=True)
+    table.add_column("when", no_wrap=True)
+    table.add_column("next run", style="bright_black", no_wrap=True)
+    table.add_column("agent", style="dim", no_wrap=True)
+    table.add_column("task")
+    for entry in entries:
+        name = entry["name"]
+        if entry.get("source") == "builtin":
+            name = f"[dim]{name} (built-in)[/dim]"
+        table.add_row(
+            name,
+            entry["schedule"].removesuffix(local_suffix),
+            entry["next_run_local"],
+            entry["agent"],
+            entry["task"],
+        )
+    _console.print()
+    _console.print(table)
+    _console.print(f"  [dim]times shown in {local_timezone_name()}[/dim]")
+    _console.print()
+
+
+@cron_app.callback()
+def cron_root(ctx: typer.Context) -> None:
+    """Show recurring schedules (bare `north cron`), or run a subcommand."""
+    if ctx.invoked_subcommand is None:
+        _print_cron_entries(_api("GET", "/orchestrator/cron").json())
+
+
+@cron_app.command("list")
+def list_cron() -> None:
+    """List recurring schedules, soonest first."""
+    _print_cron_entries(_api("GET", "/orchestrator/cron").json())
+
+
+@cron_app.command("add")
+def add_cron(
+    task: str = typer.Argument(..., help="What north should do, in plain language."),
+    hour: int = typer.Option(..., "--hour", "-h", help="Hour to run, 0-23, your local time."),
+    minute: int = typer.Option(0, "--minute", "-m", help="Minute to run, 0-59."),
+    day: str | None = typer.Option(None, "--day", "-d", help="Day for a weekly run (mon…sun). Omit for daily."),
+    agent: str = typer.Option("general", "--agent", "-a", help="Agent that runs it."),
+    name: str | None = typer.Option(None, "--name", help="Name to address it by (default: from the task)."),
+) -> None:
+    """Add a recurring schedule. Times are your local time."""
+    body = {
+        "name": name,
+        "agent": agent,
+        "task": task,
+        "hour": hour,
+        "minute": minute,
+        "weekday": _weekday_number(day),
+    }
+    entry = _api("POST", "/orchestrator/cron", json=body).json()
+    typer.secho(f"✓ {entry['name']}: {entry['schedule']} - next run {entry['next_run_local']}.", fg=typer.colors.GREEN)
+
+
+@cron_app.command("set")
+def set_cron(
+    name: str = typer.Argument(..., help="Schedule name (see `north cron`)."),
+    hour: int | None = typer.Option(None, "--hour", "-h", help="New hour, 0-23, local."),
+    minute: int | None = typer.Option(None, "--minute", "-m", help="New minute, 0-59."),
+    day: str | None = typer.Option(None, "--day", "-d", help="New day (mon…sun)."),
+    task: str | None = typer.Option(None, "--task", help="New task text."),
+    agent: str | None = typer.Option(None, "--agent", "-a", help="New agent."),
+) -> None:
+    """Change a schedule. Only the options you pass are changed."""
+    body = {"hour": hour, "minute": minute, "weekday": _weekday_number(day), "task": task, "agent": agent}
+    changes = {k: v for k, v in body.items() if v is not None}
+    if not changes:
+        typer.secho(
+            "Nothing to change - pass --hour, --minute, --day, --task or --agent.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    entry = _api("PATCH", f"/orchestrator/cron/{name}", json=changes).json()
+    typer.secho(f"✓ {entry['name']}: {entry['schedule']} - next run {entry['next_run_local']}.", fg=typer.colors.GREEN)
+
+
+@cron_app.command("rm")
+def remove_cron(
+    name: str = typer.Argument(..., help="Schedule name (see `north cron`)."),
+) -> None:
+    """Remove a recurring schedule, so it never fires again."""
+    _api("DELETE", f"/orchestrator/cron/{name}")
+    typer.secho(f"✓ Removed schedule {name}.", fg=typer.colors.YELLOW)
 
 
 # ── agents ────────────────────────────────────────────────────────────────────

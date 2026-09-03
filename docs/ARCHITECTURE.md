@@ -773,7 +773,8 @@ finds. The agent→tool mapping is then a two-tier graph:
 
 - **Universal tools** (`tools/universal/`) are granted to *every* agent: `read_file`,
   `write_file`, `glob`, `list_dir`, `search_files`, `web_search`, `fetch_url`,
-  `schedule_task`, `create_tool`, `create_agent`, `query_metrics`.
+  `schedule_task`, `list_schedules`, `update_schedule`, `cancel_schedule`, `create_tool`,
+  `create_agent`, `query_metrics`.
 - **Specialized tools** are opt-in per agent. Each agent lists the ones it wants in its
   `tools.yaml`; the registry maps that into the graph at load time.
 
@@ -1281,21 +1282,39 @@ The `CronScheduler` runs as a single asyncio background task. It combines two so
 
 **Built-in schedules** (`jobs/scheduler.py` - `V1_CRON_ENTRIES`):
 ```
-health_daily_meal_plan         -> daily 7:00 AM
-university_canvas_check        -> daily 8:00 AM
-job_internship_update          -> daily 9:00 AM
-finance_expense_summary        -> daily 10:00 PM
-university_weekly_summary      -> every Monday 8:00 AM
-finance_weekly_budget_check    -> every Sunday 6:00 PM
+news_daily_briefing            -> daily 8:00 AM
 task_context_cleanup           -> daily 3:00 AM
 ```
 
-**User-defined schedules** - stored in the `user_cron_entries` table in `~/.north/jobs.db`. Created two ways:
-1. Natural language: "remind me every Monday at 9am to review my goals"
-   → agent calls `schedule_task` tool with `hour`, `minute`, `weekday` params
-2. API: `POST /orchestrator/cron`
+The built-in list stays deliberately short: housekeeping north needs to run
+itself, plus the daily briefing. Anything tied to one person's routine - a meal
+plan, a workout, a budget review - is not shipped as an assumption; the user
+adds it as a user-defined schedule below, and it runs identically.
 
-User entries are deleted with `DELETE /orchestrator/cron/{name}`.
+**User-defined schedules** - stored in the `user_cron_entries` table in `~/.north/jobs.db`,
+re-read by the scheduler every 60 s, so one added mid-conversation fires without a restart.
+Full CRUD, in three interchangeable surfaces:
+
+| | conversation | CLI | API |
+|---|---|---|---|
+| create | `schedule_task` | `north cron add "…" --hour 7` | `POST /orchestrator/cron` |
+| read | `list_schedules` | `north cron` | `GET /orchestrator/cron` |
+| update | `update_schedule` | `north cron set <name> --hour 8` | `PATCH /orchestrator/cron/{name}` |
+| delete | `cancel_schedule` | `north cron rm <name>` | `DELETE /orchestrator/cron/{name}` |
+
+"Remind me every Monday at 9am to review my goals" reaches `schedule_task` with `hour`,
+`minute` and `weekday`; "what have I got scheduled?" and "move it to 8" reach the read and
+update tools. The four verbs are universal, so every agent has all of them - an agent that
+can create a schedule can always show, change and remove one.
+
+Reads return the built-in schedules too, marked `source: "builtin"`, so "what is scheduled?"
+is answered completely; update and delete refuse them with a 409 (or a tool error naming the
+reason) rather than a confusing "not found", because they are part of the install.
+
+**Times.** `hour`/`minute` are wall clock in the entry's IANA `tz` (default: the machine's
+own zone), which is why a 07:00 schedule stays 07:00 across a DST shift. Every *instant* -
+a firing, a one-shot's `run_at`, every `job_queue` timestamp - is stored as epoch seconds
+and displayed in local time (`utils/time.py`, CODING_STYLE 5.2.1).
 
 ### 11.4 One-Shot Scheduled Jobs
 
@@ -1576,6 +1595,7 @@ north/
     exceptions.py
     universal/          <- granted to every agent (read_file, write_file, glob, list_dir,
                            search_files, web_search, fetch_url, schedule_task,
+                           list_schedules, update_schedule, cancel_schedule,
                            create_tool, create_agent, query_metrics)
     specialized/        <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
     semantic/           <- code intelligence (search_symbols, find_references)

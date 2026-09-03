@@ -206,11 +206,20 @@ Logic used by more than one module lives in `utils/`; never re-implemented inlin
 utils/
   db.py          <- open_db_connection()
   ids.py         <- generate_id(), generate_task_id()
-  time.py        <- utcnow(), format_timestamp()
+  time.py        <- utcnow(), localnow(), now_epoch(), format_local()
   security.py    <- generate_secret(), load_secret(), verify_secret()
   prompts.py     <- load_prompt(path: str | Path) -> str
   tasks.py       <- spawn(coro, *, name)  # supervised fire-and-forget background task
 ```
+
+### 5.2.1 Store Epochs, Show Local Time
+
+Every instant is stored as a Unix epoch (seconds, UTC) - in SQLite as a `REAL`, never as
+formatted text - and rendered in the user's local zone at the edges (CLI, TUI, API, tool
+output, prompts) via `utils/time.py`. Anything a user says or reads is their local time; a
+naive timestamp coming in means local, not UTC. A recurring schedule is the one exception:
+a rule is not an instant, so it stores wall-clock hour/minute plus an IANA zone, which is
+what keeps it fixed across a DST shift.
 
 ### 5.3 Prompts Are Files, Not Strings
 
@@ -316,8 +325,9 @@ is adding a file:
 ```
 tools/
   universal/    <- available to EVERY agent (read_file, write_file, glob, list_dir,
-                   search_files, web_search, fetch_url, schedule_task, create_tool,
-                   create_agent, query_metrics)
+                   search_files, web_search, fetch_url, schedule_task, list_schedules,
+                   update_schedule, cancel_schedule, create_tool, create_agent,
+                   query_metrics)
   specialized/  <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
   semantic/     <- code intelligence (search_symbols, find_references)
   analysis/     <- static analysis (check_types)
@@ -483,6 +493,7 @@ tools/
   _path.py           <- shared path-safety helpers
   universal/         <- granted to every agent (read_file, write_file, glob, list_dir,
                         search_files, web_search, fetch_url, schedule_task,
+                        list_schedules, update_schedule, cancel_schedule,
                         create_tool, create_agent, query_metrics)
   specialized/       <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
   semantic/          <- code intelligence (search_symbols, find_references)
@@ -514,7 +525,7 @@ jobs/
 utils/
   db.py              <- open_db_connection()
   ids.py             <- generate_id(), generate_task_id()
-  time.py            <- utcnow(), localnow(), format_timestamp()
+  time.py            <- epoch/local conversion: now_epoch(), epoch_to_local(), format_local()
   security.py        <- generate_secret(), load_secret(), verify_secret()
   prompts.py         <- load_prompt()
   net.py             <- SSRF-safe HTTP helpers
