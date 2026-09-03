@@ -85,6 +85,7 @@ def facts_from_catalog(raw_models: list[dict]) -> tuple[list[ModelFacts], list[E
         params = {str(p) for p in (model.get("supported_parameters") or [])}
         architecture = model.get("architecture") or {}
         modalities = frozenset(str(m) for m in (architecture.get("input_modalities") or []))
+        outputs = frozenset(str(m) for m in (architecture.get("output_modalities") or []))
         benchmarks = model.get("benchmarks") or {}
         top_provider = model.get("top_provider") or {}
         context_length = model.get("context_length") or top_provider.get("context_length")
@@ -97,6 +98,11 @@ def facts_from_catalog(raw_models: list[dict]) -> tuple[list[ModelFacts], list[E
                     fact(int(context_length), Rank.DECLARED, SOURCE, when) if context_length else None
                 ),
                 max_output_tokens=(fact(int(max_output), Rank.DECLARED, SOURCE, when) if max_output else None),
+                # A model that does not emit text is not a completion model,
+                # however cheap it is.
+                supports_completion=(
+                    fact("text" in outputs, Rank.DECLARED, SOURCE, when) if outputs else None
+                ),
                 supports_tools=fact(
                     any(p in params for p in _TOOL_PARAMS), Rank.DECLARED, SOURCE, when
                 ),

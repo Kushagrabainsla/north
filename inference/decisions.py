@@ -163,38 +163,6 @@ class DecisionLog:
             return []
         return [_row_to_dict(row) for row in rows]
 
-    def failure_rate(self, *, since: timedelta = timedelta(days=7), min_attempts: int = 3) -> dict[str, float]:
-        """Per-model share of selections that ended badly - the demotion signal.
-
-        A model this install keeps failing on keeps its place in the chain's tail
-        rather than being removed: "worse here" is first-party evidence about
-        ranking, not a claim that the model is unusable.
-        """
-        if not self._enabled:
-            return {}
-        cutoff = (datetime.now(UTC) - since).isoformat()
-        try:
-            with open_db_connection(self._db_path) as conn:
-                rows = conn.execute(
-                    "SELECT chosen_model, outcome, COUNT(*) AS n FROM routing_decisions"
-                    " WHERE created_at >= ? AND chosen_model IS NOT NULL GROUP BY chosen_model, outcome",
-                    (cutoff,),
-                ).fetchall()
-        except Exception:
-            return {}
-        totals: dict[str, int] = {}
-        failures: dict[str, int] = {}
-        for row in rows:
-            model = row["chosen_model"]
-            totals[model] = totals.get(model, 0) + row["n"]
-            if row["outcome"] != SUCCESS:
-                failures[model] = failures.get(model, 0) + row["n"]
-        return {
-            model: failures.get(model, 0) / count
-            for model, count in totals.items()
-            if count >= min_attempts and failures.get(model, 0)
-        }
-
     def prune(self, older_than: timedelta) -> int:
         """Drop rows past the retention window. Called by the task-cleanup job."""
         if not self._enabled:

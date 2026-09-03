@@ -24,7 +24,7 @@ from inference.facts.models import Entitlement
 from inference.failure import OutageCorroboration, Scope, classify, invalid_response
 from inference.routing.availability import AvailabilityView
 from inference.routing.chain import Candidate, ChainWalk, Requirements, context_of, narrow
-from inference.routing.parts import PartProfile, profile_for, with_power
+from inference.routing.parts import PartProfile, profile_for, with_pool, with_power
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,10 @@ class ChainRouter:
     def set_profiles(self, profiles: dict[str, PartProfile]) -> None:
         self._profiles = profiles
 
+    def _is_wired(self, provider: str) -> bool:
+        """True when *provider* is currently configured on this install."""
+        return self._provider_lookup(provider) is not None
+
     @property
     def is_ready(self) -> bool:
         """False until a catalog exists, so the caller can keep the legacy path."""
@@ -74,14 +78,20 @@ class ChainRouter:
 
     # ---- selection ----
 
-    def chain_for(self, component: str, requirements: Requirements) -> tuple[list[Candidate], PartProfile]:
+    def chain_for(
+        self, component: str, requirements: Requirements, pool: str | None = None
+    ) -> tuple[list[Candidate], PartProfile]:
         """The chain for *component*, narrowed to what this call needs.
 
         Raises :class:`ContextTooLargeError` when models qualify on capability but
         none has a window big enough, so the agent layer can compact and retry
-        rather than being told, unhelpfully, that nothing is available.
+        rather than being told, unhelpfully, that nothing is available. A prompt
+        that only trips a provider's *payload* cap is a different problem with a
+        different fix, and is never reported as a context overflow.
         """
-        profile = with_power(profile_for(component, self._profiles), self._power() if self._power else None)
+        profile = profile_for(component, self._profiles)
+        profile = with_pool(profile, pool)
+        profile = with_power(profile, self._power() if self._power else None)
         full = self._catalog.chain_for(profile, self._demoted)
         eligible = narrow(
             full,
@@ -98,11 +108,18 @@ class ChainRouter:
                 profile.part,
             )
             eligible = narrow(full, Requirements(capabilities=requirements.capabilities))
-        fitting = narrow(eligible, requirements)
-        if not fitting and eligible and requirements.min_context:
+
+        # Context and payload are separated deliberately. Compaction is the fix
+        # for one and useless for the other, so conflating them had the agent
+        # layer shorten its history and retry into the same wall.
+        fits_context = narrow(
+            eligible,
+            Requirements(capabilities=requirements.capabilities, min_context=requirements.min_context),
+        )
+        if not fits_context and eligible and requirements.min_context:
             largest = max((context_of(c.facts, c.endpoints) or 0) for c in eligible)
             raise ContextTooLargeError(requirements.min_context, largest)
-        return fitting, profile
+        return narrow(fits_context, requirements), profile
 
     # ---- dispatch ----
 
@@ -115,22 +132,20 @@ class ChainRouter:
         is_valid: Callable[[Any], bool] | None = None,
         capability: str | None = None,
         task_id: str | None = None,
+        pool: str | None = None,
     ) -> Any:
         """Walk the chain for *component* until one endpoint returns a usable answer."""
-        chain, profile = self.chain_for(component, requirements)
+        chain, profile = self.chain_for(component, requirements, pool)
         decision = RoutingDecision(
             part=profile.part,
             task_id=task_id,
             requirements=_describe(requirements, capability),
         )
-        walk = ChainWalk(chain, self._availability, capability)
+        walk = ChainWalk(chain, self._availability, capability, self._is_wired)
 
         for attempt in walk.attempts():
             provider = self._provider_lookup(attempt.provider)
-            if provider is None:
-                # The catalog lists an endpoint whose provider is no longer wired
-                # up (a key was removed since the last refresh). Skip it quietly.
-                attempt.failed(invalid_response(attempt.model_id, attempt.provider, None))
+            if provider is None:  # pragma: no cover - the walk filters these out
                 continue
             try:
                 result = await call_fn(provider, attempt.model_id)
@@ -162,8 +177,8 @@ class ChainRouter:
         decision.outcome = EXHAUSTED
         self._decisions.record(_finish(decision, walk))
         raise AllModelsRateLimitedError(
-            f"No model could serve {profile.part} - {walk.exhaustion_summary()}",
-            retry_after=_soonest_retry(walk),
+            f"No model could serve {profile.part} - {walk.exhaustion_summary(requirements)}",
+            retry_after=walk.soonest_retry(),
         )
 
     # ---- outcome handling ----
@@ -184,9 +199,25 @@ class ChainRouter:
         if self._on_outcome is not None:
             self._on_outcome(attempt.model_id, attempt.provider, True)
 
+    # Which fact a capability failure contradicts. A capability north cannot map
+    # onto a declared fact still gets its cooldown; it just has nothing to demote.
+    _CAPABILITY_FIELDS: dict[str, str] = {
+        "tool_calls": "supports_tools",
+        "structured_output": "supports_structured",
+        "reasoning": "supports_reasoning",
+        "completion": "supports_completion",
+    }
+
     def _apply(self, failure, attempt) -> None:
         """Act on one failure at its own scope, and no wider."""
         provider_down = False
+        if failure.scope is Scope.MODEL_CAPABILITY and failure.capability:
+            # The model was declared able to do this and could not. Observation
+            # contradicts a declaration, but only with corroboration, so this
+            # counts a witness and demotes the fact once enough agree.
+            field = self._CAPABILITY_FIELDS.get(failure.capability)
+            if field is not None:
+                self._catalog.contradict(attempt.candidate.canonical_id, field, attempt.provider)
         if failure.scope is Scope.PROVIDER_DOWN:
             provider_down = self._corroboration.record(attempt.provider, attempt.model_id)
             if not provider_down:
@@ -254,13 +285,3 @@ def _finish(decision: RoutingDecision, walk: ChainWalk) -> RoutingDecision:
     decision.considered = walk.considered
     decision.skipped = [skip.as_dict() for skip in walk.skipped]
     return decision
-
-
-def _soonest_retry(walk: ChainWalk) -> float | None:
-    """The shortest wait any skipped candidate named, so callers can back off usefully."""
-    waits = [
-        float(reason.split("(")[1].rstrip("s)"))
-        for skip in walk.skipped
-        if (reason := skip.reason).startswith("cooling down (")
-    ]
-    return min(waits) if waits else None

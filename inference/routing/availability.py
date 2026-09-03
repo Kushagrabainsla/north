@@ -143,6 +143,15 @@ class AvailabilityView:
             return f"{capability} suspended on this model"
         return None
 
+    def retry_after(self, endpoint: Endpoint) -> float | None:
+        """Seconds until this endpoint's cooldown lapses, or None if it is not timed.
+
+        An entitlement block or a bad key has no useful countdown - it needs an
+        action, not a wait - so only a real cooldown answers here.
+        """
+        remaining = self._cooldowns.remaining((endpoint.provider_model_id, endpoint.provider))
+        return remaining if remaining > 0 else None
+
     def record_success(self, endpoint: Endpoint) -> None:
         self._entitlements.clear(endpoint.provider)
         self._health.record_success(endpoint.provider)

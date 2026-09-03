@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from inference.capability import ModelCapability, ModelInfo
@@ -77,3 +79,37 @@ async def test_the_legacy_path_still_serves_when_there_is_no_catalog(tmp_path) -
     dispatcher = _dispatcher(tmp_path, "chain")
     response = await dispatcher.complete(CompletionRequest(prompt="hello", component="coder"))
     assert response.model_used in _models()
+
+
+@pytest.mark.asyncio
+async def test_an_image_in_the_tool_loop_requires_a_vision_model(tmp_path) -> None:
+    """Agents send screenshots as image_url parts, not through request.images."""
+    from inference.dispatcher import _messages_carry_images
+
+    with_image = [{"role": "user", "content": [{"type": "text", "text": "look"},
+                                               {"type": "image_url", "image_url": {"url": "data:..."}}]}]
+    assert _messages_carry_images(with_image) is True
+    assert _messages_carry_images([{"role": "user", "content": "plain text"}]) is False
+    assert _messages_carry_images([{"role": "user", "content": [{"type": "text", "text": "x"}]}]) is False
+
+
+def test_the_litellm_disk_cache_survives_a_restart(tmp_path) -> None:
+    """A fresh cache written by the last process must not be re-downloaded."""
+    import json
+
+    from inference.facts.sources.litellm import LiteLLMSource
+
+    fetches = 0
+
+    class _Client:
+        async def get(self, url):
+            nonlocal fetches
+            fetches += 1
+            raise AssertionError("the cached copy should have been used")
+
+    cache = tmp_path / "litellm_models.json"
+    cache.write_text(json.dumps({"m": {"mode": "chat", "max_input_tokens": 2000}}))
+
+    facts = asyncio.run(LiteLLMSource(cache, client=_Client()).load())
+    assert fetches == 0
+    assert [record.canonical_id for record in facts] == ["m"]

@@ -130,6 +130,21 @@ def _satisfies_json_request(text: str, request: CompletionRequest) -> bool:
     return request.matches_schema(parsed)
 
 
+def _messages_carry_images(messages: list[dict]) -> bool:
+    """True when any message carries image content.
+
+    The agent loop sends screenshots and diagrams as ``image_url`` parts inside
+    the tool-calling conversation, not through ``CompletionRequest.images``, so a
+    request's need for a vision model has to be read off the messages themselves.
+    """
+    return any(
+        isinstance(part, dict) and part.get("type") == "image_url"
+        for message in messages
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+    )
+
+
 def _toolcall_has_output(resp: Any) -> bool:
     """A tool-call response is usable if it invoked tools, produced text, or reasoning."""
     if getattr(resp, "calls", None):
@@ -342,6 +357,16 @@ class ModelDispatcher(InferenceRouter):
             return []
         return self._decisions.recent(task_id=task_id, part=part, limit=limit)
 
+    def entitlement_summary(self) -> dict[str, str]:
+        """Per-provider entitlement blocks, for `north limits` and health checks.
+
+        Answers the question a 24-hour provider blackout used to make unanswerable:
+        which providers need an action, and which of their models still work.
+        """
+        if self._availability is None:
+            return {}
+        return self._availability.entitlements.summary()
+
     def prune_routing_decisions(self, retention_days: int) -> int:
         """Drop decisions older than *retention_days*. Called by the cleanup job."""
         if self._decisions is None:
@@ -432,6 +457,7 @@ class ModelDispatcher(InferenceRouter):
                 is_valid=_valid,
                 capability=str(capability),
                 task_id=request.task_id,
+                pool=request.pool,
             )
 
         priority = self._effective_priority(request.priority)
@@ -529,12 +555,14 @@ class ModelDispatcher(InferenceRouter):
                     estimated_tokens=estimated,
                     payload_chars=(estimated * 4) + _SYSTEM_PROMPT_CHARS,
                     needs_tools=bool(request.tools),
+                    needs_vision=_messages_carry_images(request.messages),
                     exclude_models=request.exclude_models,
                 ),
                 call_fn=_call,
                 is_valid=_toolcall_has_output,
                 capability=str(ModelCapability.TOOL_CALLS),
                 task_id=request.task_id,
+                pool=request.pool,
             )
 
         priority = self._effective_priority(request.priority)
@@ -686,7 +714,11 @@ class ModelDispatcher(InferenceRouter):
         if self._chain_router is None:
             return
         self._chain_router.set_profiles(self._routing_profiles())
-        await self._chain_router.catalog.refresh(self._providers, self._models_by_provider())
+        await self._chain_router.catalog.refresh(
+            self._providers,
+            self._models_by_provider(),
+            configured_providers=[provider.name for provider in self._providers],
+        )
 
     def _models_by_provider(self) -> dict[str, dict[str, ModelInfo]]:
         """The live registry regrouped as ``{provider: {model_id: info}}``."""

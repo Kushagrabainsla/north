@@ -189,6 +189,40 @@ def with_power(profile: PartProfile, power: str | None) -> PartProfile:
     return profile
 
 
+# What an agent's configured ``model_pool`` asks for, expressed as an ordering.
+# Pools are gone as a selection mechanism, but ``create_agent`` still offers the
+# setting and agent configs still carry it, so the intent behind it is honoured
+# rather than silently dropped.
+_POOL_ORDERS: dict[str, str] = {
+    "reasoning": Order.INTELLIGENCE,
+    "speed": Order.CHEAPEST,
+    "fast_cheap": Order.CHEAPEST,
+    "high_volume": Order.CHEAPEST,
+}
+
+
+def with_pool(profile: PartProfile, pool: str | None) -> PartProfile:
+    """Apply a caller's ``model_pool`` to a part's profile as an ordering hint.
+
+    Only the *direction* carries over, and only where the pool actually disagrees
+    with the part: ``fast_cheap`` / ``high_volume`` make a quality-ranked part
+    cost-ranked, and ``reasoning`` makes a cost-ranked part quality-ranked.
+
+    A pool must never restate which quality axis a part uses. ``reasoning`` is the
+    default in every agent config, so treating it as "rank on intelligence" would
+    quietly take the coder off its measured coding score on every single call.
+    Requirements are never touched either way.
+    """
+    order = _POOL_ORDERS.get((pool or "").strip().lower())
+    if order is None:
+        return profile
+    if order == Order.CHEAPEST and profile.ranks_by_score:
+        return replace(profile, order_by=Order.CHEAPEST, floor_field=profile.order_by)
+    if order != Order.CHEAPEST and not profile.ranks_by_score:
+        return replace(profile, order_by=profile.floor_field, quality_floor_percentile=None)
+    return profile
+
+
 def parse_profiles(raw: object) -> dict[str, PartProfile]:
     """Coerce a settings.json ``routing.parts`` value into profiles, dropping junk.
 

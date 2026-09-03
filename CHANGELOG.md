@@ -13,6 +13,33 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.12.1] - 2026-09-03
+### Fixed
+- **A chain can no longer offer a model that does not answer completions** (`inference/facts/`, `inference/routing/chain.py`). Embedding, transcription, image and moderation models sit in the same catalogs and provider registries as chat models and are far cheaper, and nothing in the chain asserted "can produce a completion" - so a part that states no capability requirement ranked them alongside chat models. Ordered cheapest-first they won: on an install with no free chat models, `coder:compact` selected **Whisper**. Model facts now carry `supports_completion`, declared by every source, and it is checked for every chain rather than being a per-part option.
+- **An endpoint on an unconfigured provider no longer disqualifies its model.** It was reported as a model-level failure, which made the walk skip every *other* endpoint that model had - so removing one API key silently demoted every model that provider also served. It is now a skip with its own reason, and the walk moves to the model's next provider.
+- **The `OBSERVED` contradiction path is now actually wired.** `Rank.OBSERVED` was defined and never produced: a capability failure only ever set an in-memory cooldown, so a model that declared tool support and could not do it was re-offered after an hour, for ever. A `MODEL_CAPABILITY` failure now records a witness against the declared fact and, once two *independent* endpoints agree, writes `OBSERVED false` to `models.db` - which survives the next refresh re-declaring the same thing.
+- **Endpoint rows for a provider whose key was removed are now dropped.** Pruning only ever considered providers that answered a refresh, so it could not tell "its fetch failed" from "its key is gone"; the rows persisted for ever. A provider that is merely failing still keeps its rows, which is the point of persisting them.
+- **A payload cap is no longer reported as a context overflow.** Compaction is the fix for one and useless against the other, so the agent layer was shortening its history and retrying into the same wall. Exhaustion now names the requirement nothing met.
+- **The LiteLLM catalog cache survives a restart.** Staleness was measured against in-process state rather than the cache file's age, so every north start re-downloaded ~2MB it already had on disk.
+- **An image sent through the tool-calling loop now requires a vision-capable model.** Agents send screenshots as `image_url` message parts rather than through `CompletionRequest.images`, and only the latter was checked.
+- An agent's configured `model_pool` is honoured again, as an ordering hint rather than a pool: `fast_cheap` / `high_volume` make a quality-ranked part cost-ranked, and `reasoning` does the reverse. It never changes which quality axis a part uses - `reasoning` is the default in every agent config, and reading it as "rank on intelligence" would have taken the coder off its measured coding score on every call.
+- `Endpoint.is_free` no longer disagrees with `Endpoint.price`: an unknown price is not free, and a zero price is not paid.
+- A retry hint no longer has to be parsed back out of a message written for a person; an unparseable skip reason could raise during exhaustion.
+
+### Added
+- **`north routing`** shows why each part ran on the model it ran on - what it needed, how many models were considered, why the ones ahead of the winner were passed over. The decision log had no user-facing surface, so the design's "one query" answer needed raw SQLite. Reads `models.db` directly, so it works with the server offline.
+- OpenRouter's `/models/{id}/endpoints` detail is now actually fetched, for the head of the coder chain, once per model per process. The parser existed and was never called, so per-upstream price, uptime and quantization were never collected.
+- `north inference models` now says when pools are a catalog view rather than what decides anything.
+
+### Changed
+- `models.db` evolves additively: a new fact field is added as a nullable column, so a database written by an older north keeps every row it has.
+
+### Removed
+- Dead code: `DecisionLog.failure_rate()`, `merge.newest()` and the string-parsing retry helper.
+
+
+---
+
 ## [1.12.0] - 2026-09-03
 ### Added
 - **north now picks models from downloaded data instead of guessing from their names** (`inference/facts/`, `inference/routing/`, `inference/failure.py`, `inference/decisions.py`). Three guesses sat in the routing path and all three were wrong in production. What a model *is* was inferred from its id by token matching - `"gpt-5"`, `"gpt-4o"` and `"gpt-4.1"` were matched against tokens split on `-` and `.`, so they could never match, and every `-codex` model was invisible to the coder. How *good* it is came from a ~45-row substring table that ranked `claude-opus-5` (measured coding 78.0) above `claude-fable-5.1` (81.6) and `minimax-m3:free` (58.6) above `glm-5.2:free` (68.8). Those tiers were hand-written two commits earlier, carefully and with current knowledge; measured data contradicted them on both the paid and the free winner.

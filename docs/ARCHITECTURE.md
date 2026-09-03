@@ -911,7 +911,7 @@ Selection is driven by fetched facts, not by model names. `NORTH_ROUTING` picks 
 | Runtime observation | contradictions only - a declared capability that fails twice | observed |
 | `capabilities_from_model_id` | last resort for models no source describes | inferred |
 
-Merge rules: highest rank wins, ties break on recency; a declared value is believed **in both directions**, so a source that lists a model's parameters and omits tools is saying it has no tools; observation can only contradict a declared capability, never assert one, and needs two independent failures; facts cross providers, endpoint terms (price, limits, entitlement) never do. Everything is persisted to `~/.north/models.db` with per-field provenance, so North keeps routing when a refresh fails or the machine is offline, and `updated_at` makes staleness visible.
+Merge rules: highest rank wins, ties break on recency; a declared value is believed **in both directions**, so a source that lists a model's parameters and omits tools is saying it has no tools; observation can only contradict a declared capability, never assert one, and needs two independent failures - a `MODEL_CAPABILITY` failure records a witness against the declared fact and writes `OBSERVED false` once two distinct endpoints agree, which then survives later refreshes re-declaring it; facts cross providers, endpoint terms (price, limits, entitlement) never do. Every model carries `supports_completion`, checked for every chain rather than per part: embedding, transcription and image models share the same catalogs and are far cheaper, so without that floor a cheapest-first part selects them. Everything is persisted to `~/.north/models.db` with per-field provenance, so North keeps routing when a refresh fails or the machine is offline, and `updated_at` makes staleness visible.
 
 **Canonical identity (`inference/facts/identity.py`).** `openai/gpt-5.1-codex`, `gpt-5.1-codex` and `anthropic.claude-opus-5` all reduce to one join key. Only *known variant* suffixes are stripped (`:free`, `:batch`, `-preview`, `-free`) - never version or size tokens, so `gpt-5.1-codex` and `gpt-5.1-codex-max` stay distinct. Over-merging silently routes work to a different model than intended, so the rule is deliberately conservative.
 
@@ -919,7 +919,7 @@ Merge rules: highest rank wins, ties break on recency; a declared value is belie
 
 **Chains (`inference/routing/chain.py`).** A chain is *every* qualifying model for a part, ordered best first, with the free tier as its tail rather than a separate fallback list - two lists is how a reviewer forced off the coder's model silently got it back once the primary ran dry. One ranking axis per part; cost is a filter (`max_price`) and the tie-break, never blended into the score. Ordering is deterministic, so per-task stickiness is redundant. Models with no measured score are ranked by a price-percentile prior derived from the catalog's own score distribution, capped at the measured median so a guess can never lead a chain.
 
-Chains are rebuilt only when the catalog is, so the hot path never touches SQLite; a call only *narrows* its part's cached chain.
+Chains are rebuilt only when the catalog is, so the hot path never touches SQLite; a call only *narrows* its part's cached chain (~0.2 ms). Context and payload limits are kept distinct - compaction fixes one and is useless against the other - so only a genuine context overflow raises `ContextTooLargeError`. An endpoint whose provider is not currently configured is skipped with a reason rather than failing its model, and an agent's `model_pool` survives as an ordering hint (`fast_cheap` makes a quality-ranked part cost-ranked; `reasoning` does the reverse) without ever changing which quality axis a part uses.
 
 **Failure scope (`inference/failure.py`).** Every failure declares what it implicates, decided from the response's own evidence rather than from the exception type, and wider scopes require more evidence:
 
@@ -934,7 +934,7 @@ PROVIDER_DOWN     only by corroboration - N distinct models in a window
 
 A 401 carrying a billing marker is an entitlement fact about the account, not an auth failure: it marks that provider's *paid* endpoints and leaves its free models untouched. `PROVIDER_DOWN` is unreachable from a single call.
 
-**Decision log (`inference/decisions.py`).** One row per selection in `models.db`: the part, the derived requirements, how many models were considered, every skip with its reason, the winner and the outcome. "Why did the coder run on a free model?" is one query. Exhaustion reports itself - *"47 considered: 30 need billing, 12 rate-limited, 5 context too small"* - rather than a bare count. Retention follows the task-cleanup window.
+**Decision log (`inference/decisions.py`).** One row per selection in `models.db`: the part, the derived requirements, how many models were considered, every skip with its reason, the winner and the outcome. `north routing` prints it, reading `models.db` directly so it works with the server offline. Exhaustion reports itself - *"47 considered: 30 need billing, 12 rate-limited, 5 context too small"*, or the requirement nothing met - rather than a bare count. Retention follows the task-cleanup window.
 
 ### 8.2.1 Model Pools (legacy, `NORTH_ROUTING=legacy`)
 

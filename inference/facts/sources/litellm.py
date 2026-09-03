@@ -54,6 +54,9 @@ def facts_from_catalog(raw: dict, when: datetime | None = None) -> list[ModelFac
         out.append(
             ModelFacts(
                 canonical_id=canonical_id,
+                # Only chat/completion modes reach here, so the entry existing is
+                # itself the declaration.
+                supports_completion=fact(True, Rank.DECLARED, SOURCE, fetched_at),
                 context_window=(
                     fact(int(context_window), Rank.DECLARED, SOURCE, fetched_at) if context_window else None
                 ),
@@ -81,10 +84,16 @@ class LiteLLMSource:
         self._client = client
         self._last_fetch: datetime | None = None
 
-    def _is_due(self, now: datetime) -> bool:
-        if self._last_fetch is None:
-            return True
-        return now - self._last_fetch >= REFRESH_INTERVAL
+    @staticmethod
+    def _is_stale(fetched_at: datetime, now: datetime) -> bool:
+        """True when a copy fetched at *fetched_at* is old enough to refetch.
+
+        Asked of the *cache file's* age, not of this object's memory of its own
+        fetches: the cache outlives the process that wrote it, and comparing
+        against in-process state made every restart re-download ~2MB it already
+        had on disk.
+        """
+        return now - fetched_at >= REFRESH_INTERVAL
 
     def _read_cache(self) -> tuple[dict, datetime] | None:
         try:
@@ -114,7 +123,7 @@ class LiteLLMSource:
         """
         now = datetime.now(UTC)
         cached = self._read_cache()
-        if cached is not None and not self._is_due(cached[1]):
+        if cached is not None and not self._is_stale(cached[1], now):
             self._last_fetch = cached[1]
             return facts_from_catalog(cached[0], cached[1])
 

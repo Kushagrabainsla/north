@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
-from inference.facts.models import FACT_FIELDS, Endpoint, Fact, ModelFacts, Rank, fact
+from inference.facts.models import FACT_FIELDS, Endpoint, ModelFacts, Rank, fact
 
 # A declared capability is only demoted after this many independent failures.
 # One failure is a bad gateway, a malformed request, a bad minute - not evidence
@@ -150,9 +150,3 @@ def percentile_floor(facts: Iterable[ModelFacts], score_field: str, percentile: 
     high = min(low + 1, len(scores) - 1)
     weight = position - low
     return scores[low] * (1 - weight) + scores[high] * weight
-
-
-def newest(*facts: Fact | None) -> datetime | None:
-    """The most recent fetch time among *facts*, for staleness reporting."""
-    times = [f.fetched_at for f in facts if f is not None]
-    return max(times) if times else None

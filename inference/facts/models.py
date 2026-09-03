@@ -76,6 +76,7 @@ def fact[T](value: T, rank: Rank, source: str, fetched_at: datetime | None = Non
 # provenance all iterate this rather than each repeating the field list.
 FACT_FIELDS: tuple[str, ...] = (
     "context_window",
+    "supports_completion",
     "max_output_tokens",
     "supports_tools",
     "supports_reasoning",
@@ -101,6 +102,12 @@ class ModelFacts:
 
     canonical_id: str
     context_window: Fact[int] | None = None
+    # Whether this model answers chat/completion requests at all. Embedding,
+    # transcription, image and moderation models are in the same catalogs and the
+    # same provider registries, and a part that states no capability requirement
+    # would otherwise rank them alongside chat models - on a paid-only install
+    # that put Whisper at the head of the compaction chain.
+    supports_completion: Fact[bool] | None = None
     max_output_tokens: Fact[int] | None = None
     supports_tools: Fact[bool] | None = None
     supports_reasoning: Fact[bool] | None = None
@@ -183,4 +190,9 @@ class Endpoint:
 
     @property
     def is_free(self) -> bool:
-        return self.price_out == 0.0 and (self.price_in or 0.0) == 0.0
+        """True only when a price was published and it is zero.
+
+        Read from :attr:`price` so "free" can never disagree with how the endpoint
+        is ordered: an unknown price is not free, and a zero price is not paid.
+        """
+        return self.price == 0.0

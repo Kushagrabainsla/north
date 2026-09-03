@@ -26,7 +26,14 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from inference.capability import ModelInfo
-from inference.facts.merge import ScorePrior, build_prior, merge_all, percentile_floor
+from inference.facts.merge import (
+    CONTRADICTION_THRESHOLD,
+    ScorePrior,
+    build_prior,
+    contradict,
+    merge_all,
+    percentile_floor,
+)
 from inference.facts.models import Endpoint, Entitlement, ModelFacts
 from inference.facts.sources import catalog as provider_catalog
 from inference.facts.sources import openrouter as openrouter_source
@@ -104,6 +111,9 @@ class FactsCatalog:
         self._floors: dict[tuple[str, float, int], float] = {}
         self._generation = 0
         self._endpoint_detail_done: set[str] = set()
+        # (canonical_id, field) -> the endpoints that have contradicted it. A
+        # capability is only demoted once independent endpoints agree.
+        self._contradictions: dict[tuple[str, str], set[str]] = {}
         self.load()
 
     # ---- snapshot ----
@@ -141,19 +151,72 @@ class FactsCatalog:
 
     # ---- refresh ----
 
-    async def refresh(self, providers: Sequence[object], registry_models: dict[str, dict[str, ModelInfo]]) -> None:
+    def contradict(self, canonical_id: str, field: str, source: str) -> bool:
+        """Record that a declared capability failed in practice; demote it at threshold.
+
+        Observation contradicts, never asserts: this can only ever turn a declared
+        ``true`` into an OBSERVED ``false``, and only once
+        :data:`CONTRADICTION_THRESHOLD` *independent* endpoints have failed the
+        same way. One failure is a bad gateway or a bad minute, not evidence about
+        the model.
+
+        Returns True when the fact was demoted.
+        """
+        record = self._snapshot.facts.get(canonical_id)
+        if record is None or not record.declares(field) or not record.value(field):
+            return False  # nothing declared it true, so there is nothing to contradict
+        witnesses = self._contradictions.setdefault((canonical_id, field), set())
+        witnesses.add(source)
+        if len(witnesses) < CONTRADICTION_THRESHOLD:
+            logger.info(
+                "%s failed %s on %s (%d of %d independent failures needed to demote it)",
+                canonical_id,
+                field,
+                source,
+                len(witnesses),
+                CONTRADICTION_THRESHOLD,
+            )
+            return False
+
+        demoted = contradict(record, field, source)
+        facts = dict(self._snapshot.facts)
+        facts[canonical_id] = demoted
+        try:
+            self._store.upsert_facts([demoted])
+        except Exception:
+            logger.warning("Could not persist the contradiction for %s.%s", canonical_id, field, exc_info=True)
+        logger.warning(
+            "%s declared %s but failed it on %d providers - recording OBSERVED false",
+            canonical_id,
+            field,
+            len(witnesses),
+        )
+        self._publish(facts, [e for group in self._snapshot.endpoints_by_model.values() for e in group])
+        return True
+
+    async def refresh(
+        self,
+        providers: Sequence[object],
+        registry_models: dict[str, dict[str, ModelInfo]],
+        configured_providers: Iterable[str] = (),
+    ) -> None:
         """Run the pipeline. Never raises: a failed refresh keeps the last snapshot.
 
         *registry_models* is ``{provider_name: {model_id: ModelInfo}}`` as the
         dispatcher already has it, so no provider is asked for its catalog twice.
+        *configured_providers* is every provider this install has credentials for,
+        which is what distinguishes "its refresh failed" from "its key is gone".
         """
         try:
-            await self._refresh(providers, registry_models)
+            await self._refresh(providers, registry_models, set(configured_providers))
         except Exception:
             logger.warning("Model-facts refresh failed - keeping the previous catalog", exc_info=True)
 
     async def _refresh(
-        self, providers: Sequence[object], registry_models: dict[str, dict[str, ModelInfo]]
+        self,
+        providers: Sequence[object],
+        registry_models: dict[str, dict[str, ModelInfo]],
+        configured_providers: set[str],
     ) -> None:
         fact_records: list[ModelFacts] = []
         endpoints: list[Endpoint] = []
@@ -182,12 +245,15 @@ class FactsCatalog:
         merged = merge_all(fact_records)
         deduped = _dedupe_endpoints(endpoints)
         live_providers = sorted(registry_models.keys())
+        merged = self._reapply_contradictions(merged)
         try:
             self._store.upsert_facts(merged.values())
             self._store.upsert_endpoints(deduped)
             self._store.prune_missing_endpoints(
                 live_providers, {e.key for e in deduped if e.provider in registry_models}
             )
+            if configured_providers:
+                self._store.drop_unconfigured_providers(configured_providers)
         except Exception:
             logger.warning("Could not persist model facts - continuing in memory", exc_info=True)
 
@@ -200,6 +266,37 @@ class FactsCatalog:
             len(stored_endpoints),
             sum(1 for record in merged.values() if record.value("coding_score") is not None),
         )
+        await self._refresh_endpoint_detail(providers)
+
+    async def _refresh_endpoint_detail(self, providers: Sequence[object]) -> None:
+        """Fetch per-upstream detail for the models chains actually reach.
+
+        Only the head of the coder chain is worth a request each: that is the part
+        that reaches the most expensive models, where the cheapest upstream and a
+        quantization disagreement matter most.
+        """
+        from inference.routing.parts import profile_for
+
+        try:
+            head = self.chain_for(profile_for("coder"))
+        except Exception:  # pragma: no cover - detail is an enrichment, never a dependency
+            return
+        for provider in providers:
+            await self.fetch_endpoint_detail(provider, head)
+
+    def _reapply_contradictions(self, merged: dict[str, ModelFacts]) -> dict[str, ModelFacts]:
+        """Re-assert what north has watched fail, over what the sources re-declare.
+
+        A refresh re-reads the same declarations that were already contradicted,
+        and rank alone would let them win back - OBSERVED outranks DECLARED, but
+        only if the observation is still in the record.
+        """
+        for (canonical_id, fact_field), witnesses in self._contradictions.items():
+            record = merged.get(canonical_id)
+            if record is None or len(witnesses) < CONTRADICTION_THRESHOLD:
+                continue
+            merged[canonical_id] = contradict(record, fact_field, ",".join(sorted(witnesses)))
+        return merged
 
     def _safe_load_endpoints(self, fallback: list[Endpoint]) -> list[Endpoint]:
         try:

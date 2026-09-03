@@ -86,6 +86,14 @@ def meets(facts: ModelFacts, endpoints: Sequence[Endpoint], requirements: Requir
     mentioned does not: unknown is not exclusion, or every model the sources
     ignore would be unreachable.
     """
+    # A chain only ever serves completions and tool calls, so this is not a
+    # per-part requirement - it is what a chain *is*. Embedding, transcription,
+    # image and moderation models sit in the same catalogs and registries, and a
+    # part that states no capability requirement would otherwise rank them
+    # alongside chat models; ordered cheapest-first they win, because they are
+    # cheap. Left unguarded this put Whisper at the head of the compaction chain.
+    if facts.get("supports_completion") is not None and not facts.value("supports_completion"):
+        return "not a completion model"
     for requirement in requirements.capabilities:
         if requirement == VISION:
             if facts.get("input_modalities") is not None and not facts.supports_vision():
@@ -161,16 +169,19 @@ def _pin_first(chain: list[Candidate], pinned_model: str | None) -> list[Candida
     """Move a manually pinned model to the head. A deliberate override wins."""
     if not pinned_model:
         return chain
-    pinned = [
-        c
+    matched = {
+        c.canonical_id
         for c in chain
         if any(model_matches(pinned_model, e.provider, e.provider_model_id) for e in c.endpoints)
-    ]
-    if not pinned:
+    }
+    if not matched:
         logger.info("Pinned model %r matches nothing in the current chain - ignoring the pin", pinned_model)
         return chain
-    rest = [c for c in chain if c not in pinned]
-    return pinned + rest
+    # Partitioned by id rather than by candidate equality: comparing whole fact
+    # records for membership is quadratic over a chain of several hundred models.
+    return [c for c in chain if c.canonical_id in matched] + [
+        c for c in chain if c.canonical_id not in matched
+    ]
 
 
 @dataclass(slots=True)
@@ -195,11 +206,17 @@ class Attempt:
 
 @dataclass(slots=True)
 class Skip:
-    """One candidate the walk passed over, and why. Goes straight to the log."""
+    """One candidate the walk passed over, and why. Goes straight to the log.
+
+    ``retry_after`` travels alongside the reason rather than inside it: a caller
+    that needs to know how long to wait must never have to parse it back out of
+    text written for a person to read.
+    """
 
     model: str
     provider: str
     reason: str
+    retry_after: float | None = None
 
     def as_dict(self) -> dict[str, str]:
         return {"model": self.model, "provider": self.provider, "reason": self.reason}
@@ -213,11 +230,17 @@ class ChainWalk:
     *account* or the *provider* moves to the next provider for the same model -
     the model was never the problem. A failure about the *request* is the
     caller's to handle and stops the walk.
+
+    ``is_wired`` reports whether a provider is currently configured. An endpoint
+    on a provider that is not is *skipped*, never *failed*: a model is not at
+    fault for being listed against a key the user removed, and treating that as a
+    model failure skipped every other endpoint it had.
     """
 
     chain: Sequence[Candidate]
     availability: AvailabilityView
     capability: str | None = None
+    is_wired: Callable[[str], bool] | None = None
     considered: int = 0
     skipped: list[Skip] = field(default_factory=list)
 
@@ -229,16 +252,33 @@ class ChainWalk:
         for candidate in self.chain:
             self.considered += 1
             for endpoint in self._endpoints_of(candidate):
+                if self.is_wired is not None and not self.is_wired(endpoint.provider):
+                    self.skipped.append(
+                        Skip(endpoint.provider_model_id, endpoint.provider, "provider not configured")
+                    )
+                    continue
                 reason = self.availability.skip_reason(endpoint, self.capability)
                 if reason is not None:
-                    self.skipped.append(Skip(endpoint.provider_model_id, endpoint.provider, reason))
+                    self.skipped.append(
+                        Skip(
+                            endpoint.provider_model_id,
+                            endpoint.provider,
+                            reason,
+                            self.availability.retry_after(endpoint),
+                        )
+                    )
                     continue
                 attempt = Attempt(candidate, endpoint)
                 yield attempt
                 if attempt.failure is None:
                     return  # the caller kept the result
                 self.skipped.append(
-                    Skip(endpoint.provider_model_id, endpoint.provider, attempt.failure.reason)
+                    Skip(
+                        endpoint.provider_model_id,
+                        endpoint.provider,
+                        attempt.failure.reason,
+                        attempt.failure.retry_after,
+                    )
                 )
                 if attempt.failure.scope is Scope.REQUEST:
                     return
@@ -246,12 +286,21 @@ class ChainWalk:
                     break  # this model is the problem; try the next model
                 # ACCOUNT_PAID / PROVIDER_*: the model is fine, this provider is not.
 
-    def exhaustion_summary(self) -> str:
+    def soonest_retry(self) -> float | None:
+        """The shortest wait any skipped candidate named, so callers back off usefully."""
+        waits = [skip.retry_after for skip in self.skipped if skip.retry_after]
+        return min(waits) if waits else None
+
+    def exhaustion_summary(self, requirements: Requirements | None = None) -> str:
         """Why the whole chain came to nothing, in the words of the skips themselves.
 
         "47 considered: 30 need billing, 12 rate-limited, 5 context too small" is
-        actionable. "All 47 candidates exhausted" is not.
+        actionable. "All 47 candidates exhausted" is not. An empty chain is a
+        different answer again - nothing *qualified* - so it names the requirement
+        that emptied it rather than reporting zero of something.
         """
+        if not self.chain:
+            return f"no model meets this part's requirements ({_describe_requirements(requirements)})"
         if not self.skipped:
             return f"{self.considered} considered, none reachable"
         tally: dict[str, int] = {}
@@ -260,6 +309,20 @@ class ChainWalk:
         ranked = sorted(tally.items(), key=lambda item: (-item[1], item[0]))
         detail = ", ".join(f"{count} {reason}" for reason, count in ranked[:5])
         return f"{self.considered} considered: {detail}"
+
+
+def _describe_requirements(requirements: Requirements | None) -> str:
+    """The requirements in the words a person would use to check them."""
+    if requirements is None:
+        return "none stated"
+    parts = sorted(requirements.capabilities)
+    if requirements.min_context:
+        parts.append(f"context >= {requirements.min_context:,}")
+    if requirements.max_payload_chars:
+        parts.append(f"payload <= {requirements.max_payload_chars:,} chars")
+    if requirements.exclude:
+        parts.append(f"excluding {', '.join(sorted(requirements.exclude))}")
+    return ", ".join(parts) or "none stated"
 
 
 def narrow(chain: Sequence[Candidate], requirements: Requirements) -> list[Candidate]:

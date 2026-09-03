@@ -1380,14 +1380,79 @@ def inference_costs(
 @inference_app.command("models")
 def inference_models() -> None:
     """Show current model pool state and discovered models."""
+    from config.settings import settings
+
     response = _api("GET", "/orchestrator/inference/models")
     pools = response.json()
     _console.print()
+    if settings.routing.strip().lower() != "legacy":
+        # Pools are price-derived bins. Under chain routing they no longer decide
+        # anything, and showing them as if they did is how a user ends up tuning
+        # the wrong thing.
+        _console.print(
+            "  [yellow]Pools below are a catalog view only.[/yellow] "
+            f"[bright_black]NORTH_ROUTING={settings.routing} selects per part from fetched "
+            "facts - run `north routing` to see the actual decisions.[/bright_black]"
+        )
+        _console.print()
     for pool_name, pool_data in pools.items():
         models = pool_data.get("models", [])
         _console.print(f"  [bold white]{pool_name}[/bold white]  [bright_black]{len(models)} models[/bright_black]")
         for entry in models:
             _console.print(f"    [dim]{entry['id']}[/dim]  [bright_black]({entry['provider']})[/bright_black]")
+        _console.print()
+
+
+@app.command("routing")
+@inference_app.command("routing")
+def inference_routing(
+    task: str = typer.Option("", "--task", help="Only decisions for this task id."),
+    part: str = typer.Option("", "--part", help="Only decisions for this part, e.g. coder."),
+    limit: int = typer.Option(20, "--limit", help="How many decisions to show."),
+) -> None:
+    """Show why each part of a task ran on the model it ran on.
+
+    Reads ~/.north/models.db directly, so it works with the server offline. Each
+    row is one model selection: what the part needed, how many models were
+    considered, why the ones ahead of the winner were passed over, and what
+    happened. This is the answer to "why did the coder run on a free model?".
+    """
+    from config.settings import settings
+    from inference.decisions import DecisionLog
+
+    log = DecisionLog(settings.north_home / "models.db")
+    rows = log.recent(task_id=task or None, part=part or None, limit=limit)
+    _console.print()
+    if not rows:
+        _console.print("  [bright_black]No routing decisions recorded yet.[/bright_black]")
+        _console.print("  [bright_black]They are written as calls are made, under NORTH_ROUTING=chain.[/bright_black]")
+        _console.print()
+        return
+    for row in rows:
+        outcome = row.get("outcome") or "?"
+        colour = {"success": "green", "exhausted": "red", "diverged": "yellow"}.get(outcome, "white")
+        chosen = row.get("chosen_model") or "-"
+        _console.print(
+            f"  [bold white]{row['part']}[/bold white] "
+            f"[{colour}]{outcome}[/{colour}]  [dim]{chosen}[/dim] "
+            f"[bright_black]({row.get('chosen_provider') or '-'})[/bright_black]"
+        )
+        needs = row.get("requirements") or {}
+        if needs:
+            rendered = ", ".join(f"{k}={v}" for k, v in needs.items())
+            _console.print(f"    [bright_black]needs {rendered}[/bright_black]")
+        skipped = row.get("skipped") or []
+        _console.print(
+            f"    [bright_black]considered {row.get('considered', 0)}, "
+            f"passed over {len(skipped)}[/bright_black]"
+        )
+        for skip in skipped[:5]:
+            _console.print(
+                f"      [dim]{skip.get('model', '?')}[/dim] "
+                f"[bright_black]{skip.get('provider', '?')} - {skip.get('reason', '?')}[/bright_black]"
+            )
+        if len(skipped) > 5:
+            _console.print(f"      [bright_black]... {len(skipped) - 5} more[/bright_black]")
         _console.print()
 
 

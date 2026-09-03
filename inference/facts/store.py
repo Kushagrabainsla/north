@@ -25,7 +25,17 @@ logger = logging.getLogger(__name__)
 
 # Fields stored as JSON because their value is a set, not a scalar.
 _JSON_FIELDS = frozenset({"input_modalities"})
-_BOOL_FIELDS = frozenset({"supports_tools", "supports_reasoning", "supports_structured"})
+_BOOL_FIELDS = frozenset(
+    {"supports_completion", "supports_tools", "supports_reasoning", "supports_structured"}
+)
+_REAL_FIELDS = frozenset({"coding_score", "agentic_score", "intelligence_score"})
+
+# SQLite type per fact field, used both by CREATE TABLE above and by the additive
+# migration, so the two can never disagree about a column.
+_COLUMN_TYPES: dict[str, str] = {
+    field: ("TEXT" if field in _JSON_FIELDS else "REAL" if field in _REAL_FIELDS else "INTEGER")
+    for field in FACT_FIELDS
+}
 
 
 def _now() -> str:
@@ -50,6 +60,7 @@ class ModelFactsStore:
                 "CREATE TABLE IF NOT EXISTS model_facts ("
                 "  canonical_id        TEXT PRIMARY KEY,"
                 "  context_window      INTEGER,"
+                "  supports_completion INTEGER,"
                 "  max_output_tokens   INTEGER,"
                 "  supports_tools      INTEGER,"
                 "  supports_reasoning  INTEGER,"
@@ -77,6 +88,21 @@ class ModelFactsStore:
                 "  PRIMARY KEY (canonical_id, provider, provider_model_id))"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_endpoints_model ON endpoints (canonical_id)")
+            self._add_missing_columns(conn)
+
+    @staticmethod
+    def _add_missing_columns(conn) -> None:
+        """Additively evolve an existing models.db to the current fact fields.
+
+        A store owns its own schema (docs/CODING_STYLE.md 11.4). New fact fields
+        are added as nullable columns, so a database written by an older north
+        keeps every row it has and simply reports the new field as unknown until
+        the next refresh fills it in.
+        """
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(model_facts)")}
+        for field in FACT_FIELDS:
+            if field not in existing:
+                conn.execute(f"ALTER TABLE model_facts ADD COLUMN {field} {_COLUMN_TYPES[field]}")
 
     # ---- model_facts ----
 
@@ -228,7 +254,6 @@ class ModelFactsStore:
         Only for providers that actually answered this refresh - a provider whose
         fetch failed keeps its rows, which is the whole point of persisting them.
         """
-        removed = 0
         provider_names = list(providers)
         if not provider_names:
             return 0
@@ -239,13 +264,33 @@ class ModelFactsStore:
                 provider_names,
             ).fetchall()
             stale = [tuple(row) for row in stored if tuple(row) not in live_keys]
-            if stale:
-                conn.executemany(
-                    "DELETE FROM endpoints WHERE canonical_id = ? AND provider = ? AND provider_model_id = ?",
-                    stale,
+            if not stale:
+                return 0
+            conn.executemany(
+                "DELETE FROM endpoints WHERE canonical_id = ? AND provider = ? AND provider_model_id = ?",
+                stale,
+            )
+        return len(stale)
+
+    def drop_unconfigured_providers(self, configured: Iterable[str]) -> int:
+        """Delete endpoint rows for providers this install no longer has a key for.
+
+        Distinct from :meth:`prune_missing_endpoints`, which only ever touches
+        providers that answered a refresh. A provider whose key was *removed*
+        never answers again, so its rows would otherwise persist forever and every
+        model they serve would be skipped for a provider that no longer exists.
+        """
+        names = sorted(set(configured))
+        with open_db_connection(self._db_path) as conn:
+            if names:
+                cursor = conn.execute(
+                    f"DELETE FROM endpoints WHERE provider NOT IN ({', '.join('?' for _ in names)})", names
                 )
-                removed = len(stale)
-        return removed
+            else:
+                # No providers configured at all: keep the rows. This is startup
+                # before any provider is wired, not a deliberate removal.
+                return 0
+            return cursor.rowcount or 0
 
 
 def _parse_time(raw: object) -> datetime | None:
