@@ -88,8 +88,16 @@ class Settings(BaseSettings):
     confidence_auto_approve_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
     inference_pool_refresh_interval_hours: int = Field(default=6, ge=1)
     inference_pool_refresh_interval_seconds: int = Field(default=180, ge=10)
-    agent_max_iterations: int = Field(default=40, ge=1)
+    # Tool-call rounds one agent may take before it is cut off. This is a runaway
+    # guard, not a budget (compaction and the cost ledger are the budget), so it is
+    # set well above what a real coding task needs - at 40 the coder was hitting it
+    # on an ordinary multi-file feature and returning without a final answer.
+    agent_max_iterations: int = Field(default=120, ge=1)
     agent_history_keep_recent: int = Field(default=10, ge=1)
+
+    # Port for the local approval-callback server. Separate from the API port so a
+    # second instance (or an unrelated process on the default) can be moved aside.
+    callback_port: int = Field(default=8001, ge=1, le=65535)
     planner_max_attempts: int = Field(default=3, ge=1)
     planner_retry_delay_seconds: float = Field(default=6.0, ge=0.5)
     planner_retry_backoff_factor: float = Field(default=1.5, ge=1.0)

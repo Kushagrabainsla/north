@@ -12,6 +12,7 @@ from utils.time import format_local, from_epoch, parse_local
 
 class ScheduleTaskTool(Tool):
     name = "schedule_task"
+    excluded_domains = frozenset({"engineering"})
     description = (
         "Schedule a task for north to run later in the background, even when the user is "
         "not chatting. Give the work as a natural-language prompt in 'task'; it runs at the "

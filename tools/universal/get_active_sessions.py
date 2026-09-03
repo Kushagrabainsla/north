@@ -22,6 +22,7 @@ class GetActiveSessionsTool(Tool):
     """Discover other running sessions/tasks and their current status."""
 
     name = "get_active_sessions"
+    excluded_domains = frozenset({"engineering"})
     description = (
         "List every other task (session) that is currently running right now, "
         "including their domain, description, and how long they've been active. "

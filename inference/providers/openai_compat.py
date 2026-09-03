@@ -336,13 +336,13 @@ class OpenAICompatibleProvider:
 
     async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
         if request.images:
-            content: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
+            message_parts: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
             for b64, mime in request.images:
-                content.append({
+                message_parts.append({
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime};base64,{b64}"},
                 })
-            messages = [{"role": "user", "content": content}]
+            messages = [{"role": "user", "content": message_parts}]
         else:
             messages = [{"role": "user", "content": request.prompt}]
 

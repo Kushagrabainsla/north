@@ -597,6 +597,8 @@ async def classify_intent(prompt): ...
 def get_agent(name): ...
 ```
 
+Hints are load-bearing, not decoration: CI type-checks `inference/` with mypy, and that list grows as each package is cleared. An annotation you contradict at the call site is a crash waiting to happen — a `str` passed where a `ModelCapability` was declared once broke every task at the planner while ruff and the full test suite stayed green.
+
 ### 9.3 Naming Conventions
 
 | Kind | Convention | Example |

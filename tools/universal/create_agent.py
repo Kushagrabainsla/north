@@ -64,6 +64,7 @@ class CreateAgentTool(Tool):
     """
 
     name = "create_agent"
+    excluded_domains = frozenset({"engineering"})
     is_mutating = True
     description = (
         "Creates a new north agent from a natural-language description. "

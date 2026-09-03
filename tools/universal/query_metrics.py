@@ -14,6 +14,7 @@ class QueryMetricsTool(Tool):
     """Query system performance metrics from the ledger."""
 
     name = "query_metrics"
+    excluded_domains = frozenset({"engineering"})
     description = (
         "Query aggregated system performance metrics from the ledger. "
         "Returns task counts, cost breakdown by agent and model, latency percentiles "

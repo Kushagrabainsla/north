@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
 from inference.constants import _FREE_MODEL_QUALITY, _QUALITY_LOG_MAX, _QUALITY_LOG_MIN
+
+# Model ids are split on these characters to get comparable name tokens.
+_ID_SEPARATORS = re.compile(r"[-_./: ]+")
+
+
+def _family_matches(lower: str, tokens: set[str], families: tuple[str, ...]) -> bool:
+    """True when any name in *families* identifies this model.
+
+    A single-word family ("opus", "pro") must match a whole id token, so "pro"
+    never fires on "prometheus". A family that contains a separator ("gpt-5",
+    "claude-3") can never *be* a token - the id is split on those very
+    characters - so it is matched as a substring of the id instead. Matching
+    those by token silently made every such entry dead, which hid the whole
+    gpt-5 family from the reasoning pool.
+    """
+    return any(family in lower if _ID_SEPARATORS.search(family) else family in tokens for family in families)
 
 
 def quality_from_cost(cost_per_token: float) -> float:
@@ -82,9 +99,7 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
     if any(kw in lower for kw in _NON_CHAT_PATTERNS):
         return frozenset()
 
-    import re
-
-    tokens = set(re.split(r"[-_./: ]+", lower))
+    tokens = set(_ID_SEPARATORS.split(lower))
 
     # Core completion and tool calling
     caps.add(ModelCapability.COMPLETION)
@@ -92,20 +107,22 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
 
     # Multimodal / Vision
     alpha_variants = ["ox-alpha", "oxalpha", "0x-alpha", "0xalpha", "0x_alpha", "ox_alpha", "stealth"]
-    vision_models = ["gemini", "gpt-4o", "gpt-4.1", "gpt-5", "claude-3", "sonnet", "opus", "haiku"]
-    if (
-        any(k in lower for k in ["vision", "-vl", "image", *alpha_variants])
-        or any(t in tokens for t in vision_models)
+    vision_models = ("gemini", "gpt-4o", "gpt-4.1", "gpt-5", "claude-3", "sonnet", "opus", "haiku")
+    if any(k in lower for k in ["vision", "-vl", "image", *alpha_variants]) or _family_matches(
+        lower, tokens, vision_models
     ):
         caps.add(ModelCapability.VISION)
 
-    # Deep Reasoning / Complex Coding
-    reasoning_tokens = ["sonnet", "opus", "gpt-5", "gpt-4o", "gpt-4.1", "pro", "r1", "coder", "70b", "405b", "120b"]
+    # Deep Reasoning / Complex Coding. "codex" sits alongside "coder": the
+    # gpt-*-codex models are OpenAI's coding line and belong in this pool.
+    reasoning_tokens = (
+        "sonnet", "opus", "gpt-5", "gpt-4o", "gpt-4.1", "pro", "r1", "coder", "codex", "70b", "405b", "120b",
+    )
     reasoning_keywords = [
         "deepseek-r1", "deepseek-chat", "deepseek-v3", "qwen3-coder", "qwen-2.5-coder",
         "qwen3.6-27b", *alpha_variants,
     ]
-    is_reasoning = any(t in tokens for t in reasoning_tokens) or any(k in lower for k in reasoning_keywords)
+    is_reasoning = _family_matches(lower, tokens, reasoning_tokens) or any(k in lower for k in reasoning_keywords)
     is_mini_nano = (
         ("mini" in tokens and "gemini" not in tokens)
         or "nano" in tokens

@@ -31,6 +31,13 @@ class Tool(ABC):
     # so two edits to the same file can't race (lost update). Default False;
     # mutating tools opt in (OCP - no central switch-on-name).
     is_mutating: bool = False
+    # Domains this universal tool is NOT offered to. Empty (the default) means
+    # every agent gets it, so registration stays universal by default. Set it to
+    # keep a tool out of a domain where it is pure noise - a coder carrying a
+    # camera and four scheduling verbs pays for them in schema tokens and in
+    # tool-selection mistakes on every turn. A tool a agent asks for explicitly
+    # in its tools.yaml is always honoured, whatever this says.
+    excluded_domains: frozenset[str] = frozenset()
     # Override in subclasses with an OpenAI-compatible JSON Schema for the
     # function parameters.  The default accepts any key/value object.
     parameters_schema: dict = {

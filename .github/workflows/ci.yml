@@ -39,6 +39,34 @@ jobs:
       - name: Lint
         run: ruff check .
 
+  types:
+    # Ruff and pytest both passed on a tree where a `str` was passed where a
+    # ModelCapability was annotated, which crashed every task at the planner.
+    # mypy catches that class of bug. Scoped to the packages that are already
+    # clean; widen the list as each remaining package is cleared.
+    name: Types (mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv pip install --system -e . mypy
+
+      - name: Type check
+        run: mypy --ignore-missing-imports --follow-imports=silent inference/
+
   test:
     name: Test (pytest)
     runs-on: ubuntu-latest

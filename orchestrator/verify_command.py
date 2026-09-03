@@ -19,6 +19,9 @@ _AUTO_VERIFY_RULES: tuple[tuple[str, str | None, str], ...] = (
     ("setup.cfg", "[tool:pytest]", "pytest -q"),
     ("go.mod", None, "go test ./..."),
     ("Cargo.toml", None, "cargo test"),
+    # Only when the manifest actually declares a test script - `npm test` on a
+    # project without one exits 1 and would read as a failing suite.
+    ("package.json", '"test"', "npm test --silent"),
 )
 
 

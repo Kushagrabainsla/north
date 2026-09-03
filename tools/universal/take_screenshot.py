@@ -25,6 +25,7 @@ class TakeScreenshotTool(Tool):
     """Takes a screenshot of the user's screens in pure Python."""
 
     name = "take_screenshot"
+    excluded_domains = frozenset({"engineering"})
     # Screen inspection is read-only from the user's perspective. The capture is
     # also persisted for the model's visual context, but it is an ephemeral,
     # workspace-scoped diagnostic artifact and should not block simple questions

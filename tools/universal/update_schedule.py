@@ -9,6 +9,7 @@ from tools.universal._schedules import BUILTIN_NAMES, entry_view, resolve_zone_n
 
 class UpdateScheduleTool(Tool):
     name = "update_schedule"
+    excluded_domains = frozenset({"engineering"})
     description = (
         "Change an existing recurring schedule: its time, its day, the task it runs, or "
         "the agent that runs it. Address it by the 'name' shown by list_schedules, and "

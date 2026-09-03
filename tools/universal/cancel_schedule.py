@@ -9,6 +9,7 @@ from tools.universal._schedules import BUILTIN_NAMES
 
 class CancelScheduleTool(Tool):
     name = "cancel_schedule"
+    excluded_domains = frozenset({"engineering"})
     description = (
         "Stop a scheduled task permanently: pass the 'name' of a recurring schedule, or "
         "the 'job_id' of a one-shot task, as shown by list_schedules. A recurring schedule "

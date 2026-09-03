@@ -236,13 +236,18 @@ class ToolRegistry:
         """Return every registered tool (universal + specialized)."""
         return list(self._tools.values())
 
-    def tools_for_agent(self, agent: str, *, auto_reload: bool = True) -> list[Tool]:
+    def tools_for_agent(self, agent: str, *, domain: str = "", auto_reload: bool = True) -> list[Tool]:
         """Return universal tools + any specialized tools the agent declared.
 
         Rescans the filesystem at most once per _RELOAD_TTL_SECONDS so new tool
         files written by create_tool mid-task appear within the TTL window without
         scanning on every ReAct iteration.
         Pass auto_reload=False to skip the filesystem scan (useful in tests).
+
+        ``domain`` filters out universal tools that declared themselves irrelevant
+        to it (``Tool.excluded_domains``). Omitting it keeps every universal tool,
+        so callers that do not know the agent's domain are unaffected. Tools the
+        agent named in its tools.yaml are never filtered - an explicit request wins.
         """
         if auto_reload and (time.monotonic() - self._last_reload) > _RELOAD_TTL_SECONDS:
             self.reload()
@@ -251,8 +256,9 @@ class ToolRegistry:
         seen: set[str] = set()
 
         for name in self._universal:
-            if name in self._tools:
-                result.append(self._tools[name])
+            tool = self._tools.get(name)
+            if tool is not None and (not domain or domain not in tool.excluded_domains):
+                result.append(tool)
                 seen.add(name)
 
         for name in self._graph.get(agent, []):

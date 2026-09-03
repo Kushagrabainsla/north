@@ -410,7 +410,7 @@ def _configure_routers(app, orchestrator, deps, agent_registry, context_injector
 
 
 def _build_callback_server() -> uvicorn.Server:
-    config = uvicorn.Config(callback_app, host="127.0.0.1", port=8001, log_level="warning")
+    config = uvicorn.Config(callback_app, host="127.0.0.1", port=settings.callback_port, log_level="warning")
     server = uvicorn.Server(config)
     # Prevents the nested uvicorn from overriding the outer server's SIGTERM/SIGINT handlers on macOS.
     server.install_signal_handlers = lambda: None
@@ -423,11 +423,19 @@ def _build_callback_server() -> uvicorn.Server:
 
 
 async def _guarded(coro, name: str) -> None:
+    """Run a background task so its failure degrades that feature, not the server.
+
+    ``SystemExit`` is caught alongside ``Exception`` because a nested uvicorn
+    (the approval callback server) raises it via ``sys.exit(1)`` when it cannot
+    bind its port. As a BaseException that escaped this guard and killed the
+    whole process, so any unrelated process holding the callback port took north
+    down at startup instead of costing it one optional feature.
+    """
     try:
         await coro
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except (Exception, SystemExit):
         logger.exception("background task %r failed", name)
 
 

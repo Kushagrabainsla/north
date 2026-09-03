@@ -256,11 +256,20 @@ class ModelDispatcher(InferenceRouter):
         candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated, pool=request.pool)
         # Deferred: building the free-tier list is a full registry scan, score, sort
         # and shuffle, and it is only consulted when the primary chain is exhausted.
-        fallback = _Deferred(lambda: self._free_fallback_candidates(ModelCapability.COMPLETION, estimated))
+        # Exclusions are applied *inside* the thunk so the fallback honours them too -
+        # otherwise a reviewer forced off the coder's model silently gets it back the
+        # moment the primary pool runs dry.
+        free_tier = _Deferred(
+            lambda: self._apply_exclusions(
+                self._free_fallback_candidates(ModelCapability.COMPLETION, estimated),
+                request.exclude_models,
+            )
+        )
+        fallback: _Deferred | None = free_tier
         if not candidates:
             # Primary pool exhausted (out of credits / all rate-limited / down) -
             # fall back to the free tier so the request still completes.
-            candidates = fallback.get()
+            candidates = free_tier.get()
             fallback = None
         candidates = self._apply_exclusions(candidates, request.exclude_models)
 
@@ -322,9 +331,15 @@ class ModelDispatcher(InferenceRouter):
             estimated += tools_chars // 4
         priority = self._effective_priority(request.priority)
         candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated, pool=request.pool)
-        fallback = _Deferred(lambda: self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated))
+        free_tier = _Deferred(
+            lambda: self._apply_exclusions(
+                self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated),
+                request.exclude_models,
+            )
+        )
+        fallback: _Deferred | None = free_tier
         if not candidates:
-            candidates = fallback.get()
+            candidates = free_tier.get()
             fallback = None
         candidates = self._apply_exclusions(candidates, request.exclude_models)
 
@@ -954,14 +969,21 @@ class ModelDispatcher(InferenceRouter):
 
     @staticmethod
     def _sticky_key(
-        request: CompletionRequest | ToolCallRequest, capability: ModelCapability, priority: PoolPriority
+        request: CompletionRequest | ToolCallRequest,
+        capability: ModelCapability | str,
+        priority: PoolPriority,
     ) -> tuple[str, str, str, str] | None:
-        """Stickiness key for a request, or None when there is no task to scope to."""
+        """Stickiness key for a request, or None when there is no task to scope to.
+
+        ``capability`` may be a plain string (``_STRUCTURED_OUTPUT``), which is
+        deliberately not a ModelCapability member, so it is stringified rather
+        than read through ``.value``.
+        """
         task_id = getattr(request, "task_id", None)
         if not task_id:
             return None
         component = getattr(request, "component", "") or ""
-        return (task_id, component, capability.value, priority.value)
+        return (task_id, component, str(capability), priority.value)
 
     def _apply_stickiness(
         self, sticky_key: tuple[str, str, str, str], candidates: list[_Candidate]

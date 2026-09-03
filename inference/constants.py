@@ -45,6 +45,8 @@ MODEL_FAMILY_TIERS: dict[str, float] = {
     "claude-opus-4": 0.96,
     "claude-opus": 0.95,
     "gpt-5": 0.95,
+    "codex": 0.95,         # OpenAI's dedicated coding line
+    "claude-fable": 0.94,
     "gemini-3.1-pro": 0.94,
     "gemini-3-pro": 0.93,
     "gemini-2.5-pro": 0.92,
@@ -62,6 +64,7 @@ MODEL_FAMILY_TIERS: dict[str, float] = {
     "llama-3.3-70b": 0.62,
     "gemini-3.1-flash": 0.72,
     "gemini-3-flash": 0.72,
+    "gemini-3": 0.72,      # any other gemini-3.x (3.6/3.7/3.8 flash) - not the 0.50 floor
     "gemini-2.5-flash": 0.70,
     "gemini-flash": 0.65,  # generic flash catch-all
     "qwen3.6-27b": 0.60,

@@ -10,6 +10,7 @@ from utils.time import local_timezone_name
 
 class ListSchedulesTool(Tool):
     name = "list_schedules"
+    excluded_domains = frozenset({"engineering"})
     description = (
         "List everything north is scheduled to run: recurring schedules, and one-shot "
         "tasks still waiting to run. Each result carries the name to address it by (or "

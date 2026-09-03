@@ -35,7 +35,18 @@ import re
 # is intentionally absent: the cheapest-first pool (and the ECO strategy that
 # maps onto it) must never be overridden by a preference for a pricier model.
 DEFAULT_PREFERRED_MODELS: dict[str, list[str]] = {
-    "reasoning": [],
+    # Best-first. The reasoning pool is what the engineering conductor runs the
+    # coder and reviewer on, so an empty list here meant "whichever near-equal
+    # model the shuffle happened to draw" - in practice a free model, while the
+    # frontier coding models sat unused. Dedicated coding lines lead; a stale or
+    # unavailable entry costs nothing because the ranked catalog stays behind it.
+    "reasoning": [
+        "claude-opus",
+        "gpt-5.1-codex",
+        "gpt-5-codex",
+        "claude-sonnet",
+        "gemini-3.1-pro",
+    ],
     "speed": [],
     "fast_cheap": [],
 }

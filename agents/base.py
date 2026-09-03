@@ -301,7 +301,7 @@ class Agent(ABC):
         artificial capping or accidental filter dropouts. Tools named by the skills already
         selected for this task (passed in by `run()`) are boosted in the ranking.
         """
-        registry_tools = self._deps.tool_registry.tools_for_agent(self.name)
+        registry_tools = self._deps.tool_registry.tools_for_agent(self.name, domain=self.domain)
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
 
         # Word-boundary match: a bare substring test let a skill that merely

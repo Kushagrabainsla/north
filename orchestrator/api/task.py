@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
+from pydantic import ValidationError
 
 from jobs.models import JobStatus
 from orchestrator.api.deps import _get_job_processor, _get_orchestrator, router
@@ -11,14 +12,26 @@ from orchestrator.models import TaskRequest, TaskResponse
 
 @router.post("/task", response_model=TaskResponse, status_code=202)
 async def submit_task(request: Request) -> TaskResponse:
-    """Submit a new task for processing. Accepts JSON or form-encoded bodies."""
+    """Submit a new task for processing. Accepts JSON or form-encoded bodies.
+
+    The body is parsed by hand (to accept both shapes), which bypasses FastAPI's
+    automatic validation - so a bad request must be turned into a 422 here, or a
+    pydantic error escapes the handler as a 500 with a stack trace.
+    """
     content_type = request.headers.get("content-type", "")
-    if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
-        form = await request.form()
-        task_req = TaskRequest(prompt=str(form.get("prompt", "")))
-    else:
-        body = await request.json()
-        task_req = TaskRequest(**body)
+    try:
+        if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            form = await request.form()
+            task_req = TaskRequest(prompt=str(form.get("prompt", "")))
+        else:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=422, detail="Request body must be a JSON object.")
+            task_req = TaskRequest(**body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    except (ValueError, TypeError) as exc:  # malformed JSON / undecodable form
+        raise HTTPException(status_code=422, detail=f"Malformed request body: {exc}") from exc
     return await _get_orchestrator().submit_task(task_req)
 
 

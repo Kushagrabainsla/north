@@ -786,7 +786,7 @@ async def _extract_unified(
         raw_profile = parsed
 
     if isinstance(raw_profile, dict):
-        profile = UserProfile(**{k: raw_profile.get(k, []) for k in UserProfile.model_fields})
+        profile = UserProfile(**{k: _profile_strings(raw_profile.get(k)) for k in UserProfile.model_fields})
         sections: list[str] = []
         for section, items in profile.model_dump().items():
             if not items:
@@ -856,6 +856,31 @@ def _fingerprint(path: Path) -> tuple[str, float]:
         return _file_hash(path), path.stat().st_mtime
     except OSError:
         return "", 0.0
+
+
+def _profile_strings(raw: object) -> list[str]:
+    """Coerce one raw profile section into the list[str] UserProfile requires.
+
+    Models routinely return richer entries than the schema asks for - e.g.
+    ``{"name": "...", "status": "active"}`` or ``{"content": "...",
+    "confidence": 0.9}``. Passing those straight to ``UserProfile`` raised a
+    ValidationError that discarded the whole document, so each entry is reduced
+    to its text field here and anything unusable is dropped individually.
+    """
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    values: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            item = item.get("content") or item.get("name") or item.get("fact") or item.get("text")
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text:
+            values.append(text)
+    return values
 
 
 def _clean_fact(fact: object) -> str | None:
