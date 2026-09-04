@@ -41,7 +41,14 @@ def _normalize(text: str) -> str:
 _ENGINEERING_ORDER: tuple[str, ...] = ("researcher", "architect", "coder", "reviewer")
 _ENGINEERING_STAGES: dict[str, tuple[str, ...]] = {
     "question": ("researcher",),
-    "research": ("researcher", "architect"),
+    # Investigation returns findings, so it ends with the agent that found them.
+    # Pairing it with the architect meant every "investigate X and summarise it"
+    # ran a design stage with nothing to design: measured on one such task the
+    # architect took 21s, wrote no spec, and - by making the run multi-agent -
+    # pulled in a synthesis pass on top. A task that genuinely wants a design
+    # says so, and gets `design`.
+    "research": ("researcher",),
+    "design": ("researcher", "architect"),
     "bugfix": ("coder", "reviewer"),
     "debug": ("coder", "reviewer"),
     "test": ("coder", "reviewer"),
@@ -53,7 +60,7 @@ _ENGINEERING_FULL_CHAIN_BELOW_CONFIDENCE: float = 0.6
 # Read-only engineering kinds. These must NEVER be escalated into a code-writing
 # task, even at low confidence: a vague "how does X work?" stays an investigation
 # and must not silently add the coder (which would turn it into a write task).
-_NO_CODE_KINDS: frozenset[str] = frozenset({"question", "research"})
+_NO_CODE_KINDS: frozenset[str] = frozenset({"question", "research", "design"})
 # Shipping kinds: take already-completed work and ship it (branch/commit/push/PR/CI).
 # Handled by the orchestrator's single-agent, human-gated deploy flow - not the
 # researcher→architect→coder→reviewer pipeline - so they map to a coder-only plan.

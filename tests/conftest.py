@@ -34,6 +34,30 @@ from ledger import SQLiteLedgerWriter
 from memory import FileContextStore
 
 
+@pytest.fixture(autouse=True)
+def _isolated_north_home(tmp_path_factory, monkeypatch):
+    """Point NORTH_HOME at a throwaway directory for every test.
+
+    ``tools._path._handoff_root`` reads NORTH_HOME from the environment, so any
+    test that did not set it wrote into the developer's real ``~/.north/tasks``.
+    Fixture directories (``t1``, ``resumed-task-1``, ``t_pause_race``) were found
+    sitting among genuine task artifacts on a live install.
+
+    The lru_caches over the resolved roots are cleared on the way in and out, so
+    no test inherits a path that was resolved under a different home.
+    """
+    from tools import _path
+
+    home = tmp_path_factory.mktemp("north_home")
+    monkeypatch.setenv("NORTH_HOME", str(home))
+    _path._handoff_root.cache_clear()
+    _path._resolved_blocked_prefixes.cache_clear()
+    yield home
+    _path._handoff_root.cache_clear()
+    _path._resolved_blocked_prefixes.cache_clear()
+
+
+
 class MockInferenceRouter(InferenceRouter):
     """Deterministic stand-in for InferenceRouter in tests.
 

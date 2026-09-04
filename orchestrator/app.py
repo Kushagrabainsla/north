@@ -617,7 +617,7 @@ def _warn_unknown_cron_agents(agent_registry: AgentRegistry) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    configure_structured_logging()
+    configure_structured_logging(logging.getLevelNamesMapping().get(settings.log_level.upper(), logging.INFO))
 
     _step("loading secret")
     load_secret()

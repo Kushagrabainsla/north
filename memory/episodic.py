@@ -33,7 +33,11 @@ logger = logging.getLogger(__name__)
 # task history is retained and searched. The cosine scan is over all kept rows.
 _RETENTION_DAYS = 365  # episodes older than this (1-year window) are pruned on write
 
-_VALID_OUTCOMES = frozenset({"success", "failed", "cancelled"})
+# "partial" is a task that finished but did not fully do what was asked. It is
+# kept for recall - knowing an approach half-worked is useful - but it is not a
+# success, so `list_successful` will not offer it to the skill distiller as an
+# exemplar to learn a procedure from.
+_VALID_OUTCOMES = frozenset({"success", "partial", "failed", "cancelled"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -70,6 +74,8 @@ def _label(summary: str, outcome: str) -> str:
         return f"[FAILED] {summary}"
     if outcome == "cancelled":
         return f"[CANCELLED] {summary}"
+    if outcome == "partial":
+        return f"[PARTIAL] {summary}"
     return summary
 
 

@@ -44,7 +44,8 @@ Set `mode` to `single_agent` and leave `agents` empty. The system builds a fixed
 | `engineering_kind` | Use when... | Keywords |
 |---|---|---|
 | `question` | Explain existing code, no change | "how does", "what is", "explain" |
-| `research` | Compare options, assess feasibility | "find out", "investigate", "compare" |
+| `research` | Investigate and report findings | "find out", "investigate", "look into" |
+| `design` | Decide an approach, write a spec, no code yet | "design", "spec", "how should we", "compare options" |
 | `bugfix` | Fix a known problem | "fix", "broken", "error in" |
 | `debug` | Diagnose then fix (cause unknown) | "why does it crash", "debug" |
 | `test` | Add/expand tests only | "add tests", "coverage", "unit test" |
@@ -150,8 +151,12 @@ In hierarchical output, `parallel_groups` lists **sequential stages** - each inn
 (NOT engineering - no code involved)
 
 "Research this codebase and suggest improvements"
+→ domain: engineering, engineering_kind: design, mode: single_agent
+(CODE INVESTIGATION + a recommendation - researcher then architect)
+
+"Investigate how approval cards are stored and summarise the flow"
 → domain: engineering, engineering_kind: research, mode: single_agent
-(CODE INVESTIGATION - engineering pipeline)
+(findings ARE the deliverable - researcher only, no design stage)
 ```
 
 ---

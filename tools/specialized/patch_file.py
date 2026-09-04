@@ -19,11 +19,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from approval.mode import ApprovalMode
+from approval.models import ApprovalDecision
 from approval.unattended import UnattendedPolicy
 from tools._path import resolve_path
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import request_approval_decision
+from tools.specialized._approval import refusal_output, request_approval_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -136,15 +137,20 @@ class PatchFileTool(ApprovalGatedTool):
 
         if self._approval_store is not None and not self._auto_edits(resolved, input.params.get("workspace")):
             task_id = input.params.get("task_id")
-            approved = await self._request_diff_approval(task_id, resolved, old_content, new_content)
-            if not approved:
-                return ToolOutput(success=False, error="Edit cancelled by user.")
+            status = await self._request_diff_approval(task_id, resolved, old_content, new_content)
+            refused = refusal_output(
+                status, timeout=self._approval_timeout_seconds, declined="Edit cancelled by user."
+            )
+            if refused is not None:
+                return refused
 
         return await asyncio.to_thread(_write, resolved, old_content, new_content, blocks_applied)
 
-    async def _request_diff_approval(self, task_id: str | None, path: Path, old: str, new: str) -> bool:
+    async def _request_diff_approval(
+        self, task_id: str | None, path: Path, old: str, new: str
+    ) -> ApprovalDecision:
         diff = _unified_diff(path, old, new)
-        return await request_approval_decision(
+        return await request_approval_status(
             self._approval_store,
             task_id=task_id,
             agent="patch_file",

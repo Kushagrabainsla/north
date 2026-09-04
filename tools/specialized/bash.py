@@ -19,11 +19,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from approval.mode import ApprovalMode
+from approval.models import ApprovalDecision
 from approval.unattended import UnattendedPolicy
 from tools._path import references_sensitive_path
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import request_approval_decision
+from tools.specialized._approval import refusal_output, request_approval_status
 from tools.specialized._sandbox import (
     SandboxConfig,
     build_run_argv,
@@ -170,17 +171,22 @@ class BashTool(ApprovalGatedTool):
     def format_output(self, data: dict[str, Any]) -> str:
         return str(data.get("stdout", data.get("output", ""))).strip()
 
-    async def _request_approval(self, task_id: str | None, command: str) -> bool:
-        """Emit an approval card for the command. Returns True if the user approves."""
+    async def _request_approval(self, task_id: str | None, command: str) -> ApprovalDecision:
+        """Emit an approval card for the command; report how it resolved.
+
+        The status, not a bool: a card nobody answered has to be told apart from
+        one a person declined, or the agent goes hunting for another way to run
+        the same command and stalls for the timeout again on every attempt.
+        """
         if self._safety_inspector.is_instantly_safe(command):
-            return True
+            return ApprovalDecision.APPROVED
         # In auto/autonomous mode, deterministically auto-approve a safe test/lint/
         # build command so the run isn't blocked. Anything else still asks (and in
         # autonomous mode the JudgementFilter approves it downstream).
         if self._mode() in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS) and self._unattended.approves_command(command):
-            return True
+            return ApprovalDecision.APPROVED
 
-        return await request_approval_decision(
+        return await request_approval_status(
             self._approval_store,
             task_id=task_id,
             agent="bash",
@@ -227,9 +233,10 @@ class BashTool(ApprovalGatedTool):
                     return ToolOutput(success=False, error=f"Blocked pattern in command: {blocked!r}")
 
         task_id: str | None = input.params.get("task_id")
-        approved = await self._request_approval(task_id, command)
-        if not approved:
-            return ToolOutput(success=False, error="Command cancelled by user.")
+        status = await self._request_approval(task_id, command)
+        refused = refusal_output(status, timeout=self._approval_timeout_seconds, declined="Command cancelled by user.")
+        if refused is not None:
+            return refused
 
         cwd = input.params.get("workspace") or None
         raw_timeout = input.params.get("timeout")

@@ -62,12 +62,19 @@ _ASK_USER_NO_ANSWER = (
 # Agent-loop built-ins, not registry tools - excluded from tool-reliability tracking.
 _INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user"})
 
-# How many approval cards may expire unanswered, back to back, before the agent
+# How many approval cards may expire unanswered in one run before the agent
 # gives up. Nobody is watching: each card costs a full approval timeout, and an
 # agent that reads the expiry as a refusal goes looking for another way to do
-# the same thing, so the run repeats that stall until the iteration cap. The
-# count is consecutive, so a user who answers slowly - from Telegram, say -
-# resets it and is never cut off; only a genuinely absent one trips it.
+# the same thing, so the run repeats that stall until the iteration cap.
+#
+# Counted across the whole run, not consecutively. An earlier version reset on
+# any batch that raised no card, which meant an ordinary `read_file` between two
+# expired cards cleared the count - observed live, where a coder raised a
+# patch_file card, read some files, raised a git card, and sailed past the cap.
+# Reading a file is not evidence that a human is at the keyboard. Answering a
+# card would be, but a granted approval is indistinguishable from any other
+# successful tool call by the time the loop sees it. So: two expired cards in one
+# run means nobody is there, whatever happened in between.
 MAX_UNANSWERED_APPROVALS = 2
 
 
@@ -338,7 +345,7 @@ class AgenticLLMAgent(LLMAgent):
         successful_tools: list[str] = []
         _seen_models: set[str] = set()
         models_used: list[str] = []
-        consecutive_unanswered: int = 0
+        unanswered_approvals: int = 0
 
         known_registry_tools = (
             set(self._deps.tool_registry._tools.keys()) if getattr(self._deps, "tool_registry", None) else set()
@@ -462,15 +469,15 @@ class AgenticLLMAgent(LLMAgent):
                     _seen_success.add(name)
                     successful_tools.append(name)
 
-            # One expired card is a slow user; several in a row means nobody is
+            # One expired card is a slow user; several in a run means nobody is
             # there. Stop rather than spend the whole iteration budget stalling
             # for a timeout each time.
-            consecutive_unanswered = consecutive_unanswered + unanswered if unanswered else 0
-            if consecutive_unanswered >= MAX_UNANSWERED_APPROVALS:
+            unanswered_approvals += unanswered
+            if unanswered_approvals >= MAX_UNANSWERED_APPROVALS:
                 return _final_answer(
-                    f"Stopped: {consecutive_unanswered} approval requests in a row expired with no "
-                    "answer, so the work that needed approval was never done. Re-run this when you "
-                    "are available to approve, or switch the approval mode to auto.",
+                    f"Stopped: {unanswered_approvals} approval requests expired with no answer, so "
+                    "the work that needed approval was never done. Re-run this when you are "
+                    "available to approve, or switch the approval mode to auto.",
                     "No one available to approve",
                     total_cost_usd,
                     tools_used,

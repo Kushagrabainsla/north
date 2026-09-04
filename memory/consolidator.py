@@ -34,7 +34,13 @@ _WATERMARK_FILENAME = "episode_watermark.txt"
 # Terminal task-level actions written by the Orchestrator, mapped to an outcome.
 _TERMINAL_OUTCOME: dict[str, str] = {
     "task_completed": "success",
-    "task_completed_with_failures": "success",
+    # Not a success to learn from. A run that finished with failures was being
+    # recorded as an exemplar, and the skill distiller learns from exemplars -
+    # so a task that told the user "I could not complete the summary" was
+    # distilled into a permanent skill whose first step was "read the handoff
+    # file; if it is missing, stop". Later runs followed it and failed the same
+    # way, which is a fixed prompt being overruled by a learned procedure.
+    "task_completed_with_failures": "partial",
     "task_failed": "failed",
     "task_cancelled": "cancelled",
 }

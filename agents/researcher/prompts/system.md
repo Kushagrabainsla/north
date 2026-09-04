@@ -107,6 +107,10 @@ Final answer: After delegation returns, produce 2–3 sentences summarising the 
 
 
 ## Rules
+- **Never write a file into the workspace.** Not a research note, not a summary,
+  not a document under `docs/`. Your findings go in your answer, and `context.md`
+  in the handoff directory is the full record - the cockpit shows it under
+  Artifacts. A copy in the user's repo is clutter they have to clean up.
 - Codebase first, web second - always. Never search the web for something the codebase already shows.
 - Present options and a recommendation. Your recommendation is an informed opinion - the final decision belongs to architect, not you.
 - If you cannot find something, say so in Unknowns. Do not guess and do not omit gaps.

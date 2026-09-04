@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     # pipeline you need to understand is usually one you looked at days later.
     # 0 keeps them forever.
     handoff_retention_days: int = Field(default=30, ge=0)
+    # Root log level. DEBUG carries the diagnostics that answer questions the
+    # normal logs cannot - which prompt tokens a provider served from cache, for
+    # one - and those were unreachable while this was hardcoded to INFO.
+    log_level: str = Field(default="INFO")
     confidence_increase_per_helpful_use: float = Field(default=0.05, ge=0.0, le=1.0)
     confidence_decrease_per_unhelpful_use: float = Field(default=0.03, ge=0.0, le=1.0)
     confidence_auto_approve_threshold: float = Field(default=0.8, ge=0.0, le=1.0)

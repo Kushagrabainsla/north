@@ -8,6 +8,13 @@ MAX_DELEGATION_DEPTH = 10
 # Engineering agents must be found exactly - no silent fallback to general.
 ENGINEERING_AGENTS: frozenset[str] = frozenset({"researcher", "architect", "coder", "reviewer"})
 
+# Engineering agents that never touch production code. Their `write_file` calls
+# produce handoff documents - research notes, specs - which is the whole of their
+# job, so the code-evidence gate must not read one as an unverified code change.
+# Every research task was being told "modified code but ran no check_types or
+# test to verify the change" for writing its own context.md.
+NO_CODE_AGENTS: frozenset[str] = frozenset({"researcher", "architect"})
+
 # Tools that change code, and the tools that check it. A run that used the first
 # without the second changed code no one verified - see orchestrator/result_audit.py.
 CODE_MUTATING_TOOLS: frozenset[str] = frozenset({"write_file", "patch_file", "rename_symbol"})

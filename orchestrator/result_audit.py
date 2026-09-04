@@ -23,7 +23,7 @@ import asyncio
 import logging
 
 from agents.base import Agent
-from agents.constants import CODE_MUTATING_TOOLS, CODE_VERIFY_TOOLS, ENGINEERING_AGENTS
+from agents.constants import CODE_MUTATING_TOOLS, CODE_VERIFY_TOOLS, ENGINEERING_AGENTS, NO_CODE_AGENTS
 from agents.models import AgentPayload, AgentResult
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
@@ -118,7 +118,7 @@ class ResultAuditor:
         was applied at all, so a "done" claim is simply false. Either routes the
         answer through self-repair rather than being accepted.
         """
-        if agent.name not in ENGINEERING_AGENTS:
+        if agent.name not in ENGINEERING_AGENTS or agent.name in NO_CODE_AGENTS:
             return violations
         succeeded = set(result.successful_tools or [])
         attempted = set(result.tools_used or [])

@@ -26,9 +26,10 @@ import signal
 import time
 from typing import TYPE_CHECKING, Any
 
+from approval.models import ApprovalDecision
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import request_approval_decision
+from tools.specialized._approval import refusal_output, request_approval_status
 
 if TYPE_CHECKING:
     from approval.base import Notifier
@@ -215,8 +216,12 @@ class ShellTool(ApprovalGatedTool):
                 error=f"Too many active sessions ({_MAX_SESSIONS}). Stop one before starting another.",
             )
 
-        if not await self._request_approval(params.get("task_id"), f"start shell:\n{command}"):
-            return ToolOutput(success=False, error="Shell start cancelled by user.")
+        status = await self._request_approval(params.get("task_id"), f"start shell:\n{command}")
+        refused = refusal_output(
+            status, timeout=self._approval_timeout_seconds, declined="Shell start cancelled by user."
+        )
+        if refused is not None:
+            return refused
 
         cwd = params.get("workspace") or None
         try:
@@ -251,8 +256,12 @@ class ShellTool(ApprovalGatedTool):
         if text is None:
             return ToolOutput(success=False, error="action=write requires 'input'.")
 
-        if not await self._request_approval(params.get("task_id"), f"send to shell {session.shell_id}:\n{text}"):
-            return ToolOutput(success=False, error="Shell input cancelled by user.")
+        status = await self._request_approval(params.get("task_id"), f"send to shell {session.shell_id}:\n{text}")
+        refused = refusal_output(
+            status, timeout=self._approval_timeout_seconds, declined="Shell input cancelled by user."
+        )
+        if refused is not None:
+            return refused
 
         try:
             session.write(text if text.endswith("\n") else text + "\n")
@@ -305,9 +314,9 @@ class ShellTool(ApprovalGatedTool):
             with contextlib.suppress(Exception):
                 await s.stop()
 
-    async def _request_approval(self, task_id: str | None, message: str) -> bool:
-        """Gate a command/input behind the shared tool approval flow."""
-        return await request_approval_decision(
+    async def _request_approval(self, task_id: str | None, message: str) -> ApprovalDecision:
+        """Gate a command/input behind the shared tool approval flow; report the outcome."""
+        return await request_approval_status(
             self._approval_store,
             task_id=task_id,
             agent="shell",

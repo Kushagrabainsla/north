@@ -1611,3 +1611,89 @@ async def test_pause_preserves_recovery_row_after_pipeline_cancellation(tmp_path
     stored = await store.get("t_pause_race")
     assert stored is not None
     assert stored.status == "paused"
+
+
+# ── the code-evidence gate must not fire on agents that write documents ──────
+
+
+def _agent_named(name: str):
+    """A stand-in carrying only the attribute the evidence gate reads."""
+    from unittest.mock import MagicMock
+
+    agent = MagicMock()
+    agent.name = name
+    return agent
+
+
+@pytest.mark.parametrize("agent_name", ["researcher", "architect"])
+def test_document_writing_agents_are_not_accused_of_unverified_code_changes(
+    tmp_path: Path, agent_name: str
+) -> None:
+    """Writing `context.md` or `spec.md` is the job, not an unchecked code edit.
+
+    These agents produce handoff documents with `write_file`, which the gate read
+    as a code change - so every research task ended with "modified code but ran
+    no check_types or test to verify the change" appended to a correct answer.
+    """
+    auditor, _ledger, _stream = _make_auditor(tmp_path)
+    result = AgentResult(
+        output="Here are the findings.",
+        summary="findings",
+        tools_used=["read_file", "write_file"],
+        successful_tools=["read_file", "write_file"],
+    )
+
+    violations = auditor._with_evidence_gate_violations(_agent_named(agent_name), result, [])
+
+    assert violations == [], f"{agent_name} writes documents, not code"
+
+
+def test_the_coder_is_still_held_to_the_evidence_gate(tmp_path: Path) -> None:
+    """The gate exists for the agent that actually edits code."""
+    auditor, _ledger, _stream = _make_auditor(tmp_path)
+    result = AgentResult(
+        output="Fixed it.",
+        summary="fixed",
+        tools_used=["patch_file"],
+        successful_tools=["patch_file"],
+    )
+
+    violations = auditor._with_evidence_gate_violations(_agent_named("coder"), result, [])
+
+    assert violations and "ran no check_types" in violations[0]
+
+
+# ── a run that finished with failures is not an exemplar ─────────────────────
+
+
+async def test_a_partial_run_is_not_offered_to_the_skill_distiller(tmp_path: Path) -> None:
+    """The distiller learns procedures from successful episodes, so what counts
+    as success decides what north teaches itself.
+
+    `task_completed_with_failures` was recorded as a success. One such run - it
+    told the user "I could not complete the summary" - was distilled into a
+    permanent skill whose first step was "read the handoff file; if it is
+    missing, stop and report". Later runs followed that skill and failed the
+    same way, overruling the prompt fix that had removed exactly that step.
+    """
+    from memory.consolidator import _TERMINAL_OUTCOME
+    from memory.episodic import EpisodicStore
+
+    assert _TERMINAL_OUTCOME["task_completed_with_failures"] == "partial"
+    assert _TERMINAL_OUTCOME["task_completed"] == "success"
+
+    store = EpisodicStore(db_path=tmp_path / "episodic.db")
+    await store.record(task_id="t-good", domain="engineering", summary="clean run", outcome="success")
+    await store.record(task_id="t-partial", domain="engineering", summary="half a run", outcome="partial")
+
+    learnable = {task_id for task_id, _summary, _emb in await store.list_successful(frozenset({"engineering"}))}
+
+    assert learnable == {"t-good"}, "a partial run must not become a skill"
+
+
+async def test_a_partial_episode_is_still_recalled_but_labelled(tmp_path: Path) -> None:
+    """Knowing an approach half-worked is useful - it just is not an exemplar."""
+    from memory.episodic import _label
+
+    assert _label("did half of it", "partial") == "[PARTIAL] did half of it"
+    assert _label("did all of it", "success") == "did all of it"

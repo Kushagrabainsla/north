@@ -1215,6 +1215,11 @@ class NorthApp(App[None]):
             self._render_active_turns()
 
     async def _on_tool_called(self, task_id: str, data: dict) -> None:
+        # Whatever streamed before a tool call was narration on the way to it
+        # ("I'll check the repo for..."), not the answer. Keeping it glued the
+        # two together with no separator; the answer is what streams after the
+        # last tool call.
+        self._token_buffer[task_id] = ""
         tool = data.get("tool", "")
         params = data.get("params") or {}
         params_str = _fmt_params(params)

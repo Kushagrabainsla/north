@@ -436,6 +436,12 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                         )
                         steps.append(("✓", label, True))
                     elif event == "tool_called":
+                        # Whatever streamed before a tool call was narration on
+                        # the way to it ("I'll check the repo for..."), not the
+                        # answer - keeping it glued the two together with no
+                        # separator. The answer is what streams after the last
+                        # tool call.
+                        token_buffer = ""
                         tool = data.get("tool", "tool")
                         params = data.get("params") or data.get("args") or {}
                         params_preview = ""

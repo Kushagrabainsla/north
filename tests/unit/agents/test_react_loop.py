@@ -798,42 +798,46 @@ async def test_repeated_unanswered_approvals_stop_the_run(tmp_path: Path) -> Non
     assert "no answer" in result.output.lower()
 
 
-async def test_an_answered_approval_resets_the_count(tmp_path: Path) -> None:
-    """A slow user - approving from Telegram, say - must never be cut off."""
+async def test_ordinary_work_between_two_expired_cards_does_not_clear_the_count(tmp_path: Path) -> None:
+    """Reading a file is not evidence that a human is at the keyboard.
 
-    class OneTimeoutThenAnswer(MockInferenceRouter):
+    An earlier version reset on any batch that raised no card. Observed live: a
+    coder raised a patch_file card, read some files, raised a git card, and
+    sailed straight past the cap while nobody was there to answer either one.
+    """
+
+    class GatedThenReadThenGated(MockInferenceRouter):
         calls = 0
 
         async def complete_with_tools(self, request, token_callback=None):
-            OneTimeoutThenAnswer.calls += 1
-            if OneTimeoutThenAnswer.calls <= 3:
-                name = "gated" if OneTimeoutThenAnswer.calls != 2 else "answered"
-                return ToolCallResponse(
-                    type="tool_calls",
-                    calls=[ToolCall(name=name, call_id=f"c{OneTimeoutThenAnswer.calls}", params={})],
-                    model_used="mock",
-                    tokens_in=1,
-                    tokens_out=1,
-                )
+            GatedThenReadThenGated.calls += 1
+            name = "reader" if GatedThenReadThenGated.calls == 2 else "gated"
             return ToolCallResponse(
-                type="message", content="finished", calls=[], model_used="mock", tokens_in=1, tokens_out=1
+                type="tool_calls",
+                calls=[ToolCall(name=name, call_id=f"c{GatedThenReadThenGated.calls}", params={})],
+                model_used="mock",
+                tokens_in=1,
+                tokens_out=1,
             )
 
-    class _AnsweredTool(Tool):
-        name = "answered"
-        description = "approved by a slow user"
+    class _ReaderTool(Tool):
+        name = "reader"
+        description = "an ordinary successful read"
         parameters_schema = {"type": "object", "properties": {}}
 
         async def run(self, input: ToolInput) -> ToolOutput:
             return ToolOutput(success=True, data={"ok": True})
 
-    OneTimeoutThenAnswer.calls = 0
-    agent = _load_agent("coder", tmp_path, OneTimeoutThenAnswer())
+    GatedThenReadThenGated.calls = 0
+    agent = _load_agent("coder", tmp_path, GatedThenReadThenGated())
+    agent._deps.agent_max_iterations = 40
     _registering(agent, _UnansweredApprovalTool())
-    _registering(agent, _AnsweredTool())
+    _registering(agent, _ReaderTool())
 
-    result = await agent.run(AgentPayload(task_id="t-slow", prompt="Do the gated thing."))
-    assert result.output == "finished", "an answered card in between must reset the count"
+    result = await agent.run(AgentPayload(task_id="t-interleaved", prompt="Do the gated thing."))
+
+    assert GatedThenReadThenGated.calls == 3, "two expired cards end the run, read or no read"
+    assert "no answer" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

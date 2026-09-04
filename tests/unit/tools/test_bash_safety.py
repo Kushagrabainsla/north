@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.models import ApprovalDecision
 from tools.models import ToolInput
 from tools.specialized.bash import BashTool, CommandSafetyInspector
 
@@ -100,8 +101,8 @@ class TestBashToolApprovalBypass:
     @pytest.mark.asyncio
     async def test_instantly_safe_command_skips_all_gates(self) -> None:
         tool = self._make_tool()
-        approved = await tool._request_approval("task-1", "git status")
-        assert approved is True
+        decision = await tool._request_approval("task-1", "git status")
+        assert decision == ApprovalDecision.APPROVED
         # approval_store.add should never have been called
         tool._approval_store.add.assert_not_called()
 
@@ -111,8 +112,8 @@ class TestBashToolApprovalBypass:
         jf.check = AsyncMock(return_value=("approved", "learned rule"))
         tool = self._make_tool(judgement_filter=jf)
 
-        approved = await tool._request_approval("task-1", "npm test")
-        assert approved is True
+        decision = await tool._request_approval("task-1", "npm test")
+        assert decision == ApprovalDecision.APPROVED
         jf.check.assert_awaited_once()
         # The auto-approved card is still recorded in the store (added + resolved)
         # for audit; the point is that the user is never asked (no wait).
@@ -126,8 +127,8 @@ class TestBashToolApprovalBypass:
         tool = BashTool(
             approval_store=MagicMock(), unattended=UnattendedPolicy(), mode_provider=lambda: ApprovalMode.AUTO
         )
-        approved = await tool._request_approval("task-1", "pytest -q")
-        assert approved is True
+        decision = await tool._request_approval("task-1", "pytest -q")
+        assert decision == ApprovalDecision.APPROVED
         tool._approval_store.add.assert_not_called()  # never surfaced a card
 
     @pytest.mark.asyncio
@@ -144,8 +145,8 @@ class TestBashToolApprovalBypass:
             mode_provider=lambda: ApprovalMode.AUTO,
         )
         # not on the allowlist -> unattended does not bypass, falls through to the gate
-        approved = await tool._request_approval("task-1", "rm -rf /tmp/x")
-        assert approved is False
+        decision = await tool._request_approval("task-1", "rm -rf /tmp/x")
+        assert decision != ApprovalDecision.APPROVED
         jf.check.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -154,8 +155,8 @@ class TestBashToolApprovalBypass:
         jf.check = AsyncMock(return_value=("rejected", "user rule"))
         tool = self._make_tool(judgement_filter=jf)
 
-        approved = await tool._request_approval("task-1", "rm -rf node_modules")
-        assert approved is False
+        decision = await tool._request_approval("task-1", "rm -rf node_modules")
+        assert decision != ApprovalDecision.APPROVED
 
     @pytest.mark.asyncio
     async def test_judgement_filter_undecided_falls_through_to_manual(self) -> None:
@@ -169,8 +170,8 @@ class TestBashToolApprovalBypass:
         resolved_card.status = "approved"
         tool._approval_store.wait_for_decision = AsyncMock(return_value=resolved_card)
 
-        approved = await tool._request_approval("task-1", "python setup.py install")
-        assert approved is True
+        decision = await tool._request_approval("task-1", "python setup.py install")
+        assert decision == ApprovalDecision.APPROVED
         tool._approval_store.add.assert_called_once()
 
     @pytest.mark.asyncio
@@ -184,8 +185,8 @@ class TestBashToolApprovalBypass:
         resolved_card.status = "approved"
         tool._approval_store.wait_for_decision = AsyncMock(return_value=resolved_card)
 
-        approved = await tool._request_approval("task-1", "make build")
-        assert approved is True  # fell through to manual, user approved
+        decision = await tool._request_approval("task-1", "make build")
+        assert decision == ApprovalDecision.APPROVED  # fell through to manual, user approved
 
 
 # ---------------------------------------------------------------------------
@@ -296,3 +297,46 @@ class TestBashAllowDangerous:
         assert out.success is False
         assert "timed out" in (out.error or "")
         assert killpg_called is True
+
+
+class TestBashApprovalOutcomes:
+    """A command nobody approved is not a broken tool.
+
+    Observed live: a reviewer whose approvals went unanswered drove `bash` down
+    to 0.09 confidence in three calls. Nothing was wrong with bash - there was
+    nobody at the keyboard.
+    """
+
+    @staticmethod
+    def _tool(store):
+        from approval.unattended import UnattendedPolicy
+
+        return BashTool(approval_store=store, unattended=UnattendedPolicy(), approval_timeout_seconds=0.01)
+
+    @pytest.mark.asyncio
+    async def test_an_unanswered_command_is_refused_not_failed(self) -> None:
+        store = MagicMock()
+        store.wait_for_decision = AsyncMock(return_value=None)
+        store.resolve = MagicMock(return_value=True)
+
+        result = await self._tool(store).run(ToolInput(params={"command": "rm -rf build"}))
+
+        assert result.success is False
+        assert result.failure_kind == "refused", "an absent human must not count against the tool"
+        assert result.data.get("unanswered") is True
+        assert "No one answered" in result.error
+
+    @pytest.mark.asyncio
+    async def test_a_declined_command_says_the_user_cancelled_it(self) -> None:
+        store = MagicMock()
+        resolved = MagicMock()
+        resolved.status = "rejected"
+        resolved.chosen_option = "Cancel"
+        store.wait_for_decision = AsyncMock(return_value=resolved)
+
+        result = await self._tool(store).run(ToolInput(params={"command": "rm -rf build"}))
+
+        assert result.success is False
+        assert result.failure_kind == "refused"
+        assert result.error == "Command cancelled by user."
+        assert result.data.get("unanswered") is not True

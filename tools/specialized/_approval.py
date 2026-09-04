@@ -136,6 +136,18 @@ async def gate_mutating_action(
         notifier=notifier,
         timeout=timeout,
     )
+    return refusal_output(status, timeout=timeout, declined="Action rejected by user.")
+
+
+def refusal_output(status: ApprovalDecision, *, timeout: float, declined: str) -> ToolOutput | None:
+    """``None`` when approved; otherwise the ToolOutput the tool must return.
+
+    The single place that turns an approval outcome into a tool result, so every
+    gated tool tells the agent the same two things: that a refusal is not the
+    tool malfunctioning (``failure_kind="refused"``, which keeps an absent human
+    from being counted against the tool), and that an expired card is nobody
+    saying no rather than someone saying no.
+    """
     if status == ApprovalDecision.APPROVED:
         return None
     if status == ApprovalDecision.TIMEOUT_REJECTED:
@@ -149,4 +161,4 @@ async def gate_mutating_action(
                 "Do not retry this or look for another way to do it."
             ),
         )
-    return ToolOutput(success=False, failure_kind="refused", error="Action rejected by user.")
+    return ToolOutput(success=False, failure_kind="refused", error=declined)

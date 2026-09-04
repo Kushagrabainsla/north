@@ -119,8 +119,20 @@ def test_refactor_runs_architect_coder_reviewer() -> None:
     assert plan.agents == ["architect", "coder", "reviewer"]
 
 
-def test_research_runs_researcher_then_architect() -> None:
+def test_research_ends_with_the_agent_that_found_the_answer() -> None:
+    """Investigation returns findings, so there is nothing for a design stage to do.
+
+    Pairing the two meant every "investigate X and summarise it" ran an architect
+    with nothing to design - 21s, no spec written - and made the run multi-agent,
+    which pulled in a synthesis pass on top.
+    """
     plan = _engineering_planner()._build_engineering_plan("research", 0.9, "t1")
+    assert plan.agents == ["researcher"]
+
+
+def test_design_is_where_the_architect_belongs() -> None:
+    """A task that actually wants an approach decided still gets one."""
+    plan = _engineering_planner()._build_engineering_plan("design", 0.9, "t1")
     assert plan.agents == ["researcher", "architect"]
 
 
@@ -144,14 +156,15 @@ def test_low_confidence_no_code_kinds_never_add_coder() -> None:
     # "how does X work?" (question) or "investigate Y" (research) must never be
     # escalated into a write task by adding the coder.
     assert _engineering_planner()._build_engineering_plan("question", 0.4, "t1").agents == ["researcher"]
-    assert _engineering_planner()._build_engineering_plan("research", 0.4, "t1").agents == [
+    assert _engineering_planner()._build_engineering_plan("research", 0.4, "t1").agents == ["researcher"]
+    assert _engineering_planner()._build_engineering_plan("design", 0.4, "t1").agents == [
         "researcher",
         "architect",
     ]
 
 
 def test_no_code_kinds_are_read_only_at_every_confidence() -> None:
-    for kind in ("question", "research"):
+    for kind in ("question", "research", "design"):
         for confidence in (0.95, 0.6, 0.59, 0.4, 0.05):
             plan = _engineering_planner()._build_engineering_plan(kind, confidence, "t1")
             assert "coder" not in plan.agents, f"{kind}@{confidence} leaked coder"
