@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import functools
 import os
+import shutil
 import sys
+import time
+from collections.abc import Container
 from pathlib import Path
 
 # Directories never worth walking for a coding task. Shared by the
@@ -60,8 +63,9 @@ _BLOCKED_FILENAMES: frozenset[str] = frozenset({"secret.key"})
 # under ~/.north - including the task-context DBs that share ~/.north/tasks/ with
 # the agent handoff carve-out. Agents must never write these directly; they go
 # through the proper stores/tools. Enforced only inside ~/.north so a workspace
-# may still contain editable .db files.
-_DB_SUFFIXES: tuple[str, ...] = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3")
+# may still contain editable .db files. Public because the cockpit's artifact
+# library reads that same directory and must exclude exactly these files.
+DB_SUFFIXES: tuple[str, ...] = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3")
 
 # Marker files that identify a project root, checked from a file upward.
 _PROJECT_ROOT_MARKERS: tuple[str, ...] = (
@@ -137,6 +141,37 @@ def ensure_handoff_dir(task_id: str) -> str:
     return str(path)
 
 
+def prune_handoff_dirs(retention_days: int, *, keep: Container[str] = ()) -> int:
+    """Delete handoff directories past their retention window; return how many.
+
+    Nothing ever removed these. One directory is created per task and only
+    losing best-of-N candidates were cleaned up, so they accumulated for the
+    life of the install - and once the cockpit lists what is inside them, every
+    task ever run shows up in the library.
+
+    Empty directories go regardless of age: they hold nothing to read and are
+    pure noise. Directories for *keep* (tasks still running) are never touched.
+    ``retention_days`` of 0 keeps everything that has content.
+    """
+    root = Path(_handoff_root())
+    if not root.is_dir():
+        return 0
+    cutoff = time.time() - retention_days * 86_400
+    removed = 0
+    for path in root.iterdir():
+        if not path.is_dir() or path.name in keep:
+            continue
+        contents = list(path.rglob("*"))
+        empty = not any(child.is_file() for child in contents)
+        # Age is the newest thing in there: an artifact written late in a long
+        # task must not be aged out on the directory's creation time.
+        newest = max((child.stat().st_mtime for child in contents if child.is_file()), default=0.0)
+        if empty or (retention_days > 0 and newest < cutoff):
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+    return removed
+
+
 # Personal-data subdirectories inside NORTH_HOME that agents are allowed to
 # write to (news digests, wellness logs, general notes). The rest of ~/.north
 # stays blocked (secret.key, .env, ledger/jobs/facts DBs). Kept in sync with
@@ -189,7 +224,7 @@ def _is_blocked_path(resolved: str) -> bool:
     # a secret.key inside tasks/ can never be exposed. The task-context SQLite
     # DBs share ~/.north/tasks/ with this carve-out, so DB files stay blocked.
     if _in_handoff_root(resolved):
-        return resolved.endswith(_DB_SUFFIXES)
+        return resolved.endswith(DB_SUFFIXES)
     # Carve-out: the personal-data subdirs (news/notes/wellness) are the only
     # other writable part of ~/.north. The home root and every other sibling
     # (secret.key, .env, ledger/jobs/facts DBs) stay blocked.

@@ -72,7 +72,7 @@ class CheckTypesTool(Tool):
             return ToolOutput(success=False, error="Path escapes workspace root.")
 
         if not resolved.exists():
-            return ToolOutput(success=False, error=f"File not found: {resolved}")
+            return ToolOutput(success=False, error=f"File not found: {resolved}", failure_kind="not_found")
         if not resolved.is_file():
             return ToolOutput(success=False, error=f"Not a file: {resolved}")
 

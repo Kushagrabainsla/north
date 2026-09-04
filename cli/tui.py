@@ -1696,6 +1696,10 @@ class NorthApp(App[None]):
 
     async def _on_self_repair_started(self, task_id: str, data: dict) -> None:
         agent = data.get("agent", "agent")
+        # Drop the answer streamed so far: the correction pass streams its own
+        # over the same channel, and keeping both concatenated the two drafts
+        # into one reply that contradicted itself halfway through.
+        self._token_buffer[task_id] = ""
         self._update_turn_phase(task_id, f"self-repair · {agent}")
         self._set_status("correcting unverified claims…")
 

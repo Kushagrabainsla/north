@@ -4,13 +4,18 @@ Every provider reports the same fact - "how much of this prompt did you already
 have?" - under a different key, so each one is read here rather than in five
 providers that would drift apart.
 
-Why north measures this at all, given that no provider it currently reaches
-actually caches: the failure mode is silent. A cache is a *prefix* match, so one
-changed byte near the front - a timestamp, a re-ordered tool list - throws the
-whole thing away and the bill goes back to full price with nothing logged and no
-error raised. The only symptom is this number falling to zero. Recording it now
-means the day a caching provider is configured, north can already tell whether
-it is working, instead of that being invisible.
+Why north measures this: the failure mode is silent. A cache is a *prefix*
+match, so one changed byte near the front - a timestamp, a re-ordered tool list
+- throws the whole thing away and the bill goes back to full price with nothing
+logged and no error raised. The only symptom is this number falling to zero.
+
+And zero is what it read, for a reason that was not the one assumed. The Codex
+backend does cache and does report it: two identical 2412-token prompts came
+back cold, then with 1792 tokens reused. What defeated it was north's own
+prefix - a minute-resolution clock at the head of the system prompt, and a tool
+list re-sorted by a confidence score that moves on every call. Both are fixed
+in `agents/agentic_llm_agent.py`; this number is how you would know if they
+regressed.
 """
 
 from __future__ import annotations

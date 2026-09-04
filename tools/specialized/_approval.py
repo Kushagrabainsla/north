@@ -14,6 +14,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from approval.interaction import UserInteraction
+from approval.models import ApprovalDecision
+from tools.models import ToolOutput
 
 if TYPE_CHECKING:
     from approval.base import Notifier
@@ -41,8 +43,38 @@ async def request_approval_decision(
 
     Thin tool-facing adapter over the shared ``UserInteraction`` mediator: it
     consults the JudgementFilter, surfaces an APPROVAL card, and blocks up to
-    *timeout* seconds. A timeout is treated as a rejection.
+    *timeout* seconds. A timeout is treated as a rejection - callers that need
+    to tell those apart should use ``request_approval_status``.
     """
+    status = await request_approval_status(
+        approval_store,
+        task_id=task_id,
+        agent=agent,
+        title=title,
+        message=message,
+        options=options,
+        stream_manager=stream_manager,
+        judgement_filter=judgement_filter,
+        notifier=notifier,
+        timeout=timeout,
+    )
+    return status == ApprovalDecision.APPROVED
+
+
+async def request_approval_status(
+    approval_store: ApprovalStore,
+    *,
+    task_id: str | None,
+    agent: str,
+    title: str,
+    message: str,
+    options: tuple[str, str] = _DEFAULT_OPTIONS,
+    stream_manager: EventStreamManager | None = None,
+    judgement_filter: JudgementFilter | None = None,
+    notifier: Notifier | None = None,
+    timeout: float = 300.0,
+) -> ApprovalDecision:
+    """Same flow as ``request_approval_decision``, but reporting how it resolved."""
     interaction = UserInteraction(
         approval_store,
         notifier=notifier,
@@ -50,7 +82,7 @@ async def request_approval_decision(
         stream_manager=stream_manager,
         default_timeout=timeout,
     )
-    return await interaction.request_approval(
+    return await interaction.request_approval_status(
         task_id=task_id,
         agent=agent,
         title=title,
@@ -71,20 +103,28 @@ async def gate_mutating_action(
     judgement_filter: JudgementFilter | None = None,
     notifier: Notifier | None = None,
     timeout: float = 300.0,
-) -> str | None:
+) -> ToolOutput | None:
     """Fail-closed approval gate for mutating tool actions.
 
-    Returns ``None`` when the action may proceed, or an error string the tool
-    must return as a failure. Without an ApprovalStore (e.g. an auto-discovered
-    instance that never got its dependencies injected) the action is refused  - 
+    Returns ``None`` when the action may proceed, or the ``ToolOutput`` the tool
+    must return instead. Without an ApprovalStore (e.g. an auto-discovered
+    instance that never got its dependencies injected) the action is refused  -
     a missing gate must never mean an open gate.
+
+    An unanswered card is reported as unanswered, never as a rejection. Saying
+    "rejected by user" when nobody was watching sent agents looking for another
+    way to do the same thing, and each attempt stalled for the full timeout.
     """
     if approval_store is None:
-        return (
-            f"{agent}: this action mutates state and requires user approval, but no approval "
-            "gate is configured for this tool instance. Refusing (fail closed)."
+        return ToolOutput(
+            success=False,
+            failure_kind="refused",
+            error=(
+                f"{agent}: this action mutates state and requires user approval, but no approval "
+                "gate is configured for this tool instance. Refusing (fail closed)."
+            ),
         )
-    approved = await request_approval_decision(
+    status = await request_approval_status(
         approval_store,
         task_id=task_id,
         agent=agent,
@@ -96,4 +136,17 @@ async def gate_mutating_action(
         notifier=notifier,
         timeout=timeout,
     )
-    return None if approved else "Action rejected by user."
+    if status == ApprovalDecision.APPROVED:
+        return None
+    if status == ApprovalDecision.TIMEOUT_REJECTED:
+        return ToolOutput(
+            success=False,
+            failure_kind="refused",
+            data={"unanswered": True},
+            error=(
+                f"No one answered the approval request within {timeout:.0f}s, so the action did "
+                "not run. Nobody rejected it - there is simply no one available to approve. "
+                "Do not retry this or look for another way to do it."
+            ),
+        )
+    return ToolOutput(success=False, failure_kind="refused", error="Action rejected by user.")

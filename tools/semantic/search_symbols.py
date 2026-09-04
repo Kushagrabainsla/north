@@ -79,7 +79,7 @@ class SearchSymbolsTool(Tool):
 
 def _search_symbols_dispatch(path: Path, search_type: str) -> ToolOutput:
     if not path.exists():
-        return ToolOutput(success=False, error=f"File not found: {path}")
+        return ToolOutput(success=False, error=f"File not found: {path}", failure_kind="not_found")
     if not path.is_file():
         return ToolOutput(success=False, error=f"Not a file: {path}")
 

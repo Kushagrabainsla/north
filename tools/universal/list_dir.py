@@ -56,7 +56,7 @@ class ListDirTool(Tool):
 
 def _list_sync(path: Path) -> ToolOutput:
     if not path.exists():
-        return ToolOutput(success=False, error=f"Directory not found: {path}")
+        return ToolOutput(success=False, error=f"Directory not found: {path}", failure_kind="not_found")
     if not path.is_dir():
         return ToolOutput(success=False, error=f"Not a directory: {path}")
     try:

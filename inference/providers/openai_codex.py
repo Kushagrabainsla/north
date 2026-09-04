@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -34,6 +35,8 @@ from inference.models import (
 )
 from inference.usage import cache_tokens
 from utils.ids import generate_id
+
+logger = logging.getLogger(__name__)
 
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
@@ -382,6 +385,12 @@ class OpenAICodexProvider:
                         tokens_in = int(usage.get("input_tokens") or 0)
                         tokens_out = int(usage.get("output_tokens") or 0)
                         cached_tokens, cache_write_tokens = cache_tokens(usage)
+                        # `north inference costs` can say "0 tokens reused" for two
+                        # very different reasons: the cache genuinely missed, or this
+                        # backend never reports the number and the question is
+                        # unanswerable. The keys the provider actually sent settle
+                        # it, and nothing else records them.
+                        logger.debug("codex usage keys=%s cached=%d", sorted(usage), cached_tokens)
                         response_model = str(completed.get("model") or "")
                         response_id = str(completed.get("id") or response_id)
                         previous_response_id = str(completed.get("previous_response_id") or "")

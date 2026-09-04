@@ -52,6 +52,7 @@ from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.watchdog import watch_stuck_tasks
 from skills import SkillRegistry, SkillSelector
 from skills.distiller import SkillDistiller
+from tools._path import prune_handoff_dirs
 from tools.confidence import RELIABLE_TOOLS
 from tools.registry import ToolRegistry
 from tools.semantic.search_code import SearchCodeTool
@@ -484,12 +485,20 @@ def _launch_background_tasks(
             pruned = await deps.ledger.prune(completed_before, failed_before)
             # Routing decisions age out with the tasks they explain.
             decisions = _prune_routing_decisions(deps, settings.task_cleanup_completed_days)
+            # Handoff artifacts are what the cockpit lists, so they need a window
+            # of their own: nothing ever deleted these directories, and one is
+            # created for every task the install has ever run.
+            handoffs = await asyncio.to_thread(
+                prune_handoff_dirs,
+                settings.handoff_retention_days,
+                keep=orchestrator.active_task_ids,
+            )
             await deps.ledger.write(
                 LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     action=(
                         f"task_context_cleanup: removed {n} stale rows, pruned {pruned} ledger entries"
-                        f", {decisions} routing decisions"
+                        f", {decisions} routing decisions, {handoffs} handoff directories"
                     ),
                     status=LedgerStatus.COMPLETED,
                 )

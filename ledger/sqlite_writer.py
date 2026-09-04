@@ -396,6 +396,20 @@ class SQLiteLedgerWriter(LedgerWriter):
                 (since_iso,),
             ).fetchall()
 
+            # A stage that answered but never wrote the artifact it declares in
+            # `produces` did not finish its job. It is not a failure - the agent
+            # returned - so success_rate calls it a success, which is how three
+            # runs that told the user "I could not complete" were all recorded
+            # as 100%. Counted separately so the gap is visible either way.
+            incomplete_rows = conn.execute(
+                """SELECT agent, COUNT(DISTINCT task_id) as incomplete_tasks
+                   FROM ledger
+                   WHERE timestamp >= ? AND agent IS NOT NULL AND task_id IS NOT NULL
+                     AND action = 'handoff_artifact_missing'
+                   GROUP BY agent""",
+                (since_iso,),
+            ).fetchall()
+
             model_rows = conn.execute(
                 """SELECT model_used, COALESCE(SUM(cost_usd), 0.0) as cost
                    FROM ledger
@@ -418,6 +432,7 @@ class SQLiteLedgerWriter(LedgerWriter):
                 agent_durations[r["agent"]].append(r["duration_ms"])
 
         failed_by_agent: dict[str, int] = {r["agent"]: r["failed_tasks"] for r in error_rows}
+        incomplete_by_agent: dict[str, int] = {r["agent"]: r["incomplete_tasks"] for r in incomplete_rows}
 
         def _pct(vals: list[int], p: int) -> int | None:
             if not vals:
@@ -436,6 +451,7 @@ class SQLiteLedgerWriter(LedgerWriter):
                     "agent": agent,
                     "tasks": tasks,
                     "success_rate": round((tasks - failed) / tasks, 3) if tasks > 0 else 0.0,
+                    "incomplete": incomplete_by_agent.get(agent, 0),
                     "cost_usd": round(r["cost_usd"] or 0.0, 6),
                     "p50_ms": _pct(durs, 50),
                     "p95_ms": _pct(durs, 95),

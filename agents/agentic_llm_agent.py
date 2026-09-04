@@ -62,6 +62,14 @@ _ASK_USER_NO_ANSWER = (
 # Agent-loop built-ins, not registry tools - excluded from tool-reliability tracking.
 _INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user"})
 
+# How many approval cards may expire unanswered, back to back, before the agent
+# gives up. Nobody is watching: each card costs a full approval timeout, and an
+# agent that reads the expiry as a refusal goes looking for another way to do
+# the same thing, so the run repeats that stall until the iteration cap. The
+# count is consecutive, so a user who answers slowly - from Telegram, say -
+# resets it and is never cut off; only a genuinely absent one trips it.
+MAX_UNANSWERED_APPROVALS = 2
+
 
 class AgenticLLMAgent(LLMAgent):
     """LLMAgent that runs a ReAct loop via native function calling.
@@ -71,13 +79,22 @@ class AgenticLLMAgent(LLMAgent):
     as they arrive so the UI can render them progressively.
     """
 
-    async def _record_tool_call_confidence(self, tool_name: str, success: bool) -> None:
-        """Record tool execution confidence if not a special internal tool."""
-        if tool_name not in _INTERNAL_TOOLS:
-            spawn(
-                self._deps.confidence_tracker.record_use(self.name, tool_name, success),
-                name=f"record_confidence:{self.name}/{tool_name}",
-            )
+    async def _record_tool_call_confidence(self, tool_name: str, result_str: str, success: bool) -> None:
+        """Record tool execution confidence if not a special internal tool.
+
+        A tool that correctly reports absence, or an action a human declined, is
+        not an unreliable tool. Counting those as failures ranked `read_file`
+        below every other tool the researcher used, purely because it was asked
+        whether an optional file existed.
+        """
+        if tool_name in _INTERNAL_TOOLS:
+            return
+        if not success and _failure_kind(result_str) != "error":
+            return
+        spawn(
+            self._deps.confidence_tracker.record_use(self.name, tool_name, success),
+            name=f"record_confidence:{self.name}/{tool_name}",
+        )
 
     def _append_tool_call_exchange(
         self,
@@ -155,13 +172,14 @@ class AgenticLLMAgent(LLMAgent):
         payload: AgentPayload,
         tool_map: dict[str, Tool],
         messages: list[dict],
-    ) -> list[tuple[str, bool]]:
+    ) -> tuple[list[tuple[str, bool]], int]:
         """Execute the requested tool calls and update logging/history.
 
         Read-only calls run concurrently; mutating calls run sequentially so two
         edits to the same file cannot race. Results are returned in call order.
         Returns ``(tool_name, success)`` per call as evidence for output
-        verification.
+        verification, plus how many approval cards in this batch expired with
+        nobody answering them.
         """
         # Announce every call *before* execution so the UI shows live in-progress
         # state rather than a retrospective log after the tool has already finished.
@@ -185,10 +203,11 @@ class AgenticLLMAgent(LLMAgent):
                 except (json.JSONDecodeError, AttributeError):
                     pass
                 await self._deps.stream_manager.emit(payload.task_id, "tool_result", event_data)
-            await self._record_tool_call_confidence(call.name, success)
+            await self._record_tool_call_confidence(call.name, result_str, success)
 
         self._append_tool_call_exchange(messages, results)
-        return [(call.name, success) for call, _, success, _ in results]
+        unanswered = sum(1 for item in results if _is_unanswered_approval(item[1]))
+        return [(call.name, success) for call, _, success, _ in results], unanswered
 
     async def _execute_calls_ordered(
         self,
@@ -319,6 +338,7 @@ class AgenticLLMAgent(LLMAgent):
         successful_tools: list[str] = []
         _seen_models: set[str] = set()
         models_used: list[str] = []
+        consecutive_unanswered: int = 0
 
         known_registry_tools = (
             set(self._deps.tool_registry._tools.keys()) if getattr(self._deps, "tool_registry", None) else set()
@@ -336,7 +356,13 @@ class AgenticLLMAgent(LLMAgent):
             internal_schemas = [REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
             if payload.allow_delegation:
                 internal_schemas.insert(0, DELEGATE_TASK_SCHEMA)
-            tools = [t.schema() for t in tool_map.values()] + internal_schemas
+            # Sorted by name, not by confidence. Tool definitions are the largest
+            # stable block of the cached prefix, and `_load_tools` orders them by
+            # a score that moves every time a tool succeeds or fails - so the
+            # ranking rewrote the prefix between runs and threw the cache away.
+            # The ranking still reaches the model, as text, in the reliability
+            # hints at the end of the task message where it costs nothing.
+            tools = [tool_map[name].schema() for name in sorted(tool_map)] + internal_schemas
 
             token_cb = self._make_token_callback(payload.task_id)
 
@@ -428,11 +454,32 @@ class AgenticLLMAgent(LLMAgent):
                 if call.name not in _seen_tools:
                     _seen_tools.add(call.name)
                     tools_used.append(call.name)
-            evidence = await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
+            evidence, unanswered = await self._handle_tool_calls_response(
+                response.calls, payload, tool_map, messages
+            )
             for name, success in evidence:
                 if success and name not in _seen_success:
                     _seen_success.add(name)
                     successful_tools.append(name)
+
+            # One expired card is a slow user; several in a row means nobody is
+            # there. Stop rather than spend the whole iteration budget stalling
+            # for a timeout each time.
+            consecutive_unanswered = consecutive_unanswered + unanswered if unanswered else 0
+            if consecutive_unanswered >= MAX_UNANSWERED_APPROVALS:
+                return _final_answer(
+                    f"Stopped: {consecutive_unanswered} approval requests in a row expired with no "
+                    "answer, so the work that needed approval was never done. Re-run this when you "
+                    "are available to approve, or switch the approval mode to auto.",
+                    "No one available to approve",
+                    total_cost_usd,
+                    tools_used,
+                    successful_tools,
+                    total_tokens_in,
+                    total_tokens_out,
+                    models_used=models_used,
+                    cached_tokens=total_cached_tokens,
+                )
 
         return _final_answer(
             "Reached the maximum number of reasoning steps without a final answer.",
@@ -458,11 +505,18 @@ class AgenticLLMAgent(LLMAgent):
         The persona (soul.md) leads the system prompt so north's voice frames the
         agent's own instructions.
         """
-        now = localnow().strftime("%Y-%m-%d %H:%M %Z")
+        # The clock goes last, not first. A prompt cache is a *prefix* match, and
+        # the system prompt is the head of that prefix for every provider - so a
+        # minute-resolution timestamp sitting in front of the agent's own
+        # instructions meant no two runs a minute apart could share anything.
+        # The precise time is what changes; the date is what agents actually
+        # reason about, and it is stable for a day. Anything needing the minute
+        # asks a tool for it.
         preamble = f"{persona}\n\n" if persona else ""
-        system_prompt = f"{preamble}Current date/time: {now}\n\n" + self._load_system_prompt()
+        system_prompt = preamble + self._load_system_prompt()
         if capabilities := build_platform_capabilities_summary(self._deps):
             system_prompt = f"{system_prompt}\n\n{capabilities}"
+        system_prompt = f"{system_prompt}\n\nCurrent date: {localnow().strftime('%Y-%m-%d')}"
         user_text = self._build_task_message(payload, context, scored_tools)
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
@@ -563,7 +617,10 @@ class AgenticLLMAgent(LLMAgent):
             return call, result_str, success, []
         if call.name == "request_approval":
             decision = await self._request_approval(payload, params)
-            result_str = json.dumps({"decision": decision})
+            result_str = json.dumps({
+                "decision": decision,
+                "unanswered": decision == ApprovalDecision.TIMEOUT_REJECTED,
+            })
             return call, result_str, not _is_rejection(decision), []
         if call.name == "ask_user":
             result_str = await self._ask_user(payload, params)
@@ -991,6 +1048,37 @@ def _extract_success(tool_result_str: str) -> bool:
         return bool(json.loads(tool_result_str).get("success", False))
     except (json.JSONDecodeError, AttributeError):
         return False
+
+
+def _is_unanswered_approval(tool_result_str: str) -> bool:
+    """True when an approval card expired with nobody answering it.
+
+    Two shapes carry the marker: a gated tool's ``ToolOutput`` puts it under
+    ``data``, while the loop's own ``request_approval`` built-in puts it at the
+    top level.
+    """
+    try:
+        parsed = json.loads(tool_result_str)
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("unanswered"):
+        return True
+    data = parsed.get("data")
+    return bool(isinstance(data, dict) and data.get("unanswered"))
+
+
+def _failure_kind(tool_result_str: str) -> str:
+    """Why a tool call failed: ``error``, ``not_found`` or ``refused``.
+
+    Anything unparseable is an error - the safe reading, matching
+    ``ToolOutput``'s own default.
+    """
+    try:
+        return str(json.loads(tool_result_str).get("failure_kind") or "error")
+    except (json.JSONDecodeError, AttributeError):
+        return "error"
 
 
 def _is_delegation_failure(tool_result_str: str) -> bool:

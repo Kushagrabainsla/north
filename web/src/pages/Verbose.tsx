@@ -14,14 +14,35 @@ export function Tasks() {
   </div>{!tasks.size && <Empty>No task history yet.</Empty>}</div>;
 }
 
+// The pipeline stages, in the order they run - so a task's artifacts read as the
+// story of that run rather than in whatever order the filesystem returned them.
+const stageOrder = ["research", "architecture", "implementation", "qa"];
+const stageIcon: Record<string, string> = { news: "☼", notes: "✎", wellness: "♥", research: "◇", architecture: "▣", implementation: "▸", qa: "✓" };
+
 function ArtifactLibrary({ newsOnly = false }: { newsOnly?: boolean }) {
   const resource = useResource<Artifact[]>("/web/api/artifacts", 10000);
   const [selected, setSelected] = useState<Artifact | null>(null);
   const [error, setError] = useState("");
   const files = (resource.data || []).filter(file => !newsOnly || file.kind === "news");
   const open = async (file: Artifact) => { try { setSelected(await api<Artifact>(`/web/api/artifacts/${file.id}`)); } catch (err) { setError(String(err)); } };
+  const personal = files.filter(file => !file.task);
+  // One group per task run, newest run first, stages in pipeline order within it.
+  const runs = useMemo(() => {
+    const grouped = new Map<string, Artifact[]>();
+    for (const file of files) if (file.task) grouped.set(file.task, [...(grouped.get(file.task) || []), file]);
+    return [...grouped].map(([task, items]) => ({
+      task,
+      items: [...items].sort((a, b) => stageOrder.indexOf(a.kind) - stageOrder.indexOf(b.kind) || a.name.localeCompare(b.name)),
+      updated: Math.max(...items.map(item => item.updated_at || 0)),
+    })).sort((a, b) => b.updated - a.updated);
+  }, [files]);
+  const card = (file: Artifact) => <button className="artifact-card" key={file.id} onClick={() => open(file)}><span>{stageIcon[file.kind] || "◇"}</span><div><b>{file.name}</b><small>{file.kind} · {file.size ? `${Math.ceil(file.size / 1024)} KB` : ""} · {timeAgo(file.updated_at)}</small></div></button>;
   if (resource.loading) return <Loading/>;
-  return <>{(resource.error || error) && <ErrorNotice message={resource.error || error}/>}<div className="artifact-grid">{files.map(file => <button className="artifact-card" key={file.id} onClick={() => open(file)}><span>{file.kind === "news" ? "☼" : "◇"}</span><div><b>{file.name}</b><small>{file.kind} · {file.size ? `${Math.ceil(file.size / 1024)} KB` : ""} · {timeAgo(file.updated_at)}</small></div></button>)}</div>{!files.length && <Empty>No files have been generated in this section.</Empty>}{selected && <div className="document-view"><header><div><span>{selected.kind}</span><h2>{selected.name}</h2></div><button onClick={() => setSelected(null)}>Close</button></header><Markdown>{selected.content || ""}</Markdown></div>}</>;
+  return <>{(resource.error || error) && <ErrorNotice message={resource.error || error}/>}
+    {!!personal.length && <div className="artifact-grid">{personal.map(card)}</div>}
+    {runs.map(run => <section className="artifact-run" key={run.task}><h3>{run.task}<small>{timeAgo(run.updated)}</small></h3><div className="artifact-grid">{run.items.map(card)}</div></section>)}
+    {!files.length && <Empty>No files have been generated in this section.</Empty>}
+    {selected && <div className="document-view"><header><div><span>{selected.task ? `${selected.task} · ${selected.kind}` : selected.kind}</span><h2>{selected.name}</h2></div><button onClick={() => setSelected(null)}>Close</button></header><Markdown>{selected.content || ""}</Markdown></div>}</>;
 }
 
 export function Artifacts() { return <div className="page"><PageHeader eyebrow="Outputs" title="Artifacts" subtitle="Every report, briefing, note, plan, and file North has produced."/><ArtifactLibrary/></div>; }

@@ -6,11 +6,17 @@ stash, merge, branch create/delete) are gated in code behind a user approval
 card - the gate does not rely on the agent's system prompt. Force pushes are
 permanently blocked via token-level argument parsing. reset/clean are not
 offered as actions at all.
+
+Because the read-only path skips the approval card, its *arguments* are
+allowlisted too: git's diff family can write a file anywhere on disk
+(`--output=`) or run a configured command (`--ext-diff`), which would step
+around both the approval gate and the `tools/_path.py` workspace sandbox.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 import shutil
 from pathlib import Path
@@ -32,17 +38,94 @@ if TYPE_CHECKING:
     from orchestrator.stream import EventStreamManager
 
 _TIMEOUT = 30
+# `git log -20` - a count with no option letter in front of it.
+_BARE_COUNT = re.compile(r"-\d+")
 
 # Actions that never change repository state. Everything else is mutating and
 # requires in-code approval before the subprocess is spawned.
 _READONLY_ACTIONS: frozenset[str] = frozenset({"status", "diff", "log", "show"})
 # `branch` is read-only only when listing; these flags keep it on the fast path.
-_BRANCH_LIST_FLAGS: frozenset[str] = frozenset({"-a", "-r", "-v", "-vv", "--list", "--all", "--show-current"})
+_BRANCH_LIST_FLAGS: frozenset[str] = frozenset({
+    "-a", "-r", "-v", "-vv", "-l", "--list", "--all", "--show-current",
+})
+# ...and these put `branch` into list mode, where a positional is a glob pattern
+# to filter by rather than a branch name to create. `git branch --list foo*`
+# cannot mutate anything; `git branch foo` creates a branch.
+_BRANCH_LIST_MODE_FLAGS: frozenset[str] = frozenset({"-l", "--list"})
+
+# Read-only actions skip the approval gate, so their arguments are the one place
+# an agent reaches the filesystem unsupervised - and git's diff family can write
+# and execute. `git diff --output=<path>` creates a file at any absolute path,
+# outside the workspace and outside the `tools/_path.py` sandbox; `--ext-diff`
+# runs a diff driver configured in the repo. Flags are therefore allowlisted,
+# not blocklisted: a blocklist has to predict every future git option that
+# touches the disk, and misses the first one it does not know about.
+_SAFE_DIFF_FLAGS: frozenset[str] = frozenset({
+    "--stat", "--numstat", "--shortstat", "--summary", "--dirstat", "--raw",
+    "--name-only", "--name-status", "--diff-filter", "--relative",
+    "-p", "-u", "--patch", "--no-patch", "-s",
+    "--cached", "--staged", "--merge-base",
+    "-U", "--unified", "--function-context", "-W",
+    "-w", "-b", "--ignore-all-space", "--ignore-space-change",
+    "--ignore-blank-lines", "--ignore-cr-at-eol",
+    "--color", "--no-color", "--word-diff", "--color-words",
+    "-M", "-C", "--find-renames", "--find-copies", "--find-copies-harder",
+    "-R", "--text", "--binary", "--full-index", "--abbrev",
+    "--src-prefix", "--dst-prefix", "--no-prefix",
+    # Explicitly safe counterparts of the two options that can run a command.
+    "--no-ext-diff", "--no-textconv",
+})
+_SAFE_LOG_FLAGS: frozenset[str] = frozenset({
+    "--oneline", "--graph", "--decorate", "--no-decorate",
+    "--all", "--branches", "--tags", "--remotes",
+    "--first-parent", "--merges", "--no-merges",
+    "--reverse", "--topo-order", "--date-order", "--author-date-order",
+    "-n", "--max-count", "--skip",
+    "--since", "--after", "--until", "--before",
+    "--author", "--committer", "--grep", "--regexp-ignore-case", "-i",
+    "--follow", "--date", "--pretty", "--format",
+    "--abbrev-commit", "--no-abbrev-commit",
+})
+# `status` builds its own fixed argument list and drops whatever the agent
+# passed, so it has no user-controlled flags to check.
+_SAFE_FLAGS_BY_ACTION: dict[str, frozenset[str]] = {
+    "diff": _SAFE_DIFF_FLAGS,
+    "log": _SAFE_LOG_FLAGS | _SAFE_DIFF_FLAGS,
+    "show": _SAFE_LOG_FLAGS | _SAFE_DIFF_FLAGS,
+}
 
 
 def _is_force_flag(token: str) -> bool:
     """Token-level force detection - robust against `--force-with-lease=ref` etc."""
     return token == "-f" or token.startswith("--force")
+
+
+def _flag_allowed(token: str, allowed: frozenset[str]) -> bool:
+    """True when *token* names an option on the read-only allowlist.
+
+    Handles the three shapes git accepts for one option: `--unified=3`,
+    `-U3` (value attached to a short flag), and `-20` (a bare count for `log`).
+    """
+    name = token.split("=", 1)[0]
+    if name in allowed:
+        return True
+    if len(name) > 2 and not name.startswith("--") and name[:2] in allowed:
+        return True
+    return bool(_BARE_COUNT.fullmatch(name))
+
+
+def _unsafe_flags(action: str, args: list[str]) -> list[str]:
+    """Options in *args* that are not allowlisted for a read-only *action*."""
+    allowed = _SAFE_FLAGS_BY_ACTION.get(action)
+    if allowed is None:
+        return []
+    unsafe: list[str] = []
+    for token in args:
+        if token == "--":
+            break  # everything after the separator is a pathspec, not an option
+        if token.startswith("-") and not _flag_allowed(token, allowed):
+            unsafe.append(token)
+    return unsafe
 
 
 class GitTool(ApprovalGatedTool):
@@ -150,8 +233,22 @@ class GitTool(ApprovalGatedTool):
                 error="Force-push is blocked - too destructive. Push to a new branch instead.",
             )
 
+        # An action that runs without an approval card has nobody checking its
+        # arguments, so the allowlist is the only thing between the agent and
+        # `git diff --output=/anywhere`.
+        mutating = _is_mutating(action, cmd)
+        if not mutating and (unsafe := _unsafe_flags(action, cmd[2:])):
+            return ToolOutput(
+                success=False,
+                error=(
+                    f"Option(s) not permitted for read-only `git {action}`: {' '.join(unsafe)}. "
+                    "Read-only git runs without an approval card, so its options are limited to "
+                    "an allowlist that cannot write files or run commands."
+                ),
+            )
+
         auto_git = mode in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS) and self._unattended.approves_git(action, args)
-        if _is_mutating(action, cmd) and not auto_git:
+        if mutating and not auto_git:
             denial = await gate_mutating_action(
                 self._approval_store,
                 agent="git",
@@ -164,7 +261,7 @@ class GitTool(ApprovalGatedTool):
                 timeout=self._approval_timeout_seconds,
             )
             if denial is not None:
-                return ToolOutput(success=False, error=denial)
+                return denial
 
         return await asyncio.to_thread(run_capture, cmd, cwd, timeout=_TIMEOUT)
 
@@ -173,9 +270,16 @@ def _is_mutating(action: str, cmd: list[str]) -> bool:
     if action in _READONLY_ACTIONS:
         return False
     if action == "branch":
-        # Listing branches is read-only; any non-list flag or positional
-        # argument (create/delete/rename) makes it mutating.
-        return any(token not in _BRANCH_LIST_FLAGS for token in cmd[2:])
+        # Listing branches is read-only. Any flag outside the list set
+        # (create/delete/rename/move) makes it mutating. A positional is a
+        # branch name to create - unless `--list` is present, which turns it
+        # into a glob pattern to filter the listing by.
+        tokens = cmd[2:]
+        flags = [t for t in tokens if t.startswith("-")]
+        if any(flag not in _BRANCH_LIST_FLAGS for flag in flags):
+            return True
+        positionals = [t for t in tokens if not t.startswith("-")]
+        return bool(positionals) and not any(flag in _BRANCH_LIST_MODE_FLAGS for flag in flags)
     return True
 
 

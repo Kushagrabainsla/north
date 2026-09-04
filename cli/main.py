@@ -230,6 +230,10 @@ app = typer.Typer(
 )
 
 
+# Set by the root callback; read by `_run_task` so --yolo works outside the TUI.
+_YOLO = False
+
+
 @app.callback()
 def _root(
     ctx: typer.Context,
@@ -239,6 +243,11 @@ def _root(
 
     Run without a subcommand to open the interactive TUI.
     """
+    # Remembered for whichever subcommand runs next: `--yolo` is a root option,
+    # but it used to reach only the TUI, so `north --yolo task "..."` parsed the
+    # flag, ignored it, and still stopped dead at an approval prompt.
+    global _YOLO
+    _YOLO = yolo
     if ctx.invoked_subcommand is None:
         # No subcommand - boot the server if needed, then open the TUI.
         _launch_tui(yolo=yolo)
@@ -295,14 +304,14 @@ def _launch_tui(
 
 # ── task ─────────────────────────────────────────────────────────────────────
 
-task_app = typer.Typer(help="Task management.", no_args_is_help=True)
-app.add_typer(task_app, name="task")
-
-
-@task_app.callback(invoke_without_command=True)
-def task_default(
-    ctx: typer.Context,
-    prompt: str | None = typer.Argument(None, help="Prompt to submit as a new task."),
+# A plain command, not a command group. As a group with a positional `prompt`,
+# the first word of every prompt was parsed as a subcommand name first: the
+# documented `north task cancel <id>` failed with "No such command <id>", and
+# `-w` was only accepted before the prompt. Cancelling is `north cancel <id>`,
+# which handles tasks and jobs alike.
+@app.command("task")
+def submit_task(
+    prompt: str = typer.Argument(..., help="Prompt to submit as a new task."),
     workspace: str | None = typer.Option(
         None,
         "--workspace",
@@ -311,22 +320,7 @@ def task_default(
     ),
 ) -> None:
     """Submit a task and stream results live."""
-    if ctx.invoked_subcommand is not None:
-        return
-    if prompt is None:
-        typer.echo(ctx.get_help())
-        raise typer.Exit()
-    resolved = _resolve_workspace(workspace)
-    _run_task(prompt, workspace=resolved)
-
-
-@task_app.command("cancel")
-def cancel_task(
-    task_id: str = typer.Argument(..., help="Task ID to cancel."),
-) -> None:
-    """Cancel a pending task."""
-    _api("DELETE", f"/orchestrator/task/{task_id}")
-    typer.secho(f"✓ Task {task_id} cancelled.", fg=typer.colors.YELLOW)
+    _run_task(prompt, workspace=_resolve_workspace(workspace))
 
 
 # ── tasks ─────────────────────────────────────────────────────────────────────
@@ -376,6 +370,12 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
     output_text: str = ""
     failed_msg: str = ""
     token_buffer: str = ""
+    # The auditor can run the agent a second time to correct unverified claims,
+    # and that draft streams down the same channel as the first. Without this,
+    # both answers were concatenated - which is how one reply ended
+    # "...format_status_table()I could not complete the verification:".
+    repairing: bool = False
+    repaired: bool = False
 
     try:
         with (
@@ -489,7 +489,11 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                         for i, opt in enumerate(options, 1):
                             _console.print(f"  [bright_black][{i}][/bright_black]  {opt}")
                         _console.print()
-                        raw_choice = input("  ❯ ").strip()
+                        if _YOLO:
+                            raw_choice = "1"
+                            _console.print("  [yellow]⚠ YOLO[/yellow]  auto-approved")
+                        else:
+                            raw_choice = input("  ❯ ").strip()
                         try:
                             idx = int(raw_choice) - 1
                             chosen = options[idx] if 0 <= idx < len(options) else raw_choice
@@ -520,6 +524,12 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                         # task_completed / task_cancelled will break the loop.
                         current_event = ""
                         continue
+                    elif event == "self_repair_started":
+                        # The answer streamed so far is about to be replaced.
+                        token_buffer = ""
+                        repairing, repaired = True, False
+                    elif event == "self_repair_done":
+                        repaired = True
                     elif event == "token":
                         token_buffer += data.get("text", "")
                         # Don't add a step pill per token - just accumulate silently.
@@ -568,7 +578,9 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
         )
         return ""
 
-    if token_buffer:
+    # A repair that started but was never adopted leaves a rejected draft in the
+    # buffer; the ledger holds the answer that was actually kept.
+    if token_buffer and not (repairing and not repaired):
         # Tokens were streamed - use them directly, no ledger round-trip needed.
         output_text = token_buffer
     else:
@@ -1555,6 +1567,9 @@ def metrics(
         t.add_column("agent", style="bold white")
         t.add_column("tasks", justify="right")
         t.add_column("success", justify="right")
+        # A stage can answer and still not finish: it never wrote the artifact
+        # it declares in `produces`. That reads as success everywhere else.
+        t.add_column("incomplete", justify="right")
         t.add_column("cost $", justify="right")
         t.add_column("p50 ms", justify="right")
         t.add_column("p95 ms", justify="right")
@@ -1563,6 +1578,7 @@ def metrics(
                 a["agent"],
                 str(a["tasks"]),
                 f"{a['success_rate'] * 100:.0f}%",
+                (f"[yellow]{a['incomplete']}[/yellow]" if a.get("incomplete") else " - "),
                 f"{a['cost_usd']:.6f}",
                 str(a["p50_ms"]) if a["p50_ms"] is not None else " - ",
                 str(a["p95_ms"]) if a["p95_ms"] is not None else " - ",

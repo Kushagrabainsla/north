@@ -70,7 +70,7 @@ class GotoDefinitionTool(Tool):
         if resolved is None:
             return ToolOutput(success=False, error="Path escapes workspace root.")
         if not resolved.is_file():
-            return ToolOutput(success=False, error=f"File not found: {resolved}")
+            return ToolOutput(success=False, error=f"File not found: {resolved}", failure_kind="not_found")
         if is_sensitive_path(resolved):
             return ToolOutput(success=False, error="Refusing to operate on a sensitive path.")
 

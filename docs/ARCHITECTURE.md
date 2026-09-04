@@ -555,6 +555,22 @@ Task SQLite files are cleaned up by a daily cron job (`task_context_cleanup`, ru
 - `failed`: retained for 30 days (may be needed for debugging or retry)
 - `pending` or `running` with no update in more than 24 hours: treated as stale, marked `failed`, retained for 30 days
 
+**Handoff artifact cleanup policy:**
+
+The same daily job sweeps `<NORTH_HOME>/tasks/<task_id>/` - the research notes,
+specs, implementation notes and QA reports agents write during a run, which the
+web cockpit lists under Artifacts. Nothing removed these before: one directory
+is created per task and only losing best-of-N candidates were cleaned up, so an
+install accumulated one directory for every task it had ever run.
+
+- empty directories: deleted regardless of age (they hold nothing to read)
+- directories with content: deleted after `handoff.retention_days` (default 30)
+- directories for tasks still running: never touched
+
+Age is taken from the newest artifact in the directory, not the directory
+itself, so a long task that writes its QA report late is not aged out on when it
+started. Setting `handoff.retention_days` to 0 keeps everything that has content.
+
 Ledger entries for all tasks are retained permanently regardless of Task Context Object cleanup.
 
 ### 6.7 Failure Handling
@@ -1236,7 +1252,7 @@ north stop                               # stop (kills the server process or doc
 north task "Plan my week"
 north task "What assignments are due this week?"
 north tasks                              # list active tasks
-north task cancel {id}
+north cancel {id}
 
 # Voice input (push-to-talk)
 north dictate                            # hold hotkey, speak, release to submit

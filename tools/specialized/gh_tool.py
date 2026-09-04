@@ -137,6 +137,6 @@ class GhTool(ApprovalGatedTool):
                 timeout=self._approval_timeout_seconds,
             )
             if denial is not None:
-                return ToolOutput(success=False, error=denial)
+                return denial
 
         return await asyncio.to_thread(run_capture, cmd, cwd, timeout=_TIMEOUT)

@@ -20,6 +20,7 @@ from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinitio
 from ledger.base import LedgerFilters
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
+from tools._path import DB_SUFFIXES
 from utils.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 
 from .conversations import ConversationStore, Turn
@@ -624,8 +625,34 @@ async def update_provider(provider_id: str, body: ProviderCredentialUpdate, requ
 
 
 def _allowed_output_roots() -> list[Path]:
+    """Every directory the artifact library may read from.
+
+    ``tasks/`` is where the engineering pipeline writes what it actually
+    concluded - research notes, specs, implementation notes, QA reports. It was
+    not readable from anywhere, which is why the researcher was told to copy its
+    findings into the user's repo as well: the real artifact had nowhere visible
+    to live. Listing it here is what makes that duplicate unnecessary.
+    """
     home = current_services().require("north_home")
-    return [home / name for name in ("news", "notes", "wellness")]
+    return [home / name for name in ("news", "notes", "wellness", "tasks")]
+
+
+def _is_readable_artifact(path: Path) -> bool:
+    """False for north's own state files, which share ~/.north/tasks with the
+    handoff directories. ``tasks.db`` and its WAL/SHM siblings sit right beside
+    them, and adding that root to the library would otherwise publish the
+    task-state database over HTTP. Same suffix list the tool sandbox blocks on.
+    """
+    return path.is_file() and not path.name.endswith(DB_SUFFIXES)
+
+
+def _artifact_task_id(path: Path, home: Path) -> str:
+    """The task a handoff artifact belongs to, or "" for a personal output."""
+    try:
+        parts = path.relative_to(home).parts
+    except ValueError:
+        return ""
+    return parts[1] if len(parts) > 2 and parts[0] == "tasks" else ""
 
 
 def _artifact_id(path: Path) -> str:
@@ -644,7 +671,7 @@ def _artifact_path(artifact_id: str) -> Path:
     path = (home / relative).resolve()
     if not any(path.is_relative_to(root.resolve()) for root in _allowed_output_roots()):
         raise HTTPException(status_code=404, detail="Artifact not found")
-    if not path.is_file():
+    if not _is_readable_artifact(path):
         raise HTTPException(status_code=404, detail="Artifact not found")
     return path
 
@@ -653,8 +680,9 @@ def _list_artifacts_sync(limit: int) -> list[dict[str, Any]]:
     paths: list[Path] = []
     for root in _allowed_output_roots():
         if root.exists():
-            paths.extend(path for path in root.rglob("*") if path.is_file())
+            paths.extend(path for path in root.rglob("*") if _is_readable_artifact(path))
     paths.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    home = current_services().require("north_home")
     result = []
     for path in paths[: max(1, min(limit, 500))]:
         stat = path.stat()
@@ -663,6 +691,7 @@ def _list_artifacts_sync(limit: int) -> list[dict[str, Any]]:
                 "id": _artifact_id(path),
                 "name": path.name,
                 "kind": path.parent.name,
+                "task": _artifact_task_id(path, home),
                 "media_type": mimetypes.guess_type(path.name)[0] or "text/plain",
                 "size": stat.st_size,
                 "updated_at": stat.st_mtime,
@@ -686,6 +715,7 @@ async def get_artifact(artifact_id: str) -> dict[str, Any]:
         "id": artifact_id,
         "name": path.name,
         "kind": path.parent.name,
+        "task": _artifact_task_id(path, current_services().require("north_home")),
         "media_type": mimetypes.guess_type(path.name)[0] or "text/plain",
         "content": content,
     }

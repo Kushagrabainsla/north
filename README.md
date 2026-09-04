@@ -61,7 +61,7 @@ headless setups.
 | `north reset --all` | Wipe everything |
 | `north update` | Update to latest version |
 | `north task "..."` | Submit a task |
-| `north task cancel <id>` | Cancel a task |
+| `north cancel <id>` | Cancel a task or job |
 | `north tasks` | List active tasks |
 | `north stream <id>` | Stream raw events for a task |
 | `north dictate` | Push-to-talk voice input |

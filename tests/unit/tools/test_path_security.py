@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,7 @@ from tools._path import (
     find_project_root,
     handoff_dir_for,
     is_sensitive_path,
+    prune_handoff_dirs,
     references_sensitive_path,
     resolve_path,
 )
@@ -188,3 +191,80 @@ class TestHandoffDirectory:
         created = ensure_handoff_dir("task_abc123")
         target = f"{created}/research/context.md"
         assert resolve_path(target, "/srv/project") == Path(target)
+
+
+class TestHandoffRetention:
+    """Nothing ever deleted these directories.
+
+    One is created per task and only losing best-of-N candidates were cleaned
+    up, so an install accumulated one directory for every task it had ever run -
+    78 of 80 of them empty. Once the cockpit lists what is inside them, that
+    backlog becomes the artifact library.
+    """
+
+    @pytest.fixture
+    def handoff_root(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+        _handoff_root.cache_clear()
+        yield tmp_path / "tasks"
+        _handoff_root.cache_clear()
+
+    def _task(self, root, name: str, *, age_days: float = 0.0, empty: bool = False):
+        directory = root / name / "research"
+        directory.mkdir(parents=True)
+        if not empty:
+            artifact = directory / "context.md"
+            artifact.write_text("findings", encoding="utf-8")
+            when = time.time() - age_days * 86_400
+            os.utime(artifact, (when, when))
+        return root / name
+
+    def test_empty_directories_go_regardless_of_age(self, handoff_root) -> None:
+        fresh_empty = self._task(handoff_root, "task_empty", empty=True)
+        kept = self._task(handoff_root, "task_recent")
+
+        assert prune_handoff_dirs(30) == 1
+        assert not fresh_empty.exists()
+        assert kept.exists(), "a directory with content inside the window stays"
+
+    def test_artifacts_past_the_window_are_removed(self, handoff_root) -> None:
+        old = self._task(handoff_root, "task_old", age_days=45)
+        recent = self._task(handoff_root, "task_recent", age_days=2)
+
+        assert prune_handoff_dirs(30) == 1
+        assert not old.exists()
+        assert recent.exists()
+
+    def test_age_is_the_newest_artifact_not_the_directory(self, handoff_root) -> None:
+        """A long task writing its QA report late must not age out on its start."""
+        directory = self._task(handoff_root, "task_long", age_days=45)
+        late = directory / "qa"
+        late.mkdir()
+        (late / "review_report_latest.md").write_text("PASS", encoding="utf-8")
+
+        assert prune_handoff_dirs(30) == 0
+        assert directory.exists()
+
+    def test_running_tasks_are_never_swept(self, handoff_root) -> None:
+        running = self._task(handoff_root, "task_running", age_days=99)
+
+        assert prune_handoff_dirs(30, keep={"task_running"}) == 0
+        assert running.exists()
+
+    def test_zero_keeps_everything_that_has_content(self, handoff_root) -> None:
+        ancient = self._task(handoff_root, "task_ancient", age_days=9999)
+        empty = self._task(handoff_root, "task_empty", empty=True)
+
+        assert prune_handoff_dirs(0) == 1, "an empty directory is still noise"
+        assert ancient.exists()
+        assert not empty.exists()
+
+    def test_state_files_beside_the_directories_are_untouched(self, handoff_root) -> None:
+        """`tasks.db` lives in the handoff root, not under it."""
+        handoff_root.mkdir(parents=True, exist_ok=True)
+        db = handoff_root / "tasks.db"
+        db.write_bytes(b"SQLite format 3\x00")
+        self._task(handoff_root, "task_empty", empty=True)
+
+        prune_handoff_dirs(30)
+        assert db.exists(), "the task-state database is not a handoff directory"

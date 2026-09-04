@@ -10,15 +10,20 @@ No real network calls are made; inference is fully mocked.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from agents.agentic_llm_agent import MAX_UNANSWERED_APPROVALS
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
+from tools.base import Tool
 from tools.confidence import ConfidenceTracker
+from tools.models import ToolInput, ToolOutput
 from tools.registry import ToolRegistry
 
 AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
@@ -485,7 +490,7 @@ async def test_multimodal_tool_image_context(tmp_path: Path) -> None:
     import json
 
     from tools.base import Tool
-    from tools.models import ToolInput, ToolOutput
+    from tools.models import ToolOutput
 
     class MockVisionTool(Tool):
         name = "mock_vision"
@@ -540,7 +545,7 @@ async def test_multimodal_tool_image_context(tmp_path: Path) -> None:
 async def test_execute_calls_ordered_preserves_causal_chunks(tmp_path: Path) -> None:
     """Verify that a mutating call followed by a read executes in proper causal order."""
     from tools.base import Tool
-    from tools.models import ToolInput, ToolOutput
+    from tools.models import ToolOutput
 
     execution_order: list[str] = []
 
@@ -659,3 +664,241 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
     assert "custom_tool" in loaded_names
 
 
+
+
+# ---------------------------------------------------------------------------
+# Failure kinds - "that isn't there" is not a broken tool
+# ---------------------------------------------------------------------------
+
+
+def _registering(agent, tool):
+    """Put *tool* in the agent's registry, available to every agent."""
+    agent._deps.tool_registry.register(tool)
+    agent._deps.tool_registry.make_universal(tool.name)
+    return agent
+
+
+class _AbsentFileTool(Tool):
+    """Answers "not found" correctly - a working tool, not a broken one."""
+
+    name = "read_file"
+    description = "read a file"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        return ToolOutput(success=False, error="File not found: /nope", failure_kind="not_found")
+
+
+class _BrokenTool(Tool):
+    name = "read_file"
+    description = "read a file"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        return ToolOutput(success=False, error="disk exploded")
+
+
+def _call_then_finish(tool_name: str):
+    class Router(MockInferenceRouter):
+        calls = 0
+
+        async def complete_with_tools(self, request, token_callback=None):
+            Router.calls += 1
+            if Router.calls == 1:
+                return ToolCallResponse(
+                    type="tool_calls",
+                    calls=[ToolCall(name=tool_name, call_id="c1", params={})],
+                    model_used="mock",
+                    tokens_in=1,
+                    tokens_out=1,
+                )
+            return ToolCallResponse(
+                type="message", content="done", calls=[], model_used="mock", tokens_in=1, tokens_out=1
+            )
+
+    Router.calls = 0
+    return Router()
+
+
+async def test_not_found_does_not_count_against_the_tool(tmp_path: Path) -> None:
+    """`read_file` decayed to the lowest-ranked tool the researcher had, purely
+    from being asked whether an optional file existed and answering correctly."""
+    agent = _load_agent("researcher", tmp_path, _call_then_finish("read_file"))
+    _registering(agent, _AbsentFileTool())
+    before = await agent._deps.confidence_tracker.get_score("researcher", "read_file")
+
+    await agent.run(AgentPayload(task_id="t-nf", prompt="Look for a file."))
+    await asyncio.sleep(0.05)  # confidence is recorded on a spawned task
+
+    after = await agent._deps.confidence_tracker.get_score("researcher", "read_file")
+    assert after == before, "answering 'not found' is not a malfunction"
+
+
+async def test_a_real_tool_error_still_counts_against_the_tool(tmp_path: Path) -> None:
+    agent = _load_agent("researcher", tmp_path, _call_then_finish("read_file"))
+    _registering(agent, _BrokenTool())
+    before = await agent._deps.confidence_tracker.get_score("researcher", "read_file")
+
+    await agent.run(AgentPayload(task_id="t-err", prompt="Look for a file."))
+    await asyncio.sleep(0.05)
+
+    after = await agent._deps.confidence_tracker.get_score("researcher", "read_file")
+    assert after < before, "a tool that actually broke must lose confidence"
+
+
+# ---------------------------------------------------------------------------
+# An approval nobody answers must not spin the loop
+# ---------------------------------------------------------------------------
+
+
+class _UnansweredApprovalTool(Tool):
+    """Stands in for any gated tool whose approval card expires."""
+
+    name = "gated"
+    description = "needs approval"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        return ToolOutput(
+            success=False,
+            failure_kind="refused",
+            data={"unanswered": True},
+            error="No one answered the approval request within 300s.",
+        )
+
+
+async def test_repeated_unanswered_approvals_stop_the_run(tmp_path: Path) -> None:
+    """Nobody is there: keep asking and every card costs a full timeout, which is
+    how one abandoned task kept calling the provider for twelve minutes."""
+
+    class AlwaysCallsGatedTool(MockInferenceRouter):
+        calls = 0
+
+        async def complete_with_tools(self, request, token_callback=None):
+            AlwaysCallsGatedTool.calls += 1
+            return ToolCallResponse(
+                type="tool_calls",
+                calls=[ToolCall(name="gated", call_id=f"c{AlwaysCallsGatedTool.calls}", params={})],
+                model_used="mock",
+                tokens_in=1,
+                tokens_out=1,
+            )
+
+    AlwaysCallsGatedTool.calls = 0
+    router = AlwaysCallsGatedTool()
+    agent = _load_agent("coder", tmp_path, router)
+    agent._deps.agent_max_iterations = 40
+    _registering(agent, _UnansweredApprovalTool())
+
+    result = await agent.run(AgentPayload(task_id="t-unans", prompt="Do the gated thing."))
+
+    assert AlwaysCallsGatedTool.calls == MAX_UNANSWERED_APPROVALS, (
+        "the run must stop at the cap, not spend the whole iteration budget"
+    )
+    assert "no answer" in result.output.lower()
+
+
+async def test_an_answered_approval_resets_the_count(tmp_path: Path) -> None:
+    """A slow user - approving from Telegram, say - must never be cut off."""
+
+    class OneTimeoutThenAnswer(MockInferenceRouter):
+        calls = 0
+
+        async def complete_with_tools(self, request, token_callback=None):
+            OneTimeoutThenAnswer.calls += 1
+            if OneTimeoutThenAnswer.calls <= 3:
+                name = "gated" if OneTimeoutThenAnswer.calls != 2 else "answered"
+                return ToolCallResponse(
+                    type="tool_calls",
+                    calls=[ToolCall(name=name, call_id=f"c{OneTimeoutThenAnswer.calls}", params={})],
+                    model_used="mock",
+                    tokens_in=1,
+                    tokens_out=1,
+                )
+            return ToolCallResponse(
+                type="message", content="finished", calls=[], model_used="mock", tokens_in=1, tokens_out=1
+            )
+
+    class _AnsweredTool(Tool):
+        name = "answered"
+        description = "approved by a slow user"
+        parameters_schema = {"type": "object", "properties": {}}
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            return ToolOutput(success=True, data={"ok": True})
+
+    OneTimeoutThenAnswer.calls = 0
+    agent = _load_agent("coder", tmp_path, OneTimeoutThenAnswer())
+    _registering(agent, _UnansweredApprovalTool())
+    _registering(agent, _AnsweredTool())
+
+    result = await agent.run(AgentPayload(task_id="t-slow", prompt="Do the gated thing."))
+    assert result.output == "finished", "an answered card in between must reset the count"
+
+
+# ---------------------------------------------------------------------------
+# Prompt-cache prefix stability
+#
+# A cache is a prefix match, so one changed byte near the front throws the whole
+# thing away with no error raised - the only symptom is the reuse count sitting
+# at zero (see inference/usage.py). These invariants are what keep the prefix
+# stable, and nothing else would notice if they broke.
+# ---------------------------------------------------------------------------
+
+
+class _CapturingRouter(MockInferenceRouter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_names: list[str] = []
+        self.system_prompt: str = ""
+
+    async def complete_with_tools(self, request, token_callback=None):
+        self.tool_names = [t.get("function", {}).get("name", "") for t in (request.tools or [])]
+        self.system_prompt = next(
+            (m["content"] for m in request.messages if m.get("role") == "system"), ""
+        )
+        return ToolCallResponse(
+            type="message", content="ok", calls=[], model_used="mock", tokens_in=1, tokens_out=1
+        )
+
+
+async def _capture(tmp_path: Path, scores: list[tuple[str, float]]) -> _CapturingRouter:
+    router = _CapturingRouter()
+    agent = _load_agent("researcher", tmp_path, router)
+    for name in ("alpha_tool", "beta_tool", "gamma_tool"):
+        tool = _AbsentFileTool()
+        tool.name = name
+        agent._deps.tool_registry.register(tool)
+        agent._deps.tool_registry.make_universal(name)
+    agent._deps.confidence_tracker = MagicMock()
+    agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=scores)
+    agent._deps.confidence_tracker.record_use = AsyncMock(return_value=0.5)
+    await agent.run(AgentPayload(task_id="t-cache", prompt="hello"))
+    return router
+
+
+async def test_tool_order_on_the_wire_ignores_confidence(tmp_path: Path) -> None:
+    """Ranking tools by a score that moves on every call rewrote the prefix."""
+    high_alpha = await _capture(tmp_path, [("alpha_tool", 0.9), ("beta_tool", 0.2), ("gamma_tool", 0.1)])
+    high_gamma = await _capture(tmp_path, [("alpha_tool", 0.1), ("beta_tool", 0.2), ("gamma_tool", 0.9)])
+
+    registry_tools = [n for n in high_alpha.tool_names if n.endswith("_tool")]
+    assert registry_tools == sorted(registry_tools), "wire order must be by name"
+    assert high_alpha.tool_names == high_gamma.tool_names, (
+        "a confidence change must not reorder the tool definitions in the prefix"
+    )
+
+
+async def test_system_prompt_carries_no_minute_resolution_clock(tmp_path: Path) -> None:
+    """A timestamp at the head of the system prompt gave two runs a minute apart
+    no shared prefix at all."""
+    import re as _re
+
+    router = await _capture(tmp_path, [])
+    assert router.system_prompt, "expected a system prompt"
+    assert not _re.search(r"\d{2}:\d{2}", router.system_prompt), (
+        f"system prompt still carries a clock: {router.system_prompt[:200]!r}"
+    )
+    assert _re.search(r"Current date: \d{4}-\d{2}-\d{2}", router.system_prompt), (
+        "agents still need to know the date"
+    )

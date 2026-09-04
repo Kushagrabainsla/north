@@ -90,9 +90,32 @@ class UserInteraction:
         timeout: float | None = None,
     ) -> bool:
         """Surface an APPROVAL card and block; return True only if approved."""
+        status = await self.request_approval_status(
+            task_id=task_id, agent=agent, title=title, message=message, options=options, timeout=timeout
+        )
+        return status == ApprovalDecision.APPROVED
+
+    async def request_approval_status(
+        self,
+        *,
+        task_id: str | None,
+        agent: str,
+        title: str,
+        message: str,
+        options: tuple[str, ...] | list[str] = APPROVAL_DEFAULT_OPTIONS,
+        timeout: float | None = None,
+    ) -> ApprovalDecision:
+        """Surface an APPROVAL card and block; return how it actually resolved.
+
+        Callers that only need yes/no should use ``request_approval``. This exists
+        for the ones that must tell "a person said no" apart from "the card timed
+        out because nobody was there" - collapsing both into a rejection told the
+        agent it had been refused, so it tried another route, hit another card,
+        and stalled for the timeout again on a loop that never ended.
+        """
         card = self._build(CardType.APPROVAL, task_id, agent, title, message, list(options))
         resolved = await self.request_decision(card, event=CardEvent.APPROVAL, timeout=timeout)
-        return resolved.status == ApprovalDecision.APPROVED
+        return resolved.status
 
     async def ask_user(
         self,

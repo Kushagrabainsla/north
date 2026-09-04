@@ -82,7 +82,7 @@ def _coerce_line(value: Any) -> int | None:
 
 def _read_sync(path: Path, start_line: int | None, end_line: int | None) -> ToolOutput:
     if not path.exists():
-        return ToolOutput(success=False, error=f"File not found: {path}")
+        return ToolOutput(success=False, error=f"File not found: {path}", failure_kind="not_found")
     if not path.is_file():
         return ToolOutput(success=False, error=f"Not a file: {path}")
     try:

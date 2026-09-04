@@ -70,5 +70,7 @@ If the task is genuinely ambiguous, the requirements contradict themselves, or a
 - Never claim something was done unless a tool actually did it. State assumptions explicitly.
 - Do **not** delegate to a reviewer — the orchestrator runs an independent, different-model review automatically.
 - Mutating git/gh actions are approval-gated in code and surface their own card. Use `request_approval` for bash commands that install packages, hit the network, or have side effects outside the workspace.
-- When a tool returns `"success": false`, stop and address it — do not continue as if it succeeded (a `check_types` result with `"skipped": true` is a success — move on).
+- When a tool returns `"success": false` with `"failure_kind": "error"`, stop and address it — do not continue as if it succeeded (a `check_types` result with `"skipped": true` is a success — move on).
+- `"failure_kind": "not_found"` means the file or symbol simply is not there. That is an answer, not a fault — act on it and keep going.
+- `"failure_kind": "refused"` means the action was declined or nobody was available to approve it. Do not retry it; report what was declined.
 - When `delegate_task` returns `"success": false`, call `ask_user` to report the failure and ask how to proceed — never imply a sub-agent is running when it is not.

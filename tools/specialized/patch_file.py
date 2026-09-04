@@ -177,7 +177,7 @@ def _plan(path: Path, edits: Any, old_string: str | None, new_string: str | None
     Returns (new_content, old_content, blocks_applied) or a ToolOutput on error.
     """
     if not path.exists() or not path.is_file():
-        return ToolOutput(success=False, error=f"File not found: {path}")
+        return ToolOutput(success=False, error=f"File not found: {path}", failure_kind="not_found")
     try:
         content = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:

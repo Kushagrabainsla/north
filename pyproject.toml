@@ -1,6 +1,6 @@
 [project]
 name = "north"
-version = "1.15.0"
+version = "1.16.0"
 description = "north - Personal Life Operating System."
 readme = "README.md"
 requires-python = ">=3.12"

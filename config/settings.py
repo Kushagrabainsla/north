@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     agent_read_timeout_seconds: int = Field(default=30, ge=1)
     task_cleanup_completed_days: int = Field(default=7, ge=0)
     task_cleanup_failed_days: int = Field(default=30, ge=0)
+    # How long a task's handoff artifacts (research notes, specs, QA reports)
+    # stay readable in the cockpit. Longer than the ledger window: these are what
+    # you read when you want to know what an agent actually concluded, and a
+    # pipeline you need to understand is usually one you looked at days later.
+    # 0 keeps them forever.
+    handoff_retention_days: int = Field(default=30, ge=0)
     confidence_increase_per_helpful_use: float = Field(default=0.05, ge=0.0, le=1.0)
     confidence_decrease_per_unhelpful_use: float = Field(default=0.03, ge=0.0, le=1.0)
     confidence_auto_approve_threshold: float = Field(default=0.8, ge=0.0, le=1.0)

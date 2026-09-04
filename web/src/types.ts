@@ -77,6 +77,8 @@ export interface Artifact {
   id: string;
   name: string;
   kind: string;
+  /** Task this artifact came out of; empty for personal outputs (news, notes, wellness). */
+  task?: string;
   media_type: string;
   size?: number;
   updated_at?: number;
