@@ -141,6 +141,12 @@ _RECALL_MIN_SIMILARITY: float = 0.30
 # populations overlap completely and no threshold separates them. Whether a task
 # wants personal context is a property of the task, not of a cosine score.
 _RECALL_RELATIVE_MARGIN: float = 0.05
+# The best few candidates always reach the model, margin or not. On held-out
+# questions the margin alone dropped a fact ranked *third* because it sat 0.053
+# below the top hit - and a fact the model never sees is one it cannot use,
+# whereas a wrong fact among three is one it can ignore. Widening the margin
+# instead would buy the same recall at twice the injected facts.
+_RECALL_ALWAYS_KEEP: int = 3
 # Retention cap: the store holds at most this many facts (oldest evicted on
 # insert), which also bounds every cosine scan and the in-memory cache.
 _MAX_FACTS_STORED: int = 5_000
@@ -153,17 +159,22 @@ _DEDUP_SCAN_LIMIT: int = 500
 def _apply_recall_cutoff(scored: list[tuple[str, float]], max_results: int) -> list[str]:
     """Keep the facts worth injecting from *scored*, best first.
 
-    Two tests, and the relative one does the real work: a fact survives if it is
-    within _RECALL_RELATIVE_MARGIN of the best match for this query, and clears
-    the absolute sanity floor. Judging relevance by absolute cosine alone ties
-    recall to whatever numeric range the current embedding model happens to
-    produce - which is exactly how a model swap silently emptied this store.
+    Past the first _RECALL_ALWAYS_KEEP, a fact survives if it is within
+    _RECALL_RELATIVE_MARGIN of the best match for this query and clears the
+    absolute sanity floor. The relative test does the real work: judging
+    relevance by absolute cosine alone ties recall to whatever numeric range the
+    current embedding model happens to produce, which is exactly how a model swap
+    silently emptied this store.
     """
     if not scored:
         return []
     best = scored[0][1]
     cutoff = max(_RECALL_MIN_SIMILARITY, best - _RECALL_RELATIVE_MARGIN)
-    return [content for content, score in scored[:max_results] if score >= cutoff]
+    return [
+        content
+        for rank, (content, score) in enumerate(scored[:max_results])
+        if rank < _RECALL_ALWAYS_KEEP or score >= cutoff
+    ]
 
 
 class FactStore:
