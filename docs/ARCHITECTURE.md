@@ -908,7 +908,7 @@ Inference is served by a `ModelDispatcher` that fans out across multiple provide
 | Groq | `NORTH_GROQ_API_KEY` | Optional. Free-tier fast completions; Whisper transcription. |
 | Gemini | `NORTH_GEMINI_API_KEY` | Optional. Free-tier completions; embeddings. |
 | OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | Optional. Free and paid completion models. |
-| Local embeddings | none | Always present. Serves the EMBEDDING capability on-device (model2vec static embeddings, numpy inference - no torch, no ONNX). No chat models, so completion routing is unaffected. |
+| Local embeddings | none | Always present. Serves the EMBEDDING capability on-device (BAAI/bge-small-en-v1.5, the model's own ONNX export driven by onnxruntime in `inference/providers/onnx_encoder.py` - no torch, no network). No chat models, so completion routing is unaffected. |
 | OpenAI Codex | Browser OAuth | Experimental Responses transport; North retains its own tool loop and locally records response/item/request IDs, event types, and rate-limit metadata per agent run. |
 
 All providers share the same `Provider` protocol (`inference/provider.py`) and are registered into a single `ModelDispatcher` at startup via `inference/factory.py:build_router()`. OAuth tokens are owned by North, atomically persisted with private permissions, and refreshed per request through the shared credential interface.

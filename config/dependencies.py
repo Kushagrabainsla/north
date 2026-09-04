@@ -228,11 +228,15 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
 
         return [r for r in results if r is not None]
 
-    episodic_store = EpisodicStore(db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn)
-    fact_store = FactStore(db_path=settings.north_home / "facts.db", embed_fn=_embed_fn)
     # Which model produced a vector decides which vectors it can be compared
     # against, so every store is stamped with it and clears itself on a change.
     embedding_model = base_router.embedding_model_id()
+    episodic_store = EpisodicStore(
+        db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn, embedding_model=embedding_model
+    )
+    fact_store = FactStore(
+        db_path=settings.north_home / "facts.db", embed_fn=_embed_fn, embedding_model=embedding_model
+    )
     code_index = CodeIndex(
         db_path=settings.north_home / "code_index.db", embed_fn=_embed_fn, embedding_model=embedding_model
     )

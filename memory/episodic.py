@@ -25,6 +25,7 @@ from config.dependencies import EmbedFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.text import STOPWORDS
+from utils.vector_space import ensure_vector_space_reembed
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ def _keyword_score(text: str, query_words: frozenset[str]) -> int:
 class EpisodicStore:
     """Stores and retrieves per-task episodic summaries."""
 
-    def __init__(self, db_path: Path, embed_fn: EmbedFn | None = None) -> None:
+    def __init__(self, db_path: Path, embed_fn: EmbedFn | None = None, embedding_model: str = "") -> None:
         self._db_path = db_path
         self._embed_fn = embed_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,6 +97,10 @@ class EpisodicStore:
             conn.execute(_SCHEMA_INDEX)
             conn.execute(_SCHEMA_TASK_INDEX)
             self._migrate(conn)
+        # An episode is a record of something that happened; it cannot be rebuilt
+        # from anything on disk, so a model change clears its vector and keeps the
+        # summary. Search already falls back to keyword overlap without one.
+        ensure_vector_space_reembed(self._db_path, embedding_model, (("episodes", "embedding"),))
 
     @staticmethod
     def _migrate(conn: Connection) -> None:

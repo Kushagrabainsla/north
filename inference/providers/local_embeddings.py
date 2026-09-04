@@ -11,11 +11,20 @@ none, and Codex refuses outright. So one empty key silently disabled semantic
 tool search, code search and memory recall - north kept working, but fell back
 to keyword overlap and to injecting every tool into every prompt.
 
-This provider serves embeddings from a static model held in memory. It answers
-a batch of 200 texts in about 2 ms, where a remote call costs a round trip. The
-model weights are fetched once on first use and cached on disk by the
-underlying library; if that fetch fails the provider simply reports no models
-and north degrades exactly as it does today.
+This provider serves embeddings from a model held in memory. The weights are
+fetched once on first use and cached on disk by the underlying library; if that
+fetch fails the provider simply reports no models and north degrades exactly as
+it does today.
+
+It ran on a *static* model until recall was measured against real stored facts.
+Static embeddings are a lookup table averaged over tokens, so they match on
+literal word overlap and cannot see that "when do I graduate" is answered by a
+fact about May 2027, or that "what is my name" is answered by "The user's name
+is ...". On 28 questions over 220 real facts that model put the right fact in
+the injected set 82% of the time, and the correct answer to "what is my name"
+ranked 94th. A real encoder scores 93% on the same set and ranks that fact 1st.
+The cost is ~2 ms per text instead of ~0.02 ms, which is nothing on a recall
+path and does matter when bulk-indexing a large repository.
 """
 
 from __future__ import annotations
@@ -41,11 +50,11 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "local"
 
-# A retrieval-tuned static embedding model: 512 dimensions, ~30 MB on disk, and
-# fast enough on CPU that batching stops mattering. Static means there is no
-# transformer forward pass at inference - the library needs numpy and a
-# tokenizer, not torch or an ONNX runtime.
-DEFAULT_MODEL_ID = "minishlab/potion-retrieval-32M"
+# A retrieval-tuned encoder, taken from the model owner's own ONNX export: 384
+# dimensions, ~133 MB of weights, run by onnxruntime - so there is still no torch
+# and no network call at inference. Queries and documents are embedded
+# identically for this model, so callers need no query/document distinction.
+DEFAULT_MODEL_ID = "BAAI/bge-small-en-v1.5"
 
 
 class LocalEmbeddingProvider:
@@ -92,8 +101,8 @@ class LocalEmbeddingProvider:
             raise InferenceError("Local embedding model is unavailable")
         if not request.texts:
             return EmbedResponse(embeddings=[], model_used=self._model_id, cost_usd=0.0)
-        # Encoding is CPU-bound and fast, but a large batch would still stall the
-        # event loop, so it runs in a worker thread like every other blocking call.
+        # Encoding is CPU-bound, so it runs in a worker thread like every other
+        # blocking call rather than stalling the event loop for the batch.
         vectors = await asyncio.to_thread(model.encode, list(request.texts))
         return EmbedResponse(
             embeddings=[[float(value) for value in row] for row in vectors],
@@ -141,15 +150,15 @@ class LocalEmbeddingProvider:
 
     def _load_sync(self) -> Any | None:
         try:
-            from model2vec import StaticModel
+            from inference.providers.onnx_encoder import OnnxTextEncoder
         except ImportError:
             logger.info(
-                "model2vec is not installed - local embeddings are unavailable "
+                "onnxruntime is not installed - local embeddings are unavailable "
                 "(install north's dependencies to enable them)"
             )
             return None
         try:
-            model = StaticModel.from_pretrained(self._model_id)
+            model = OnnxTextEncoder(self._model_id)
         except Exception as exc:
             logger.warning(
                 "Could not load the local embedding model %s (%s) - "

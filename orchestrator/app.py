@@ -730,6 +730,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 name="tool_index",
             )
         )
+    if deps.fact_store is not None:
+        background_tasks.append(
+            asyncio.create_task(
+                _guarded(deps.fact_store.backfill_embeddings(), "fact_backfill"),
+                name="fact_backfill",
+            )
+        )
 
     _step("startup complete - yielding to server")
     try:

@@ -23,6 +23,7 @@ from config.dependencies import EmbedFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.math import cosine_similarity
+from utils.vector_space import ensure_vector_space_reembed
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +113,34 @@ _MIGRATION_STATEMENTS = [
 
 _MAX_FACTS_RETURNED: int = 15
 _DEDUP_SIMILARITY_THRESHOLD: float = 0.85
-# Recalled facts below this cosine similarity to the query are dropped as noise (#10).
-_RECALL_MIN_SIMILARITY: float = 0.25
+# How a recalled fact is judged "close enough" to the query.
+#
+# This was a single absolute floor of 0.25, and that number silently broke recall
+# when the embedding model changed underneath it. Absolute cosine values are a
+# property of the *model*, not of relevance: on the static model that shipped in
+# 1.13.0 an identity question like "who am I" scored 0.096 against the fact that
+# answered it correctly - ranked first, and thrown away by the floor. The store
+# then returned nothing, and the agent truthfully reported it knew nothing about
+# the user while holding 220 facts about them.
+#
+# So the test is mostly *relative*: keep what is close to the best match for this
+# query, whatever that scale happens to be. The absolute floor stays only as a
+# sanity check for a query no fact is about, at a value low enough that it cannot
+# be what decides an ordinary recall.
+_RECALL_MIN_SIMILARITY: float = 0.30
+# A fact more than this far below the query's best match is a worse answer to a
+# question already answered, not a second answer. Measured against 220 real
+# facts: 0.05 keeps recall identical to a wide margin (the right fact is still
+# retrieved for 93% of questions) while cutting a typical personal question from
+# 15 injected facts to 5, because a question with a real answer has a *peaked*
+# score distribution - a few facts stand out and the rest fall away.
+#
+# What this cannot do is decide whether to inject anything at all. On the same
+# data an unrelated prompt ("deploy to production") scores 0.678 against its best
+# fact while a real question ("what school do I go to") scores 0.534, so the two
+# populations overlap completely and no threshold separates them. Whether a task
+# wants personal context is a property of the task, not of a cosine score.
+_RECALL_RELATIVE_MARGIN: float = 0.05
 # Retention cap: the store holds at most this many facts (oldest evicted on
 # insert), which also bounds every cosine scan and the in-memory cache.
 _MAX_FACTS_STORED: int = 5_000
@@ -121,6 +148,22 @@ _MAX_FACTS_STORED: int = 5_000
 # an O(all rows) scan per insert does not scale and recent facts are the
 # plausible duplicates anyway.
 _DEDUP_SCAN_LIMIT: int = 500
+
+
+def _apply_recall_cutoff(scored: list[tuple[str, float]], max_results: int) -> list[str]:
+    """Keep the facts worth injecting from *scored*, best first.
+
+    Two tests, and the relative one does the real work: a fact survives if it is
+    within _RECALL_RELATIVE_MARGIN of the best match for this query, and clears
+    the absolute sanity floor. Judging relevance by absolute cosine alone ties
+    recall to whatever numeric range the current embedding model happens to
+    produce - which is exactly how a model swap silently emptied this store.
+    """
+    if not scored:
+        return []
+    best = scored[0][1]
+    cutoff = max(_RECALL_MIN_SIMILARITY, best - _RECALL_RELATIVE_MARGIN)
+    return [content for content, score in scored[:max_results] if score >= cutoff]
 
 
 class FactStore:
@@ -131,18 +174,68 @@ class FactStore:
     Falls back to recency ordering when embedding is unavailable.
     """
 
-    def __init__(self, db_path: Path, embed_fn: EmbedFn) -> None:
+    def __init__(self, db_path: Path, embed_fn: EmbedFn, embedding_model: str = "") -> None:
         self._db_path = db_path
         self._embed_fn = embed_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.executescript(_SCHEMA)
             self._run_migrations(conn)
+        # A fact is not derived data - the document it was extracted from may be
+        # long gone - so a model change clears its vector and keeps its content,
+        # and `backfill_embeddings` re-embeds it. Until that runs the store still
+        # answers, from recency rather than similarity. The return value is not
+        # kept: the backfill has to run anyway for facts written while the
+        # embedder was down, and it is a no-op when there is nothing to embed.
+        ensure_vector_space_reembed(self._db_path, embedding_model, (("context_facts", "embedding"),))
         # (id, content, embedding_vector, category, subject, status) - rebuilt lazily, invalidated on insert.
         self._cache: list[tuple[str, str, list[float], str, str, str]] | None = None
         # Serializes cache rebuilds: concurrent searches after an invalidation
         # must not interleave loads and clobber each other's cache.
         self._cache_lock = asyncio.Lock()
+
+    async def backfill_embeddings(self, batch_size: int = 128) -> int:
+        """Embed every fact that has no vector. Returns how many were embedded.
+
+        Runs after a model change and on any fact written while the embedder was
+        down. Batched, because one call per fact would pay the model's per-call
+        overhead hundreds of times over.
+        """
+        pending = await asyncio.to_thread(self._unembedded_sync)
+        if not pending:
+            return 0
+        done = 0
+        for start in range(0, len(pending), batch_size):
+            batch = pending[start : start + batch_size]
+            try:
+                vectors = await self._embed_fn([content for _, content in batch])
+            except Exception:
+                logger.warning("FactStore: backfill batch failed - leaving it for the next run", exc_info=True)
+                break
+            if len(vectors) != len(batch):
+                logger.warning("FactStore: backfill got %d vectors for %d facts - stopping", len(vectors), len(batch))
+                break
+            await asyncio.to_thread(
+                self._store_embeddings_sync,
+                [(fact_id, json.dumps(vec)) for (fact_id, _), vec in zip(batch, vectors, strict=True)],
+            )
+            done += len(batch)
+        if done:
+            self.invalidate_cache()
+            logger.info("FactStore: re-embedded %d fact(s) into the current embedding space", done)
+        return done
+
+    def _unembedded_sync(self) -> list[tuple[str, str]]:
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM context_facts "
+                "WHERE embedding IS NULL OR embedding = '' OR embedding = '[]'"
+            ).fetchall()
+        return [(r["id"], r["content"]) for r in rows]
+
+    def _store_embeddings_sync(self, pairs: list[tuple[str, str]]) -> None:
+        with open_db_connection(self._db_path) as conn:
+            conn.executemany("UPDATE context_facts SET embedding = ? WHERE id = ?", [(e, i) for i, e in pairs])
 
     def _run_migrations(self, conn) -> None:
         """Run schema migrations for existing databases."""
@@ -274,14 +367,19 @@ class FactStore:
         if results is not None:
             return results
 
-        # Fallback path: in-memory cache with Python cosine calculation
+        # Fallback path: in-memory cache with Python cosine calculation.
+        # The length guard is not paranoia: comparing vectors of different sizes
+        # raises inside numpy, and one stray row would take down the whole recall
+        # rather than being skipped as the unusable row it is.
         scored = [
             (content, cosine_similarity(qvec, emb))
             for _, content, emb, category, _, _ in cache
-            if emb and (allowed_categories is None or category in allowed_categories)
+            if emb
+            and len(emb) == len(qvec)
+            and (allowed_categories is None or category in allowed_categories)
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
-        return [content for content, score in scored[:max_results] if score >= _RECALL_MIN_SIMILARITY]
+        return _apply_recall_cutoff(scored, max_results)
 
     def _search_vector_sync(
         self,
@@ -309,10 +407,13 @@ class FactStore:
             params.append(_RECALL_MIN_SIMILARITY)
             sql += " ORDER BY similarity DESC LIMIT ?"
             params.append(max_results)
+            # The relative half of the cutoff needs the best score for this query,
+            # which SQL only knows once the rows are ordered - so SQL applies the
+            # absolute floor and the margin is applied to the result below.
 
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(sql, params).fetchall()
-            return [r["content"] for r in rows]
+            return _apply_recall_cutoff([(r["content"], r["similarity"]) for r in rows], max_results)
         except Exception:
             return None
 
