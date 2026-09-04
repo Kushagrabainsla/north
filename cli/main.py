@@ -349,6 +349,33 @@ def list_tasks() -> None:
 # ── shared task runner ────────────────────────────────────────────────────────
 
 
+# The affirmative option is not spelled the same by every tool: git offers
+# "Approve", patch_file "Apply", bash and shell "Run". Reading the label as
+# consent only for the word "approve" meant --yolo approved a branch checkout and
+# then returned merely "answered" for the edit itself - which is not consent, so
+# the edit never landed and the run looked like it had simply done nothing.
+_AFFIRMATIVE = frozenset({"approve", "approved", "yes", "y", "apply", "run", "ok"})
+_NEGATIVE = frozenset({"reject", "rejected", "no", "n", "cancel", "deny"})
+
+
+def _approval_decision(chosen: str, *, yolo: bool) -> str:
+    """Map the user's pick on an approval card to a decision the server accepts.
+
+    This is only ever reached for ``approval_required``; questions arrive under
+    their own event. So under --yolo the first option is a yes whatever it is
+    called, and anything unrecognised stays ``answered`` rather than being
+    guessed into consent.
+    """
+    if yolo:
+        return "approved"
+    picked = chosen.strip().lower()
+    if picked in _AFFIRMATIVE:
+        return "approved"
+    if picked in _NEGATIVE:
+        return "rejected"
+    return "answered"
+
+
 def _run_task(prompt: str, workspace: str | None = None) -> str:
     """Submit prompt, stream SSE pipeline steps live, then render the response. Returns output text."""
     body: dict = {"prompt": prompt}
@@ -500,18 +527,19 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
                             _console.print("  [yellow]⚠ YOLO[/yellow]  auto-approved")
                         else:
                             raw_choice = input("  ❯ ").strip()
+                        # The affirmative option is not spelled the same by every
+                        # tool - git offers "Approve", patch_file "Apply", bash
+                        # "Run" - so deciding from the label approved a branch
+                        # checkout and then let the edit itself come back as
+                        # merely "answered", which is not consent. This event
+                        # only ever carries approval cards, so under --yolo the
+                        # first option is a yes whatever it is called.
                         try:
                             idx = int(raw_choice) - 1
                             chosen = options[idx] if 0 <= idx < len(options) else raw_choice
                         except ValueError:
                             chosen = raw_choice or options[0]
-                        decision = (
-                            "approved"
-                            if chosen.lower() in ("approve", "approved", "yes")
-                            else "rejected"
-                            if chosen.lower() in ("reject", "rejected", "no")
-                            else "answered"
-                        )
+                        decision = _approval_decision(chosen, yolo=_YOLO)
                         with contextlib.suppress(SystemExit):
                             _api(
                                 "POST",
