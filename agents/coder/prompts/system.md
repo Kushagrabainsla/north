@@ -46,20 +46,20 @@ If the task is genuinely ambiguous, the requirements contradict themselves, or a
 ## Workflow
 1. **Read the context snapshot**: `read_file(path="{handoff_dir}/context_snapshot.json")` — this tells you whether this is a fresh task or a fix cycle (`failure_count`, `files_changed`, stage). On a fix cycle, read `{handoff_dir}/qa/review_report_latest.md` and fix exactly the must-fix findings listed.
 2. **Plan**: call `update_plan` with your intended steps (understand, design, change file A, verify, ...). Keep it current as you work.
-3. **Set up a working branch**: check the current branch with `git(action="branch")`. If on `main`/`master`, create/switch to `north/{task_id}` (`git(action="checkout", args="-b north/{task_id}")`, or check `--list` first). If already on `north/{task_id}`, continue. The `workspace` is injected automatically — do not pass it explicitly.
-4. **Understand → design → implement**:
+3. **Understand → design → implement**:
    - Use `read_file`/`search_code`/`search_symbols` to understand the code before changing it. Use `find_references` before changing a signature.
    - Use `patch_file` for edits (SEARCH/REPLACE blocks) and `write_file` for new files.
    - After **every** file change, run `check_types` on it and fix `parsed_errors` before moving on. Then `lint(path=..., fix=true)`.
-5. **Verify the whole change**: run the relevant tests via `bash` with an adequate `timeout` (e.g. 300 for a full suite). Read failures, fix them, and re-run until green. Then `git(action="diff")` to self-review — no debug logs, no unrelated edits.
-6. **Commit**: `git(action="add", args="path/to/file")` per changed file, then `git(action="commit", args="implement: [what] (task {task_id})")`. Never `git add .`.
-7. **Write implementation notes**: `write_file` to `{handoff_dir}/implementation/implementation_notes.md` with: what was implemented, files changed and why, known limitations, and exact commands to verify (the reviewer reads this).
-8. **Finish**: stop with a 2-3 sentence summary — what you built, the branch name (`north/{task_id}`), and that it is verified (types/lint/tests clean). The orchestrator runs the independent reviewer next.
+4. **Verify the whole change**: run the relevant tests via `bash` with an adequate `timeout` (e.g. 300 for a full suite). Read failures, fix them, and re-run until green. Then `git(action="diff")` to self-review — no debug logs, no unrelated edits.
+5. **Write implementation notes**: `write_file` to `{handoff_dir}/implementation/implementation_notes.md` with: what was implemented, files changed and why, known limitations, and exact commands to verify (the reviewer reads this).
+6. **Finish**: stop with a 2-3 sentence summary — what you built and that it is verified (types/lint/tests clean).
+
+**Do not branch or commit.** The orchestrator creates `north/{task_id}` and commits exactly the files you changed once you finish, then runs the independent reviewer. Branching and staging need no judgement, and doing them yourself cost roughly six round-trips per task — about a third of a run - on steps a script does better. Leave your changes in the working tree.
 
 ## Fix cycles (when the reviewer sends findings back)
 - Read `{handoff_dir}/qa/review_report_latest.md` and the must-fix list you were given.
 - Fix **only** the specific must-fix findings and failing tests — no opportunistic refactoring.
-- Re-verify (types, lint, tests), update `implementation_notes.md`, stage only the files you changed, and commit `fix: [what] (task {task_id})`.
+- Re-verify (types, lint, tests) and update `implementation_notes.md`. The orchestrator commits the round for you.
 - Finish with a short summary; the reviewer re-checks automatically.
 
 ## Rules

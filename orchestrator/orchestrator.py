@@ -22,6 +22,7 @@ from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
+from orchestrator.commit import WorkCommitter
 from orchestrator.constants import (
     MAX_CONCURRENT_TASKS,
     MAX_QUEUE_ATTEMPTS,
@@ -1311,6 +1312,36 @@ class Orchestrator:
         )
         return issues
 
+    async def _commit_coder_work(self, task_id: str, prompt: str, workspace: str) -> None:
+        """Branch and commit whatever the coder changed. Never raises.
+
+        Committing is bookkeeping, so it must not be able to fail a task whose
+        change was already applied and verified - the work is on disk either way.
+        """
+        if self._tool_registry is None:
+            return
+        try:
+            git_tool = self._tool_registry.get("git")
+        except Exception:
+            return
+        summary = " ".join(prompt.split())[:60]
+        try:
+            branch = await WorkCommitter(git_tool).commit(
+                workspace=workspace,
+                task_id=task_id,
+                message=f"implement: {summary} (task {task_id})",
+            )
+        except Exception:
+            logger.warning("Could not commit the coder's work for %s", task_id, exc_info=True)
+            return
+        if branch:
+            await self._journal.record(
+                task_id,
+                "work_committed",
+                output=f"Committed the change on {branch}.",
+                payload={"branch": branch},
+            )
+
     async def _run_engineering_conductor(
         self,
         task_id: str,
@@ -1338,6 +1369,11 @@ class Orchestrator:
         )
         if failures:
             return failures  # coder failed - nothing to review
+
+        # Record the work before it is reviewed. The coder used to do this itself,
+        # at a cost of roughly six model turns spent on steps that need no
+        # judgement at all - branch, stage each file, commit.
+        await self._commit_coder_work(task_id, prompt, workspace)
 
         review_prompt = f"{prompt}\n\n{CONDUCTOR_REVIEW_PROMPT}"
         for fix_round in range(CONDUCTOR_MAX_FIX_ROUNDS + 1):

@@ -41,10 +41,19 @@ def _bugfix_evidence_reasons(review: ReviewResult) -> list[str]:
     v = review.verification
     if v.post_fix_passed is False:
         reasons.append("the fix is unverified - the recorded reproduction did not pass after the fix")
-    if v.reproduction_command and v.pre_fix_failed is False:
+    # A reproduction that passed *before* the fix says the command was a poor
+    # choice, not that the bug was imaginary. Reviewers reach for the existing
+    # test suite, which of course passes on a bug nothing covers yet - and the
+    # task was then failed for it even with the fix applied, a regression test
+    # added, and the reviewer's own verdict a PASS. That false failure is not
+    # harmless: `task_completed_with_failures` is what marks an episode partial
+    # and counts against a learned skill. So it only counts when nothing else
+    # verified the change.
+    weakly_verified = v.post_fix_passed is not True and v.regression_test_added is not True
+    if v.reproduction_command and v.pre_fix_failed is False and weakly_verified:
         reasons.append(
-            "the bug was not reproduced before fixing - the reproduction passed pre-fix, "
-            "so the change is unverified"
+            "the bug was not reproduced before fixing and nothing else verifies the change - "
+            "the reproduction passed pre-fix, no regression test was recorded, and no post-fix run passed"
         )
     if v.regression_test_added is False:
         reasons.append("no regression test was added to guard the fix against reappearing")

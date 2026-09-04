@@ -118,10 +118,51 @@ def test_bugfix_fails_when_reproduction_still_fails_post_fix():
     assert any("did not pass after the fix" in x for x in r.reasons)
 
 
-def test_bugfix_fails_when_bug_never_reproduced():
+def test_bugfix_fails_when_bug_never_reproduced_and_nothing_else_verifies_it():
     r = _eval_bugfix(_passing_bugfix({"reproduction_command": "pytest x", "pre_fix_failed": False}))
     assert r.passed is False
     assert any("not reproduced before fixing" in x for x in r.reasons)
+
+
+def test_a_poor_reproduction_command_does_not_sink_an_otherwise_verified_fix():
+    """Reviewers reach for the existing suite, which of course passes on a bug
+    nothing covers yet.
+
+    Observed live: the fix landed, a regression test was added, the reviewer's
+    own verdict was PASS - and the task was still reported failed because the
+    recorded reproduction had passed pre-fix. That false failure is not
+    harmless: `task_completed_with_failures` marks an episode partial and counts
+    against a learned skill.
+    """
+    r = _eval_bugfix(
+        _passing_bugfix(
+            {
+                "reproduction_command": "pytest",  # the whole suite, not the bug
+                "pre_fix_failed": False,
+                "post_fix_passed": True,
+                "regression_test_added": True,
+            }
+        )
+    )
+    assert r.passed is True, r.reasons
+
+
+def test_a_regression_test_alone_is_enough_to_hold_the_fix_up():
+    r = _eval_bugfix(
+        _passing_bugfix(
+            {"reproduction_command": "pytest", "pre_fix_failed": False, "regression_test_added": True}
+        )
+    )
+    assert r.passed is True, r.reasons
+
+
+def test_a_post_fix_pass_alone_is_enough_too():
+    r = _eval_bugfix(
+        _passing_bugfix(
+            {"reproduction_command": "pytest", "pre_fix_failed": False, "post_fix_passed": True}
+        )
+    )
+    assert r.passed is True, r.reasons
 
 
 def test_bugfix_fails_when_regression_test_explicitly_absent():
