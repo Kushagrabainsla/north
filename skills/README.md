@@ -20,13 +20,18 @@ The `description` is the retrieval key — write it as a trigger ("Use when …"
 ## How it works
 
 - **Built-in** skills live in `skills/builtin/`; **learned** skills live in `~/.north/skills/`.
-- For an engineering or research task, north embeds the prompt and injects the **top ~2** most
-  similar skills (above a threshold) into the agent's context. If none fit, it injects nothing.
+- For an engineering or research task, north embeds the prompt and offers the **top ~3** most
+  similar skills (above a threshold) as one-line descriptions. The agent calls `use_skill` to
+  pull the full procedure when one matches. If none fit, it offers nothing.
+- Descriptions, not bodies, is deliberate: the opening block of an agent conversation is
+  re-sent on every turn, so a pasted playbook is paid ~20 times per task whether it is used
+  or not. A description costs ~50 tokens against ~1,500 for two bodies.
 - A skill declares which agent **domains** it serves via a `domains:` frontmatter list
   (defaults to `[engineering]`); the general assistant only ever sees skills tagged `general`
   (e.g. `conducting-a-literature-review`), and engineering skills never leak into ordinary chat.
-- Weak models don't need to ask: the right skill is already there. `use_skill` is a
-  fallback for the long tail. Every selection is logged as a `skill_selected` ledger entry.
+- `use_skill` is now the normal way a skill is loaded, not just the long-tail fallback -
+  the agent is told which skills fit and fetches the one it wants. Every selection is
+  logged as a `skill_selected` ledger entry.
 
 ## Learned skills (procedural memory)
 

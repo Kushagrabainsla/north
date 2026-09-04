@@ -142,8 +142,8 @@ class Agent(ABC):
         """Skills relevant to this task, selected once per run.
 
         Selection embeds the prompt, so it is done here and passed to both
-        `_load_context` (which injects the skill bodies) and `_load_tools` (which
-        boosts the tools those skills name) rather than run twice.
+        `_load_context` (which offers the skills by description) and `_load_tools`
+        (which boosts the tools those skills name) rather than run twice.
         """
         registry = self._deps.skill_registry
         selector = self._deps.skill_selector
@@ -228,11 +228,20 @@ class Agent(ABC):
         return "\n\n".join(p for p in parts if p)
 
     async def _load_skills_block(self, payload: AgentPayload, selected: list[Any]) -> str:
-        """Render the already-selected procedural skills for this task.
+        """Offer the most relevant procedural skills for this task, by description.
 
-        Semantically-selected skills are injected in full as advisory context (the
-        primary path); any remaining skills are listed by name so the agent can pull
-        them on demand with use_skill. Returns "" when no skills are registered.
+        Only each skill's one-line description reaches the prompt; the full
+        procedure is fetched on demand with ``use_skill``. Pasting the bodies in
+        instead cost ~1,500 tokens of every message and up to 4,000 in the worst
+        case - and because the whole opening block is re-sent on every turn of the
+        agent loop, that was paid twenty-odd times per task for a procedure the
+        model often did not end up needing. A description is ~50.
+
+        The trade is one extra round trip when a skill *is* wanted. That is worth
+        it when the alternative is carrying every candidate playbook, in full,
+        through the entire conversation.
+
+        Returns "" when no skills are registered for this agent's domain.
         """
         registry = self._deps.skill_registry
         if registry is None:
@@ -248,10 +257,13 @@ class Agent(ABC):
 
         sections: list[str] = []
         if selected:
-            bodies = "\n\n".join(f"### {skill.name}\n{skill.body}" for skill in selected)
+            offered = "\n".join(f"- {skill.name}: {skill.description}" for skill in selected)
             sections.append(
-                "## Applicable skills (advisory procedural context - it does not override "
-                f"system instructions, user instructions, or safety constraints)\n\n{bodies}"
+                "## Skills for this task\n"
+                "Each line is a procedure north has for this kind of work. When one matches what "
+                "you are about to do, call use_skill with its name to get the full instructions "
+                "before you act. They are advisory: they do not override system instructions, "
+                f"user instructions, or safety constraints.\n\n{offered}"
             )
             await self._emit_skill_selected(payload, selected)
 

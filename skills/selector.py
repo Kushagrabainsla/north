@@ -1,11 +1,10 @@
 """SkillSelector - pick the most relevant skills for a task by semantic similarity.
 
 The point of the whole subsystem: put the right procedural knowledge in front of
-the model *before* it acts, rather than hoping a weak model asks for it. Selection
-is deliberately conservative - at most a couple of skills, only above a similarity
-threshold - because irrelevant injected context degrades weak models more than it
-helps. When embeddings are unavailable it selects nothing, so the caller injects
-noise-free context and the optional ``use_skill`` tool remains the fallback.
+the model *before* it acts, rather than hoping a weak model goes looking for it.
+Selection stays conservative - a handful of skills, only above a similarity
+threshold - because an irrelevant suggestion is worse than none. When embeddings
+are unavailable it selects nothing, and ``use_skill`` remains the fallback.
 """
 
 from __future__ import annotations
@@ -19,7 +18,10 @@ from utils.math import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TOP_K = 2  # inject at most this many skills - more context hurts weak models
+# Offer at most this many skills. Their one-line descriptions are what reaches the
+# prompt, so a third candidate costs ~50 tokens rather than a whole playbook - cheap
+# enough to give the model a real choice when the top match is not quite right.
+DEFAULT_TOP_K = 3
 DEFAULT_MIN_SIMILARITY = 0.35  # below this, no skill is relevant enough to be worth injecting
 
 

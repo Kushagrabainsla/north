@@ -13,6 +13,16 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.14.0] - 2026-09-03
+### Changed
+- **Skills are offered by description now, not pasted in whole** (`agents/base.py`, `skills/selector.py`). The top matches used to be injected as full playbooks - ~1,500 tokens of a typical message and up to 4,000 in the worst case. That block sits in the *opening* user message, which north's compaction deliberately never trims, so an agent loop re-sent it on every turn: measured on one real task, 23 turns paid for the same skill bodies 23 times, for a procedure the model often never used. The prompt now carries one line per skill - name and description - and the agent calls `use_skill` to pull the full instructions when one actually fits. **~1,400 tokens saved per call, ~32,000 over a 23-turn task.**
+
+  Because a description costs ~50 tokens where a body cost ~800, the selector now offers the **top 3** rather than the top 2: a real choice when the closest match is not the right one, for less than a tenth of the old price.
+
+  `use_skill` therefore becomes the normal way a skill is loaded rather than a long-tail fallback. The trade is one extra round trip when a skill is wanted, against carrying every candidate playbook through the whole conversation. Skills are still selected semantically, still domain-filtered, and still logged as `skill_selected`; tool boosting reads skill bodies from the registry, not the prompt, so it is unaffected.
+
+---
+
 ## [1.13.2] - 2026-09-03
 ### Fixed
 - **The bootstrap schemas now satisfy the strict contract they declare** (`bootstrap/schema.py`). With the payload shape fixed in 1.13.1, Codex got far enough to validate the schema itself and rejected it twice more: strict structured output requires every object to set `additionalProperties: false` and to list every property in `required`, and forbids any sibling keyword beside a `$ref`. Pydantic emits none of that - it omits `additionalProperties`, leaves defaulted fields out of `required`, and writes `default`/`description` next to a `$ref`. So `strict = True` was a promise the schemas never kept: hard-rejected by the one provider that enforces it, silently ignored by the rest, and therefore never actually enforced anywhere. Requiring a defaulted field is safe for these models - `evidence` is nullable, an empty profile section is an empty list - and Python-side defaults are untouched. Verified live: the same schema-enforced call that returned 400 now returns 200 with a schema-conforming extraction.

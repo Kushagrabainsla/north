@@ -64,7 +64,12 @@ def _agent(registry: SkillRegistry, selector: SkillSelector) -> _StubAgent:
     return _StubAgent(SimpleNamespace(agent="coder", domain="engineering"), deps)
 
 
-async def test_injects_selected_skill_body(tmp_path):
+async def test_offers_the_selected_skill_by_description_not_body(tmp_path):
+    """The body is fetched with use_skill, never pasted into the prompt.
+
+    The opening block of an agent conversation is re-sent on every turn, so a
+    pasted playbook is paid ~20 times per task whether the model uses it or not.
+    """
     _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
     _write_skill(tmp_path, "add-tool", "Use when adding a tool")
     registry = SkillRegistry(builtin_dir=tmp_path)
@@ -73,10 +78,12 @@ async def test_injects_selected_skill_body(tmp_path):
 
     block = await _skills_block(agent, "add a database migration")
 
-    assert "BODY-db-migration" in block  # selected skill injected in full
+    assert "db-migration" in block  # the match is offered by name
+    assert "Use when adding a database migration" in block  # ...and by its description
+    assert "BODY-db-migration" not in block  # but the procedure itself is not pasted in
+    assert "use_skill" in block  # the model is told how to fetch it
     assert "advisory" in block.lower()  # framed as advisory, not authoritative
-    assert "BODY-add-tool" not in block  # non-selected skill body not injected
-    assert "add-tool" in block  # but listed as available via use_skill
+    assert "add-tool" in block  # non-selected skills stay discoverable by name
 
 
 async def test_no_skills_returns_empty(tmp_path):
@@ -157,7 +164,8 @@ async def test_load_skills_block_filters_by_agent_domain(tmp_path):
     assert "db-migration" not in migration_block  # engineering-only: not eligible, not even listed
 
     tool_block = await _skills_block(general, "add a tool")
-    assert "BODY-add-tool" in tool_block  # general-eligible skill is injected
+    assert "add-tool" in tool_block  # general-eligible skill is offered
+    assert "Use when adding a tool" in tool_block
 
 
 async def test_engineering_agent_still_gets_engineering_skills(tmp_path):
@@ -167,4 +175,34 @@ async def test_engineering_agent_still_gets_engineering_skills(tmp_path):
     ctx = await _agent_for_domain("engineering", registry, selector)._load_context(
         AgentPayload(task_id="t", prompt="add a database migration")
     )
-    assert "BODY-db-migration" in ctx
+    assert "db-migration" in ctx
+    assert "Use when adding a database migration" in ctx
+
+
+async def test_three_skills_are_offered_not_two(tmp_path):
+    """Descriptions are cheap enough to offer a real choice.
+
+    A third candidate costs ~50 tokens where a third body would have cost ~800,
+    so the model gets an alternative when the top match is not quite right.
+    """
+    for name in ("db-migration", "db-schema", "db-index", "unrelated-topic"):
+        _write_skill(tmp_path, name, f"Use when working on {name.replace('-', ' ')}")
+    registry = SkillRegistry(builtin_dir=tmp_path)
+    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.0)
+
+    selected = await selector.select("db migration schema index")
+    assert len(selected) == 3
+
+
+async def test_no_skill_body_ever_reaches_the_prompt(tmp_path):
+    """The saving only holds if this is true for every skill, selected or not."""
+    for name in ("alpha", "beta", "gamma", "delta"):
+        _write_skill(tmp_path, name, f"Use when doing {name}")
+    registry = SkillRegistry(builtin_dir=tmp_path)
+    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.0)
+    agent = _agent(registry, selector)
+
+    block = await _skills_block(agent, "doing alpha")
+
+    assert block  # something was offered
+    assert not any(f"BODY-{name}" in block for name in ("alpha", "beta", "gamma", "delta"))
