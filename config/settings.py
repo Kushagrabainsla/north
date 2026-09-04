@@ -114,8 +114,12 @@ class Settings(BaseSettings):
 
     # Run mutating agents (see orchestrator.constants.WORKTREE_ISOLATION_AGENTS) in a
     # dedicated git worktree when the workspace is a git repo, applying changes back
-    # on success. Off by default; opt in with NORTH_WORKTREE_ISOLATION_ENABLED=1.
-    worktree_isolation_enabled: bool = False
+    # on success. On by default, and scoped to the coder: an agent that writes code
+    # should not be doing it in the tree you are working in. A run that goes wrong
+    # is discarded with its worktree instead of needing to be undone, and two runs
+    # can never share a working tree. Falls back to editing in place when the
+    # workspace is not a git repo. Opt out with NORTH_WORKTREE_ISOLATION_ENABLED=0.
+    worktree_isolation_enabled: bool = True
 
     # Where isolated worktrees are created. Empty = a "north-worktrees" dir under the
     # system temp dir. Never place this inside a workspace or under ~/.north.

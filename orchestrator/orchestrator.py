@@ -1312,7 +1312,9 @@ class Orchestrator:
         )
         return issues
 
-    async def _commit_coder_work(self, task_id: str, prompt: str, workspace: str) -> None:
+    async def _commit_coder_work(
+        self, task_id: str, prompt: str, workspace: str, *, round_label: str = ""
+    ) -> None:
         """Branch and commit whatever the coder changed. Never raises.
 
         Committing is bookkeeping, so it must not be able to fail a task whose
@@ -1325,11 +1327,12 @@ class Orchestrator:
         except Exception:
             return
         summary = " ".join(prompt.split())[:60]
+        verb = f"fix ({round_label})" if round_label else "implement"
         try:
             branch = await WorkCommitter(git_tool).commit(
                 workspace=workspace,
                 task_id=task_id,
-                message=f"implement: {summary} (task {task_id})",
+                message=f"{verb}: {summary} (task {task_id})",
             )
         except Exception:
             logger.warning("Could not commit the coder's work for %s", task_id, exc_info=True)
@@ -1439,6 +1442,10 @@ class Orchestrator:
             )
             if fix_failures:
                 return fix_failures  # coder fix failed
+            # Each round is recorded as it lands. Committing only after the first
+            # coder run left everything a fix round changed uncommitted, which is
+            # the half that matters most - it is what the reviewer asked for.
+            await self._commit_coder_work(task_id, prompt, workspace, round_label=f"fix round {fix_round + 1}")
         return []
 
     async def _execute_hierarchical_groups(

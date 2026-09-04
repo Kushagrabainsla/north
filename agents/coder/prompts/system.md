@@ -48,7 +48,8 @@ If the task is genuinely ambiguous, the requirements contradict themselves, or a
 2. **Plan**: call `update_plan` with your intended steps (understand, design, change file A, verify, ...). Keep it current as you work.
 3. **Understand → design → implement**:
    - Use `read_file`/`search_code`/`search_symbols` to understand the code before changing it. Use `find_references` before changing a signature.
-   - Use `patch_file` for edits (SEARCH/REPLACE blocks) and `write_file` for new files.
+   - **`read_file` the file before you `patch_file` it.** The tool refuses an edit to a file this task has not read - editing from memory is how `old_string` ends up not matching, and each miss costs a full round-trip. A file you have just edited counts as read.
+   - Use `patch_file` for edits (SEARCH/REPLACE blocks) and `write_file` for new files. Copy `old_string` from what `read_file` returned; if it still misses, the error shows the real text with line numbers - use that rather than guessing again.
    - After **every** file change, run `check_types` on it and fix `parsed_errors` before moving on. Then `lint(path=..., fix=true)`.
 4. **Verify the whole change**: run the relevant tests via `bash` with an adequate `timeout` (e.g. 300 for a full suite). Read failures, fix them, and re-run until green. Then `git(action="diff")` to self-review — no debug logs, no unrelated edits.
 5. **Write implementation notes**: `write_file` to `{handoff_dir}/implementation/implementation_notes.md` with: what was implemented, files changed and why, known limitations, and exact commands to verify (the reviewer reads this).

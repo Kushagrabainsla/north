@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from tools._path import resolve_path
+from tools._read_tracker import record_read
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
@@ -66,7 +67,13 @@ class ReadFileTool(Tool):
 
         start_line = _coerce_line(input.params.get("start_line"))
         end_line = _coerce_line(input.params.get("end_line"))
-        return await asyncio.to_thread(_read_sync, resolved, start_line, end_line)
+        result = await asyncio.to_thread(_read_sync, resolved, start_line, end_line)
+        if result.success:
+            # An exact-match edit only works when the model's copy is exact, and
+            # having just read the file is what makes that true. `patch_file`
+            # checks this before it will touch the file.
+            record_read(input.params.get("task_id"), str(resolved))
+        return result
 
 
 def _coerce_line(value: Any) -> int | None:

@@ -22,9 +22,11 @@ from approval.mode import ApprovalMode
 from approval.models import ApprovalDecision
 from approval.unattended import UnattendedPolicy
 from tools._path import resolve_path
+from tools._read_tracker import record_read, was_read
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import refusal_output, request_approval_status
+from tools.specialized._edit_match import find_unique, indents_for, reindent
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -127,6 +129,19 @@ class PatchFileTool(ApprovalGatedTool):
         if resolved is None:
             return ToolOutput(success=False, error="Path escapes workspace root.")
 
+        # Editing from memory is where exact matching goes wrong: the model
+        # reproduces a block it saw several turns and two edits ago, the
+        # whitespace differs, and the edit fails. Reading first is cheap and
+        # makes the match reliable, so it is a precondition rather than advice.
+        if not was_read(input.params.get("task_id"), str(resolved)):
+            return ToolOutput(
+                success=False,
+                error=(
+                    f"Read `{resolved}` before editing it - call read_file on it first. "
+                    "Editing from memory is how old_string ends up not matching."
+                ),
+            )
+
         plan = await asyncio.to_thread(_plan, resolved, edits, old_string, new_string)
         if isinstance(plan, ToolOutput):
             return plan  # error
@@ -144,7 +159,10 @@ class PatchFileTool(ApprovalGatedTool):
             if refused is not None:
                 return refused
 
-        return await asyncio.to_thread(_write, resolved, old_content, new_content, blocks_applied)
+        written = await asyncio.to_thread(_write, resolved, old_content, new_content, blocks_applied)
+        if written.success:
+            record_read(input.params.get("task_id"), str(resolved))
+        return written
 
     async def _request_diff_approval(
         self, task_id: str | None, path: Path, old: str, new: str
@@ -205,20 +223,11 @@ def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
         replacement = edit.get("new_string")
         if old_string is None or replacement is None:
             return ToolOutput(success=False, error=f"Edit {index} needs both 'old_string' and 'new_string'.")
-        count = content.count(old_string)
-        if count == 0:
-            return ToolOutput(
-                success=False,
-                error=f"Edit {index}: old_string not found. Check exact whitespace and newlines.",
-            )
-        if count > 1:
-            return ToolOutput(
-                success=False,
-                error=f"Edit {index}: old_string appears {count} times - add surrounding context.",
-            )
-        start = content.find(old_string)
-        end = start + len(old_string)
-        spans.append((start, end, replacement, index))
+        match, error = find_unique(content, old_string)
+        if match is None:
+            return ToolOutput(success=False, error=f"Edit {index}: {error}")
+        needle_indent, file_indent = indents_for(content, old_string, match)
+        spans.append((match.start, match.end, reindent(replacement, needle_indent, file_indent), index))
 
     # Check for overlapping edit spans
     sorted_by_start = sorted(spans, key=lambda s: s[0])
@@ -274,18 +283,12 @@ def _plan_blocks_or_legacy(content: str, old_string: str | None, new_string: str
     if blocks:
         new_content = content
         for search_val, replace_val in blocks:
-            count = new_content.count(search_val)
-            if count == 0:
-                return ToolOutput(
-                    success=False,
-                    error=f"SEARCH block not found in file:\n{search_val}\nCheck for exact spacing/newlines.",
-                )
-            if count > 1:
-                return ToolOutput(
-                    success=False,
-                    error=f"SEARCH block is not unique, appears {count} times:\n{search_val}",
-                )
-            new_content = new_content.replace(search_val, replace_val, 1)
+            match, error = find_unique(new_content, search_val)
+            if match is None:
+                return ToolOutput(success=False, error=f"SEARCH block: {error}")
+            needle_indent, file_indent = indents_for(new_content, search_val, match)
+            shifted = reindent(replace_val, needle_indent, file_indent)
+            new_content = new_content[: match.start] + shifted + new_content[match.end :]
         return new_content, content, len(blocks)
 
     if old_string is None:
@@ -293,21 +296,12 @@ def _plan_blocks_or_legacy(content: str, old_string: str | None, new_string: str
             success=False,
             error="Either old_string must be provided, or new_string must contain SEARCH/REPLACE blocks.",
         )
-    count = content.count(old_string)
-    if count == 0:
-        return ToolOutput(
-            success=False,
-            error="old_string not found in file. Check for exact whitespace and newlines.",
-        )
-    if count > 1:
-        return ToolOutput(
-            success=False,
-            error=(
-                f"old_string appears {count} times - not unique. "
-                "Add more surrounding context to make it match exactly once."
-            ),
-        )
-    return content.replace(old_string, new_string, 1), content, 1
+    match, error = find_unique(content, old_string)
+    if match is None:
+        return ToolOutput(success=False, error=error)
+    needle_indent, file_indent = indents_for(content, old_string, match)
+    shifted = reindent(new_string, needle_indent, file_indent)
+    return content[: match.start] + shifted + content[match.end :], content, 1
 
 
 def _write(path: Path, old_content: str, new_content: str, blocks_applied: int) -> ToolOutput:
