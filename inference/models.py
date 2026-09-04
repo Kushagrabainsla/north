@@ -169,6 +169,10 @@ class CompletionResponse(BaseModel):
     tokens_in: int
     tokens_out: int
     cost_usd: float
+    # Prompt tokens the provider served from its cache, and wrote to it. Both 0
+    # when the provider reports nothing about caching - see inference/usage.py.
+    cached_tokens: int = 0
+    cache_write_tokens: int = 0
     reasoning: str | None = None
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -215,6 +219,10 @@ class ToolCallResponse(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    # Prompt tokens the provider served from its cache, and wrote to it. Both 0
+    # when the provider reports nothing about caching - see inference/usage.py.
+    cached_tokens: int = 0
+    cache_write_tokens: int = 0
     reasoning: str | None = None
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -257,6 +265,7 @@ class InferenceRecord(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float
+    cached_tokens: int = 0
     task_id: str | None = None
 
 

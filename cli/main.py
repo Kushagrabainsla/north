@@ -1373,6 +1373,61 @@ def inference_costs(
         _console.print("\n  [dim]by model[/dim]")
         for model, cost in sorted(data["by_model"].items(), key=lambda x: -x[1]):
             _console.print(f"    [dim]{model:<40}[/dim]  ${cost:.6f}")
+
+    _print_cache_usage(period)
+    _console.print()
+
+
+def _print_cache_usage(period: str) -> None:
+    """Show how much of the prompt each provider served from its cache.
+
+    An agent loop re-sends the same opening block on every turn, so this is the
+    difference between paying for it once and paying for it twenty times. A cache
+    is a prefix match, and one changed byte near the front silently drops the hit
+    rate to zero with no error - so the number is only useful if it is shown.
+    """
+    import sqlite3
+
+    from config.settings import settings
+
+    days = {"day": 1, "week": 7, "month": 30}.get(period, 7)
+    db = settings.north_home / "ledger.db"
+    if not db.exists():
+        return
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        # A ledger written before caching was recorded has no such column. That is
+        # not "no data" - it is "every call so far was uncached", which is worth
+        # saying out loud rather than showing an empty section.
+        has_column = "cached_tokens" in {row[1] for row in conn.execute("PRAGMA table_info(ledger)")}
+        cached_expr = "SUM(COALESCE(cached_tokens,0))" if has_column else "0"
+        rows = conn.execute(
+            f"SELECT model_used, SUM(COALESCE(tokens_in,0)), {cached_expr}"
+            " FROM ledger WHERE model_used IS NOT NULL"
+            f" AND created_at >= datetime('now', '-{days} days')"
+            " GROUP BY model_used HAVING SUM(COALESCE(tokens_in,0)) > 0"
+        ).fetchall()
+        conn.close()
+    except sqlite3.Error:
+        return
+    if not rows:
+        return
+
+    total_in = sum(r[1] for r in rows)
+    total_cached = sum(r[2] for r in rows)
+    _console.print("\n  [dim]prompt cache[/dim]")
+    if total_cached == 0:
+        _console.print(
+            f"    [bright_black]0 of {total_in:,} prompt tokens reused"
+            " - no configured provider is caching[/bright_black]"
+        )
+        return
+    share = 100 * total_cached / total_in
+    _console.print(f"    [dim]{'reused across all models':<40}[/dim]  {total_cached:,} / {total_in:,} ({share:.0f}%)")
+    for model, tokens_in, cached in sorted(rows, key=lambda r: -r[2]):
+        if cached:
+            pct = 100 * cached / tokens_in
+            _console.print(f"    [dim]{str(model)[:40]:<40}[/dim]  {cached:,} / {tokens_in:,} ({pct:.0f}%)")
     _console.print()
 
 

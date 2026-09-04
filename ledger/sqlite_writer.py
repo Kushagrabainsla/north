@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS ledger (
     model_used      TEXT,
     tokens_in       INTEGER,
     tokens_out      INTEGER,
+    cached_tokens   INTEGER,
     cost_usd        REAL,
     status          TEXT,
     duration_ms     INTEGER,
@@ -101,6 +102,9 @@ _MIGRATIONS = [
     "ALTER TABLE ledger ADD COLUMN run_id TEXT",
     "ALTER TABLE ledger ADD COLUMN parent_run_id TEXT",
     "ALTER TABLE ledger ADD COLUMN attempt INTEGER",
+    # Prompt tokens served from a provider's cache. Recorded so a cache that
+    # silently stops working is visible - see inference/usage.py.
+    "ALTER TABLE ledger ADD COLUMN cached_tokens INTEGER",
 ]
 
 # Column order for INSERTs. Placeholders are derived from this tuple so the two
@@ -122,6 +126,7 @@ _INSERT_COLUMN_NAMES = (
     "model_used",
     "tokens_in",
     "tokens_out",
+    "cached_tokens",
     "cost_usd",
     "status",
     "duration_ms",
@@ -192,6 +197,7 @@ class SQLiteLedgerWriter(LedgerWriter):
                     entry.model_used,
                     entry.tokens_in,
                     entry.tokens_out,
+                    entry.cached_tokens,
                     entry.cost_usd,
                     entry.status.value if entry.status is not None else None,
                     entry.duration_ms,

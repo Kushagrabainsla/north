@@ -104,6 +104,10 @@ class LedgerEntry(BaseModel):
     model_used: str | None = None
     tokens_in: int | None = None
     tokens_out: int | None = None
+    # Prompt tokens the provider served from its cache (see inference/usage.py).
+    # None when the provider said nothing about caching, which is not the same as
+    # a cache miss.
+    cached_tokens: int | None = None
     cost_usd: float | None = None
     status: LedgerStatus | None = None
     duration_ms: int | None = None

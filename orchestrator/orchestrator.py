@@ -2112,6 +2112,7 @@ class Orchestrator:
                 cost_usd=result.cost_usd,
                 tokens_in=result.tokens_in,
                 tokens_out=result.tokens_out,
+                cached_tokens=result.cached_tokens,
                 model_used=", ".join(result.models_used) or None,
             )
         )

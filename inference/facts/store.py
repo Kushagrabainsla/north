@@ -84,10 +84,13 @@ class ModelFactsStore:
                 "  entitlement       TEXT NOT NULL DEFAULT 'UNKNOWN',"
                 "  uptime            REAL,"
                 "  context_window    INTEGER,"
+                "  cache_read_price  REAL,"
                 "  updated_at        TEXT NOT NULL,"
                 "  PRIMARY KEY (canonical_id, provider, provider_model_id))"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_endpoints_model ON endpoints (canonical_id)")
+            if "cache_read_price" not in {row["name"] for row in conn.execute("PRAGMA table_info(endpoints)")}:
+                conn.execute("ALTER TABLE endpoints ADD COLUMN cache_read_price REAL")
             self._add_missing_columns(conn)
 
     @staticmethod
@@ -192,6 +195,7 @@ class ModelFactsStore:
                 row.entitlement.value,
                 row.uptime,
                 row.context_window,
+                row.cache_read_price,
                 _now(),
             )
             for row in rows
@@ -201,12 +205,14 @@ class ModelFactsStore:
         with open_db_connection(self._db_path) as conn:
             conn.executemany(
                 "INSERT INTO endpoints (canonical_id, provider, provider_model_id, price_in, price_out,"
-                " quantization, max_payload_chars, entitlement, uptime, context_window, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " quantization, max_payload_chars, entitlement, uptime, context_window,"
+                " cache_read_price, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (canonical_id, provider, provider_model_id) DO UPDATE SET"
                 "   price_in=excluded.price_in, price_out=excluded.price_out,"
                 "   quantization=excluded.quantization, max_payload_chars=excluded.max_payload_chars,"
                 "   uptime=excluded.uptime, context_window=excluded.context_window,"
+                "   cache_read_price=excluded.cache_read_price,"
                 "   updated_at=excluded.updated_at",
                 values,
             )
@@ -231,6 +237,7 @@ class ModelFactsStore:
                 ),
                 uptime=row["uptime"],
                 context_window=row["context_window"],
+                cache_read_price=row["cache_read_price"],
             )
             for row in rows
         ]

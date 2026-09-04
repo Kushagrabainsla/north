@@ -32,6 +32,7 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from inference.usage import cache_tokens
 from utils.ids import generate_id
 
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -226,6 +227,8 @@ class OpenAICodexProvider:
             text=result["text"],
             model_used=result["model"] or model_id,
             tokens_in=result["tokens_in"],
+            cached_tokens=result["cached_tokens"],
+            cache_write_tokens=result["cache_write_tokens"],
             tokens_out=result["tokens_out"],
             cost_usd=0.0,
             reasoning=result["reasoning"] or None,
@@ -258,6 +261,8 @@ class OpenAICodexProvider:
             calls=calls,
             model_used=result["model"] or model_id,
             tokens_in=result["tokens_in"],
+            cached_tokens=result["cached_tokens"],
+            cache_write_tokens=result["cache_write_tokens"],
             tokens_out=result["tokens_out"],
             cost_usd=0.0,
             reasoning=result["reasoning"] or None,
@@ -276,6 +281,8 @@ class OpenAICodexProvider:
         reasoning = ""
         calls_by_id: dict[str, dict[str, str]] = {}
         tokens_in = 0
+        cached_tokens = 0
+        cache_write_tokens = 0
         tokens_out = 0
         response_model = ""
         response_id = ""
@@ -374,6 +381,7 @@ class OpenAICodexProvider:
                         usage = completed.get("usage") or {}
                         tokens_in = int(usage.get("input_tokens") or 0)
                         tokens_out = int(usage.get("output_tokens") or 0)
+                        cached_tokens, cache_write_tokens = cache_tokens(usage)
                         response_model = str(completed.get("model") or "")
                         response_id = str(completed.get("id") or response_id)
                         previous_response_id = str(completed.get("previous_response_id") or "")
@@ -424,6 +432,8 @@ class OpenAICodexProvider:
             "calls": calls,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
             "model": response_model,
             "metadata": {
                 "provider": self.name,

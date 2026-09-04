@@ -309,6 +309,7 @@ class AgenticLLMAgent(LLMAgent):
         total_cost_usd: float = 0.0
         total_tokens_in: int = 0
         total_tokens_out: int = 0
+        total_cached_tokens: int = 0
         last_tokens_in: int = 0
         last_model_used: str = ""
         emitted_model: str = ""
@@ -373,6 +374,7 @@ class AgenticLLMAgent(LLMAgent):
                         total_tokens_in,
                         total_tokens_out,
                         models_used=models_used,
+                        cached_tokens=total_cached_tokens,
                     )
             # Stream finished - release any reasoning/answer fragment the splitter
             # withheld in case it began a tag that never completed.
@@ -381,6 +383,7 @@ class AgenticLLMAgent(LLMAgent):
             total_cost_usd += response.cost_usd
             total_tokens_in += response.tokens_in
             total_tokens_out += response.tokens_out
+            total_cached_tokens += response.cached_tokens
             last_tokens_in = response.tokens_in
             last_model_used = response.model_used
             if last_model_used and last_model_used not in _seen_models:
@@ -403,6 +406,7 @@ class AgenticLLMAgent(LLMAgent):
                     total_tokens_in,
                     total_tokens_out,
                     models_used=models_used,
+                    cached_tokens=total_cached_tokens,
                 )
 
             # Tool calls branch - execute the requested calls.
@@ -417,6 +421,7 @@ class AgenticLLMAgent(LLMAgent):
                     total_tokens_in,
                     total_tokens_out,
                     models_used=models_used,
+                    cached_tokens=total_cached_tokens,
                 )
 
             for call in response.calls:
@@ -438,6 +443,7 @@ class AgenticLLMAgent(LLMAgent):
             total_tokens_in,
             total_tokens_out,
             models_used=models_used,
+            cached_tokens=total_cached_tokens,
         )
 
     def _init_conversation(
@@ -1039,6 +1045,7 @@ def _final_answer(
     tokens_in: int = 0,
     tokens_out: int = 0,
     models_used: list[str] | None = None,
+    cached_tokens: int = 0,
 ) -> dict[str, Any]:
     return {
         "output": output,
@@ -1051,6 +1058,7 @@ def _final_answer(
         "cost_usd": cost_usd,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
+        "cached_tokens": cached_tokens,
         "tools_used": tools_used or [],
         # Always a list for agentic agents (even when empty) so the orchestrator
         # treats the output as verifiable; None would skip verification.

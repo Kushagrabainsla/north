@@ -39,6 +39,7 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from inference.usage import cache_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -421,12 +422,15 @@ class OpenAICompatibleProvider:
                 reason="empty completion text and reasoning",
             )
         usage = payload.get("usage", {})
+        cached, cache_written = cache_tokens(usage)
         return CompletionResponse(
             text=content,
             model_used=payload.get("model", model_id),
             tokens_in=usage.get("prompt_tokens", 0),
             tokens_out=usage.get("completion_tokens", 0),
             cost_usd=float(usage.get("cost", 0.0)),
+            cached_tokens=cached,
+            cache_write_tokens=cache_written,
             reasoning=reasoning,
         )
 
@@ -503,6 +507,8 @@ class OpenAICompatibleProvider:
         reasoning_parts: list[str] = []
         tool_calls_acc: dict[int, dict] = {}
         tokens_in = 0
+        cached_tokens = 0
+        cache_write_tokens = 0
         tokens_out = 0
         cost_usd = 0.0
         saw_tool_call = False
@@ -526,6 +532,7 @@ class OpenAICompatibleProvider:
                         tokens_in = usage.get("prompt_tokens", tokens_in)
                         tokens_out = usage.get("completion_tokens", tokens_out)
                         cost_usd = float(usage.get("cost", cost_usd))
+                        cached_tokens, cache_write_tokens = cache_tokens(usage)
                     choices = chunk.get("choices")
                     if not choices:
                         continue
@@ -622,6 +629,8 @@ class OpenAICompatibleProvider:
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 cost_usd=cost_usd,
+                cached_tokens=cached_tokens,
+                cache_write_tokens=cache_write_tokens,
                 reasoning=reasoning_text,
             )
 
@@ -638,6 +647,8 @@ class OpenAICompatibleProvider:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost_usd=cost_usd,
+            cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
             reasoning=reasoning_text,
         )
 

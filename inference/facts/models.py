@@ -170,6 +170,12 @@ class Endpoint:
     entitlement: Entitlement = Entitlement.UNKNOWN
     uptime: float | None = None
     context_window: int | None = None
+    # Price per token for prompt tokens served from the provider's cache. None
+    # means no cache discount is published - which does NOT mean the endpoint
+    # never caches: free models publish no cache price and were still measured
+    # serving 99% of a warm prefix from cache. It is what lets routing prefer an
+    # endpoint where a long repeated prefix is actually cheaper.
+    cache_read_price: float | None = None
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -187,6 +193,19 @@ class Endpoint:
         if self.price_in is not None:
             return self.price_in
         return float("inf")
+
+    @property
+    def discounts_cache_reads(self) -> bool:
+        """True when this endpoint publishes a cheaper price for cached tokens.
+
+        Deliberately not named ``caches``: a free endpoint quotes no cache price
+        because there is no price to quote, yet OpenRouter's free models were
+        measured serving 99% of a warm prefix from cache. Whether an endpoint
+        caches is a fact only the response can tell you (inference/usage.py);
+        this is the narrower question routing can act on - is there money to be
+        saved by sending a long, repeated prefix here.
+        """
+        return self.cache_read_price is not None
 
     @property
     def is_free(self) -> bool:

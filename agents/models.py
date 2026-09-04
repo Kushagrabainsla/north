@@ -74,6 +74,10 @@ class AgentResult(BaseModel):
     cost_usd: float = 0.0
     tokens_in: int = 0  # summed prompt tokens across the agent's LLM calls
     tokens_out: int = 0  # summed completion tokens across the agent's LLM calls
+    # Of tokens_in, how many the provider served from its cache. An agent loop
+    # re-sends the same opening block every turn, so this is the difference
+    # between paying for it once and paying for it once per turn.
+    cached_tokens: int = 0
     duration_ms: int | None = None
     tools_used: list[str] = Field(default_factory=list)  # deduplicated, ordered by first call
     # Tools that succeeded at least once, deduplicated and ordered by first success.

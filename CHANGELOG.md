@@ -13,6 +13,16 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.15.0] - 2026-09-03
+### Added
+- **north now measures how much of each prompt a provider served from its cache** (`inference/usage.py`, ledger, `north inference costs`). An agent loop re-sends the same opening block on every turn, so caching is the difference between paying for that block once and paying for it once per turn - and the failure mode is silent. A cache is a *prefix* match, so one changed byte near the front throws the whole thing away and the bill returns to full price, with no error raised and nothing logged. The only symptom is this number falling to zero, which is invisible unless it is shown. Every provider reports it under a different key (`prompt_tokens_details.cached_tokens`, `input_tokens_details.cached_tokens`, `cache_read_input_tokens`), so all the shapes are read in one place rather than in five that would drift apart.
+- Endpoints now record the price a provider charges for cached tokens, where one is published, so routing can later prefer an endpoint on which a long repeated prefix is actually cheaper. Deliberately *not* named or read as "this endpoint caches": OpenRouter's free models publish no cache price and were measured serving **99% of a warm prefix from cache** regardless. Whether an endpoint caches is a fact only its own response can tell you.
+
+### Fixed
+- An earlier reading of OpenRouter's free tier as "caches about 4%" was a cold cache rather than the steady state. Sending the same prefix twice, the second call came back 2,151 of 2,174 tokens cached.
+
+---
+
 ## [1.14.0] - 2026-09-03
 ### Changed
 - **Skills are offered by description now, not pasted in whole** (`agents/base.py`, `skills/selector.py`). The top matches used to be injected as full playbooks - ~1,500 tokens of a typical message and up to 4,000 in the worst case. That block sits in the *opening* user message, which north's compaction deliberately never trims, so an agent loop re-sent it on every turn: measured on one real task, 23 turns paid for the same skill bodies 23 times, for a procedure the model often never used. The prompt now carries one line per skill - name and description - and the agent calls `use_skill` to pull the full instructions when one actually fits. **~1,400 tokens saved per call, ~32,000 over a 23-turn task.**

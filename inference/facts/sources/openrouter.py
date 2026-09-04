@@ -132,6 +132,7 @@ def facts_from_catalog(raw_models: list[dict]) -> tuple[list[ModelFacts], list[E
                 price_in=_price(pricing, "prompt"),
                 price_out=_price(pricing, "completion"),
                 context_window=int(context_length) if context_length else None,
+                cache_read_price=_price(pricing, "input_cache_read"),
             )
         )
     return facts, endpoints
