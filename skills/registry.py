@@ -9,6 +9,7 @@ bad skill must never take the whole system down.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from skills.exceptions import SkillNotFoundError, SkillParseError
@@ -26,13 +27,22 @@ logger = logging.getLogger(__name__)
 MAX_BODY_CHARS = 8_000
 
 
+# An absolute path rooted in somebody's home directory, on any platform. A
+# procedure that names one is not a procedure - it is a transcript of one run on
+# one machine. A learned skill was found instructing every future agent to read
+# `/Users/<name>/.north/tasks/<a-specific-task-id>/research/context.md` and to
+# write its output to a summary file under that developer's project directory.
+_MACHINE_PATH = re.compile(r"(?:/Users/|/home/|/root/|[A-Za-z]:\\Users\\)[^\s`'\"),;]+")
+
+
 def rejection_reason(name: str, description: str, body: str, *, source: SkillSource = SkillSource.LEARNED) -> str:
     """Return why a skill is invalid, or "" when it is valid.
 
     Shared by the registry (loading skills) and the distiller (before writing a
-    learned skill) so both apply exactly the same acceptance bar. The length cap
-    applies only to LEARNED skills; built-ins bypass it but still must have a
-    name, description, and non-empty body.
+    learned skill) so both apply exactly the same acceptance bar - a rule added
+    here rejects a bad skill on the way in *and* refuses to load one already on
+    disk. The length and machine-path checks apply only to LEARNED skills;
+    built-ins bypass them but still must have a name, description, and body.
     """
     if not name:
         return "missing name"
@@ -42,6 +52,8 @@ def rejection_reason(name: str, description: str, body: str, *, source: SkillSou
         return "empty body"
     if source is SkillSource.LEARNED and len(body) > MAX_BODY_CHARS:
         return f"body exceeds {MAX_BODY_CHARS} chars"
+    if source is SkillSource.LEARNED and (found := _MACHINE_PATH.search(body)):
+        return f"body hardcodes a machine-specific path ({found.group(0)[:60]})"
     return ""
 
 

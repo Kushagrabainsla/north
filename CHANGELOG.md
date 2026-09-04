@@ -13,6 +13,18 @@ All notable changes to north are documented here.
 
 ---
 
+## [1.18.0] - 2026-09-04
+### Added
+- **Routing knows how fast a model actually is** (`inference/dispatcher.py`, `inference/routing/router.py`, `tools/confidence.py`). It ranked on measured quality and price, and on nothing else - there was no latency term anywhere in the chain, so a model that takes minutes to answer could not lose its place to one that takes seconds. Each successful call now records the rate it generated at, per (model, provider), as an EMA beside the reliability EMA that was already there and in the same row. A model measured below the floor over enough calls is pushed to the **tail** of its chain: still reachable when it is the only thing that qualifies, never preferred while something quicker fits.
+
+  Rate, not wall-clock: a long answer legitimately takes longer, and ranking on duration would punish a model for being asked a bigger question. Only *successful* calls are timed - a timeout would otherwise be the slowest sample of all and tail a model for being unavailable, which is what cooldowns are for. A model nobody has timed is never slow, so an untried model is not tailed before it has run. Slowness is per endpoint: if any provider serves a model quickly, the model keeps its rank.
+- `north speed` shows what has been measured - tok/s, sample count, and whether a model is being tailed. Reads `~/.north/tools.db` directly, so it works with the server offline.
+
+### Changed
+- **A learned skill can now be withdrawn** (`skills/retirement.py`). north distils skills from its own runs, which means it can distil a mistake - and nothing ever looked back. A skill that has been selected for enough tasks, most of which ended badly, is marked `retired` by the daily cleanup job. The registry already refused to offer a retired skill, so nothing else had to change. Reversible by editing the file; the body and provenance are kept, because what north believed and why it was withdrawn is the useful part. Hand-authored skills are never touched - a built-in showing up in failures is evidence about the tasks, not the skill.
+- A learned skill that hardcodes a machine-specific path is rejected (`skills/registry.py`). A procedure naming one machine's absolute paths is a transcript of one run, not something reusable. The bar is shared by the writer and the loader, so this both refuses to write such a skill and stops loading one already on disk - which is what takes the observed `trace-and-document-model-routing` out of service, a skill that told every future agent to read `/Users/<name>/.north/tasks/<a-specific-task-id>/research/context.md` and stop if it was missing.
+- Model reliability and speed share a row, so both are written together and a write of one no longer blanks the other (`ON CONFLICT ... DO UPDATE` on the named columns, rather than a whole-row replace).
+
 ## [1.17.0] - 2026-09-03
 ### Changed
 - **Investigating something no longer runs a design stage with nothing to design** (`orchestrator/router.py`, `prompts/planner.md`). `research` mapped to researcher *and* architect, so "investigate X and summarise the flow" ran an architect that had no decision to make: measured on one such task it took 21s, wrote no spec, and - by making the run multi-agent - pulled in a synthesis pass on top of that. `research` is now researcher-only, and a new `design` kind carries the researcher→architect pair for tasks that genuinely want an approach decided. The new `incomplete` column is what made this visible: the architect showed 1 task, 100% success, 1 incomplete.

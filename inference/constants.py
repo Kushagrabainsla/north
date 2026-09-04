@@ -36,6 +36,20 @@ _MODEL_CONFIDENCE_FULL_USES: int = 20
 _PREFERRED_MIN_USES: int = 5
 _PREFERRED_HEALTH_FLOOR: float = 0.35
 
+# Observed speed, in output tokens per second, measured per (model, provider) on
+# this install. Routing ranked on quality and price alone, with no term for how
+# long a model actually takes - so two free models averaging over two minutes per
+# agent run kept winning on price, and nothing could notice. A model measured
+# below the floor is pushed to the tail of its chain: still reachable when it is
+# the only thing that qualifies, never preferred while something quicker fits.
+#
+# The floor is deliberately low. It is there to catch models that are unusable
+# for interactive work, not to shave seconds: at 4 tok/s a 700-token answer takes
+# three minutes, which is the behaviour actually observed.
+_MODEL_SPEED_ALPHA: float = 0.25
+_MODEL_SPEED_MIN_SAMPLES: int = 3
+_MODEL_SPEED_FLOOR_TOK_PER_SEC: float = 5.0
+
 # Model family-quality tiers (price-FREE prior). Keyed by case-insensitive
 # substring; longest match wins. This is the static "smartness prior" used when
 # price carries no signal (all providers free). Overridable per-install via

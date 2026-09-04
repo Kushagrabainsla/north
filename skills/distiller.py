@@ -122,10 +122,20 @@ class SkillDistiller:
                 written += 1
 
         if written:
-            self._registry.reload()
-            self._selector.invalidate()
+            self.reload_registry()
             logger.info("SkillDistiller: wrote %d new learned skill(s)", written)
         return written
+
+    def reload_registry(self) -> None:
+        """Re-read the learned skills from disk and drop the selector's cache.
+
+        Needed by anything that changes a skill file behind the registry's back -
+        the distiller writing a new one, or the retirement sweep withdrawing one.
+        Without the invalidate, a retired skill keeps being offered from cache
+        until the process restarts.
+        """
+        self._registry.reload()
+        self._selector.invalidate()
 
     async def _distill_and_write(self, cluster: list[tuple[str, str]], written_names: set[str]) -> bool:
         """Distil one cluster into a skill and write it. Returns True on success."""

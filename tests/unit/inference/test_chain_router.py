@@ -254,3 +254,103 @@ async def test_entitlement_is_persisted_when_a_restricted_account_starts_working
         component="coder", requirements=requirements_from(needs_tools=True), call_fn=_call
     )
     assert ("openrouter", "OK") not in writes  # a different provider is untouched
+
+
+# ── observed speed ───────────────────────────────────────────────────────────
+#
+# Routing ranked on quality and price with no term for how long a model takes.
+# Two free models were measured on a live install averaging over two minutes per
+# agent run and kept winning on price, because nothing anywhere could notice.
+
+
+class _Timed:
+    """A response carrying a token count, which is what a rate is measured from."""
+
+    def __init__(self, text: str, tokens_out: int) -> None:
+        self.text = text
+        self.tokens_out = tokens_out
+
+
+def _speed_router(tmp_path, slow_ids: set[str]):
+    """A router that reports *slow_ids* as slow, and records what it times."""
+    router, providers, decisions = _router(tmp_path, {})
+    timings: list[tuple[str, str, float, int]] = []
+    router._on_latency = lambda m, p, s, t: timings.append((m, p, s, t))  # noqa: SLF001
+    router._slow = lambda canonical_id: canonical_id in slow_ids  # noqa: SLF001
+    return router, providers, decisions, timings
+
+
+@pytest.mark.asyncio
+async def test_a_slow_model_loses_its_place_to_a_quicker_one(tmp_path) -> None:
+    """The best model on paper is not the best when it takes two minutes."""
+    router, _providers, _decisions, _timings = _speed_router(tmp_path, {"claude-fable-5-1"})
+
+    result = await router.dispatch(
+        component="coder",
+        requirements=requirements_from(estimated_tokens=47_000, needs_tools=True),
+        call_fn=_call,
+    )
+
+    assert result == "openrouter:anthropic/claude-opus-5", "the quicker model should serve"
+
+
+@pytest.mark.asyncio
+async def test_a_slow_model_still_runs_when_it_is_the_only_one_left(tmp_path) -> None:
+    """Ranking, never filtering. Being slow here is not being unusable."""
+    router, _providers, _decisions, _timings = _speed_router(
+        tmp_path, {"claude-fable-5-1", "claude-opus-5", "glm-5-2"}
+    )
+
+    result = await router.dispatch(
+        component="coder",
+        requirements=requirements_from(estimated_tokens=47_000, needs_tools=True),
+        call_fn=_call,
+    )
+
+    assert result == "opencode_zen:claude-fable-5.1", "all slow means the normal order stands"
+
+
+@pytest.mark.asyncio
+async def test_a_successful_call_is_timed_with_its_token_count(tmp_path) -> None:
+    router, _providers, _decisions, timings = _speed_router(tmp_path, set())
+
+    async def call(provider, model_id: str):
+        await provider.respond(model_id)
+        return _Timed("hello", tokens_out=120)
+
+    await router.dispatch(
+        component="coder",
+        requirements=requirements_from(estimated_tokens=47_000, needs_tools=True),
+        call_fn=call,
+    )
+
+    assert len(timings) == 1
+    model_id, provider, seconds, tokens_out = timings[0]
+    assert (model_id, provider, tokens_out) == ("claude-fable-5.1", "opencode_zen", 120)
+    assert seconds >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_call_is_never_timed(tmp_path) -> None:
+    """A timeout says nothing about generation speed.
+
+    Recording it would be the slowest sample of all, tailing a model for being
+    unavailable rather than for being slow - which cooldowns already handle.
+    """
+    router, _providers, _decisions, timings = _speed_router(tmp_path, set())
+    router._slow = None  # noqa: SLF001 - ordering is not what this test is about
+
+    async def call(provider, model_id: str):
+        if model_id == "claude-fable-5.1":
+            raise ProviderUnavailableError("down")
+        return _Timed("hello", tokens_out=50)
+
+    await router.dispatch(
+        component="coder",
+        requirements=requirements_from(estimated_tokens=47_000, needs_tools=True),
+        call_fn=call,
+    )
+
+    timed_models = {model_id for model_id, _p, _s, _t in timings}
+    assert "claude-fable-5.1" not in timed_models, "the call that failed must not be timed"
+    assert timed_models, "the call that succeeded must be"

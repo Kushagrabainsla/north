@@ -51,6 +51,7 @@ from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.watchdog import watch_stuck_tasks
 from skills import SkillRegistry, SkillSelector
+from skills import retirement as skill_retirement
 from skills.distiller import SkillDistiller
 from tools._path import prune_handoff_dirs
 from tools.confidence import RELIABLE_TOOLS
@@ -493,12 +494,20 @@ def _launch_background_tasks(
                 settings.handoff_retention_days,
                 keep=orchestrator.active_task_ids,
             )
+            # north writes its own skills, so it can write down a mistake. Nothing
+            # looked back: one learned skill told agents to stop when a file was
+            # missing, they did, and it stayed active. A skill whose tasks keep
+            # failing is retired here - reversibly, by a status field.
+            retired = await skill_retirement.sweep(deps.ledger, settings.north_home / "skills")
+            if retired:
+                skill_distiller.reload_registry()
             await deps.ledger.write(
                 LedgerEntry.new(
                     source=LedgerSource.SYSTEM,
                     action=(
                         f"task_context_cleanup: removed {n} stale rows, pruned {pruned} ledger entries"
                         f", {decisions} routing decisions, {handoffs} handoff directories"
+                        f"{f', retired {len(retired)} learned skill(s)' if retired else ''}"
                     ),
                     status=LedgerStatus.COMPLETED,
                 )

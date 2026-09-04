@@ -66,6 +66,17 @@ _MIGRATION_ADD_CONSECUTIVE_FAILURES = (
     "ALTER TABLE tool_confidence ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0"
 )
 
+# How fast a model has actually been on this install, in output tokens per second,
+# alongside how reliable it has been. Both are the same kind of fact - what this
+# machine has observed - so they live in the same row and are written together.
+# Two free models were measured averaging over two minutes per agent run while
+# routing ranked purely on quality and price, with nothing anywhere that could
+# notice.
+_MIGRATION_ADD_SPEED = (
+    "ALTER TABLE model_confidence ADD COLUMN tokens_per_sec REAL NOT NULL DEFAULT 0.0",
+    "ALTER TABLE model_confidence ADD COLUMN speed_samples INTEGER NOT NULL DEFAULT 0",
+)
+
 
 def _clamp(value: float) -> float:
     return max(MIN_CONFIDENCE, min(MAX_CONFIDENCE, value))
@@ -91,6 +102,9 @@ class ConfidenceTracker:
 
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute(_MIGRATION_ADD_CONSECUTIVE_FAILURES)
+            for migration in _MIGRATION_ADD_SPEED:
+                with contextlib.suppress(sqlite3.OperationalError):
+                    conn.execute(migration)
 
     async def get_score(self, agent: str, tool: str) -> float:
         row = await asyncio.to_thread(self._get_row_sync, agent, tool)
@@ -214,6 +228,19 @@ class ConfidenceTracker:
             rows = conn.execute("SELECT model_id, provider, confidence, uses_total FROM model_confidence").fetchall()
         return {(r["model_id"], r["provider"]): (r["confidence"], r["uses_total"]) for r in rows}
 
+    def load_model_speeds_sync(self) -> dict[tuple[str, str], tuple[float, int]]:
+        """Return persisted speeds as {(model_id, provider): (tokens_per_sec, samples)}.
+
+        Only rows with at least one sample: a model nobody has timed yet must look
+        untried, not infinitely slow, or it would be tailed before it ever ran.
+        """
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT model_id, provider, tokens_per_sec, speed_samples FROM model_confidence "
+                "WHERE speed_samples > 0"
+            ).fetchall()
+        return {(r["model_id"], r["provider"]): (r["tokens_per_sec"], r["speed_samples"]) for r in rows}
+
     async def save_model_score(self, model_id: str, provider: str, score: float, uses: int) -> None:
         """Upsert one model's EMA score. Called fire-and-forget after each dispatch outcome."""
         await asyncio.to_thread(self._save_model_score_sync, model_id, provider, score, uses)
@@ -221,27 +248,41 @@ class ConfidenceTracker:
     def _save_model_score_sync(self, model_id: str, provider: str, score: float, uses: int) -> None:
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
+            # Upsert the reliability columns only. INSERT OR REPLACE would write a
+            # whole new row and silently reset the speed this model had earned.
             conn.execute(
-                "INSERT OR REPLACE INTO model_confidence "
-                "(model_id, provider, confidence, uses_total, last_updated) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO model_confidence (model_id, provider, confidence, uses_total, last_updated) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(model_id, provider) DO UPDATE SET "
+                "confidence = excluded.confidence, uses_total = excluded.uses_total, "
+                "last_updated = excluded.last_updated",
                 (model_id, provider, score, uses, now),
             )
 
-    async def save_model_scores_batch(self, items: list[tuple[str, str, float, int]]) -> None:
-        """Upsert multiple models' EMA scores in a single transaction."""
+    async def save_model_scores_batch(self, items: list[tuple[str, str, float, int, float, int]]) -> None:
+        """Upsert multiple models' reliability and speed in a single transaction.
+
+        Each item is ``(model_id, provider, score, uses, tokens_per_sec, samples)``.
+        Both signals go in one write because they share a row: an INSERT OR REPLACE
+        carrying only one of them would blank the other.
+        """
         if not items:
             return
         await asyncio.to_thread(self._save_model_scores_batch_sync, items)
 
-    def _save_model_scores_batch_sync(self, items: list[tuple[str, str, float, int]]) -> None:
+    def _save_model_scores_batch_sync(self, items: list[tuple[str, str, float, int, float, int]]) -> None:
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
             conn.executemany(
-                "INSERT OR REPLACE INTO model_confidence "
-                "(model_id, provider, confidence, uses_total, last_updated) "
-                "VALUES (?, ?, ?, ?, ?)",
-                [(model_id, provider, score, uses, now) for (model_id, provider, score, uses) in items],
+                "INSERT INTO model_confidence "
+                "(model_id, provider, confidence, uses_total, tokens_per_sec, speed_samples, last_updated) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(model_id, provider) DO UPDATE SET "
+                "confidence = excluded.confidence, uses_total = excluded.uses_total, "
+                "tokens_per_sec = excluded.tokens_per_sec, speed_samples = excluded.speed_samples, "
+                "last_updated = excluded.last_updated",
+                [(model_id, provider, score, uses, tps, samples) + (now,) for
+                 (model_id, provider, score, uses, tps, samples) in items],
             )
 
     async def inherit_from(self, new_agent: str, source_agent: str) -> None:

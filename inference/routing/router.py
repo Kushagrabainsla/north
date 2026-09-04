@@ -13,6 +13,7 @@ read in one file.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -31,6 +32,8 @@ logger = logging.getLogger(__name__)
 # Called with (model_id, provider_name, succeeded) after every attempt, so the
 # dispatcher can keep its per-model success EMA without this module knowing it exists.
 OutcomeSink = Callable[[str, str, bool], None]
+# (model_id, provider, seconds, tokens_out) - one observed generation rate.
+LatencySink = Callable[[str, str, float, int], None]
 ProviderLookup = Callable[[str], Any]
 
 
@@ -47,7 +50,9 @@ class ChainRouter:
         profiles: dict[str, PartProfile] | None = None,
         corroboration: OutageCorroboration | None = None,
         on_outcome: OutcomeSink | None = None,
+        on_latency: LatencySink | None = None,
         demoted: Callable[[str], bool] | None = None,
+        slow: Callable[[str], bool] | None = None,
         power: Callable[[], str | None] | None = None,
     ) -> None:
         self._catalog = catalog
@@ -57,7 +62,9 @@ class ChainRouter:
         self._profiles = profiles or {}
         self._corroboration = corroboration or OutageCorroboration()
         self._on_outcome = on_outcome
+        self._on_latency = on_latency
         self._demoted = demoted
+        self._slow = slow
         self._power = power
 
     @property
@@ -119,7 +126,22 @@ class ChainRouter:
         if not fits_context and eligible and requirements.min_context:
             largest = max((context_of(c.facts, c.endpoints) or 0) for c in eligible)
             raise ContextTooLargeError(requirements.min_context, largest)
-        return narrow(fits_context, requirements), profile
+        return self._quickest_first(narrow(fits_context, requirements)), profile
+
+    def _quickest_first(self, candidates: list[Candidate]) -> list[Candidate]:
+        """Move models this install has measured as slow to the tail, order intact.
+
+        Applied here rather than in ``build_chain`` because the catalog caches one
+        chain per (profile, generation): folding speed in there would freeze the
+        ordering at build time, and a model that turns slow an hour later would
+        keep its place until the next catalog refresh. Ranking, never filtering -
+        a slow model is still the right answer when it is the only one that
+        qualifies.
+        """
+        if self._slow is None or len(candidates) < 2:
+            return candidates
+        quick = [c for c in candidates if not self._slow(c.canonical_id)]
+        return quick + [c for c in candidates if self._slow(c.canonical_id)] if quick else candidates
 
     # ---- dispatch ----
 
@@ -147,6 +169,7 @@ class ChainRouter:
             provider = self._provider_lookup(attempt.provider)
             if provider is None:  # pragma: no cover - the walk filters these out
                 continue
+            started = time.monotonic()
             try:
                 result = await call_fn(provider, attempt.model_id)
             except Exception as exc:
@@ -169,6 +192,7 @@ class ChainRouter:
                 attempt.failed(failure)
                 continue
 
+            self._record_speed(attempt, time.monotonic() - started, result)
             self._succeed(attempt)
             decision.chose(attempt.model_id, attempt.provider)
             self._decisions.record(_finish(decision, walk))
@@ -182,6 +206,19 @@ class ChainRouter:
         )
 
     # ---- outcome handling ----
+
+    def _record_speed(self, attempt, seconds: float, result: Any) -> None:
+        """Report how fast this endpoint actually generated, for later ranking.
+
+        Only successful calls are timed. A call that failed says nothing about how
+        quickly the model produces text, and a timeout would otherwise be recorded
+        as the slowest result of all and tail a model for being unavailable rather
+        than for being slow - which is what cooldowns are already for.
+        """
+        if self._on_latency is None:
+            return
+        tokens_out = getattr(result, "tokens_out", 0) or 0
+        self._on_latency(attempt.model_id, attempt.provider, seconds, int(tokens_out))
 
     def _succeed(self, attempt) -> None:
         # Only persist entitlement when it actually changed. A paid call going

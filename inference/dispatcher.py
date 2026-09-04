@@ -31,6 +31,9 @@ from inference.capability import ModelCapability, ModelInfo
 from inference.constants import (
     _DEFAULT_MODEL_CONFIDENCE,
     _MODEL_CONFIDENCE_ALPHA,
+    _MODEL_SPEED_ALPHA,
+    _MODEL_SPEED_FLOOR_TOK_PER_SEC,
+    _MODEL_SPEED_MIN_SAMPLES,
     _PREFERRED_HEALTH_FLOOR,
     _PREFERRED_MIN_USES,
     _QUALITY_TIER_HIGH,
@@ -213,6 +216,11 @@ class ModelDispatcher(InferenceRouter):
         self._model_confidence: dict[_CooldownKey, tuple[float, int]] = (
             confidence_tracker.load_model_scores_sync() if confidence_tracker is not None else {}
         )
+        # (model_id, provider_name) → (ema_tokens_per_sec, samples). Same shape and
+        # same lifecycle as the reliability EMA above: what this install measured.
+        self._model_speed: dict[_CooldownKey, tuple[float, int]] = (
+            confidence_tracker.load_model_speeds_sync() if confidence_tracker is not None else {}
+        )
         # Scores changed since the last batched DB flush.
         self._dirty_scores: set[_CooldownKey] = set()
         self._flush_task: asyncio.Task | None = None
@@ -285,7 +293,9 @@ class ModelDispatcher(InferenceRouter):
             self._provider_by_name,
             profiles=self._routing_profiles(),
             on_outcome=self._record_chain_outcome,
+            on_latency=self._record_chain_speed,
             demoted=self._is_demoted,
+            slow=self._is_slow,
             power=self._power_mode,
         )
 
@@ -308,6 +318,42 @@ class ModelDispatcher(InferenceRouter):
         key: _CooldownKey = (model_id, provider_name)
         self._record_model_outcome(key, success)
         self._persist_model_score(key)
+
+    def _record_chain_speed(self, model_id: str, provider_name: str, seconds: float, tokens_out: int) -> None:
+        """Fold one observed generation rate into this model's speed EMA.
+
+        Rate, not wall-clock: a long answer legitimately takes longer, and ranking
+        on raw duration would punish a model for being asked a bigger question.
+        Calls that produced no tokens (embeddings, an empty reply) carry no rate
+        and are ignored rather than recorded as zero.
+        """
+        if tokens_out <= 0 or seconds <= 0:
+            return
+        key: _CooldownKey = (model_id, provider_name)
+        rate = tokens_out / seconds
+        prev_rate, prev_samples = self._model_speed.get(key, (rate, 0))
+        blended = _MODEL_SPEED_ALPHA * rate + (1 - _MODEL_SPEED_ALPHA) * prev_rate
+        self._model_speed[key] = (blended, prev_samples + 1)
+        self._persist_model_score(key)
+
+    def _is_slow(self, canonical_id: str) -> bool:
+        """True when every endpoint this install has timed for the model is slow.
+
+        Mirrors ``_is_demoted``: the model stays in the chain, it just stops being
+        preferred. "Slow here" is not "unusable", and a model nobody has timed yet
+        is never slow - an untried model must not be tailed before it has run.
+        """
+        rates = [
+            (rate, samples)
+            for (model_id, _provider), (rate, samples) in self._model_speed.items()
+            if canonical(model_id) == canonical_id
+        ]
+        if not rates:
+            return False
+        return all(
+            samples >= _MODEL_SPEED_MIN_SAMPLES and rate < _MODEL_SPEED_FLOOR_TOK_PER_SEC
+            for rate, samples in rates
+        )
 
     def _is_demoted(self, canonical_id: str) -> bool:
         """True when this install's own history says a model belongs in the tail.
@@ -917,17 +963,17 @@ class ModelDispatcher(InferenceRouter):
         if self._confidence_tracker is None or not self._dirty_scores:
             return
         dirty, self._dirty_scores = self._dirty_scores, set()
-        items: list[tuple[str, str, float, int]] = []
+        items: list[tuple[str, str, float, int, float, int]] = []
         for key in dirty:
-            score, uses = self._model_confidence.get(key, (None, None))
-            if score is not None and uses is not None:
-                items.append((key[0], key[1], score, uses))
+            score, uses = self._model_confidence.get(key, (_DEFAULT_MODEL_CONFIDENCE, 0))
+            rate, samples = self._model_speed.get(key, (0.0, 0))
+            items.append((key[0], key[1], score, uses, rate, samples))
         if items:
             try:
                 if hasattr(self._confidence_tracker, "save_model_scores_batch"):
                     await self._confidence_tracker.save_model_scores_batch(items)
                 else:
-                    for model_id, provider, score, uses in items:
+                    for model_id, provider, score, uses, _rate, _samples in items:
                         await self._confidence_tracker.save_model_score(model_id, provider, score, uses)
             except Exception:
                 self._dirty_scores.update(dirty)

@@ -1476,6 +1476,53 @@ def inference_models() -> None:
         _console.print()
 
 
+@app.command("speed")
+@inference_app.command("speed")
+def inference_speed(
+    limit: int = typer.Option(30, "--limit", help="How many models to show."),
+) -> None:
+    """Show how fast each model has actually been on this install.
+
+    Reads ~/.north/tools.db directly, so it works with the server offline.
+    Routing ranks on quality and price; this is the third signal it uses - a
+    model measured below the floor is pushed to the tail of its chain, so a free
+    model that takes two minutes stops being preferred over one that answers in
+    five seconds. A model with too few samples is not yet judged either way.
+    """
+    from config.settings import settings
+    from inference.constants import _MODEL_SPEED_FLOOR_TOK_PER_SEC, _MODEL_SPEED_MIN_SAMPLES
+    from tools.confidence import ConfidenceTracker
+
+    speeds = ConfidenceTracker(db_path=settings.north_home / "tools.db").load_model_speeds_sync()
+    _console.print()
+    if not speeds:
+        _console.print("  [bright_black]No model has been timed yet.[/bright_black]")
+        _console.print()
+        return
+
+    table = Table(box=None, padding=(0, 2), show_header=True, header_style="dim")
+    table.add_column("model", style="bold white")
+    table.add_column("provider")
+    table.add_column("tok/s", justify="right")
+    table.add_column("samples", justify="right")
+    table.add_column("ranking")
+    rows = sorted(speeds.items(), key=lambda item: item[1][0])
+    for (model_id, provider), (rate, samples) in rows[: max(1, limit)]:
+        if samples < _MODEL_SPEED_MIN_SAMPLES:
+            verdict = "[bright_black]not yet judged[/bright_black]"
+        elif rate < _MODEL_SPEED_FLOOR_TOK_PER_SEC:
+            verdict = "[yellow]tailed - too slow[/yellow]"
+        else:
+            verdict = "[green]normal[/green]"
+        table.add_row(model_id, provider, f"{rate:.1f}", str(samples), verdict)
+    _console.print(table)
+    _console.print(
+        f"  [bright_black]Below {_MODEL_SPEED_FLOOR_TOK_PER_SEC:.0f} tok/s over "
+        f"{_MODEL_SPEED_MIN_SAMPLES}+ calls is ranked last, never removed.[/bright_black]"
+    )
+    _console.print()
+
+
 @app.command("routing")
 @inference_app.command("routing")
 def inference_routing(
