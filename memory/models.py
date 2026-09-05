@@ -25,17 +25,25 @@ class ContextDocument(StrEnum):
 
 @dataclass(frozen=True)
 class MemoryPrincipal:
-    """Who is asking for memory, and which episode domains they may read.
+    """Who is asking for memory, and which of it they may read.
 
-    Every context document and fact is non-sensitive and readable by any caller,
-    so the only boundary left is episodic task history: an agent sees its own
-    domain's episodes plus a shared set, never another domain's.
+    Two boundaries. Episodic task history is scoped by domain: an agent sees its
+    own domain's episodes plus a shared set, never another domain's.
+
+    Facts are scoped by *topic*, which is about relevance rather than secrecy.
+    Nothing here is sensitive, but a coding agent handed the user's tax figures
+    is carrying noise through every turn of its loop - and measurably was:
+    engineering prompts pulled 4 personal facts on average against 5 for
+    questions actually about the user, so the similarity search was not
+    discriminating at all. Which facts a task wants is a property of the task.
     """
 
     name: str
     domain: str | None
     # Episode domains this principal may read (its own domain plus a shared set).
     allowed_domains: frozenset[str]
+    # Fact topics this principal may read. None means no restriction.
+    allowed_fact_topics: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
