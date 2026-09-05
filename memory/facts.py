@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from config.dependencies import EmbedFn
+from config.dependencies import EmbedFn, SupersedeFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.math import cosine_similarity
@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS context_facts (
     source_hash     TEXT,
     source_mtime    REAL,
     evidence        TEXT,
-    observed_at     DATETIME
+    observed_at     DATETIME,
+    superseded_by   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_context_facts_cat_updated ON context_facts (category, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_context_facts_updated ON context_facts (updated_at DESC);
@@ -106,6 +107,7 @@ _MIGRATION_STATEMENTS = [
     "ALTER TABLE context_facts ADD COLUMN source_mtime REAL",
     "ALTER TABLE context_facts ADD COLUMN evidence TEXT",
     "ALTER TABLE context_facts ADD COLUMN observed_at DATETIME",
+    "ALTER TABLE context_facts ADD COLUMN superseded_by TEXT",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_cat_updated ON context_facts (category, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_updated ON context_facts (updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_context_facts_cat_content ON context_facts (category, content)",
@@ -154,6 +156,26 @@ _MAX_FACTS_STORED: int = 5_000
 # an O(all rows) scan per insert does not scale and recent facts are the
 # plausible duplicates anyway.
 _DEDUP_SCAN_LIMIT: int = 500
+# A fact is only *retrieved* while its status is this. Superseded rows stay in
+# the table - they are the record of what was once true, and deleting them would
+# make the change invisible - but they never reach a prompt again.
+_STATUS_ACTIVE: str = "active"
+_STATUS_SUPERSEDED: str = "superseded"
+# The band where a new fact is close enough to an old one to be *about the same
+# thing*, but not close enough to be the same claim. Below _DEDUP_SIMILARITY_
+# THRESHOLD the store already merges; this is the range underneath it, where a
+# contradiction can hide. Measured on real facts: "the user currently interns at
+# LinkedIn" scores 0.81 against the fact recording that the internship ended and
+# 0.68 against the fact dating its end - both would have been missed entirely by
+# a check that only looked at near-identical text.
+_SUPERSEDE_MIN_SIMILARITY: float = 0.60
+# At most this many candidates are shown to the supersede check, so one insert
+# cannot turn into an unbounded prompt. Not smaller: the fact most in need of
+# retiring is often *not* the most similar one. Recording that an internship
+# ended scores 0.84 against another fact about it ending, but only 0.70 against
+# the stale "currently interns at ..." that actually had to go - which sat 8th.
+# A cap of 5 silently missed every fact worth superseding.
+_SUPERSEDE_MAX_CANDIDATES: int = 20
 
 
 def _apply_recall_cutoff(scored: list[tuple[str, float]], max_results: int) -> list[str]:
@@ -185,9 +207,18 @@ class FactStore:
     Falls back to recency ordering when embedding is unavailable.
     """
 
-    def __init__(self, db_path: Path, embed_fn: EmbedFn, embedding_model: str = "") -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        embed_fn: EmbedFn,
+        embedding_model: str = "",
+        supersede_fn: SupersedeFn | None = None,
+    ) -> None:
         self._db_path = db_path
         self._embed_fn = embed_fn
+        # Optional: without it the store simply never supersedes, which is the
+        # behaviour this replaces rather than a new failure mode.
+        self._supersede_fn = supersede_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.executescript(_SCHEMA)
@@ -204,6 +235,107 @@ class FactStore:
         # Serializes cache rebuilds: concurrent searches after an invalidation
         # must not interleave loads and clobber each other's cache.
         self._cache_lock = asyncio.Lock()
+
+    async def _supersede_contradicted(self, content: str, category: str, new_emb: list[float]) -> int:
+        """Retire active facts that *content* makes untrue. Returns how many.
+
+        Only runs against facts in the band below the dedup threshold: close
+        enough to be about the same subject, far enough not to be the same claim.
+        Above that band the store already merges the rows, and below it the two
+        facts are about different things and cannot contradict.
+
+        A failure here is not allowed to fail the write. The new fact is the more
+        current of the two, so storing it and leaving the old one active is a
+        strictly better outcome than losing it.
+        """
+        if self._supersede_fn is None or not new_emb:
+            return 0
+        try:
+            candidates = await asyncio.to_thread(
+                self._candidates_in_band_sync, category, new_emb,
+                _SUPERSEDE_MIN_SIMILARITY, _DEDUP_SIMILARITY_THRESHOLD,
+            )
+            if not candidates:
+                return 0
+            stale = await self._supersede_fn(content, [c[1] for c in candidates])
+            retired = [candidates[i][0] for i in stale if 0 <= i < len(candidates)]
+            if not retired:
+                return 0
+            await asyncio.to_thread(self._mark_superseded_sync, retired, None)
+            self.invalidate_cache()
+            for fact_id, text in candidates:
+                if fact_id in retired:
+                    logger.info("FactStore: superseded %r - contradicted by %r", text[:80], content[:80])
+            return len(retired)
+        except Exception:
+            logger.warning("FactStore: supersede check failed - the older fact stays active", exc_info=True)
+            return 0
+
+    def _candidates_in_band_sync(
+        self, category: str, emb: list[float], low: float, high: float
+    ) -> list[tuple[str, str]]:
+        """Active facts in *category* whose similarity to *emb* falls in [low, high)."""
+        emb_json = json.dumps(emb)
+        sql = """
+        SELECT id, content FROM (
+            SELECT id, content, (1.0 - vec_distance_cosine(embedding, ?)) AS sim
+            FROM context_facts
+            WHERE category = ? AND status = ?
+              AND embedding IS NOT NULL AND embedding != '' AND embedding != '[]'
+            ORDER BY updated_at DESC LIMIT ?
+        )
+        WHERE sim >= ? AND sim < ?
+        ORDER BY sim DESC LIMIT ?
+        """
+        try:
+            with open_db_connection(self._db_path) as conn:
+                rows = conn.execute(
+                    sql, (emb_json, category, _STATUS_ACTIVE, _DEDUP_SCAN_LIMIT,
+                          low, high, _SUPERSEDE_MAX_CANDIDATES),
+                ).fetchall()
+            return [(r["id"], r["content"]) for r in rows]
+        except Exception:
+            # No sqlite-vec: fall back to scoring in Python over the recent window.
+            with open_db_connection(self._db_path) as conn:
+                rows = conn.execute(
+                    "SELECT id, content, embedding FROM context_facts "
+                    "WHERE category = ? AND status = ? ORDER BY updated_at DESC LIMIT ?",
+                    (category, _STATUS_ACTIVE, _DEDUP_SCAN_LIMIT),
+                ).fetchall()
+            scored: list[tuple[float, str, str]] = []
+            for row in rows:
+                if not row["embedding"]:
+                    continue
+                try:
+                    existing = json.loads(row["embedding"])
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not existing or len(existing) != len(emb):
+                    continue
+                sim = cosine_similarity(emb, existing)
+                if low <= sim < high:
+                    scored.append((sim, row["id"], row["content"]))
+            scored.sort(reverse=True)
+            return [(i, c) for _, i, c in scored[:_SUPERSEDE_MAX_CANDIDATES]]
+
+    def _mark_superseded_sync(self, fact_ids: list[str], replaced_by: str | None) -> int:
+        if not fact_ids:
+            return 0
+        now = datetime.now(UTC).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            placeholders = ",".join("?" for _ in fact_ids)
+            return conn.execute(
+                f"UPDATE context_facts SET status = ?, superseded_by = ?, updated_at = ? "  # noqa: S608
+                f"WHERE id IN ({placeholders})",
+                (_STATUS_SUPERSEDED, replaced_by, now, *fact_ids),
+            ).rowcount
+
+    async def supersede_fact(self, fact_id: str, replaced_by: str | None = None) -> bool:
+        """Retire one fact by id. The row is kept; it just stops being recalled."""
+        changed = await asyncio.to_thread(self._mark_superseded_sync, [fact_id], replaced_by)
+        if changed:
+            self.invalidate_cache()
+        return changed > 0
 
     async def backfill_embeddings(self, batch_size: int = 128) -> int:
         """Embed every fact that has no vector. Returns how many were embedded.
@@ -344,6 +476,11 @@ class FactStore:
                 self._cache.append((fact_id, content, new_emb, category, subject, status))
                 if len(self._cache) > _MAX_FACTS_STORED:
                     self._cache = self._cache[-_MAX_FACTS_STORED:]
+        # Runs after the write, not before: learning that "the internship ended"
+        # is only worth acting on once that fact is safely stored, and a new fact
+        # is the more current of any pair it contradicts.
+        if inserted:
+            await self._supersede_contradicted(content, category, new_emb)
         return inserted
 
     async def search(
@@ -404,9 +541,10 @@ class FactStore:
             sql = (
                 "SELECT content, (1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
                 "FROM context_facts "
-                "WHERE embedding IS NOT NULL AND embedding != '' AND embedding != '[]'"
+                "WHERE embedding IS NOT NULL AND embedding != '' AND embedding != '[]' "
+                "AND status = ?"
             )
-            params: list[Any] = [qvec_json]
+            params: list[Any] = [qvec_json, _STATUS_ACTIVE]
             if allowed_categories is not None:
                 if not allowed_categories:
                     return []
@@ -627,7 +765,9 @@ class FactStore:
     def _load_all_sync(self) -> list[tuple[str, str, str, str, str, str]]:
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT id, content, embedding, category, subject, status FROM context_facts"
+                "SELECT id, content, embedding, category, subject, status FROM context_facts "
+                "WHERE status = ?",
+                (_STATUS_ACTIVE,),
             ).fetchall()
         return [
             (
@@ -648,14 +788,14 @@ class FactStore:
             if allowed_categories is not None:
                 placeholders = ",".join("?" * len(allowed_categories))
                 rows = conn.execute(
-                    f"SELECT content FROM context_facts WHERE category IN ({placeholders}) "
+                    f"SELECT content FROM context_facts WHERE status = ? AND category IN ({placeholders}) "
                     "ORDER BY updated_at DESC LIMIT ?",
-                    (*allowed_categories, limit),
+                    (_STATUS_ACTIVE, *allowed_categories, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT content FROM context_facts ORDER BY updated_at DESC LIMIT ?",
-                    (limit,),
+                    "SELECT content FROM context_facts WHERE status = ? ORDER BY updated_at DESC LIMIT ?",
+                    (_STATUS_ACTIVE, limit),
                 ).fetchall()
         return [r["content"] for r in rows]
 

@@ -44,6 +44,10 @@ if TYPE_CHECKING:
     from tools.confidence import ConfidenceTracker
 
 EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
+# Given one new fact and the existing facts closest to it, return the indices of
+# those the new fact makes untrue. Injected as a plain callable for the same
+# reason as EmbedFn: the fact store owns storage, not inference.
+SupersedeFn = Callable[[str, list[str]], Awaitable[list[int]]]
 
 logger = logging.getLogger(__name__)
 
@@ -231,11 +235,50 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     # Which model produced a vector decides which vectors it can be compared
     # against, so every store is stamped with it and clears itself on a change.
     embedding_model = base_router.embedding_model_id()
+    async def _supersede_fn(new_fact: str, candidates: list[str]) -> list[int]:
+        """Which of *candidates* does *new_fact* make untrue? Returns their indices.
+
+        Deliberately conservative: the model is told to answer only when the new
+        fact genuinely replaces the old one, because wrongly retiring a fact
+        loses information that nothing else will put back. "Related" and "about
+        the same topic" are not enough - the old claim has to now be false.
+        """
+        from inference.models import CompletionRequest, PoolPriority
+        from utils.text import extract_json
+
+        numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(candidates))
+        prompt = (
+            "A new fact about a person has just been recorded. Decide which of the "
+            "existing facts it makes NO LONGER TRUE.\n\n"
+            f"New fact:\n{new_fact}\n\nExisting facts:\n{numbered}\n\n"
+            "Only list an existing fact if the new one genuinely replaces it - for example a "
+            "role that has ended, a number that has changed, or a plan that has been carried "
+            "out. Do NOT list a fact merely because it covers the same topic, adds detail, or "
+            "sits alongside the new one. Two facts that can both be true must both stay.\n"
+            'Reply with JSON only: {"superseded": [<indices>]}'
+        )
+        response = await cost_tracker.complete(
+            CompletionRequest(
+                prompt=prompt,
+                priority=PoolPriority.LOW,
+                component="fact_supersede",
+                json_mode=True,
+            )
+        )
+        result = extract_json(response.text.strip())
+        if not isinstance(result, dict):
+            return []
+        raw = result.get("superseded") or []
+        return [int(i) for i in raw if isinstance(i, int | str) and str(i).lstrip("-").isdigit()]
+
     episodic_store = EpisodicStore(
         db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn, embedding_model=embedding_model
     )
     fact_store = FactStore(
-        db_path=settings.north_home / "facts.db", embed_fn=_embed_fn, embedding_model=embedding_model
+        db_path=settings.north_home / "facts.db",
+        embed_fn=_embed_fn,
+        embedding_model=embedding_model,
+        supersede_fn=_supersede_fn,
     )
     code_index = CodeIndex(
         db_path=settings.north_home / "code_index.db", embed_fn=_embed_fn, embedding_model=embedding_model
