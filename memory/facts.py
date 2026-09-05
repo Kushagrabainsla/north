@@ -116,6 +116,15 @@ _MIGRATION_STATEMENTS = [
 
 _MAX_FACTS_RETURNED: int = 15
 _DEDUP_SIMILARITY_THRESHOLD: float = 0.85
+# The retroactive sweep uses a stricter bar than insert-time dedup, and the gap
+# is deliberate. On insert the store compares one new fact against recent ones
+# and rewrites a row in place. The sweep instead merges across the *whole* store
+# after the fact, so a wrong call silently destroys something no later write will
+# restore. At 0.85 it merged "paid biweekly on scheduled pay dates" into
+# "qualifies for holiday pay if scheduled at least 20 hours" - plainly two
+# different claims that happen to share vocabulary. Every pair that is genuinely
+# one claim restated scored 0.93 or above.
+_SWEEP_DEDUP_THRESHOLD: float = 0.93
 # How a recalled fact is judged "close enough" to the query.
 #
 # This was a single absolute floor of 0.25, and that number silently broke recall
@@ -177,6 +186,38 @@ _SUPERSEDE_MIN_SIMILARITY: float = 0.60
 # the stale "currently interns at ..." that actually had to go - which sat 8th.
 # A cap of 5 silently missed every fact worth superseding.
 _SUPERSEDE_MAX_CANDIDATES: int = 20
+# What the store gives up last when it hits the cap. Retention used to be pure
+# recency, which is exactly backwards for a memory: `_touch_sync` bumps
+# `updated_at` every time a duplicate is re-seen, so boilerplate that recurs in
+# document after document stayed permanently fresh while "the user's name is ..."
+# - written once, never restated - drifted toward eviction. Who someone is
+# should be the last thing forgotten, not the first.
+_TOPIC_RETENTION_RANK: dict[str, int] = {
+    "identity": 0,
+    "preferences": 1,
+    "jobs": 2,
+    "education": 2,
+    "projects": 2,
+    "skills": 3,
+    "health": 3,
+    "schedule": 3,
+    "finances": 4,
+    "other": 5,
+}
+_DEFAULT_RETENTION_RANK: int = 5
+
+
+def _retention_rank_sql() -> str:
+    """A CASE expression mapping a fact's category to its retention rank.
+
+    Built from _TOPIC_RETENTION_RANK rather than written out, so the ordering has
+    exactly one definition. Categories outside the topic set - facts learned in
+    conversation, filed under their context document - take the default rank.
+    """
+    whens = " ".join(
+        f"WHEN category = '{topic}' THEN {rank}" for topic, rank in sorted(_TOPIC_RETENTION_RANK.items())
+    )
+    return f"(CASE {whens} ELSE {_DEFAULT_RETENTION_RANK} END)"
 
 
 def _apply_recall_cutoff(scored: list[tuple[str, float]], max_results: int) -> list[str]:
@@ -330,6 +371,67 @@ class FactStore:
                 f"WHERE id IN ({placeholders})",
                 (_STATUS_SUPERSEDED, replaced_by, now, *fact_ids),
             ).rowcount
+
+    async def deduplicate(self) -> int:
+        """Retire near-duplicate facts, keeping the most informative of each set.
+
+        Dedup normally happens on insert, but it compares in whatever embedding
+        space was current at the time. Vectors written under a previous model were
+        scored on a different scale, so pairs that are plainly the same claim
+        survived - a real store held the same fact about hourly pay three times
+        over. Re-embedding fixes the vectors but not the rows, so this sweeps once
+        afterwards, at the stricter _SWEEP_DEDUP_THRESHOLD.
+
+        Survivor of each pair is the longer text: between "paid $70 per hour" and
+        "paid $70 per hour, with payments made biweekly", the second states
+        everything the first does. Losers are superseded, not deleted, so the
+        merge stays inspectable.
+        """
+        rows = await asyncio.to_thread(self._active_with_vectors_sync)
+        if len(rows) < 2:
+            return 0
+        retired: dict[str, str] = {}
+        for i, (id_a, text_a, emb_a) in enumerate(rows):
+            if id_a in retired:
+                continue
+            for id_b, text_b, emb_b in rows[i + 1 :]:
+                # A fact already retired cannot be either party: not a loser
+                # twice, and not a survivor, or the pointer would lead to a row
+                # that is itself superseded.
+                if id_b in retired or len(emb_a) != len(emb_b):
+                    continue
+                if cosine_similarity(emb_a, emb_b) < _SWEEP_DEDUP_THRESHOLD:
+                    continue
+                # Keep the longer text; it is the one that loses nothing.
+                if len(text_b) > len(text_a):
+                    retired[id_a] = id_b
+                    break
+                retired[id_b] = id_a
+        if not retired:
+            return 0
+        for loser, winner in retired.items():
+            await asyncio.to_thread(self._mark_superseded_sync, [loser], winner)
+        self.invalidate_cache()
+        logger.info("FactStore: merged %d duplicate fact(s) left by a previous embedding space", len(retired))
+        return len(retired)
+
+    def _active_with_vectors_sync(self) -> list[tuple[str, str, list[float]]]:
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content, embedding FROM context_facts "
+                "WHERE status = ? AND embedding IS NOT NULL AND embedding != '' AND embedding != '[]' "
+                "ORDER BY updated_at DESC",
+                (_STATUS_ACTIVE,),
+            ).fetchall()
+        out: list[tuple[str, str, list[float]]] = []
+        for r in rows:
+            try:
+                emb = json.loads(r["embedding"])
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if emb:
+                out.append((r["id"], r["content"], emb))
+        return out
 
     async def supersede_fact(self, fact_id: str, replaced_by: str | None = None) -> bool:
         """Retire one fact by id. The row is kept; it just stops being recalled."""
@@ -775,11 +877,16 @@ class FactStore:
                 (fact_id, content, category, emb_json, now, subject, confidence, status,
                  source_path, source_hash, source_mtime, evidence, now),
             )
-            # Retention: evict the oldest facts beyond the cap so the store
-            # (and every scan over it) stays bounded.
+            # Retention: keep the store (and every scan over it) bounded, giving
+            # up superseded rows first, then the least defining topics, and only
+            # then the oldest. See _TOPIC_RETENTION_RANK for why recency alone was
+            # the wrong rule.
             conn.execute(
-                "DELETE FROM context_facts WHERE id NOT IN "
-                "(SELECT id FROM context_facts ORDER BY updated_at DESC LIMIT ?)",
+                f"DELETE FROM context_facts WHERE id NOT IN ("  # noqa: S608 - built from module constants
+                f"  SELECT id FROM context_facts"
+                f"  ORDER BY (status = '{_STATUS_ACTIVE}') DESC, {_retention_rank_sql()} ASC,"
+                f"           updated_at DESC"
+                f"  LIMIT ?)",
                 (_MAX_FACTS_STORED,),
             )
             return True, fact_id

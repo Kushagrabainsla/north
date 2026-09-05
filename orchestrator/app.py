@@ -260,6 +260,20 @@ def _build_tool_index(deps) -> ToolIndex | None:
     )
 
 
+async def _refresh_fact_store(fact_store) -> None:
+    """Bring the fact store into the current embedding space, then merge duplicates.
+
+    Order matters: dedup compares vectors, so it has to run *after* every fact
+    has one from the current model. Both are no-ops on a store that is already
+    consistent, and both run after the server is serving - until they finish,
+    recall falls back to recency rather than failing.
+    """
+    embedded = await fact_store.backfill_embeddings()
+    merged = await fact_store.deduplicate()
+    if embedded or merged:
+        logger.info("Fact store: re-embedded %d fact(s), merged %d duplicate(s)", embedded, merged)
+
+
 async def _populate_tool_index(tool_index: ToolIndex, tool_registry: ToolRegistry) -> None:
     """Embed every registered tool description so agents can do semantic selection.
 
@@ -734,8 +748,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if deps.fact_store is not None:
         background_tasks.append(
             asyncio.create_task(
-                _guarded(deps.fact_store.backfill_embeddings(), "fact_backfill"),
-                name="fact_backfill",
+                _guarded(_refresh_fact_store(deps.fact_store), "fact_maintenance"),
+                name="fact_maintenance",
             )
         )
 
