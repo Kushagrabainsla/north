@@ -580,6 +580,7 @@ def _launch_background_tasks(
                     fact_store=deps.fact_store,
                     inference_router=deps.inference_router,
                     north_home=settings.north_home,
+                    context_store=deps.context_store,
                 ),
                 "bootstrap",
             ),

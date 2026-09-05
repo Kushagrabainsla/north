@@ -15,6 +15,7 @@ import contextlib
 import json
 import logging
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -569,6 +570,27 @@ class FactStore:
     async def count(self, category: str | None = None) -> int:
         """Total facts, or only those in *category* when given."""
         return await asyncio.to_thread(self._count_sync, category)
+
+    async def count_in_categories(self, categories: Iterable[str]) -> int:
+        """How many facts sit in any of *categories*.
+
+        Bootstrap files its facts under a topic rather than one flat category, so
+        "has bootstrap already run?" is a question about a *set* of categories -
+        and it must stay distinguishable from facts learned in conversation,
+        which are filed under their context document instead.
+        """
+        names = [c for c in categories if c]
+        if not names:
+            return 0
+        return await asyncio.to_thread(self._count_in_categories_sync, names)
+
+    def _count_in_categories_sync(self, names: list[str]) -> int:
+        placeholders = ",".join("?" for _ in names)
+        with open_db_connection(self._db_path) as conn:
+            return conn.execute(
+                f"SELECT COUNT(*) FROM context_facts WHERE category IN ({placeholders})",  # noqa: S608
+                names,
+            ).fetchone()[0]
 
     async def all_facts(self, category: str | None = None) -> list[dict]:
         """Return all facts for web UI display, optionally filtered by category."""

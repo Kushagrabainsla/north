@@ -17,6 +17,7 @@ from bootstrap.onboarding import (
     _save_progress,
     run_bootstrap_if_needed,
 )
+from bootstrap.schema import FactTopic
 from bootstrap.survey import survey_files
 from inference.base import InferenceRouter
 from inference.models import (
@@ -79,6 +80,9 @@ class _FakeRouter(InferenceRouter):
         raise NotImplementedError
 
 
+_TOPICS = frozenset(t.value for t in FactTopic)
+
+
 class _FakeFactStore(FactStore):
     def __init__(self, bootstrap_count: int = 0, other_count: int = 0) -> None:
         self._bootstrap_count = bootstrap_count
@@ -93,6 +97,12 @@ class _FakeFactStore(FactStore):
         if category == "bootstrap":
             return self._bootstrap_count
         return self._bootstrap_count + self._other_count + len(self.added)
+
+    async def count_in_categories(self, categories) -> int:
+        # Bootstrap files facts under a topic, so its own count spans the topic
+        # set. `other_count` stands in for facts learned in conversation, which
+        # are filed elsewhere and must not look like a completed bootstrap.
+        return self._bootstrap_count
 
     async def add_fact(self, content: str, category: str = "user") -> bool:
         # Mirrors FactStore.add_fact: exact-match dedup lives in the store,
@@ -399,7 +409,7 @@ async def test_bootstrap_resumes_interrupted_run(monkeypatch: pytest.MonkeyPatch
     await run_bootstrap_if_needed(store, router, north_home)
     assert len(store.added) == 1
     assert store.added[0][0] == "User likes B"
-    assert store.added[0][1] == "bootstrap"
+    assert store.added[0][1] in _TOPICS
     assert (north_home / ".bootstrapped").exists()
     assert not (north_home / ".bootstrap_progress.json").exists()
 
@@ -421,7 +431,7 @@ async def test_bootstrap_fresh_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     )
     await run_bootstrap_if_needed(store, router, north_home)
     assert len(store.added) == 2
-    assert all(category == "bootstrap" for _, category in store.added)
+    assert all(category in _TOPICS for _, category in store.added)
     assert (north_home / ".bootstrapped").exists()
     assert not (north_home / ".bootstrap_progress.json").exists()
 
@@ -443,7 +453,7 @@ async def test_bootstrap_dedups_identical_facts_within_run(monkeypatch: pytest.M
     await run_bootstrap_if_needed(store, router, north_home)
     assert len(store.added) == 1
     assert store.added[0][0] == "User fact A"
-    assert store.added[0][1] == "bootstrap"
+    assert store.added[0][1] in _TOPICS
 
 
 async def test_bootstrap_no_candidate_files_marks_done(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

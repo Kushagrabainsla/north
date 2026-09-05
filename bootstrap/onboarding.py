@@ -24,13 +24,16 @@ from pathlib import Path
 
 from bootstrap.schema import (
     UNIFIED_EXTRACTION_JSON_SCHEMA,
+    FactTopic,
     UserProfile,
 )
 from bootstrap.survey import survey_files
 from inference.base import InferenceRouter
 from inference.exceptions import AllModelsRateLimitedError
 from inference.models import CompletionRequest, PoolPriority
+from memory.base import ContextStore
 from memory.facts import FactStore
+from memory.models import ContextDocument
 from utils.text import extract_json
 
 logger = logging.getLogger(__name__)
@@ -252,6 +255,10 @@ Return a JSON object containing:
 1. "facts": An array of atomic personal facts about the user. Each fact must have:
    - "content": the fact string (10-500 chars, specific and about the user)
    - "subject": one of ["user", "third_party", "organization", "unknown"]
+   - "topic": one of ["identity", "education", "jobs", "skills", "finances", "health",
+     "schedule", "preferences", "projects", "other"] - the area of life the fact belongs to.
+     Use "identity" for who the user is (name, nationality, student or visa status).
+     Use "other" only when nothing else fits.
    - "confidence": float 0.0-1.0
    - "evidence": short quote from the document supporting this fact (optional, max 500 chars)
 
@@ -768,6 +775,7 @@ async def _extract_unified(
                     {
                         "content": text,
                         "subject": "user",
+                        "topic": _valid_topic(item.get("topic")),
                         "confidence": float(item.get("confidence", 0.8)),
                         "source_path": source_path,
                         "source_hash": source_hash,
@@ -800,6 +808,9 @@ async def _extract_unified(
                         {
                             "content": text,
                             "subject": "user",
+                            # The section this came from *is* the topic - the model
+                            # already sorted it, so labelling costs nothing here.
+                            "topic": _valid_topic(section),
                             "confidence": 0.85,
                             "source_path": source_path,
                             "source_hash": source_hash,
@@ -881,6 +892,23 @@ def _profile_strings(raw: object) -> list[str]:
         if text:
             values.append(text)
     return values
+
+
+_VALID_TOPICS: frozenset[str] = frozenset(t.value for t in FactTopic)
+
+
+def _valid_topic(raw: object) -> str:
+    """Coerce a model-supplied topic to a known one, defaulting to 'other'.
+
+    The topic becomes the fact's category, and the category decides which tasks
+    may read it - so an unrecognised value must land somewhere harmless rather
+    than creating a category nothing knows to ask for.
+    """
+    if isinstance(raw, str):
+        candidate = raw.strip().lower()
+        if candidate in _VALID_TOPICS:
+            return candidate
+    return FactTopic.OTHER.value
 
 
 def _clean_fact(fact: object) -> str | None:
@@ -970,6 +998,7 @@ async def run_bootstrap_if_needed(
     inference_router: InferenceRouter,
     north_home: Path,
     selected_paths: set[str] | None = None,
+    context_store: ContextStore | None = None,
 ) -> None:
     """Seed facts from local files on first-ever start.
 
@@ -991,7 +1020,11 @@ async def run_bootstrap_if_needed(
 
     progress = _load_progress(north_home)
 
-    existing = await fact_store.count(category="bootstrap")
+    # Facts are filed under their topic now, so "has bootstrap run?" spans the
+    # whole topic set. It must stay narrower than a plain total: facts learned in
+    # conversation are filed under their context document, and those must never
+    # block a first-ever bootstrap.
+    existing = await fact_store.count_in_categories(_VALID_TOPICS)
     if existing > 0 and progress is None and not selected_paths:
         logger.debug("bootstrap: skipped (fact store already has %d facts)", existing)
         marker.touch()
@@ -1061,14 +1094,16 @@ async def run_bootstrap_if_needed(
             items.append({"path": resolved, "hash": file_hash, "mtime": mtime, "status": "completed"})
         await asyncio.to_thread(_save_progress, north_home, items)
 
+    profile_sections: list[str] = []
     for path in pending:
         candidates = []
+        profile_md = ""
         file_extracted = False
         max_file_retries = 3
 
         for attempt in range(max_file_retries):
             try:
-                candidates, _profile_md = await _extract_unified(
+                candidates, profile_md = await _extract_unified(
                     path, inference_router, content=text_by_path.get(path)
                 )
                 file_extracted = True
@@ -1085,6 +1120,7 @@ async def run_bootstrap_if_needed(
             except Exception:
                 logger.warning("bootstrap: failed to extract from %s", path, exc_info=True)
                 candidates = []
+                profile_md = ""
                 file_extracted = True
                 break
 
@@ -1104,7 +1140,7 @@ async def run_bootstrap_if_needed(
             try:
                 if await fact_store.add_fact_with_provenance(
                     content=cand["content"],
-                    category="bootstrap",
+                    category=cand.get("topic") or FactTopic.OTHER.value,
                     subject=cand["subject"],
                     confidence=cand["confidence"],
                     status="active",
@@ -1122,6 +1158,9 @@ async def run_bootstrap_if_needed(
         # it as processed is how a run that extracted one fact from twenty-five
         # files reported itself as done.
         outcomes["yielded facts" if stored_here else "yielded nothing"] += 1
+        if profile_md:
+            profile_sections.append(profile_md)
+
         if not stored_here:
             logger.warning("bootstrap: %s produced no usable facts", path.name)
 
@@ -1129,8 +1168,18 @@ async def run_bootstrap_if_needed(
         await _snapshot_progress()
         await asyncio.sleep(_BOOTSTRAP_DELAY_SECONDS)
 
-    # Keep the fact store atomic: profile markdown is written to context docs,
-    # while each durable fact remains a single claim rather than a paragraph.
+    # Keep the fact store atomic - each durable fact stays a single claim - and
+    # write the readable profile to the USER context document. This was extracted
+    # on every file and then dropped on the floor, which is why the whole-document
+    # fallback in the memory gateway had nothing to fall back to.
+    if context_store is not None and profile_sections:
+        synthesized = _synthesize_profile(profile_sections)
+        if synthesized:
+            try:
+                await context_store.write(ContextDocument.USER, synthesized)
+                logger.info("bootstrap: wrote a user profile from %d file(s)", len(profile_sections))
+            except Exception:
+                logger.warning("bootstrap: could not write the user profile document", exc_info=True)
 
     # Write versioned marker only on clean completion
     await asyncio.to_thread(

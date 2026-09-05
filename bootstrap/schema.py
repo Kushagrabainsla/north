@@ -18,6 +18,28 @@ class FactSubject(StrEnum):
     UNKNOWN = "unknown"
 
 
+class FactTopic(StrEnum):
+    """What area of the user's life a fact belongs to.
+
+    Deliberately the same set as ``UserProfile``'s sections plus two the profile
+    has no place for: an identity fact (name, status, who the user is) and a
+    catch-all. This is what lets a caller ask for the *kind* of fact a task needs
+    - a coding agent has real use for preferences and skills and none at all for
+    tax figures - which a single flat category cannot express.
+    """
+
+    IDENTITY = "identity"
+    EDUCATION = "education"
+    JOBS = "jobs"
+    SKILLS = "skills"
+    FINANCES = "finances"
+    HEALTH = "health"
+    SCHEDULE = "schedule"
+    PREFERENCES = "preferences"
+    PROJECTS = "projects"
+    OTHER = "other"
+
+
 class FactStatus(StrEnum):
     """Status of a stored fact."""
 
@@ -41,6 +63,13 @@ class FactItem(BaseModel):
     subject: FactSubject = Field(
         default=FactSubject.USER,
         description="Who or what this fact is about.",
+    )
+    topic: FactTopic = Field(
+        default=FactTopic.OTHER,
+        description=(
+            "Which area of life this fact belongs to. Use 'identity' for who the user is "
+            "(name, nationality, student/visa status), and 'other' only when nothing else fits."
+        ),
     )
     confidence: float = Field(
         default=0.8,
@@ -71,6 +100,7 @@ class FactCandidate:
 
     content: str
     subject: FactSubject
+    topic: FactTopic
     confidence: float
     source_path: str
     source_hash: str
