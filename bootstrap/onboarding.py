@@ -251,6 +251,21 @@ IMPORTANT SECURITY RULES:
 - Files about OTHER people (third parties, vendors, other individuals) must be SKIPPED
   or labeled subject="third_party". Only extract facts about the user.
 
+WRITING EACH FACT:
+- Always call the person "the user". Never use their name, "he", "she", or "they" as the
+  subject. Facts are retrieved one at a time, and a fact naming the person does not match
+  a question the user asks about themselves.
+- Each fact must stand alone. Whoever reads it will see it WITHOUT the other facts from
+  this file, so it has to carry the context needed to make sense of it.
+- In particular, keep an identifier together with what it means, in the SAME fact. Write
+  "the user's CS 272 Reinforcement Learning lecture meets Mondays and Wednesdays", not
+  "the user's CS 272 lecture meets Mondays and Wednesdays" plus a separate fact saying
+  CS 272 is Reinforcement Learning. Split that way, a question about the reinforcement
+  learning class matches neither. The same applies to a role and its employer, a project
+  and what it does, a course code and its title.
+- Do not pad a fact with unrelated detail to make it longer. Self-contained means it
+  answers a question on its own, not that it says more.
+
 Return a JSON object containing:
 1. "facts": An array of atomic personal facts about the user. Each fact must have:
    - "content": the fact string (10-500 chars, specific and about the user)

@@ -96,6 +96,11 @@ Document rules:
 
 Fact format:
 - One sentence, third-person neutral, grounded only in the user's words.
+- The fact must stand alone. It is retrieved on its own, without the message it
+  came from and without any other fact, so it has to carry the context that makes
+  it meaningful. Keep an identifier together with what it means in the SAME
+  sentence - "User's CS 272 Reinforcement Learning class is on Mondays", not
+  "User's CS 272 class is on Mondays", which answers no question anyone would ask.
 - Fill the fact with the user's ACTUAL words. Never emit a placeholder, a single
   letter, a bracketed slot, or an example token (e.g. "X", "Y", "<company>") - if
   you cannot name the real value from the message, return extract:false instead.
