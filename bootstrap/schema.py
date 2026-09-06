@@ -115,6 +115,13 @@ class UserProfile(BaseModel):
     a resume yields education/jobs/skills; a meal plan yields health/preferences.
     """
 
+    identity: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Who the user is: name, where they live, nationality or student status. "
+            "State the attribute by name - 'the user's name is ...', not 'the user is ...'."
+        ),
+    )
     education: list[str] = Field(default_factory=list, description="Schools, degrees, courses, enrollment.")
     jobs: list[str] = Field(default_factory=list, description="Roles, employers, internships, job searches.")
     skills: list[str] = Field(default_factory=list, description="Technical and soft skills, languages, tools.")

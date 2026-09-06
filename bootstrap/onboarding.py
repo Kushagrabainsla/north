@@ -255,6 +255,10 @@ WRITING EACH FACT:
 - Always call the person "the user". Never use their name, "he", "she", or "they" as the
   subject. Facts are retrieved one at a time, and a fact naming the person does not match
   a question the user asks about themselves.
+- Keep the word for WHAT an attribute is. Write "the user's name is Ada Lovelace", not
+  "the user is Ada Lovelace"; "the user's employer is Acme", not "the user is at Acme".
+  A question asks for the attribute by name ("what is my name"), so a fact that drops the
+  word answers it far less well.
 - Each fact must stand alone. Whoever reads it will see it WITHOUT the other facts from
   this file, so it has to carry the context needed to make sense of it.
 - In particular, keep an identifier together with what it means, in the SAME fact. Write
@@ -278,6 +282,7 @@ Return a JSON object containing:
    - "evidence": short quote from the document supporting this fact (optional, max 500 chars)
 
 2. "profile": A structured user profile object with these sections (each a list of specific, real facts about the user):
+   - "identity": who the user is - name, location, nationality or student status
    - "education": schools, degrees, courses, enrollment
    - "jobs": roles, employers, internships, job searches
    - "skills": technical/soft skills, languages, tools

@@ -102,12 +102,26 @@ class LocalMemoryGateway(MemoryGateway):
             self._recall_facts(query, fact_limit, principal.allowed_fact_topics),
             self._recall_episodes(principal, query, episode_limit),
         )
-        # Whole-document fallback only when no atomic facts are available - and
-        # only for a principal allowed to read every topic. The document is the
-        # *whole* profile, so serving it to a topic-scoped caller would hand back
-        # everything the scoping just excluded, by a different route.
+        # A principal allowed to read every topic always gets the profile
+        # document, not just when facts come back empty.
+        #
+        # Broad questions - "what do you know about me?", "who am I" - have no
+        # single best fact, and ranking cannot find one: against a real store
+        # every fact scored within 0.09 of the top, so the cutoff kept three
+        # essentially arbitrary ones and the user's own name sat at rank 17. north
+        # answered that it knew three things, none of them who it was talking to.
+        #
+        # Detecting such a question from the scores was tried and does not work:
+        # measured over broad and focused questions the "peakiness" of the two
+        # populations overlaps completely (0.167-0.212 against 0.147-0.271).
+        # The profile is ~1k tokens and is the one thing that actually answers
+        # the question, so it is simply always there. Topic-scoped callers still
+        # never see it - it is the whole profile, and serving it to them would
+        # return by another route exactly what the scoping excluded, which is
+        # also what keeps this affordable: the cost lands only on the agent whose
+        # job is knowing the user.
         unrestricted = principal.allowed_fact_topics is None
-        documents = [] if facts or not unrestricted else await self._read_documents()
+        documents = await self._read_documents() if unrestricted else []
         return MemoryContext(facts=facts, episodes=episodes, documents=documents)
 
     async def read_document(self, doc: ContextDocument) -> str:
