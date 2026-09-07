@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from config.dependencies import EmbedFn
+from inference.models import EmbedFn
 from skills.models import Skill
 from skills.registry import SkillRegistry
 from utils.math import cosine_similarity

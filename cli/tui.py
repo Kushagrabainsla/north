@@ -37,6 +37,7 @@ from cli.constants import (
     _SLASH_COMMANDS,
     _SSE_BACKOFF_BASE,
     _SSE_BACKOFF_MAX,
+    _VALID_DOCS,
 )
 from cli.formatting import (
     _compute_suggestion,
@@ -432,6 +433,13 @@ class _NorthSuggester(Suggester):
 
     async def get_suggestion(self, value: str) -> str | None:
         return _compute_suggestion(value, self._history_getter())
+
+
+# How many model ids /models lists per pool before summarising the rest as "+N more".
+_MODEL_SAMPLE_SIZE = 4
+
+# How many prompts the on-disk input history keeps.
+_MAX_REMEMBERED_INPUTS = 1000
 
 
 def _read_power(settings_path: Path) -> str:
@@ -1975,16 +1983,7 @@ class NorthApp(App[None]):
         event.stop()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        text = event.value.strip()
-        event.input.clear()
-        # A pending paste is sent only if the placeholder is still intact; if the
-        # user edited the line (typed over it, used history, or the editor), send
-        # what they see and drop the stale paste so input and action never diverge.
-        if self._pending_paste is not None:
-            if event.value == self._paste_placeholder:
-                text = self._pending_paste.strip()
-            self._pending_paste = None
-            self._paste_placeholder = None
+        text = self._submitted_text(event)
         if not text:
             return
 
@@ -2004,6 +2003,25 @@ class NorthApp(App[None]):
             await self._submit_approval(text)
             return
 
+        self._remember_input(text)
+        await self._submit_prompt(text)
+
+    def _submitted_text(self, event: Input.Submitted) -> str:
+        """What the user actually meant to send, resolving a pending paste."""
+        text = event.value.strip()
+        event.input.clear()
+        # A pending paste is sent only if the placeholder is still intact; if the
+        # user edited the line (typed over it, used history, or the editor), send
+        # what they see and drop the stale paste so input and action never diverge.
+        if self._pending_paste is not None:
+            if event.value == self._paste_placeholder:
+                text = self._pending_paste.strip()
+            self._pending_paste = None
+            self._paste_placeholder = None
+        return text
+
+    def _remember_input(self, text: str) -> None:
+        """Add the prompt to the in-memory history and the on-disk recall file."""
         if not self._input_history or self._input_history[-1] != text:
             self._input_history.append(text)
         self._history_index = -1
@@ -2011,278 +2029,296 @@ class NorthApp(App[None]):
         try:
             history_file = Path.home() / ".north" / "tui_history"
             history_file.parent.mkdir(parents=True, exist_ok=True)
-            history_file.write_text("\n".join(self._input_history[-1000:]))
+            history_file.write_text("\n".join(self._input_history[-_MAX_REMEMBERED_INPUTS:]))
         except Exception:
             pass
 
+    def _task_request_body(self, text: str) -> dict:
         body: dict = {"prompt": text}
         if self.workspace:
             body["workspace"] = self.workspace
         if self._conversation_history:
-            turns: list[str] = []
-            for turn in self._conversation_history:
-                parts = [f"User: {turn['user']}"]
-                if turn.get("tools"):
-                    summaries = [
-                        f"{e['tool']}({e['params']}) → {e['result']}"
-                        if e.get("params")
-                        else f"{e['tool']} → {e['result']}"
-                        for e in turn["tools"]
-                        if e.get("result")
-                    ]
-                    if summaries:
-                        parts.append("[actions: " + "; ".join(summaries) + "]")
-                parts.append(f"north: {turn['north']}")
-                turns.append("\n".join(parts))
-            body["context"] = "## Recent conversation\n" + "\n\n".join(turns)
+            body["context"] = "## Recent conversation\n" + "\n\n".join(
+                _describe_turn(turn) for turn in self._conversation_history
+            )
+        return body
 
+    async def _post_task(self, text: str) -> str:
+        """Submit the prompt and return its task id, or "" when the server refused it."""
         self._set_status("…")
-        self._last_submitted_prompt = text
         try:
             async with self._http() as c:
                 resp = await c.post(
                     f"{self.base_url}/orchestrator/task",
                     headers=self.headers,
-                    json=body,
+                    json=self._task_request_body(text),
                     timeout=30.0,
                 )
                 resp.raise_for_status()
-                task_id = resp.json().get("task_id", "")
-                if task_id:
-                    self._user_task_ids.add(task_id)
-                    self._turn_start_times[task_id] = time.monotonic()
-                    self._pending_user_messages[task_id] = text
-                    self._current_turn_activity[task_id] = {
-                        "task_id": task_id,
-                        "prompt": text,
-                        "domain": "",
-                        "is_consequential": False,
-                        "agents": [],
-                        "model": self._model,
-                        "thought_duration": 0.0,
-                        "thought_tokens": 0,
-                        "tools": [],
-                        "verifications": [],
-                        "output": "",
-                        "status": "running",
-                        "error": "",
-                        "phase": "submitted",
-                        "thoughts": "",
-                        "details_expanded": self._details_expanded,
-                        "thoughts_expanded": self._reasoning_visible,
-                        "plan_steps": [],
-                        "dod_results": [],
-                        "active_phase": "",
-                        "interaction": None,
-                    }
-                    self._session_tokens += max(1, len(text) // 4)
-                    self._render_active_turns()
-                    self._render_status_bar()
+                return str(resp.json().get("task_id", ""))
         except httpx.ConnectError:
             self._set_status("")
             self._log("  [red]◆[/red]  [red]cannot reach north server[/red]")
         except Exception as exc:
             self._set_status("")
             self._log(f"  [red]◆[/red]  [red]error: {exc}[/red]")
+        return ""
+
+    def _new_turn_activity(self, task_id: str, text: str) -> dict:
+        return {
+            "task_id": task_id,
+            "prompt": text,
+            "domain": "",
+            "is_consequential": False,
+            "agents": [],
+            "model": self._model,
+            "thought_duration": 0.0,
+            "thought_tokens": 0,
+            "tools": [],
+            "verifications": [],
+            "output": "",
+            "status": "running",
+            "error": "",
+            "phase": "submitted",
+            "thoughts": "",
+            "details_expanded": self._details_expanded,
+            "thoughts_expanded": self._reasoning_visible,
+            "plan_steps": [],
+            "dod_results": [],
+            "active_phase": "",
+            "interaction": None,
+        }
+
+    async def _submit_prompt(self, text: str) -> None:
+        """Send a typed prompt and open a live turn for it."""
+        self._last_submitted_prompt = text
+        task_id = await self._post_task(text)
+        if not task_id:
+            return
+        self._user_task_ids.add(task_id)
+        self._turn_start_times[task_id] = time.monotonic()
+        self._pending_user_messages[task_id] = text
+        self._current_turn_activity[task_id] = self._new_turn_activity(task_id, text)
+        self._session_tokens += _estimated_tokens(text)
+        self._render_active_turns()
+        self._render_status_bar()
 
     # ── slash commands ────────────────────────────────────────────────────────
 
     async def _handle_slash(self, text: str) -> None:
-        cmd = text.split()[0].lower()
-        if cmd in ("/quit", "/exit"):
-            self._log("  [dim]goodbye[/dim]")
-            self.exit()
-        elif cmd == "/clear":
-            self.query_one("#log", RichLog).clear()
-            self._draw_banner()
-        elif cmd == "/cost":
-            self._log(
-                f"  [bright_black]tokens[/bright_black] {_fmt_tokens(self._session_tokens)}  ·  "
-                f"[bright_black]cost[/bright_black] ${self._session_cost:.4f}  ·  "
-                f"[bright_black]compactions[/bright_black] {self._compactions}"
-            )
-        elif cmd == "/power":
-            parts = text.split()
-            val = parts[1] if len(parts) > 1 else None
-            await self._set_dial("/orchestrator/settings", "power", val, ok="  [bright_black]power[/bright_black] ")
-        elif cmd == "/autonomy":
-            parts = text.split()
-            val = parts[1] if len(parts) > 1 else None
-            await self._set_dial(
-                "/orchestrator/settings", "autonomy", val, ok="  [bright_black]autonomy[/bright_black] "
-            )
-        elif cmd == "/agents":
-            agents = await self._fetch_agents()
-            self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))
-        elif cmd == "/queue":
-            try:
-                async with self._http() as c:
-                    r_tasks = await c.get(f"{self.base_url}/orchestrator/tasks", headers=self.headers, timeout=5.0)
-                    r_jobs = await c.get(
+        command = text.split()[0].lower()
+        handler = _SLASH_HANDLERS.get(command) or _prefixed_slash_handler(command)
+        if handler is None:
+            self._log(f"  [bright_black]unknown command: {command} - try /help[/bright_black]")
+            return
+        await handler(self, text)
+
+    async def _slash_quit(self, text: str) -> None:
+        self._log("  [dim]goodbye[/dim]")
+        self.exit()
+
+    async def _slash_clear(self, text: str) -> None:
+        self.query_one("#log", RichLog).clear()
+        self._draw_banner()
+
+    async def _slash_cost(self, text: str) -> None:
+        self._log(
+            f"  [bright_black]tokens[/bright_black] {_fmt_tokens(self._session_tokens)}  ·  "
+            f"[bright_black]cost[/bright_black] ${self._session_cost:.4f}  ·  "
+            f"[bright_black]compactions[/bright_black] {self._compactions}"
+        )
+
+    async def _slash_power(self, text: str) -> None:
+        await self._set_dial(
+            "/orchestrator/settings", "power", _slash_argument(text), ok="  [bright_black]power[/bright_black] "
+        )
+
+    async def _slash_autonomy(self, text: str) -> None:
+        await self._set_dial(
+            "/orchestrator/settings", "autonomy", _slash_argument(text), ok="  [bright_black]autonomy[/bright_black] "
+        )
+
+    async def _slash_agents(self, text: str) -> None:
+        agents = await self._fetch_agents()
+        self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))
+
+    async def _slash_queue(self, text: str) -> None:
+        try:
+            async with self._http() as c:
+                tasks = _json_list(
+                    await c.get(f"{self.base_url}/orchestrator/tasks", headers=self.headers, timeout=5.0)
+                )
+                jobs = _json_list(
+                    await c.get(
                         f"{self.base_url}/orchestrator/jobs",
                         params={"status": "pending"},
                         headers=self.headers,
                         timeout=5.0,
                     )
-                    tasks = r_tasks.json() if r_tasks.status_code == 200 else []
-                    jobs = r_jobs.json() if r_jobs.status_code == 200 else []
-                    self._log("  [cyan]◆[/cyan]  [white]active tasks & queued jobs[/white]")
-                    if not tasks and not jobs:
-                        self._log("    [bright_black]No active tasks or queued jobs in flight.[/bright_black]")
-                    else:
-                        for t in tasks:
-                            tid = t.get("task_id", "")
-                            p = t.get("prompt", "")[:60]
-                            self._log(f"    [green]active task[/green]  [bright_black]{tid}[/bright_black]  {p}")
-                        for j in jobs:
-                            jid = j.get("job_id", "")
-                            p = j.get("task", "")[:60]
-                            self._log(f"    [yellow]queued job[/yellow]   [bright_black]{jid}[/bright_black]  {p}")
-                        self._log(
-                            "    [bright_black]Type '/cancel <id>' to cancel a task/job, "
-                            "or '/cancel all' to cancel everything.[/bright_black]"
-                        )
-            except Exception as exc:
-                self._log(f"  [red]error fetching queue: {exc}[/red]")
-        elif cmd.startswith("/cancel"):
-            parts = text.strip().split()
-            target = parts[1] if len(parts) > 1 else ""
-            if not target or target.lower() in ("all", "--all"):
-                try:
-                    async with self._http() as c:
-                        r = await c.post(
-                            f"{self.base_url}/orchestrator/cancel-all", headers=self.headers, timeout=10.0
-                        )
-                        if r.status_code == 200:
-                            data = r.json()
-                            c_tasks = data.get("tasks_cancelled", 0)
-                            c_jobs = data.get("jobs_cancelled", 0)
-                            self._log(
-                                f"  [yellow]✓[/yellow]  [white]cancelled {c_tasks} active task(s) "
-                                f"and {c_jobs} queued job(s)[/white]"
-                            )
-                        else:
-                            self._log(f"  [red]error cancelling tasks (HTTP {r.status_code})[/red]")
-                except Exception as exc:
-                    self._log(f"  [red]error cancelling tasks: {exc}[/red]")
-            else:
-                try:
-                    async with self._http() as c:
-                        r = await c.post(
-                            f"{self.base_url}/orchestrator/cancel/{target}", headers=self.headers, timeout=10.0
-                        )
-                        if r.status_code == 200:
-                            data = r.json()
-                            c_type = data.get("cancelled", "task")
-                            c_id = data.get("id", target)
-                            self._log(f"  [yellow]✓[/yellow]  [white]cancelled {c_type} {c_id}[/white]")
-                        else:
-                            self._log(f"  [red]task or job '{target}' not found or already completed[/red]")
-                except Exception as exc:
-                    self._log(f"  [red]error cancelling {target}: {exc}[/red]")
-        elif cmd == "/jobs":
-            try:
-                async with self._http() as c:
-                    r = await c.get(f"{self.base_url}/orchestrator/jobs", headers=self.headers, timeout=5.0)
-                    jobs = r.json() if r.status_code == 200 else []
-                    self._log_rich(_format_jobs_table(jobs))
-            except Exception as exc:
-                self._log(f"  [red]error fetching jobs: {exc}[/red]")
-        elif cmd == "/context":
-            parts = text.split()
-            target_doc = None
-            if len(parts) == 2 and parts[1] not in ("show", "edit"):
-                target_doc = parts[1].removesuffix(".md")
-            elif len(parts) >= 3 and parts[1] == "show":
-                target_doc = parts[2].removesuffix(".md")
+                )
+        except Exception as exc:
+            self._log(f"  [red]error fetching queue: {exc}[/red]")
+            return
 
-            if target_doc:
-                try:
-                    async with self._http() as c:
-                        r = await c.get(
-                            f"{self.base_url}/orchestrator/context/{target_doc}",
-                            headers=self.headers,
-                            timeout=5.0,
-                        )
-                        if r.status_code == 200:
-                            content = r.text.strip()
-                            self._log(f"  [cyan]◆[/cyan]  [white]{target_doc}.md[/white]")
-                            if content:
-                                self._log_rich(RichPadding(RichMarkdown(content), (0, 0, 0, 4)))
-                            else:
-                                self._log("    [dim](empty document)[/dim]")
-                        else:
-                            self._log(f"  [yellow]context document '{target_doc}' not found[/yellow]")
-                except Exception as exc:
-                    self._log(f"  [red]error fetching context '{target_doc}': {exc}[/red]")
-            else:
-                try:
-                    async with self._http() as c:
-                        docs = ["user", "judgement_rules", "north_stars", "soul"]
-                        self._log("  [cyan]◆[/cyan]  [white]context documents[/white]")
-                        for doc in docs:
-                            r = await c.get(
-                                f"{self.base_url}/orchestrator/context/{doc}",
-                                headers=self.headers,
-                                timeout=5.0,
-                            )
-                            if r.status_code == 200 and r.text.strip():
-                                self._log(
-                                    f"    [white]{doc}.md[/white] [bright_black]({len(r.text)} chars)[/bright_black]"
-                                )
-                        self._log(
-                            "    [bright_black]Type '/context <doc>' or '/context show <doc>' to inspect[/bright_black]"
-                        )
-                except Exception as exc:
-                    self._log(f"  [red]error fetching context: {exc}[/red]")
-        elif cmd == "/models":
-            try:
-                async with self._http() as c:
+        self._log("  [cyan]◆[/cyan]  [white]active tasks & queued jobs[/white]")
+        if not tasks and not jobs:
+            self._log("    [bright_black]No active tasks or queued jobs in flight.[/bright_black]")
+            return
+        for task in tasks:
+            task_id = task.get("task_id", "")
+            self._log(
+                f"    [green]active task[/green]  [bright_black]{task_id}[/bright_black]  {task.get('prompt', '')[:60]}"
+            )
+        for job in jobs:
+            job_id = job.get("job_id", "")
+            self._log(
+                f"    [yellow]queued job[/yellow]   [bright_black]{job_id}[/bright_black]  {job.get('task', '')[:60]}"
+            )
+        self._log(
+            "    [bright_black]Type '/cancel <id>' to cancel a task/job, "
+            "or '/cancel all' to cancel everything.[/bright_black]"
+        )
+
+    async def _slash_cancel(self, text: str) -> None:
+        target = _slash_argument(text) or ""
+        if target and target.lower() not in ("all", "--all"):
+            await self._cancel_one(target)
+        else:
+            await self._cancel_everything()
+
+    async def _cancel_everything(self) -> None:
+        try:
+            async with self._http() as c:
+                r = await c.post(f"{self.base_url}/orchestrator/cancel-all", headers=self.headers, timeout=10.0)
+                if r.status_code != 200:
+                    self._log(f"  [red]error cancelling tasks (HTTP {r.status_code})[/red]")
+                    return
+                data = r.json()
+                self._log(
+                    f"  [yellow]✓[/yellow]  [white]cancelled {data.get('tasks_cancelled', 0)} active task(s) "
+                    f"and {data.get('jobs_cancelled', 0)} queued job(s)[/white]"
+                )
+        except Exception as exc:
+            self._log(f"  [red]error cancelling tasks: {exc}[/red]")
+
+    async def _cancel_one(self, target: str) -> None:
+        try:
+            async with self._http() as c:
+                r = await c.post(f"{self.base_url}/orchestrator/cancel/{target}", headers=self.headers, timeout=10.0)
+                if r.status_code != 200:
+                    self._log(f"  [red]task or job '{target}' not found or already completed[/red]")
+                    return
+                data = r.json()
+                self._log(
+                    f"  [yellow]✓[/yellow]  [white]cancelled {data.get('cancelled', 'task')} "
+                    f"{data.get('id', target)}[/white]"
+                )
+        except Exception as exc:
+            self._log(f"  [red]error cancelling {target}: {exc}[/red]")
+
+    async def _slash_jobs(self, text: str) -> None:
+        try:
+            async with self._http() as c:
+                r = await c.get(f"{self.base_url}/orchestrator/jobs", headers=self.headers, timeout=5.0)
+                self._log_rich(_format_jobs_table(_json_list(r)))
+        except Exception as exc:
+            self._log(f"  [red]error fetching jobs: {exc}[/red]")
+
+    async def _slash_context(self, text: str) -> None:
+        document = _requested_context_document(text)
+        if document:
+            await self._show_context_document(document)
+        else:
+            await self._list_context_documents()
+
+    async def _show_context_document(self, document: str) -> None:
+        try:
+            async with self._http() as c:
+                r = await c.get(
+                    f"{self.base_url}/orchestrator/context/{document}",
+                    headers=self.headers,
+                    timeout=5.0,
+                )
+                if r.status_code != 200:
+                    self._log(f"  [yellow]context document '{document}' not found[/yellow]")
+                    return
+                content = r.text.strip()
+                self._log(f"  [cyan]◆[/cyan]  [white]{document}.md[/white]")
+                if content:
+                    self._log_rich(RichPadding(RichMarkdown(content), (0, 0, 0, 4)))
+                else:
+                    self._log("    [dim](empty document)[/dim]")
+        except Exception as exc:
+            self._log(f"  [red]error fetching context '{document}': {exc}[/red]")
+
+    async def _list_context_documents(self) -> None:
+        try:
+            async with self._http() as c:
+                self._log("  [cyan]◆[/cyan]  [white]context documents[/white]")
+                for document in _VALID_DOCS:
                     r = await c.get(
-                        f"{self.base_url}/orchestrator/inference/models",
+                        f"{self.base_url}/orchestrator/context/{document}",
                         headers=self.headers,
                         timeout=5.0,
                     )
-                    pools = r.json() if r.status_code == 200 else {}
-                    self._log("  [cyan]◆[/cyan]  [white]discovered models per pool[/white]")
-                    for pool_name, pool_data in pools.items():
-                        models = pool_data.get("models", [])
-                        if models:
-                            sample = ", ".join(m["id"] for m in models[:4])
-                            more = f" (+{len(models) - 4} more)" if len(models) > 4 else ""
-                            self._log(
-                                f"    [white]{pool_name}[/white] "
-                                f"[bright_black]({len(models)}): {sample}{more}[/bright_black]"
-                            )
-            except Exception as exc:
-                self._log(f"  [red]error fetching models: {exc}[/red]")
-        elif cmd == "/limits":
-            from config.settings import settings
-            from inference.rate_limit_status import format_status_table
+                    if r.status_code == 200 and r.text.strip():
+                        self._log(
+                            f"    [white]{document}.md[/white] [bright_black]({len(r.text)} chars)[/bright_black]"
+                        )
+                self._log(
+                    "    [bright_black]Type '/context <doc>' or '/context show <doc>' to inspect[/bright_black]"
+                )
+        except Exception as exc:
+            self._log(f"  [red]error fetching context: {exc}[/red]")
 
-            self._log_rich(format_status_table(settings.north_home / "rate_limit_status.json"))
-        elif cmd == "/details":
-            self.action_toggle_activity_details()
-            state = "expanded" if self._details_expanded else "collapsed"
-            self._log(f"  [bright_black]Execution traces {state} (Ctrl+O)[/bright_black]")
-        elif cmd == "/thoughts":
-            self.action_toggle_reasoning()
-            state = "expanded" if self._reasoning_visible else "collapsed"
-            self._log(f"  [bright_black]Thoughts for the current message {state} (Ctrl+T)[/bright_black]")
-        elif cmd in ("/tools", "/inspect"):
-            self.action_inspect_tools()
-        elif cmd == "/plan":
-            self.action_inspect_plan()
-        elif cmd.startswith("/steer"):
-            feedback = text.partition(" ")[2].strip()
-            if feedback:
-                await self._send_steer(feedback)
-            else:
-                self.push_screen(SteerModal(), self._handle_steer_submit)
-        elif cmd == "/help":
-            self._log_rich(_format_help_table(_SLASH_COMMANDS))
+    async def _slash_models(self, text: str) -> None:
+        try:
+            async with self._http() as c:
+                r = await c.get(
+                    f"{self.base_url}/orchestrator/inference/models",
+                    headers=self.headers,
+                    timeout=5.0,
+                )
+                pools = r.json() if r.status_code == 200 else {}
+                self._log("  [cyan]◆[/cyan]  [white]discovered models per pool[/white]")
+                for pool_name, pool in pools.items():
+                    line = _pool_summary_line(pool_name, pool.get("models", []))
+                    if line:
+                        self._log(line)
+        except Exception as exc:
+            self._log(f"  [red]error fetching models: {exc}[/red]")
+
+    async def _slash_limits(self, text: str) -> None:
+        from config.settings import settings
+        from inference.rate_limit_status import format_status_table
+
+        self._log_rich(format_status_table(settings.north_home / "rate_limit_status.json"))
+
+    async def _slash_details(self, text: str) -> None:
+        self.action_toggle_activity_details()
+        state = "expanded" if self._details_expanded else "collapsed"
+        self._log(f"  [bright_black]Execution traces {state} (Ctrl+O)[/bright_black]")
+
+    async def _slash_thoughts(self, text: str) -> None:
+        self.action_toggle_reasoning()
+        state = "expanded" if self._reasoning_visible else "collapsed"
+        self._log(f"  [bright_black]Thoughts for the current message {state} (Ctrl+T)[/bright_black]")
+
+    async def _slash_tools(self, text: str) -> None:
+        self.action_inspect_tools()
+
+    async def _slash_plan(self, text: str) -> None:
+        self.action_inspect_plan()
+
+    async def _slash_steer(self, text: str) -> None:
+        feedback = text.partition(" ")[2].strip()
+        if feedback:
+            await self._send_steer(feedback)
         else:
-            self._log(f"  [bright_black]unknown command: {cmd} - try /help[/bright_black]")
+            self.push_screen(SteerModal(), self._handle_steer_submit)
+
+    async def _slash_help(self, text: str) -> None:
+        self._log_rich(_format_help_table(_SLASH_COMMANDS))
 
     # ── interactive cockpit actions ──────────────────────────────────────────
 
@@ -2598,57 +2634,101 @@ class NorthApp(App[None]):
         self._log(f"  [cyan]✎ {text}[/cyan]")
 
         # Submit as a prompt (reuse the same submission logic as typed input)
-        if not self._input_history or self._input_history[-1] != text:
-            self._input_history.append(text)
-        self._history_index = -1
-        self._current_input = ""
-
+        self._remember_input(text)
         self._log(f"  [bright_black]>[/bright_black]  {text}")
 
-        body: dict = {"prompt": text}
-        if self.workspace:
-            body["workspace"] = self.workspace
-        if self._conversation_history:
-            turns: list[str] = []
-            for turn in self._conversation_history:
-                parts = [f"User: {turn['user']}"]
-                if turn.get("tools"):
-                    summaries = [
-                        f"{e['tool']}({e['params']}) → {e['result']}"
-                        if e.get("params")
-                        else f"{e['tool']} → {e['result']}"
-                        for e in turn["tools"]
-                        if e.get("result")
-                    ]
-                    if summaries:
-                        parts.append("[actions: " + "; ".join(summaries) + "]")
-                parts.append(f"north: {turn['north']}")
-                turns.append("\n".join(parts))
-            body["context"] = "## Recent conversation\n" + "\n\n".join(turns)
+        task_id = await self._post_task(text)
+        if not task_id:
+            return
+        self._user_task_ids.add(task_id)
+        self._pending_user_messages[task_id] = text
+        self._session_tokens += _estimated_tokens(text)
+        self._render_status_bar()
 
-        self._set_status("…")
-        try:
-            async with self._http() as c:
-                resp = await c.post(
-                    f"{self.base_url}/orchestrator/task",
-                    headers=self.headers,
-                    json=body,
-                    timeout=30.0,
-                )
-                resp.raise_for_status()
-                task_id = resp.json().get("task_id", "")
-                if task_id:
-                    self._user_task_ids.add(task_id)
-                    self._pending_user_messages[task_id] = text
-                    self._session_tokens += max(1, len(text) // 4)
-                    self._render_status_bar()
-        except httpx.ConnectError:
-            self._set_status("")
-            self._log("  [red]◆[/red]  [red]cannot reach north server[/red]")
-        except Exception as exc:
-            self._set_status("")
-            self._log(f"  [red]◆[/red]  [red]error: {exc}[/red]")
 
+def _describe_turn(turn: dict) -> str:
+    """One past exchange, rendered for the conversation context sent to the server."""
+    parts = [f"User: {turn['user']}"]
+    actions = [
+        f"{call['tool']}({call['params']}) → {call['result']}" if call.get("params") else
+        f"{call['tool']} → {call['result']}"
+        for call in turn.get("tools") or []
+        if call.get("result")
+    ]
+    if actions:
+        parts.append("[actions: " + "; ".join(actions) + "]")
+    parts.append(f"north: {turn['north']}")
+    return "\n".join(parts)
+
+
+def _estimated_tokens(text: str) -> int:
+    """Rough token count for the session meter - four characters to a token."""
+    return max(1, len(text) // 4)
+
+def _slash_argument(text: str) -> str | None:
+    """The first argument of a slash command, or None when it was given bare."""
+    parts = text.split()
+    return parts[1] if len(parts) > 1 else None
+
+
+def _json_list(response: httpx.Response) -> list[dict]:
+    return response.json() if response.status_code == 200 else []
+
+
+def _requested_context_document(text: str) -> str:
+    """The document named by `/context <doc>` or `/context show <doc>`, else ""."""
+    parts = text.split()
+    if len(parts) == 2 and parts[1] not in ("show", "edit"):
+        return parts[1].removesuffix(".md")
+    if len(parts) >= 3 and parts[1] == "show":
+        return parts[2].removesuffix(".md")
+    return ""
+
+
+def _pool_summary_line(pool_name: str, models: list[dict]) -> str:
+    if not models:
+        return ""
+    sample = ", ".join(m["id"] for m in models[:_MODEL_SAMPLE_SIZE])
+    more = f" (+{len(models) - _MODEL_SAMPLE_SIZE} more)" if len(models) > _MODEL_SAMPLE_SIZE else ""
+    return f"    [white]{pool_name}[/white] [bright_black]({len(models)}): {sample}{more}[/bright_black]"
+
+
+# Every slash command the TUI answers, mapped to the handler that runs it. A new
+# command is a new entry here, never another branch in _handle_slash.
+_SLASH_HANDLERS: dict[str, Callable[[NorthApp, str], Awaitable[None]]] = {
+    "/quit": NorthApp._slash_quit,
+    "/exit": NorthApp._slash_quit,
+    "/clear": NorthApp._slash_clear,
+    "/cost": NorthApp._slash_cost,
+    "/power": NorthApp._slash_power,
+    "/autonomy": NorthApp._slash_autonomy,
+    "/agents": NorthApp._slash_agents,
+    "/queue": NorthApp._slash_queue,
+    "/jobs": NorthApp._slash_jobs,
+    "/context": NorthApp._slash_context,
+    "/models": NorthApp._slash_models,
+    "/limits": NorthApp._slash_limits,
+    "/details": NorthApp._slash_details,
+    "/thoughts": NorthApp._slash_thoughts,
+    "/tools": NorthApp._slash_tools,
+    "/inspect": NorthApp._slash_tools,
+    "/plan": NorthApp._slash_plan,
+    "/help": NorthApp._slash_help,
+}
+
+# These two also answer to anything typed onto the end of them ("/cancel-all",
+# "/steer!"), which the exact table above would reject as unknown.
+_PREFIXED_SLASH_HANDLERS: dict[str, Callable[[NorthApp, str], Awaitable[None]]] = {
+    "/cancel": NorthApp._slash_cancel,
+    "/steer": NorthApp._slash_steer,
+}
+
+
+def _prefixed_slash_handler(command: str) -> Callable[[NorthApp, str], Awaitable[None]] | None:
+    for prefix, handler in _PREFIXED_SLASH_HANDLERS.items():
+        if command.startswith(prefix):
+            return handler
+    return None
 
 async def run(
     base_url: str,

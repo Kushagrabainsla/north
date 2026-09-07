@@ -21,6 +21,7 @@ import json
 import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -180,6 +181,34 @@ class _Deferred:
             self._value = self._build()
         return self._value
 
+
+# Returned by a candidate call that failed in a way the next candidate can answer.
+_NO_RESULT = object()
+
+_DEGENERATE_COOLDOWN_SECS = 120
+_MAX_INLINE_WAIT_SECONDS = 40.0
+_WAIT_GRACE_SECONDS = 0.5
+_ERROR_REASON_CHARS = 160
+
+
+@dataclass(frozen=True)
+class _DispatchPlan:
+    """One dispatch: what to call on each candidate, and how to judge the answer."""
+
+    call_fn: Callable[[Provider, str], Awaitable]
+    is_valid: Callable[[Any], bool] | None = None
+    sticky_key: tuple[str, str, str, str] | None = None
+    fallback_candidates: list[_Candidate] | _Deferred | None = None
+    allow_wait: bool = True
+    capability: ModelCapability | str | None = None
+
+    def resolved_fallback(self) -> list[_Candidate]:
+        """The fallback chain, built only where it is needed."""
+        if self.fallback_candidates is None:
+            return []
+        if isinstance(self.fallback_candidates, _Deferred):
+            return self.fallback_candidates.get()
+        return self.fallback_candidates
 
 class ModelDispatcher(InferenceRouter):
     """Routes inference calls across multiple providers with per-model cooldowns."""
@@ -536,11 +565,13 @@ class ModelDispatcher(InferenceRouter):
         candidates = self._apply_exclusions(candidates, request.exclude_models)
         response = await self._dispatch(
             candidates,
-            _call,
-            is_valid=_valid,
-            sticky_key=self._sticky_key(request, capability, priority),
-            fallback_candidates=fallback,
-            capability=capability,
+            _DispatchPlan(
+                call_fn=_call,
+                is_valid=_valid,
+                sticky_key=self._sticky_key(request, capability, priority),
+                fallback_candidates=fallback,
+                capability=capability,
+            ),
         )
         self._record_divergence(
             request.component,
@@ -635,11 +666,13 @@ class ModelDispatcher(InferenceRouter):
         sticky = self._sticky_key(request, ModelCapability.TOOL_CALLS, priority)
         response = await self._dispatch(
             candidates,
-            _call,
-            is_valid=_toolcall_has_output,
-            sticky_key=sticky,
-            fallback_candidates=fallback,
-            capability=ModelCapability.TOOL_CALLS,
+            _DispatchPlan(
+                call_fn=_call,
+                is_valid=_toolcall_has_output,
+                sticky_key=sticky,
+                fallback_candidates=fallback,
+                capability=ModelCapability.TOOL_CALLS,
+            ),
         )
         self._record_divergence(
             request.component,
@@ -658,7 +691,9 @@ class ModelDispatcher(InferenceRouter):
         async def _call(provider: Provider, model_id: str) -> EmbedResponse:
             return await provider.embed(model_id, request)
 
-        return await self._dispatch(candidates, _call, capability=ModelCapability.EMBEDDING)
+        return await self._dispatch(
+            candidates, _DispatchPlan(call_fn=_call, capability=ModelCapability.EMBEDDING)
+        )
 
     def embedding_model_id(self) -> str:
         """The model embeddings will come from, resolvable before the first call.
@@ -703,7 +738,9 @@ class ModelDispatcher(InferenceRouter):
         async def _call(provider: Provider, model_id: str) -> TranscriptionResponse:
             return await provider.transcribe(model_id, request)
 
-        return await self._dispatch(candidates, _call, capability=ModelCapability.TRANSCRIPTION)
+        return await self._dispatch(
+            candidates, _DispatchPlan(call_fn=_call, capability=ModelCapability.TRANSCRIPTION)
+        )
 
     async def get_model(self, priority: PoolPriority) -> str:
         candidates = self._candidates(ModelCapability.COMPLETION, priority, 0)
@@ -1395,243 +1432,236 @@ class ModelDispatcher(InferenceRouter):
 
     # ---- Dispatch ----
 
-    async def _dispatch(
-        self,
-        candidates: list[_Candidate],
-        call_fn: Callable[[Provider, str], Awaitable],
-        is_valid: Callable[[Any], bool] | None = None,
-        sticky_key: tuple[str, str, str, str] | None = None,
-        fallback_candidates: list[_Candidate] | _Deferred | None = None,
-        allow_wait: bool = True,
-        capability: ModelCapability | str | None = None,
-    ):
-        # Resolved only where it is used, so a deferred fallback stays unbuilt on
-        # the common path where the primary chain succeeds.
-        def _fallback() -> list[_Candidate]:
-            if fallback_candidates is None:
-                return []
-            return fallback_candidates.get() if isinstance(fallback_candidates, _Deferred) else fallback_candidates
-
-        if not candidates:
-            # Nothing in the primary pool - go straight to the fallback (free tier)
-            # if one was supplied, otherwise fail fast.
-            resolved = _fallback()
-            if resolved:
-                candidates = resolved
-                used_fallback = True
-            else:
-                raise AllModelsRateLimitedError("No models available for this request")
-        else:
-            used_fallback = False
-
-        if sticky_key is not None:
-            candidates = self._apply_stickiness(sticky_key, candidates)
+    async def _dispatch(self, candidates: list[_Candidate], plan: _DispatchPlan) -> Any:
+        candidates, used_fallback = self._starting_candidates(candidates, plan)
+        if plan.sticky_key is not None:
+            candidates = self._apply_stickiness(plan.sticky_key, candidates)
 
         for info, provider in candidates:
-            key: _CooldownKey = (info.model_id, info.provider_name)
-            if self._cooldowns.is_active(key):
+            if self._is_unusable(info, plan.capability):
                 continue
-            if capability is not None and self._cooldowns.is_capability_active(key, str(capability)):
-                continue
-            if not self._provider_health.is_available(info.provider_name):
-                continue
-            try:
-                result = await call_fn(provider, info.model_id)
-                # A model that returns an empty/degenerate response (200 OK but no
-                # usable content) must not count as success - otherwise a single
-                # broken model in the pool silently breaks every caller. Treat it
-                # like a failure: deprioritise it and fall through to the next.
-                if is_valid is not None and not is_valid(result):
-                    self._record_model_outcome(key, False)
-                    self._persist_model_score(key)
-                    if capability is not None:
-                        self._cooldowns.set_capability_cooldown(key, str(capability))
-                        logger.warning(
-                            "Empty/invalid %s response from %s/%s - suspending %s capability for 1h",
-                            capability,
-                            info.provider_name,
-                            info.model_id,
-                            capability,
-                        )
-                    else:
-                        self._cooldowns.set_rate_limit(key, 120)
-                        logger.warning(
-                            "Empty/invalid response from %s/%s - trying next candidate",
-                            info.provider_name,
-                            info.model_id,
-                        )
-                    continue
-                self._record_model_outcome(key, True)
-                self._persist_model_score(key)
-                self._provider_health.record_success(info.provider_name)
-                self._rate_limit_status.mark_ok(info.provider_name, info.model_id)
-                if sticky_key is not None:
-                    self._remember_sticky(sticky_key, key)
+            result = await self._call_candidate(info, provider, plan)
+            if result is not _NO_RESULT:
                 return result
-            except ModelDegenerateError as e:
-                self._record_model_outcome(key, False)
-                self._persist_model_score(key)
-                if capability is not None:
-                    self._cooldowns.set_capability_cooldown(key, str(capability))
-                    logger.warning(
-                        "Degenerate %s response from %s/%s (%s) - suspending %s capability for 1h",
-                        capability,
-                        info.provider_name,
-                        info.model_id,
-                        e.reason,
-                        capability,
-                    )
-                else:
-                    self._cooldowns.set_rate_limit(key, 120)
-                    logger.warning(
-                        "Degenerate response from %s/%s (%s) - trying next candidate",
-                        info.provider_name,
-                        info.model_id,
-                        e.reason,
-                    )
-                continue
-            except ModelRateLimitedError as e:
-                self._cooldowns.set_rate_limit(key, e.retry_after)
-                self._rate_limit_status.record_rate_limit(
-                    info.provider_name,
-                    info.model_id,
-                    status_code=e.status_code,
-                    headers=e.headers,
-                    body=e.body,
-                    retry_after=e.retry_after,
-                    is_free=info.is_free,
-                )
-                logger.info(
-                    "Rate limited: %s/%s - skipping for %s",
-                    info.provider_name,
-                    info.model_id,
-                    f"{e.retry_after:.0f}s (Retry-After)" if e.retry_after else "60 s",
-                )
-            except PaymentRequiredError:
-                self._cooldowns.set_payment_exhausted(key)
-                self._rate_limit_status.record_payment_required(
-                    info.provider_name,
-                    info.model_id,
-                    is_free=info.is_free,
-                )
-                logger.warning(
-                    "Payment required: %s/%s - skipping for 24 h",
-                    info.provider_name,
-                    info.model_id,
-                )
-            except PayloadTooLargeError:
-                # 413: this model can't accept north's request size. Skip it (1h) and
-                # route to a model that accepts the payload, rather than retrying.
-                self._cooldowns.set_rate_limit(key, _PAYLOAD_TOO_LARGE_SECS)
-                self._rate_limit_status.record_payload_too_large(
-                    info.provider_name,
-                    info.model_id,
-                    is_free=info.is_free,
-                )
-                logger.warning(
-                    "Payload too large: %s/%s - skipping for 1h",
-                    info.provider_name,
-                    info.model_id,
-                )
-            except ProviderAuthError:
-                self._provider_health.mark_down(info.provider_name, "provider auth failed")
-                self._rate_limit_status.record_provider_down(info.provider_name, "provider auth failed")
-                logger.warning(
-                    "Provider auth failed: %s/%s - skipping provider for 24 h",
-                    info.provider_name,
-                    info.model_id,
-                )
-            except ProviderUnavailableError as e:
-                self._record_model_outcome(key, False)
-                self._persist_model_score(key)
-                state = self._provider_health.mark_degraded(info.provider_name, str(e) or "server outage")
-                self._rate_limit_status.record_provider_down(info.provider_name, str(e) or "server outage")
-                logger.warning(
-                    "Provider degraded: %s - circuit %s (%s)",
-                    info.provider_name,
-                    state,
-                    e,
-                )
-            except ModelNotFoundError:
-                self._record_model_outcome(key, False)
-                self._persist_model_score(key)
-                self._cooldowns.set_payment_exhausted(key)
-                self._rate_limit_status.record_error(
-                    info.provider_name,
-                    info.model_id,
-                    reason="model not found (404)",
-                    is_free=info.is_free,
-                )
-                logger.info(
-                    "Model not found: %s/%s - skipping for 24 h",
-                    info.provider_name,
-                    info.model_id,
-                )
-            except InferenceError as e:
-                self._record_model_outcome(key, False)
-                self._persist_model_score(key)
-                self._rate_limit_status.record_error(
-                    info.provider_name,
-                    info.model_id,
-                    reason=str(e)[:160] or "inference error",
-                    is_free=info.is_free,
-                )
-                logger.warning(
-                    "Inference error on %s/%s - trying next candidate: %s",
-                    info.provider_name,
-                    info.model_id,
-                    e,
-                )
-            except Exception:
-                self._record_model_outcome(key, False)
-                self._persist_model_score(key)
-                raise
 
+        return await self._all_candidates_failed(candidates, plan, used_fallback=used_fallback)
+
+    def _starting_candidates(self, candidates: list[_Candidate], plan: _DispatchPlan) -> tuple[list[_Candidate], bool]:
+        """The chain to try, and whether it is already the fallback chain.
+
+        Nothing in the primary pool means going straight to the fallback (free
+        tier) if one was supplied, otherwise failing fast.
+        """
+        if candidates:
+            return candidates, False
+        resolved = plan.resolved_fallback()
+        if not resolved:
+            raise AllModelsRateLimitedError("No models available for this request")
+        return resolved, True
+
+    def _is_unusable(self, info: ModelInfo, capability: ModelCapability | str | None) -> bool:
+        """True when this model is cooling down, or its provider is down."""
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        if self._cooldowns.is_active(key):
+            return True
+        if capability is not None and self._cooldowns.is_capability_active(key, str(capability)):
+            return True
+        return not self._provider_health.is_available(info.provider_name)
+
+    async def _call_candidate(self, info: ModelInfo, provider: Provider, plan: _DispatchPlan) -> Any:
+        """Call one model, returning its result or `_NO_RESULT` if the next should be tried."""
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        try:
+            result = await plan.call_fn(provider, info.model_id)
+            # A model that returns an empty/degenerate response (200 OK but no
+            # usable content) must not count as success - otherwise a single
+            # broken model in the pool silently breaks every caller. Treat it
+            # like a failure: deprioritise it and fall through to the next.
+            if plan.is_valid is not None and not plan.is_valid(result):
+                self._penalise_degenerate(info, plan.capability, "empty or invalid response")
+                return _NO_RESULT
+        except ModelDegenerateError as e:
+            self._penalise_degenerate(info, plan.capability, e.reason)
+            return _NO_RESULT
+        except ModelRateLimitedError as e:
+            self._note_rate_limited(info, e)
+            return _NO_RESULT
+        except PaymentRequiredError:
+            self._note_payment_required(info)
+            return _NO_RESULT
+        except PayloadTooLargeError:
+            self._note_payload_too_large(info)
+            return _NO_RESULT
+        except ProviderAuthError:
+            self._note_provider_auth_failed(info)
+            return _NO_RESULT
+        except ProviderUnavailableError as e:
+            self._note_provider_unavailable(info, e)
+            return _NO_RESULT
+        except ModelNotFoundError:
+            self._note_model_not_found(info)
+            return _NO_RESULT
+        except InferenceError as e:
+            self._note_inference_error(info, e)
+            return _NO_RESULT
+        except Exception:
+            self._record_failure(key)
+            raise
+
+        self._record_success(info, plan.sticky_key)
+        return result
+
+    def _record_failure(self, key: _CooldownKey) -> None:
+        self._record_model_outcome(key, False)
+        self._persist_model_score(key)
+
+    def _record_success(self, info: ModelInfo, sticky_key: tuple[str, str, str, str] | None) -> None:
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        self._record_model_outcome(key, True)
+        self._persist_model_score(key)
+        self._provider_health.record_success(info.provider_name)
+        self._rate_limit_status.mark_ok(info.provider_name, info.model_id)
+        if sticky_key is not None:
+            self._remember_sticky(sticky_key, key)
+
+    def _penalise_degenerate(
+        self,
+        info: ModelInfo,
+        capability: ModelCapability | str | None,
+        reason: str,
+    ) -> None:
+        """Deprioritise a model that answered 200 OK with nothing usable in it."""
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        self._record_failure(key)
+        if capability is None:
+            self._cooldowns.set_rate_limit(key, _DEGENERATE_COOLDOWN_SECS)
+            logger.warning(
+                "Degenerate response from %s/%s (%s) - trying next candidate",
+                info.provider_name,
+                info.model_id,
+                reason,
+            )
+            return
+        self._cooldowns.set_capability_cooldown(key, str(capability))
+        logger.warning(
+            "Degenerate %s response from %s/%s (%s) - suspending %s capability for 1h",
+            capability,
+            info.provider_name,
+            info.model_id,
+            reason,
+            capability,
+        )
+
+    def _note_rate_limited(self, info: ModelInfo, error: ModelRateLimitedError) -> None:
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        self._cooldowns.set_rate_limit(key, error.retry_after)
+        self._rate_limit_status.record_rate_limit(
+            info.provider_name,
+            info.model_id,
+            status_code=error.status_code,
+            headers=error.headers,
+            body=error.body,
+            retry_after=error.retry_after,
+            is_free=info.is_free,
+        )
+        logger.info(
+            "Rate limited: %s/%s - skipping for %s",
+            info.provider_name,
+            info.model_id,
+            f"{error.retry_after:.0f}s (Retry-After)" if error.retry_after else "60 s",
+        )
+
+    def _note_payment_required(self, info: ModelInfo) -> None:
+        self._cooldowns.set_payment_exhausted((info.model_id, info.provider_name))
+        self._rate_limit_status.record_payment_required(info.provider_name, info.model_id, is_free=info.is_free)
+        logger.warning("Payment required: %s/%s - skipping for 24 h", info.provider_name, info.model_id)
+
+    def _note_payload_too_large(self, info: ModelInfo) -> None:
+        # 413: this model can't accept north's request size. Skip it (1h) and
+        # route to a model that accepts the payload, rather than retrying.
+        self._cooldowns.set_rate_limit((info.model_id, info.provider_name), _PAYLOAD_TOO_LARGE_SECS)
+        self._rate_limit_status.record_payload_too_large(info.provider_name, info.model_id, is_free=info.is_free)
+        logger.warning("Payload too large: %s/%s - skipping for 1h", info.provider_name, info.model_id)
+
+    def _note_provider_auth_failed(self, info: ModelInfo) -> None:
+        self._provider_health.mark_down(info.provider_name, "provider auth failed")
+        self._rate_limit_status.record_provider_down(info.provider_name, "provider auth failed")
+        logger.warning(
+            "Provider auth failed: %s/%s - skipping provider for 24 h",
+            info.provider_name,
+            info.model_id,
+        )
+
+    def _note_provider_unavailable(self, info: ModelInfo, error: ProviderUnavailableError) -> None:
+        self._record_failure((info.model_id, info.provider_name))
+        outage = str(error) or "server outage"
+        state = self._provider_health.mark_degraded(info.provider_name, outage)
+        self._rate_limit_status.record_provider_down(info.provider_name, outage)
+        logger.warning("Provider degraded: %s - circuit %s (%s)", info.provider_name, state, error)
+
+    def _note_model_not_found(self, info: ModelInfo) -> None:
+        key: _CooldownKey = (info.model_id, info.provider_name)
+        self._record_failure(key)
+        self._cooldowns.set_payment_exhausted(key)
+        self._rate_limit_status.record_error(
+            info.provider_name,
+            info.model_id,
+            reason="model not found (404)",
+            is_free=info.is_free,
+        )
+        logger.info("Model not found: %s/%s - skipping for 24 h", info.provider_name, info.model_id)
+
+    def _note_inference_error(self, info: ModelInfo, error: InferenceError) -> None:
+        self._record_failure((info.model_id, info.provider_name))
+        self._rate_limit_status.record_error(
+            info.provider_name,
+            info.model_id,
+            reason=str(error)[:_ERROR_REASON_CHARS] or "inference error",
+            is_free=info.is_free,
+        )
+        logger.warning(
+            "Inference error on %s/%s - trying next candidate: %s",
+            info.provider_name,
+            info.model_id,
+            error,
+        )
+
+    async def _all_candidates_failed(
+        self,
+        candidates: list[_Candidate],
+        plan: _DispatchPlan,
+        *,
+        used_fallback: bool,
+    ) -> Any:
+        """Every candidate is out: try the free tier, then wait out a short cooldown."""
         # Primary pool exhausted (all paid models out of credits / rate-limited /
         # down). If a free-tier fallback was supplied, try it before giving up.
         # This is the first point that needs the fallback, so it is built here.
-        resolved_fallback = _fallback() if not used_fallback else []
-        if resolved_fallback:
+        fallback = [] if used_fallback else plan.resolved_fallback()
+        if fallback:
             logger.info("Primary pool exhausted - falling back to free-tier models")
-            return await self._dispatch(
-                resolved_fallback,
-                call_fn,
-                is_valid=is_valid,
-                sticky_key=sticky_key,
-                fallback_candidates=None,
-                allow_wait=allow_wait,
-                capability=capability,
-            )
+            return await self._dispatch(fallback, replace(plan, fallback_candidates=None))
 
-        # Check for transient rate limit cooldowns across all evaluated candidates
-        all_evaluated = candidates + resolved_fallback
-        transient_waits: list[float] = []
-        for info, _ in all_evaluated:
-            key = (info.model_id, info.provider_name)
-            if not self._cooldowns.is_payment_required(info.provider_name, info.model_id):
-                rem = self._cooldowns.remaining(key)
-                if rem > 0:
-                    transient_waits.append(rem)
-
-        min_wait = min(transient_waits) if transient_waits else 0.0
-
-        if allow_wait and 0 < min_wait <= 40.0:
+        wait = self._shortest_transient_wait(candidates + fallback)
+        if plan.allow_wait and 0 < wait <= _MAX_INLINE_WAIT_SECONDS:
             logger.info(
                 "All candidates transiently rate-limited - pausing in-flight for %.1fs before retrying",
-                min_wait,
+                wait,
             )
-            await asyncio.sleep(min_wait + 0.5)
-            return await self._dispatch(
-                candidates,
-                call_fn,
-                is_valid=is_valid,
-                sticky_key=sticky_key,
-                fallback_candidates=fallback_candidates,
-                allow_wait=False,
-                capability=capability,
-            )
+            await asyncio.sleep(wait + _WAIT_GRACE_SECONDS)
+            return await self._dispatch(candidates, replace(plan, allow_wait=False))
 
         raise AllModelsRateLimitedError(
             f"All {len(candidates)} candidate(s) exhausted - every model is rate-limited or has insufficient credits",
-            retry_after=min_wait if min_wait > 0 else None,
+            retry_after=wait if wait > 0 else None,
         )
+
+    def _shortest_transient_wait(self, candidates: list[_Candidate]) -> float:
+        """How long until the soonest candidate is out of cooldown; 0.0 if none will be."""
+        waits = [
+            remaining
+            for info, _ in candidates
+            if not self._cooldowns.is_payment_required(info.provider_name, info.model_id)
+            and (remaining := self._cooldowns.remaining((info.model_id, info.provider_name))) > 0
+        ]
+        return min(waits) if waits else 0.0

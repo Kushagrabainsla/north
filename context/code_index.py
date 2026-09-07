@@ -25,17 +25,16 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from context.repo_map import _collect_source_files
+from inference.models import EmbedFn
 from utils.db import open_db_connection
 from utils.math import cosine_similarity
 from utils.vector_space import ensure_vector_space
 
 logger = logging.getLogger(__name__)
 
-EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS code_chunks (

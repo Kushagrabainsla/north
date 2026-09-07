@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import importlib.util
 import json
 import os
 import shutil
@@ -47,7 +48,6 @@ from pathlib import Path
 import httpx
 import typer
 from rich.console import Console
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
@@ -55,7 +55,6 @@ from rich.text import Text
 
 from cli._client import _api, _headers
 from cli._server import (
-    _detached_process_kwargs,
     _docker_available,
     _find_compose_file,
     _find_project_root,
@@ -67,16 +66,15 @@ from cli._server import (
     _start_server_process,
     _sync_docker_secret,
 )
+from cli._task_stream import TaskStream, follow_task
 from cli.constants import (
     _BASE_URL,
     _CONFIG_KEYS,
     _PROVIDERS,
-    _STEP_ICONS,
-    _STEP_LABELS,
     _VALID_DOCS,
     _Provider,
 )
-from cli.formatting import _build_steps_table, _reconstruct_task_output
+from cli.formatting import _reconstruct_task_output
 from cli.tui import run as _tui_run
 from utils.security import load_secret
 from utils.time import local_timezone_name
@@ -269,27 +267,8 @@ def _launch_tui(
         settings.north_home.mkdir(parents=True, exist_ok=True)
         load_secret()
 
-        log_path = settings.north_home / "north.log"
-        pid_path = settings.north_home / "north.pid"
         resolved_workspace = _resolve_workspace(workspace)
-
-        cmd = [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "orchestrator.app:app",
-            "--host",
-            host,
-            "--port",
-            str(port),
-            "--log-level",
-            "info",
-        ]
-        server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
-        log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
-        proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
-        log_file.close()  # child holds its own dup; close the parent's copy so the fd isn't leaked
-        pid_path.write_text(str(proc.pid), encoding="utf-8")
+        proc = _start_server_process(port, resolved_workspace, host=host)
         _wait_for_server(host, port, proc=proc)
         workspace = resolved_workspace
 
@@ -349,292 +328,42 @@ def list_tasks() -> None:
 # ── shared task runner ────────────────────────────────────────────────────────
 
 
-# The affirmative option is not spelled the same by every tool: git offers
-# "Approve", patch_file "Apply", bash and shell "Run". Reading the label as
-# consent only for the word "approve" meant --yolo approved a branch checkout and
-# then returned merely "answered" for the edit itself - which is not consent, so
-# the edit never landed and the run looked like it had simply done nothing.
-_AFFIRMATIVE = frozenset({"approve", "approved", "yes", "y", "apply", "run", "ok"})
-_NEGATIVE = frozenset({"reject", "rejected", "no", "n", "cancel", "deny"})
+def _submit_task(prompt: str, workspace: str | None) -> str:
+    body: dict = {"prompt": prompt}
+    if workspace:
+        body["workspace"] = workspace
+    return _api("POST", "/orchestrator/task", json=body).json()["task_id"]
 
 
-def _approval_decision(chosen: str, *, yolo: bool) -> str:
-    """Map the user's pick on an approval card to a decision the server accepts.
+def _answer_from_ledger(task_id: str) -> str:
+    """The kept answer for a task that streamed no usable tokens."""
+    try:
+        entries = _api("GET", f"/orchestrator/ledger?task_id={task_id}&limit=20").json()
+    except Exception:
+        return "Task completed, but the result could not be retrieved."
+    return _reconstruct_task_output(entries) or "Task completed."
 
-    This is only ever reached for ``approval_required``; questions arrive under
-    their own event. So under --yolo the first option is a yes whatever it is
-    called, and anything unrecognised stays ``answered`` rather than being
-    guessed into consent.
-    """
-    if yolo:
-        return "approved"
-    picked = chosen.strip().lower()
-    if picked in _AFFIRMATIVE:
-        return "approved"
-    if picked in _NEGATIVE:
-        return "rejected"
-    return "answered"
+
+def _print_panel(body: Markdown | Text, title: str) -> None:
+    _console.print()
+    _console.print(Panel(body, title=title, border_style="bright_black", padding=(1, 2)))
 
 
 def _run_task(prompt: str, workspace: str | None = None) -> str:
     """Submit prompt, stream SSE pipeline steps live, then render the response. Returns output text."""
-    body: dict = {"prompt": prompt}
-    if workspace:
-        body["workspace"] = workspace
-    resp = _api("POST", "/orchestrator/task", json=body)
-    task_id = resp.json()["task_id"]
-
-    steps: list[tuple[str, str, bool]] = []
-
-    def _make_renderable() -> Panel:
-        return Panel(
-            _build_steps_table(steps) if steps else Text("starting…", style="dim"),
-            border_style="bright_black",
-            padding=(0, 1),
-        )
-
-    url = f"{_BASE_URL}/orchestrator/stream/{task_id}"
-    output_text: str = ""
-    failed_msg: str = ""
-    token_buffer: str = ""
-    # The auditor can run the agent a second time to correct unverified claims,
-    # and that draft streams down the same channel as the first. Without this,
-    # both answers were concatenated - which is how one reply ended
-    # "...format_status_table()I could not complete the verification:".
-    repairing: bool = False
-    repaired: bool = False
-
+    task_id = _submit_task(prompt, workspace)
     try:
-        with (
-            Live(_make_renderable(), console=_console, refresh_per_second=8) as live,
-            httpx.stream("GET", url, headers=_headers(), timeout=None) as stream,
-        ):
-            current_event = ""
-            for line in stream.iter_lines():
-                if line.startswith("event:"):
-                    current_event = line[6:].strip()
-                elif line.startswith("data:"):
-                    try:
-                        data = json.loads(line[5:].strip())
-                    except json.JSONDecodeError:
-                        continue
-
-                    event = current_event or data.get("event", "")
-
-                    # Mark previous active step done
-                    if steps:
-                        icon, label, _ = steps[-1]
-                        steps[-1] = (icon, label, False)
-
-                    if event == "agent_started":
-                        agent = data.get("agent", "agent")
-                        branch = "  ├─ " if data.get("parent_run_id") else ""
-                        run = str(data.get("run_id") or "")[:8]
-                        run_str = f" [dim]#{run}[/dim]" if run else ""
-                        steps.append(("◎", f"{branch}{agent} agent running{run_str}…", True))
-                    elif event == "model":
-                        model = data.get("model", "")
-                        if model and steps:
-                            for idx in range(len(steps) - 1, -1, -1):
-                                icon, lbl, active = steps[idx]
-                                if icon == "◎" and active:
-                                    agent_name = lbl.split()[0]
-                                    steps[idx] = ("◎", f"{agent_name} running on [cyan]{model}[/cyan]…", True)
-                                    break
-                    elif event == "failover":
-                        from_m = data.get("from", "model")
-                        to_m = data.get("to", "")
-                        reason = data.get("reason", "")
-                        reason_str = f" ({reason})" if reason else ""
-                        to_str = f" → [cyan]{to_m}[/cyan]" if to_m else ""
-                        steps.append(("↻", f"failover: [dim]{from_m}[/dim]{to_str}{reason_str}", False))
-                    elif event == "agent_completed":
-                        agent = data.get("agent", "agent")
-                        summary = data.get("summary", "")
-                        duration = data.get("duration_ms")
-                        dur_str = f" [dim]({duration}ms)[/dim]" if duration else ""
-                        branch = "  └─ " if data.get("parent_run_id") else ""
-                        run = str(data.get("run_id") or "")[:8]
-                        run_str = f" [dim]#{run}[/dim]" if run else ""
-                        label = (
-                            f"{branch}{agent}: {summary}{dur_str}{run_str}"
-                            if summary
-                            else f"{branch}{agent} agent done{dur_str}{run_str}"
-                        )
-                        steps.append(("✓", label, True))
-                    elif event == "tool_called":
-                        # Whatever streamed before a tool call was narration on
-                        # the way to it ("I'll check the repo for..."), not the
-                        # answer - keeping it glued the two together with no
-                        # separator. The answer is what streams after the last
-                        # tool call.
-                        token_buffer = ""
-                        tool = data.get("tool", "tool")
-                        params = data.get("params") or data.get("args") or {}
-                        params_preview = ""
-                        if isinstance(params, dict) and params:
-                            clean_params = {k: v for k, v in params.items() if not k.startswith("_")}
-                            if clean_params:
-                                items = []
-                                for k, v in clean_params.items():
-                                    val_str = json.dumps(v) if not isinstance(v, str) else v
-                                    if len(val_str) > 28:
-                                        val_str = val_str[:25] + "…"
-                                    items.append(f"{k}={val_str}")
-                                params_preview = f" [dim]({', '.join(items)})[/dim]"
-                        steps.append(("→", f"  {tool}{params_preview}…", True))
-                    elif event == "tool_result":
-                        tool = data.get("tool", "tool")
-                        success = data.get("success", True)
-                        formatted = data.get("formatted") or data.get("summary") or data.get("error") or ""
-                        preview_str = ""
-                        if formatted:
-                            f_str = str(formatted).strip().replace("\n", " ")
-                            if len(f_str) > 35:
-                                f_str = f_str[:32] + "…"
-                            preview_str = f" [dim]→ {f_str}[/dim]"
-                        steps.append(("✓" if success else "✗", f"  {tool}{preview_str}", True))
-                    elif event == "classified":
-                        domain = data.get("domain", "")
-                        is_conseq = data.get("is_consequential", False)
-                        desc = "complex" if is_conseq else "direct"
-                        label = f"classified: [cyan]{domain}[/cyan] [dim]({desc})[/dim]" if domain else "classified"
-                        steps.append(("✓", label, True))
-                    elif event == "routed":
-                        agents = data.get("agents", [])
-                        agents_str = ", ".join(agents) if agents else ""
-                        label = f"plan ready: [cyan]{agents_str}[/cyan]" if agents_str else "plan ready"
-                        steps.append(("✓", label, True))
-                    elif event == "approval_required":
-                        steps.append(("?", "Approval required", False))
-                        live.update(_make_renderable())
-                        live.stop()
-                        _console.print()
-                        _console.print(
-                            Panel(
-                                Text(data.get("message", ""), style="white"),
-                                title="[yellow]approval required[/yellow]",
-                                border_style="yellow",
-                                padding=(1, 2),
-                            )
-                        )
-                        options = data.get("options", ["Approve", "Reject"])
-                        for i, opt in enumerate(options, 1):
-                            _console.print(f"  [bright_black][{i}][/bright_black]  {opt}")
-                        _console.print()
-                        if _YOLO:
-                            raw_choice = "1"
-                            _console.print("  [yellow]⚠ YOLO[/yellow]  auto-approved")
-                        else:
-                            raw_choice = input("  ❯ ").strip()
-                        # The affirmative option is not spelled the same by every
-                        # tool - git offers "Approve", patch_file "Apply", bash
-                        # "Run" - so deciding from the label approved a branch
-                        # checkout and then let the edit itself come back as
-                        # merely "answered", which is not consent. This event
-                        # only ever carries approval cards, so under --yolo the
-                        # first option is a yes whatever it is called.
-                        try:
-                            idx = int(raw_choice) - 1
-                            chosen = options[idx] if 0 <= idx < len(options) else raw_choice
-                        except ValueError:
-                            chosen = raw_choice or options[0]
-                        decision = _approval_decision(chosen, yolo=_YOLO)
-                        with contextlib.suppress(SystemExit):
-                            _api(
-                                "POST",
-                                "/orchestrator/approval/respond",
-                                json={
-                                    "card_id": data.get("card_id", ""),
-                                    "task_id": task_id,
-                                    "agent": data.get("agent", ""),
-                                    "decision": decision,
-                                    "chosen_option": chosen,
-                                },
-                            )
-                        steps[-1] = ("✓" if decision != "rejected" else "✗", f"Approval: {chosen}", False)
-                        # Do NOT restart Live - cursor is now past the approval panel.
-                        # Subsequent live.update() calls on a stopped Live are no-ops;
-                        # task_completed / task_cancelled will break the loop.
-                        current_event = ""
-                        continue
-                    elif event == "self_repair_started":
-                        # The answer streamed so far is about to be replaced.
-                        token_buffer = ""
-                        repairing, repaired = True, False
-                    elif event == "self_repair_done":
-                        repaired = True
-                    elif event == "token":
-                        token_buffer += data.get("text", "")
-                        # Don't add a step pill per token - just accumulate silently.
-                        current_event = ""
-                        continue
-                    elif event in _STEP_LABELS:
-                        steps.append((_STEP_ICONS.get(event, "·"), _STEP_LABELS[event], True))
-
-                    live.update(_make_renderable())
-
-                    if event == "task_completed":
-                        if steps:
-                            icon, label, _ = steps[-1]
-                            steps[-1] = (icon, label, False)
-                        live.update(_make_renderable())
-                        break
-                    if event == "task_failed":
-                        failed_msg = data.get("error", "Task failed.")
-                        if steps:
-                            icon, label, _ = steps[-1]
-                            steps[-1] = ("✗", label, False)
-                        live.update(_make_renderable())
-                        break
-                    if event == "task_cancelled":
-                        if steps:
-                            icon, label, _ = steps[-1]
-                            steps[-1] = (icon, label, False)
-                        live.update(_make_renderable())
-                        _console.print("[dim]Task cancelled.[/dim]")
-                        break
-                    current_event = ""
-
+        feed = follow_task(TaskStream(task_id=task_id, console=_console, yolo=_YOLO))
     except KeyboardInterrupt:
         _console.print("[dim]Interrupted.[/dim]")
         return ""
 
-    if failed_msg:
-        _console.print()
-        _console.print(
-            Panel(
-                Text(failed_msg, style="red"),
-                title="[dim]north - error[/dim]",
-                border_style="bright_black",
-                padding=(1, 2),
-            )
-        )
+    if feed.failure:
+        _print_panel(Text(feed.failure, style="red"), "[dim]north - error[/dim]")
         return ""
 
-    # A repair that started but was never adopted leaves a rejected draft in the
-    # buffer; the ledger holds the answer that was actually kept.
-    if token_buffer and not (repairing and not repaired):
-        # Tokens were streamed - use them directly, no ledger round-trip needed.
-        output_text = token_buffer
-    else:
-        # No tokens (multi-agent synthesis or older path) - fetch from ledger.
-        try:
-            ledger_resp = _api("GET", f"/orchestrator/ledger?task_id={task_id}&limit=20")
-            entries = ledger_resp.json()
-            output_text = _reconstruct_task_output(entries) or "Task completed."
-        except Exception:
-            output_text = "Task completed, but the result could not be retrieved."
-
-    _console.print()
-    _console.print(
-        Panel(
-            Markdown(output_text),
-            title="[dim]north[/dim]",
-            border_style="bright_black",
-            padding=(1, 2),
-        )
-    )
+    output_text = feed.answer or _answer_from_ledger(task_id)
+    _print_panel(Markdown(output_text), "[dim]north[/dim]")
     return output_text
 
 
@@ -1764,6 +1493,123 @@ def status() -> None:
 # ── dictate ───────────────────────────────────────────────────────────────────
 
 
+_DICTATE_DEPENDENCIES = ("numpy", "sounddevice", "pynput")
+_TRANSCRIBE_TIMEOUT_SECONDS = 60.0
+
+
+def _parse_hotkey(hotkey: str) -> frozenset:
+    """The hotkey string ("right_alt+space") as the set of pynput keys it names."""
+    from pynput import keyboard as kb
+
+    def _key(part: str) -> object:
+        name = part.strip()
+        return getattr(kb.Key, name) if hasattr(kb.Key, name) else kb.KeyCode.from_char(name)
+
+    return frozenset(_key(part) for part in hotkey.split("+"))
+
+
+def _wav_bytes(captured: list, sample_rate: int) -> bytes:
+    """The captured frames as a 16-bit PCM WAV, in memory."""
+    import io
+    import wave
+
+    import numpy as np
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(sample_rate)
+        wf.writeframes(np.concatenate(captured, axis=0).tobytes())
+    return buf.getvalue()
+
+
+class _PushToTalk:
+    """Hold-to-talk capture: records while the hotkey is held, sends on release."""
+
+    def __init__(self, hotkey: str, sample_rate: int) -> None:
+        self._required_keys = _parse_hotkey(hotkey)
+        self._sample_rate = sample_rate
+        self._held: set = set()
+        self._frames: list = []
+        self._recording = False
+
+    def listen(self) -> None:
+        """Capture and submit until the user interrupts."""
+        import sounddevice as sd
+        from pynput import keyboard as kb
+
+        stream = sd.InputStream(
+            samplerate=self._sample_rate,
+            channels=1,
+            dtype="int16",
+            callback=self._on_audio,
+        )
+        stream.start()
+        listener = kb.Listener(on_press=self._on_press, on_release=self._on_release)
+        listener.start()
+        try:
+            listener.join()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            stream.stop()
+            stream.close()
+            listener.stop()
+            typer.echo("\nDictate session ended.")
+
+    def _on_audio(self, indata, frame_count, time_info, status) -> None:  # type: ignore[no-untyped-def]
+        if self._recording:
+            self._frames.append(indata.copy())
+
+    def _on_press(self, key: object) -> None:
+        self._held.add(key)
+        if self._required_keys.issubset(self._held) and not self._recording:
+            self._frames.clear()
+            self._recording = True
+            typer.secho("  ● Recording…", fg=typer.colors.RED)
+
+    def _on_release(self, key: object) -> None:
+        self._held.discard(key)
+        if self._recording and not self._required_keys.issubset(self._held):
+            self._recording = False
+            typer.secho("  ■ Processing…", fg=typer.colors.YELLOW)
+            self._submit(self._frames[:])
+
+    def _submit(self, captured: list) -> None:
+        if not captured:
+            typer.echo("  (nothing recorded)")
+            return
+        text = self._transcribe(_wav_bytes(captured, self._sample_rate))
+        if not text:
+            return
+        typer.secho(f"  ✎ {text}", fg=typer.colors.CYAN)
+        try:
+            response = _api("POST", "/orchestrator/task", json={"prompt": text})
+            typer.secho(f"  ✓ Task submitted: {response.json().get('task_id', '?')}", fg=typer.colors.GREEN)
+        except Exception as exc:
+            typer.secho(f"  ERROR submitting task: {exc}", fg=typer.colors.RED, err=True)
+
+    def _transcribe(self, wav_bytes: bytes) -> str:
+        """The spoken text, or "" when nothing usable came back."""
+        # Raw bytes, so this bypasses the _api helper.
+        try:
+            with httpx.Client(timeout=_TRANSCRIBE_TIMEOUT_SECONDS) as client:
+                response = client.post(
+                    f"{_BASE_URL}/orchestrator/transcribe",
+                    content=wav_bytes,
+                    headers={**_headers(), "Content-Type": "audio/wav"},
+                )
+                response.raise_for_status()
+            text = str(response.json().get("text", "")).strip()
+        except Exception as exc:
+            typer.secho(f"  ERROR transcribing: {exc}", fg=typer.colors.RED, err=True)
+            return ""
+        if not text:
+            typer.echo("  (empty transcript)")
+        return text
+
+
 @app.command("dictate")
 def dictate(
     hotkey: str = typer.Option(
@@ -1778,121 +1624,21 @@ def dictate(
     Audio is captured via sounddevice, transcribed via OpenRouter Whisper,
     and submitted as a task to the Orchestrator. Press Ctrl+C to exit.
     """
-    try:
-        import numpy as np
-        import sounddevice as sd
-        from pynput import keyboard as kb
-    except ImportError as exc:
+    missing = [name for name in _DICTATE_DEPENDENCIES if importlib.util.find_spec(name) is None]
+    if missing:
         typer.secho(
-            f"ERROR: Missing dependency: {exc}. Install with: uv add sounddevice pynput",
+            f"ERROR: Missing dependency: {', '.join(missing)}. Install with: uv add sounddevice pynput",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(1) from None
-
-    # Parse hotkey string into a frozenset of pynput Key/KeyCode objects
-    def _parse_key(part: str) -> object:
-        part = part.strip()
-        if hasattr(kb.Key, part):
-            return getattr(kb.Key, part)
-        return kb.KeyCode.from_char(part)
-
-    required_keys: frozenset = frozenset(_parse_key(p) for p in hotkey.split("+"))
-    held_keys: set = set()
-    frames: list = []
-    recording = False
 
     typer.secho(
         f"★ north dictate  (hold {hotkey} to record, Ctrl+C to quit)",
         fg=typer.colors.BRIGHT_WHITE,
         bold=True,
     )
-
-    def _audio_callback(indata, frame_count, time_info, status):  # type: ignore[no-untyped-def]
-        if recording:
-            frames.append(indata.copy())
-
-    stream = sd.InputStream(
-        samplerate=sample_rate,
-        channels=1,
-        dtype="int16",
-        callback=_audio_callback,
-    )
-    stream.start()
-
-    def _on_press(key: object) -> None:
-        nonlocal recording
-        held_keys.add(key)
-        if required_keys.issubset(held_keys) and not recording:
-            frames.clear()
-            recording = True
-            typer.secho("  ● Recording…", fg=typer.colors.RED)
-
-    def _on_release(key: object) -> None:
-        nonlocal recording
-        held_keys.discard(key)
-        if recording and not required_keys.issubset(held_keys):
-            recording = False
-            typer.secho("  ■ Processing…", fg=typer.colors.YELLOW)
-            _send_audio(frames[:], sample_rate)
-
-    def _send_audio(captured: list, sr: int) -> None:
-        if not captured:
-            typer.echo("  (nothing recorded)")
-            return
-
-        audio_np = np.concatenate(captured, axis=0)
-        # Encode as 16-bit PCM WAV in memory
-        import io  # noqa: E401
-        import wave
-
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)  # 16-bit
-            wf.setframerate(sr)
-            wf.writeframes(audio_np.tobytes())
-        wav_bytes = buf.getvalue()
-
-        # Send to Orchestrator transcription endpoint (raw bytes - bypass _api helper)
-        try:
-            with httpx.Client(timeout=60.0) as client:
-                resp = client.post(
-                    f"{_BASE_URL}/orchestrator/transcribe",
-                    content=wav_bytes,
-                    headers={**_headers(), "Content-Type": "audio/wav"},
-                )
-                resp.raise_for_status()
-            text = resp.json().get("text", "").strip()
-        except Exception as exc:
-            typer.secho(f"  ERROR transcribing: {exc}", fg=typer.colors.RED, err=True)
-            return
-
-        if not text:
-            typer.echo("  (empty transcript)")
-            return
-
-        typer.secho(f"  ✎ {text}", fg=typer.colors.CYAN)
-
-        # Submit as a task
-        try:
-            resp = _api("POST", "/orchestrator/task", json={"prompt": text})
-            task_id = resp.json().get("task_id", "?")
-            typer.secho(f"  ✓ Task submitted: {task_id}", fg=typer.colors.GREEN)
-        except Exception as exc:
-            typer.secho(f"  ERROR submitting task: {exc}", fg=typer.colors.RED, err=True)
-
-    listener = kb.Listener(on_press=_on_press, on_release=_on_release)
-    listener.start()
-    try:
-        listener.join()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stream.stop()
-        stream.close()
-        listener.stop()
-        typer.echo("\nDictate session ended.")
+    _PushToTalk(hotkey, sample_rate).listen()
 
 
 # ── tools ─────────────────────────────────────────────────────────────────────
@@ -2127,6 +1873,106 @@ def _wait_for_server(
     raise typer.Exit(1) from None
 
 
+@dataclass(frozen=True)
+class _StartOptions:
+    """How north should come up, as the start command's flags asked for it."""
+
+    host: str
+    port: int
+    workspace: str
+    reload: bool = False
+    chat: bool = True
+
+
+def _print_start_header(mode: str, rows: list[tuple[str, str]]) -> None:
+    _console.print()
+    _console.print(f"  [bold white]north[/bold white]  [bright_black]{mode}[/bright_black]")
+    _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
+    for label, value in rows:
+        _console.print(f"  [dim]{label:<11}[/dim]  {value}")
+    _console.print()
+
+
+def _start_with_docker(options: _StartOptions, compose_file: Path) -> None:
+    _print_start_header(
+        "docker",
+        [
+            ("compose", str(compose_file)),
+            ("address", f"http://127.0.0.1:{options.port}"),
+            ("workspace", options.workspace),
+        ],
+    )
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
+        env={**os.environ, "NORTH_NORTH_WORKSPACE": options.workspace},
+        check=False,
+    )
+    if result.returncode != 0:
+        typer.secho("Docker Compose failed to start.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+
+    _wait_for_server("127.0.0.1", options.port)
+    _sync_docker_secret(compose_file)
+    if options.chat:
+        _launch_tui(host="127.0.0.1", port=options.port, workspace=options.workspace)
+
+
+def _free_the_port(options: _StartOptions) -> bool:
+    """Make the port available. False when north is already serving on it."""
+    if not _port_in_use(options.host, options.port):
+        return True
+    if _is_north_server(options.host, options.port):
+        return False
+
+    typer.secho(f"Port {options.port} is in use by another application.", fg=typer.colors.YELLOW)
+    if not typer.confirm("Kill the existing process and restart?", default=False):
+        raise typer.Exit(0)
+    typer.echo(f"Stopping process on port {options.port}…")
+    if not _kill_port(options.host, options.port):
+        typer.secho(
+            f"Could not stop the existing process. Try killing port {options.port} manually.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    time.sleep(1)
+    return True
+
+
+def _start_locally(options: _StartOptions) -> None:
+    from config.settings import settings
+
+    settings.north_home.mkdir(parents=True, exist_ok=True)
+    (settings.north_home / "tasks").mkdir(parents=True, exist_ok=True)
+    (settings.north_home / "context").mkdir(parents=True, exist_ok=True)
+    _ensure_api_keys()
+    load_secret()
+
+    if not _free_the_port(options):
+        typer.secho(f"north is already running on port {options.port}.", fg=typer.colors.YELLOW)
+        if options.chat:
+            typer.echo("")
+            _launch_tui(host=options.host, port=options.port, workspace=options.workspace)
+        return
+
+    _print_start_header(
+        "local",
+        [
+            ("address", f"http://{options.host}:{options.port}"),
+            ("workspace", options.workspace),
+            ("home", str(settings.north_home)),
+            ("logs", str(settings.north_home / "north.log")),
+        ],
+    )
+    proc = _start_server_process(options.port, options.workspace, host=options.host, reload=options.reload)
+    _wait_for_server(options.host, options.port)
+
+    if not options.chat:
+        typer.secho(f"north running (pid {proc.pid}). Stop with: north stop", fg=typer.colors.GREEN)
+        return
+    _launch_tui(host=options.host, port=options.port, workspace=options.workspace)
+
+
 @app.command("start")
 def start(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
@@ -2147,127 +1993,29 @@ def start(
     on your own machine. Pass --docker for server or headless deployments.
     Pass --no-chat to start the server without entering the chat REPL.
     """
-    resolved_workspace = _resolve_workspace(workspace)
+    options = _StartOptions(
+        host=host,
+        port=port,
+        workspace=_resolve_workspace(workspace),
+        reload=reload,
+        chat=not no_chat,
+    )
+    if not docker:
+        _start_locally(options)
+        return
 
-    compose_file = _find_compose_file()
-    use_docker = docker and _docker_available() and compose_file is not None
-
-    if docker and not _docker_available():
+    if not _docker_available():
         typer.secho("Docker not found. Install Docker or run without --docker.", fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from None
-    if docker and compose_file is None:
+    compose_file = _find_compose_file()
+    if compose_file is None:
         typer.secho(
             "No docker-compose.yml found. Run from the project root or omit --docker.",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(1) from None
-
-    if use_docker:
-        _console.print()
-        _console.print("  [bold white]north[/bold white]  [bright_black]docker[/bright_black]")
-        _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
-        _console.print(f"  [dim]compose    [/dim]  {compose_file}")
-        _console.print(f"  [dim]address    [/dim]  http://127.0.0.1:{port}")
-        _console.print(f"  [dim]workspace  [/dim]  {resolved_workspace}")
-        _console.print()
-        docker_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
-        result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
-            env=docker_env,
-            check=False,
-        )
-        if result.returncode != 0:
-            typer.secho("Docker Compose failed to start.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from None
-
-        _wait_for_server("127.0.0.1", port)
-        _sync_docker_secret(compose_file)
-
-        if not no_chat:
-            _launch_tui(host="127.0.0.1", port=port, workspace=resolved_workspace)
-        return
-
-    # ── Local uvicorn launch ──────────────────────────────────────────────
-    from config.settings import settings
-
-    settings.north_home.mkdir(parents=True, exist_ok=True)
-    (settings.north_home / "tasks").mkdir(parents=True, exist_ok=True)
-    (settings.north_home / "context").mkdir(parents=True, exist_ok=True)
-    _ensure_api_keys()
-    load_secret()
-
-    log_path = settings.north_home / "north.log"
-    pid_path = settings.north_home / "north.pid"
-
-    if _port_in_use(host, port):
-        if _is_north_server(host, port):
-            typer.secho(f"north is already running on port {port}.", fg=typer.colors.YELLOW)
-            if not no_chat:
-                typer.echo("")
-                _launch_tui(host=host, port=port, workspace=resolved_workspace)
-            return
-        typer.secho(f"Port {port} is in use by another application.", fg=typer.colors.YELLOW)
-        kill = typer.confirm("Kill the existing process and restart?", default=False)
-        if not kill:
-            raise typer.Exit(0)
-        typer.echo(f"Stopping process on port {port}…")
-        if not _kill_port(host, port):
-            typer.secho(
-                f"Could not stop the existing process. Try killing port {port} manually.",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(1) from None
-        time.sleep(1)
-
-    _console.print()
-    _console.print("  [bold white]north[/bold white]  [bright_black]local[/bright_black]")
-    _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
-    _console.print(f"  [dim]address    [/dim]  http://{host}:{port}")
-    _console.print(f"  [dim]workspace  [/dim]  {resolved_workspace}")
-    _console.print(f"  [dim]home       [/dim]  {settings.north_home}")
-    _console.print(f"  [dim]logs       [/dim]  {log_path}")
-    _console.print()
-
-    # Launch the server as a subprocess so its stdout/stderr are fully
-    # redirected to the log file at the OS level - no monkey-patching needed.
-    # Every print(), logging call, traceback, and uvicorn line goes to the file.
-    cmd = [
-        sys.executable,
-        "-m",
-        "uvicorn",
-        "orchestrator.app:app",
-        "--host",
-        host,
-        "--port",
-        str(port),
-        "--log-level",
-        "info",
-    ]
-    if reload:
-        cmd.append("--reload")
-
-    server_env = {
-        **os.environ,
-        "NORTH_NORTH_WORKSPACE": resolved_workspace,
-    }
-
-    workspace_path = settings.north_home / "workspace.txt"
-    workspace_path.write_text(resolved_workspace, encoding="utf-8")
-
-    log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
-    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
-    log_file.close()  # child holds its own dup; close the parent's copy so the fd isn't leaked
-    pid_path.write_text(str(proc.pid), encoding="utf-8")
-
-    _wait_for_server(host, port)
-
-    if no_chat:
-        typer.secho(f"north running (pid {proc.pid}). Stop with: north stop", fg=typer.colors.GREEN)
-        return
-
-    _launch_tui(host=host, port=port, workspace=resolved_workspace)
+    _start_with_docker(options, compose_file)
 
 
 def _web_build_is_stale(web_dir: Path) -> bool:
@@ -2454,6 +2202,134 @@ def reset(
     )
 
 
+_NORTH_GIT_URL = "https://github.com/Kushagrabainsla/north.git"
+_INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh"
+
+
+@dataclass(frozen=True)
+class _UpdateOptions:
+    """How an update should run, as the command's flags asked for it."""
+
+    port: int
+    restart: bool = True
+    assume_yes: bool = False
+
+
+def _confirm_update(options: _UpdateOptions) -> None:
+    if not options.assume_yes:
+        typer.confirm("Proceed with update?", default=True, abort=True)
+
+
+def _stop_server_if_running(port: int) -> bool:
+    """Stop a running north server. True when one was actually running."""
+    if not (_port_in_use("127.0.0.1", port) and _is_north_server("127.0.0.1", port)):
+        return False
+    _console.print("  [dim]→[/dim]  stopping server…")
+    _stop_server(port)
+    return True
+
+
+def _install_helper_binaries() -> None:
+    """Optional companions north can use but does not ship (currently chrome-agent)."""
+    if shutil.which("chrome-agent"):
+        return
+    if shutil.which("cargo"):
+        _console.print("  [dim]→[/dim]  installing chrome-agent via cargo…")
+        subprocess.run(["cargo", "install", "chrome-agent", "-q"], capture_output=True)
+    elif shutil.which("npm"):
+        _console.print("  [dim]→[/dim]  installing chrome-agent via npm…")
+        subprocess.run(["npm", "install", "-g", "chrome-agent", "-q"], capture_output=True)
+
+
+def _update_docker_deployment(options: _UpdateOptions) -> None:
+    project_root = _find_project_root()
+    compose_file = _find_compose_file()
+    if not _docker_available() or compose_file is None:
+        typer.secho("Docker or docker-compose.yml not found.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    if project_root:
+        _console.print("  [dim]→[/dim]  git pull…")
+        _run_command(["git", "pull"], cwd=project_root)
+    _console.print("  [dim]→[/dim]  docker compose build…")
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
+        cwd=project_root or Path.cwd(),
+    )
+    if result.returncode != 0:
+        typer.secho("Docker Compose rebuild failed.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    _wait_for_server("127.0.0.1", options.port)
+    _console.print()
+    typer.secho("✓ north updated and restarted via Docker.", fg=typer.colors.GREEN)
+
+
+def _update_local_checkout(project_root: Path, options: _UpdateOptions) -> None:
+    _console.print(f"  [dim]source     [/dim]  {project_root} (local git repository)")
+    _stop_server_if_running(options.port)
+    _console.print()
+    _confirm_update(options)
+
+    _console.print("  [dim]→[/dim]  pulling latest changes from git…")
+    _run_command(["git", "pull"], cwd=project_root)
+    _console.print("  [dim]→[/dim]  reinstalling dependencies…")
+    subprocess.run(["uv", "pip", "install", "-e", "."], cwd=project_root, check=False)
+    subprocess.run(
+        ["uv", "tool", "install", "--editable", "--force", str(project_root)], capture_output=True, check=False
+    )
+    _console.print()
+    typer.secho("✓ north updated and synced.", fg=typer.colors.GREEN)
+    if options.restart:
+        _start_server_process(options.port)
+
+
+def _update_from_git(install_url: str, options: _UpdateOptions) -> None:
+    _console.print(f"  [dim]source     [/dim]  {install_url}")
+    was_running = _stop_server_if_running(options.port)
+    _console.print()
+    _confirm_update(options)
+
+    if not shutil.which("uv"):
+        typer.secho(
+            f"ERROR: uv not found. Re-run the install script:\n  curl -fsSL {_INSTALL_SCRIPT_URL} | bash",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    _console.print("  [dim]→[/dim]  reinstalling from git…")
+    result = subprocess.run(
+        ["uv", "tool", "install", _pinned_git_spec(install_url), "--force", "--no-cache", "-q"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        typer.secho(
+            f"Install failed:\n{(result.stdout + result.stderr).strip()}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    _console.print("  [dim green]✓[/dim green]  updated python dependencies and cli")
+
+    _install_helper_binaries()
+    _console.print()
+    if options.restart and (was_running or typer.confirm("Start north now?", default=True)):
+        _console.print("  [dim]→[/dim]  restarting…")
+        proc = _start_server_process(options.port)
+        _wait_for_server("127.0.0.1", options.port)
+        typer.secho(f"✓ north updated and restarted (pid {proc.pid}).", fg=typer.colors.GREEN)
+    else:
+        typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
+
+
+def _pinned_git_spec(install_url: str) -> str:
+    """The install URL as a uv git spec, pinned to main when it names no ref."""
+    spec = f"git+{install_url}"
+    if spec.endswith("@main") or "@" in spec.split("/")[-1]:
+        return spec
+    return f"{spec}@main"
+
+
 @app.command("update")
 def update(
     port: int = typer.Option(8000, "--port", "-p", help="Port the server is running on."),
@@ -2470,116 +2346,18 @@ def update(
     _console.print("  [bold white]north update[/bold white]")
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
 
-    install_url, is_git_url = _get_install_url()
-
-    # ── Docker path ───────────────────────────────────────────────────────
+    options = _UpdateOptions(port=port, restart=restart, assume_yes=yes)
     if docker:
-        project_root = _find_project_root()
-        compose_file = _find_compose_file()
-        if not _docker_available() or compose_file is None:
-            typer.secho("Docker or docker-compose.yml not found.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from None
-        if project_root:
-            _console.print("  [dim]→[/dim]  git pull…")
-            _run_command(["git", "pull"], cwd=project_root)
-        _console.print("  [dim]→[/dim]  docker compose build…")
-        result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "up", "--build", "--detach"],
-            cwd=project_root or Path.cwd(),
-        )
-        if result.returncode != 0:
-            typer.secho("Docker Compose rebuild failed.", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1) from None
-        _wait_for_server("127.0.0.1", port)
-        _console.print()
-        typer.secho("✓ north updated and restarted via Docker.", fg=typer.colors.GREEN)
+        _update_docker_deployment(options)
         return
 
-    # ── uv tool upgrade from git URL or local git checkout ────────────────
+    install_url, is_git_url = _get_install_url()
     project_root = _find_project_root()
     if not is_git_url and project_root and (project_root / ".git").exists():
-        _console.print(f"  [dim]source     [/dim]  {project_root} (local git repository)")
-        was_running = _port_in_use("127.0.0.1", port) and _is_north_server("127.0.0.1", port)
-        if was_running:
-            _console.print("  [dim]→[/dim]  stopping server…")
-            _stop_server(port)
-        _console.print()
-
-        if not yes:
-            typer.confirm("Proceed with update?", default=True, abort=True)
-
-        _console.print("  [dim]→[/dim]  pulling latest changes from git…")
-        _run_command(["git", "pull"], cwd=project_root)
-        _console.print("  [dim]→[/dim]  reinstalling dependencies…")
-        subprocess.run(["uv", "pip", "install", "-e", "."], cwd=project_root, check=False)
-        subprocess.run(
-            ["uv", "tool", "install", "--editable", "--force", str(project_root)], capture_output=True, check=False
-        )
-        _console.print()
-        typer.secho("✓ north updated and synced.", fg=typer.colors.GREEN)
-        if restart:
-            _start_server_process(port, project_root=project_root)
+        _update_local_checkout(project_root, options)
         return
 
-    if not install_url or not is_git_url:
-        install_url = "https://github.com/Kushagrabainsla/north.git"
-        is_git_url = True
-
-    _console.print(f"  [dim]source     [/dim]  {install_url}")
-
-    was_running = _port_in_use("127.0.0.1", port) and _is_north_server("127.0.0.1", port)
-    if was_running:
-        _console.print("  [dim]→[/dim]  stopping server…")
-        _stop_server(port)
-    _console.print()
-
-    if not yes:
-        typer.confirm("Proceed with update?", default=True, abort=True)
-
-    if not shutil.which("uv"):
-        typer.secho(
-            "ERROR: uv not found. Re-run the install script:\n"
-            "  curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1) from None
-
-    _console.print("  [dim]→[/dim]  reinstalling from git…")
-    git_spec = f"git+{install_url}"
-    if not git_spec.endswith("@main") and "@" not in git_spec.split("/")[-1]:
-        git_spec = f"{git_spec}@main"
-    result = subprocess.run(
-        ["uv", "tool", "install", git_spec, "--force", "--no-cache", "-q"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        typer.secho(
-            f"Install failed:\n{(result.stdout + result.stderr).strip()}",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1) from None
-    _console.print("  [dim green]✓[/dim green]  updated python dependencies and cli")
-
-    # Update/install optional helper binaries (e.g. chrome-agent)
-    if not shutil.which("chrome-agent"):
-        if shutil.which("cargo"):
-            _console.print("  [dim]→[/dim]  installing chrome-agent via cargo…")
-            subprocess.run(["cargo", "install", "chrome-agent", "-q"], capture_output=True)
-        elif shutil.which("npm"):
-            _console.print("  [dim]→[/dim]  installing chrome-agent via npm…")
-            subprocess.run(["npm", "install", "-g", "chrome-agent", "-q"], capture_output=True)
-
-    _console.print()
-    if restart and (was_running or typer.confirm("Start north now?", default=True)):
-        _console.print("  [dim]→[/dim]  restarting…")
-        proc = _start_server_process(port)
-        _wait_for_server("127.0.0.1", port)
-        typer.secho(f"✓ north updated and restarted (pid {proc.pid}).", fg=typer.colors.GREEN)
-    else:
-        typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
+    _update_from_git(install_url if is_git_url and install_url else _NORTH_GIT_URL, options)
 
 
 def _stop_all_north_processes() -> int:

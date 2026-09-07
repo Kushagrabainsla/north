@@ -14,12 +14,16 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from inference.registry import PROVIDER_DEFINITIONS
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+
+if TYPE_CHECKING:
+    from inference.model_scorer import ScoringConfig
 
 
 def _upsert_env_key(path: Path, key: str, value: str) -> None:
@@ -52,6 +56,42 @@ _SECRET_KEYS = frozenset(
 # Keys that affect the live inference router and need a rebuild on change.
 _INFERENCE_KEYS = frozenset(definition.env_key for definition in PROVIDER_DEFINITIONS if definition.env_key)
 
+
+_KEY_PREFIX = "NORTH_"
+# Shorthand a user is likely to type for a key north stores under its own prefix.
+_KEY_ALIASES = {"FAL_KEY": "NORTH_FAL_KEY"}
+_SCORING_KEYS = ("family_weight", "ema_weight", "curation_weight", "family_tiers")
+_SHOWED_CURRENT = " (no value given -> showed current)"
+
+
+def _dial_output(dial: str, value: str, note: str = "") -> ToolOutput:
+    return ToolOutput(success=True, data={"action": dial, "value": value, "note": note})
+
+
+def _scoring_config(current: ScoringConfig, params: dict) -> ScoringConfig:
+    from inference.model_scorer import ScoringConfig
+
+    return ScoringConfig(
+        family_weight=float(params.get("family_weight", current.family_weight)),
+        ema_weight=float(params.get("ema_weight", current.ema_weight)),
+        curation_weight=float(params.get("curation_weight", current.curation_weight)),
+        unknown_family_quality=current.unknown_family_quality,
+        family_tiers=dict(params.get("family_tiers", current.family_tiers)),
+    )
+
+
+def _reload_live_scoring() -> bool:
+    """Push new scoring to the running router. False when north is not serving."""
+    from config.runtime import get_runtime
+
+    deps = get_runtime()
+    if deps is None:
+        return False
+    inner = deps.cost_tracker.get_inner()
+    if inner is None or not hasattr(inner, "reload_scoring"):
+        return False
+    inner.reload_scoring()
+    return True
 
 class NorthConfigTool(Tool):
     """Read and update north's configuration (.env file).
@@ -233,157 +273,95 @@ class NorthConfigTool(Tool):
         action = input.params.get("action", "").strip().lower()
         if not action:
             return ToolOutput(success=False, error="Parameter 'action' is required (list/get/set).")
-
-        # ── list ────────────────────────────────────────────────────────────
-        if action == "list":
-            env = self._read_env()
-            if not env:
-                return ToolOutput(
-                    success=True,
-                    data={"action": "list", "entries": []},
-                )
+        handler = _ACTIONS.get(action)
+        if handler is None:
             return ToolOutput(
-                success=True,
-                data={"action": "list", "entries": sorted(env.items())},
+                success=False,
+                error=f"Unknown action: {action!r}. Valid: {', '.join(_ACTIONS)}.",
             )
+        return await handler(self, input.params)
 
-        # ── get ─────────────────────────────────────────────────────────────
-        if action == "get":
-            key = (input.params.get("key") or "").strip().upper()
-            if not key:
-                return ToolOutput(
-                    success=False,
-                    error="Usage: get <KEY> — provide the key name after 'get'.",
-                )
-            env = self._read_env()
-            value = env.get(key, None)
+    async def _list(self, params: dict) -> ToolOutput:
+        return ToolOutput(success=True, data={"action": "list", "entries": sorted(self._read_env().items())})
+
+    async def _get(self, params: dict) -> ToolOutput:
+        key = (params.get("key") or "").strip().upper()
+        if not key:
+            return ToolOutput(success=False, error="Usage: get <KEY> — provide the key name after 'get'.")
+        return ToolOutput(success=True, data={"action": "get", "key": key, "value": self._read_env().get(key)})
+
+    async def _set(self, params: dict) -> ToolOutput:
+        key = (params.get("key") or "").strip().upper()
+        value = (params.get("value") or "").strip()
+        if not key or not value:
             return ToolOutput(
-                success=True,
-                data={"action": "get", "key": key, "value": value},
+                success=False,
+                error="Usage: set key=NORTH_FAL_KEY value=xxx — both 'key' and 'value' parameters required.",
             )
+        key = _KEY_ALIASES.get(key, key)
+        if not key.startswith(_KEY_PREFIX):
+            return ToolOutput(success=False, error=f"Config keys must start with {_KEY_PREFIX}. Got: {key!r}")
 
-        # ── set ─────────────────────────────────────────────────────────────
-        if action == "set":
-            key = (input.params.get("key") or "").strip().upper()
-            value = (input.params.get("value") or "").strip()
-            if not key or not value:
-                return ToolOutput(
-                    success=False,
-                    error="Usage: set key=NORTH_FAL_KEY value=xxx — both 'key' and 'value' parameters required.",
-                )
-
-            # Normalize shorthand keys
-            if key == "FAL_KEY":
-                key = "NORTH_FAL_KEY"
-
-            if not key.startswith("NORTH_"):
-                return ToolOutput(
-                    success=False,
-                    error=f"Config keys must start with NORTH_. Got: {key!r}",
-                )
-
-            if not value:
-                return ToolOutput(
-                    success=False,
-                    error="Value cannot be empty.",
-                )
-
-            # Upsert the key in .env off-thread (CODING_STYLE §10.3).
-            await asyncio.to_thread(_upsert_env_key, self._env_path(), key, value)
-
-            note = self._apply_runtime(key)
-
-            return ToolOutput(
-                success=True,
-                data={"action": "set", "key": key, "value": value, "note": note},
-            )
-
-        # ── scoring ─────────────────────────────────────────────────────────
-        if action == "scoring":
-            from config.runtime import get_runtime
-            from config.settings import reload_settings
-            from config.strategy import NorthSettings
-            from inference.model_scorer import ScoringConfig
-
-            # Use NorthSettings (which has the scoring property) not config.settings
-            ns = NorthSettings(self._settings_path())
-            reload_settings()  # still reload .env for any API key changes
-            if any(k in input.params for k in ("family_weight", "ema_weight", "curation_weight", "family_tiers")):
-                cur = ns.scoring
-                new = ScoringConfig(
-                    family_weight=float(input.params.get("family_weight", cur.family_weight)),
-                    ema_weight=float(input.params.get("ema_weight", cur.ema_weight)),
-                    curation_weight=float(input.params.get("curation_weight", cur.curation_weight)),
-                    unknown_family_quality=cur.unknown_family_quality,
-                    family_tiers=dict(input.params.get("family_tiers", cur.family_tiers)),
-                )
-                ns.set_scoring(new)
-                # Push live to the running router (no restart).
-                deps = get_runtime()
-                applied = False
-                if deps is not None:
-                    inner = deps.cost_tracker.get_inner()
-                    if inner is not None and hasattr(inner, "reload_scoring"):
-                        inner.reload_scoring()
-                        applied = True
-                note = "" if applied else "\n⚠️ north not running as a server — applies on next restart."
-                return ToolOutput(
-                    success=True,
-                    data={"action": "scoring", "config": new.to_dict(), "note": note},
-                )
-            # Getter
-            cfg = ns.scoring.to_dict()
-            return ToolOutput(success=True, data={"action": "scoring", "config": cfg})
-
-        # ── power ──────────────────────────────────────────────────────────
-        if action == "power":
-            from config.strategy import NorthSettings, StrategyMode
-
-            ns = NorthSettings(self._settings_path())
-            if "value" in input.params and input.params["value"]:
-                val = (input.params["value"] or "").strip().lower()
-                try:
-                    mode = StrategyMode(val)
-                except ValueError:
-                    return ToolOutput(
-                        success=False,
-                        error=f"Unknown power mode {val!r}. Valid: eco, cruise, sport.",
-                    )
-                ns.set_power(mode)
-                note = ""
-            else:
-                mode = ns.power
-                note = " (no value given -> showed current)"
-            return ToolOutput(
-                success=True,
-                data={"action": "power", "value": mode.value, "note": note},
-            )
-
-        # ── autonomy ─────────────────────────────────────────────────────────
-        if action == "autonomy":
-            from approval.mode import parse_approval_mode
-            from config.strategy import NorthSettings
-
-            ns = NorthSettings(self._settings_path())
-            if "value" in input.params and input.params["value"]:
-                val = (input.params["value"] or "").strip().lower()
-                mode = parse_approval_mode(val)
-                if mode is None:
-                    return ToolOutput(
-                        success=False,
-                        error=f"Unknown autonomy mode {val!r}. Valid: interactive, auto, autonomous.",
-                    )
-                ns.set_autonomy(mode)
-                note = ""
-            else:
-                mode = ns.autonomy
-                note = " (no value given -> showed current)"
-            return ToolOutput(
-                success=True,
-                data={"action": "autonomy", "value": mode.value, "note": note},
-            )
-
+        # Upsert the key in .env off-thread (CODING_STYLE §10.3).
+        await asyncio.to_thread(_upsert_env_key, self._env_path(), key, value)
         return ToolOutput(
-            success=False,
-            error=f"Unknown action: {action!r}. Valid: list, get, set, scoring, power, autonomy.",
+            success=True,
+            data={"action": "set", "key": key, "value": value, "note": self._apply_runtime(key)},
         )
+
+    async def _scoring(self, params: dict) -> ToolOutput:
+        from config.settings import reload_settings
+        from config.strategy import NorthSettings
+
+        # Use NorthSettings (which has the scoring property) not config.settings
+        north_settings = NorthSettings(self._settings_path())
+        reload_settings()  # still reload .env for any API key changes
+        if not any(key in params for key in _SCORING_KEYS):
+            return ToolOutput(success=True, data={"action": "scoring", "config": north_settings.scoring.to_dict()})
+
+        updated = _scoring_config(north_settings.scoring, params)
+        north_settings.set_scoring(updated)
+        note = "" if _reload_live_scoring() else "\n⚠️ north not running as a server — applies on next restart."
+        return ToolOutput(success=True, data={"action": "scoring", "config": updated.to_dict(), "note": note})
+
+    async def _power(self, params: dict) -> ToolOutput:
+        from config.strategy import NorthSettings, StrategyMode
+
+        north_settings = NorthSettings(self._settings_path())
+        requested = (params.get("value") or "").strip().lower()
+        if not requested:
+            return _dial_output("power", north_settings.power.value, note=_SHOWED_CURRENT)
+        try:
+            mode = StrategyMode(requested)
+        except ValueError:
+            return ToolOutput(success=False, error=f"Unknown power mode {requested!r}. Valid: eco, cruise, sport.")
+        north_settings.set_power(mode)
+        return _dial_output("power", mode.value)
+
+    async def _autonomy(self, params: dict) -> ToolOutput:
+        from approval.mode import parse_approval_mode
+        from config.strategy import NorthSettings
+
+        north_settings = NorthSettings(self._settings_path())
+        requested = (params.get("value") or "").strip().lower()
+        if not requested:
+            return _dial_output("autonomy", north_settings.autonomy.value, note=_SHOWED_CURRENT)
+        mode = parse_approval_mode(requested)
+        if mode is None:
+            return ToolOutput(
+                success=False,
+                error=f"Unknown autonomy mode {requested!r}. Valid: interactive, auto, autonomous.",
+            )
+        north_settings.set_autonomy(mode)
+        return _dial_output("autonomy", mode.value)
+
+
+# Every settings action north_config answers, mapped to the handler that runs it.
+_ACTIONS: dict[str, Callable[[NorthConfigTool, dict], Awaitable[ToolOutput]]] = {
+    "list": NorthConfigTool._list,
+    "get": NorthConfigTool._get,
+    "set": NorthConfigTool._set,
+    "scoring": NorthConfigTool._scoring,
+    "power": NorthConfigTool._power,
+    "autonomy": NorthConfigTool._autonomy,
+}

@@ -543,6 +543,8 @@ cli/
   tui.py             <- Textual TUI client
   _client.py         <- HTTP client for the local server
   _server.py         <- server lifecycle helpers
+  _task_stream.py    <- live view of one task's SSE stream
+  formatting.py      <- tables and text rendering shared by main.py and tui.py
 
 tests/
   unit/

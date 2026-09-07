@@ -820,115 +820,141 @@ class Orchestrator:
         await asyncio.to_thread(ensure_handoff_dir, task_id)
         task_start = time.monotonic()
         try:
-            # Strategy command shortcut - handle before full pipeline
-            if await self._handle_strategy_command(task_id, request.prompt):
-                return
-
-            # Manual agent trigger (`north agent run <name>`): run exactly that
-            # agent, bypassing classification and the planner so it is never re-routed.
-            if request.forced_agent:
-                await self._run_forced_agent(task_id, request)
-                return
-
-            classification, plan = await self._stage_plan(task_id, request.prompt, request.context)
-            # Stamp the domain on the running_task row so other agents
-            # can see which domain this session belongs to.
-            if self._running_task_store is not None:
-                await self._running_task_store.update_domain(task_id, classification.domain)
-            await self._stage_north_star(task_id, request.prompt, classification)
-            await self._stage_execute(
-                task_id,
-                request.prompt,
-                plan,
-                request.workspace,
-                domain=classification.domain,
-                context=request.context,
-                confidence=classification.confidence,
-            )
+            await self._run_pipeline(task_id, request)
         except asyncio.CancelledError:
             # cancel_task() already wrote the ledger entry and emitted events.
             raise
         except NorthStarConflictError as e:
-            logger.warning("Task %s rejected: conflicts with North Star goals", task_id)
-            with contextlib.suppress(Exception):
-                await self._task_context_store.update_task_status(task_id, "failed")
-            await self._stream_manager.emit(task_id, "task_rejected", {"reason": str(e)})
-            await self._record_task_failure(task_id, task_start, str(e), LedgerStatus.CANCELLED, "north_star_conflict")
-            await self._stream_manager.emit_done(task_id)
+            await self._reject_conflicting_task(task_id, task_start, e)
         except Exception as e:
-            error_type = classify_error(e)
-            with contextlib.suppress(Exception):
-                await self._task_context_store.update_task_status(task_id, "failed")
-            if error_type == "model_unavailable":
-                # Check attempt count to allow queueing / retry on model recovery
-                current_attempt = 0
-                if self._running_task_store is not None:
-                    stored_task = await self._running_task_store.get(task_id)
-                    if stored_task is not None:
-                        current_attempt = stored_task.attempt
-                if current_attempt < MAX_QUEUE_ATTEMPTS:
-                    logger.warning(
-                        "Task %s queued for model availability recovery (attempt %d): %s",
-                        task_id,
-                        current_attempt + 1,
-                        e,
-                    )
-                    if self._running_task_store is not None:
-                        await self._running_task_store.mark_queued(task_id, attempt=current_attempt + 1)
-                    await self._journal.record(
-                        task_id,
-                        "task_queued",
-                        status=LedgerStatus.PENDING,
-                        output=f"model pool unavailable - queued for retry (attempt {current_attempt + 1})",
-                        payload={
-                            "reason": "model pool unavailable - queued for retry",
-                            "attempt": current_attempt + 1,
-                        },
-                    )
-                    self._queue_wake_event.set()
-                    return
-
-                # Not a north failure: the whole model pool was unavailable, so the
-                # work could not proceed. Skip honestly (autonomous mode just moves
-                # on) rather than reporting a failure the user would read as a bug.
-                logger.warning("Task %s skipped - %s: %s", task_id, _MODEL_SCARCITY_MESSAGE, e)
-                await self._stream_manager.emit(
-                    task_id, "task_skipped", {"reason": _MODEL_SCARCITY_MESSAGE, "error_type": error_type}
-                )
-                await self._record_task_skipped_model_unavailable(task_id, task_start)
-            else:
-                logger.error("Task %s failed: %s", task_id, e, exc_info=True)
-                await self._stream_manager.emit(task_id, "task_failed", {"error": str(e), "error_type": error_type})
-                await self._record_task_failure(task_id, task_start, str(e), LedgerStatus.FAILED, error_type)
-            await self._stream_manager.emit_done(task_id)
+            await self._report_task_failure(task_id, task_start, e)
         finally:
-            # Reap this task's tracked cost exactly once, regardless of exit path.
-            # The success/failure/conflict/cancel paths already pop it to record
-            # the cost in the ledger; popping again here is a no-op (pop_task_cost
-            # returns 0.0 when absent), so this only catches tasks that recorded
-            # cost but never reached one of those pops - preventing an unbounded
-            # leak in CostTracker._task_costs on a long-lived server.
-            if self._tracked_router is not None:
-                self._tracked_router.pop_task_cost(task_id)
-            # This task can no longer act on an answer, so stop asking for one.
-            # Left pending, its cards would keep appearing in the approvals list
-            # and would never be evicted (the cap spares pending cards), so a
-            # cancelled or failed task leaked a card and an event apiece.
-            # Synchronous on purpose: this runs in a `finally` that may already
-            # be unwinding a cancellation, where an await would re-raise.
-            self._release_pending_cards(task_id)
-            if self._plan_store is not None and hasattr(self._plan_store, "clear"):
-                self._plan_store.clear(task_id)
-            if self._failure_handler is not None and hasattr(self._failure_handler, "clear_all"):
-                self._failure_handler.clear_all(task_id)
-            # The task has reached a terminal state (success/failure/cancel/skip), so it
-            # is no longer in-flight: drop it from the crash-recovery registry unless queued.
-            if self._running_task_store is not None:
-                with contextlib.suppress(Exception, asyncio.CancelledError):
-                    stored_task = await asyncio.shield(self._running_task_store.get(task_id))
-                    is_resumable = stored_task is not None and stored_task.status in {"queued", "paused"}
-                    if not is_resumable:
-                        await asyncio.shield(self._running_task_store.clear(task_id))
+            await self._release_finished_task(task_id)
+
+    async def _run_pipeline(self, task_id: str, request: TaskRequest) -> None:
+        # Strategy command shortcut - handle before full pipeline
+        if await self._handle_strategy_command(task_id, request.prompt):
+            return
+
+        # Manual agent trigger (`north agent run <name>`): run exactly that
+        # agent, bypassing classification and the planner so it is never re-routed.
+        if request.forced_agent:
+            await self._run_forced_agent(task_id, request)
+            return
+
+        classification, plan = await self._stage_plan(task_id, request.prompt, request.context)
+        # Stamp the domain on the running_task row so other agents
+        # can see which domain this session belongs to.
+        if self._running_task_store is not None:
+            await self._running_task_store.update_domain(task_id, classification.domain)
+        await self._stage_north_star(task_id, request.prompt, classification)
+        await self._stage_execute(
+            task_id,
+            request.prompt,
+            plan,
+            request.workspace,
+            domain=classification.domain,
+            context=request.context,
+            confidence=classification.confidence,
+        )
+
+    async def _reject_conflicting_task(self, task_id: str, task_start: float, error: Exception) -> None:
+        logger.warning("Task %s rejected: conflicts with North Star goals", task_id)
+        await self._mark_task_failed(task_id)
+        await self._stream_manager.emit(task_id, "task_rejected", {"reason": str(error)})
+        await self._record_task_failure(
+            task_id, task_start, str(error), LedgerStatus.CANCELLED, "north_star_conflict"
+        )
+        await self._stream_manager.emit_done(task_id)
+
+    async def _report_task_failure(self, task_id: str, task_start: float, error: Exception) -> None:
+        error_type = classify_error(error)
+        await self._mark_task_failed(task_id)
+        if error_type != "model_unavailable":
+            logger.error("Task %s failed: %s", task_id, error, exc_info=True)
+            await self._stream_manager.emit(task_id, "task_failed", {"error": str(error), "error_type": error_type})
+            await self._record_task_failure(task_id, task_start, str(error), LedgerStatus.FAILED, error_type)
+            await self._stream_manager.emit_done(task_id)
+            return
+
+        if await self._queue_for_model_recovery(task_id, error):
+            return
+
+        # Not a north failure: the whole model pool was unavailable, so the work
+        # could not proceed. Skip honestly (autonomous mode just moves on) rather
+        # than reporting a failure the user would read as a bug.
+        logger.warning("Task %s skipped - %s: %s", task_id, _MODEL_SCARCITY_MESSAGE, error)
+        await self._stream_manager.emit(
+            task_id, "task_skipped", {"reason": _MODEL_SCARCITY_MESSAGE, "error_type": error_type}
+        )
+        await self._record_task_skipped_model_unavailable(task_id, task_start)
+        await self._stream_manager.emit_done(task_id)
+
+    async def _mark_task_failed(self, task_id: str) -> None:
+        with contextlib.suppress(Exception):
+            await self._task_context_store.update_task_status(task_id, "failed")
+
+    async def _queue_for_model_recovery(self, task_id: str, error: Exception) -> bool:
+        """Queue the task to retry when models return. False once attempts run out."""
+        attempt = await self._attempts_so_far(task_id) + 1
+        if attempt > MAX_QUEUE_ATTEMPTS:
+            return False
+        logger.warning(
+            "Task %s queued for model availability recovery (attempt %d): %s",
+            task_id,
+            attempt,
+            error,
+        )
+        if self._running_task_store is not None:
+            await self._running_task_store.mark_queued(task_id, attempt=attempt)
+        await self._journal.record(
+            task_id,
+            "task_queued",
+            status=LedgerStatus.PENDING,
+            output=f"model pool unavailable - queued for retry (attempt {attempt})",
+            payload={
+                "reason": "model pool unavailable - queued for retry",
+                "attempt": attempt,
+            },
+        )
+        self._queue_wake_event.set()
+        return True
+
+    async def _attempts_so_far(self, task_id: str) -> int:
+        if self._running_task_store is None:
+            return 0
+        stored_task = await self._running_task_store.get(task_id)
+        return stored_task.attempt if stored_task is not None else 0
+
+    async def _release_finished_task(self, task_id: str) -> None:
+        """Drop everything a task holds once it can no longer act, whatever ended it."""
+        # Reap this task's tracked cost exactly once, regardless of exit path.
+        # The success/failure/conflict/cancel paths already pop it to record
+        # the cost in the ledger; popping again here is a no-op (pop_task_cost
+        # returns 0.0 when absent), so this only catches tasks that recorded
+        # cost but never reached one of those pops - preventing an unbounded
+        # leak in CostTracker._task_costs on a long-lived server.
+        if self._tracked_router is not None:
+            self._tracked_router.pop_task_cost(task_id)
+        # This task can no longer act on an answer, so stop asking for one.
+        # Left pending, its cards would keep appearing in the approvals list
+        # and would never be evicted (the cap spares pending cards), so a
+        # cancelled or failed task leaked a card and an event apiece.
+        # Synchronous on purpose: this runs in a `finally` that may already
+        # be unwinding a cancellation, where an await would re-raise.
+        self._release_pending_cards(task_id)
+        if self._plan_store is not None and hasattr(self._plan_store, "clear"):
+            self._plan_store.clear(task_id)
+        if self._failure_handler is not None and hasattr(self._failure_handler, "clear_all"):
+            self._failure_handler.clear_all(task_id)
+        # The task has reached a terminal state (success/failure/cancel/skip), so it
+        # is no longer in-flight: drop it from the crash-recovery registry unless queued.
+        if self._running_task_store is not None:
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                stored_task = await asyncio.shield(self._running_task_store.get(task_id))
+                is_resumable = stored_task is not None and stored_task.status in {"queued", "paused"}
+                if not is_resumable:
+                    await asyncio.shield(self._running_task_store.clear(task_id))
 
     async def _stage_plan(
         self, task_id: str, prompt: str, context: str = ""

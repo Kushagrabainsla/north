@@ -45,8 +45,7 @@ def strip_reasoning(text: str) -> str:
     if not text or "<" not in text:
         return text
     cleaned = _BLOCK_RE.sub("", text)
-    cleaned = _DANGLING_RE.sub("", cleaned)
-    return cleaned
+    return _DANGLING_RE.sub("", cleaned)
 
 
 def _earliest_marker(buf: str, markers: tuple[str, ...]) -> tuple[int, str]:

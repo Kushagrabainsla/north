@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+# The callables a store is handed instead of a router: a store owns storage, not
+# inference. Each is wired in config/dependencies.py.
+EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
+# Given one new fact and the existing facts closest to it, return the indices of
+# those the new fact makes untrue.
+SupersedeFn = Callable[[str, list[str]], Awaitable[list[int]]]
+# Given short names and the facts that mention them, say what each one means.
+GlossaryFn = Callable[[dict[str, list[str]]], Awaitable[dict[str, str]]]
 
 
 class PoolPriority(StrEnum):

@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -38,6 +39,238 @@ from utils.ids import generate_id
 
 logger = logging.getLogger(__name__)
 
+
+# The item fields north keeps as a descriptor of one output item.
+_ITEM_DESCRIPTOR_KEYS = ("id", "type", "status", "name", "call_id")
+_FAILURE_DETAIL_CHARS = 300
+
+
+async def _aiter_response_events(response: httpx.Response) -> AsyncIterator[dict]:
+    """Yield each decoded event of a Responses SSE stream, skipping unparsable lines."""
+    events = response.aiter_lines().__aiter__()
+    while True:
+        try:
+            line = await asyncio.wait_for(events.__anext__(), timeout=SSE_CHUNK_TIMEOUT_SECONDS)
+        except StopAsyncIteration:
+            return
+        except TimeoutError as exc:
+            raise InferenceError("OpenAI Codex response stream stalled") from exc
+        if not line.startswith("data:"):
+            continue
+        raw = line[5:].strip()
+        if not raw or raw == "[DONE]":
+            continue
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        yield event
+
+
+def _item_descriptor(item: dict) -> dict[str, str]:
+    return {key: str(item[key]) for key in _ITEM_DESCRIPTOR_KEYS if item.get(key) is not None}
+
+
+def _message_text(item: dict) -> str:
+    return "".join(
+        str(part.get("text", ""))
+        for part in item.get("content") or []
+        if part.get("type") in {"output_text", "text"}
+    )
+
+
+@dataclass
+class _RequestTrace:
+    """Identifiers for the HTTP call itself, reported back as provider metadata."""
+
+    client_request_id: str
+    request_id: str = ""
+    rate_limits: dict[str, str] = field(default_factory=dict)
+
+    def observe(self, headers: httpx.Headers) -> None:
+        self.request_id = headers.get("x-request-id", "")
+        self.rate_limits = {
+            key: value for key, value in headers.items() if key.lower().startswith("x-ratelimit-")
+        }
+
+
+class _ResponsesStream:
+    """Folds a Responses-API event stream into one finished reply.
+
+    The same reply arrives twice over: as deltas while it is generated, and again
+    whole in `response.completed`. Both are read, the deltas because they are what
+    streams to the user and the final envelope because it is authoritative.
+    """
+
+    def __init__(self, token_callback: Callable[[str], Awaitable[None]] | None = None) -> None:
+        self._emit = token_callback
+        self.text = ""
+        self.reasoning = ""
+        self._calls_by_id: dict[str, dict[str, str]] = {}
+        self._tokens_in = 0
+        self._tokens_out = 0
+        self._cached_tokens = 0
+        self._cache_write_tokens = 0
+        self._model = ""
+        self._response_id = ""
+        self._conversation_id = ""
+        self._previous_response_id = ""
+        self._item_ids: list[str] = []
+        self._output_items: list[dict[str, str]] = []
+        self._event_types: list[str] = []
+        self._last_sequence_number: int | None = None
+
+    async def add(self, event: dict) -> None:
+        event_type = event.get("type")
+        self._note_arrival(event, event_type)
+        handler = _RESPONSE_EVENT_HANDLERS.get(str(event_type))
+        if handler is not None:
+            await handler(self, event)
+
+    def to_result(self, provider_name: str, trace: _RequestTrace) -> dict[str, Any]:
+        calls = [self._tool_call(item) for item in self._calls_by_id.values()]
+        if not self.text and not calls:
+            raise InferenceError("OpenAI Codex returned no text or tool calls")
+        return {
+            "text": self.text,
+            "reasoning": self.reasoning,
+            "calls": calls,
+            "tokens_in": self._tokens_in,
+            "tokens_out": self._tokens_out,
+            "cached_tokens": self._cached_tokens,
+            "cache_write_tokens": self._cache_write_tokens,
+            "model": self._model,
+            "metadata": {
+                "provider": provider_name,
+                "response_id": self._response_id,
+                "conversation_id": self._conversation_id,
+                "previous_response_id": self._previous_response_id,
+                "item_ids": self._item_ids,
+                "output_items": self._output_items,
+                "event_types": self._event_types,
+                "last_sequence_number": self._last_sequence_number,
+                "request_id": trace.request_id,
+                "client_request_id": trace.client_request_id,
+                "rate_limits": trace.rate_limits,
+                "stored_remotely": False,
+            },
+        }
+
+    def _note_arrival(self, event: dict, event_type: object) -> None:
+        if isinstance(event.get("sequence_number"), int):
+            self._last_sequence_number = event["sequence_number"]
+        if isinstance(event_type, str) and event_type not in self._event_types:
+            self._event_types.append(event_type)
+
+    async def _on_response_opened(self, event: dict) -> None:
+        envelope = event.get("response") if isinstance(event.get("response"), dict) else {}
+        self._response_id = str(envelope.get("id") or self._response_id)
+        self._remember_conversation(envelope)
+
+    async def _on_text_delta(self, event: dict) -> None:
+        delta = str(event.get("delta", ""))
+        self.text += delta
+        if self._emit and delta:
+            await self._emit(delta)
+
+    async def _on_reasoning_delta(self, event: dict) -> None:
+        self.reasoning += str(event.get("delta", ""))
+
+    async def _on_output_item(self, event: dict) -> None:
+        item = event.get("item", {})
+        self._remember_item(item)
+        if item.get("type") != "function_call":
+            return
+        key = str(item.get("id") or item.get("call_id") or event.get("output_index", ""))
+        entry = self._calls_by_id.setdefault(
+            key, {"call_id": str(item.get("call_id") or key), "name": "", "arguments": ""}
+        )
+        if item.get("call_id"):
+            entry["call_id"] = str(item["call_id"])
+        if item.get("name"):
+            entry["name"] = str(item["name"])
+        if isinstance(item.get("arguments"), str):
+            entry["arguments"] = item["arguments"]
+
+    async def _on_arguments_delta(self, event: dict) -> None:
+        key = str(event.get("item_id") or event.get("output_index", ""))
+        entry = self._calls_by_id.setdefault(key, {"call_id": key, "name": "", "arguments": ""})
+        entry["arguments"] += str(event.get("delta", ""))
+
+    async def _on_completed(self, event: dict) -> None:
+        completed = event.get("response", {})
+        self._read_usage(completed.get("usage") or {})
+        self._model = str(completed.get("model") or "")
+        self._response_id = str(completed.get("id") or self._response_id)
+        self._previous_response_id = str(completed.get("previous_response_id") or "")
+        self._remember_conversation(completed)
+        for item in completed.get("output") or []:
+            self._remember_item(item)
+            self._read_completed_item(item)
+
+    async def _on_failed(self, event: dict) -> None:
+        detail = event.get("error") or event.get("response", {}).get("error") or event
+        raise InferenceError(f"OpenAI Codex response failed: {str(detail)[:_FAILURE_DETAIL_CHARS]}")
+
+    def _read_usage(self, usage: dict) -> None:
+        self._tokens_in = int(usage.get("input_tokens") or 0)
+        self._tokens_out = int(usage.get("output_tokens") or 0)
+        self._cached_tokens, self._cache_write_tokens = cache_tokens(usage)
+        # `north inference costs` can say "0 tokens reused" for two very
+        # different reasons: the cache genuinely missed, or this backend never
+        # reports the number and the question is unanswerable. The keys the
+        # provider actually sent settle it, and nothing else records them.
+        logger.debug("codex usage keys=%s cached=%d", sorted(usage), self._cached_tokens)
+
+    def _read_completed_item(self, item: dict) -> None:
+        if item.get("type") == "message" and not self.text:
+            self.text = _message_text(item)
+        elif item.get("type") == "function_call":
+            key = str(item.get("id") or item.get("call_id") or len(self._calls_by_id))
+            self._calls_by_id[key] = {
+                "call_id": str(item.get("call_id") or key),
+                "name": str(item.get("name") or ""),
+                "arguments": str(item.get("arguments") or "{}"),
+            }
+
+    def _remember_conversation(self, envelope: dict) -> None:
+        conversation = envelope.get("conversation")
+        if isinstance(conversation, dict):
+            self._conversation_id = str(conversation.get("id") or self._conversation_id)
+
+    def _remember_item(self, item: dict) -> None:
+        item_id = str(item.get("id") or "")
+        if item_id and item_id not in self._item_ids:
+            self._item_ids.append(item_id)
+        descriptor = _item_descriptor(item)
+        if descriptor and descriptor not in self._output_items:
+            self._output_items.append(descriptor)
+
+    @staticmethod
+    def _tool_call(item: dict[str, str]) -> ToolCall:
+        try:
+            params = json.loads(item["arguments"] or "{}")
+        except json.JSONDecodeError:
+            params = {"_raw": item["arguments"]}
+        return ToolCall(name=item["name"], call_id=item["call_id"], params=params)
+
+
+# Every Responses event north reads, mapped to the fold that reads it. Events
+# with no entry are recorded as having arrived and otherwise ignored.
+_RESPONSE_EVENT_HANDLERS: dict[str, Callable[[_ResponsesStream, dict], Awaitable[None]]] = {
+    "response.created": _ResponsesStream._on_response_opened,
+    "response.in_progress": _ResponsesStream._on_response_opened,
+    "response.output_text.delta": _ResponsesStream._on_text_delta,
+    "response.reasoning_text.delta": _ResponsesStream._on_reasoning_delta,
+    "response.reasoning_summary_text.delta": _ResponsesStream._on_reasoning_delta,
+    "response.output_item.added": _ResponsesStream._on_output_item,
+    "response.output_item.done": _ResponsesStream._on_output_item,
+    "response.function_call_arguments.delta": _ResponsesStream._on_arguments_delta,
+    "response.completed": _ResponsesStream._on_completed,
+    "response.failed": _ResponsesStream._on_failed,
+    "error": _ResponsesStream._on_failed,
+}
+
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
 
@@ -54,6 +287,49 @@ def _tool_definition(tool: dict) -> dict:
     return result
 
 
+def _tool_output_item(message: dict) -> dict:
+    content = message.get("content")
+    return {
+        "type": "function_call_output",
+        "call_id": str(message.get("tool_call_id", "")),
+        "output": content if isinstance(content, str) else json.dumps(content),
+    }
+
+
+def _assistant_call_items(message: dict) -> list[dict]:
+    """The assistant's own words, if any, followed by each tool call it made."""
+    items: list[dict] = []
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        items.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
+    for call in message["tool_calls"]:
+        function = call.get("function", {})
+        arguments = function.get("arguments", "{}")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments)
+        items.append({
+            "type": "function_call",
+            "call_id": str(call.get("id", "")),
+            "name": str(function.get("name", "")),
+            "arguments": arguments,
+        })
+    return items
+
+
+def _content_item(role: str, content: Any) -> dict:
+    """One turn of plain content, whether it is text or text mixed with images."""
+    text_type = "output_text" if role == "assistant" else "input_text"
+    if not isinstance(content, list):
+        return {"role": role, "content": [{"type": text_type, "text": str(content or "")}]}
+    parts = [
+        {"type": "input_image", "image_url": part.get("image_url", {}).get("url", "")}
+        if part.get("type") == "image_url"
+        else {"type": text_type, "text": str(part.get("text", ""))}
+        for part in content
+    ]
+    return {"role": role, "content": parts}
+
+
 def _message_items(messages: list[dict]) -> tuple[str, list[dict]]:
     """Convert North's Chat Completions history to Responses input items."""
     instructions: list[str] = []
@@ -64,49 +340,12 @@ def _message_items(messages: list[dict]) -> tuple[str, list[dict]]:
         if role in {"system", "developer"}:
             if isinstance(content, str) and content:
                 instructions.append(content)
-            continue
-        if role == "tool":
-            items.append({
-                "type": "function_call_output",
-                "call_id": str(message.get("tool_call_id", "")),
-                "output": content if isinstance(content, str) else json.dumps(content),
-            })
-            continue
-        if role == "assistant" and message.get("tool_calls"):
-            if isinstance(content, str) and content:
-                items.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
-            for call in message["tool_calls"]:
-                function = call.get("function", {})
-                arguments = function.get("arguments", "{}")
-                if not isinstance(arguments, str):
-                    arguments = json.dumps(arguments)
-                items.append({
-                    "type": "function_call",
-                    "call_id": str(call.get("id", "")),
-                    "name": str(function.get("name", "")),
-                    "arguments": arguments,
-                })
-            continue
-        if isinstance(content, list):
-            converted: list[dict] = []
-            for part in content:
-                if part.get("type") == "image_url":
-                    image = part.get("image_url", {})
-                    converted.append({"type": "input_image", "image_url": image.get("url", "")})
-                else:
-                    converted.append({
-                        "type": "output_text" if role == "assistant" else "input_text",
-                        "text": str(part.get("text", "")),
-                    })
-            items.append({"role": role, "content": converted})
+        elif role == "tool":
+            items.append(_tool_output_item(message))
+        elif role == "assistant" and message.get("tool_calls"):
+            items.extend(_assistant_call_items(message))
         else:
-            items.append({
-                "role": role,
-                "content": [{
-                    "type": "output_text" if role == "assistant" else "input_text",
-                    "text": str(content or ""),
-                }],
-            })
+            items.append(_content_item(role, content))
     return "\n\n".join(instructions), items
 
 
@@ -280,185 +519,21 @@ class OpenAICodexProvider:
         *,
         run_id: str | None = None,
     ) -> dict[str, Any]:
-        text = ""
-        reasoning = ""
-        calls_by_id: dict[str, dict[str, str]] = {}
-        tokens_in = 0
-        cached_tokens = 0
-        cache_write_tokens = 0
-        tokens_out = 0
-        response_model = ""
-        response_id = ""
-        conversation_id = ""
-        previous_response_id = ""
-        item_ids: list[str] = []
-        output_items: list[dict[str, str]] = []
-        event_types: list[str] = []
-        seen_event_types: set[str] = set()
-        last_sequence_number: int | None = None
-        client_request_id = f"{run_id or 'north'}:{generate_id()}"
-        request_id = ""
-        rate_limits: dict[str, str] = {}
+        trace = _RequestTrace(client_request_id=f"{run_id or 'north'}:{generate_id()}")
+        stream = _ResponsesStream(token_callback)
         try:
             headers = dict(await self._request_headers())
-            headers["X-Client-Request-Id"] = client_request_id
-            async with self._client.stream(
-                "POST", "/responses", json=body, headers=headers
-            ) as response:
-                request_id = response.headers.get("x-request-id", "")
-                rate_limits = {
-                    key: value
-                    for key, value in response.headers.items()
-                    if key.lower().startswith("x-ratelimit-")
-                }
+            headers["X-Client-Request-Id"] = trace.client_request_id
+            async with self._client.stream("POST", "/responses", json=body, headers=headers) as response:
+                trace.observe(response.headers)
                 if response.status_code >= 400:
                     await response.aread()
                     self._raise_status(response, model_id)
-                iterator = response.aiter_lines().__aiter__()
-                while True:
-                    try:
-                        line = await asyncio.wait_for(
-                            iterator.__anext__(), timeout=SSE_CHUNK_TIMEOUT_SECONDS
-                        )
-                    except StopAsyncIteration:
-                        break
-                    except TimeoutError as exc:
-                        raise InferenceError("OpenAI Codex response stream stalled") from exc
-                    if not line.startswith("data:"):
-                        continue
-                    raw = line[5:].strip()
-                    if not raw or raw == "[DONE]":
-                        continue
-                    try:
-                        event = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    event_type = event.get("type")
-                    if isinstance(event.get("sequence_number"), int):
-                        last_sequence_number = event["sequence_number"]
-                    if isinstance(event_type, str) and event_type not in seen_event_types:
-                        seen_event_types.add(event_type)
-                        event_types.append(event_type)
-                    envelope = event.get("response") if isinstance(event.get("response"), dict) else {}
-                    if event_type in {"response.created", "response.in_progress"}:
-                        response_id = str(envelope.get("id") or response_id)
-                        conversation = envelope.get("conversation")
-                        if isinstance(conversation, dict):
-                            conversation_id = str(conversation.get("id") or conversation_id)
-                    if event_type == "response.output_text.delta":
-                        delta = str(event.get("delta", ""))
-                        text += delta
-                        if token_callback and delta:
-                            await token_callback(delta)
-                    elif event_type in {"response.reasoning_text.delta", "response.reasoning_summary_text.delta"}:
-                        reasoning += str(event.get("delta", ""))
-                    elif event_type in {"response.output_item.added", "response.output_item.done"}:
-                        item = event.get("item", {})
-                        item_id = str(item.get("id") or "")
-                        if item_id and item_id not in item_ids:
-                            item_ids.append(item_id)
-                        descriptor = {
-                            key: str(item[key])
-                            for key in ("id", "type", "status", "name", "call_id")
-                            if item.get(key) is not None
-                        }
-                        if descriptor and descriptor not in output_items:
-                            output_items.append(descriptor)
-                        if item.get("type") == "function_call":
-                            key = str(item.get("id") or item.get("call_id") or event.get("output_index", ""))
-                            entry = calls_by_id.setdefault(
-                                key, {"call_id": str(item.get("call_id") or key), "name": "", "arguments": ""}
-                            )
-                            if item.get("call_id"):
-                                entry["call_id"] = str(item["call_id"])
-                            if item.get("name"):
-                                entry["name"] = str(item["name"])
-                            if isinstance(item.get("arguments"), str):
-                                entry["arguments"] = item["arguments"]
-                    elif event_type == "response.function_call_arguments.delta":
-                        key = str(event.get("item_id") or event.get("output_index", ""))
-                        entry = calls_by_id.setdefault(key, {"call_id": key, "name": "", "arguments": ""})
-                        entry["arguments"] += str(event.get("delta", ""))
-                    elif event_type == "response.completed":
-                        completed = event.get("response", {})
-                        usage = completed.get("usage") or {}
-                        tokens_in = int(usage.get("input_tokens") or 0)
-                        tokens_out = int(usage.get("output_tokens") or 0)
-                        cached_tokens, cache_write_tokens = cache_tokens(usage)
-                        # `north inference costs` can say "0 tokens reused" for two
-                        # very different reasons: the cache genuinely missed, or this
-                        # backend never reports the number and the question is
-                        # unanswerable. The keys the provider actually sent settle
-                        # it, and nothing else records them.
-                        logger.debug("codex usage keys=%s cached=%d", sorted(usage), cached_tokens)
-                        response_model = str(completed.get("model") or "")
-                        response_id = str(completed.get("id") or response_id)
-                        previous_response_id = str(completed.get("previous_response_id") or "")
-                        conversation = completed.get("conversation")
-                        if isinstance(conversation, dict):
-                            conversation_id = str(conversation.get("id") or conversation_id)
-                        for item in completed.get("output") or []:
-                            item_id = str(item.get("id") or "")
-                            if item_id and item_id not in item_ids:
-                                item_ids.append(item_id)
-                            descriptor = {
-                                key: str(item[key])
-                                for key in ("id", "type", "status", "name", "call_id")
-                                if item.get(key) is not None
-                            }
-                            if descriptor and descriptor not in output_items:
-                                output_items.append(descriptor)
-                            if item.get("type") == "message" and not text:
-                                text = "".join(
-                                    str(part.get("text", ""))
-                                    for part in item.get("content") or []
-                                    if part.get("type") in {"output_text", "text"}
-                                )
-                            elif item.get("type") == "function_call":
-                                key = str(item.get("id") or item.get("call_id") or len(calls_by_id))
-                                calls_by_id[key] = {
-                                    "call_id": str(item.get("call_id") or key),
-                                    "name": str(item.get("name") or ""),
-                                    "arguments": str(item.get("arguments") or "{}"),
-                                }
-                    elif event_type in {"response.failed", "error"}:
-                        detail = event.get("error") or event.get("response", {}).get("error") or event
-                        raise InferenceError(f"OpenAI Codex response failed: {str(detail)[:300]}")
+                async for event in _aiter_response_events(response):
+                    await stream.add(event)
         except httpx.RequestError as exc:
             raise ProviderUnavailableError(f"OpenAI Codex request failed: {exc}") from exc
-        calls: list[ToolCall] = []
-        for item in calls_by_id.values():
-            try:
-                params = json.loads(item["arguments"] or "{}")
-            except json.JSONDecodeError:
-                params = {"_raw": item["arguments"]}
-            calls.append(ToolCall(name=item["name"], call_id=item["call_id"], params=params))
-        if not text and not calls:
-            raise InferenceError("OpenAI Codex returned no text or tool calls")
-        return {
-            "text": text,
-            "reasoning": reasoning,
-            "calls": calls,
-            "tokens_in": tokens_in,
-            "tokens_out": tokens_out,
-            "cached_tokens": cached_tokens,
-            "cache_write_tokens": cache_write_tokens,
-            "model": response_model,
-            "metadata": {
-                "provider": self.name,
-                "response_id": response_id,
-                "conversation_id": conversation_id,
-                "previous_response_id": previous_response_id,
-                "item_ids": item_ids,
-                "output_items": output_items,
-                "event_types": event_types,
-                "last_sequence_number": last_sequence_number,
-                "request_id": request_id,
-                "client_request_id": client_request_id,
-                "rate_limits": rate_limits,
-                "stored_remotely": False,
-            },
-        }
+        return stream.to_result(self.name, trace)
 
     async def embed(self, model_id: str, request: EmbedRequest) -> EmbedResponse:
         del model_id, request

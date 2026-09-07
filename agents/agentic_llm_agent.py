@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from agents.capabilities import build_platform_capabilities_summary
@@ -39,7 +40,7 @@ from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface
 from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
 from inference.exceptions import ContextTooLargeError
-from inference.models import ToolCall, ToolCallRequest
+from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from tools._path import handoff_dir_for
 from tools.base import Tool
@@ -77,6 +78,75 @@ _INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user"})
 # run means nobody is there, whatever happened in between.
 MAX_UNANSWERED_APPROVALS = 2
 
+
+# How much of a final answer is kept as its one-line summary.
+_SUMMARY_CHARS = 120
+
+
+def _tool_schemas(tool_map: dict[str, Tool], *, allow_delegation: bool) -> list[dict]:
+    """Every tool definition sent to the model this turn.
+
+    Sorted by name, not by confidence. Tool definitions are the largest stable
+    block of the cached prefix, and `_load_tools` orders them by a score that
+    moves every time a tool succeeds or fails - so the ranking rewrote the prefix
+    between runs and threw the cache away. The ranking still reaches the model,
+    as text, in the reliability hints at the end of the task message where it
+    costs nothing.
+    """
+    internal = [REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
+    if allow_delegation:
+        internal.insert(0, DELEGATE_TASK_SCHEMA)
+    return [tool_map[name].schema() for name in sorted(tool_map)] + internal
+
+
+@dataclass
+class _RunTally:
+    """What one agent run has spent and used, and the answer it ends up returning."""
+
+    cost_usd: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cached_tokens: int = 0
+    last_tokens_in: int = 0
+    last_model_used: str = ""
+    tools_used: list[str] = field(default_factory=list)
+    successful_tools: list[str] = field(default_factory=list)
+    models_used: list[str] = field(default_factory=list)
+
+    def add(self, response: ToolCallResponse) -> None:
+        self.cost_usd += response.cost_usd
+        self.tokens_in += response.tokens_in
+        self.tokens_out += response.tokens_out
+        self.cached_tokens += response.cached_tokens
+        self.last_tokens_in = response.tokens_in
+        self.last_model_used = response.model_used
+        if response.model_used:
+            _append_once(self.models_used, response.model_used)
+
+    def note_call(self, tool_name: str) -> None:
+        _append_once(self.tools_used, tool_name)
+
+    def note_success(self, tool_name: str) -> None:
+        _append_once(self.successful_tools, tool_name)
+
+    def answer(self, output: str, summary: str) -> dict[str, Any]:
+        return _final_answer(
+            output,
+            summary,
+            self.cost_usd,
+            self.tools_used,
+            self.successful_tools,
+            self.tokens_in,
+            self.tokens_out,
+            models_used=self.models_used,
+            cached_tokens=self.cached_tokens,
+        )
+
+
+def _append_once(seen: list[str], value: str) -> None:
+    """Keep first-seen order without a parallel set to go stale."""
+    if value not in seen:
+        seen.append(value)
 
 class AgenticLLMAgent(LLMAgent):
     """LLMAgent that runs a ReAct loop via native function calling.
@@ -332,19 +402,8 @@ class AgenticLLMAgent(LLMAgent):
     ) -> dict[str, Any]:
         persona = await self._memory().read_persona()
         messages, tool_map, compact_tokens = self._init_conversation(payload, context, scored_tools, persona)
-        total_cost_usd: float = 0.0
-        total_tokens_in: int = 0
-        total_tokens_out: int = 0
-        total_cached_tokens: int = 0
-        last_tokens_in: int = 0
-        last_model_used: str = ""
+        tally = _RunTally()
         emitted_model: str = ""
-        _seen_tools: set[str] = set()
-        tools_used: list[str] = []
-        _seen_success: set[str] = set()
-        successful_tools: list[str] = []
-        _seen_models: set[str] = set()
-        models_used: list[str] = []
         unanswered_approvals: int = 0
 
         known_registry_tools = (
@@ -354,74 +413,28 @@ class AgenticLLMAgent(LLMAgent):
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for _ in range(self._deps.agent_max_iterations):
             await self._compact_for_next_call(
-                messages, last_tokens_in, last_model_used, compact_tokens, payload.task_id
+                messages, tally.last_tokens_in, tally.last_model_used, compact_tokens, payload.task_id
             )
 
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
             _sync_hot_loaded_tools(self._deps, self.name, tool_map, known_registry_tools)
-            internal_schemas = [REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
-            if payload.allow_delegation:
-                internal_schemas.insert(0, DELEGATE_TASK_SCHEMA)
-            # Sorted by name, not by confidence. Tool definitions are the largest
-            # stable block of the cached prefix, and `_load_tools` orders them by
-            # a score that moves every time a tool succeeds or fails - so the
-            # ranking rewrote the prefix between runs and threw the cache away.
-            # The ranking still reaches the model, as text, in the reliability
-            # hints at the end of the task message where it costs nothing.
-            tools = [tool_map[name].schema() for name in sorted(tool_map)] + internal_schemas
-
+            tools = _tool_schemas(tool_map, allow_delegation=payload.allow_delegation)
             token_cb = self._make_token_callback(payload.task_id)
 
             try:
-                response = await self._complete_with_tools(
-                    messages,
-                    tools,
-                    payload.task_id,
-                    token_cb,
-                    payload.exclude_models,
-                    model_pool=payload.model_pool,
-                )
+                response = await self._complete_or_shrink(messages, tools, payload, token_cb)
             except ContextTooLargeError:
-                compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
-                # Discard whatever the failed attempt streamed before re-streaming
-                # so the splitter starts clean and UIs drop the partial output.
-                if token_cb is not None:
-                    await token_cb.reset()
-                try:
-                    response = await self._complete_with_tools(
-                        messages,
-                        tools,
-                        payload.task_id,
-                        token_cb,
-                        payload.exclude_models,
-                        model_pool=payload.model_pool,
-                    )
-                except ContextTooLargeError:
-                    return _final_answer(
-                        "Context window exceeded - the conversation is too long to continue.",
-                        "Context overflow",
-                        total_cost_usd,
-                        tools_used,
-                        successful_tools,
-                        total_tokens_in,
-                        total_tokens_out,
-                        models_used=models_used,
-                        cached_tokens=total_cached_tokens,
-                    )
+                return tally.answer(
+                    "Context window exceeded - the conversation is too long to continue.",
+                    "Context overflow",
+                )
+
             # Stream finished - release any reasoning/answer fragment the splitter
             # withheld in case it began a tag that never completed.
             if token_cb is not None:
                 await token_cb.flush()
-            total_cost_usd += response.cost_usd
-            total_tokens_in += response.tokens_in
-            total_tokens_out += response.tokens_out
-            total_cached_tokens += response.cached_tokens
-            last_tokens_in = response.tokens_in
-            last_model_used = response.model_used
-            if last_model_used and last_model_used not in _seen_models:
-                _seen_models.add(last_model_used)
-                models_used.append(last_model_used)
+            tally.add(response)
             emitted_model = await self._maybe_emit_model(response, emitted_model, payload.task_id)
             await self._record_provider_metadata(payload, response)
 
@@ -430,75 +443,73 @@ class AgenticLLMAgent(LLMAgent):
                 # strip the model's private reasoning from the stored copy so it
                 # matches the streamed view and never feeds extraction/verification.
                 content = normalize_dashes(strip_reasoning(response.content or ""))
-                return _final_answer(
-                    content,
-                    content[:120],
-                    total_cost_usd,
-                    tools_used,
-                    successful_tools,
-                    total_tokens_in,
-                    total_tokens_out,
-                    models_used=models_used,
-                    cached_tokens=total_cached_tokens,
-                )
+                return tally.answer(content, content[:_SUMMARY_CHARS])
 
             # Tool calls branch - execute the requested calls.
             if not response.calls:
-                return _final_answer(
-                    normalize_dashes(strip_reasoning(response.content or ""))
-                    or "The model returned no tool calls and no message.",
+                content = normalize_dashes(strip_reasoning(response.content or ""))
+                return tally.answer(
+                    content or "The model returned no tool calls and no message.",
                     "No actionable response",
-                    total_cost_usd,
-                    tools_used,
-                    successful_tools,
-                    total_tokens_in,
-                    total_tokens_out,
-                    models_used=models_used,
-                    cached_tokens=total_cached_tokens,
                 )
 
             for call in response.calls:
-                if call.name not in _seen_tools:
-                    _seen_tools.add(call.name)
-                    tools_used.append(call.name)
+                tally.note_call(call.name)
             evidence, unanswered = await self._handle_tool_calls_response(
                 response.calls, payload, tool_map, messages
             )
             for name, success in evidence:
-                if success and name not in _seen_success:
-                    _seen_success.add(name)
-                    successful_tools.append(name)
+                if success:
+                    tally.note_success(name)
 
             # One expired card is a slow user; several in a run means nobody is
             # there. Stop rather than spend the whole iteration budget stalling
             # for a timeout each time.
             unanswered_approvals += unanswered
             if unanswered_approvals >= MAX_UNANSWERED_APPROVALS:
-                return _final_answer(
+                return tally.answer(
                     f"Stopped: {unanswered_approvals} approval requests expired with no answer, so "
                     "the work that needed approval was never done. Re-run this when you are "
                     "available to approve, or switch the approval mode to auto.",
                     "No one available to approve",
-                    total_cost_usd,
-                    tools_used,
-                    successful_tools,
-                    total_tokens_in,
-                    total_tokens_out,
-                    models_used=models_used,
-                    cached_tokens=total_cached_tokens,
                 )
 
-        return _final_answer(
+        return tally.answer(
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
-            total_cost_usd,
-            tools_used,
-            successful_tools,
-            total_tokens_in,
-            total_tokens_out,
-            models_used=models_used,
-            cached_tokens=total_cached_tokens,
         )
+
+    async def _complete_or_shrink(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        payload: AgentPayload,
+        token_cb: ReasoningStreamSplitter | None,
+    ) -> ToolCallResponse:
+        """One model turn, compacting the history once if the context overflows."""
+        try:
+            return await self._complete_with_tools(
+                messages,
+                tools,
+                payload.task_id,
+                token_cb,
+                payload.exclude_models,
+                model_pool=payload.model_pool,
+            )
+        except ContextTooLargeError:
+            compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
+            # Discard whatever the failed attempt streamed before re-streaming
+            # so the splitter starts clean and UIs drop the partial output.
+            if token_cb is not None:
+                await token_cb.reset()
+            return await self._complete_with_tools(
+                messages,
+                tools,
+                payload.task_id,
+                token_cb,
+                payload.exclude_models,
+                model_pool=payload.model_pool,
+            )
 
     def _init_conversation(
         self,
@@ -777,7 +788,7 @@ class AgenticLLMAgent(LLMAgent):
             model_pool=payload.model_pool,
             exclude_models=list(payload.exclude_models),
             delegation_depth=payload.delegation_depth + 1,
-            delegation_chain=payload.delegation_chain + [self.name],
+            delegation_chain=[*payload.delegation_chain, self.name],
         )
         resolved_agent_name = str(getattr(agent, "name", agent_name))
         try:

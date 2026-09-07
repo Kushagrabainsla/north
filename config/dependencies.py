@@ -14,8 +14,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from approval import Notifier, TerminalNotifier
@@ -25,6 +25,7 @@ from config.strategy import NorthSettings
 from inference import InferenceRouter
 from inference.exceptions import EmbeddingCountMismatchError
 from inference.factory import build_router
+from inference.models import EmbedFn, GlossaryFn, SupersedeFn
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
 from memory import ContextStore, SQLiteContextStore
@@ -43,11 +44,6 @@ if TYPE_CHECKING:
     from orchestrator.task_context import TaskContextStore
     from tools.confidence import ConfidenceTracker
 
-EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
-# Given one new fact and the existing facts closest to it, return the indices of
-# those the new fact makes untrue. Injected as a plain callable for the same
-# reason as EmbedFn: the fact store owns storage, not inference.
-SupersedeFn = Callable[[str, list[str]], Awaitable[list[int]]]
 
 logger = logging.getLogger(__name__)
 
@@ -113,128 +109,101 @@ def _resolve_preferred_models() -> dict[str, list[str]]:
     return parsed or {k: list(v) for k, v in DEFAULT_PREFERRED_MODELS.items()}
 
 
-def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
-    """Build and wire all synchronously-constructable production dependencies."""
-    from context.code_index import CodeIndex
-    from inference.cost_tracker import CostTracker
-    from inference.models import EmbedRequest
-    from jobs.cron_store import UserCronStore
-    from memory import LocalMemoryGateway
-    from memory.episodic import EpisodicStore
-    from memory.facts import FactStore
-    from orchestrator.agent_runs import AgentRunStore
-    from orchestrator.plan_store import PlanStore
-    from orchestrator.running_tasks import RunningTaskStore
-    from orchestrator.stream import EventStreamManager
-    from orchestrator.task_context import TaskContextStore
-    from tools.confidence import ConfidenceTracker
+_EMBED_CACHE_MAX_SIZE = 512
 
-    if north_settings is None:
-        from approval.mode import resolve_approval_mode
 
-        north_settings = NorthSettings(
-            settings.north_home / "settings.json",
-            default_approval_mode=resolve_approval_mode(settings),
-            default_preferred_models=_resolve_preferred_models(),
-        )
+class _CachingEmbedder:
+    """Embeds text once: an LRU of recent vectors plus in-flight de-duplication.
 
-    context_dir = settings.north_home / "context"
-    legacy_public = context_dir / "public.md"
-    user_doc = context_dir / "user.md"
-    if legacy_public.exists() and not user_doc.exists():
-        # 2b memory model: public.md was renamed to user.md. Preserve the user's
-        # existing facts document under the new name (idempotent, one-time).
-        legacy_public.rename(user_doc)
-    context_store = SQLiteContextStore(settings.north_home / "memory.db", legacy_path=context_dir)
-    ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
-    confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
-    base_router = build_router(
-        openrouter_api_key=settings.openrouter_api_key,
-        north_settings=north_settings,
-        groq_api_key=settings.groq_api_key,
-        gemini_api_key=settings.gemini_api_key,
-        opencode_zen_api_key=settings.opencode_zen_api_key,
-        provider_settings=settings,
-        confidence_tracker=confidence_tracker,
-        cooldowns_path=settings.north_home / "cooldowns.json",
-        models_db_path=settings.north_home / "models.db",
-        routing_mode=settings.routing,
-    )
-    cost_tracker = CostTracker(base_router)
+    An agent run fans out four concurrent recalls (facts, episodes, skills ×2)
+    for the *same* prompt; without the in-flight map they all miss the cache and
+    each pays its own round trip.
+    """
 
-    _embed_cache: OrderedDict[str, list[float]] = OrderedDict()
-    _EMBED_CACHE_MAX_SIZE = 512
-    # Text → the in-flight request already embedding it. An agent run fans out
-    # four concurrent recalls (facts, episodes, skills ×2) for the *same* prompt;
-    # without this they all miss the cache and each pays a round trip.
-    _embed_inflight: dict[str, asyncio.Future[list[float]]] = {}
+    def __init__(self, cost_tracker: CostTracker) -> None:
+        self._cost_tracker = cost_tracker
+        self._cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._inflight: dict[str, asyncio.Future[list[float]]] = {}
 
-    def _cache_put(text: str, emb: list[float]) -> None:
-        _embed_cache[text] = emb
-        _embed_cache.move_to_end(text)
-        while len(_embed_cache) > _EMBED_CACHE_MAX_SIZE:
-            _embed_cache.popitem(last=False)
-
-    async def _embed_uncached(texts: list[str]) -> list[list[float]]:
-        """Embed *texts*, returning exactly one vector per input, in order."""
-        resp = await cost_tracker.embed(EmbedRequest(texts=texts, component="embed"))
-        embeddings = list(resp.embeddings)
-        if len(embeddings) != len(texts):
-            # Callers zip these against their own lists (skills, tool descriptions,
-            # code chunks). A short response silently shifts every later vector onto
-            # the wrong item, so refuse it rather than corrupt the mapping.
-            raise EmbeddingCountMismatchError(expected=len(texts), received=len(embeddings))
-        return embeddings
-
-    async def _embed_fn(texts: list[str]) -> list[list[float]]:
+    async def __call__(self, texts: list[str]) -> list[list[float]]:
         results: list[list[float] | None] = [None] * len(texts)
         awaited: dict[str, asyncio.Future[list[float]]] = {}
-        missing_texts: list[str] = []
+        missing: list[str] = []
 
-        for i, text in enumerate(texts):
-            cached = _embed_cache.get(text)
+        for index, text in enumerate(texts):
+            cached = self._cached(text)
             if cached is not None:
-                _embed_cache.move_to_end(text)
-                results[i] = cached
+                results[index] = cached
                 continue
-            inflight = _embed_inflight.get(text)
+            inflight = self._inflight.get(text)
             if inflight is not None:
                 awaited[text] = inflight
             elif text not in awaited:
                 awaited[text] = asyncio.get_running_loop().create_future()
-                _embed_inflight[text] = awaited[text]
-                missing_texts.append(text)
+                self._inflight[text] = awaited[text]
+                missing.append(text)
 
         # Only the texts this call claimed are embedded; duplicates within the
         # batch and texts another coroutine is already fetching are awaited below.
-        if missing_texts:
-            try:
-                embeddings = await _embed_uncached(missing_texts)
-            except BaseException as exc:
-                for text in missing_texts:
-                    future = _embed_inflight.pop(text, None)
-                    if future is not None and not future.done():
-                        future.set_exception(exc)
-                        # This caller re-raises rather than awaiting its own future,
-                        # so consume the result here; otherwise asyncio logs a
-                        # "Future exception was never retrieved" warning per text.
-                        future.exception()
-                raise
-            for text, emb in zip(missing_texts, embeddings, strict=True):
-                _cache_put(text, emb)
-                future = _embed_inflight.pop(text, None)
-                if future is not None and not future.done():
-                    future.set_result(emb)
+        if missing:
+            await self._fulfil(missing)
 
-        for i, text in enumerate(texts):
-            if results[i] is None:
-                results[i] = await awaited[text]
+        for index, text in enumerate(texts):
+            if results[index] is None:
+                results[index] = await awaited[text]
+        return [vector for vector in results if vector is not None]
 
-        return [r for r in results if r is not None]
+    def _cached(self, text: str) -> list[float] | None:
+        vector = self._cache.get(text)
+        if vector is None:
+            return None
+        self._cache.move_to_end(text)
+        return vector
 
-    # Which model produced a vector decides which vectors it can be compared
-    # against, so every store is stamped with it and clears itself on a change.
-    embedding_model = base_router.embedding_model_id()
+    def _remember(self, text: str, vector: list[float]) -> None:
+        self._cache[text] = vector
+        self._cache.move_to_end(text)
+        while len(self._cache) > _EMBED_CACHE_MAX_SIZE:
+            self._cache.popitem(last=False)
+
+    async def _fulfil(self, texts: list[str]) -> None:
+        """Embed the texts this call claimed, settling every future it created."""
+        try:
+            vectors = await self._embed(texts)
+        except BaseException as exc:
+            self._fail(texts, exc)
+            raise
+        for text, vector in zip(texts, vectors, strict=True):
+            self._remember(text, vector)
+            future = self._inflight.pop(text, None)
+            if future is not None and not future.done():
+                future.set_result(vector)
+
+    def _fail(self, texts: list[str], exc: BaseException) -> None:
+        for text in texts:
+            future = self._inflight.pop(text, None)
+            if future is not None and not future.done():
+                future.set_exception(exc)
+                # This caller re-raises rather than awaiting its own future, so
+                # consume the result here; otherwise asyncio logs a "Future
+                # exception was never retrieved" warning per text.
+                future.exception()
+
+    async def _embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed *texts*, returning exactly one vector per input, in order."""
+        from inference.models import EmbedRequest
+
+        response = await self._cost_tracker.embed(EmbedRequest(texts=texts, component="embed"))
+        vectors = list(response.embeddings)
+        if len(vectors) != len(texts):
+            # Callers zip these against their own lists (skills, tool descriptions,
+            # code chunks). A short response silently shifts every later vector onto
+            # the wrong item, so refuse it rather than corrupt the mapping.
+            raise EmbeddingCountMismatchError(expected=len(texts), received=len(vectors))
+        return vectors
+
+
+def _build_supersede_fn(cost_tracker: CostTracker) -> SupersedeFn:
     async def _supersede_fn(new_fact: str, candidates: list[str]) -> list[int]:
         """Which of *candidates* does *new_fact* make untrue? Returns their indices.
 
@@ -271,6 +240,10 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         raw = result.get("superseded") or []
         return [int(i) for i in raw if isinstance(i, int | str) and str(i).lstrip("-").isdigit()]
 
+    return _supersede_fn
+
+
+def _build_glossary_fn(cost_tracker: CostTracker) -> GlossaryFn:
     async def _glossary_fn(context: dict[str, list[str]]) -> dict[str, str]:
         """Say what each short name means, in a few words, or nothing at all.
 
@@ -319,18 +292,81 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
             if isinstance(k, str) and isinstance(v, str) and v.strip() and v.strip().lower() != "null"
         }
 
+    return _glossary_fn
+
+
+def _migrate_legacy_public_document(context_dir: Path) -> None:
+    """2b memory model: public.md was renamed to user.md.
+
+    Preserves the user's existing facts document under the new name. Idempotent.
+    """
+    legacy_public = context_dir / "public.md"
+    user_doc = context_dir / "user.md"
+    if legacy_public.exists() and not user_doc.exists():
+        legacy_public.rename(user_doc)
+
+
+def _default_north_settings() -> NorthSettings:
+    from approval.mode import resolve_approval_mode
+
+    return NorthSettings(
+        settings.north_home / "settings.json",
+        default_approval_mode=resolve_approval_mode(settings),
+        default_preferred_models=_resolve_preferred_models(),
+    )
+
+
+def build_production_dependencies(north_settings: NorthSettings | None = None) -> Dependencies:
+    """Build and wire all synchronously-constructable production dependencies."""
+    from context.code_index import CodeIndex
+    from inference.cost_tracker import CostTracker
+    from jobs.cron_store import UserCronStore
+    from memory import LocalMemoryGateway
+    from memory.episodic import EpisodicStore
+    from memory.facts import FactStore
+    from orchestrator.agent_runs import AgentRunStore
+    from orchestrator.plan_store import PlanStore
+    from orchestrator.running_tasks import RunningTaskStore
+    from orchestrator.stream import EventStreamManager
+    from orchestrator.task_context import TaskContextStore
+    from tools.confidence import ConfidenceTracker
+
+    north_settings = north_settings or _default_north_settings()
+    _migrate_legacy_public_document(settings.north_home / "context")
+
+    context_store = SQLiteContextStore(settings.north_home / "memory.db", legacy_path=settings.north_home / "context")
+    ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
+    confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
+    base_router = build_router(
+        openrouter_api_key=settings.openrouter_api_key,
+        north_settings=north_settings,
+        groq_api_key=settings.groq_api_key,
+        gemini_api_key=settings.gemini_api_key,
+        opencode_zen_api_key=settings.opencode_zen_api_key,
+        provider_settings=settings,
+        confidence_tracker=confidence_tracker,
+        cooldowns_path=settings.north_home / "cooldowns.json",
+        models_db_path=settings.north_home / "models.db",
+        routing_mode=settings.routing,
+    )
+    cost_tracker = CostTracker(base_router)
+    embed_fn: EmbedFn = _CachingEmbedder(cost_tracker)
+
+    # Which model produced a vector decides which vectors it can be compared
+    # against, so every store is stamped with it and clears itself on a change.
+    embedding_model = base_router.embedding_model_id()
     episodic_store = EpisodicStore(
-        db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn, embedding_model=embedding_model
+        db_path=settings.north_home / "episodic.db", embed_fn=embed_fn, embedding_model=embedding_model
     )
     fact_store = FactStore(
         db_path=settings.north_home / "facts.db",
-        embed_fn=_embed_fn,
+        embed_fn=embed_fn,
         embedding_model=embedding_model,
-        supersede_fn=_supersede_fn,
+        supersede_fn=_build_supersede_fn(cost_tracker),
+        glossary_fn=_build_glossary_fn(cost_tracker),
     )
-    fact_store.glossary_fn = _glossary_fn
     code_index = CodeIndex(
-        db_path=settings.north_home / "code_index.db", embed_fn=_embed_fn, embedding_model=embedding_model
+        db_path=settings.north_home / "code_index.db", embed_fn=embed_fn, embedding_model=embedding_model
     )
     memory = LocalMemoryGateway(
         context_store=context_store,
@@ -359,7 +395,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         agent_run_store=agent_run_store,
         north_settings=north_settings,
         memory=memory,
-        embed_fn=_embed_fn,
+        embed_fn=embed_fn,
         fact_store=fact_store,
         code_index=code_index,
     )

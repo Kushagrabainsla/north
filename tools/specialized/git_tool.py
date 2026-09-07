@@ -291,13 +291,13 @@ def _build_command(action: str, args: str) -> list[str] | None:
 
     match action:
         case "status":
-            return base + ["status", "--short", "--branch"]
+            return [*base, "status", "--short", "--branch"]
         case "diff":
-            return base + ["diff"] + arg_parts
+            return [*base, "diff", *arg_parts]
         case "log":
-            return base + ["log", "--oneline", "--graph", "--decorate", "-20"] + arg_parts
+            return [*base, "log", "--oneline", "--graph", "--decorate", "-20", *arg_parts]
         case "branch":
-            return base + ["branch"] + arg_parts
+            return [*base, "branch", *arg_parts]
         case "show":
             return base + ["show"] + (arg_parts or ["HEAD"])
         case "add":
@@ -305,16 +305,16 @@ def _build_command(action: str, args: str) -> list[str] | None:
         case "commit":
             if not args:
                 return None  # message is required
-            return base + ["commit", "-m", args]
+            return [*base, "commit", "-m", args]
         case "push":
-            return base + ["push"] + arg_parts
+            return [*base, "push", *arg_parts]
         case "pull":
-            return base + ["pull"] + arg_parts
+            return [*base, "pull", *arg_parts]
         case "checkout":
-            return base + ["checkout"] + arg_parts
+            return [*base, "checkout", *arg_parts]
         case "stash":
-            return base + ["stash"] + arg_parts
+            return [*base, "stash", *arg_parts]
         case "merge":
-            return base + ["merge"] + arg_parts
+            return [*base, "merge", *arg_parts]
         case _:
             return None

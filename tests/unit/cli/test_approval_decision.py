@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from cli.main import _approval_decision
+from cli._task_stream import _approval_decision
 
 
 @pytest.mark.parametrize("chosen", ["Approve", "approved", "Yes", "Apply", "Run", "OK"])

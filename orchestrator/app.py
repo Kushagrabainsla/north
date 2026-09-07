@@ -279,10 +279,7 @@ async def _refresh_fact_store(fact_store, context_store=None) -> None:
     """
     embedded = await fact_store.backfill_embeddings()
     merged = await fact_store.deduplicate()
-    explained = 0
-    glossary_fn = getattr(fact_store, "glossary_fn", None)
-    if glossary_fn is not None:
-        explained = await fact_store.expand_identifiers(glossary_fn)
+    explained = await fact_store.expand_identifiers()
     if embedded or merged or explained:
         logger.info(
             "Fact store: re-embedded %d fact(s), merged %d duplicate(s), explained %d identifier use(s)",

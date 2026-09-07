@@ -33,7 +33,7 @@ def _orch(running_task_store: RunningTaskStore | None = None):
     ledger.write = AsyncMock()
     ledger.query = AsyncMock(return_value=[])
     ledger.query_summaries = AsyncMock(return_value=[])
-    orch = Orchestrator(
+    return Orchestrator(
         ledger=ledger,
         agent_registry=registry,
         north_star_checker=MagicMock(),
@@ -45,7 +45,6 @@ def _orch(running_task_store: RunningTaskStore | None = None):
         approval_store=ApprovalStore(),
         running_task_store=running_task_store,
     )
-    return orch
 
 
 def _record_writes(orch):

@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from sqlite3 import Connection
 
-from config.dependencies import EmbedFn
+from inference.models import EmbedFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.text import STOPWORDS

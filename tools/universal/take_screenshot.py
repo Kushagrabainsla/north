@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import mss  # noqa: F401  # retained for compatibility with screenshot test integrations
+import mss
 from PIL import Image
 
 from tools._path import resolve_path
@@ -96,8 +96,6 @@ def _capture_screen_pure_python(path: Path, display: int | None = None) -> ToolO
 
         # 1. Multi-monitor capture via MSS
         try:
-            import mss
-
             with mss.MSS() as sct:
                 monitor_count = len(sct.monitors) - 1  # index 0 is virtual bounding box
 

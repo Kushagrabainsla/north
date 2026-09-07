@@ -281,8 +281,7 @@ class ConfidenceTracker:
                 "confidence = excluded.confidence, uses_total = excluded.uses_total, "
                 "tokens_per_sec = excluded.tokens_per_sec, speed_samples = excluded.speed_samples, "
                 "last_updated = excluded.last_updated",
-                [(model_id, provider, score, uses, tps, samples) + (now,) for
-                 (model_id, provider, score, uses, tps, samples) in items],
+                [(*row, now) for row in items],
             )
 
     async def inherit_from(self, new_agent: str, source_agent: str) -> None:

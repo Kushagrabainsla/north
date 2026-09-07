@@ -68,6 +68,8 @@ _TYPE_GLOBS: dict[str, tuple[str, ...]] = {
     "bash": ("*.sh", "*.bash", "*.zsh"),
 }
 _OUTPUT_MODES: frozenset[str] = frozenset({"content", "files_with_matches", "count"})
+# How often the Python engine looks at the clock while scanning one file.
+_DEADLINE_CHECK_EVERY = 1000
 
 
 @functools.lru_cache(maxsize=1)
@@ -334,60 +336,110 @@ def _iter_files(base: Path, globs: tuple[str, ...]):
                 yield p
 
 
+class _Collector:
+    """Gathers what one output mode reports, and knows when it has enough."""
+
+    def __init__(self, options: SearchOptions) -> None:
+        self._options = options
+        self._rows: list[Any] = []
+
+    @property
+    def full(self) -> bool:
+        return len(self._rows) >= self._options.limit
+
+    def add(self, file: Path, hit_lines: list[int], lines: list[str]) -> None:
+        raise NotImplementedError
+
+    def data(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class _FilenameCollector(_Collector):
+    def add(self, file: Path, hit_lines: list[int], lines: list[str]) -> None:
+        self._rows.append(str(file))
+
+    def data(self) -> dict[str, Any]:
+        return {"files": self._rows}
+
+
+class _CountCollector(_Collector):
+    def add(self, file: Path, hit_lines: list[int], lines: list[str]) -> None:
+        self._rows.append({"file": str(file), "count": len(hit_lines)})
+
+    def data(self) -> dict[str, Any]:
+        return {"counts": self._rows}
+
+
+class _LineCollector(_Collector):
+    """content mode: every matching line, plus the requested lines around it."""
+
+    def add(self, file: Path, hit_lines: list[int], lines: list[str]) -> None:
+        context = self._options.context
+        shown: set[int] = set()
+        for hit in hit_lines:
+            shown.update(range(max(0, hit - context), min(len(lines), hit + context + 1)))
+        for index in sorted(shown):
+            if self.full:
+                return
+            self._rows.append({"file": str(file), "line": index + 1, "text": lines[index]})
+
+    def data(self) -> dict[str, Any]:
+        return {"matches": self._rows}
+
+
+_COLLECTORS: dict[str, type[_Collector]] = {
+    "files_with_matches": _FilenameCollector,
+    "count": _CountCollector,
+    "content": _LineCollector,
+}
+
+
+class _SearchTimeout(Exception):
+    """The bounded Python engine ran out of its time budget."""
+
+
+def _read_lines(file: Path) -> list[str] | None:
+    try:
+        return file.read_text(encoding="utf-8").splitlines()
+    except (UnicodeDecodeError, OSError):
+        return None
+
+
+def _matching_lines(regex: re.Pattern[str], lines: list[str], deadline: float) -> list[int]:
+    hits: list[int] = []
+    for index, line in enumerate(lines):
+        if index % _DEADLINE_CHECK_EVERY == 0 and time.monotonic() > deadline:
+            raise _SearchTimeout
+        if regex.search(line[:_MAX_LINE_CHARS]):
+            hits.append(index)
+    return hits
+
+
 def _search_sync(base: Path, pattern: str, options: SearchOptions) -> ToolOutput:
     try:
         regex = re.compile(pattern, re.IGNORECASE if options.case_insensitive else 0)
     except re.error as exc:
         return ToolOutput(success=False, error=f"Invalid regex: {exc}")
 
-    matches: list[dict] = []
-    files: list[str] = []
-    counts: list[dict] = []
+    collector = _COLLECTORS.get(options.mode, _LineCollector)(options)
     deadline = time.monotonic() + _PY_TIMEOUT_SECONDS
-
-    for file in _iter_files(base, options.globs):
-        if time.monotonic() > deadline:
-            return ToolOutput(success=False, error=f"Search timed out after {_PY_TIMEOUT_SECONDS:.0f}s.")
-        try:
-            lines = file.read_text(encoding="utf-8").splitlines()
-        except (UnicodeDecodeError, OSError):
-            continue
-
-        hit_lines: list[int] = []
-        for i, line in enumerate(lines):
-            if i % 1000 == 0 and time.monotonic() > deadline:
-                return ToolOutput(success=False, error=f"Search timed out after {_PY_TIMEOUT_SECONDS:.0f}s.")
-            if regex.search(line[:_MAX_LINE_CHARS]):
-                hit_lines.append(i)
-        if not hit_lines:
-            continue
-
-        if options.mode == "files_with_matches":
-            files.append(str(file))
-            if len(files) >= options.limit:
+    try:
+        for file in _iter_files(base, options.globs):
+            if time.monotonic() > deadline:
+                raise _SearchTimeout
+            lines = _read_lines(file)
+            if lines is None:
+                continue
+            hits = _matching_lines(regex, lines, deadline)
+            if not hits:
+                continue
+            collector.add(file, hits, lines)
+            if collector.full:
                 break
-            continue
-        if options.mode == "count":
-            counts.append({"file": str(file), "count": len(hit_lines)})
-            if len(counts) >= options.limit:
-                break
-            continue
+    except _SearchTimeout:
+        return ToolOutput(success=False, error=f"Search timed out after {_PY_TIMEOUT_SECONDS:.0f}s.")
 
-        include: set[int] = set()
-        for i in hit_lines:
-            include.update(range(max(0, i - options.context), min(len(lines), i + options.context + 1)))
-        for j in sorted(include):
-            matches.append({"file": str(file), "line": j + 1, "text": lines[j]})
-            if len(matches) >= options.limit:
-                break
-        if len(matches) >= options.limit:
-            break
-
-    data: dict[str, Any] = {"output_mode": options.mode, "engine": "python"}
-    if options.mode == "files_with_matches":
-        data["files"] = files
-    elif options.mode == "count":
-        data["counts"] = counts
-    else:
-        data["matches"] = matches
-    return ToolOutput(success=True, data=data)
+    return ToolOutput(
+        success=True,
+        data={"output_mode": options.mode, "engine": "python", **collector.data()},
+    )

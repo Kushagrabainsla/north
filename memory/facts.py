@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from config.dependencies import EmbedFn, SupersedeFn
+from inference.models import EmbedFn, GlossaryFn, SupersedeFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.math import cosine_similarity
@@ -291,12 +291,15 @@ class FactStore:
         embed_fn: EmbedFn,
         embedding_model: str = "",
         supersede_fn: SupersedeFn | None = None,
+        glossary_fn: GlossaryFn | None = None,
     ) -> None:
         self._db_path = db_path
         self._embed_fn = embed_fn
-        # Optional: without it the store simply never supersedes, which is the
-        # behaviour this replaces rather than a new failure mode.
+        # Both optional: without them the store simply never supersedes and never
+        # explains an identifier, which is the behaviour this replaces rather
+        # than a new failure mode.
         self._supersede_fn = supersede_fn
+        self._glossary_fn = glossary_fn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.executescript(_SCHEMA)
@@ -408,7 +411,7 @@ class FactStore:
                 (_STATUS_SUPERSEDED, replaced_by, now, *fact_ids),
             ).rowcount
 
-    async def expand_identifiers(self, glossary_fn: Any) -> int:
+    async def expand_identifiers(self) -> int:
         """Annotate bare identifiers in stored facts with what they mean.
 
         Facts written recently carry their own context, because extraction now
@@ -426,6 +429,8 @@ class FactStore:
         Idempotent: a fact already carrying the meaning is left alone, so this
         converges and later runs do nothing.
         """
+        if self._glossary_fn is None:
+            return 0
         facts = await asyncio.to_thread(self._active_id_rows_sync)
         if not facts:
             return 0
@@ -442,7 +447,7 @@ class FactStore:
             for token in candidates
         }
         try:
-            glossary = await glossary_fn(context)
+            glossary = await self._glossary_fn(context)
         except Exception:
             logger.warning("FactStore: identifier glossary failed - facts left as they are", exc_info=True)
             return 0

@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -54,6 +55,231 @@ async def _aiter_with_chunk_timeout(aiter, timeout: float):
         except TimeoutError as exc:
             raise InferenceError(f"SSE stream stalled for {timeout:.0f}s - model stopped generating") from exc
 
+
+async def _aiter_sse_chunks(response: httpx.Response) -> AsyncIterator[dict]:
+    """Yield each JSON chunk of an OpenAI-style SSE stream, skipping unparsable lines."""
+    async for raw_line in _aiter_with_chunk_timeout(response.aiter_lines(), SSE_CHUNK_TIMEOUT_SECONDS):
+        if not raw_line.startswith("data: "):
+            continue
+        data = raw_line[6:]
+        if data == "[DONE]":
+            return
+        try:
+            chunk = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        yield chunk
+
+
+# Finish reasons that mean the upstream provider broke mid-stream rather than
+# the model finishing: the reply is unusable and the model must be failed over.
+_UPSTREAM_ERROR_REASONS = frozenset({"network_error", "error", "failed", "upstream_error"})
+
+
+def _parse_json_args(raw: str) -> dict:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Tool-call arguments were not valid JSON; using empty params. Raw: %.200s", raw)
+        return {}
+
+
+def _formatted_tool(tool: dict) -> dict:
+    """One tool in the OpenAI function-calling shape, whatever shape it arrived in."""
+    if "type" in tool and "function" in tool:
+        return tool
+    if "name" not in tool:
+        return tool
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.get("name"),
+            "description": tool.get("description", ""),
+            "parameters": tool.get("parameters") or tool.get("parameters_schema") or {"type": "object"},
+        },
+    }
+
+
+def _chat_messages(request: CompletionRequest) -> list[dict]:
+    """The user turn, with any images attached as data URLs."""
+    if not request.images:
+        return [{"role": "user", "content": request.prompt}]
+    parts: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
+    parts.extend(
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}} for b64, mime in request.images
+    )
+    return [{"role": "user", "content": parts}]
+
+
+@dataclass
+class _StreamUsage:
+    """What the stream reported about its own cost, as the last usage block saw it."""
+
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
+    cached_tokens: int = 0
+    cache_write_tokens: int = 0
+
+    def update(self, usage: dict) -> None:
+        self.tokens_in = usage.get("prompt_tokens", self.tokens_in)
+        self.tokens_out = usage.get("completion_tokens", self.tokens_out)
+        self.cost_usd = float(usage.get("cost", self.cost_usd))
+        self.cached_tokens, self.cache_write_tokens = cache_tokens(usage)
+
+
+class _ToolCallStream:
+    """Folds one streamed tool-call turn into text, reasoning and tool calls.
+
+    A turn is either an answer or a tool call, and which one it is only becomes
+    known when the first `tool_calls` delta arrives. Everything streamed to the
+    caller before that point belongs to an answer that is now being discarded,
+    which is why the switch retracts it.
+    """
+
+    def __init__(
+        self,
+        model_id: str,
+        provider: str,
+        token_callback: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        self._model_id = model_id
+        self._provider = provider
+        self._emit = token_callback
+        self._usage = _StreamUsage()
+        self._content: list[str] = []
+        self._reasoning: list[str] = []
+        self._calls: dict[int, dict] = {}
+        self._saw_tool_call = False
+        self._in_thought = False
+
+    @property
+    def _forwarding(self) -> bool:
+        """True while streamed tokens still belong to the answer the caller sees."""
+        return self._emit is not None and not self._saw_tool_call
+
+    async def add(self, chunk: dict) -> None:
+        usage = chunk.get("usage")
+        if usage:
+            self._usage.update(usage)
+        choices = chunk.get("choices")
+        if not choices:
+            return
+        choice = choices[0]
+        delta = choice.get("delta", {})
+        self._raise_if_upstream_failed(choice, delta)
+        await self._add_reasoning(delta)
+        await self._add_text(delta)
+        await self._add_tool_calls(delta)
+
+    async def close(self) -> None:
+        """End the turn, raising when the model streamed nothing at all."""
+        if self._in_thought and self._forwarding:
+            await self._emit("</thought>")
+        if not self._calls and not self._content and not self._reasoning:
+            raise ModelDegenerateError(
+                self._model_id,
+                self._provider,
+                reason="empty stream (no content, reasoning, or tool calls)",
+            )
+
+    def to_response(self) -> ToolCallResponse:
+        reasoning_text = "".join(self._reasoning) or None
+        if self._calls:
+            return self._response(calls=self._tool_calls(), content=None, reasoning=reasoning_text)
+        # Fallback: model generated output in reasoning channel and finished.
+        content_text = "".join(self._content) or reasoning_text or ""
+        return self._response(calls=[], content=content_text, reasoning=reasoning_text)
+
+    def _raise_if_upstream_failed(self, choice: dict, delta: dict) -> None:
+        finish = choice.get("finish_reason")
+        native = str(choice.get("native_finish_reason") or delta.get("native_finish_reason") or "").lower()
+        if native in _UPSTREAM_ERROR_REASONS or finish == "error":
+            raise ModelDegenerateError(
+                self._model_id,
+                self._provider,
+                reason=f"upstream stream error ({native or finish})",
+            )
+
+    async def _add_reasoning(self, delta: dict) -> None:
+        token = delta.get("reasoning") or delta.get("reasoning_content") or delta.get("thought") or ""
+        if not token:
+            return
+        self._reasoning.append(token)
+        if not self._forwarding:
+            return
+        if not self._in_thought:
+            self._in_thought = True
+            await self._emit("<thought>")
+        await self._emit(token)
+
+    async def _add_text(self, delta: dict) -> None:
+        token = delta.get("content") or ""
+        if not token:
+            return
+        if self._in_thought:
+            self._in_thought = False
+            if self._forwarding:
+                await self._emit("</thought>")
+        self._content.append(token)
+        # Once a tool_calls delta has arrived the response is a tool-call turn -
+        # its content never reaches the final answer, so forwarding it would show
+        # the user text that is then discarded.
+        if self._forwarding:
+            await self._emit(token)
+
+    async def _add_tool_calls(self, delta: dict) -> None:
+        for call in delta.get("tool_calls") or []:
+            if not self._saw_tool_call:
+                self._saw_tool_call = True
+                await self._retract_streamed_answer()
+            self._accumulate_call(call)
+
+    async def _retract_streamed_answer(self) -> None:
+        """Take back the answer streamed so far: this turn is a tool call."""
+        retractable = self._emit is not None and hasattr(self._emit, "reset")
+        if self._in_thought:
+            self._in_thought = False
+            if retractable:
+                await self._emit("</thought>")
+        if retractable and self._content:
+            await self._emit.reset()
+
+    def _accumulate_call(self, call: dict) -> None:
+        entry = self._calls.setdefault(call.get("index", 0), {"id": "", "name": "", "arguments": ""})
+        if call.get("id"):
+            entry["id"] = call["id"]
+        function = call.get("function", {})
+        if function.get("name"):
+            entry["name"] = function["name"]
+        if function.get("arguments"):
+            entry["arguments"] += function["arguments"]
+
+    def _tool_calls(self) -> list[ToolCall]:
+        return [
+            ToolCall(
+                name=call["name"],
+                call_id=call["id"] or f"call_{call['name']}_{index}",
+                params=_parse_json_args(call["arguments"]),
+            )
+            for index, call in sorted(self._calls.items())
+        ]
+
+    def _response(self, *, calls: list[ToolCall], content: str | None, reasoning: str | None) -> ToolCallResponse:
+        return ToolCallResponse(
+            type="tool_calls" if calls else "message",
+            calls=calls,
+            content=content,
+            model_used=self._model_id,
+            tokens_in=self._usage.tokens_in,
+            tokens_out=self._usage.tokens_out,
+            cost_usd=self._usage.cost_usd,
+            cached_tokens=self._usage.cached_tokens,
+            cache_write_tokens=self._usage.cache_write_tokens,
+            reasoning=reasoning,
+        )
 
 class OpenAICompatibleProvider:
     """Base class for providers that use the OpenAI wire format over HTTPS.
@@ -346,25 +572,8 @@ class OpenAICompatibleProvider:
     # ---- completion ----
 
     async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
-        if request.images:
-            message_parts: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
-            for b64, mime in request.images:
-                message_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{b64}"},
-                })
-            messages = [{"role": "user", "content": message_parts}]
-        else:
-            messages = [{"role": "user", "content": request.prompt}]
-
-        body = self._build_chat_body(model_id, messages, request)
-
-        try:
-            response = await self._client.post("/chat/completions", json=body)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
-            raise ProviderUnavailableError(f"Connection to {self.name} failed: {e}") from e
-        except httpx.RequestError as e:
-            raise InferenceError(f"Request to {self.name} failed: {e}") from e
+        body = self._build_chat_body(model_id, _chat_messages(request), request)
+        response = await self._post_chat(body)
 
         # Graceful degradation: some models (especially free/small ones) reject a
         # requested response_format (json_schema / json_object) with HTTP 400. Retry
@@ -373,54 +582,14 @@ class OpenAICompatibleProvider:
         # We retry on ANY 400 for a structured request: providers (e.g. opencode_zen)
         # wrap the real error so the body rarely names response_format explicitly.
         if response.status_code == 400 and self._should_retry_without_format(response, request):
-            # Say so. The retry turns a schema-enforced call into a free-form one,
-            # and a caller that gets prose back where it asked for JSON has no
-            # other way to find out this is why. The dispatcher's validity gate
-            # rejects the prose and moves on, but the reason belongs in the log.
-            logger.warning(
-                "%s/%s rejected the requested response_format - retrying without it, "
-                "so this response is NOT schema-enforced",
-                self.name,
-                model_id,
-            )
-            body.pop("response_format", None)
-            response = await self._client.post("/chat/completions", json=body)
+            response = await self._retry_without_response_format(body, model_id)
 
         self._raise_for_status(response, model_id)
+        payload = self._decoded(response)
+        choice = self._first_choice(payload, model_id)
+        self._raise_if_upstream_failed(choice, model_id)
+        content, reasoning = self._answer_of(choice, model_id)
 
-        try:
-            payload = response.json()
-        except ValueError as e:
-            raise InferenceError(f"{self.name} response was not JSON") from e
-
-        choices = payload.get("choices") or []
-        if not choices:
-            raise InferenceError(f"{self.name} returned empty choices for {model_id}: {payload}")
-        choice = choices[0]
-        native_finish = str(choice.get("native_finish_reason") or "").lower()
-        finish = str(choice.get("finish_reason") or "").lower()
-        if native_finish in ("network_error", "error", "failed", "upstream_error") or finish == "error":
-            raise ModelDegenerateError(
-                model_id,
-                self.name,
-                reason=f"upstream error ({native_finish or finish})",
-            )
-        msg_obj = choice.get("message", {})
-        content = msg_obj.get("content") or ""
-        reasoning = (
-            msg_obj.get("reasoning")
-            or msg_obj.get("reasoning_content")
-            or msg_obj.get("thought")
-            or None
-        )
-        if not content and reasoning:
-            content = reasoning
-        if not content:
-            raise ModelDegenerateError(
-                model_id,
-                self.name,
-                reason="empty completion text and reasoning",
-            )
         usage = payload.get("usage", {})
         cached, cache_written = cache_tokens(usage)
         return CompletionResponse(
@@ -433,6 +602,60 @@ class OpenAICompatibleProvider:
             cache_write_tokens=cache_written,
             reasoning=reasoning,
         )
+
+    async def _post_chat(self, body: dict) -> httpx.Response:
+        try:
+            return await self._client.post("/chat/completions", json=body)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
+            raise ProviderUnavailableError(f"Connection to {self.name} failed: {e}") from e
+        except httpx.RequestError as e:
+            raise InferenceError(f"Request to {self.name} failed: {e}") from e
+
+    async def _retry_without_response_format(self, body: dict, model_id: str) -> httpx.Response:
+        # Say so. The retry turns a schema-enforced call into a free-form one,
+        # and a caller that gets prose back where it asked for JSON has no
+        # other way to find out this is why. The dispatcher's validity gate
+        # rejects the prose and moves on, but the reason belongs in the log.
+        logger.warning(
+            "%s/%s rejected the requested response_format - retrying without it, "
+            "so this response is NOT schema-enforced",
+            self.name,
+            model_id,
+        )
+        body.pop("response_format", None)
+        return await self._post_chat(body)
+
+    def _decoded(self, response: httpx.Response) -> dict:
+        try:
+            return response.json()
+        except ValueError as e:
+            raise InferenceError(f"{self.name} response was not JSON") from e
+
+    def _first_choice(self, payload: dict, model_id: str) -> dict:
+        choices = payload.get("choices") or []
+        if not choices:
+            raise InferenceError(f"{self.name} returned empty choices for {model_id}: {payload}")
+        return choices[0]
+
+    def _raise_if_upstream_failed(self, choice: dict, model_id: str) -> None:
+        native = str(choice.get("native_finish_reason") or "").lower()
+        finish = str(choice.get("finish_reason") or "").lower()
+        if native in _UPSTREAM_ERROR_REASONS or finish == "error":
+            raise ModelDegenerateError(model_id, self.name, reason=f"upstream error ({native or finish})")
+
+    def _answer_of(self, choice: dict, model_id: str) -> tuple[str, str | None]:
+        """The text and reasoning of a finished completion, one of which must be there."""
+        message = choice.get("message", {})
+        reasoning = (
+            message.get("reasoning")
+            or message.get("reasoning_content")
+            or message.get("thought")
+            or None
+        )
+        content = message.get("content") or reasoning or ""
+        if not content:
+            raise ModelDegenerateError(model_id, self.name, reason="empty completion text and reasoning")
+        return content, reasoning
 
 
     def _build_chat_body(self, model_id: str, messages: list[dict], request: CompletionRequest) -> dict:
@@ -477,22 +700,6 @@ class OpenAICompatibleProvider:
         request: ToolCallRequest,
         token_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> ToolCallResponse:
-        formatted_tools = []
-        for t in request.tools:
-            if "type" in t and "function" in t:
-                formatted_tools.append(t)
-            elif "name" in t:
-                formatted_tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": t.get("name"),
-                        "description": t.get("description", ""),
-                        "parameters": t.get("parameters") or t.get("parameters_schema") or {"type": "object"},
-                    },
-                })
-            else:
-                formatted_tools.append(t)
-
         body: dict = {
             "model": model_id,
             "messages": request.messages,
@@ -500,168 +707,22 @@ class OpenAICompatibleProvider:
             **self._extra_body_fields(),
             **self._request_body_fields(request),
         }
-        if formatted_tools:
-            body["tools"] = formatted_tools
+        if request.tools:
+            body["tools"] = [_formatted_tool(tool) for tool in request.tools]
 
-        content_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        tool_calls_acc: dict[int, dict] = {}
-        tokens_in = 0
-        cached_tokens = 0
-        cache_write_tokens = 0
-        tokens_out = 0
-        cost_usd = 0.0
-        saw_tool_call = False
-        saw_reasoning = False
-
+        stream = _ToolCallStream(model_id, self.name, token_callback)
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as resp:
                 await self._raise_for_stream_status(resp, model_id)
-                async for raw_line in _aiter_with_chunk_timeout(resp.aiter_lines(), SSE_CHUNK_TIMEOUT_SECONDS):
-                    if not raw_line.startswith("data: "):
-                        continue
-                    data = raw_line[6:]
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    usage = chunk.get("usage")
-                    if usage:
-                        tokens_in = usage.get("prompt_tokens", tokens_in)
-                        tokens_out = usage.get("completion_tokens", tokens_out)
-                        cost_usd = float(usage.get("cost", cost_usd))
-                        cached_tokens, cache_write_tokens = cache_tokens(usage)
-                    choices = chunk.get("choices")
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    delta = choice.get("delta", {})
-                    finish = choice.get("finish_reason")
-                    native_raw = choice.get("native_finish_reason") or delta.get("native_finish_reason") or ""
-                    native_finish = str(native_raw).lower()
-                    if native_finish in ("network_error", "error", "failed", "upstream_error") or finish == "error":
-                        raise ModelDegenerateError(
-                            model_id,
-                            self.name,
-                            reason=f"upstream stream error ({native_finish or finish})",
-                        )
-
-                    reasoning_token = (
-                        delta.get("reasoning")
-                        or delta.get("reasoning_content")
-                        or delta.get("thought")
-                        or ""
-                    )
-                    if reasoning_token:
-                        reasoning_parts.append(reasoning_token)
-                        if token_callback is not None and not saw_tool_call:
-                            if not saw_reasoning:
-                                saw_reasoning = True
-                                await token_callback("<thought>")
-                            await token_callback(reasoning_token)
-
-                    text_token = delta.get("content") or ""
-                    if text_token:
-                        if saw_reasoning:
-                            saw_reasoning = False
-                            if token_callback is not None and not saw_tool_call:
-                                await token_callback("</thought>")
-                        content_parts.append(text_token)
-                        # Once a tool_calls delta has arrived the response is a
-                        # tool-call turn - its content never reaches the final
-                        # answer, so forwarding it would show the user text
-                        # that is then discarded.
-                        if token_callback is not None and not saw_tool_call:
-                            await token_callback(text_token)
-
-                    for tc in (delta.get("tool_calls") or []):
-                        if not saw_tool_call:
-                            saw_tool_call = True
-                            if saw_reasoning:
-                                saw_reasoning = False
-                                if token_callback is not None and hasattr(token_callback, "reset"):
-                                    await token_callback("</thought>")
-                            if token_callback is not None and hasattr(token_callback, "reset") and content_parts:
-                                await token_callback.reset()
-                        idx = tc.get("index", 0)
-                        if idx not in tool_calls_acc:
-                            tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
-                        if tc.get("id"):
-                            tool_calls_acc[idx]["id"] = tc["id"]
-                        fn = tc.get("function", {})
-                        if fn.get("name"):
-                            tool_calls_acc[idx]["name"] = fn["name"]
-                        if fn.get("arguments"):
-                            tool_calls_acc[idx]["arguments"] += fn["arguments"]
+                async for chunk in _aiter_sse_chunks(resp):
+                    await stream.add(chunk)
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as e:
             raise ProviderUnavailableError(f"Connection to {self.name} failed: {e}") from e
         except httpx.RequestError as e:
             raise InferenceError(f"Request to {self.name} failed: {e}") from e
 
-        if saw_reasoning and token_callback is not None and not saw_tool_call:
-            await token_callback("</thought>")
-
-        if not tool_calls_acc and not content_parts and not reasoning_parts:
-            raise ModelDegenerateError(
-                model_id,
-                self.name,
-                reason="empty stream (no content, reasoning, or tool calls)",
-            )
-
-        reasoning_text = "".join(reasoning_parts) if reasoning_parts else None
-
-        if tool_calls_acc:
-            calls = [
-                ToolCall(
-                    name=tc["name"],
-                    call_id=tc["id"] or f"call_{tc['name']}_{idx}",
-                    params=self._parse_json_args(tc["arguments"]),
-                )
-                for idx, tc in sorted(tool_calls_acc.items())
-            ]
-            return ToolCallResponse(
-                type="tool_calls",
-                calls=calls,
-                content=None,
-                model_used=model_id,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                cost_usd=cost_usd,
-                cached_tokens=cached_tokens,
-                cache_write_tokens=cache_write_tokens,
-                reasoning=reasoning_text,
-            )
-
-        content_text = "".join(content_parts)
-        if not content_text and reasoning_text:
-            # Fallback: model generated output in reasoning channel and finished
-            content_text = reasoning_text
-
-        return ToolCallResponse(
-            type="message",
-            content=content_text,
-            calls=[],
-            model_used=model_id,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cost_usd=cost_usd,
-            cached_tokens=cached_tokens,
-            cache_write_tokens=cache_write_tokens,
-            reasoning=reasoning_text,
-        )
-
-
-    @staticmethod
-    def _parse_json_args(raw: str) -> dict:
-        if not raw:
-            return {}
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Tool-call arguments were not valid JSON; using empty params. Raw: %.200s", raw)
-            return {}
+        await stream.close()
+        return stream.to_response()
 
     # ---- embeddings (override in providers that support it) ----
 

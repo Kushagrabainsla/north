@@ -13,7 +13,7 @@ import json
 import logging
 from pathlib import Path
 
-from config.dependencies import EmbedFn
+from inference.models import EmbedFn
 from utils.db import open_db_connection
 from utils.math import cosine_similarity
 from utils.vector_space import ensure_vector_space

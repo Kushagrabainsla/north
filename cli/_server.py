@@ -84,7 +84,7 @@ def _kill_port(host: str, port: int) -> bool:
             pids = result.stdout.strip().split()
             if not pids:
                 return False
-            subprocess.run(["kill", "-9"] + pids, capture_output=True)
+            subprocess.run(["kill", "-9", *pids], capture_output=True)
             return True
         except Exception:
             return False
@@ -189,33 +189,58 @@ def _find_project_root() -> Path | None:
     return None
 
 
-def _start_server_process(port: int, project_root: Path | None = None) -> subprocess.Popen:
-    """Spawn uvicorn and record the PID. Mirrors the logic in the start command."""
+def _recorded_workspace() -> str:
+    """The workspace the last start recorded, or the one the cwd implies."""
     from config.settings import settings
 
-    log_path = settings.north_home / "north.log"
-    pid_path = settings.north_home / "north.pid"
     workspace_path = settings.north_home / "workspace.txt"
-    workspace = (
-        workspace_path.read_text(encoding="utf-8").strip() if workspace_path.exists() else _resolve_workspace(None)
-    )
+    if workspace_path.exists():
+        return workspace_path.read_text(encoding="utf-8").strip()
+    return _resolve_workspace(None)
+
+
+def _start_server_process(
+    port: int,
+    workspace: str | None = None,
+    *,
+    host: str = "127.0.0.1",
+    reload: bool = False,
+) -> subprocess.Popen:
+    """Spawn uvicorn detached, logging to north.log and recording the PID.
+
+    The server runs as a subprocess so its stdout/stderr are redirected to the
+    log file at the OS level - no monkey-patching needed. Every print(), logging
+    call, traceback and uvicorn line goes to the file.
+
+    Restarts (`north update`) pass no workspace and inherit the one the last
+    start recorded, so north keeps serving the same directory.
+    """
+    from config.settings import settings
+
+    resolved_workspace = workspace or _recorded_workspace()
     cmd = [
         sys.executable,
         "-m",
         "uvicorn",
         "orchestrator.app:app",
         "--host",
-        "127.0.0.1",
+        host,
         "--port",
         str(port),
         "--log-level",
         "info",
     ]
-    server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": workspace}
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
-    proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
-    pid_path.write_text(str(proc.pid), encoding="utf-8")
+    if reload:
+        cmd.append("--reload")
+
+    settings.north_home.mkdir(parents=True, exist_ok=True)
+    (settings.north_home / "workspace.txt").write_text(resolved_workspace, encoding="utf-8")
+    server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
+    # The child gets its own dup of the fd, so closing the parent's copy on the
+    # way out of the with-block leaves the server's logging intact.
+    with open(settings.north_home / "north.log", "a", encoding="utf-8") as log_file:
+        proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=server_env, **_detached_process_kwargs())
+    (settings.north_home / "north.pid").write_text(str(proc.pid), encoding="utf-8")
     return proc
 
 

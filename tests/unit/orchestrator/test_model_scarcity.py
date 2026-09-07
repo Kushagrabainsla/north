@@ -30,7 +30,7 @@ def _orch():
     stream.emit_done = AsyncMock()
     ledger = MagicMock()
     ledger.write = AsyncMock()
-    orch = Orchestrator(
+    return Orchestrator(
         ledger=ledger,
         agent_registry=registry,
         north_star_checker=MagicMock(),
@@ -41,7 +41,6 @@ def _orch():
         stream_manager=stream,
         approval_store=ApprovalStore(),
     )
-    return orch
 
 
 def _record_writes(orch):
