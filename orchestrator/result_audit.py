@@ -27,10 +27,10 @@ from agents.constants import CODE_MUTATING_TOOLS, CODE_VERIFY_TOOLS, ENGINEERING
 from agents.models import AgentPayload, AgentResult
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
-from orchestrator.engineering_prompts import CRITIC_PROMPT
 from orchestrator.journal import TaskJournal
 from orchestrator.verification import verify_claims
 from utils.ids import generate_id
+from utils.prompts import load_prompt
 from utils.text import extract_json
 
 logger = logging.getLogger(__name__)
@@ -195,7 +195,7 @@ class ResultAuditor:
             return
         if result.requires_approval or result.has_question or not result.output.strip():
             return
-        prompt = CRITIC_PROMPT.format(
+        prompt = load_prompt("prompts/answer_critic.md").format(
             request=payload.prompt[:_CRITIC_REQUEST_CHARS], answer=result.output[:_CRITIC_ANSWER_CHARS]
         )
         try:

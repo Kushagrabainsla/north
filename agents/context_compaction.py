@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from inference.models import CompletionRequest, PoolPriority
+from utils.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -287,15 +288,8 @@ async def compact_if_needed(
 
     history_text = render_exchange_for_summary(to_summarise)
     max_words = int(max_summary_tokens * 0.70)
-    prompt = (
-        "You are summarising intermediate steps of an ongoing AI agent task.\n"
-        "Condense the following tool calls and results into a concise bullet-point summary.\n"
-        "Preserve: what was accomplished, the exact list of files created or modified, key facts "
-        "discovered, file paths, function names, the most recent error or failing test, important data "
-        "values, and what still remains to be done.\n"
-        "Omit: raw file contents, verbose outputs, redundant retries.\n"
-        f"Max {max_words} words.\n\n"
-        f"<history>\n{history_text}\n</history>"
+    prompt = load_prompt("prompts/context_compaction.md").format(
+        max_words=max_words, history_text=history_text
     )
 
     if inference_router is not None and hasattr(inference_router, "complete"):

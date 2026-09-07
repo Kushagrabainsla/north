@@ -45,7 +45,6 @@ from orchestrator.engineering_prompts import (
     DESIGN_KINDS,
     DESIGN_RESEARCH_PREAMBLE,
     SPEC_CRITIQUE_INJECTION,
-    SPEC_CRITIQUE_PROMPT,
     SPEC_CRITIQUE_TIMEOUT_S,
     SPEC_MIN_CHARS,
     clean_issues,
@@ -79,6 +78,7 @@ from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
+from utils.prompts import load_prompt
 from utils.tasks import spawn
 from utils.text import extract_json
 from utils.time import format_timestamp, utcnow
@@ -1299,7 +1299,7 @@ class Orchestrator:
             _read_artifact, self._primary_artifact_path("researcher", task_id), _HANDOFF_ARTIFACT_MAX_CHARS
         )
         exclude = await self._models_used_by(task_id, {"architect"})
-        critique_prompt = SPEC_CRITIQUE_PROMPT.format(
+        critique_prompt = load_prompt("prompts/spec_critique.md").format(
             prompt=prompt[:1500], research=(research or "(none)")[:2000], spec=spec[:_HANDOFF_ARTIFACT_MAX_CHARS]
         )
         try:

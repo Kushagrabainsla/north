@@ -22,6 +22,7 @@ from approval.models import Card, CardType
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from memory import ContextDocument, MemoryGateway
+from utils.prompts import load_prompt
 from utils.text import extract_json
 
 logger = logging.getLogger(__name__)
@@ -38,43 +39,6 @@ NEVER_AUTO_APPROVE_AGENTS: frozenset[str] = frozenset(
     {"bash", "shell", "patch_file", "create_tool", "git", "gh", "kasa"}
 )
 
-_PROMPT_TEMPLATE = """\
-You are the Judgement Rules Filter for a personal AI operating system called north.
-
-The user has a set of learned decision rules in judgement_rules.md:
-
----
-{rules}
----
-{preferences}
-A card is about to be surfaced to the user:
-  Type:    {card_type}
-  Agent:   {agent}
-  Title:   {title}
-  Message: {message}
-  Options: {options}
-
-Does a learned rule (or, for a QUESTION, a known preference) clearly determine the
-outcome - so the user does not need to be asked again?
-
-Reply with JSON only - no prose:
-{{
-  "decision": "approved" | "rejected" | "answered" | "none",
-  "chosen_option": "<the answer text if answered, else empty string>",
-  "confidence": <0.0 to 1.0>,
-  "rule": "<one-line summary of the matching rule/preference, or empty string>"
-}}
-
-Rules:
-- Use "none" if nothing clearly applies, or confidence is below {threshold}.
-- Use "approved" only for APPROVAL cards where a rule clearly says to approve.
-- Use "rejected" only for APPROVAL cards where a rule clearly says to reject.
-- Use "answered" only for QUESTION cards where a learned rule or a known preference
-  clearly determines the answer. Put that answer in chosen_option - it need not be
-  one of the listed options.
-- INFORMATION cards should always return "none" (they need no decision).
-- When in doubt, return "none" - asking the user is always safer than guessing.
-"""
 
 
 class JudgementFilter:
@@ -141,7 +105,7 @@ class JudgementFilter:
         if len((rules + preferences).strip()) < _MIN_LEARNED_CONTEXT_CHARS:
             return None, ""
 
-        prompt = _PROMPT_TEMPLATE.format(
+        prompt = load_prompt("prompts/judgement_filter.md").format(
             rules=rules[:3000] or "(no rules learned yet)",
             preferences=(
                 f"\nThe user's known preferences and identity:\n---\n{preferences[:2000]}\n---\n"

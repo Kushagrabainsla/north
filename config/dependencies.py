@@ -29,6 +29,7 @@ from inference.models import EmbedFn, GlossaryFn, SupersedeFn
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
 from memory import ContextStore, SQLiteContextStore
+from utils.prompts import load_prompt
 
 if TYPE_CHECKING:
     from context.code_index import CodeIndex
@@ -216,16 +217,7 @@ def _build_supersede_fn(cost_tracker: CostTracker) -> SupersedeFn:
         from utils.text import extract_json
 
         numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(candidates))
-        prompt = (
-            "A new fact about a person has just been recorded. Decide which of the "
-            "existing facts it makes NO LONGER TRUE.\n\n"
-            f"New fact:\n{new_fact}\n\nExisting facts:\n{numbered}\n\n"
-            "Only list an existing fact if the new one genuinely replaces it - for example a "
-            "role that has ended, a number that has changed, or a plan that has been carried "
-            "out. Do NOT list a fact merely because it covers the same topic, adds detail, or "
-            "sits alongside the new one. Two facts that can both be true must both stay.\n"
-            'Reply with JSON only: {"superseded": [<indices>]}'
-        )
+        prompt = load_prompt("prompts/fact_supersede.md").format(new_fact=new_fact, numbered=numbered)
         response = await cost_tracker.complete(
             CompletionRequest(
                 prompt=prompt,
@@ -257,26 +249,7 @@ def _build_glossary_fn(cost_tracker: CostTracker) -> GlossaryFn:
         blocks = "\n\n".join(
             f"{token}:\n" + "\n".join(f"  - {c}" for c in facts) for token, facts in context.items()
         )
-        prompt = (
-            "Below are short names taken from notes about one person, each with facts that mention "
-            "them. For each, give the plain-language thing it refers to, in at most FOUR words - "
-            "the words someone would use if they did not know the short name.\n\n"
-            "Give the shortest phrase that identifies it and nothing more. No institution names, no "
-            "dates, no qualifiers: for a course code answer with the subject alone (\"Distributed "
-            "Computing\"), not who teaches it or where it is taught.\n\n"
-            "Only expand names that are specific to THIS person's life and would be meaningless to "
-            "anyone else: a course code, a project codename, a lab or team name, an employer's "
-            "internal system. Those are the ones a person cannot search for without knowing them "
-            "already.\n\n"
-            "Return null for everything else. In particular return null for standard industry "
-            "terminology - programming languages, protocols, file formats, hardware, well-known "
-            "libraries and frameworks - however abbreviated. Someone asking about those already "
-            "uses the same words, so spelling them out adds length and helps nobody.\n\n"
-            "Also return null for a name whose meaning is not stated in its facts, or one you would "
-            "have to guess at. Null is the right answer whenever you are unsure.\n\n"
-            f"{blocks}\n\n"
-            'Reply with JSON only: {"glossary": {"<name>": "<meaning or null>"}}'
-        )
+        prompt = load_prompt("prompts/fact_glossary.md").format(blocks=blocks)
         response = await cost_tracker.complete(
             CompletionRequest(
                 prompt=prompt, priority=PoolPriority.LOW, component="fact_glossary", json_mode=True

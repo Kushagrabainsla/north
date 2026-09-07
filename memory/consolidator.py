@@ -23,6 +23,7 @@ from ledger.models import LedgerEntry, LedgerSource
 
 if TYPE_CHECKING:
     from memory.episodic import EpisodicStore
+from utils.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +51,6 @@ _PROMPT_SOURCES = frozenset(
     {LedgerSource.PROMPT, LedgerSource.MIC, LedgerSource.MANUAL_INJECTION, LedgerSource.WEBHOOK}
 )
 
-_SUMMARY_PROMPT = (
-    "Summarize this completed AI task in 2-3 sentences for future retrieval. "
-    "Include what was requested, what was done, and any key outcomes or decisions. "
-    "If it failed, state plainly what went wrong so it is not repeated.\n\n"
-    "Task: {prompt}\n\nResult: {result}"
-)
 
 
 class EpisodeConsolidator:
@@ -170,7 +165,7 @@ class EpisodeConsolidator:
         try:
             response = await self._inference_router.complete(
                 CompletionRequest(
-                    prompt=_SUMMARY_PROMPT.format(prompt=prompt, result=result[:3000]),
+                    prompt=load_prompt("prompts/episode_summary.md").format(prompt=prompt, result=result[:3000]),
                     priority=PoolPriority.LOW,
                     component="episode_consolidator",
                     task_id=None,  # task already finished; no live cost to attribute

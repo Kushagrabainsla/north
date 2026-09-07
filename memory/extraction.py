@@ -22,6 +22,7 @@ from memory.backup import snapshot_memory
 from memory.base import ContextStore
 from memory.models import ContextDocument
 from utils.ids import generate_id
+from utils.prompts import load_prompt
 from utils.text import STOPWORDS, extract_json
 from utils.time import utcnow
 
@@ -54,76 +55,7 @@ _USER_AUTHORED_SOURCES = frozenset(
 # durable facts about the user.  Sending them to the LLM wastes budget.
 _SKIPPED_STATUSES = {LedgerStatus.FAILED}
 
-_EXTRACTION_PROMPT = """\
-You are the memory extraction pipeline for a personal AI operating system.
 
-Below is something the USER stated - either a message they typed, or (shown as
-"north asked: ... / The user answered: ...") their answer to a question north
-asked:
-
-\"\"\"
-{message}
-\"\"\"
-
-Extract a durable fact ONLY IF the USER states it explicitly. When the text is a
-question-and-answer, the fact comes from the USER's answer, never from north's
-question. Durable means it will still be true or useful weeks from now.
-
-Anti-fabrication contract - follow exactly:
-- Extract ONLY information the user literally wrote above. Never infer, assume,
-  generalize, or invent.
-- Every name, company, person, number, or date in the fact MUST appear verbatim
-  in the message above. If it is not in the message, you may not write it.
-- Greetings, questions, commands, and small-talk reveal NO durable fact.
-- This is the user's own message - it is NOT an assistant reply. Do not treat
-  any AI-sounding content as a fact about the user.
-- If you are not certain the user explicitly stated a durable fact, or the
-  message contains none, return extract:false. When in doubt, return false.
-
-If a durable fact is explicitly present, respond with JSON:
-{{"extract": true, "document": "<user|judgement_rules|north_stars>", "delta": "<fact>"}}
-
-Otherwise respond with:
-{{"extract": false}}
-
-Document rules:
-- "user": stable identity facts the user stated - their name, role, employer,
-  schedule, preferences, tools they use, people they work with.
-- "judgement_rules": how the user decides - what they approve/reject, thresholds,
-  priorities, communication style.
-- "north_stars": goals with time horizons the user stated - career, projects,
-  this week's focus.
-
-Fact format:
-- One sentence, third-person neutral, grounded only in the user's words.
-- The fact must stand alone. It is retrieved on its own, without the message it
-  came from and without any other fact, so it has to carry the context that makes
-  it meaningful. Keep an identifier together with what it means in the SAME
-  sentence - "User's CS 272 Reinforcement Learning class is on Mondays", not
-  "User's CS 272 class is on Mondays", which answers no question anyone would ask.
-- Fill the fact with the user's ACTUAL words. Never emit a placeholder, a single
-  letter, a bracketed slot, or an example token (e.g. "X", "Y", "<company>") - if
-  you cannot name the real value from the message, return extract:false instead.
-- "user"/"judgement_rules": present tense. Shape: "User <verb> <real detail>"
-  - e.g. for a message saying "I use Postgres", write "User uses Postgres".
-- "north_stars": goal-oriented. Shape: "User wants to <real goal> by <real
-  horizon>" - only include the horizon if the user actually stated one.
-"""
-
-_DEDUP_PROMPT = """\
-You are checking whether a new memory fact is already captured in an existing document.
-
-Existing document (last 2000 chars):
----
-{existing}
----
-
-New fact to add:
-"{delta}"
-
-Is the core information in the new fact ALREADY present in the document (even if worded differently)?
-Reply with JSON only: {{"duplicate": true}} or {{"duplicate": false}}
-"""
 
 # Deterministic dedup thresholds, measured as Jaccard overlap of content tokens.
 # At/above _DEDUP_CERTAIN a new fact is a duplicate outright (no LLM call); at/above
@@ -150,21 +82,6 @@ _MAX_DOCUMENT_CHARS = 8_000  # trim when a context doc exceeds this
 _TRIM_TARGET_CHARS = 5_000  # target size after trimming
 _BACKUP_INTERVAL_HOURS = 24  # minimum hours between full context backups
 
-_TRIM_PROMPT = """\
-The following personal context document ({doc_type}) has grown too long. Condense it by:
-1. Merging duplicate or near-duplicate facts into one line.
-2. Removing facts that are clearly outdated or no longer relevant - apply this aggressively for \
-"north_stars" (goals with past deadlines), conservatively for "public" (stable identity facts) \
-and "judgement_rules" (learned preferences that rarely expire).
-3. Keeping every distinct fact that is still likely to be useful.
-
-Return ONLY the condensed document text, no explanation.
-
-Document:
----
-{content}
----
-"""
 
 
 class ExtractionPipeline:
@@ -323,7 +240,7 @@ class ExtractionPipeline:
 
     async def _process_entry(self, entry: LedgerEntry) -> bool:
         """Ask the LLM whether the user's message yields a fact worth storing."""
-        prompt = _EXTRACTION_PROMPT.format(message=(entry.input or "").strip()[:2000])
+        prompt = load_prompt("prompts/fact_extraction.md").format(message=(entry.input or "").strip()[:2000])
 
         response = await self._inference_router.complete(
             CompletionRequest(
@@ -433,7 +350,7 @@ class ExtractionPipeline:
         # Ambiguous near-duplicate: spend one LLM call only when lexical overlap
         # is real, then trust its semantic judgement.
         if best >= _DEDUP_MAYBE or max_shared >= _DEDUP_MIN_SHARED:
-            prompt = _DEDUP_PROMPT.format(existing=existing[-2000:], delta=delta)
+            prompt = load_prompt("prompts/fact_dedup.md").format(existing=existing[-2000:], delta=delta)
             try:
                 resp = await self._inference_router.complete(
                     CompletionRequest(
@@ -466,7 +383,7 @@ class ExtractionPipeline:
         except Exception:
             logger.warning("ExtractionPipeline: failed to archive %s before trim", doc.value)
 
-        prompt = _TRIM_PROMPT.format(content=existing, doc_type=doc.value)
+        prompt = load_prompt("prompts/context_trim.md").format(content=existing, doc_type=doc.value)
         try:
             resp = await self._inference_router.complete(
                 CompletionRequest(

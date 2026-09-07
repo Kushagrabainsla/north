@@ -28,6 +28,7 @@ from skills.models import SKILL_FILENAME, SkillSource
 from skills.registry import SkillRegistry, rejection_reason
 from skills.selector import SkillSelector
 from utils.math import cosine_similarity
+from utils.prompts import load_prompt
 from utils.text import strip_code_fences
 
 logger = logging.getLogger(__name__)
@@ -42,29 +43,6 @@ CLUSTER_SIMILARITY = 0.60
 # Hard cap on learned skills, so the library can never bloat and drown selection.
 MAX_LEARNED_SKILLS = 24
 
-_DISTILL_PROMPT = """\
-You are distilling a REUSABLE SKILL from several successful software-engineering \
-tasks that north completed. A skill is procedural memory: the concrete, repeatable \
-steps that made this KIND of task succeed, so next time the same procedure is followed.
-
-Here are {count} successful tasks of a similar kind:
-
-{summaries}
-
-Write ONE skill capturing the shared, generalizable procedure - only if there is a \
-genuinely repeatable process here. Respond with a single JSON object:
-
-{{
-  "name": "short-kebab-case-name",
-  "description": "Use when <trigger conditions>. One sentence, phrased as when to reach for this skill.",
-  "body": "Numbered procedural steps; reference the specific tools/files that recur. No generic advice."
-}}
-
-Rules:
-- The body must be PROCEDURAL and SPECIFIC (steps, tools, checks), not generic advice ("write clean code", etc.).
-- The description must be a retrieval trigger ("Use when ..."), not a summary of what the skill is.
-- If these tasks share no reusable procedure, respond exactly: {{"skill": null}}
-- Output ONLY the JSON object, nothing else."""
 
 
 class SkillDistiller:
@@ -159,7 +137,7 @@ class SkillDistiller:
     async def _distill(self, summaries: list[str]) -> tuple[str, str, str] | None:
         """Ask the model to distil a skill from the summaries; parse to (name, desc, body)."""
         listed = "\n".join(f"{i}. {s}" for i, s in enumerate(summaries, start=1))
-        prompt = _DISTILL_PROMPT.format(count=len(summaries), summaries=listed)
+        prompt = load_prompt("prompts/skill_distiller.md").format(count=len(summaries), summaries=listed)
         try:
             response = await self._inference_router.complete(
                 CompletionRequest(prompt=prompt, priority=PoolPriority.LOW, component="skill_distiller")

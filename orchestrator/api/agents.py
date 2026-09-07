@@ -9,6 +9,7 @@ from agents.exceptions import AgentNotFoundError
 from inference.models import CompletionRequest, PoolPriority
 from orchestrator.api.deps import _get_agent_registry, _get_inference_router, _get_orchestrator, router
 from orchestrator.models import TaskRequest, TaskResponse
+from utils.prompts import load_prompt
 
 
 class AgentInfo(BaseModel):
@@ -84,20 +85,13 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
     The caller (CLI) is responsible for writing the files to disk.
     """
     router_obj = _get_inference_router()
-    prompt = (
-        f"You are writing the system prompt for a new north AI agent.\n\n"
-        f"Agent name: {body.name}\n"
-        f"Domain: {body.domain}\n"
-        f"Description: {body.description or 'A domain specialist.'}\n"
-        f"Model pool: {body.model_pool}\n"
-        f"Tools available: {', '.join(body.tools) if body.tools else 'none specified'}\n"
-        f"Accepts task types: {', '.join(body.accepts) if body.accepts else 'any'}\n\n"
-        f"Write a concise but complete system prompt (200-400 words) that:\n"
-        f"1. Defines the agent's role and expertise in the {body.domain} domain\n"
-        f"2. Lists what kinds of tasks it handles\n"
-        f"3. Describes its reasoning style and output format\n"
-        f"4. Mentions the tools it can use\n\n"
-        f"Output ONLY the system prompt text, no preamble."
+    prompt = load_prompt("prompts/agent_author.md").format(
+        name=body.name,
+        domain=body.domain,
+        description=body.description or "A domain specialist.",
+        model_pool=body.model_pool,
+        tools=", ".join(body.tools) if body.tools else "none specified",
+        accepts=", ".join(body.accepts) if body.accepts else "any",
     )
 
     result = await router_obj.complete(
