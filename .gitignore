@@ -38,3 +38,6 @@ web/vite.config.d.ts
 # The compiled web client is shipped with the Python package.
 !web/dist/
 !web/dist/**
+
+# Bench output: rewritten on every run, never worth versioning.
+evals/context_strategies/results.json
