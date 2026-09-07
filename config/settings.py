@@ -168,6 +168,11 @@ class Settings(BaseSettings):
     unattended_extra_commands: tuple[str, ...] = ()
     autonomous_mode: bool = False
 
+    # Anthropic Console API key (sk-ant-api...). A Claude Pro or Max subscription
+    # is a separate account and does not authorise the developer API.
+    # Set NORTH_ANTHROPIC_API_KEY in environment or .env.
+    anthropic_api_key: str = ""
+
     # Telegram bot token for the Telegram gateway.
     # Set NORTH_TELEGRAM_BOT_TOKEN in environment or .env.
     telegram_bot_token: str = ""
