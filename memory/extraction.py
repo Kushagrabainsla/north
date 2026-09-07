@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +18,7 @@ from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from memory.backup import snapshot_memory
 from memory.base import ContextStore
 from memory.models import ContextDocument
 from utils.ids import generate_id
@@ -194,6 +194,7 @@ class ExtractionPipeline:
         self._inference_router = inference_router
         self._watermark_path = north_home / _WATERMARK_FILENAME
         self._archive_dir = north_home / "context_archive"
+        self._north_home = north_home
         self._backup_dir = north_home / "context_backup"
         self._poll_interval = poll_interval_seconds
         self._max_daily_cost = max_daily_cost_usd
@@ -494,7 +495,7 @@ class ExtractionPipeline:
         archive_path.write_text(content, encoding="utf-8")
 
     async def _maybe_backup(self) -> None:
-        """Copy all context documents to a backup directory once per day."""
+        """Snapshot the memory stores once per day."""
         stamp_path = self._backup_dir / ".last_backup"
         try:
             if stamp_path.exists():
@@ -506,14 +507,15 @@ class ExtractionPipeline:
         try:
             await asyncio.to_thread(self._write_backup)
         except Exception:
-            logger.warning("ExtractionPipeline: context backup failed", exc_info=True)
+            logger.warning("ExtractionPipeline: memory backup failed", exc_info=True)
 
     def _write_backup(self) -> None:
+        # This used to copy *.md out of the context directory. The documents moved
+        # into SQLite, so that glob matched nothing and the backup quietly did
+        # nothing at all - while facts.db, the store worth protecting, was never
+        # covered in the first place.
+        snapshot_memory(self._north_home)
         self._backup_dir.mkdir(parents=True, exist_ok=True)
-        context_dir = self._watermark_path.parent
-        for path in context_dir.glob("*.md"):
-            dest = self._backup_dir / path.name
-            shutil.copy2(path, dest)
         stamp_path = self._backup_dir / ".last_backup"
         stamp_path.write_text(utcnow().isoformat(), encoding="utf-8")
 

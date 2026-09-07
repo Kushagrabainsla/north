@@ -433,6 +433,57 @@ class FactStore:
                 out.append((r["id"], r["content"], emb))
         return out
 
+    async def render_profile(
+        self, topic_order: list[str] | None = None, per_topic: int = 8, always_full: frozenset[str] = frozenset()
+    ) -> str:
+        """Render the active facts as a readable profile, grouped by topic.
+
+        The profile document used to be a by-product of bootstrap, written once
+        from the files it happened to read that run. That makes it stale the
+        moment anything is learned, superseded or recovered afterwards - and
+        rebuilding it meant re-reading every file. Deriving it from the store
+        instead means it is always the store, just readable.
+
+        It answers the question a ranked list cannot: "what do you know about
+        me?" has no single best fact, so the summary is the answer.
+        """
+        rows = await asyncio.to_thread(self._active_by_topic_sync)
+        if not rows:
+            return ""
+        order = topic_order or sorted(rows)
+
+        def section(topic: str) -> str | None:
+            items = rows.get(topic)
+            if not items:
+                return None
+            # Rendering every fact is not a profile, it is the store again: 265
+            # facts came to 33k characters, some 8k tokens on every turn of every
+            # general-agent loop. A profile is the shape of a person, so each
+            # topic contributes its most recent few and the detail stays in the
+            # facts, where a specific question can retrieve it.
+            shown = items if topic in always_full else items[:per_topic]
+            body = "\n".join(f"- {i}" for i in shown)
+            if len(items) > len(shown):
+                body += f"\n- ...and {len(items) - len(shown)} more {topic} facts"
+            return f"## {topic.capitalize()}\n{body}"
+
+        sections = [s for s in (section(t) for t in order) if s]
+        sections += [s for s in (section(t) for t in sorted(set(rows) - set(order))) if s]
+        if not sections:
+            return ""
+        return "# User Profile\n\n" + "\n\n".join(sections)
+
+    def _active_by_topic_sync(self) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT category, content FROM context_facts WHERE status = ? ORDER BY category, updated_at DESC",
+                (_STATUS_ACTIVE,),
+            ).fetchall()
+        for r in rows:
+            out.setdefault(r["category"], []).append(r["content"])
+        return out
+
     async def supersede_fact(self, fact_id: str, replaced_by: str | None = None) -> bool:
         """Retire one fact by id. The row is kept; it just stops being recalled."""
         changed = await asyncio.to_thread(self._mark_superseded_sync, [fact_id], replaced_by)

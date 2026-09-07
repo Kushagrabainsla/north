@@ -37,6 +37,7 @@ from memory.consolidator import EpisodeConsolidator
 from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
 from memory.injection import ContextInjector
+from memory.models import ContextDocument
 from orchestrator.api import configure as configure_api
 from orchestrator.api import health_router, webhook_router
 from orchestrator.api import router as orchestrator_router
@@ -260,7 +261,15 @@ def _build_tool_index(deps) -> ToolIndex | None:
     )
 
 
-async def _refresh_fact_store(fact_store) -> None:
+# Identity first: a profile is read top-down, and who someone is comes before
+# what they are working on.
+_PROFILE_TOPIC_ORDER = [
+    "identity", "preferences", "jobs", "education", "projects",
+    "skills", "schedule", "health", "finances", "other",
+]
+
+
+async def _refresh_fact_store(fact_store, context_store=None) -> None:
     """Bring the fact store into the current embedding space, then merge duplicates.
 
     Order matters: dedup compares vectors, so it has to run *after* every fact
@@ -272,6 +281,20 @@ async def _refresh_fact_store(fact_store) -> None:
     merged = await fact_store.deduplicate()
     if embedded or merged:
         logger.info("Fact store: re-embedded %d fact(s), merged %d duplicate(s)", embedded, merged)
+    # Rebuild the readable profile from the store rather than leaving whatever
+    # bootstrap happened to write. Facts learned, superseded or recovered since
+    # then belong in it, and re-deriving costs a query where re-running bootstrap
+    # costs hours.
+    if context_store is not None:
+        try:
+            profile = await fact_store.render_profile(
+                topic_order=_PROFILE_TOPIC_ORDER,
+                always_full=frozenset({"identity", "preferences"}),
+            )
+            if profile:
+                await context_store.write(ContextDocument.USER, profile)
+        except Exception:
+            logger.warning("Could not rebuild the user profile document", exc_info=True)
 
 
 async def _populate_tool_index(tool_index: ToolIndex, tool_registry: ToolRegistry) -> None:
@@ -748,7 +771,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if deps.fact_store is not None:
         background_tasks.append(
             asyncio.create_task(
-                _guarded(_refresh_fact_store(deps.fact_store), "fact_maintenance"),
+                _guarded(_refresh_fact_store(deps.fact_store, deps.context_store), "fact_maintenance"),
                 name="fact_maintenance",
             )
         )
