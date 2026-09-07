@@ -271,6 +271,54 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         raw = result.get("superseded") or []
         return [int(i) for i in raw if isinstance(i, int | str) and str(i).lstrip("-").isdigit()]
 
+    async def _glossary_fn(context: dict[str, list[str]]) -> dict[str, str]:
+        """Say what each short name means, in a few words, or nothing at all.
+
+        Answering "no idea" has to be cheap and expected. A wrong expansion is
+        spliced into every fact using that name, so silence costs one unfindable
+        fact while a guess corrupts many.
+        """
+        from inference.models import CompletionRequest, PoolPriority
+        from utils.text import extract_json
+
+        blocks = "\n\n".join(
+            f"{token}:\n" + "\n".join(f"  - {c}" for c in facts) for token, facts in context.items()
+        )
+        prompt = (
+            "Below are short names taken from notes about one person, each with facts that mention "
+            "them. For each, give the plain-language thing it refers to, in at most FOUR words - "
+            "the words someone would use if they did not know the short name.\n\n"
+            "Give the shortest phrase that identifies it and nothing more. No institution names, no "
+            "dates, no qualifiers: for a course code answer with the subject alone (\"Distributed "
+            "Computing\"), not who teaches it or where it is taught.\n\n"
+            "Only expand names that are specific to THIS person's life and would be meaningless to "
+            "anyone else: a course code, a project codename, a lab or team name, an employer's "
+            "internal system. Those are the ones a person cannot search for without knowing them "
+            "already.\n\n"
+            "Return null for everything else. In particular return null for standard industry "
+            "terminology - programming languages, protocols, file formats, hardware, well-known "
+            "libraries and frameworks - however abbreviated. Someone asking about those already "
+            "uses the same words, so spelling them out adds length and helps nobody.\n\n"
+            "Also return null for a name whose meaning is not stated in its facts, or one you would "
+            "have to guess at. Null is the right answer whenever you are unsure.\n\n"
+            f"{blocks}\n\n"
+            'Reply with JSON only: {"glossary": {"<name>": "<meaning or null>"}}'
+        )
+        response = await cost_tracker.complete(
+            CompletionRequest(
+                prompt=prompt, priority=PoolPriority.LOW, component="fact_glossary", json_mode=True
+            )
+        )
+        parsed = extract_json(response.text.strip())
+        raw = parsed.get("glossary") if isinstance(parsed, dict) else None
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            k: v.strip()
+            for k, v in raw.items()
+            if isinstance(k, str) and isinstance(v, str) and v.strip() and v.strip().lower() != "null"
+        }
+
     episodic_store = EpisodicStore(
         db_path=settings.north_home / "episodic.db", embed_fn=_embed_fn, embedding_model=embedding_model
     )
@@ -280,6 +328,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         embedding_model=embedding_model,
         supersede_fn=_supersede_fn,
     )
+    fact_store.glossary_fn = _glossary_fn
     code_index = CodeIndex(
         db_path=settings.north_home / "code_index.db", embed_fn=_embed_fn, embedding_model=embedding_model
     )

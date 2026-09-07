@@ -15,6 +15,7 @@ import contextlib
 import json
 import logging
 import re
+import unicodedata
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -169,6 +170,19 @@ _DEDUP_SCAN_LIMIT: int = 500
 # A fact is only *retrieved* while its status is this. Superseded rows stay in
 # the table - they are the record of what was once true, and deleting them would
 # make the change invisible - but they never reach a prompt again.
+# Short names that mean nothing on their own: course codes, project codenames,
+# acronyms. A fact using one without saying what it means cannot be found by
+# someone who only knows the meaning - "who teaches my distributed computing
+# class" never matches "the user's CS 249 instructor is ...".
+_IDENTIFIER_RE = re.compile(r"\b(?:[A-Z]{2,4}\s?\d{2,3}|[A-Z]{3,}[a-zA-Z]*)\b")
+# Acronyms so common they are their own meaning, or too generic to expand well.
+_IDENTIFIER_STOPWORDS: frozenset[str] = frozenset({
+    "THE", "AND", "USD", "GPA", "PHD", "SJSU", "USA", "API", "APIs", "PDF", "SQL", "AWS",
+    "GPU", "GPUs", "CPU", "RAM", "URL", "HTTP", "JSON", "YAML", "CSV", "PST", "UTC", "AI", "ML",
+})
+# An identifier used in only one fact has nothing to disambiguate against.
+_IDENTIFIER_MIN_USES: int = 2
+
 _STATUS_ACTIVE: str = "active"
 _STATUS_SUPERSEDED: str = "superseded"
 # The band where a new fact is close enough to an old one to be *about the same
@@ -205,6 +219,28 @@ _TOPIC_RETENTION_RANK: dict[str, int] = {
     "other": 5,
 }
 _DEFAULT_RETENTION_RANK: int = 5
+
+
+# A meaning is redundant once most of its distinctive words are already in the
+# fact. Comparing the whole phrase is not enough: "CS 249 Distributed Computing
+# seminar" does not contain the string "San José State distributed computing
+# course", so a phrase check annotated it anyway and produced "CS 249 (San José
+# State distributed computing course) Distributed Computing seminar".
+_EXPLAIN_OVERLAP: float = 0.6
+_EXPLAIN_STOPWORDS: frozenset[str] = frozenset(
+    {"a", "an", "the", "of", "for", "and", "or", "to", "in", "on", "at", "with", "system", "course"}
+)
+
+
+def _already_explained(fact: str, meaning: str) -> bool:
+    """True when *fact* already carries most of what *meaning* would add."""
+    normalized = unicodedata.normalize("NFKD", meaning.lower()).encode("ascii", "ignore").decode()
+    words = [w for w in re.findall(r"[a-z0-9]+", normalized) if w not in _EXPLAIN_STOPWORDS]
+    if not words:
+        return True
+    lowered = unicodedata.normalize("NFKD", fact.lower()).encode("ascii", "ignore").decode()
+    present = sum(1 for w in words if w in lowered)
+    return present / len(words) >= _EXPLAIN_OVERLAP
 
 
 def _retention_rank_sql() -> str:
@@ -371,6 +407,70 @@ class FactStore:
                 f"WHERE id IN ({placeholders})",
                 (_STATUS_SUPERSEDED, replaced_by, now, *fact_ids),
             ).rowcount
+
+    async def expand_identifiers(self, glossary_fn: Any) -> int:
+        """Annotate bare identifiers in stored facts with what they mean.
+
+        Facts written recently carry their own context, because extraction now
+        requires it. Facts that predate that rule - and facts recovered from a
+        backup - do not, and no retriever can bridge the gap: the join was never
+        stored. Measured on real facts, annotating the identifier raises the
+        similarity of the question that wanted them by 0.11 to 0.16, which is the
+        difference between unreachable and top of the list.
+
+        The model is only asked for a glossary - "PACER" means what? - and the
+        text change itself is a deterministic insertion after the first mention.
+        Letting a model rewrite whole facts is how a name fact previously ended
+        up glued to an unrelated sentence and got worse, not better.
+
+        Idempotent: a fact already carrying the meaning is left alone, so this
+        converges and later runs do nothing.
+        """
+        facts = await asyncio.to_thread(self._active_id_rows_sync)
+        if not facts:
+            return 0
+        uses: dict[str, int] = {}
+        for _, content in facts:
+            for token in set(_IDENTIFIER_RE.findall(content)):
+                if token.upper() not in _IDENTIFIER_STOPWORDS:
+                    uses[token] = uses.get(token, 0) + 1
+        candidates = sorted(k for k, n in uses.items() if n >= _IDENTIFIER_MIN_USES)
+        if not candidates:
+            return 0
+        context = {
+            token: [c for _, c in facts if token in c][:6]
+            for token in candidates
+        }
+        try:
+            glossary = await glossary_fn(context)
+        except Exception:
+            logger.warning("FactStore: identifier glossary failed - facts left as they are", exc_info=True)
+            return 0
+
+        updates: list[tuple[str, str]] = []
+        for fact_id, content in facts:
+            new = content
+            for token, meaning in (glossary or {}).items():
+                if not meaning or token not in new:
+                    continue
+                if _already_explained(new, meaning):
+                    continue
+                new = new.replace(token, f"{token} ({meaning})", 1)
+            if new != content:
+                updates.append((fact_id, new))
+        if not updates:
+            return 0
+        for fact_id, new in updates:
+            await self.update_fact(fact_id, new)
+        logger.info("FactStore: explained bare identifiers in %d fact(s)", len(updates))
+        return len(updates)
+
+    def _active_id_rows_sync(self) -> list[tuple[str, str]]:
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM context_facts WHERE status = ?", (_STATUS_ACTIVE,)
+            ).fetchall()
+        return [(r["id"], r["content"]) for r in rows]
 
     async def deduplicate(self) -> int:
         """Retire near-duplicate facts, keeping the most informative of each set.

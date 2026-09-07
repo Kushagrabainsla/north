@@ -279,8 +279,15 @@ async def _refresh_fact_store(fact_store, context_store=None) -> None:
     """
     embedded = await fact_store.backfill_embeddings()
     merged = await fact_store.deduplicate()
-    if embedded or merged:
-        logger.info("Fact store: re-embedded %d fact(s), merged %d duplicate(s)", embedded, merged)
+    explained = 0
+    glossary_fn = getattr(fact_store, "glossary_fn", None)
+    if glossary_fn is not None:
+        explained = await fact_store.expand_identifiers(glossary_fn)
+    if embedded or merged or explained:
+        logger.info(
+            "Fact store: re-embedded %d fact(s), merged %d duplicate(s), explained %d identifier use(s)",
+            embedded, merged, explained,
+        )
     # Rebuild the readable profile from the store rather than leaving whatever
     # bootstrap happened to write. Facts learned, superseded or recovered since
     # then belong in it, and re-deriving costs a query where re-running bootstrap
