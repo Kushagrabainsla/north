@@ -129,13 +129,20 @@ def build_chain(
 
     *floor* is the minimum score for a cheapest-first part, already resolved from
     a percentile of the live catalog by the caller. *demoted* marks models this
-    install has first-party negative evidence about; they keep their place in the
-    chain's tail rather than being removed, because "worse here" is not "unusable".
+    install has first-party negative evidence about.
+
+    Neither removes a model: both send it to the chain's tail, because "worse
+    here" is not "unusable". A floor that excluded outright made north unusable
+    the moment its funded models went away - every above-floor model returned
+    NEEDS_BILLING, the free tail was never in the chain to fall back to, and the
+    planner failed, which fails every non-trivial task. Ranked last, a lesser
+    model is only ever reached when nothing better can answer at all.
     """
     combined = requirements.merged_with(profile)
     score_field = profile.order_by if profile.ranks_by_score else profile.floor_field
 
-    candidates: list[Candidate] = []
+    preferred: list[Candidate] = []
+    below_floor: list[Candidate] = []
     for canonical_id, record in facts.items():
         endpoints = endpoints_by_model.get(canonical_id)
         if not endpoints:
@@ -149,20 +156,24 @@ def build_chain(
             continue
         raw = record.value(score_field)
         score = float(raw) if raw is not None else prior(cheapest)
+        candidate = Candidate(record, tuple(endpoints), score)
         if floor is not None and score < floor:
-            continue
-        candidates.append(Candidate(record, tuple(endpoints), score))
+            below_floor.append(candidate)
+        else:
+            preferred.append(candidate)
 
-    if profile.ranks_by_score:
-        candidates.sort(key=lambda c: (-c.score, c.price, c.canonical_id))
-    else:
-        candidates.sort(key=lambda c: (c.price, -c.score, c.canonical_id))
-
-    if demoted is not None:
-        candidates = [c for c in candidates if not demoted(c.canonical_id)] + [
-            c for c in candidates if demoted(c.canonical_id)
+    def _ordered(tier: list[Candidate]) -> list[Candidate]:
+        if profile.ranks_by_score:
+            tier.sort(key=lambda c: (-c.score, c.price, c.canonical_id))
+        else:
+            tier.sort(key=lambda c: (c.price, -c.score, c.canonical_id))
+        if demoted is None:
+            return tier
+        return [c for c in tier if not demoted(c.canonical_id)] + [
+            c for c in tier if demoted(c.canonical_id)
         ]
-    return _pin_first(candidates, profile.pinned_model)
+
+    return _pin_first(_ordered(preferred) + _ordered(below_floor), profile.pinned_model)
 
 
 def _pin_first(chain: list[Candidate], pinned_model: str | None) -> list[Candidate]:
@@ -308,7 +319,11 @@ class ChainWalk:
             tally[skip.reason] = tally.get(skip.reason, 0) + 1
         ranked = sorted(tally.items(), key=lambda item: (-item[1], item[0]))
         detail = ", ".join(f"{count} {reason}" for reason, count in ranked[:5])
-        return f"{self.considered} considered: {detail}"
+        # Two units in one sentence: `considered` counts models, the skips count
+        # endpoints, and one model has many. Reported bare, "114 considered: 151
+        # NEEDS_BILLING" reads as impossible and sent a reader hunting a bug that
+        # was not there.
+        return f"{self.considered} models / {len(self.skipped)} endpoints: {detail}"
 
 
 def _describe_requirements(requirements: Requirements | None) -> str:

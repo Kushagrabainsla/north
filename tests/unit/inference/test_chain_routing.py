@@ -195,7 +195,8 @@ class TestWalk:
             attempt.failed(Failure(Scope.MODEL, "rate limited", attempt.model_id, attempt.provider))
 
         summary = walk.exhaustion_summary()
-        assert summary.startswith("4 considered:")
+        # Models and endpoints are counted separately: 4 models, 5 endpoint skips.
+        assert summary.startswith("4 models / 5 endpoints:")
         assert "NEEDS_BILLING" in summary
         assert "rate limited" in summary
 

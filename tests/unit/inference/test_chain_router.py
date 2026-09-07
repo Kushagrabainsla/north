@@ -207,7 +207,8 @@ async def test_exhaustion_reports_what_went_wrong(tmp_path) -> None:
             call_fn=_call,
             task_id="t4",
         )
-    assert "considered" in str(caught.value)
+    assert "models /" in str(caught.value)
+    assert "endpoints:" in str(caught.value)
     await decisions.flush()
     (row,) = decisions.recent(task_id="t4")
     assert row["outcome"] == "exhausted"
