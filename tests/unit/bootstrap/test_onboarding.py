@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import bootstrap.onboarding as onboarding
 from bootstrap.onboarding import (
     _clean_fact,
     _discover_files,
@@ -142,6 +143,20 @@ _DOCUMENT_TEXT = (
 
 def _fake_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+
+@pytest.fixture(autouse=True)
+def _pin_user_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Say who the fixture documents are about, instead of asking the machine.
+
+    The survey keeps a file when it looks like it is about *this* user, and it
+    learns who that is from the system account (`_get_user_tokens`). So these
+    tests passed on a laptop whose account is "Kushagra Bainsla" and failed on CI,
+    where it is "runner": the resume read as somebody else's, nothing survived the
+    survey, and bootstrap marked itself done without ever calling a model - which
+    is exactly what the rate-limit test asserts must not happen.
+    """
+    monkeypatch.setattr(onboarding, "_get_user_tokens", lambda: {"kushagra", "bainsla"})
 
 
 # --- _clean_fact -----------------------------------------------------------
