@@ -84,6 +84,11 @@ class CronEntry:
     # what it did. Empty on rows written before labels existed - `title` falls
     # back to the prompt for those.
     label: str = ""
+    # What this schedule is for, in a sentence. Only the built-ins carry one:
+    # a routine the user wrote explains itself through its prompt, but a
+    # built-in whose prompt is an internal slug does not. "task_context_cleanup"
+    # told the reader nothing about what runs at 3 a.m. or why they want it to.
+    description: str = ""
 
     def __post_init__(self) -> None:
         if not (0 <= self.hour <= 23):
@@ -358,6 +363,10 @@ V1_CRON_ENTRIES: list[CronEntry] = [
     CronEntry(
         name="news_daily_briefing",
         label="Daily news briefing",
+        description=(
+            "Reads the morning's news across tech & AI, world events, science & health, and business, "
+            "and files one briefing you can read in Artifacts."
+        ),
         agent="news_briefing",
         task=(
             "Compile the daily news briefing across Tech & AI, world events, science & health, and business & markets"
@@ -368,6 +377,12 @@ V1_CRON_ENTRIES: list[CronEntry] = [
     CronEntry(
         name="task_context_cleanup",
         label="Nightly cleanup",
+        description=(
+            "Housekeeping north runs on itself: closes tasks left half-finished, deletes the databases, "
+            "ledger entries, routing records and handoff files of runs that are old enough to have stopped "
+            "mattering, and retires learned skills whose tasks keep failing. Without it north's storage "
+            "grows for as long as it is installed."
+        ),
         agent="system",
         task="task_context_cleanup",
         hour=3,
@@ -395,17 +410,32 @@ def merge_entries(builtins: list[CronEntry], user_rows: list[Mapping[str, Any]])
     """
     by_name = {entry.name: entry for entry in builtins}
     for row in user_rows:
-        stored = CronEntry.from_row(row)
-        shipped = by_name.get(stored.name)
-        # An override written before a field existed holds nothing for it, and
-        # nothing must not beat the shipped value. `label` is the case that bit:
-        # a built-in edited before schedules had names kept showing its slug
-        # ("task_context_cleanup") after the update that gave it one, because an
-        # empty label overrode a good one.
-        if shipped is not None and not stored.label and shipped.label:
-            stored = dataclasses.replace(stored, label=shipped.label)
+        stored = apply_shipped_defaults(CronEntry.from_row(row))
         by_name[stored.name] = stored
     return list(by_name.values())
+
+
+def apply_shipped_defaults(entry: CronEntry) -> CronEntry:
+    """Restore, on a stored override, the fields only the shipped built-in knows.
+
+    An override records what the user changed, and it is written by forms and
+    tools that have no field for either a built-in's title or its description.
+    Nothing must not beat the shipped value: a built-in edited before schedules
+    had names kept showing its slug ("task_context_cleanup") after the update
+    that gave it one, because an empty label overrode a good one.
+
+    A description is taken from the shipped entry outright rather than only when
+    the override lacks one - it says what the schedule *is*, which retiming or
+    pausing it does not change, and there is no way to edit it.
+    """
+    shipped = BUILTIN_BY_NAME.get(entry.name)
+    if shipped is None:
+        return entry
+    return dataclasses.replace(
+        entry,
+        label=entry.label or shipped.label,
+        description=shipped.description,
+    )
 
 
 def builtin_default(name: str) -> CronEntry | None:

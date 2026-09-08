@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, del, patch, post } from "../api";
 import { Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
@@ -139,7 +139,8 @@ interface Job {
 }
 
 interface Cron {
-  name: string; label: string; title: string; agent: string; task: string; hour: number; minute: number;
+  name: string; label: string; title: string; description: string;
+  agent: string; task: string; hour: number; minute: number;
   weekdays: number[]; cadence: string; enabled: boolean; tz: string;
   schedule: string; next_run_local: string; next_run_epoch: number; source: string; modified: boolean;
 }
@@ -305,6 +306,46 @@ function ConfirmRow({ question, confirmLabel, onConfirm, onCancel, busy }: {
   </div>;
 }
 
+// A schedule north ships with. It is part of how north runs itself rather than
+// something the user asked for, so the page shows it rather than offering to
+// change it: the row says what it is for, and "Details" opens the whole
+// definition. Listing these among the user's own routines made north's own
+// housekeeping look like something they had set up and forgotten.
+function BuiltinRow({ entry, restore }: { entry: Cron; restore?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const facts: [string, string][] = [
+    ["Runs", entry.task],
+    ["Agent", entry.agent],
+    ["Repeats", `${entry.cadence} at ${hhmm(entry.hour, entry.minute)}`],
+    ["Time zone", entry.tz],
+    ["Next run", entry.enabled ? `${entry.next_run_local} (${whenFromNow(entry.next_run_epoch)})` : "paused"],
+    ["Settings", entry.modified ? "changed from the ones north ships with" : "as north ships them"],
+  ];
+  return <div className={entry.enabled ? "schedule-row builtin" : "schedule-row builtin paused"}>
+    <div className="schedule-main">
+      <b>{entry.title}</b>
+      {/* What it is for, in north's words - the part a built-in cannot say
+          through its prompt, which for the nightly cleanup is a bare slug. */}
+      {entry.description && <small className="schedule-description">{entry.description}</small>}
+      <small>
+        {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
+        {entry.enabled ? ` · next ${entry.next_run_local}` : " · paused"}
+        {entry.modified && " · edited"}
+      </small>
+      {open && <dl className="schedule-details">
+        {facts.map(([term, value]) => <div key={term}><dt>{term}</dt><dd>{value}</dd></div>)}
+      </dl>}
+    </div>
+    <div className="schedule-actions">
+      <span className="schedule-locked">built-in</span>
+      <button className="ghost-button" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {open ? "Hide" : "Details"}
+      </button>
+    </div>
+    {restore}
+  </div>;
+}
+
 export function Schedule() {
   const [editing, setEditing] = useState("");
   const [creating, setCreating] = useState(false);
@@ -369,6 +410,12 @@ export function Schedule() {
   const startEdit = (entry: Cron) => { close(); setDraft(draftOf(entry)); setEditing(entry.name); };
 
   const routines = cron.data || [];
+  // Two lists, because they are two kinds of thing. A built-in is part of how
+  // north runs itself; a routine is something the user (or north, on their
+  // behalf) set up. Mixed together, north's own housekeeping read as a chore
+  // the user had scheduled and could not remember scheduling.
+  const mine = routines.filter(entry => entry.source !== "builtin");
+  const builtins = routines.filter(entry => entry.source === "builtin");
   // A job carries only its prompt, so a firing of a named routine is titled by
   // the routine it came from - otherwise the same run reads two different ways
   // depending on which list it is in.
@@ -441,14 +488,13 @@ export function Schedule() {
         </div>) : <Empty>Nothing is scheduled. Add a routine below, or ask north to remind you about something.</Empty>}
     </Panel>
 
-    <Panel title="Routines" label={`${routines.length} recurring`}>
-      {cron.loading ? <Loading/> : routines.length ? routines.map(entry => (
+    <Panel title="Your routines" label={`${mine.length} recurring`}>
+      {cron.loading ? <Loading/> : mine.length ? mine.map(entry => (
         <div className={entry.enabled ? "schedule-row" : "schedule-row paused"} key={entry.name}>
           <div className="schedule-main">
             <b>{entry.title}</b>
             <small>
               {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
-              {entry.source === "builtin" && (entry.modified ? " · built-in, edited" : " · built-in")}
               {entry.enabled ? ` · next ${entry.next_run_local}` : " · paused"}
             </small>
             {/* Once the title is a name, what actually runs is no longer on
@@ -457,21 +503,13 @@ export function Schedule() {
           </div>
           {confirming === entry.name
             ? <ConfirmRow busy={busy} onCancel={() => setConfirming("")} onConfirm={() => removeOrRestore(entry)}
-                question={entry.source === "builtin"
-                  ? "Put this back to the settings north ships with?"
-                  : "Delete this routine? It will not run again."}
-                confirmLabel={entry.source === "builtin" ? "Restore" : "Delete"}/>
+                question="Delete this routine? It will not run again." confirmLabel="Delete"/>
             : <div className="schedule-actions">
                 <button className="ghost-button" onClick={() => setEnabled(entry, !entry.enabled)} disabled={busy}>
                   {entry.enabled ? "Pause" : "Resume"}
                 </button>
                 <button className="ghost-button" onClick={() => startEdit(entry)} disabled={busy}>Edit</button>
-                {/* A built-in lives in the source, so it can only be un-edited,
-                    never removed - and there is nothing to undo until it has
-                    been edited. */}
-                {entry.source === "builtin"
-                  ? entry.modified && <button className="ghost-button" onClick={() => setConfirming(entry.name)} disabled={busy}>Restore default</button>
-                  : <button className="ghost-button danger-link" onClick={() => setConfirming(entry.name)} disabled={busy}>Delete</button>}
+                <button className="ghost-button danger-link" onClick={() => setConfirming(entry.name)} disabled={busy}>Delete</button>
               </div>}
           {/* A routine cannot become a one-off in place - that is a delete and
               a new event - so "Does not repeat" is not offered when editing. */}
@@ -479,7 +517,27 @@ export function Schedule() {
             onSubmit={() => save(entry.name)} submitLabel="Save changes" busy={busy} error={error}
             agents={agents} allowOnce={false}/>}
         </div>
-      )) : <Empty>No recurring routines yet.</Empty>}
+      )) : <Empty>No routines of your own yet. Schedule something above, or just ask north for it.</Empty>}
+    </Panel>
+
+    {/* Read-only: these are north's own, not the user's, and changing one
+        changes how north runs rather than what it does for them. The one
+        exception is undoing an edit made before they were read-only, which
+        would otherwise be stranded with no way back to the shipped values. */}
+    <Panel title="Built into north" label="read-only">
+      {cron.loading ? <Loading/> : builtins.length ? builtins.map(entry =>
+        <BuiltinRow key={entry.name} entry={entry} restore={entry.modified && (
+          confirming === entry.name
+            ? <div className="schedule-restore">
+                <ConfirmRow busy={busy} onCancel={() => setConfirming("")} onConfirm={() => removeOrRestore(entry)}
+                  question="Put this back to the settings north ships with?" confirmLabel="Restore"/>
+              </div>
+            : <div className="schedule-restore">
+                <button className="ghost-button" onClick={() => setConfirming(entry.name)} disabled={busy}>
+                  Restore default
+                </button>
+              </div>)}/>
+      ) : <Empty>North has no built-in schedules.</Empty>}
     </Panel>
 
     <Panel title="Recently run" label="history">

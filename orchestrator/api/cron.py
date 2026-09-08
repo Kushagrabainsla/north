@@ -12,7 +12,14 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from jobs.cron_store import UNSET
-from jobs.scheduler import V1_CRON_ENTRIES, CronEntry, builtin_default, merge_entries, next_firing_epoch
+from jobs.scheduler import (
+    V1_CRON_ENTRIES,
+    CronEntry,
+    apply_shipped_defaults,
+    builtin_default,
+    merge_entries,
+    next_firing_epoch,
+)
 from orchestrator.api.deps import _get_cron_store, router
 from tools.universal._schedules import parse_weekdays
 from utils.time import format_local, local_timezone_name
@@ -23,9 +30,10 @@ class CronEntryOut(BaseModel):
     given as both an epoch (for machines) and local text (for people).
 
     `source` is "user" for a schedule the user created and "builtin" for one
-    north ships with. Both can be edited and paused; a built-in additionally
-    reports `modified`, and deleting it restores the shipped values rather than
-    removing it.
+    north ships with. The page shows the two apart: a user's own is editable,
+    a built-in is read-only there and explains itself through `description`.
+    A built-in additionally reports `modified`, and deleting it restores the
+    shipped values rather than removing it.
 
     `weekdays` is the days it runs, empty meaning every day. `cadence` is the
     same fact in the words a person uses ("weekdays", "weekends", "every Tue"),
@@ -37,6 +45,10 @@ class CronEntryOut(BaseModel):
     # `task` the prompt that actually runs. One field used to be all three.
     label: str
     title: str
+    # What the schedule is for, in a sentence. Only built-ins have one - a
+    # routine the user wrote is explained by its own prompt, where a built-in's
+    # prompt may be an internal slug that says nothing to the person reading it.
+    description: str = ""
     agent: str
     task: str
     hour: int
@@ -91,7 +103,8 @@ BUILTIN_NAMES = frozenset(entry.name for entry in V1_CRON_ENTRIES)
 def _to_out(row: dict) -> CronEntryOut:
     name = row["name"]
     is_builtin = name in BUILTIN_NAMES
-    return _entry_out(CronEntry.from_row(row), "builtin" if is_builtin else "user", modified=is_builtin)
+    entry = apply_shipped_defaults(CronEntry.from_row(row))
+    return _entry_out(entry, "builtin" if is_builtin else "user", modified=is_builtin)
 
 
 def _entry_out(entry: CronEntry, source: str, *, modified: bool = False) -> CronEntryOut:
@@ -100,6 +113,7 @@ def _entry_out(entry: CronEntry, source: str, *, modified: bool = False) -> Cron
         name=entry.name,
         label=entry.label,
         title=entry.title,
+        description=entry.description,
         agent=entry.agent,
         task=entry.task,
         hour=entry.hour,

@@ -274,7 +274,10 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
 .schedule-main b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .schedule-main small { display: block; }
 .schedule-main small { color: var(--muted); margin-top: 4px; font-size: 10px; }
-.schedule-actions { display: flex; gap: 6px; }
+.schedule-actions { display: flex; align-items: center; gap: 6px; }
+/* A built-in row grows when its details open, and its controls belong
+   beside the title rather than halfway down what the title revealed. */
+.schedule-row.builtin { align-items: start; }
 .schedule-actions .ghost-button { font-size: 10px; padding: 6px 9px; }
 .schedule-locked { color: var(--faint); font: 9px "DM Mono", monospace; }
 .schedule-form { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px; padding: 13px; margin: 8px 0 4px; border: 1px solid var(--line-soft); border-radius: 10px; background: rgba(0,0,0,.2); }
@@ -294,6 +297,13 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
    like the same kind of row. */
 .schedule-row.upcoming .schedule-main b { font-weight: 500; }
 .schedule-prompt { color: var(--faint); font-style: italic; }
+/* A built-in explains itself in a sentence, so this one wraps where the
+   single-line facts beside it do not. */
+.schedule-description { white-space: normal; line-height: 1.55; max-width: 68ch; }
+.schedule-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 18px; margin: 10px 0 2px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: rgba(0,0,0,.2); }
+.schedule-details dt { color: var(--faint); font: 9px "DM Mono", monospace; text-transform: uppercase; letter-spacing: .1em; }
+.schedule-details dd { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.schedule-restore { grid-column: 1 / -1; display: flex; justify-content: flex-end; padding-top: 8px; }
 .schedule-upcoming-kind { color: var(--muted); font: 9px "DM Mono", monospace; white-space: nowrap; }
 .panel > header .primary-button { font-size: 10px; padding: 6px 10px; align-self: center; }
 .day-picker { display: flex; flex-wrap: wrap; gap: 5px; }

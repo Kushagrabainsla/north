@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 import orchestrator.api.cron as api
 from jobs.cron_store import UserCronStore
+from jobs.scheduler import builtin_default
 from orchestrator.api_context import ApiServices, bind_services
 
 
@@ -237,3 +238,47 @@ async def test_the_builtin_briefing_has_a_readable_name(store) -> None:
     titles = {e.name: e.title for e in listed}
     assert titles["news_daily_briefing"] == "Daily news briefing"
     assert titles["task_context_cleanup"] == "Nightly cleanup"
+
+
+@pytest.mark.asyncio
+async def test_a_builtin_says_what_it_is_for(store) -> None:
+    """A built-in's prompt can be an internal slug, which explains nothing.
+
+    "task_context_cleanup" was the whole of what the page could say about the
+    job that runs at 3 a.m., so the row read as a chore the user had scheduled
+    themselves and could no longer remember.
+    """
+    with bind_services(ApiServices(cron_store=store)):
+        listed = await api.list_cron_entries()
+
+    cleanup = next(entry for entry in listed if entry.name == "task_context_cleanup")
+    assert cleanup.description
+    assert cleanup.description != cleanup.task
+    assert all(entry.description for entry in listed if entry.source == "builtin")
+
+
+@pytest.mark.asyncio
+async def test_a_routine_of_the_users_own_carries_no_description(store) -> None:
+    """It is explained by the prompt they wrote for it."""
+    with bind_services(ApiServices(cron_store=store)):
+        entry = await create(label="Morning stretch")
+    assert entry.description == ""
+
+
+@pytest.mark.asyncio
+async def test_retiming_a_builtin_leaves_its_description_alone(store) -> None:
+    """What a schedule is for does not change when the hour it runs at does.
+
+    The override is written by a form with no description field, so the shipped
+    text has to be put back on the way out or an edited built-in goes silent.
+    """
+    shipped = builtin_default("task_context_cleanup")
+    assert shipped is not None
+    with bind_services(ApiServices(cron_store=store)):
+        edited = await update("task_context_cleanup", hour=4)
+        listed = await api.list_cron_entries()
+
+    assert edited.hour == 4
+    assert edited.description == shipped.description
+    cleanup = next(entry for entry in listed if entry.name == "task_context_cleanup")
+    assert cleanup.description == shipped.description
