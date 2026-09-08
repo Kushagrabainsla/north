@@ -9,7 +9,8 @@ Device control after discovery uses the async python-kasa API directly.
 from __future__ import annotations
 
 import asyncio
-import re
+import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,8 @@ from typing import Any
 
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
+
+logger = logging.getLogger(__name__)
 
 # Named colours → (hue 0-360, saturation 0-100)
 _COLOR_NAMES: dict[str, tuple[int, int]] = {
@@ -92,19 +95,71 @@ class _ActionParams:
     brightness: int | None = None
 
 
-def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
-    """Run `kasa discover` as a subprocess. Returns (pairs, diagnostic).
+def _credential_args() -> list[str]:
+    """The TP-Link login, when one is configured. Empty otherwise.
 
-    *pairs* is [(ip, alias), ...]. *diagnostic* is an empty string on success,
-    or a human-readable reason when discovery produced nothing (binary missing,
-    permission error, timeout, no network) so the caller can surface it instead
-    of a silent "no devices found".
+    Devices speaking KLAP - most firmware since 2023 - answer discovery without a
+    credential and then refuse everything else, so this is the difference between
+    seeing a bulb and being able to switch it on.
+    """
+    from config.settings import settings
+
+    if not (settings.kasa_username and settings.kasa_password):
+        return []
+    return ["--username", settings.kasa_username, "--password", settings.kasa_password]
+
+
+def _parse_discovery(payload: str) -> list[tuple[str, str]]:
+    """Read `kasa --json discover` into [(ip, alias), ...].
+
+    JSON rather than the CLI's prose, because the prose changed underneath us:
+    the scraper looked for "Host: 10.0.0.36" and python-kasa 0.10 prints
+    "IP:  10.0.0.36", so every device on the network parsed as no devices at all.
+
+    A device that has not been authenticated reports no alias, so the address
+    stands in - a bulb the user cannot name is still a bulb worth listing.
+    """
+    try:
+        found = json.loads(payload)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(found, dict):
+        return []
+    pairs: list[tuple[str, str]] = []
+    for host, record in found.items():
+        info = record if isinstance(record, dict) else {}
+        system = info.get("system") if isinstance(info.get("system"), dict) else {}
+        inner = system.get("get_sysinfo") if isinstance(system.get("get_sysinfo"), dict) else {}
+        alias = info.get("alias") or inner.get("alias") or info.get("device_model") or host
+        pairs.append((str(info.get("ip") or host), str(alias)))
+    return pairs
+
+
+def _authentication_failed(payload: str) -> int:
+    """How many discovered devices refused the credentials north offered.
+
+    Counted so the caller can say *why* nothing is controllable. This was the
+    failure that reached the user as silence: two bulbs on the network, both
+    reporting "Authentication failed", and a tool that reported no devices.
+    """
+    return payload.count("Authentication failed")
+
+
+def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
+    """Run `kasa --json discover` as a subprocess. Returns (pairs, diagnostic).
+
+    *pairs* is [(ip, alias), ...]. *diagnostic* is an empty string on success, or
+    a human-readable reason when discovery produced nothing - a missing binary, a
+    timeout, or devices that would not authenticate - so the caller can surface it
+    instead of a silent "no devices found".
     """
     kasa_bin = shutil.which("kasa") or f"{sys.executable.rsplit('/', 1)[0]}/kasa"
+    credentials = _credential_args()
     last_err = ""
     for attempt in ("binary", "module"):
+        base = [kasa_bin] if attempt == "binary" else [sys.executable, "-m", "kasa"]
+        cmd = [*base, "--json", *credentials, "discover"]
         try:
-            cmd = [kasa_bin, "discover"] if attempt == "binary" else [sys.executable, "-m", "kasa", "discover"]
             # North is commonly launched detached, where stdin may be closed.
             # Explicitly detach all standard input so Python-based CLIs cannot
             # fail during interpreter startup with EBADF (Errno 9).
@@ -114,7 +169,7 @@ def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
             if result.returncode != 0:
                 # A broken/missing binary should not prevent the module fallback.
                 # Preserve the diagnostic if both discovery methods fail.
-                last_err = f"`{' '.join(cmd)}` exited {result.returncode}: {last_err or 'no output'}"
+                last_err = f"`{' '.join(_redacted(cmd))}` exited {result.returncode}: {last_err or 'no output'}"
                 continue
         except FileNotFoundError:
             last_err = f"kasa executable not found at {kasa_bin}"
@@ -124,25 +179,82 @@ def _run_kasa_discover() -> tuple[list[tuple[str, str]], str]:
         except Exception as exc:  # noqa: BLE001
             return [], f"kasa discover raised: {exc}"
 
-        hosts = re.findall(r"Host:\s+(\d+\.\d+\.\d+\.\d+)", output)
-        aliases = re.findall(r"==\s+(.+?)\s+-\s+\w+\s+==", output)
-        pairs = [(host, aliases[i] if i < len(aliases) else host) for i, host in enumerate(hosts)]
-        return pairs, ""
+        pairs = _parse_discovery(output)
+        if pairs:
+            return pairs, ""
+        # Nothing parsed. Say which of the two reasons it was, rather than
+        # returning an empty list and an empty explanation.
+        refused = _authentication_failed(result.stderr or "") + _authentication_failed(output)
+        if refused:
+            return [], (
+                f"{refused} device(s) refused authentication. Newer Kasa firmware needs a TP-Link "
+                "account: set NORTH_KASA_USERNAME and NORTH_KASA_PASSWORD in ~/.north/.env."
+            )
+        return [], last_err or "kasa discover found nothing on this network"
 
     return [], last_err or "kasa discovery produced no output"
 
 
+def _redacted(cmd: list[str]) -> list[str]:
+    """The command with the password blanked, for logs and error messages."""
+    out = list(cmd)
+    for index, token in enumerate(out):
+        if token == "--password" and index + 1 < len(out):
+            out[index + 1] = "***"
+    return out
+
+
+async def _open_device(host: str) -> Any:
+    """Open one device, letting discovery work out how to talk to it.
+
+    ``Device.connect(host=...)`` assumes the legacy protocol and dials port 9999,
+    which a KLAP device is not listening on - so every bulb failed with "connect
+    call failed" no matter what credentials were set. ``discover_single`` asks the
+    device which protocol and port it speaks before connecting, and carries the
+    login while it does.
+
+    The credentials have to travel here as well as to the discovery subprocess:
+    discovery only has to *see* a device, control has to authenticate to it.
+    """
+    from kasa import Discover
+
+    from config.settings import settings
+
+    return await Discover.discover_single(
+        host,
+        timeout=_DEVICE_TIMEOUT_SECONDS,
+        username=settings.kasa_username or None,
+        password=settings.kasa_password or None,
+    )
+
+
+async def _close_devices(devices: Any) -> None:
+    """Release the HTTP sessions opened for *devices*.
+
+    A KLAP device is reached over aiohttp, and each open device holds a session
+    until it is disconnected. Nothing did, so every command leaked one connector
+    per device - invisible in a CLI run and steady growth in a server that has
+    been up for days.
+    """
+    for dev in devices:
+        disconnect = getattr(dev, "disconnect", None)
+        if disconnect is None:
+            continue
+        try:
+            await disconnect()
+        except Exception:  # noqa: BLE001 - closing must never fail a command
+            logger.debug("kasa: failed to disconnect a device", exc_info=True)
+
+
 async def _connect_devices(pairs: list[tuple[str, str]]) -> tuple[dict[str, Any], list[str]]:
     """Connect to discovered devices, preserving per-device failures."""
-    from kasa import Device
-
-    found = {}
+    found: dict[str, Any] = {}
     errors: list[str] = []
     for host, alias in pairs:
         last_error: Exception | None = None
         for attempt in range(_DEVICE_RETRIES + 1):
             try:
-                dev = await asyncio.wait_for(Device.connect(host=host), timeout=_DEVICE_TIMEOUT_SECONDS)
+                dev = await asyncio.wait_for(_open_device(host), timeout=_DEVICE_TIMEOUT_SECONDS)
                 await asyncio.wait_for(dev.update(), timeout=_DEVICE_TIMEOUT_SECONDS)
                 found[host] = dev
                 last_error = None
@@ -467,7 +579,10 @@ class KasaTool(ApprovalGatedTool):
         # devices; keep power actions target-specific to avoid surprises with
         # plugs and switches.
         broad_actions = {"brightness", "color", "color_temp", "scene"}
-        if action not in broad_actions and not target_hint:
+        # `list` names nothing because it changes nothing - and it is the action
+        # the error below tells the reader to run, so requiring a device for it
+        # made the only route out of the error the error itself.
+        if action != "list" and action not in broad_actions and not target_hint:
             # Require an explicit target so a control action can never fan out
             # to every device on the network. No approval prompt - actions run
             # immediately once a device is named.
@@ -498,7 +613,22 @@ class KasaTool(ApprovalGatedTool):
         found, alias_map, early = await self._discover_and_connect()
         if early is not None:
             return early
+        try:
+            return await self._run_action(action, input, found, alias_map, target_hint, broad_actions)
+        finally:
+            # Whatever the command did, the sessions it opened are released here.
+            await _close_devices(found.values())
 
+    async def _run_action(
+        self,
+        action: str,
+        input: ToolInput,
+        found: dict[str, Any],
+        alias_map: dict[str, str],
+        target_hint: str,
+        broad_actions: set[str],
+    ) -> ToolOutput:
+        """Carry out one command against already-connected devices."""
         if action == "list":
             devices = [
                 _device_state(dev, ip, alias_map, include_model=True, include_hsv=True) for ip, dev in found.items()
@@ -559,6 +689,14 @@ class KasaTool(ApprovalGatedTool):
             return {}, {}, ToolOutput(success=False, error=f"Failed to connect to devices: {exc}")
         if not found:
             diagnostic = "; ".join(connection_errors) or "unknown connection failure"
+            # An auth failure with nothing configured is not a wrong password, it
+            # is a missing one - and the fix belongs in the message, not in a
+            # docstring the user will never read.
+            if "AuthenticationError" in diagnostic and not _credential_args():
+                diagnostic += (
+                    " No TP-Link account is configured: set NORTH_KASA_USERNAME and "
+                    "NORTH_KASA_PASSWORD in ~/.north/.env. Kasa firmware since 2023 requires one."
+                )
             return (
                 {},
                 {},

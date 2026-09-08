@@ -25,6 +25,22 @@ The installer configures an inference provider. One provider is enough to start:
 | OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | [opencode.ai/auth](https://opencode.ai/auth) |
 | OpenAI Codex | Browser OAuth | **System → Providers → Connect**, or `north auth login openai-codex` |
 
+### Optional: Kasa smart-home devices
+
+TP-Link Kasa devices are controlled over your local network. Firmware shipped
+since roughly 2023 speaks an encrypted protocol (KLAP) that requires a TP-Link
+cloud account - north can *see* those devices without one and can do nothing
+with them, so set:
+
+```
+NORTH_KASA_USERNAME=you@example.com
+NORTH_KASA_PASSWORD=...
+```
+
+Older devices need neither. `kasa_control` with `action='list'` reports what it
+found and, when a device refuses the login, says so rather than reporting an
+empty network.
+
 ### Optional: browser automation
 
 north can drive a real Chrome - clicking, filling forms, reading pages that build

@@ -177,6 +177,13 @@ class Settings(BaseSettings):
     # Set NORTH_TELEGRAM_ALLOWED_CHAT_IDS="12345678,87654321" in environment or .env.
     telegram_allowed_chat_ids: str = ""
 
+    # TP-Link cloud account, for Kasa devices that speak KLAP - which is most
+    # firmware shipped since 2023. Discovery finds those devices without any
+    # credential and then cannot authenticate to them, so without these the tool
+    # can see the bulbs and do nothing with them. Older devices need neither.
+    kasa_username: str = ""
+    kasa_password: str = ""
+
     # A task whose heartbeat has not advanced for this long is considered stuck and
     # is cancelled/failed by the watchdog; the same age caps how old an interrupted
     # task may be before startup fails it instead of resuming. Default 24 hours.

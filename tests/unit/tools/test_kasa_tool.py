@@ -6,22 +6,36 @@ import pytest
 
 from tools.specialized import kasa_tool
 
+_JSON_TWO_BULBS = """
+{
+  "10.0.0.36": {"ip": "10.0.0.36", "device_model": "KL125(US)", "alias": "Desk lamp"},
+  "10.0.0.47": {"ip": "10.0.0.47", "device_model": "KL125(US)"}
+}
+"""
+
 
 def test_discovery_detaches_stdin_and_parses_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parsed from --json, because the CLI's prose changed underneath the scraper.
+
+    It looked for "Host: 10.0.0.36" and python-kasa 0.10 prints "IP: 10.0.0.36",
+    so two bulbs on the network read as none at all.
+    """
     calls: list[dict] = []
 
     def fake_run(cmd, **kwargs):
-        calls.append(kwargs)
-        return SimpleNamespace(returncode=0, stdout="Host: 192.168.1.20\n== Desk lamp - bulb ==", stderr="")
+        calls.append({**kwargs, "cmd": cmd})
+        return SimpleNamespace(returncode=0, stdout=_JSON_TWO_BULBS, stderr="")
 
     monkeypatch.setattr(kasa_tool.shutil, "which", lambda _: "/usr/bin/kasa")
     monkeypatch.setattr(kasa_tool.subprocess, "run", fake_run)
 
     pairs, diagnostic = kasa_tool._run_kasa_discover()
 
-    assert pairs == [("192.168.1.20", "Desk lamp")]
+    # A device that has not authenticated reports no alias; the model stands in.
+    assert pairs == [("10.0.0.36", "Desk lamp"), ("10.0.0.47", "KL125(US)")]
     assert diagnostic == ""
     assert calls[0]["stdin"] is kasa_tool.subprocess.DEVNULL
+    assert "--json" in calls[0]["cmd"]
 
 
 def test_discovery_uses_module_fallback_after_binary_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,8 +53,60 @@ def test_discovery_uses_module_fallback_after_binary_failure(monkeypatch: pytest
     pairs, diagnostic = kasa_tool._run_kasa_discover()
 
     assert pairs == []
-    assert diagnostic == ""
-    assert commands == [["/usr/bin/kasa", "discover"], [kasa_tool.sys.executable, "-m", "kasa", "discover"]]
+    # Never silent. Finding nothing and saying nothing is the failure this tool
+    # spent months producing: two bulbs present, "no devices found" reported.
+    assert diagnostic
+    assert commands == [
+        ["/usr/bin/kasa", "--json", "discover"],
+        [kasa_tool.sys.executable, "-m", "kasa", "--json", "discover"],
+    ]
+
+
+def test_devices_that_refuse_the_login_say_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real fault on a modern network, and the one that reached the user as silence."""
+    monkeypatch.setattr(kasa_tool.shutil, "which", lambda _: "/usr/bin/kasa")
+    monkeypatch.setattr(
+        kasa_tool.subprocess,
+        "run",
+        lambda cmd, **kw: SimpleNamespace(
+            returncode=0, stdout="", stderr="== Authentication failed for device ==\n== Authentication failed ==\n"
+        ),
+    )
+
+    pairs, diagnostic = kasa_tool._run_kasa_discover()
+
+    assert pairs == []
+    assert "2 device(s) refused authentication" in diagnostic
+    assert "NORTH_KASA_USERNAME" in diagnostic
+
+
+def test_the_login_is_passed_to_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "kasa_username", "me@example.com", raising=False)
+    monkeypatch.setattr(settings, "kasa_password", "hunter2", raising=False)
+    assert kasa_tool._credential_args() == ["--username", "me@example.com", "--password", "hunter2"]
+
+
+def test_no_login_configured_passes_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "kasa_username", "", raising=False)
+    monkeypatch.setattr(settings, "kasa_password", "", raising=False)
+    assert kasa_tool._credential_args() == []
+
+
+def test_the_password_never_reaches_an_error_message() -> None:
+    """Diagnostics quote the command they ran, and one of its arguments is a secret."""
+    redacted = kasa_tool._redacted(["kasa", "--username", "me@example.com", "--password", "hunter2", "discover"])
+    assert "hunter2" not in redacted
+    assert redacted[4] == "***"
+    assert "me@example.com" in redacted  # only the password is a secret
+
+
+def test_unparseable_output_is_not_a_device() -> None:
+    assert kasa_tool._parse_discovery("not json at all") == []
+    assert kasa_tool._parse_discovery("[]") == []
 
 
 def test_action_aliases_cover_natural_tool_calls() -> None:
@@ -156,3 +222,54 @@ async def test_scene_reports_unsupported_device() -> None:
 
     assert results == []
     assert "does not support" in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_list_does_not_need_a_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The action the "device is required" error tells you to run must not need one.
+
+    It did. `list` was not exempt from the target check, so the only route out of
+    that error was the error itself.
+    """
+    from tools.models import ToolInput
+
+    async def fake_discover(*_args, **_kwargs):
+        return {}, {}, None
+
+    monkeypatch.setattr(kasa_tool.KasaTool, "_discover_and_connect", staticmethod(fake_discover))
+    out = await kasa_tool.KasaTool().run(ToolInput(params={"action": "list"}))
+
+    assert "device' is required" not in (out.error or "")
+
+
+@pytest.mark.asyncio
+async def test_a_control_action_still_needs_a_device() -> None:
+    """The guard exists so a command can never fan out across the whole house."""
+    from tools.models import ToolInput
+
+    out = await kasa_tool.KasaTool().run(ToolInput(params={"action": "off"}))
+    assert out.success is False
+    assert "device' is required" in (out.error or "")
+
+
+@pytest.mark.asyncio
+async def test_devices_are_released_after_a_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each open device holds an HTTP session; nothing used to close them."""
+    from tools.models import ToolInput
+
+    closed: list[str] = []
+
+    class _Bulb:
+        alias = "Desk lamp"
+        is_on = True
+
+        async def disconnect(self) -> None:
+            closed.append(self.alias)
+
+    async def fake_discover(*_args, **_kwargs):
+        return {"10.0.0.36": _Bulb()}, {"10.0.0.36": "Desk lamp"}, None
+
+    monkeypatch.setattr(kasa_tool.KasaTool, "_discover_and_connect", staticmethod(fake_discover))
+    await kasa_tool.KasaTool().run(ToolInput(params={"action": "list"}))
+
+    assert closed == ["Desk lamp"]
