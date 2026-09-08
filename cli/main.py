@@ -1991,7 +1991,7 @@ def _start_locally(options: _StartOptions) -> None:
         ],
     )
     proc = _start_server_process(options.port, options.workspace, host=options.host, reload=options.reload)
-    _wait_for_server(options.host, options.port)
+    _wait_for_server(options.host, options.port, proc=proc)
 
     if not options.chat:
         typer.secho(f"north running (pid {proc.pid}). Stop with: north stop", fg=typer.colors.GREEN)
@@ -2126,9 +2126,24 @@ def stop(
         return
 
     if all:
-        count = _stop_all_north_processes()
+        count = _stop_all_north_processes(port)
         _stop_server(port)
-        typer.secho(f"✓ Stopped all north processes ({count} process(es) terminated).", fg=typer.colors.GREEN)
+        # Whether anything is still serving is the only answer that matters, and
+        # it is checked rather than assumed: "✓ Stopped all north processes (0
+        # process(es) terminated)" was printed in green over a server that went
+        # on running, and on to serve stale code through an update.
+        if _port_in_use("127.0.0.1", port):
+            typer.secho(
+                f"Something is still listening on port {port} after stopping {count} process(es). "
+                f"Find it with: lsof -nP -iTCP:{port} -sTCP:LISTEN",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(1)
+        if count:
+            typer.secho(f"✓ Stopped all north processes ({count} terminated).", fg=typer.colors.GREEN)
+        else:
+            typer.secho("north was not running.", fg=typer.colors.YELLOW)
         return
 
     from config.settings import settings
@@ -2342,7 +2357,7 @@ def _update_from_git(install_url: str, options: _UpdateOptions) -> None:
     if options.restart and (was_running or typer.confirm("Start north now?", default=True)):
         _console.print("  [dim]→[/dim]  restarting…")
         proc = _start_server_process(options.port)
-        _wait_for_server("127.0.0.1", options.port)
+        _wait_for_server("127.0.0.1", options.port, proc=proc)
         typer.secho(f"✓ north updated and restarted (pid {proc.pid}).", fg=typer.colors.GREEN)
     else:
         typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
@@ -2386,8 +2401,91 @@ def update(
     _update_from_git(install_url if is_git_url and install_url else _NORTH_GIT_URL, options)
 
 
-def _stop_all_north_processes() -> int:
-    """Find and terminate all running north / uvicorn orchestrator processes."""
+def _listens_on(proc, port: int) -> bool:
+    """Whether *proc* holds a listening socket on *port*.
+
+    Asked per process rather than through ``psutil.net_connections()``, which
+    needs root on macOS and fails with AccessDenied for everyone else - silently,
+    if the caller suppresses it. A process owned by the current user answers for
+    itself without privileges.
+    """
+    import psutil
+
+    try:
+        return any(
+            conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port
+            for conn in proc.net_connections(kind="inet")
+        )
+    except (psutil.Error, OSError):
+        return False
+
+
+def _north_processes(port: int = 8000) -> list:
+    """Every process that is part of a running north, however it was spawned.
+
+    Three ways in, because one is not enough. The command line finds a server
+    started as `north start` or `uvicorn orchestrator.app:app`. The pid file
+    finds one whose command line has been rewritten. And whoever is *listening
+    on the port* finds the one that matters most: north's server runs as a
+    multiprocessing spawn child, whose argv is only
+
+        python -c from multiprocessing.spawn import spawn_main; ...
+
+    and so matches none of the command-line keywords. That process held port
+    8000 through two `north stop --all` runs and an update, each of which
+    reported success, while the update's new server died on "address already in
+    use" and the old code kept serving.
+
+    Children are included: killing a supervisor that has already forked leaves
+    the fork holding the port.
+    """
+    import psutil
+
+    from config.settings import settings
+
+    current_pid = os.getpid()
+    found: dict[int, object] = {}
+
+    def remember(proc) -> None:
+        try:
+            if proc.pid != current_pid and proc.is_running():
+                found[proc.pid] = proc
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    me = psutil.Process().username()
+    for proc in psutil.process_iter(["pid", "name", "cmdline", "username"]):
+        try:
+            if proc.pid == current_pid:
+                continue
+            cmdline = " ".join(proc.info.get("cmdline") or []).lower()
+            # The keywords only count for a process that could actually *be* a
+            # north server. Matched against any command line, they also match a
+            # shell, an editor or a grep that merely mentions one - and this
+            # function's whole purpose is to send SIGKILL to what it matches.
+            name = (proc.info.get("name") or "").lower()
+            looks_like_north = name.startswith("python") or name in {"north", "uvicorn"}
+            if looks_like_north and any(
+                k in cmdline for k in ("north start", "orchestrator.app:app", "bin/north")
+            ) or proc.info.get("username") == me and _listens_on(proc, port):
+                remember(proc)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    pid_path = settings.north_home / "north.pid"
+    if pid_path.exists():
+        with contextlib.suppress(ValueError, OSError, psutil.Error):
+            remember(psutil.Process(int(pid_path.read_text(encoding="utf-8").strip())))
+
+    for proc in list(found.values()):
+        with contextlib.suppress(psutil.Error):
+            for child in proc.children(recursive=True):
+                remember(child)
+    return list(found.values())
+
+
+def _stop_all_north_processes(port: int = 8000) -> int:
+    """Terminate every running north process. Returns how many actually stopped."""
     import signal
 
     import psutil
@@ -2395,18 +2493,7 @@ def _stop_all_north_processes() -> int:
     from config.settings import settings
 
     stopped = 0
-    current_pid = os.getpid()
-    procs_to_kill = []
-
-    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-        try:
-            if proc.pid == current_pid:
-                continue
-            cmdline = " ".join(proc.info.get("cmdline") or []).lower()
-            if any(k in cmdline for k in ("north start", "orchestrator.app:app", "bin/north")):
-                procs_to_kill.append(proc)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
+    procs_to_kill = _north_processes(port)
 
     for proc in procs_to_kill:
         try:
@@ -2424,8 +2511,11 @@ def _stop_all_north_processes() -> int:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
 
-    pid_path = settings.north_home / "north.pid"
-    pid_path.unlink(missing_ok=True)
+    # The pid file is the last handle on a process whose command line matches
+    # nothing. Deleting it after a stop that stopped nothing threw that handle
+    # away and left the orphan unreachable.
+    if not _port_in_use("127.0.0.1", port):
+        (settings.north_home / "north.pid").unlink(missing_ok=True)
     return stopped
 
 
