@@ -61,6 +61,13 @@ _SCENES: dict[str, tuple[tuple[str, dict[str, int]], ...]] = {
 _ACTION_ALIASES = {
     "turn_on": "on",
     "turn_off": "off",
+    # "dim my lights to 50%" is how a person says this, and the word reached the
+    # tool as an action nobody had defined - which the guard below then reported
+    # as a missing `device`, blaming the request for the vocabulary.
+    "dim": "brightness",
+    "brighten": "brightness",
+    "set_level": "brightness",
+    "level": "brightness",
     "set_brightness": "brightness",
     "set_color": "color",
     "set_colour": "color",
@@ -69,6 +76,10 @@ _ACTION_ALIASES = {
     "apply_scene": "scene",
     "mood": "scene",
 }
+
+# Every action the tool answers to, after aliasing. Kept beside the aliases so a
+# new action cannot be added to one and forgotten in the other.
+_KNOWN_ACTIONS = frozenset({"on", "off", "toggle", "list", "brightness", "color", "color_temp", "scene"})
 
 # Valid colour-temperature range for Kasa bulbs, in Kelvin.
 _KELVIN_MIN = 2500
@@ -572,6 +583,15 @@ class KasaTool(ApprovalGatedTool):
         action = _ACTION_ALIASES.get(action, action)
         if not action:
             return ToolOutput(success=False, error="Parameter 'action' is required.")
+
+        # An action nobody defined is that, and saying so: the device guard below
+        # runs first and answered "device is required" for `dim`, `banana` and
+        # every other unknown word alike.
+        if action not in _KNOWN_ACTIONS:
+            return ToolOutput(
+                success=False,
+                error=f"Unknown action {action!r}. Valid actions: {', '.join(sorted(_KNOWN_ACTIONS))}.",
+            )
 
         target_hint = str(input.params.get("device", "")).strip().lower()
         # Broad lighting requests are common in natural language. Allow

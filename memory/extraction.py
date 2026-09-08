@@ -53,7 +53,7 @@ _USER_AUTHORED_SOURCES = frozenset(
 )
 # Failed-task entries carry noise (error messages, stack traces) rather than
 # durable facts about the user.  Sending them to the LLM wastes budget.
-_SKIPPED_STATUSES = {LedgerStatus.FAILED}
+_SKIPPED_STATUSES = {LedgerStatus.FAILED, LedgerStatus.CANCELLED}
 
 
 
@@ -139,6 +139,24 @@ class ExtractionPipeline:
 
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _cancelled_tasks(entries: list[LedgerEntry]) -> set[str]:
+        """Tasks in this batch the user abandoned.
+
+        Cancelling is the user saying the exchange does not count, and everything
+        said inside it goes with it. Answers to north's own clarifying questions
+        are the reason this matters: they are user-authored and marked completed
+        individually, so only the task's own ending says they were withdrawn. A
+        job-application run that was cancelled mid-conversation still taught
+        north "user gives standing approval for matching roles" - a consent
+        recorded from a conversation the user walked out of.
+        """
+        return {
+            entry.task_id
+            for entry in entries
+            if entry.task_id and entry.status is LedgerStatus.CANCELLED
+        }
+
     def _filter_valid_entries(self, entries: list[LedgerEntry]) -> list[LedgerEntry]:
         """Keep only the user's own non-trivial messages; advance the watermark past the rest.
 
@@ -152,12 +170,14 @@ class ExtractionPipeline:
         entry would also jump past any older kept entry whose extraction later
         fails, silently dropping its retry.
         """
+        cancelled = self._cancelled_tasks(entries)
         valid: list[LedgerEntry] = []
         for entry in entries:
             message = (entry.input or "").strip()
             skip = (
                 entry.source not in _USER_AUTHORED_SOURCES
                 or entry.status in _SKIPPED_STATUSES
+                or (entry.task_id in cancelled)
                 or len(message) < self._min_input_chars
             )
             if not skip:

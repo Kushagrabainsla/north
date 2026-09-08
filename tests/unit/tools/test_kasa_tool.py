@@ -273,3 +273,40 @@ async def test_devices_are_released_after_a_command(monkeypatch: pytest.MonkeyPa
     await kasa_tool.KasaTool().run(ToolInput(params={"action": "list"}))
 
     assert closed == ["Desk lamp"]
+
+
+@pytest.mark.asyncio
+async def test_dim_is_the_word_people_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    """"dim my lights to 50%" reached the tool as an undefined action and was
+    reported as a missing device, which blamed the request for the vocabulary."""
+    from tools.models import ToolInput
+
+    seen: list[str] = []
+
+    async def fake_discover(*_args, **_kwargs):
+        seen.append("discovered")
+        return {}, {}, kasa_tool.ToolOutput(success=False, error="stop here")
+
+    monkeypatch.setattr(kasa_tool.KasaTool, "_discover_and_connect", staticmethod(fake_discover))
+    out = await kasa_tool.KasaTool().run(ToolInput(params={"action": "dim", "brightness": 50}))
+
+    # It got as far as looking for devices, rather than being turned away first.
+    assert seen == ["discovered"]
+    assert "device' is required" not in (out.error or "")
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_action_says_it_is_unknown() -> None:
+    """It used to answer "device is required" for every word nobody had defined."""
+    from tools.models import ToolInput
+
+    out = await kasa_tool.KasaTool().run(ToolInput(params={"action": "banana"}))
+
+    assert out.success is False
+    assert "Unknown action" in (out.error or "")
+    assert "device" not in (out.error or "").split("Valid actions")[0]
+
+
+def test_every_alias_lands_on_a_real_action() -> None:
+    """The alias table and the action table cannot drift apart unnoticed."""
+    assert set(kasa_tool._ACTION_ALIASES.values()) <= kasa_tool._KNOWN_ACTIONS
