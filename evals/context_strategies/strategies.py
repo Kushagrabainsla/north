@@ -114,12 +114,28 @@ async def _run_repl(task: Task, ask: Ask, *, system_prompt: str, recursive: bool
     session = ReplSession(context=task.context, llm_query=llm_query if recursive else None)
     history = _repl_opening(task, system_prompt)
     notes: list[str] = []
+    # Whether any model-written code has actually run. An answer given before
+    # this is a guess about a context the model has seen 400 characters of, and
+    # accepting it measured how readily a model gives up rather than what the
+    # strategy can do: half the REPL cells in the first real run returned
+    # "UNKNOWN", "code not computed" or {"pairs": [["???", "???"]]} on turn one.
+    # Scored by whether they iterated, those cells averaged 0.10 and the rest 1.00.
+    executed = 0
 
     for iteration in range(1, _REPL_MAX_ITERATIONS + 1):
         reply = await ask(history)
         final = extract_final(reply, session)
-        if final is not None:
+        if final is not None and executed:
             return StrategyRun(answer=final, iterations=iteration, notes=notes)
+        if final is not None:
+            notes.append(f"turn {iteration}: answered before running any code")
+            history += (
+                f"\n\n[your reply]\n{reply}\n\n"
+                "[system] You have not run any code yet, so you have not read the context - "
+                "only the short preview above. Inspect `context` with a ```repl block first, "
+                "then give FINAL(...)."
+            )
+            continue
 
         code = extract_code(reply)
         if not code:
@@ -128,6 +144,10 @@ async def _run_repl(task: Task, ask: Ask, *, system_prompt: str, recursive: bool
             continue
 
         result = await session.run(code)
+        # Counted even when it raised: the model saw the error and can correct it,
+        # and requiring a *successful* run would loop a model that cannot write
+        # valid code until it ran out of turns - which is a different measurement.
+        executed += 1
         if result.error:
             notes.append(f"turn {iteration}: {result.error}")
         printed = result.stdout[:_REPL_STDOUT_KEEP]
