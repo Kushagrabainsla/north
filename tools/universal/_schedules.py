@@ -141,6 +141,8 @@ def _view(entry: CronEntry, source: str) -> dict[str, Any]:
     next_epoch = next_firing_epoch(entry)
     return {
         "name": entry.name,
+        "label": entry.label,
+        "title": entry.title,
         "task": entry.task,
         "agent": entry.agent,
         "schedule": entry.describe(),

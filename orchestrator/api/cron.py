@@ -33,6 +33,10 @@ class CronEntryOut(BaseModel):
     """
 
     name: str
+    # `name` is the key it is addressed by, `label` the title a person reads, and
+    # `task` the prompt that actually runs. One field used to be all three.
+    label: str
+    title: str
     agent: str
     task: str
     hour: int
@@ -52,6 +56,7 @@ class CronEntryOut(BaseModel):
 
 class CronEntryCreate(BaseModel):
     name: str | None = None
+    label: str = ""
     agent: str = "general"
     task: str
     hour: int
@@ -71,6 +76,7 @@ class CronEntryUpdate(BaseModel):
     """
 
     agent: str | None = None
+    label: str | None = None
     task: str | None = None
     hour: int | None = None
     minute: int | None = None
@@ -92,6 +98,8 @@ def _entry_out(entry: CronEntry, source: str, *, modified: bool = False) -> Cron
     next_epoch = next_firing_epoch(entry)
     return CronEntryOut(
         name=entry.name,
+        label=entry.label,
+        title=entry.title,
         agent=entry.agent,
         task=entry.task,
         hour=entry.hour,
@@ -148,6 +156,7 @@ async def _ensure_editable_row(store, name: str) -> None:
         weekdays=default.weekdays,
         tz=default.zone_name,
         enabled=default.enabled,
+        label=default.label,
     )
 
 
@@ -181,7 +190,9 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
     store = _get_cron_store()
     # An unnamed schedule gets a name derived from its task, made unique - two
     # reminders whose text happens to slug the same must not overwrite one another.
-    name = body.name or await store.unique_name(body.task)
+    # The key is slugged from the title when there is one: a routine called
+    # "Morning stretch" should be addressable as that, not as its prompt.
+    name = body.name or await store.unique_name(body.label or body.task)
     await store.add(
         name=name,
         agent=body.agent,
@@ -191,6 +202,7 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
         weekdays=_days(body.days),
         tz=body.tz or local_timezone_name(),
         enabled=body.enabled,
+        label=body.label,
     )
     row = await store.get(name)
     if row is None:  # pragma: no cover - the row was just written

@@ -207,3 +207,49 @@ async def test_two_schedules_whose_text_slugs_alike_do_not_overwrite(tmp_path) -
 
     assert first != second
     assert len(await store.list()) == 2
+
+
+# ---- name, prompt, and key are three different things ----
+
+
+def test_the_title_is_the_label_when_there_is_one() -> None:
+    named = entry(label="Morning stretch", task="remind me to stretch and log it")
+    assert named.title == "Morning stretch"
+
+
+def test_the_title_falls_back_to_the_prompt() -> None:
+    """Rows written before labels existed still read as something."""
+    assert entry(task="remind me to stretch").title == "remind me to stretch"
+
+
+@pytest.mark.asyncio
+async def test_a_label_round_trips_through_storage(tmp_path) -> None:
+    store = UserCronStore(tmp_path / "jobs.db")
+    await store.add("user_stretch", "general", "stretch and log it", 9, 30, WEEKDAYS, label="Morning stretch")
+    (row,) = await store.list()
+
+    restored = CronEntry.from_row(row)
+    assert restored.label == "Morning stretch"
+    assert restored.task == "stretch and log it"  # the prompt is untouched by naming
+    assert restored.title == "Morning stretch"
+
+
+@pytest.mark.asyncio
+async def test_renaming_does_not_change_what_runs(tmp_path) -> None:
+    """The whole point of the split: a title is a label, never an instruction."""
+    store = UserCronStore(tmp_path / "jobs.db")
+    await store.add("user_x", "general", "remind me to stretch", 9, 0, None, label="Stretch")
+    await store.update("user_x", label="Morning mobility")
+
+    row = await store.get("user_x")
+    assert row["label"] == "Morning mobility"
+    assert row["task"] == "remind me to stretch"
+
+
+@pytest.mark.asyncio
+async def test_an_old_row_without_a_label_still_loads(tmp_path) -> None:
+    store = UserCronStore(tmp_path / "jobs.db")
+    await store.add("user_old", "general", "water the plants", 9, 0, None)
+    (row,) = await store.list()
+    assert row["label"] == ""
+    assert CronEntry.from_row(row).title == "water the plants"

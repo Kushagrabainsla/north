@@ -135,10 +135,11 @@ export function Approvals() {
 interface Job {
   job_id: string; agent: string; task: string; status: string;
   scheduled_at: string; scheduled_epoch: number; scheduled_local: string;
+  cron_entry?: string | null;
 }
 
 interface Cron {
-  name: string; agent: string; task: string; hour: number; minute: number;
+  name: string; label: string; title: string; agent: string; task: string; hour: number; minute: number;
   weekdays: number[]; cadence: string; enabled: boolean; tz: string;
   schedule: string; next_run_local: string; next_run_epoch: number; source: string; modified: boolean;
 }
@@ -167,11 +168,12 @@ function whenFromNow(epoch: number): string {
 // The form's own idea of a schedule, before it becomes a request. Days live here
 // as a set of numbers because that is what the day buttons toggle; the API is
 // given "daily" when none are picked, which is what an empty selection means.
-interface Draft { task: string; agent: string; hour: number; minute: number; days: number[]; }
+interface Draft { label: string; task: string; agent: string; hour: number; minute: number; days: number[]; }
 
-const emptyDraft = (): Draft => ({ task: "", agent: "general", hour: 9, minute: 0, days: [] });
+const emptyDraft = (): Draft => ({ label: "", task: "", agent: "general", hour: 9, minute: 0, days: [] });
 const draftOf = (entry: Cron): Draft => ({
-  task: entry.task, agent: entry.agent, hour: entry.hour, minute: entry.minute, days: [...entry.weekdays],
+  label: entry.label, task: entry.task, agent: entry.agent,
+  hour: entry.hour, minute: entry.minute, days: [...entry.weekdays],
 });
 const daysField = (days: number[]) => (days.length ? days : "daily");
 
@@ -200,8 +202,14 @@ function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, 
     setDraft({ ...draft, hour, minute });
   };
   return <form className="schedule-form" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
-    <label>What should north do?
-      <input value={draft.task} placeholder="e.g. remind me to stretch" autoFocus
+    <label>Name
+      <input value={draft.label} placeholder="e.g. Morning stretch" autoFocus
+        onChange={e => setDraft({ ...draft, label: e.target.value })}/>
+    </label>
+    {/* The name is a label - it titles the row and nothing else. This is the
+        text north is actually sent at the scheduled time. */}
+    <label>Prompt to run
+      <input value={draft.task} placeholder="e.g. remind me to stretch and log it"
         onChange={e => setDraft({ ...draft, task: e.target.value })}/>
     </label>
     <div className="schedule-form-row">
@@ -252,8 +260,10 @@ export function Schedule() {
   // under an open editor moves the row being edited.
   const settled = !editing && !creating && !confirming;
   const cron = useResource<Cron[]>("/orchestrator/cron", settled ? 10000 : 0);
-  const pending = useResource<Job[]>("/orchestrator/jobs?status=pending&limit=50", settled ? 10000 : 0);
-  const history = useResource<Job[]>("/orchestrator/jobs?limit=20", settled ? 20000 : 0);
+  // One query, partitioned here. Two queries on different intervals returned
+  // two snapshots of the same job, so one that had just been requeued appeared
+  // as "running now" and as pending work at the same time, in the same list.
+  const jobs = useResource<Job[]>("/orchestrator/jobs?limit=50", settled ? 10000 : 0);
 
   // Every mutation runs through here so one place decides what happens on
   // failure: the message is shown and the lists are re-read, rather than a row
@@ -263,7 +273,7 @@ export function Schedule() {
     setError("");
     try {
       await work();
-      await Promise.all([cron.reload(), pending.reload()]);
+      await Promise.all([cron.reload(), jobs.reload()]);
       setEditing("");
       setCreating(false);
       setConfirming("");
@@ -275,7 +285,8 @@ export function Schedule() {
   };
 
   const body = () => ({
-    task: draft.task, agent: draft.agent, hour: draft.hour, minute: draft.minute, days: daysField(draft.days),
+    label: draft.label, task: draft.task, agent: draft.agent,
+    hour: draft.hour, minute: draft.minute, days: daysField(draft.days),
   });
   const create = () => act(() => post("/orchestrator/cron", body()));
   const save = (name: string) => act(() => patch(`/orchestrator/cron/${encodeURIComponent(name)}`, body()));
@@ -290,11 +301,24 @@ export function Schedule() {
   const startEdit = (entry: Cron) => { close(); setDraft(draftOf(entry)); setEditing(entry.name); };
 
   const routines = cron.data || [];
-  const upcomingJobs = (pending.data || []).filter(job => job.status === "pending");
+  // A job carries only its prompt, so a firing of a named routine is titled by
+  // the routine it came from - otherwise the same run reads two different ways
+  // depending on which list it is in.
+  const titleOf = (job: Job) =>
+    routines.find(entry => entry.name === job.cron_entry)?.title || job.task;
+  // A queued job that names a routine is that routine's next run, already
+  // committed - not a separate one-off. Listed as both, a single firing showed
+  // up twice: once as cancellable work and once as the routine's next time.
+  const allJobs = jobs.data || [];
+  const running = allJobs.filter(job => job.status === "running");
+  const queued = allJobs.filter(job => job.status === "pending");
+  const oneOffs = queued.filter(job => !job.cron_entry);
+  // A routine with work already claimed or queued is represented by that job,
+  // not by a second row predicting the same moment.
+  const busyRoutines = new Set([...running, ...queued].map(job => job.cron_entry).filter(Boolean));
   // Only work that is over belongs under "Recently run" - a job still running
   // is not history, and appeared there as one.
-  const finished = (history.data || []).filter(job => FINISHED.has(job.status)).slice(0, 6);
-  const running = (history.data || []).filter(job => job.status === "running");
+  const finished = allJobs.filter(job => FINISHED.has(job.status)).slice(0, 6);
   // One timeline: a pending one-shot and a routine's next firing are the same
   // kind of fact - something north is going to do - and were split across two
   // panels that also disagreed about how to write a time.
@@ -303,22 +327,28 @@ export function Schedule() {
       key: job.job_id, task: job.task, agent: job.agent, epoch: 0,
       absolute: "started " + job.scheduled_local, kind: "running now" as const, job: undefined,
     })),
-    ...upcomingJobs.map(job => ({
-      key: job.job_id, task: job.task, agent: job.agent, epoch: job.scheduled_epoch,
+    ...queued.filter(job => job.cron_entry).map(job => ({
+      key: job.job_id, task: titleOf(job), agent: job.agent, epoch: job.scheduled_epoch,
+      absolute: job.scheduled_local, kind: "queued" as const, job: undefined,
+    })),
+    ...oneOffs.map(job => ({
+      key: job.job_id, task: titleOf(job), agent: job.agent, epoch: job.scheduled_epoch,
       absolute: job.scheduled_local, kind: "once" as const, job,
     })),
-    ...routines.filter(entry => entry.enabled).map(entry => ({
-      key: entry.name, task: entry.task, agent: entry.agent, epoch: entry.next_run_epoch,
+    // A routine whose run is already queued is represented by that job, not by
+    // a second row predicting the same moment.
+    ...routines.filter(entry => entry.enabled && !busyRoutines.has(entry.name)).map(entry => ({
+      key: entry.name, task: entry.title, agent: entry.agent, epoch: entry.next_run_epoch,
       absolute: entry.next_run_local, kind: entry.cadence, job: undefined,
     })),
   ].sort((a, b) => a.epoch - b.epoch);
 
   return <div className="page">
     <PageHeader eyebrow="Automation" title="Schedule" subtitle="What north will do next, and the routines behind it."/>
-    {(cron.error || pending.error) && <ErrorNotice message={cron.error || pending.error}/>}
+    {(cron.error || jobs.error) && <ErrorNotice message={cron.error || jobs.error}/>}
 
     <Panel title="Next up" label="soonest first">
-      {cron.loading || pending.loading ? <Loading/> : upcoming.length ? upcoming.slice(0, 8).map(item =>
+      {cron.loading || jobs.loading ? <Loading/> : upcoming.length ? upcoming.slice(0, 8).map(item =>
         <div className="schedule-row upcoming" key={item.key}>
           <div className="schedule-main">
             <b>{item.task}</b>
@@ -342,12 +372,15 @@ export function Schedule() {
       {cron.loading ? <Loading/> : routines.length ? routines.map(entry => (
         <div className={entry.enabled ? "schedule-row" : "schedule-row paused"} key={entry.name}>
           <div className="schedule-main">
-            <b>{entry.task}</b>
+            <b>{entry.title}</b>
             <small>
               {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
               {entry.source === "builtin" && (entry.modified ? " · built-in, edited" : " · built-in")}
               {entry.enabled ? ` · next ${entry.next_run_local}` : " · paused"}
             </small>
+            {/* Once the title is a name, what actually runs is no longer on
+                screen - and that is the part worth being able to check. */}
+            {entry.label && <small className="schedule-prompt">runs: {entry.task}</small>}
           </div>
           {confirming === entry.name
             ? <ConfirmRow busy={busy} onCancel={() => setConfirming("")} onConfirm={() => removeOrRestore(entry)}
@@ -376,7 +409,7 @@ export function Schedule() {
     <Panel title="Recently run" label="history">
       {finished.length ? finished.map(job =>
         <div className="list-row" key={job.job_id}>
-          <div><b>{job.task}</b><small>{job.agent} · {job.scheduled_local}</small></div>
+          <div><b>{titleOf(job)}</b><small>{job.agent} · {job.scheduled_local}</small></div>
           <Status value={job.status}/>
         </div>) : <Empty>Nothing has run yet.</Empty>}
     </Panel>

@@ -77,6 +77,12 @@ class CronEntry:
     weekdays: frozenset[int] | None = None
     tz: str | None = None
     enabled: bool = True
+    # A short human title. `name` is the key a schedule is addressed by and
+    # `task` is the prompt that runs; before this, one field was all three at
+    # once, so a routine could not be given a readable title without changing
+    # what it did. Empty on rows written before labels existed - `title` falls
+    # back to the prompt for those.
+    label: str = ""
 
     def __post_init__(self) -> None:
         if not (0 <= self.hour <= 23):
@@ -100,7 +106,13 @@ class CronEntry:
             weekdays=row.get("weekdays"),
             tz=row.get("tz"),
             enabled=bool(row.get("enabled", True)),
+            label=row.get("label") or "",
         )
+
+    @property
+    def title(self) -> str:
+        """What to call this schedule in a list. The prompt, until it has a name."""
+        return self.label or self.task
 
     @property
     def zone_name(self) -> str:
@@ -344,6 +356,7 @@ class CronScheduler:
 V1_CRON_ENTRIES: list[CronEntry] = [
     CronEntry(
         name="news_daily_briefing",
+        label="Daily news briefing",
         agent="news_briefing",
         task=(
             "Compile the daily news briefing across Tech & AI, world events, science & health, and business & markets"
@@ -351,7 +364,14 @@ V1_CRON_ENTRIES: list[CronEntry] = [
         hour=8,
         minute=0,
     ),
-    CronEntry(name="task_context_cleanup", agent="system", task="task_context_cleanup", hour=3, minute=0),
+    CronEntry(
+        name="task_context_cleanup",
+        label="Nightly cleanup",
+        agent="system",
+        task="task_context_cleanup",
+        hour=3,
+        minute=0,
+    ),
 ]
 
 

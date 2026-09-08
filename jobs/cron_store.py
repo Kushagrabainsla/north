@@ -44,6 +44,9 @@ _ADDED_COLUMNS = {
     "created_epoch": "REAL",
     "weekdays": "TEXT",
     "enabled": "INTEGER NOT NULL DEFAULT 1",
+    # A readable title, separate from `name` (the key) and `task` (the prompt).
+    # NULL on rows written before it existed; those fall back to the prompt.
+    "label": "TEXT",
 }
 
 # User-created entries carry this prefix so a listing can tell them apart from
@@ -53,7 +56,7 @@ _SLUG_MAX_LENGTH = 40
 
 # Fields a caller may change on an existing entry. `name` is the key, so
 # renaming is a remove + add, not an update.
-_UPDATABLE = ("agent", "task", "hour", "minute", "weekdays", "tz", "enabled")
+_UPDATABLE = ("agent", "task", "hour", "minute", "weekdays", "tz", "enabled", "label")
 
 # Distinguishes "the caller did not mention this field" from "the caller set it
 # to nothing". Both arrive as None otherwise, which made it impossible to move a
@@ -61,9 +64,9 @@ _UPDATABLE = ("agent", "task", "hour", "minute", "weekdays", "tz", "enabled")
 UNSET: Any = object()
 
 
-def schedule_name(task: str) -> str:
-    """Derive the stable key a schedule is addressed by, from its task text."""
-    slug = re.sub(r"[^a-z0-9]+", "_", task.lower())[:_SLUG_MAX_LENGTH].strip("_")
+def schedule_name(text: str) -> str:
+    """Derive the stable key a schedule is addressed by, from its title or prompt."""
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower())[:_SLUG_MAX_LENGTH].strip("_")
     return USER_PREFIX + (slug or "schedule")
 
 
@@ -125,9 +128,10 @@ class UserCronStore:
         weekdays: Iterable[int] | None,
         tz: str | None = None,
         enabled: bool = True,
+        label: str = "",
     ) -> None:
         await asyncio.to_thread(
-            self._add_sync, name, agent, task, hour, minute, weekdays, tz, enabled
+            self._add_sync, name, agent, task, hour, minute, weekdays, tz, enabled, label
         )
 
     def _add_sync(
@@ -140,13 +144,14 @@ class UserCronStore:
         weekdays: Iterable[int] | None,
         tz: str | None,
         enabled: bool,
+        label: str = "",
     ) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO user_cron_entries
-                    (name, agent, task, hour, minute, weekdays, tz, enabled, created_epoch)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (name, agent, task, hour, minute, weekdays, tz, enabled, label, created_epoch)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -157,19 +162,20 @@ class UserCronStore:
                     encode_weekdays(weekdays),
                     tz or local_timezone_name(),
                     int(enabled),
+                    label,
                     now_epoch(),
                 ),
             )
 
-    async def unique_name(self, task: str) -> str:
-        """A schedule key derived from *task* that is not already taken.
+    async def unique_name(self, text: str) -> str:
+        """A schedule key derived from *text* - its title, or its prompt - that is free.
 
         Names come from the task text, truncated, so two different reminders can
         easily slug to the same key - "stretch in the morning" and "stretch in
         the evening" both did. The insert is INSERT OR REPLACE, so the collision
         was silent and the first schedule simply vanished.
         """
-        base = schedule_name(task)
+        base = schedule_name(text)
         taken = {row["name"] for row in await self.list()}
         if base not in taken:
             return base
@@ -235,5 +241,6 @@ def _row_to_entry(row: sqlite3.Row) -> dict:
         "weekdays": decode_weekdays(row["weekdays"]),
         "tz": row["tz"],
         "enabled": bool(row["enabled"]),
+        "label": row["label"] or "",
         "created_epoch": row["created_epoch"],
     }

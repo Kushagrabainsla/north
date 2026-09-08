@@ -38,7 +38,8 @@ class ScheduleTaskTool(Tool):
     excluded_domains = frozenset({"engineering"})
     description = (
         "Schedule a task for north to run later in the background, even when the user is "
-        "not chatting. Give the work as a natural-language prompt in 'task'; it runs at the "
+        "not chatting. Give the work as a natural-language prompt in 'task', and a short "
+        "title in 'label' so it reads well in a list; the prompt runs at the "
         "scheduled time under the named agent. Times are the USER'S LOCAL TIME - pass the "
         "hour they said, do not convert to UTC. For a single future run, pass run_at as "
         "'YYYY-MM-DDTHH:MM' local (an explicit offset or trailing Z is honoured if given). "
@@ -54,6 +55,13 @@ class ScheduleTaskTool(Tool):
         "type": "object",
         "properties": {
             "task": {"type": "string", "description": "The task prompt to run"},
+            "label": {
+                "type": "string",
+                "description": (
+                    "A short title for this schedule, 2-4 words, e.g. 'Morning stretch'. "
+                    "Shown in lists; the prompt in 'task' is what actually runs."
+                ),
+            },
             "agent": {
                 "type": "string",
                 "description": "Agent to run it (default 'general')",
@@ -131,10 +139,12 @@ class ScheduleTaskTool(Tool):
         # from a cached description of this tool is not simply refused.
         days = params.get("days", params.get("weekday"))
         try:
+            label = str(params.get("label", "")).strip()
             entry = CronEntry(
-                name=await self._cron_store.unique_name(task),
+                name=await self._cron_store.unique_name(label or task),
                 agent=agent,
                 task=task,
+                label=label,
                 hour=_whole_number(params, "hour", 23),
                 minute=_whole_number(params, "minute", 59, default=0),
                 weekdays=parse_weekdays(days),
@@ -151,6 +161,7 @@ class ScheduleTaskTool(Tool):
             minute=entry.minute,
             weekdays=entry.weekdays,
             tz=entry.tz,
+            label=entry.label,
         )
         row = await self._cron_store.get(entry.name)
         return ToolOutput(success=True, data={"type": "recurring", **entry_view(row)})
@@ -158,4 +169,4 @@ class ScheduleTaskTool(Tool):
     def format_output(self, data: dict) -> str:
         if data.get("type") == "one-shot":
             return f"Scheduled once: {data['task']} - runs {data['runs_at']} (job {data['job_id']})."
-        return f"Scheduled {data['schedule']}: {data['task']} - next run {data['next_run']}."
+        return f"Scheduled {data['schedule']}: {data['title']} - next run {data['next_run']}."

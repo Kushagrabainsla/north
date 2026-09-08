@@ -198,3 +198,42 @@ async def test_the_listing_includes_builtins_and_sorts_by_next_run(store) -> Non
 
     assert {e.source for e in listed} == {"user", "builtin"}
     assert [e.next_run_epoch for e in listed] == sorted(e.next_run_epoch for e in listed)
+
+
+@pytest.mark.asyncio
+async def test_a_routine_can_be_named_separately_from_its_prompt(store) -> None:
+    with bind_services(ApiServices(cron_store=store)):
+        entry = await create(label="Morning stretch", task="remind me to stretch and log it")
+
+    assert entry.title == "Morning stretch"
+    assert entry.task == "remind me to stretch and log it"
+    # The key comes from the name when there is one, so it reads as the routine.
+    assert entry.name == "user_morning_stretch"
+
+
+@pytest.mark.asyncio
+async def test_an_unnamed_routine_is_still_titled_by_its_prompt(store) -> None:
+    with bind_services(ApiServices(cron_store=store)):
+        entry = await create(task="water the plants")
+    assert entry.title == "water the plants" and entry.label == ""
+
+
+@pytest.mark.asyncio
+async def test_renaming_leaves_the_prompt_alone(store) -> None:
+    with bind_services(ApiServices(cron_store=store)):
+        entry = await create(label="Stretch", task="remind me to stretch")
+        renamed = await update(entry.name, label="Morning mobility")
+
+    assert renamed.title == "Morning mobility"
+    assert renamed.task == "remind me to stretch"
+
+
+@pytest.mark.asyncio
+async def test_the_builtin_briefing_has_a_readable_name(store) -> None:
+    """The list showed a slug for one built-in and a 90-character sentence for the other."""
+    with bind_services(ApiServices(cron_store=store)):
+        listed = await api.list_cron_entries()
+
+    titles = {e.name: e.title for e in listed}
+    assert titles["news_daily_briefing"] == "Daily news briefing"
+    assert titles["task_context_cleanup"] == "Nightly cleanup"

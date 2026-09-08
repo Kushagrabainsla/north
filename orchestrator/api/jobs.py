@@ -28,6 +28,11 @@ class JobOut(BaseModel):
     scheduled_epoch: float
     scheduled_local: str
     created_epoch: float | None
+    # The schedule this firing came from, when it came from one. Without it a
+    # job can only be labelled by its prompt, so a list showed "Compile the
+    # daily news briefing across Tech & AI, world events, science & health, and
+    # business & markets" where the routine beside it read "Daily news briefing".
+    cron_entry: str | None = None
 
 
 class JobCreateRequest(BaseModel):
@@ -51,6 +56,7 @@ def _job_to_out(j: Job) -> JobOut:
         scheduled_epoch=to_epoch(j.scheduled_at),
         scheduled_local=format_local(j.scheduled_at),
         created_epoch=to_epoch(j.created_at) if j.created_at else None,
+        cron_entry=(j.payload or {}).get("cron_entry"),
     )
 
 

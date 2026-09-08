@@ -28,6 +28,7 @@ class UpdateScheduleTool(Tool):
         "properties": {
             "name": {"type": "string", "description": "Schedule name from list_schedules"},
             "task": {"type": "string", "description": "New task prompt"},
+            "label": {"type": "string", "description": "New short title shown in lists"},
             "agent": {"type": "string", "description": "New agent to run it"},
             "hour": {"type": "integer", "description": "New hour (0-23), local"},
             "minute": {"type": "integer", "description": "New minute (0-59)"},
@@ -82,6 +83,7 @@ class UpdateScheduleTool(Tool):
             weekdays=default.weekdays,
             tz=default.zone_name,
             enabled=default.enabled,
+            label=default.label,
         )
         return True
 
@@ -94,7 +96,7 @@ class UpdateScheduleTool(Tool):
         requests, and collapsing both to None made the second one impossible.
         """
         changes: dict[str, object] = {}
-        for field in ("task", "agent"):
+        for field in ("task", "agent", "label"):
             if params.get(field) is not None:
                 changes[field] = str(params[field])
         for field, ceiling in (("hour", 23), ("minute", 59)):
