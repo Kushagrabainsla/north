@@ -209,7 +209,7 @@ function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, 
     {/* The name is a label - it titles the row and nothing else. This is the
         text north is actually sent at the scheduled time. */}
     <label>Prompt to run
-      <input value={draft.task} placeholder="e.g. remind me to stretch and log it"
+      <textarea value={draft.task} rows={3} placeholder="e.g. remind me to stretch and log it"
         onChange={e => setDraft({ ...draft, task: e.target.value })}/>
     </label>
     <div className="schedule-form-row">
