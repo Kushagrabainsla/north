@@ -98,7 +98,7 @@ a { color: inherit; text-decoration: none; }
 .health-hero h2 { margin: 0; }
 .list-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 11px; }
 .list-row:last-child { border: 0; }
-.list-row b, .list-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-row b, .list-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }/* What to do about a row that reports something missing. Sits under the   value, dimmer than it, and wraps because it is an instruction. */.row-hint { color: var(--faint); font-size: 9px; margin-top: 3px; white-space: normal !important; text-align: right; max-width: 32ch; }
 .list-row small { color: var(--muted); margin-top: 3px; font-size: 9px; }
 .list-row > div { min-width: 0; }
 .list-row.compact { padding: 6px 0; }

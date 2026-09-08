@@ -21,6 +21,7 @@ from ledger.base import LedgerFilters
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
 from tools._path import DB_SUFFIXES
+from tools.universal.browser import browser_availability
 from utils.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 
 from .conversations import ConversationStore, Turn
@@ -341,6 +342,10 @@ async def system_overview() -> dict[str, Any]:
     return {
         "providers": providers,
         "embeddings": _embeddings_overview(),
+        # Whether agents can drive a real browser. It depends on a binary north
+        # cannot install for you, so the page says which of the three states it
+        # is in rather than leaving the gap to be found mid-task.
+        "browser": dict(zip(("state", "detail"), browser_availability(), strict=True)),
         "settings": {
             "power": settings.power.value,
             "autonomy": settings.autonomy.value,

@@ -887,6 +887,17 @@ export function SystemPage() {
         <div className="list-row"><b>Power</b><span>{overview.data?.settings?.routing === "manual" ? "not in use" : (overview.data?.settings?.power || "–")}</span></div>
         <div className="list-row"><b>Autonomy</b><span>{overview.data?.settings?.autonomy || "–"}</span></div>
         <div className="list-row"><b>Bootstrap</b><span>{overview.data?.bootstrap?.status || "–"}</span></div>
+        {/* Depends on a binary north cannot install for you, so the row carries
+            what to do about it rather than only that it is missing. */}
+        <div className="list-row">
+          <b>Browser</b>
+          <span title={overview.data?.browser?.detail || ""}>
+            {overview.data?.browser?.state || "–"}
+            {overview.data?.browser?.state === "unavailable" && (
+              <small className="row-hint">{overview.data.browser.detail}</small>
+            )}
+          </span>
+        </div>
         {/* The one model north runs itself. Worth naming: every stored vector is
             stamped with it, so "which embeddings am I on?" decides which memories
             can still be compared with which. */}

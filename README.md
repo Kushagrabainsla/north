@@ -25,6 +25,22 @@ The installer configures an inference provider. One provider is enough to start:
 | OpenCode Zen | `NORTH_OPENCODE_ZEN_API_KEY` | [opencode.ai/auth](https://opencode.ai/auth) |
 | OpenAI Codex | Browser OAuth | **System → Providers → Connect**, or `north auth login openai-codex` |
 
+### Optional: browser automation
+
+north can drive a real Chrome - clicking, filling forms, reading pages that build
+themselves in JavaScript - through the [chrome-agent](https://github.com/sderosiaux/chrome-agent)
+CLI. It is not installed for you, because it is a third-party binary and it is
+useless without Chrome itself:
+
+```bash
+cargo install chrome-agent      # or have Node available, and npx fetches it on first use
+```
+
+Everything else works without it - web search, fetching a URL as text, files,
+code, scheduling. `north status` reports which of the three states you are in
+(`available`, `on demand`, `unavailable`), so the gap is visible before an agent
+runs into it.
+
 To add or change provider keys later, run `north web` and use the cockpit's
 **System → Providers** controls. For advanced/headless setups, you can still
 edit `~/.north/.env` directly:

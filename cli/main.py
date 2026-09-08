@@ -1501,6 +1501,18 @@ def status() -> None:
     except Exception:
         pass
 
+    # ── Browser ──
+    # The one capability that depends on something north cannot install for you,
+    # and whose absence is otherwise silent until an agent tries to browse.
+    try:
+        from tools.universal.browser import browser_availability
+
+        state, detail = browser_availability()
+        style = {"available": "green", "on demand": "yellow"}.get(state, "bright_black")
+        _console.print(f"  [dim]browser   [/dim] [{style}]{state}[/{style}]  [bright_black]{detail}[/bright_black]")
+    except Exception:
+        pass
+
     # ── Agents ──
     try:
         agents = _api("GET", "/orchestrator/agents").json()

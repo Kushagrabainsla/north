@@ -70,6 +70,33 @@ def _find_chrome_agent_binary() -> list[str] | None:
     return None
 
 
+# How to get chrome-agent, in the order most people can act on. Chrome itself is
+# named because the binary is useless without it, and a machine with one and not
+# the other reads as "installed but broken" otherwise.
+BROWSER_INSTALL_HINT = "cargo install chrome-agent (or install Node for the npx fallback); needs Chrome"
+
+
+def browser_availability() -> tuple[str, str]:
+    """Whether the browser tool can run, as (state, detail) for a status view.
+
+    Three answers, because two of them are not "yes":
+
+    ``available``    a real binary is on this machine
+    ``on demand``    only the npx fallback, which downloads on first use - it
+                     works, but the first browse pays for it and it needs network
+    ``unavailable``  nothing to run; the browser tool will fail every call
+
+    Read by ``north status`` and the System page so the gap is visible before an
+    agent discovers it mid-task. Everything else in north works without it.
+    """
+    command = _find_chrome_agent_binary()
+    if command is None:
+        return "unavailable", BROWSER_INSTALL_HINT
+    if command[0].endswith("npx"):
+        return "on demand", "via npx; downloaded on first use"
+    return "available", command[0]
+
+
 def _element_args(params: dict[str, Any]) -> list[str]:
     """Flags naming the element an action applies to, or [] when the caller named none."""
     if params.get("uid"):
