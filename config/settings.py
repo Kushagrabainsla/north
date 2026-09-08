@@ -211,7 +211,6 @@ class Settings(BaseSettings):
     critic_enabled: bool = False
 
     # Extraction pipeline tuning
-    extraction_poll_interval_seconds: int = Field(default=120, ge=1)
     extraction_max_daily_cost_usd: float = Field(default=0.10, ge=0.0)
     extraction_min_output_chars: int = Field(default=100, ge=0)
     extraction_max_concurrent: int = Field(default=5, ge=1)

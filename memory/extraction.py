@@ -31,7 +31,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL_SECONDS = 120
 _BATCH_SIZE = 50
 _MAX_CONCURRENT_EXTRACTIONS = 5  # semaphore cap: fast enough, stays under rate limits
 _WATERMARK_FILENAME = "extraction_watermark.txt"
@@ -85,12 +84,18 @@ _BACKUP_INTERVAL_HOURS = 24  # minimum hours between full context backups
 
 
 class ExtractionPipeline:
-    """Background job: reads new Ledger entries and extracts meaningful context deltas.
+    """Reads finished tasks' Ledger entries and extracts meaningful context deltas.
+
+    Runs when a task ends, and only then - never on a timer. A clock cannot know
+    whether a conversation is over, so a polled run read exchanges that were still
+    happening: a job-application task had its clarifying answers extracted seven
+    seconds before the user cancelled it, and north learned a standing approval
+    from a conversation that was being abandoned as it read.
 
     Tracks a timestamp watermark persisted to `north_home/extraction_watermark.txt`.
-    Runs on `poll_interval_seconds` cadence. Qualifying entries are sent to the
-    high_volume pool; successful extractions are appended to the appropriate context
-    document and logged back to the Ledger with source=system.
+    Qualifying entries are sent to the high_volume pool; successful extractions are
+    appended to the appropriate context document and logged back to the Ledger with
+    source=system.
     """
 
     def __init__(
@@ -99,7 +104,6 @@ class ExtractionPipeline:
         context_store: ContextStore,
         inference_router: InferenceRouter,
         north_home: Path,
-        poll_interval_seconds: int = _POLL_INTERVAL_SECONDS,
         max_daily_cost_usd: float = 0.10,
         min_output_chars: int = 100,  # retained for config compatibility; unused
         min_input_chars: int = 12,
@@ -113,7 +117,6 @@ class ExtractionPipeline:
         self._archive_dir = north_home / "context_archive"
         self._north_home = north_home
         self._backup_dir = north_home / "context_backup"
-        self._poll_interval = poll_interval_seconds
         self._max_daily_cost = max_daily_cost_usd
         self._min_input_chars = min_input_chars
         self._max_concurrent = max_concurrent
@@ -122,19 +125,13 @@ class ExtractionPipeline:
         # trigger) from reading the same watermark and double-processing entries.
         self._lock = asyncio.Lock()
 
-    async def run(self) -> None:
-        """Loop forever, polling for new entries. Returns only on cancellation."""
-        while True:
-            try:
-                await self._process_batch()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("ExtractionPipeline: error in batch, continuing")
-            await asyncio.sleep(self._poll_interval)
-
     async def run_once(self, since: datetime.datetime | None = None) -> int:
-        """Process one batch and return the count of extractions made."""
+        """Process one batch and return the count of extractions made.
+
+        The only entry point. Called by the orchestrator when a task finishes, so
+        every entry it reads belongs to an exchange that is over and whose ending
+        - completed, failed, cancelled - is already recorded.
+        """
         return await self._process_batch(since_override=since)
 
     # ------------------------------------------------------------------ #
