@@ -135,7 +135,7 @@ export function Approvals() {
 interface Job {
   job_id: string; agent: string; task: string; status: string;
   scheduled_at: string; scheduled_epoch: number; scheduled_local: string;
-  cron_entry?: string | null;
+  cron_entry?: string | null; label?: string;
 }
 
 interface Cron {
@@ -168,31 +168,66 @@ function whenFromNow(epoch: number): string {
 // The form's own idea of a schedule, before it becomes a request. Days live here
 // as a set of numbers because that is what the day buttons toggle; the API is
 // given "daily" when none are picked, which is what an empty selection means.
-interface Draft { label: string; task: string; agent: string; hour: number; minute: number; days: number[]; }
+// How often, as a person chooses it - one named rule rather than a set of day
+// toggles they have to translate. "Every weekday" was expressible only by
+// picking five buttons and knowing that meant weekdays.
+type Repeat = "once" | "daily" | "weekdays" | "weekends" | "custom";
 
-const emptyDraft = (): Draft => ({ label: "", task: "", agent: "general", hour: 9, minute: 0, days: [] });
+const REPEAT_LABELS: [Repeat, string][] = [
+  ["once", "Does not repeat"],
+  ["daily", "Every day"],
+  ["weekdays", "Every weekday (Mon to Fri)"],
+  ["weekends", "Every weekend (Sat and Sun)"],
+  ["custom", "Weekly on selected days…"],
+];
+
+interface Draft {
+  label: string; task: string; agent: string;
+  hour: number; minute: number; repeat: Repeat; days: number[]; date: string;
+}
+
+const todayISO = () => new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000)
+  .toISOString().slice(0, 10);
+
+const emptyDraft = (): Draft => ({
+  label: "", task: "", agent: "general", hour: 9, minute: 0,
+  repeat: "once", days: [], date: todayISO(),
+});
+
+// Which named rule an existing routine is already following, so opening the
+// editor shows the rule rather than making the reader infer it from checkboxes.
+function repeatOf(weekdays: number[]): Repeat {
+  const set = [...weekdays].sort().join(",");
+  if (!set) return "daily";
+  if (set === "0,1,2,3,4") return "weekdays";
+  if (set === "5,6") return "weekends";
+  return "custom";
+}
+
 const draftOf = (entry: Cron): Draft => ({
   label: entry.label, task: entry.task, agent: entry.agent,
-  hour: entry.hour, minute: entry.minute, days: [...entry.weekdays],
+  hour: entry.hour, minute: entry.minute,
+  repeat: repeatOf(entry.weekdays), days: [...entry.weekdays], date: todayISO(),
 });
-const daysField = (days: number[]) => (days.length ? days : "daily");
+
+// The rule as the API takes it. Only "custom" needs the day list.
+const daysField = (draft: Draft) =>
+  draft.repeat === "custom" ? draft.days : draft.repeat === "once" ? "daily" : draft.repeat;
 
 function DayPicker({ days, onChange }: { days: number[]; onChange: (days: number[]) => void }) {
   const toggle = (day: number) =>
     onChange(days.includes(day) ? days.filter(d => d !== day) : [...days, day].sort());
   return <div className="day-picker">
     {DAY_LABELS.map((label, day) =>
-      <button type="button" key={label} className={days.includes(day) ? "day on" : "day"}
+      <button type="button" key={label} aria-pressed={days.includes(day)}
+        className={days.includes(day) ? "day on" : "day"}
         onClick={() => toggle(day)}>{label}</button>)}
-    <button type="button" className="day-preset" onClick={() => onChange([])}>Every day</button>
-    <button type="button" className="day-preset" onClick={() => onChange([0, 1, 2, 3, 4])}>Weekdays</button>
-    <button type="button" className="day-preset" onClick={() => onChange([5, 6])}>Weekends</button>
   </div>;
 }
 
-function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, error }: {
-  draft: Draft; setDraft: (d: Draft) => void; onSubmit: () => void;
-  onCancel: () => void; submitLabel: string; busy: boolean; error: string;
+function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, error, agents, allowOnce }: {
+  draft: Draft; setDraft: (d: Draft) => void; onSubmit: () => void; onCancel: () => void;
+  submitLabel: string; busy: boolean; error: string; agents: string[]; allowOnce: boolean;
 }) {
   // An empty or half-typed time field must not silently become midnight, which
   // is what `"".split(":").map(Number)` plus `|| 0` did.
@@ -201,6 +236,13 @@ function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, 
     if (!Number.isFinite(hour) || !Number.isFinite(minute)) return;
     setDraft({ ...draft, hour, minute });
   };
+  // Switching to "weekly on selected days" with nothing selected leaves a rule
+  // that matches no day, so it starts from today rather than from nothing.
+  const setRepeat = (repeat: Repeat) =>
+    setDraft({ ...draft, repeat, days: repeat === "custom" && !draft.days.length ? [new Date().getDay() === 0 ? 6 : new Date().getDay() - 1] : draft.days });
+  const noDays = draft.repeat === "custom" && !draft.days.length;
+  const options = allowOnce ? REPEAT_LABELS : REPEAT_LABELS.filter(([value]) => value !== "once");
+
   return <form className="schedule-form" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
     <label>Name
       <input value={draft.label} placeholder="e.g. Morning stretch" autoFocus
@@ -212,21 +254,35 @@ function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, 
       <textarea value={draft.task} rows={3} placeholder="e.g. remind me to stretch and log it"
         onChange={e => setDraft({ ...draft, task: e.target.value })}/>
     </label>
+    <label>Repeats
+      <select value={draft.repeat} onChange={e => setRepeat(e.target.value as Repeat)}>
+        {options.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+      </select>
+    </label>
+    {draft.repeat === "custom" && <label>On these days
+      <DayPicker days={draft.days} onChange={days => setDraft({ ...draft, days })}/>
+    </label>}
     <div className="schedule-form-row">
+      {/* A one-off happens on a date; a routine happens at a time, every time. */}
+      {draft.repeat === "once" && <label>Date
+        <input type="date" value={draft.date} min={todayISO()}
+          onChange={e => e.target.value && setDraft({ ...draft, date: e.target.value })}/>
+      </label>}
       <label>Time
         <input type="time" value={hhmm(draft.hour, draft.minute)} onChange={e => setTime(e.target.value)}/>
       </label>
       <label>Agent
-        <input value={draft.agent} onChange={e => setDraft({ ...draft, agent: e.target.value })}/>
+        <select value={draft.agent} onChange={e => setDraft({ ...draft, agent: e.target.value })}>
+          {(agents.includes(draft.agent) ? agents : [draft.agent, ...agents]).map(name =>
+            <option value={name} key={name}>{name}</option>)}
+        </select>
       </label>
     </div>
-    <label>Which days
-      <DayPicker days={draft.days} onChange={days => setDraft({ ...draft, days })}/>
-    </label>
     {/* Beside the field that caused it, not at the top of the page. */}
     {error && <p className="schedule-form-error">{error}</p>}
+    {noDays && <p className="schedule-form-error">Pick at least one day.</p>}
     <div className="schedule-form-actions">
-      <button type="submit" className="primary-button" disabled={busy || !draft.task.trim()}>
+      <button type="submit" className="primary-button" disabled={busy || !draft.task.trim() || noDays}>
         {busy ? "Saving…" : submitLabel}
       </button>
       <button type="button" className="ghost-button" onClick={onCancel}>Cancel</button>
@@ -260,6 +316,7 @@ export function Schedule() {
   // under an open editor moves the row being edited.
   const settled = !editing && !creating && !confirming;
   const cron = useResource<Cron[]>("/orchestrator/cron", settled ? 10000 : 0);
+  const agentList = useResource<{ name: string }[]>("/orchestrator/agents");
   // One query, partitioned here. Two queries on different intervals returned
   // two snapshots of the same job, so one that had just been requeued appeared
   // as "running now" and as pending work at the same time, in the same list.
@@ -284,11 +341,22 @@ export function Schedule() {
     }
   };
 
+  const agents = (agentList.data || []).map(a => a.name).sort();
   const body = () => ({
     label: draft.label, task: draft.task, agent: draft.agent,
-    hour: draft.hour, minute: draft.minute, days: daysField(draft.days),
+    hour: draft.hour, minute: draft.minute, days: daysField(draft),
   });
-  const create = () => act(() => post("/orchestrator/cron", body()));
+  // One form, two destinations. "Does not repeat" is an event on a date, which
+  // is a job; anything else is a rule, which is a routine. Creating a one-off
+  // needed the chat before this - the page could only make things that repeat.
+  const create = () => act(() => draft.repeat === "once"
+    ? post("/orchestrator/jobs", {
+        agent: draft.agent,
+        task: draft.task,
+        payload: { scheduled_by: "schedule_page", label: draft.label },
+        scheduled_at: `${draft.date}T${hhmm(draft.hour, draft.minute)}`,
+      })
+    : post("/orchestrator/cron", body()));
   const save = (name: string) => act(() => patch(`/orchestrator/cron/${encodeURIComponent(name)}`, body()));
   const setEnabled = (entry: Cron, enabled: boolean) =>
     act(() => patch(`/orchestrator/cron/${encodeURIComponent(entry.name)}`, { enabled }));
@@ -305,7 +373,7 @@ export function Schedule() {
   // the routine it came from - otherwise the same run reads two different ways
   // depending on which list it is in.
   const titleOf = (job: Job) =>
-    routines.find(entry => entry.name === job.cron_entry)?.title || job.task;
+    job.label || routines.find(entry => entry.name === job.cron_entry)?.title || job.task;
   // A queued job that names a routine is that routine's next run, already
   // committed - not a separate one-off. Listed as both, a single firing showed
   // up twice: once as cancellable work and once as the routine's next time.
@@ -344,7 +412,15 @@ export function Schedule() {
   ].sort((a, b) => a.epoch - b.epoch);
 
   return <div className="page">
-    <PageHeader eyebrow="Automation" title="Schedule" subtitle="What north will do next, and the routines behind it."/>
+    {/* The action belongs to the page, not to one panel: it makes a one-off
+        event or a repeating routine, and those land in different lists. */}
+    <PageHeader eyebrow="Automation" title="Schedule" subtitle="What north will do next, and the routines behind it."
+      actions={<button className="primary-button" onClick={startCreate}>+ Schedule something</button>}/>
+    {creating && <Panel title={draft.repeat === "once" ? "New one-off" : "New routine"} label="new">
+      <ScheduleForm draft={draft} setDraft={setDraft} onSubmit={create} onCancel={close}
+        submitLabel={draft.repeat === "once" ? "Schedule it" : "Create routine"}
+        busy={busy} error={error} agents={agents} allowOnce/>
+    </Panel>}
     {(cron.error || jobs.error) && <ErrorNotice message={cron.error || jobs.error}/>}
 
     <Panel title="Next up" label="soonest first">
@@ -365,10 +441,7 @@ export function Schedule() {
         </div>) : <Empty>Nothing is scheduled. Add a routine below, or ask north to remind you about something.</Empty>}
     </Panel>
 
-    <Panel title="Routines" label={`${routines.length} recurring`}
-      actions={<button className="primary-button" onClick={startCreate}>+ New routine</button>}>
-      {creating && <ScheduleForm draft={draft} setDraft={setDraft} onSubmit={create} onCancel={close}
-        submitLabel="Create routine" busy={busy} error={error}/>}
+    <Panel title="Routines" label={`${routines.length} recurring`}>
       {cron.loading ? <Loading/> : routines.length ? routines.map(entry => (
         <div className={entry.enabled ? "schedule-row" : "schedule-row paused"} key={entry.name}>
           <div className="schedule-main">
@@ -400,8 +473,11 @@ export function Schedule() {
                   ? entry.modified && <button className="ghost-button" onClick={() => setConfirming(entry.name)} disabled={busy}>Restore default</button>
                   : <button className="ghost-button danger-link" onClick={() => setConfirming(entry.name)} disabled={busy}>Delete</button>}
               </div>}
+          {/* A routine cannot become a one-off in place - that is a delete and
+              a new event - so "Does not repeat" is not offered when editing. */}
           {editing === entry.name && <ScheduleForm draft={draft} setDraft={setDraft} onCancel={close}
-            onSubmit={() => save(entry.name)} submitLabel="Save changes" busy={busy} error={error}/>}
+            onSubmit={() => save(entry.name)} submitLabel="Save changes" busy={busy} error={error}
+            agents={agents} allowOnce={false}/>}
         </div>
       )) : <Empty>No recurring routines yet.</Empty>}
     </Panel>

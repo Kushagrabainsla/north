@@ -279,11 +279,12 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
 .schedule-locked { color: var(--faint); font: 9px "DM Mono", monospace; }
 .schedule-form { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px; padding: 13px; margin: 8px 0 4px; border: 1px solid var(--line-soft); border-radius: 10px; background: rgba(0,0,0,.2); }
 .schedule-form label { display: flex; flex-direction: column; gap: 5px; font: 9px "DM Mono", monospace; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+.schedule-form select { padding: 7px 8px; font-size: 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); }
 .schedule-form input, .schedule-form textarea { padding: 7px 8px; font-size: 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); }
 /* The prompt is a sentence or several, so it gets room to be read back.
    Only vertical resize: widening it would break the form grid. */
 .schedule-form textarea { resize: vertical; min-height: 54px; line-height: 1.45; }
-.schedule-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.schedule-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; align-items: end; }
 .schedule-form-actions { display: flex; gap: 8px; }
 .schedule-form-error { margin: 0; color: var(--danger, #d98a7a); font-size: 11px; }
 .schedule-confirm { display: flex; align-items: center; gap: 10px; }
@@ -298,4 +299,3 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
 .day-picker { display: flex; flex-wrap: wrap; gap: 5px; }
 .day-picker .day { padding: 5px 9px; font: 10px "DM Mono", monospace; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); }
 .day-picker .day.on { border-color: var(--accent); color: var(--accent); }
-.day-picker .day-preset { padding: 5px 9px; font-size: 9px; border-radius: 6px; border: 1px solid var(--line-soft); background: transparent; color: var(--muted); }

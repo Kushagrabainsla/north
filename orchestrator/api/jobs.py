@@ -33,6 +33,9 @@ class JobOut(BaseModel):
     # daily news briefing across Tech & AI, world events, science & health, and
     # business & markets" where the routine beside it read "Daily news briefing".
     cron_entry: str | None = None
+    # A one-off scheduled from the page carries its own title the same way a
+    # routine does, so the same event is not named two different ways.
+    label: str = ""
 
 
 class JobCreateRequest(BaseModel):
@@ -57,6 +60,7 @@ def _job_to_out(j: Job) -> JobOut:
         scheduled_local=format_local(j.scheduled_at),
         created_epoch=to_epoch(j.created_at) if j.created_at else None,
         cron_entry=(j.payload or {}).get("cron_entry"),
+        label=(j.payload or {}).get("label") or "",
     )
 
 
