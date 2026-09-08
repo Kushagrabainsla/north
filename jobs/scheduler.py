@@ -8,6 +8,7 @@ enqueues the matching `Job`, then recomputes. No external scheduling library.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -394,7 +395,16 @@ def merge_entries(builtins: list[CronEntry], user_rows: list[Mapping[str, Any]])
     """
     by_name = {entry.name: entry for entry in builtins}
     for row in user_rows:
-        by_name[row["name"]] = CronEntry.from_row(row)
+        stored = CronEntry.from_row(row)
+        shipped = by_name.get(stored.name)
+        # An override written before a field existed holds nothing for it, and
+        # nothing must not beat the shipped value. `label` is the case that bit:
+        # a built-in edited before schedules had names kept showing its slug
+        # ("task_context_cleanup") after the update that gave it one, because an
+        # empty label overrode a good one.
+        if shipped is not None and not stored.label and shipped.label:
+            stored = dataclasses.replace(stored, label=shipped.label)
+        by_name[stored.name] = stored
     return list(by_name.values())
 
 

@@ -253,3 +253,33 @@ async def test_an_old_row_without_a_label_still_loads(tmp_path) -> None:
     (row,) = await store.list()
     assert row["label"] == ""
     assert CronEntry.from_row(row).title == "water the plants"
+
+
+def test_an_override_without_a_name_inherits_the_shipped_one() -> None:
+    """A built-in edited before schedules had names kept showing its slug.
+
+    The stored row holds an empty label, and an empty label must not override a
+    good one - the user saw "task_context_cleanup" in their list after the
+    update that named it "Nightly cleanup".
+    """
+    from jobs.scheduler import V1_CRON_ENTRIES, merge_entries
+
+    row = {
+        "name": "task_context_cleanup", "agent": "system", "task": "task_context_cleanup",
+        "hour": 3, "minute": 0, "weekdays": None, "tz": "UTC", "enabled": True, "label": "",
+    }
+    merged = {e.name: e for e in merge_entries(list(V1_CRON_ENTRIES), [row])}
+    assert merged["task_context_cleanup"].title == "Nightly cleanup"
+
+
+def test_an_override_that_was_renamed_keeps_its_own_name() -> None:
+    """Inheriting a missing name must not overwrite one the user chose."""
+    from jobs.scheduler import V1_CRON_ENTRIES, merge_entries
+
+    row = {
+        "name": "news_daily_briefing", "agent": "news_briefing", "task": "brief me",
+        "hour": 7, "minute": 0, "weekdays": None, "tz": "UTC", "enabled": True,
+        "label": "My morning news",
+    }
+    merged = {e.name: e for e in merge_entries(list(V1_CRON_ENTRIES), [row])}
+    assert merged["news_daily_briefing"].title == "My morning news"
