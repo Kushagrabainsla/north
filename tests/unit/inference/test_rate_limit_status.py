@@ -89,9 +89,13 @@ def test_retry_after_ms_wins_over_seconds() -> None:
 
 def test_openrouter_body_metadata_headers_parsed() -> None:
     # OpenRouter puts X-RateLimit-Reset in the error body, not response headers.
-    body = {"metadata": {"headers": {"X-RateLimit-Reset": str(int(time.time() + 20))}}}
+    # Anchored to the start of the current second rather than to now: `int()` on
+    # `now + 20` throws away up to a second, which the old `approx(20, abs=1.0)`
+    # had no room for - so the test failed whenever it ran late in a second.
+    reset_at = int(time.time()) + 20
+    body = {"metadata": {"headers": {"X-RateLimit-Reset": str(reset_at)}}}
     wait, source = compute_wait_seconds(status_code=429, headers={}, body=body)
-    assert wait == pytest.approx(20.0, abs=1.0)
+    assert 19.0 <= wait <= 20.0
     assert source.startswith("x-ratelimit-reset(body)")
 
 

@@ -17,6 +17,7 @@ import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from inference.facts.models import FACT_FIELDS, Endpoint, Entitlement, Fact, ModelFacts, Rank
 from utils.db import open_db_connection
@@ -157,6 +158,8 @@ class ModelFactsStore:
             raw = row[field]
             if raw is None:
                 continue
+            # One column, read as whichever type its field declares.
+            value: Any
             if field in _JSON_FIELDS:
                 try:
                     value = frozenset(json.loads(raw))

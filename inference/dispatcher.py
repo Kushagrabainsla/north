@@ -553,7 +553,8 @@ class ModelDispatcher(InferenceRouter):
         vectors are made without inferring it from the shape of a model name.
         """
         for provider in self._providers:
-            if provider.name == LOCAL_EMBEDDINGS and getattr(provider, "model_id", ""):
+            local_model_id = getattr(provider, "model_id", "")
+            if provider.name == LOCAL_EMBEDDINGS and local_model_id:
                 return LOCAL_EMBEDDINGS
         for info, _provider in self._registry.values():
             if info.supports(ModelCapability.EMBEDDING):
@@ -603,14 +604,14 @@ class ModelDispatcher(InferenceRouter):
         if window:
             return window
 
-        window = self._context_windows.get(model_id)
-        if window:
-            return window
+        declared = self._context_windows.get(model_id)
+        if declared:
+            return declared
 
         norm = model_id.lower().strip()
-        window = self._context_windows_normalised.get(norm)
-        if window:
-            return window
+        declared = self._context_windows_normalised.get(norm)
+        if declared:
+            return declared
 
         # Suffix match (e.g. "openai/gpt-4o" against a registry entry "gpt-4o").
         # Rare, so the scan stays here rather than in the indexed path.
@@ -712,7 +713,6 @@ class ModelDispatcher(InferenceRouter):
                     logger.warning("Failed to close provider %s on rebuild", provider.name, exc_info=True)
         self._providers = providers
         self._build_registry()
-        self._validate_preferred()
         if self._availability is not None:
             # A new key is exactly the action a FORBIDDEN provider was waiting for,
             # so a provider swap clears what the old key proved.

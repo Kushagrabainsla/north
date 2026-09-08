@@ -163,7 +163,8 @@ class _ResponsesStream:
             self._event_types.append(event_type)
 
     async def _on_response_opened(self, event: dict) -> None:
-        envelope = event.get("response") if isinstance(event.get("response"), dict) else {}
+        response = event.get("response")
+        envelope = response if isinstance(response, dict) else {}
         self._response_id = str(envelope.get("id") or self._response_id)
         self._remember_conversation(envelope)
 

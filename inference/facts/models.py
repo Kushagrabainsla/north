@@ -135,7 +135,9 @@ class ModelFacts:
         return found is not None and found.rank >= Rank.DECLARED
 
     def with_fact(self, field: str, value: Fact[Any] | None) -> ModelFacts:
-        return replace(self, **{field: value})
+        # The field is named at runtime - that is the whole point of this method -
+        # so the keyword cannot be checked against the dataclass statically.
+        return replace(self, **{field: value})  # type: ignore[arg-type]
 
     def provenance(self) -> dict[str, dict[str, str]]:
         """Per-field ``{rank, source, fetched_at}``, for storage and for auditing."""

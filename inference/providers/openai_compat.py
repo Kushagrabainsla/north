@@ -162,6 +162,17 @@ class _ToolCallStream:
         """True while streamed tokens still belong to the answer the caller sees."""
         return self._emit is not None and not self._saw_tool_call
 
+    async def _forward(self, token: str) -> None:
+        """Send one token on, if there is anywhere to send it.
+
+        Every call site is already guarded by ``_forwarding``, which implies a
+        callback exists - but it says so through a property, and no checker can
+        follow that back to the attribute. Narrowing here once beats asserting at
+        six call sites.
+        """
+        if self._emit is not None:
+            await self._emit(token)
+
     async def add(self, chunk: dict) -> None:
         usage = chunk.get("usage")
         if usage:
@@ -179,7 +190,7 @@ class _ToolCallStream:
     async def close(self) -> None:
         """End the turn, raising when the model streamed nothing at all."""
         if self._in_thought and self._forwarding:
-            await self._emit("</thought>")
+            await self._forward("</thought>")
         if not self._calls and not self._content and not self._reasoning:
             raise ModelDegenerateError(
                 self._model_id,
@@ -214,8 +225,8 @@ class _ToolCallStream:
             return
         if not self._in_thought:
             self._in_thought = True
-            await self._emit("<thought>")
-        await self._emit(token)
+            await self._forward("<thought>")
+        await self._forward(token)
 
     async def _add_text(self, delta: dict) -> None:
         token = delta.get("content") or ""
@@ -224,13 +235,13 @@ class _ToolCallStream:
         if self._in_thought:
             self._in_thought = False
             if self._forwarding:
-                await self._emit("</thought>")
+                await self._forward("</thought>")
         self._content.append(token)
         # Once a tool_calls delta has arrived the response is a tool-call turn -
         # its content never reaches the final answer, so forwarding it would show
         # the user text that is then discarded.
         if self._forwarding:
-            await self._emit(token)
+            await self._forward(token)
 
     async def _add_tool_calls(self, delta: dict) -> None:
         for call in delta.get("tool_calls") or []:
@@ -241,13 +252,15 @@ class _ToolCallStream:
 
     async def _retract_streamed_answer(self) -> None:
         """Take back the answer streamed so far: this turn is a tool call."""
-        retractable = self._emit is not None and hasattr(self._emit, "reset")
+        # Held as the bound method rather than as a flag: the callback may or may
+        # not offer `reset`, and asking once keeps the two uses in agreement.
+        reset = getattr(self._emit, "reset", None)
         if self._in_thought:
             self._in_thought = False
-            if retractable:
-                await self._emit("</thought>")
-        if retractable and self._content:
-            await self._emit.reset()
+            if reset is not None:
+                await self._forward("</thought>")
+        if reset is not None and self._content:
+            await reset()
 
     def _accumulate_call(self, call: dict) -> None:
         entry = self._calls.setdefault(call.get("index", 0), {"id": "", "name": "", "arguments": ""})
@@ -583,8 +596,8 @@ class OpenAICompatibleProvider:
                 body=body,
             )
         if resp.status_code >= 400:
-            body = (await resp.aread()).decode("utf-8", errors="replace")[:200]
-            raise InferenceError(f"{self.name} returned {resp.status_code} for {model_id}: {body}")
+            detail = (await resp.aread()).decode("utf-8", errors="replace")[:200]
+            raise InferenceError(f"{self.name} returned {resp.status_code} for {model_id}: {detail}")
 
     async def aclose(self) -> None:
         """Close the underlying HTTPX client."""

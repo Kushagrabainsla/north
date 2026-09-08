@@ -92,7 +92,7 @@ PROVIDER_DEFINITIONS: tuple[ProviderDefinition, ...] = (
         # provider guaranteed to be there. It serves no chat models, so this does
         # not affect completion routing at all.
         fallback_order=1,
-        factory=lambda _="": LocalEmbeddingProvider(),
+        factory=lambda _credential: LocalEmbeddingProvider(),
     ),
     ProviderDefinition(
         id="groq",
