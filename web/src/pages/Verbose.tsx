@@ -137,7 +137,7 @@ interface Job { job_id: string; agent: string; task: string; status: string; sch
 interface Cron {
   name: string; agent: string; task: string; hour: number; minute: number;
   weekdays: number[]; cadence: string; enabled: boolean; tz: string;
-  schedule: string; next_run_local: string; next_run_epoch: number; source: string;
+  schedule: string; next_run_local: string; next_run_epoch: number; source: string; modified: boolean;
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -230,6 +230,10 @@ export function Schedule() {
   }));
   const setEnabled = (entry: Cron, enabled: boolean) =>
     act(() => patch(`/orchestrator/cron/${encodeURIComponent(entry.name)}`, { enabled }));
+  const restore = (entry: Cron) => {
+    if (!window.confirm(`Put "${entry.name}" back to the settings north ships with?`)) return;
+    return act(() => del(`/orchestrator/cron/${encodeURIComponent(entry.name)}`));
+  };
   const remove = (entry: Cron) => {
     if (!window.confirm(`Delete "${entry.task}"? This cannot be undone.`)) return;
     return act(() => del(`/orchestrator/cron/${encodeURIComponent(entry.name)}`));
@@ -253,19 +257,21 @@ export function Schedule() {
               <b>{entry.task}</b>
               <small>
                 {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
-                {entry.source === "builtin" && " · built-in"}
+                {entry.source === "builtin" && (entry.modified ? " · built-in, edited" : " · built-in")}
                 {" · "}{entry.enabled ? `next ${entry.next_run_local}` : "paused"}
               </small>
             </div>
-            {entry.source === "builtin"
-              ? <span className="schedule-locked" title="Ships with north">built-in</span>
-              : <div className="schedule-actions">
-                  <button onClick={() => setEnabled(entry, !entry.enabled)} disabled={busy}>
-                    {entry.enabled ? "Pause" : "Resume"}
-                  </button>
-                  <button onClick={() => startEdit(entry)} disabled={busy}>Edit</button>
-                  <button className="danger-link" onClick={() => remove(entry)} disabled={busy}>Delete</button>
-                </div>}
+            <div className="schedule-actions">
+              <button onClick={() => setEnabled(entry, !entry.enabled)} disabled={busy}>
+                {entry.enabled ? "Pause" : "Resume"}
+              </button>
+              <button onClick={() => startEdit(entry)} disabled={busy}>Edit</button>
+              {/* A built-in lives in the source, so it can only be un-edited, never
+                  removed - and there is nothing to undo until it has been edited. */}
+              {entry.source === "builtin"
+                ? entry.modified && <button onClick={() => restore(entry)} disabled={busy}>Restore default</button>
+                : <button className="danger-link" onClick={() => remove(entry)} disabled={busy}>Delete</button>}
+            </div>
             {editing === entry.name && <ScheduleForm draft={draft} setDraft={setDraft}
               onSubmit={() => save(entry.name)} onCancel={() => setEditing("")}
               submitLabel="Save" busy={busy}/>}

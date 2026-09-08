@@ -195,10 +195,41 @@ async def test_changing_the_time_leaves_the_days_alone(tool, store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_builtin_schedule_cannot_be_changed(store) -> None:
+async def test_a_builtin_schedule_can_be_retimed_by_asking(store) -> None:
+    """Asking north to move the briefing is the way it was created in the first place."""
     updater = UpdateScheduleTool(cron_store=store)
-    result = await updater.run(ToolInput(params={"name": "news_daily_briefing", "hour": 10}))
-    assert not result.success and "built-in" in result.error
+    result = await updater.run(ToolInput(params={"name": "news_daily_briefing", "hour": 7}))
+
+    assert result.success, result.error
+    assert result.data["hour"] == 7
+    assert result.data["source"] == "builtin"
+    # The fields the request did not name keep their shipped values.
+    assert result.data["agent"] == "news_briefing"
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_edited_builtin_restores_the_default(store) -> None:
+    from tools.universal.cancel_schedule import CancelScheduleTool
+
+    updater = UpdateScheduleTool(cron_store=store)
+    await updater.run(ToolInput(params={"name": "news_daily_briefing", "hour": 7}))
+
+    canceller = CancelScheduleTool(job_processor=None, cron_store=store)
+    result = await canceller.run(ToolInput(params={"name": "news_daily_briefing"}))
+
+    assert result.success and result.data["type"] == "restored"
+    assert await store.get("news_daily_briefing") is None  # back to the shipped constant
+
+
+@pytest.mark.asyncio
+async def test_an_untouched_builtin_cannot_be_deleted_only_paused(store) -> None:
+    from tools.universal.cancel_schedule import CancelScheduleTool
+
+    canceller = CancelScheduleTool(job_processor=None, cron_store=store)
+    result = await canceller.run(ToolInput(params={"name": "news_daily_briefing"}))
+
+    assert not result.success
+    assert "Pause it" in result.error
 
 
 @pytest.mark.asyncio

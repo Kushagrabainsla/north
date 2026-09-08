@@ -14,7 +14,9 @@ class CancelScheduleTool(Tool):
         "Stop a scheduled task permanently: pass the 'name' of a recurring schedule, or "
         "the 'job_id' of a one-shot task, as shown by list_schedules. A recurring schedule "
         "is deleted, so it never fires again - to move it to a different time instead, use "
-        "update_schedule. This does not stop a run already in progress; 'north cancel' does."
+        "update_schedule. A schedule north ships with cannot be deleted; cancelling one that "
+        "has been edited restores its shipped settings, and pausing it via update_schedule is "
+        "how to stop it. This does not stop a run already in progress; 'north cancel' does."
     )
     is_mutating = True
     parameters_schema = {
@@ -36,17 +38,24 @@ class CancelScheduleTool(Tool):
             return ToolOutput(success=False, error="Provide 'name' (recurring) or 'job_id' (one-shot).")
 
         if name:
+            removed = await self._cron_store.remove(name)
+            if removed:
+                # Removing the stored row for a built-in undoes the edit rather
+                # than the schedule: the shipped version comes back.
+                kind = "restored" if name in BUILTIN_NAMES else "recurring"
+                return ToolOutput(success=True, data={"cancelled": name, "type": kind})
             if name in BUILTIN_NAMES:
                 return ToolOutput(
                     success=False,
-                    error=f"{name!r} is a built-in schedule and cannot be cancelled.",
+                    error=(
+                        f"{name!r} ships with north, so there is nothing to delete. "
+                        f"Pause it with update_schedule (enabled false) to stop it running."
+                    ),
                 )
-            if not await self._cron_store.remove(name):
-                return ToolOutput(
-                    success=False,
-                    error=f"No schedule named {name!r}. Call list_schedules to see what exists.",
-                )
-            return ToolOutput(success=True, data={"cancelled": name, "type": "recurring"})
+            return ToolOutput(
+                success=False,
+                error=f"No schedule named {name!r}. Call list_schedules to see what exists.",
+            )
 
         job = await self._job_processor.get(job_id)
         if job is None:
@@ -55,4 +64,6 @@ class CancelScheduleTool(Tool):
         return ToolOutput(success=True, data={"cancelled": job_id, "type": "one-shot", "task": job.task})
 
     def format_output(self, data: dict) -> str:
+        if data["type"] == "restored":
+            return f"{data['cancelled']} is back to the settings north ships with."
         return f"Cancelled {data['type']} schedule {data['cancelled']} - it will not run again."

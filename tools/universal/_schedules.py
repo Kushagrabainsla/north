@@ -119,9 +119,17 @@ def resolve_zone_name(tz: str | None) -> str:
     return tz if getattr(resolved, "key", None) == tz else local_timezone_name()
 
 
-def entry_view(row: dict[str, Any], source: str = "user") -> dict[str, Any]:
-    """Render one stored recurring entry for a tool result: what, when, next."""
-    return _view(CronEntry.from_row(row), source)
+def entry_view(row: dict[str, Any], source: str | None = None) -> dict[str, Any]:
+    """Render one stored recurring entry for a tool result: what, when, next.
+
+    A stored row whose name matches a built-in is an *edit* of that built-in, not
+    a schedule of the user's own, and says so - otherwise editing the daily
+    briefing would report it as something the user had created.
+    """
+    return _view(
+        CronEntry.from_row(row),
+        source or ("builtin" if row["name"] in BUILTIN_NAMES else "user"),
+    )
 
 
 def builtin_views() -> list[dict[str, Any]]:

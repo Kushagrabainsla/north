@@ -222,8 +222,7 @@ class CronScheduler:
         entries = list(self._builtin_entries)
         if self._cron_store is not None:
             try:
-                user = await self._cron_store.list()
-                entries.extend(CronEntry.from_row(u) for u in user)
+                entries = merge_entries(entries, await self._cron_store.list())
             except Exception:
                 logger.exception("CronScheduler: failed to load user cron entries")
         return [entry for entry in entries if entry.enabled]
@@ -354,3 +353,31 @@ V1_CRON_ENTRIES: list[CronEntry] = [
     ),
     CronEntry(name="task_context_cleanup", agent="system", task="task_context_cleanup", hour=3, minute=0),
 ]
+
+
+# The schedules north ships with, addressable by name so a stored row can stand
+# in for one.
+BUILTIN_BY_NAME: dict[str, CronEntry] = {entry.name: entry for entry in V1_CRON_ENTRIES}
+
+
+def merge_entries(builtins: list[CronEntry], user_rows: list[Mapping[str, Any]]) -> list[CronEntry]:
+    """The schedules that actually apply: shipped defaults, then what the user changed.
+
+    A stored row whose name matches a built-in *replaces* it rather than sitting
+    alongside it, which is what makes a built-in editable at all. Shipping a
+    schedule as a constant made it unreachable: the daily briefing was created
+    by asking north for it, got written into the source, and from then on could
+    not be moved, paused or retimed by the person whose briefing it was.
+
+    Deleting the stored row restores the shipped default, so an edit is always
+    reversible and nothing has to be repaired by hand.
+    """
+    by_name = {entry.name: entry for entry in builtins}
+    for row in user_rows:
+        by_name[row["name"]] = CronEntry.from_row(row)
+    return list(by_name.values())
+
+
+def builtin_default(name: str) -> CronEntry | None:
+    """The shipped form of *name*, for seeding an override or restoring one."""
+    return BUILTIN_BY_NAME.get(name)

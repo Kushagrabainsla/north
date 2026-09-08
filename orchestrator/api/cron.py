@@ -1,4 +1,8 @@
-"""Recurring schedules: the user's, and the built-in ones they can see but not edit."""
+"""Recurring schedules: the user's own, and the built-ins they can retime or pause.
+
+A built-in ships as a constant. Editing one writes a stored row that stands in
+for it, so the shipped values are never lost and deleting the row restores them.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from jobs.cron_store import UNSET
-from jobs.scheduler import V1_CRON_ENTRIES, CronEntry, next_firing_epoch
+from jobs.scheduler import V1_CRON_ENTRIES, CronEntry, builtin_default, merge_entries, next_firing_epoch
 from orchestrator.api.deps import _get_cron_store, router
 from tools.universal._schedules import parse_weekdays
 from utils.time import format_local, local_timezone_name
@@ -19,8 +23,9 @@ class CronEntryOut(BaseModel):
     given as both an epoch (for machines) and local text (for people).
 
     `source` is "user" for a schedule the user created and "builtin" for one
-    north ships with - built-ins are listed so "what is scheduled?" has a
-    complete answer, but they are part of the install and cannot be edited.
+    north ships with. Both can be edited and paused; a built-in additionally
+    reports `modified`, and deleting it restores the shipped values rather than
+    removing it.
 
     `weekdays` is the days it runs, empty meaning every day. `cadence` is the
     same fact in the words a person uses ("weekdays", "weekends", "every Tue"),
@@ -40,6 +45,9 @@ class CronEntryOut(BaseModel):
     next_run_epoch: float
     next_run_local: str
     source: str = "user"
+    # True for a built-in the user has edited. The client uses it to offer
+    # "restore default", which is the only way back to the shipped values.
+    modified: bool = False
 
 
 class CronEntryCreate(BaseModel):
@@ -75,10 +83,12 @@ BUILTIN_NAMES = frozenset(entry.name for entry in V1_CRON_ENTRIES)
 
 
 def _to_out(row: dict) -> CronEntryOut:
-    return _entry_out(CronEntry.from_row(row), "user")
+    name = row["name"]
+    is_builtin = name in BUILTIN_NAMES
+    return _entry_out(CronEntry.from_row(row), "builtin" if is_builtin else "user", modified=is_builtin)
 
 
-def _entry_out(entry: CronEntry, source: str) -> CronEntryOut:
+def _entry_out(entry: CronEntry, source: str, *, modified: bool = False) -> CronEntryOut:
     next_epoch = next_firing_epoch(entry)
     return CronEntryOut(
         name=entry.name,
@@ -94,6 +104,7 @@ def _entry_out(entry: CronEntry, source: str) -> CronEntryOut:
         next_run_epoch=next_epoch,
         next_run_local=format_local(next_epoch),
         source=source,
+        modified=modified,
     )
 
 
@@ -112,17 +123,54 @@ def _days(value: Any) -> frozenset[int] | None:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _reject_builtin(name: str) -> None:
-    if name in BUILTIN_NAMES:
-        raise HTTPException(status_code=409, detail=f"{name!r} is a built-in schedule and cannot be changed")
+async def _ensure_editable_row(store, name: str) -> None:
+    """Make sure there is a stored row for *name*, so an edit has somewhere to land.
+
+    A built-in ships as a constant in the source. Editing one writes a row that
+    stands in for it, seeded from the shipped values so an edit that names one
+    field leaves the rest as they were. Deleting the row restores the default.
+
+    This exists because a schedule the user asked north to create - the daily
+    briefing - was written into the source rather than stored, and from then on
+    the person whose briefing it was could not move it, pause it, or retime it.
+    """
+    if await store.get(name) is not None:
+        return
+    default = builtin_default(name)
+    if default is None:
+        raise HTTPException(status_code=404, detail=f"no schedule named {name!r}")
+    await store.add(
+        name=default.name,
+        agent=default.agent,
+        task=default.task,
+        hour=default.hour,
+        minute=default.minute,
+        weekdays=default.weekdays,
+        tz=default.zone_name,
+        enabled=default.enabled,
+    )
 
 
 @router.get("/cron", response_model=list[CronEntryOut])
 async def list_cron_entries(builtin: bool = True) -> list[CronEntryOut]:
-    """List recurring schedules, soonest firing first. Pass builtin=false for the user's own."""
-    entries = [_to_out(e) for e in await _get_cron_store().list()]
-    if builtin:
-        entries += [_entry_out(e, "builtin") for e in V1_CRON_ENTRIES]
+    """List recurring schedules, soonest firing first. Pass builtin=false for the user's own.
+
+    A built-in the user has edited is listed once, in its edited form, and marked
+    `modified` - listing both the shipped and the stored version would show two
+    schedules where one runs.
+    """
+    rows = await _get_cron_store().list()
+    stored = {row["name"] for row in rows}
+    merged = merge_entries(list(V1_CRON_ENTRIES) if builtin else [], rows)
+    entries = [
+        _entry_out(
+            entry,
+            "builtin" if entry.name in BUILTIN_NAMES else "user",
+            modified=entry.name in BUILTIN_NAMES and entry.name in stored,
+        )
+        for entry in merged
+        if builtin or entry.name not in BUILTIN_NAMES or entry.name in stored
+    ]
     return sorted(entries, key=lambda e: e.next_run_epoch)
 
 
@@ -154,8 +202,8 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
 async def update_cron_entry(name: str, body: CronEntryUpdate) -> CronEntryOut:
     """Change some fields of one schedule; omitted fields are left alone."""
     _validate(body.hour, body.minute)
-    _reject_builtin(name)
     store = _get_cron_store()
+    await _ensure_editable_row(store, name)
     changes: dict[str, Any] = body.model_dump(exclude_none=True, exclude={"days"})
     # `days` is translated rather than passed through, and only when the caller
     # sent it: UNSET is how the store tells "leave the days alone" apart from
@@ -174,7 +222,18 @@ async def update_cron_entry(name: str, body: CronEntryUpdate) -> CronEntryOut:
 
 @router.delete("/cron/{name}", status_code=204)
 async def delete_cron_entry(name: str) -> None:
-    """Remove a user-defined recurring schedule by name."""
-    _reject_builtin(name)
-    if not await _get_cron_store().remove(name):
-        raise HTTPException(status_code=404, detail=f"no schedule named {name!r}")
+    """Remove a schedule. For a built-in this restores the shipped default.
+
+    A built-in cannot be removed - it lives in the source - so deleting one
+    deletes the *edit*, which is the reversal a person means by it. Stopping a
+    built-in is what pausing is for.
+    """
+    removed = await _get_cron_store().remove(name)
+    if removed:
+        return
+    if name in BUILTIN_NAMES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name!r} is a built-in schedule at its default settings. Pause it to stop it.",
+        )
+    raise HTTPException(status_code=404, detail=f"no schedule named {name!r}")

@@ -118,15 +118,69 @@ async def test_deleting_removes_it(store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_builtin_schedule_cannot_be_edited_or_deleted(store) -> None:
-    with bind_services(ApiServices(cron_store=store)):
-        with pytest.raises(HTTPException) as edit:
-            await update("news_daily_briefing", hour=10)
-        with pytest.raises(HTTPException) as delete:
-            await api.delete_cron_entry("news_daily_briefing")
+async def test_a_builtin_schedule_can_be_retimed(store) -> None:
+    """The briefing was created by asking north, then written into the source.
 
-    assert edit.value.status_code == 409
-    assert delete.value.status_code == 409
+    From then on the person whose briefing it was could not move it.
+    """
+    with bind_services(ApiServices(cron_store=store)):
+        edited = await update("news_daily_briefing", hour=7, minute=15)
+
+    assert (edited.hour, edited.minute) == (7, 15)
+    assert edited.source == "builtin"
+    assert edited.modified is True
+
+
+@pytest.mark.asyncio
+async def test_editing_a_builtin_keeps_the_fields_it_did_not_name(store) -> None:
+    """The override is seeded from the shipped values, not from blanks."""
+    with bind_services(ApiServices(cron_store=store)):
+        edited = await update("news_daily_briefing", hour=7)
+
+    assert edited.agent == "news_briefing"
+    assert "news briefing" in edited.task
+
+
+@pytest.mark.asyncio
+async def test_a_builtin_can_be_paused(store) -> None:
+    with bind_services(ApiServices(cron_store=store)):
+        paused = await update("news_daily_briefing", enabled=False)
+    assert paused.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_an_edited_builtin_is_listed_once_not_twice(store) -> None:
+    """Listing the shipped and the stored version would show two schedules where one runs."""
+    with bind_services(ApiServices(cron_store=store)):
+        await update("news_daily_briefing", hour=7)
+        listed = await api.list_cron_entries()
+
+    briefings = [e for e in listed if e.name == "news_daily_briefing"]
+    assert len(briefings) == 1
+    assert briefings[0].hour == 7
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_edited_builtin_restores_the_shipped_default(store) -> None:
+    with bind_services(ApiServices(cron_store=store)):
+        await update("news_daily_briefing", hour=7, enabled=False)
+        await api.delete_cron_entry("news_daily_briefing")
+        listed = await api.list_cron_entries()
+
+    (briefing,) = [e for e in listed if e.name == "news_daily_briefing"]
+    assert briefing.hour == 8
+    assert briefing.enabled is True
+    assert briefing.modified is False
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_unedited_builtin_says_to_pause_it_instead(store) -> None:
+    """It lives in the source, so there is nothing to remove - only to stop."""
+    with bind_services(ApiServices(cron_store=store)), pytest.raises(HTTPException) as exc:
+        await api.delete_cron_entry("news_daily_briefing")
+
+    assert exc.value.status_code == 409
+    assert "Pause" in exc.value.detail
 
 
 @pytest.mark.asyncio
