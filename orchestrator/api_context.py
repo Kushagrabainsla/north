@@ -62,6 +62,11 @@ class ApiServices:
     approval_store: ApprovalStore | None = None
     conversation_store: Any | None = None
     fact_store: Any | None = None
+    # What north has learned about the user, beyond the fact store: the
+    # episodes it consolidated from past tasks, and the approval decisions
+    # autonomous mode replays. Both are read by the Memory page.
+    episodic_store: Any | None = None
+    approval_memory: Any | None = None
     skill_registry: Any | None = None
     north_home: Any | None = None
     # Mutable per-app runtime state for the web layer (in-flight logins,

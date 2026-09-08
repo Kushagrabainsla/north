@@ -74,6 +74,8 @@ def configure(
     fact_store=None,
     inference_router=None,
     skill_registry=None,
+    episodic_store=None,
+    approval_memory=None,
 ) -> None:
     """Contribute the web layer's wiring to *app*.
 
@@ -92,6 +94,8 @@ def configure(
         agent_run_store=agent_run_store,
         north_home=north_home,
         fact_store=fact_store,
+        episodic_store=episodic_store,
+        approval_memory=approval_memory,
         inference_router=inference_router,
         skill_registry=skill_registry,
         conversation_store=ConversationStore(north_home / "web.db"),
@@ -374,6 +378,39 @@ async def memory_facts() -> list[dict[str, Any]]:
     if current_services().fact_store is None:
         return []
     return await current_services().fact_store.all_facts()
+
+
+@router.get("/memory/episodes")
+async def memory_episodes(limit: int = 50) -> list[dict[str, Any]]:
+    """What north remembers of past tasks, newest first.
+
+    Consolidated after a task ends and used to recognise a situation it has been
+    in before. Read-only here: an episode is a record of what happened, so the
+    honest way to change one is to do the thing differently, not to edit the note.
+    """
+    store = current_services().episodic_store
+    if store is None:
+        return []
+    return await store.recent(limit=limit)
+
+
+@router.get("/memory/approvals")
+async def memory_approvals() -> list[dict[str, Any]]:
+    """The decisions autonomous mode replays instead of asking.
+
+    The whole point of showing them: a rule you cannot see is one you cannot check
+    before trusting it with more autonomy.
+    """
+    memory = current_services().approval_memory
+    return [] if memory is None else memory.all_decisions()
+
+
+@router.delete("/memory/approvals/{fingerprint}", status_code=204)
+async def forget_memory_approval(fingerprint: str) -> None:
+    """Withdraw one learned decision, so north asks about that action again."""
+    memory = current_services().require("approval_memory")
+    if not memory.forget(fingerprint):
+        raise HTTPException(status_code=404, detail="No learned decision with that fingerprint")
 
 
 class FactCreate(BaseModel):

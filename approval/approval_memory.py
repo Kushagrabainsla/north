@@ -74,6 +74,44 @@ class ApprovalMemory:
         """Return the user's prior decision ('approved'/'rejected') for this action, or None."""
         return self._ensure_cache().get(_fingerprint(agent, message))
 
+    def all_decisions(self) -> list[dict[str, object]]:
+        """Every decision north has learned, newest first.
+
+        Autonomous mode replays these instead of asking, so they have to be
+        readable: a rule you cannot see is one you cannot check before trusting
+        it. ``signature`` is the normalized action the fingerprint was taken
+        from, which is what makes a row mean something to a person.
+        """
+        try:
+            with open_db_connection(self._db_path) as conn:
+                rows = conn.execute(
+                    "SELECT fingerprint, agent, signature, decision, count, updated_at "
+                    "FROM approval_decisions ORDER BY updated_at DESC"
+                ).fetchall()
+        except Exception:
+            logger.warning("ApprovalMemory: failed to read decisions", exc_info=True)
+            return []
+        return [dict(row) for row in rows]
+
+    def forget(self, fingerprint: str) -> bool:
+        """Drop one learned decision. True when a row was removed.
+
+        The counterpart to recording. A decision that cannot be withdrawn is not
+        consent, and until now the only way to take one back was to delete the
+        database.
+        """
+        try:
+            with open_db_connection(self._db_path) as conn:
+                removed = conn.execute(
+                    "DELETE FROM approval_decisions WHERE fingerprint = ?", (fingerprint,)
+                ).rowcount
+        except Exception:
+            logger.warning("ApprovalMemory: failed to forget %s", fingerprint, exc_info=True)
+            return False
+        if removed:
+            self._ensure_cache().pop(fingerprint, None)
+        return bool(removed)
+
     def record(self, agent: str, message: str, decision: str) -> None:
         """Persist a human decision. The latest decision for a fingerprint wins."""
         if decision not in ("approved", "rejected"):

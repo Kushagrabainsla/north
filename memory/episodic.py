@@ -271,6 +271,23 @@ class EpisodicStore:
             cutoff = (datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)).isoformat()
             conn.execute("DELETE FROM episodes WHERE timestamp < ?", (cutoff,))
 
+    async def recent(self, limit: int = 50) -> list[dict[str, object]]:
+        """The newest episodes, without their vectors.
+
+        For reading rather than for matching, so the embedding is left behind: it
+        is several kilobytes per row and means nothing to a person.
+        """
+        return await asyncio.to_thread(self._recent_sync, limit)
+
+    def _recent_sync(self, limit: int) -> list[dict[str, object]]:
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, task_id, domain, outcome, summary, timestamp "
+                "FROM episodes ORDER BY timestamp DESC LIMIT ?",
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def _load_all_sync(
         self, allowed_domains: frozenset[str] | None = None
     ) -> list[tuple[str, str, str | None, str, str]]:

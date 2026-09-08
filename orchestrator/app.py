@@ -421,7 +421,9 @@ def _build_context_injector(deps) -> ContextInjector:
     )
 
 
-def _configure_routers(app, orchestrator, deps, agent_registry, context_injector, skill_registry) -> None:
+def _configure_routers(
+    app, orchestrator, deps, agent_registry, context_injector, skill_registry, approval_memory=None
+) -> None:
     configure_api(
         app,
         orchestrator=orchestrator,
@@ -449,6 +451,8 @@ def _configure_routers(app, orchestrator, deps, agent_registry, context_injector
         agent_run_store=deps.agent_run_store,
         north_home=settings.north_home,
         fact_store=deps.fact_store,
+        episodic_store=deps.episodic_store,
+        approval_memory=approval_memory,
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
     )
@@ -799,7 +803,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     _step("configuring API router")
-    _configure_routers(app, orchestrator, deps, agent_registry, context_injector, skill_registry)
+    _configure_routers(
+        app, orchestrator, deps, agent_registry, context_injector, skill_registry, approval_memory
+    )
 
     _step("configuring callback server")
     callback_server = _build_callback_server()

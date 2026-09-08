@@ -558,7 +558,83 @@ const docLabels: Record<string, string> = {
   "soul.md": "Soul",
 };
 interface ContextDoc { document: string; content: string; }
+// Everything north has learned, in one place. Four kinds of memory that lived in
+// four different states of visibility: the documents were editable here, the
+// facts were listed below them, and the episodes and approval decisions had no
+// endpoint at all - north was learning things nobody could look at.
+type MemoryTab = "documents" | "facts" | "episodes" | "approvals";
+
+const MEMORY_TABS: [MemoryTab, string][] = [
+  ["documents", "Documents"],
+  ["facts", "Facts"],
+  ["episodes", "Episodes"],
+  ["approvals", "Approvals"],
+];
+
+interface Episode { id: string; task_id: string; domain: string; outcome: string; summary: string; timestamp: string; }
+interface ApprovalDecision {
+  fingerprint: string; agent: string; signature: string; decision: string; count: number; updated_at: string;
+}
+
+// What north replays instead of asking, once autonomy is turned up. Shown so it
+// can be checked before it is trusted, and forgotten one row at a time - a
+// decision that cannot be withdrawn is not consent.
+function ApprovalMemoryPanel() {
+  const resource = useResource<ApprovalDecision[]>("/web/api/memory/approvals", 10000);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const forget = async (row: ApprovalDecision) => {
+    setBusy(row.fingerprint);
+    setError("");
+    try { await del(`/web/api/memory/approvals/${encodeURIComponent(row.fingerprint)}`); await resource.reload(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(""); }
+  };
+  const rows = resource.data || [];
+  return <Panel title="Learned decisions" label={`${rows.length} remembered`}>
+    {error && <ErrorNotice message={error}/>}
+    <p className="muted memory-note">
+      Every time you approve or reject an action, north records it against a fingerprint of that
+      action and replays your decision when a matching one comes up. This is what autonomous mode
+      runs on.
+    </p>
+    {resource.loading ? <Loading/> : rows.length ? rows.map(row =>
+      <div className="memory-row" key={row.fingerprint}>
+        <div className="memory-main">
+          <b>{row.signature}</b>
+          <small>
+            {row.agent} · <span className={`decision decision-${row.decision}`}>{row.decision}</span>
+            {row.count > 1 && ` · ${row.count}×`} · {timeAgo(row.updated_at)}
+          </small>
+        </div>
+        <button className="ghost-button danger-link" disabled={busy === row.fingerprint}
+          onClick={() => forget(row)}>Forget</button>
+      </div>) : <Empty>Nothing learned yet. Approve or reject an action and it appears here.</Empty>}
+  </Panel>;
+}
+
+// A record of what happened, so read-only: the honest way to change an episode
+// is to do the thing differently, not to edit the note.
+function EpisodesPanel() {
+  const resource = useResource<Episode[]>("/web/api/memory/episodes", 10000);
+  const rows = resource.data || [];
+  return <Panel title="Episodes" label={`${rows.length} remembered`}>
+    <p className="muted memory-note">
+      What north remembers of past tasks, used to recognise a situation it has been in before.
+    </p>
+    {resource.loading ? <Loading/> : rows.length ? rows.map(row =>
+      <div className="memory-row" key={row.id}>
+        <div className="memory-main">
+          <b>{row.summary}</b>
+          <small>{row.domain} · {row.task_id} · {timeAgo(row.timestamp)}</small>
+        </div>
+        <Status value={row.outcome}/>
+      </div>) : <Empty>No episodes recorded yet.</Empty>}
+  </Panel>;
+}
+
 export function Memory() {
+  const [tab, setTab] = useState<MemoryTab>("documents");
   const [doc, setDoc] = useState(docs[0]);
   const resource = useResource<ContextDoc>(`/orchestrator/context/${doc}`);
   const facts = useResource<any[]>("/web/api/memory/facts", 10000);
@@ -571,7 +647,26 @@ export function Memory() {
   const removeDocument = async () => { if (!window.confirm(`Reset ${docLabels[doc]}?`)) return; await api(`/orchestrator/context/${doc}`, { method: "DELETE" }); setDraft(null); await resource.reload(); };
   const saveFact = async () => { if (!factDraft.trim()) return; if (editingFact) await api(`/web/api/memory/facts/${editingFact}`, { method: "PATCH", body: JSON.stringify({ content: factDraft, category: "user" }) }); else await post("/web/api/memory/facts", { content: factDraft, category: "user" }); setFactDraft(""); setEditingFact(null); await facts.reload(); };
   const removeFact = async (id: string) => { if (!window.confirm("Delete this fact?")) return; await api(`/web/api/memory/facts/${id}`, { method: "DELETE" }); await facts.reload(); };
-  return <div className="page"><PageHeader eyebrow="Knowledge" title="Memory" subtitle="Manage your four durable context areas." actions={isUserFacts ? null : <><button onClick={removeDocument}>Reset document</button><button className="primary-button" disabled={draft === null} onClick={save}>Save document</button></>}/><div className="memory-layout"><aside>{docs.map(name => <button className={doc === name ? "active" : ""} key={name} onClick={() => { setDoc(name); setDraft(null); }}>{docLabels[name]}</button>)}</aside><div className="memory-editor-grid"><section><div className="editor-label">{isUserFacts ? "User facts" : "Markdown source"}</div>{isUserFacts ? <div className="document-help">User details are managed as individual facts below. Add, edit, or delete them there.</div> : resource.loading ? <Loading/> : <textarea className="document-editor" value={content} onChange={e => setDraft(e.target.value)} />}</section><section className={`memory-preview ${isUserFacts ? "user-facts-preview" : ""}`}><div className="editor-label">Rendered preview</div>{isUserFacts ? <div className="document-help">Your durable user details appear in the Facts panel below.</div> : <Markdown>{content || "Nothing written yet."}</Markdown>}</section></div></div><section className="facts-panel panel"><header><div><span>Durable context</span><h2>Facts</h2></div><span>{facts.data?.length || 0} stored</span></header><div className="panel-content"><div className="fact-editor"><input value={factDraft} onChange={e => setFactDraft(e.target.value)} placeholder="Add one atomic fact…"/><button className="ghost-button" onClick={saveFact}>{editingFact ? "Update" : "Add fact"}</button>{editingFact && <button className="ghost-button" onClick={() => { setEditingFact(null); setFactDraft(""); }}>Cancel</button>}</div><div className="fact-list">{facts.loading ? <Loading/> : (facts.data || []).map(fact => <article className="fact-row" key={fact.id}><div><b>{fact.content}</b><small>{fact.category || "general"} · updated {timeAgo(fact.updated_at)}</small></div><div className="fact-actions"><span>{fact.confidence != null ? `${Math.round(Number(fact.confidence) * 100)}%` : "Active"}</span><button onClick={() => { setEditingFact(fact.id); setFactDraft(fact.content); }}>Edit</button><button onClick={() => removeFact(fact.id)}>Delete</button></div></article>)}{!facts.loading && !facts.data?.length && <Empty>No durable facts have been captured yet.</Empty>}</div></div></section><Bootstrap embedded/></div>;
+  const onDocuments = tab === "documents";
+  return <div className="page">
+    <PageHeader eyebrow="Knowledge" title="Memory" subtitle="Everything north has learned about you, and from you."
+      actions={onDocuments && !isUserFacts
+        ? <><button onClick={removeDocument}>Reset document</button>
+            <button className="primary-button" disabled={draft === null} onClick={save}>Save document</button></>
+        : null}/>
+    <div className="segmented memory-tabs">
+      {MEMORY_TABS.map(([value, label]) =>
+        <button className={tab === value ? "active" : ""} key={value} onClick={() => setTab(value)}>{label}</button>)}
+    </div>
+
+    {onDocuments && <div className="memory-layout"><aside>{docs.map(name => <button className={doc === name ? "active" : ""} key={name} onClick={() => { setDoc(name); setDraft(null); }}>{docLabels[name]}</button>)}</aside><div className="memory-editor-grid"><section><div className="editor-label">{isUserFacts ? "User facts" : "Markdown source"}</div>{isUserFacts ? <div className="document-help">User details are managed as individual facts on the Facts tab.</div> : resource.loading ? <Loading/> : <textarea className="document-editor" value={content} onChange={e => setDraft(e.target.value)} />}</section><section className={`memory-preview ${isUserFacts ? "user-facts-preview" : ""}`}><div className="editor-label">Rendered preview</div>{isUserFacts ? <div className="document-help">Your durable user details live on the Facts tab.</div> : <Markdown>{content || "Nothing written yet."}</Markdown>}</section></div></div>}
+
+    {tab === "facts" && <section className="facts-panel panel"><header><div><span>Durable context</span><h2>Facts</h2></div><span>{facts.data?.length || 0} stored</span></header><div className="panel-content"><div className="fact-editor"><input value={factDraft} onChange={e => setFactDraft(e.target.value)} placeholder="Add one atomic fact…"/><button className="ghost-button" onClick={saveFact}>{editingFact ? "Update" : "Add fact"}</button>{editingFact && <button className="ghost-button" onClick={() => { setEditingFact(null); setFactDraft(""); }}>Cancel</button>}</div><div className="fact-list">{facts.loading ? <Loading/> : (facts.data || []).map(fact => <article className="fact-row" key={fact.id}><div><b>{fact.content}</b><small>{fact.category || "general"} · updated {timeAgo(fact.updated_at)}</small></div><div className="fact-actions"><span>{fact.confidence != null ? `${Math.round(Number(fact.confidence) * 100)}%` : "Active"}</span><button onClick={() => { setEditingFact(fact.id); setFactDraft(fact.content); }}>Edit</button><button onClick={() => removeFact(fact.id)}>Delete</button></div></article>)}{!facts.loading && !facts.data?.length && <Empty>No durable facts have been captured yet.</Empty>}</div></div></section>}
+
+    {tab === "episodes" && <EpisodesPanel/>}
+    {tab === "approvals" && <ApprovalMemoryPanel/>}
+    {onDocuments && <Bootstrap embedded/>}
+  </div>;
 }
 
 interface Agent { name: string; domain: string; model_pool: string; accepts: string[]; }
