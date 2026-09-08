@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 # Gemini's OpenAI-compatible /models endpoint does not return context_window.
 # 1M is used as the assumed value for all Gemini generative models.
 _DEFAULT_CONTEXT_WINDOW = 1_048_576
+# Words that mark one of Gemini's 429s as an empty wallet rather than a pace limit.
+_BILLING_MARKERS = ("credit", "billing", "prepay", "quota", "exhausted", "insufficient", "payment")
 
 
 class GeminiRouter(OpenAICompatibleProvider):
@@ -34,6 +36,37 @@ class GeminiRouter(OpenAICompatibleProvider):
 
     def get_models(self) -> dict[str, ModelInfo]:
         return dict(self._models)
+
+    @staticmethod
+    def _is_billing_exhausted(status_code: int, body: dict | None, headers: dict) -> bool:
+        """Gemini reports depleted prepaid credit as a 429, so here the code is not enough.
+
+        The body says ``status: RESOURCE_EXHAUSTED`` with text like "Your
+        prepayment credits are depleted", and carries no reset - retrying after a
+        guessed 60 s never helps. Surfacing it as ``PaymentRequiredError`` is what
+        makes ``north limits`` show an honest "needs billing" instead of a
+        countdown that will never come good.
+
+        This override is deliberately Gemini's alone. It used to live in the
+        shared base class, where it read every provider's replies and turned
+        OpenRouter's free-tier upsell into a billing verdict.
+        """
+        if status_code not in (401, 402, 403, 429):
+            return False
+        if headers.get("retry-after") or GeminiRouter._parse_gemini_retry_delay(body) is not None:
+            return False  # an explicit reset means it IS a transient rate limit
+        message = ""
+        status = ""
+        error_type = ""
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                message = (error.get("message") or "").lower()
+                status = (error.get("status") or "").upper()
+                error_type = (error.get("type") or "").lower()
+        if status == "RESOURCE_EXHAUSTED" and not message:
+            return True
+        return any(marker in message or marker in error_type for marker in _BILLING_MARKERS)
 
     async def refresh(self) -> None:
         """Fetch the live model list from Gemini and replace self._models."""

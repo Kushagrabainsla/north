@@ -41,6 +41,10 @@ class Entitlement(StrEnum):
 
     OK = "OK"
     NEEDS_BILLING = "NEEDS_BILLING"
+    # The free allowance is spent until it resets. Distinct from NEEDS_BILLING
+    # because it is a wait, not a purchase, and reporting it as money sent a user
+    # to a payment page when the answer was to come back in a few hours.
+    FREE_SPENT = "FREE_SPENT"
     FORBIDDEN = "FORBIDDEN"
     UNKNOWN = "UNKNOWN"
 

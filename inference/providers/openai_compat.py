@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,7 @@ from inference.exceptions import (
     ModelDegenerateError,
     ModelNotFoundError,
     ModelRateLimitedError,
+    ModelRefusedError,
     PayloadTooLargeError,
     PaymentRequiredError,
     ProviderAuthError,
@@ -281,6 +283,7 @@ class _ToolCallStream:
             reasoning=reasoning,
         )
 
+
 class OpenAICompatibleProvider:
     """Base class for providers that use the OpenAI wire format over HTTPS.
 
@@ -313,10 +316,17 @@ class OpenAICompatibleProvider:
 
     @staticmethod
     def _parse_retry_after(response: httpx.Response) -> float | None:
-        """Return the Retry-After wait in seconds (int form or HTTP-date), if present."""
+        """Return the wait in seconds the provider reported, from whichever header carries it.
+
+        ``Retry-After`` is the standard one. ``X-RateLimit-Reset`` is what
+        OpenRouter sends instead, and reading it is what tells a per-minute pace
+        limit (seconds away) apart from a daily allowance (hours away) - the
+        distinction :mod:`inference.failure` needs to scope the failure without
+        having to recognise anyone's wording.
+        """
         raw = response.headers.get("retry-after")
         if not raw:
-            return None
+            return OpenAICompatibleProvider._parse_reset_header(response.headers)
         raw = raw.strip()
         try:
             return max(0.0, float(raw))
@@ -330,6 +340,25 @@ class OpenAICompatibleProvider:
             return max(0.0, (when - datetime.now(when.tzinfo or UTC)).total_seconds())
         except Exception:
             return None
+
+    @staticmethod
+    def _parse_reset_header(headers: httpx.Headers) -> float | None:
+        """Seconds until ``X-RateLimit-Reset``, which providers stamp in epoch ms or s.
+
+        The two are told apart by magnitude rather than by configuration: an
+        epoch in seconds is a ten-digit number for the next few centuries, so
+        anything far above that is milliseconds.
+        """
+        raw = (headers.get("x-ratelimit-reset") or "").strip()
+        if not raw:
+            return None
+        try:
+            reset = float(raw)
+        except ValueError:
+            return None
+        if reset > 1e11:  # milliseconds since the epoch
+            reset /= 1000.0
+        return max(0.0, reset - time.time())
 
     @staticmethod
     def _parse_duration_seconds(value: str) -> float | None:
@@ -374,38 +403,22 @@ class OpenAICompatibleProvider:
 
     @staticmethod
     def _is_billing_exhausted(status_code: int, body: dict | None, headers: dict) -> bool:
-        """True when a 401/429/403 is a billing problem, not auth or a rate limit.
+        """Whether this reply means "fund the account", when the status code does not say so.
 
-        Gemini (and some other Google-fronted providers) return 429 with
-        ``status: RESOURCE_EXHAUSTED`` and a body like "Your prepayment credits are
-        depleted" when the project's credits run out. There is no Retry-After and no
-        reset window - retrying after a guessed 60s never helps. Treat these as
-        PaymentRequiredError (long cooldown + surfaced as "credits needed") so
-        ``north limits`` shows an honest "needs billing", not a fake countdown.
+        The default is *no*, because the status codes already say it: 402 is
+        money, 429 is pace, 401 is the key. A provider that honours them needs no
+        help reading its replies, and guessing at their wording actively hurt -
+        scanning every reply for the word "credit" turned OpenRouter's free-tier
+        upsell ("Add 10 credits to unlock 1000 free model requests per day") into
+        a billing verdict against fourteen working free models.
 
-        401 is included because OpenCode Zen bills that way: an un-funded account
-        gets ``401 {"error": {"type": "CreditsError", "message": "No payment
-        method..."}}`` for its *paid* models. Read as auth, one such reply marked
-        the whole provider down for 24 h and took its working free models with it.
+        A provider that genuinely misreports overrides this. :class:`GeminiRouter`
+        does, because Gemini reports depleted prepaid credit as a 429; OpenCode
+        Zen handles its own 401 quirk in :meth:`_raise_cooldown_status`. Each
+        exception then lives beside the provider it describes, and cannot reach
+        the providers it does not.
         """
-        if status_code not in (401, 429, 402, 403):
-            return False
-        # An explicit reset signal means it IS a transient rate limit.
-        if headers.get("retry-after") or OpenAICompatibleProvider._parse_gemini_retry_delay(body) is not None:
-            return False
-        msg = ""
-        status = ""
-        error_type = ""
-        if isinstance(body, dict):
-            error = body.get("error")
-            if isinstance(error, dict):
-                msg = (error.get("message") or "").lower()
-                status = (error.get("status") or "").upper()
-                error_type = (error.get("type") or "").lower()
-        billing_markers = ("credit", "billing", "prepay", "quota", "exhausted", "insufficient", "payment")
-        if status == "RESOURCE_EXHAUSTED" and not msg:
-            return True
-        return any(marker in msg or marker in error_type for marker in billing_markers)
+        return False
 
     def _raise_cooldown_status(self, response: httpx.Response, model_id: str) -> None:
         """Map HTTP status codes to typed exceptions for ModelDispatcher cooldown handling.
@@ -413,6 +426,10 @@ class OpenAICompatibleProvider:
         401 raises ProviderAuthError (provider down).
         502/503/504 raises ProviderUnavailableError (provider down/degraded).
         402 (insufficient credits) maps to a long payment cooldown on the model.
+        403 is a refusal of *this request* - a content or policy rule, not a bill -
+        so it falls through to a model-scoped InferenceError rather than claiming
+        the account needs funding. A provider that bills through 403 says so by
+        overriding :meth:`_is_billing_exhausted`.
         404 (model not found) maps to a long model cooldown without degrading the provider.
         413 (request/token-rate too large) and 429 (rate limited) map to model-level cooldowns.
         """
@@ -421,8 +438,16 @@ class OpenAICompatibleProvider:
         ):
             raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
         if response.status_code in (502, 503, 504):
-            raise ProviderUnavailableError(
-                f"{self.name} returned {response.status_code} - gateway/server outage"
+            raise ProviderUnavailableError(f"{self.name} returned {response.status_code} - gateway/server outage")
+        if response.status_code == 403 and not self._is_billing_exhausted(
+            403, self._safe_json(response), dict(response.headers)
+        ):
+            raise ModelRefusedError(
+                model_id,
+                self.name,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                body=self._safe_json(response),
             )
         if response.status_code in (401, 402, 403):
             raise PaymentRequiredError(
@@ -495,9 +520,17 @@ class OpenAICompatibleProvider:
                 raise ProviderAuthError(f"{self.name} returned 401 - provider auth failed")
         if resp.status_code in (502, 503, 504):
             await resp.aread()
-            raise ProviderUnavailableError(
-                f"{self.name} returned {resp.status_code} - gateway/server outage"
-            )
+            raise ProviderUnavailableError(f"{self.name} returned {resp.status_code} - gateway/server outage")
+        if resp.status_code == 403:
+            await resp.aread()
+            if not self._is_billing_exhausted(403, self._safe_json(resp), dict(resp.headers)):
+                raise ModelRefusedError(
+                    model_id,
+                    self.name,
+                    status_code=resp.status_code,
+                    headers=dict(resp.headers),
+                    body=self._safe_json(resp),
+                )
         if resp.status_code in (401, 402, 403):
             await resp.aread()
             raise PaymentRequiredError(
@@ -646,17 +679,11 @@ class OpenAICompatibleProvider:
     def _answer_of(self, choice: dict, model_id: str) -> tuple[str, str | None]:
         """The text and reasoning of a finished completion, one of which must be there."""
         message = choice.get("message", {})
-        reasoning = (
-            message.get("reasoning")
-            or message.get("reasoning_content")
-            or message.get("thought")
-            or None
-        )
+        reasoning = message.get("reasoning") or message.get("reasoning_content") or message.get("thought") or None
         content = message.get("content") or reasoning or ""
         if not content:
             raise ModelDegenerateError(model_id, self.name, reason="empty completion text and reasoning")
         return content, reasoning
-
 
     def _build_chat_body(self, model_id: str, messages: list[dict], request: CompletionRequest) -> dict:
         body: dict = {

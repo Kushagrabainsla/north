@@ -123,6 +123,36 @@ class PayloadTooLargeError(InferenceError):
         self.body = body
 
 
+class ModelRefusedError(InferenceError):
+    """The provider refused to serve *this request* (HTTP 403).
+
+    A content rule, a data policy, a region block - a fact about the request and
+    this endpoint, not about the account. It used to be read as a payment
+    failure, which put the model behind a 24-hour money hold that paying could
+    not have lifted.
+
+    Typed rather than left as a bare :class:`InferenceError` so the status code
+    and the provider's own words survive into the decision log, where a person
+    can see what was actually refused.
+    """
+
+    def __init__(
+        self,
+        model_id: str,
+        provider_name: str,
+        *,
+        status_code: int | None = None,
+        headers: dict[str, str] | None = None,
+        body: dict | None = None,
+    ) -> None:
+        super().__init__(f"Request refused: {model_id} on {provider_name}")
+        self.model_id = model_id
+        self.provider_name = provider_name
+        self.status_code = status_code
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
+        self.body = body
+
+
 class ProviderAuthError(InferenceError):
     """A provider rejected the request with a hard auth/billing failure.
 

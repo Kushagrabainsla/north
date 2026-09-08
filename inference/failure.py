@@ -18,7 +18,7 @@ here rather than in each provider means one table to read and one to change.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from inference.exceptions import (
@@ -27,6 +27,7 @@ from inference.exceptions import (
     ModelDegenerateError,
     ModelNotFoundError,
     ModelRateLimitedError,
+    ModelRefusedError,
     PayloadTooLargeError,
     PaymentRequiredError,
     ProviderAuthError,
@@ -40,6 +41,7 @@ class Scope(StrEnum):
     REQUEST = "request"  # this call only - nothing is cooled
     MODEL_CAPABILITY = "model_capability"  # this model cannot do tools / JSON
     MODEL = "model"  # 404, deprecated, model-level rate limit
+    ACCOUNT_FREE = "account_free"  # this provider's free allowance is spent; paid unaffected
     ACCOUNT_PAID = "account_paid"  # paid endpoints on this provider; free tier unaffected
     PROVIDER_AUTH = "provider_auth"  # the key is wrong - needs an action, not a timer
     PROVIDER_DOWN = "provider_down"  # only ever by corroboration
@@ -60,6 +62,10 @@ _CAPABILITY_MARKERS = (
     "structured output",
     "does not support json",
 )
+# A free-tier rate limit that lifts this far out is an *allowance* being spent,
+# not a pace being enforced: per-minute limits reset in seconds. Read from the
+# reset the provider itself reported, so no wording has to be recognised.
+_FREE_ALLOWANCE_RESET_SECONDS = 600.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,10 +80,20 @@ class Failure:
     retry_after: float | None = None
     # The capability a MODEL_CAPABILITY failure contradicts, when known.
     capability: str | None = None
+    # What the provider actually said. ``reason`` is north's reading of the
+    # failure; these two are the raw evidence behind it, kept so a person can
+    # check that reading instead of having to trust it.
+    status_code: int | None = None
+    detail: str = ""
 
     @property
     def is_provider_wide(self) -> bool:
         return self.scope in (Scope.PROVIDER_AUTH, Scope.PROVIDER_DOWN)
+
+    @property
+    def is_account_wide(self) -> bool:
+        """True when the failure is about the account, so no other model here will fare better."""
+        return self.scope in (Scope.ACCOUNT_FREE, Scope.ACCOUNT_PAID)
 
 
 def _body_text(exc: object) -> str:
@@ -89,12 +105,36 @@ def _looks_like_billing(text: str) -> bool:
     return any(marker in text for marker in _BILLING_MARKERS)
 
 
+def _account_failure(model: str, provider: str, evidence: str, *, is_free: bool, reason: str = "") -> Failure:
+    """An entitlement failure, pointed at the tier that actually has an entitlement.
+
+    A free endpoint has no bill, so the same reply that means "fund this account"
+    on a paid endpoint can only mean "this account's free access is spent" on a
+    free one. Reading it as billing is what put fourteen working free models
+    behind a 24-hour money hold they could never have satisfied.
+    """
+    if is_free:
+        return Failure(Scope.ACCOUNT_FREE, reason or "free access refused", model, provider, evidence)
+    return Failure(Scope.ACCOUNT_PAID, reason or "account needs billing", model, provider, evidence)
+
+
+def _detail_text(exc: object) -> str:
+    """The provider's own sentence, so a person can check north's reading of it."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])[:300]
+    return str(exc)[:300]
+
+
 def classify(
     exc: BaseException,
     *,
     model_id: str = "",
     provider: str = "",
     capability: str | None = None,
+    is_free: bool = False,
 ) -> Failure:
     """Decide the blast radius of *exc* from the evidence it carries.
 
@@ -113,7 +153,25 @@ def classify(
     413 payload too large           MODEL               this model cannot take north's requests
     502 / 503 / 504                 PROVIDER_DOWN       one vote toward the breaker, never a verdict
     ==============================  ==================  =========================================
+
+    ``is_free`` re-points the two account-level rows at the free tier, because a
+    free endpoint has no bill to settle. The row that moves is decided by the
+    *reset the provider reported*, never by its wording: a limit that lifts in
+    hours is an allowance being spent, one that lifts in seconds is a pace.
     """
+    failure = _classify_scope(exc, model_id=model_id, provider=provider, capability=capability, is_free=is_free)
+    return replace(failure, status_code=getattr(exc, "status_code", None), detail=_detail_text(exc))
+
+
+def _classify_scope(
+    exc: BaseException,
+    *,
+    model_id: str,
+    provider: str,
+    capability: str | None,
+    is_free: bool,
+) -> Failure:
+    """The scope decision alone. :func:`classify` attaches the raw evidence to it."""
     model = model_id or getattr(exc, "model_id", "") or ""
     who = provider or getattr(exc, "provider_name", "") or ""
     status = getattr(exc, "status_code", None)
@@ -123,17 +181,31 @@ def classify(
         return Failure(Scope.REQUEST, "input exceeds every available context window", model, who, evidence)
 
     if isinstance(exc, PaymentRequiredError):
-        return Failure(Scope.ACCOUNT_PAID, "account needs billing", model, who, evidence)
+        return _account_failure(model, who, evidence, is_free=is_free)
 
     if isinstance(exc, ProviderAuthError):
         # A billing message that reached here anyway is still about money.
         if _looks_like_billing(str(exc).lower() + _body_text(exc)):
-            return Failure(Scope.ACCOUNT_PAID, "account needs billing", model, who, evidence)
+            return _account_failure(model, who, evidence, is_free=is_free)
         return Failure(Scope.PROVIDER_AUTH, "provider rejected the API key", model, who, evidence)
 
     if isinstance(exc, ModelRateLimitedError):
         if exc.retry_after is None and _looks_like_billing(_body_text(exc)):
-            return Failure(Scope.ACCOUNT_PAID, "rate limit with no reset and credits language", model, who, evidence)
+            return _account_failure(
+                model, who, evidence, is_free=is_free, reason="rate limit with no reset and credits language"
+            )
+        if is_free and (exc.retry_after or 0) >= _FREE_ALLOWANCE_RESET_SECONDS:
+            # Hours away, so this is the free allowance spent rather than a pace
+            # limit on one model - and it will be spent for every other free
+            # model on this provider too.
+            return Failure(
+                Scope.ACCOUNT_FREE,
+                "free allowance spent",
+                model,
+                who,
+                evidence,
+                retry_after=exc.retry_after,
+            )
         return Failure(
             Scope.MODEL,
             "model is rate limited",
@@ -148,6 +220,11 @@ def classify(
 
     if isinstance(exc, PayloadTooLargeError):
         return Failure(Scope.MODEL, "model rejected the request size", model, who, evidence)
+
+    if isinstance(exc, ModelRefusedError):
+        # A content or policy rule on this endpoint. About the request and this
+        # model, never about the account - the next model may well accept it.
+        return Failure(Scope.MODEL, "endpoint refused this request", model, who, evidence)
 
     if isinstance(exc, ProviderUnavailableError):
         return Failure(Scope.PROVIDER_DOWN, "gateway or server outage", model, who, evidence)

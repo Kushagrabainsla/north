@@ -18,8 +18,10 @@ off the event loop - an unwritable log must never fail an inference call.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -42,6 +44,25 @@ DIVERGED = "diverged"
 _MAX_SKIPS_LOGGED = 40
 
 
+def _worth_keeping(skips: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The most informative :data:`_MAX_SKIPS_LOGGED` entries, in walk order.
+
+    Endpoints north actually *called* come first, because they are the scarce and
+    interesting half: a walk passes over hundreds of endpoints and calls a
+    handful, and it is the handful that carry a status code and the provider's
+    own words. Taking the first forty in walk order instead dropped every one of
+    them, since the chain leads with the models a blocked entitlement had already
+    ruled out.
+    """
+    if len(skips) <= _MAX_SKIPS_LOGGED:
+        return skips
+    tried = [skip for skip in skips if skip.get("tried")][:_MAX_SKIPS_LOGGED]
+    room = _MAX_SKIPS_LOGGED - len(tried)
+    passed_over = [skip for skip in skips if not skip.get("tried")][:room]
+    keep = {id(skip) for skip in tried + passed_over}
+    return [skip for skip in skips if id(skip) in keep]
+
+
 @dataclass(slots=True)
 class RoutingDecision:
     """One selection, accumulated during the walk and written when it ends."""
@@ -50,7 +71,11 @@ class RoutingDecision:
     requirements: dict[str, object]
     task_id: str | None = None
     considered: int = 0
-    skipped: list[dict[str, str]] = field(default_factory=list)
+    skipped: list[dict[str, object]] = field(default_factory=list)
+    # ``skipped`` is capped at _MAX_SKIPS_LOGGED; these two count the whole walk,
+    # so a reader is never left inferring the total from a truncated list.
+    endpoints: int = 0
+    attempted: int = 0
     chosen_model: str | None = None
     chosen_provider: str | None = None
     outcome: str = EXHAUSTED
@@ -93,9 +118,16 @@ class DecisionLog:
                 "  chosen_model  TEXT,"
                 "  chosen_provider TEXT,"
                 "  outcome       TEXT,"
-                "  created_at    TEXT NOT NULL)"
+                "  created_at    TEXT NOT NULL,"
+                "  endpoints     INTEGER NOT NULL DEFAULT 0,"
+                "  attempted     INTEGER NOT NULL DEFAULT 0)"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_task ON routing_decisions (task_id)")
+            # Tables written before the counts existed keep their rows; the new
+            # columns default to 0, which reads as "this row predates them".
+            for column in ("endpoints", "attempted"):
+                with contextlib.suppress(sqlite3.OperationalError):
+                    conn.execute(f"ALTER TABLE routing_decisions ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
 
     def record(self, decision: RoutingDecision) -> None:
         """Write one decision, off the event loop and never fatally."""
@@ -107,11 +139,13 @@ class DecisionLog:
             decision.part,
             json.dumps(decision.requirements, default=str),
             decision.considered,
-            json.dumps(decision.skipped[:_MAX_SKIPS_LOGGED]),
+            json.dumps(_worth_keeping(decision.skipped)),
             decision.chosen_model,
             decision.chosen_provider,
             decision.outcome,
             datetime.now(UTC).isoformat(),
+            decision.endpoints,
+            decision.attempted,
         )
         try:
             loop = asyncio.get_running_loop()
@@ -132,8 +166,8 @@ class DecisionLog:
             with open_db_connection(self._db_path) as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO routing_decisions (id, task_id, part, requirements, considered,"
-                    " skipped, chosen_model, chosen_provider, outcome, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " skipped, chosen_model, chosen_provider, outcome, created_at, endpoints, attempted)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     row,
                 )
         except Exception:

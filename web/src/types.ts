@@ -110,3 +110,33 @@ export interface DashboardData {
   activity: LedgerEntry[];
   artifacts: Artifact[];
 }
+
+// One endpoint a routing walk passed over, and why. `tried` separates the two
+// kinds that "skipped" alone conflates: north called this one and it answered
+// badly, or north never called it because it was already known to be blocked.
+export interface RoutingSkip {
+  model: string;
+  provider: string;
+  reason: string;
+  tried?: boolean;
+  status_code?: number | null;
+  detail?: string;
+  retry_after?: number | null;
+}
+
+export interface RoutingDecision {
+  id: string;
+  task_id?: string;
+  part: string;
+  requirements: Record<string, unknown> | null;
+  considered: number;
+  skipped: RoutingSkip[] | null;
+  // Totals for the whole walk. `skipped` is capped when stored, so these are
+  // what the counts must come from.
+  endpoints: number;
+  attempted: number;
+  chosen_model?: string | null;
+  chosen_provider?: string | null;
+  outcome: string;
+  created_at: string;
+}

@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from inference.capability import ModelInfo
 from inference.facts.merge import (
@@ -100,9 +100,7 @@ class FactsCatalog:
         cache_dir: Path | None = None,
     ) -> None:
         self._store = store
-        self._litellm = litellm or LiteLLMSource(
-            (cache_dir or store.db_path.parent / "cache") / "litellm_models.json"
-        )
+        self._litellm = litellm or LiteLLMSource((cache_dir or store.db_path.parent / "cache") / "litellm_models.json")
         self._snapshot = CatalogSnapshot()
         # Keyed on the whole profile, not just the part name: the power dial can
         # reshape a part's ordering, and two orderings are two chains.
@@ -378,9 +376,7 @@ class FactsCatalog:
             demoted=demoted,
         )
         if not chain and (profile.min_context or floor is not None):
-            logger.info(
-                "No model meets the %s profile's preferences - relaxing them for this catalog", profile.part
-            )
+            logger.info("No model meets the %s profile's preferences - relaxing them for this catalog", profile.part)
             chain = build_chain(
                 profile,
                 Requirements(capabilities=profile.requires),
@@ -392,19 +388,32 @@ class FactsCatalog:
         self._chains[key] = chain
         return chain
 
-    def entitlement_updates(self, provider: str, entitlement: Entitlement, *, paid_only: bool) -> int:
-        """Persist what a live call proved about this account's access to *provider*."""
+    def entitlement_updates(
+        self, provider: str, entitlement: Entitlement, *, tier: Literal["paid", "free", "any"]
+    ) -> int:
+        """Persist what a live call proved about this account's access to *provider*.
+
+        ``tier`` is which endpoints the proof covers. Money facts reach only the
+        paid rows, a spent allowance only the free ones, and a rejected key both.
+        """
         keys = [
             endpoint.key
             for endpoints in self._snapshot.endpoints_by_model.values()
             for endpoint in endpoints
-            if endpoint.provider == provider and (not paid_only or not endpoint.is_free)
+            if endpoint.provider == provider and _in_tier(endpoint, tier)
         ]
         try:
             return self._store.set_entitlement(keys, entitlement)
         except Exception:
             logger.warning("Could not persist entitlement for %s", provider, exc_info=True)
             return 0
+
+
+def _in_tier(endpoint: Endpoint, tier: Literal["paid", "free", "any"]) -> bool:
+    """Whether an entitlement proved about *tier* covers this endpoint."""
+    if tier == "any":
+        return True
+    return endpoint.is_free if tier == "free" else not endpoint.is_free
 
 
 def _dedupe_endpoints(endpoints: Iterable[Endpoint]) -> list[Endpoint]:

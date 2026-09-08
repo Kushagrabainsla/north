@@ -275,6 +275,16 @@ async def approvals(limit: int = 100) -> list[dict[str, Any]]:
     return [card.model_dump(mode="json") for card in current_services().require("approval_store").all(limit)]
 
 
+@router.get("/routing/decisions")
+async def routing_decisions(
+    task_id: str | None = None, part: str | None = None, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Every endpoint a task's calls tried or skipped, and what each one answered."""
+    return current_services().require("inference_router").routing_decisions(
+        task_id=task_id, part=part, limit=limit
+    )
+
+
 def _bootstrap_overview(home: Path) -> tuple[list, list[str], bool]:
     """Read bootstrap state from disk: (progress, candidate paths, completed?).
 

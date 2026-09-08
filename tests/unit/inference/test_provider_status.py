@@ -13,8 +13,14 @@ import types
 import httpx
 import pytest
 
-from inference.exceptions import ModelRateLimitedError, PaymentRequiredError, ProviderAuthError
+from inference.exceptions import (
+    ModelRateLimitedError,
+    ModelRefusedError,
+    PaymentRequiredError,
+    ProviderAuthError,
+)
 from inference.models import CompletionRequest, ToolCallRequest, TranscriptionRequest
+from inference.providers.gemini import GeminiRouter
 from inference.providers.groq import GroqRouter
 from inference.providers.openai_compat import OpenAICompatibleProvider
 from inference.providers.openrouter import OpenRouterRouter
@@ -43,8 +49,9 @@ class TestRaiseCooldownStatus:
         with pytest.raises(ProviderAuthError):
             self._provider()._raise_cooldown_status(httpx.Response(401), "model")
 
-    def test_403_raises_payment_required_error(self) -> None:
-        with pytest.raises(PaymentRequiredError):
+    def test_403_is_a_refusal_not_a_bill(self) -> None:
+        """403 refuses this request; only a provider that bills that way says otherwise."""
+        with pytest.raises(ModelRefusedError):
             self._provider()._raise_cooldown_status(httpx.Response(403), "model")
 
 
@@ -107,9 +114,25 @@ class TestRaiseCooldownStatus:
         }
         resp = httpx.Response(429, json=body)
         with pytest.raises(PaymentRequiredError) as exc:
-            self._provider()._raise_cooldown_status(resp, "models/gemini-embedding-001")
+            GeminiRouter(api_key="k")._raise_cooldown_status(resp, "models/gemini-embedding-001")
         assert exc.value.status_code == 429
         assert exc.value.body == body
+
+    def test_the_same_429_on_another_provider_is_only_a_rate_limit(self) -> None:
+        """Gemini's habit of billing through 429 must not travel to providers that do not.
+
+        The base class scanning every reply for the word "credit" is what read
+        OpenRouter's free-tier upsell as an empty wallet.
+        """
+        body = {
+            "error": {
+                "message": "Rate limit exceeded: free-models-per-day. "
+                "Add 10 credits to unlock 1000 free model requests per day.",
+                "code": 429,
+            }
+        }
+        with pytest.raises(ModelRateLimitedError):
+            OpenRouterRouter(api_key="k")._raise_cooldown_status(httpx.Response(429, json=body), "m:free")
 
     def test_gemini_ratelimit_429_with_retrydelay_is_rate_limited(self) -> None:
         body = {

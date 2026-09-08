@@ -31,6 +31,11 @@ from inference.routing.parts import REQUIREMENT_TO_FIELD, VISION, PartProfile
 
 logger = logging.getLogger(__name__)
 
+# How many distinct models one provider may rate-limit in a single walk before
+# the walk stops offering it. One is about a model; a run of them is about the
+# account, and no wording is needed to tell the difference.
+_PROVIDER_STRIKES = 3
+
 
 @dataclass(frozen=True, slots=True)
 class Requirements:
@@ -169,9 +174,7 @@ def build_chain(
             tier.sort(key=lambda c: (c.price, -c.score, c.canonical_id))
         if demoted is None:
             return tier
-        return [c for c in tier if not demoted(c.canonical_id)] + [
-            c for c in tier if demoted(c.canonical_id)
-        ]
+        return [c for c in tier if not demoted(c.canonical_id)] + [c for c in tier if demoted(c.canonical_id)]
 
     return _pin_first(_ordered(preferred) + _ordered(below_floor), profile.pinned_model)
 
@@ -190,9 +193,7 @@ def _pin_first(chain: list[Candidate], pinned_model: str | None) -> list[Candida
         return chain
     # Partitioned by id rather than by candidate equality: comparing whole fact
     # records for membership is quadratic over a chain of several hundred models.
-    return [c for c in chain if c.canonical_id in matched] + [
-        c for c in chain if c.canonical_id not in matched
-    ]
+    return [c for c in chain if c.canonical_id in matched] + [c for c in chain if c.canonical_id not in matched]
 
 
 @dataclass(slots=True)
@@ -222,15 +223,32 @@ class Skip:
     ``retry_after`` travels alongside the reason rather than inside it: a caller
     that needs to know how long to wait must never have to parse it back out of
     text written for a person to read.
+
+    ``tried`` separates the two ways a candidate can be passed over, which look
+    identical once they are both called "skipped": north *called* this endpoint
+    and it failed, or north never called it because it was already known to be
+    unavailable. Only the first kind cost a request, and only the first kind
+    carries a status code the provider chose.
     """
 
     model: str
     provider: str
     reason: str
     retry_after: float | None = None
+    tried: bool = False
+    status_code: int | None = None
+    detail: str = ""
 
-    def as_dict(self) -> dict[str, str]:
-        return {"model": self.model, "provider": self.provider, "reason": self.reason}
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "model": self.model,
+            "provider": self.provider,
+            "reason": self.reason,
+            "tried": self.tried,
+            "status_code": self.status_code,
+            "detail": self.detail,
+            "retry_after": self.retry_after,
+        }
 
 
 @dataclass(slots=True)
@@ -246,6 +264,17 @@ class ChainWalk:
     on a provider that is not is *skipped*, never *failed*: a model is not at
     fault for being listed against a key the user removed, and treating that as a
     model failure skipped every other endpoint it had.
+
+    A tier that rate-limits :data:`_PROVIDER_STRIKES` distinct models is **stood
+    down for the rest of this walk**. Per-model cooldowns are the right memory
+    for one paced model and no memory at all across a chain of three hundred,
+    which is how a single greeting became twenty-six refusals from one provider.
+    The stand-down lives and dies with the walk: nothing is cooled, and the next
+    call starts with a clean opinion of everyone.
+
+    It is held per (provider, tier), never per provider, for the same reason the
+    entitlement ledger is: a fact about one tier is not a fact about the free
+    models sitting behind the same key.
     """
 
     chain: Sequence[Candidate]
@@ -254,6 +283,10 @@ class ChainWalk:
     is_wired: Callable[[str], bool] | None = None
     considered: int = 0
     skipped: list[Skip] = field(default_factory=list)
+    # (provider, is_free) -> why that tier is standing down for the rest of this walk
+    stood_down: dict[tuple[str, bool], str] = field(default_factory=dict)
+    # (provider, is_free) -> the distinct models that tier has rate-limited
+    _strikes: dict[tuple[str, bool], set[str]] = field(default_factory=dict)
 
     def _endpoints_of(self, candidate: Candidate) -> list[Endpoint]:
         """Cheapest healthy endpoint first - price is the only reason to prefer one."""
@@ -264,11 +297,9 @@ class ChainWalk:
             self.considered += 1
             for endpoint in self._endpoints_of(candidate):
                 if self.is_wired is not None and not self.is_wired(endpoint.provider):
-                    self.skipped.append(
-                        Skip(endpoint.provider_model_id, endpoint.provider, "provider not configured")
-                    )
+                    self.skipped.append(Skip(endpoint.provider_model_id, endpoint.provider, "provider not configured"))
                     continue
-                reason = self.availability.skip_reason(endpoint, self.capability)
+                reason = self._stand_down_reason(endpoint) or self.availability.skip_reason(endpoint, self.capability)
                 if reason is not None:
                     self.skipped.append(
                         Skip(
@@ -289,13 +320,44 @@ class ChainWalk:
                         endpoint.provider,
                         attempt.failure.reason,
                         attempt.failure.retry_after,
+                        tried=True,
+                        status_code=attempt.failure.status_code,
+                        detail=attempt.failure.detail,
                     )
                 )
+                self._note_against_provider(attempt.failure, endpoint)
                 if attempt.failure.scope is Scope.REQUEST:
                     return
                 if attempt.failure.scope in (Scope.MODEL, Scope.MODEL_CAPABILITY):
                     break  # this model is the problem; try the next model
-                # ACCOUNT_PAID / PROVIDER_*: the model is fine, this provider is not.
+                # ACCOUNT_* / PROVIDER_*: the model is fine, this provider is not.
+
+    def _stand_down_reason(self, endpoint: Endpoint) -> str | None:
+        """Why this walk has stopped offering *endpoint*'s tier, if it has."""
+        return self.stood_down.get((endpoint.provider, endpoint.is_free))
+
+    def _note_against_provider(self, failure: Failure, endpoint: Endpoint) -> None:
+        """Count a run of rate limits against one tier, and stand it down at the threshold.
+
+        Only rate limits, because only they are uncovered. An account-wide or
+        provider-wide failure is already recorded by :class:`AvailabilityView` the
+        moment the caller applies it, so the very next endpoint on that tier is
+        skipped with the entitlement's own reason - repeating that judgement here
+        would shadow a durable fact with a vaguer copy of itself.
+
+        A model-level rate limit records nothing beyond a cooldown on that one
+        model, which is right for one model and useless across a chain of three
+        hundred. One model being paced is about that model; three of them is the
+        provider pacing the account, and counting says so without anyone having
+        to recognise the wording of a refusal.
+        """
+        if failure.scope is not Scope.MODEL or failure.retry_after is None:
+            return
+        tier = (endpoint.provider, endpoint.is_free)
+        struck = self._strikes.setdefault(tier, set())
+        struck.add(failure.model_id)
+        if len(struck) >= _PROVIDER_STRIKES:
+            self.stood_down[tier] = f"rate limited on {len(struck)} models (stood down for this walk)"
 
     def soonest_retry(self) -> float | None:
         """The shortest wait any skipped candidate named, so callers back off usefully."""
@@ -349,10 +411,7 @@ def narrow(chain: Sequence[Candidate], requirements: Requirements) -> list[Candi
     ordered. That keeps the hot path free of scoring, sorting and SQLite.
     """
     if not (
-        requirements.capabilities
-        or requirements.min_context
-        or requirements.max_payload_chars
-        or requirements.exclude
+        requirements.capabilities or requirements.min_context or requirements.max_payload_chars or requirements.exclude
     ):
         return list(chain)
     return [

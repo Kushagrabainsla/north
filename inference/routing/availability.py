@@ -51,40 +51,72 @@ class EntitlementLedger:
     about the account's relationship with one provider's *paid* tier. Applying it
     to the model, or to the whole provider, is what threw away eight working free
     models over one 401.
+
+    Both tiers can be spent, in ways that are not interchangeable. The paid tier
+    runs out of money and is fixed by paying. The free tier runs out of allowance
+    and is fixed by waiting. Each gets its own entry so neither has to borrow the
+    other's story.
     """
 
     def __init__(self, *, billing_window_seconds: float = BILLING_WINDOW_SECONDS) -> None:
         self._billing_window = billing_window_seconds
         self._paid: dict[str, _Entitlement] = {}
+        self._free: dict[str, _Entitlement] = {}
         self._auth: dict[str, _Entitlement] = {}
 
     def needs_billing(self, provider: str, reason: str) -> None:
-        self._paid[provider] = _Entitlement(
-            Entitlement.NEEDS_BILLING, reason, time.monotonic() + self._billing_window
-        )
+        self._paid[provider] = _Entitlement(Entitlement.NEEDS_BILLING, reason, time.monotonic() + self._billing_window)
+
+    def free_spent(self, provider: str, reason: str, *, resets_in: float | None) -> None:
+        """This provider's free allowance is used up until it resets.
+
+        The counterpart to :meth:`needs_billing` on the other tier, and the reason
+        the free tier needs one at all: without somewhere to put this fact, a
+        spent allowance had to be filed as a billing problem, which is both untrue
+        and unactionable. ``resets_in`` is the wait the provider itself reported;
+        without one the allowance is held for the standard window.
+        """
+        window = resets_in if resets_in and resets_in > 0 else self._billing_window
+        self._free[provider] = _Entitlement(Entitlement.FREE_SPENT, reason, time.monotonic() + window)
 
     def forbidden(self, provider: str, reason: str) -> None:
         """The key itself was rejected. No timer - a person has to fix it."""
         self._auth[provider] = _Entitlement(Entitlement.FORBIDDEN, reason, None)
 
     def clear(self, provider: str) -> None:
-        """A call succeeded here, so whatever we believed was wrong or has expired."""
+        """Forget everything believed about this provider - a new key, or a fresh start."""
         self._paid.pop(provider, None)
+        self._free.pop(provider, None)
+        self._auth.pop(provider, None)
+
+    def clear_tier(self, provider: str, *, is_free: bool) -> None:
+        """A call succeeded, so this tier's block was wrong or has expired.
+
+        Only that tier. A free model answering proves the key works and that the
+        free allowance is not spent; it proves nothing about whether the paid
+        tier has been funded, and clearing that too would send the next call
+        straight back into a 402.
+        """
+        (self._free if is_free else self._paid).pop(provider, None)
         self._auth.pop(provider, None)
 
     def state_of(self, endpoint: Endpoint) -> _Entitlement | None:
         auth = self._auth.get(endpoint.provider)
         if auth is not None:
             return auth
-        if endpoint.is_free:
-            return None  # the free tier is never implicated by a billing fact
-        paid = self._paid.get(endpoint.provider)
-        if paid is None:
+        tier = self._free if endpoint.is_free else self._paid
+        return self._live(tier, endpoint.provider)
+
+    @staticmethod
+    def _live(tier: dict[str, _Entitlement], provider: str) -> _Entitlement | None:
+        """This tier's entitlement, dropping it once its timer has run out."""
+        state = tier.get(provider)
+        if state is None:
             return None
-        if paid.until is not None and paid.until <= time.monotonic():
-            self._paid.pop(endpoint.provider, None)
+        if state.until is not None and state.until <= time.monotonic():
+            tier.pop(provider, None)
             return None
-        return paid
+        return state
 
     def entitlement_of(self, endpoint: Endpoint) -> Entitlement:
         state = self.state_of(endpoint)
@@ -94,9 +126,10 @@ class EntitlementLedger:
         """Per-provider entitlement, for ``north limits`` and the health surface."""
         out = {provider: state.reason for provider, state in self._auth.items()}
         now = time.monotonic()
-        for provider, state in self._paid.items():
-            if state.until is None or state.until > now:
-                out.setdefault(provider, state.reason)
+        for tier in (self._paid, self._free):
+            for provider, state in tier.items():
+                if state.until is None or state.until > now:
+                    out.setdefault(provider, state.reason)
         return out
 
 
@@ -153,7 +186,7 @@ class AvailabilityView:
         return remaining if remaining > 0 else None
 
     def record_success(self, endpoint: Endpoint) -> None:
-        self._entitlements.clear(endpoint.provider)
+        self._entitlements.clear_tier(endpoint.provider, is_free=endpoint.is_free)
         self._health.record_success(endpoint.provider)
         if self._status is not None:
             self._status.mark_ok(endpoint.provider, endpoint.provider_model_id)
@@ -180,6 +213,10 @@ class AvailabilityView:
                 )
             else:
                 self._record(lambda s: s.record_error(provider, model, reason=failure.reason, is_free=free))
+            return
+        if failure.scope is Scope.ACCOUNT_FREE:
+            self._entitlements.free_spent(provider, failure.reason, resets_in=failure.retry_after)
+            self._record(lambda s: s.record_rate_limit(provider, model, retry_after=failure.retry_after, is_free=True))
             return
         if failure.scope is Scope.ACCOUNT_PAID:
             self._entitlements.needs_billing(provider, failure.reason)

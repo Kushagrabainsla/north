@@ -174,7 +174,11 @@ class ChainRouter:
                 result = await call_fn(provider, attempt.model_id)
             except Exception as exc:
                 failure = classify(
-                    exc, model_id=attempt.model_id, provider=attempt.provider, capability=capability
+                    exc,
+                    model_id=attempt.model_id,
+                    provider=attempt.provider,
+                    capability=capability,
+                    is_free=attempt.endpoint.is_free,
                 )
                 attempt.failed(failure)
                 if failure.scope is Scope.REQUEST:
@@ -225,14 +229,15 @@ class ChainRouter:
         # through is news exactly once - after that, rewriting every endpoint row
         # for the provider on every successful call would put a table update on
         # the inference path for no new information.
-        was_restricted = (
-            not attempt.endpoint.is_free
-            and self._availability.entitlements.entitlement_of(attempt.endpoint) is not Entitlement.UNKNOWN
-        )
+        was_restricted = self._availability.entitlements.entitlement_of(attempt.endpoint) is not Entitlement.UNKNOWN
         self._availability.record_success(attempt.endpoint)
         self._corroboration.clear(attempt.provider)
         if was_restricted:
-            self._catalog.entitlement_updates(attempt.provider, Entitlement.OK, paid_only=True)
+            # Only the tier that just answered is cleared. A free model working
+            # says nothing about whether the paid tier has been funded.
+            self._catalog.entitlement_updates(
+                attempt.provider, Entitlement.OK, tier="free" if attempt.endpoint.is_free else "paid"
+            )
         if self._on_outcome is not None:
             self._on_outcome(attempt.model_id, attempt.provider, True)
 
@@ -267,9 +272,11 @@ class ChainRouter:
                 )
         self._availability.apply(failure, attempt.endpoint, provider_down=provider_down)
         if failure.scope is Scope.ACCOUNT_PAID:
-            self._catalog.entitlement_updates(attempt.provider, Entitlement.NEEDS_BILLING, paid_only=True)
+            self._catalog.entitlement_updates(attempt.provider, Entitlement.NEEDS_BILLING, tier="paid")
+        elif failure.scope is Scope.ACCOUNT_FREE:
+            self._catalog.entitlement_updates(attempt.provider, Entitlement.FREE_SPENT, tier="free")
         elif failure.scope is Scope.PROVIDER_AUTH:
-            self._catalog.entitlement_updates(attempt.provider, Entitlement.FORBIDDEN, paid_only=False)
+            self._catalog.entitlement_updates(attempt.provider, Entitlement.FORBIDDEN, tier="any")
         if self._on_outcome is not None and failure.scope is not Scope.REQUEST:
             self._on_outcome(attempt.model_id, attempt.provider, False)
 
@@ -321,4 +328,8 @@ def _describe(requirements: Requirements, capability: str | None) -> dict[str, o
 def _finish(decision: RoutingDecision, walk: ChainWalk) -> RoutingDecision:
     decision.considered = walk.considered
     decision.skipped = [skip.as_dict() for skip in walk.skipped]
+    # The stored list is capped, so the true total travels separately - otherwise
+    # a reader counts 40 endpoints and concludes that is all north tried.
+    decision.endpoints = len(walk.skipped)
+    decision.attempted = sum(1 for skip in walk.skipped if skip.tried)
     return decision

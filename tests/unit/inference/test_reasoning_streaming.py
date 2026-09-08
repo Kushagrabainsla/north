@@ -10,7 +10,7 @@ import pytest
 
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher
-from inference.exceptions import PaymentRequiredError
+from inference.exceptions import ModelRefusedError
 from inference.models import ToolCallRequest, ToolCallResponse
 from inference.providers.openai_compat import OpenAICompatibleProvider
 
@@ -105,11 +105,18 @@ async def test_reasoning_with_subsequent_content() -> None:
     assert "Final answer." in tokens
 
 
-def test_403_raises_payment_required_isolated_to_model() -> None:
-    """403 on a model raises PaymentRequiredError, preventing full provider lockout."""
+def test_403_is_scoped_to_the_request_not_the_account() -> None:
+    """403 refuses this request; it must not be read as the account needing money.
+
+    OpenRouter answers 403 when a request trips a content or data policy. Filing
+    that as a billing fact put the model behind a 24-hour money hold that paying
+    would not have lifted.
+    """
     provider = OpenAICompatibleProvider(name="openrouter", base_url="http://test", api_key="k")
-    with pytest.raises(PaymentRequiredError):
+    with pytest.raises(ModelRefusedError) as exc:
         provider._raise_cooldown_status(httpx.Response(403), "openrouter/some-restricted-model")
+    # The code survives onto the exception, so the decision log can show it.
+    assert exc.value.status_code == 403
 
 
 def test_dispatcher_get_context_window_from_registry() -> None:
