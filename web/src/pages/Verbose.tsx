@@ -627,6 +627,7 @@ function ModelPicker({ value, onPick, busy }: { value: string; onPick: (spec: st
   const models = providers.find(row => row.provider === provider)?.models || [];
 
   if (catalog.loading) return <Loading/>;
+  if (catalog.error) return <ErrorNotice message={`Could not read the model catalog: ${catalog.error}`}/>;
   if (!providers.length) return <Empty>No models are reachable. Check your provider keys under System.</Empty>;
   return <div className="model-picker">
     <label>Provider
@@ -672,7 +673,7 @@ export function SettingsPage() {
     <div className="settings-grid">
       <Panel title="Model routing" label="Who picks">
         <div className="segmented two">
-          <button className={!manual ? "active" : ""} disabled={busy}
+          <button className={!manual && !choosing ? "active" : ""} disabled={busy}
             onClick={() => { setChoosing(false); update({ routing: "auto" }); }}>auto</button>
           <button className={manual || choosing ? "active" : ""} disabled={busy} onClick={pickManual}>manual</button>
         </div>
