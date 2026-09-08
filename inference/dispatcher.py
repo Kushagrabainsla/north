@@ -713,6 +713,20 @@ class ModelDispatcher(InferenceRouter):
                 return info.model_id
         return ""
 
+    def embedding_provider_name(self) -> str:
+        """Who serves embeddings - the on-device model, or a provider over the network.
+
+        Reported alongside the model id so an interface can say *where* the
+        vectors are made without inferring it from the shape of a model name.
+        """
+        for provider in self._providers:
+            if provider.name == LOCAL_EMBEDDINGS and getattr(provider, "model_id", ""):
+                return LOCAL_EMBEDDINGS
+        for info, _provider in self._registry.values():
+            if info.supports(ModelCapability.EMBEDDING):
+                return info.provider_name
+        return ""
+
     @staticmethod
     def _prefer_local(candidates: list[_Candidate]) -> list[_Candidate]:
         """Put on-device embeddings first, deterministically.

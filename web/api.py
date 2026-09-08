@@ -295,6 +295,22 @@ def _bootstrap_overview(home: Path) -> tuple[list, list[str], bool]:
     return progress, candidates, (home / ".bootstrapped").exists()
 
 
+def _embeddings_overview() -> dict[str, Any]:
+    """Which model turns text into vectors, and whether it runs on this machine.
+
+    Worth naming in the interface rather than leaving to the logs: it is the one
+    model north uses that costs nothing and sends nothing anywhere, and it is
+    also the model every stored vector is stamped with - so "which embeddings am
+    I on?" is a question with real consequences for the memory indexes.
+    """
+    from inference.providers.local_embeddings import PROVIDER_NAME as LOCAL_EMBEDDINGS
+
+    router_ = current_services().inference_router
+    model = getattr(router_, "embedding_model_id", lambda: "")()
+    provider = getattr(router_, "embedding_provider_name", lambda: "")()
+    return {"model": model, "provider": provider, "local": provider == LOCAL_EMBEDDINGS}
+
+
 @router.get("/system")
 async def system_overview() -> dict[str, Any]:
     settings = current_services().require("north_settings")
@@ -324,6 +340,7 @@ async def system_overview() -> dict[str, Any]:
     completed = progress or ([{"path": path, "status": "completed"} for path in candidates] if bootstrapped else [])
     return {
         "providers": providers,
+        "embeddings": _embeddings_overview(),
         "settings": {"power": settings.power.value, "autonomy": settings.autonomy.value},
         "bootstrap": {
             "status": "complete" if bootstrapped else ("in_progress" if progress else "not_started"),

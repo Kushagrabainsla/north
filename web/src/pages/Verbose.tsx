@@ -189,8 +189,8 @@ function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy }
     </div>
     <DayPicker days={draft.days} onChange={days => setDraft({ ...draft, days })}/>
     <div className="schedule-form-actions">
-      <button type="submit" disabled={busy || !draft.task.trim()}>{busy ? "Saving…" : submitLabel}</button>
-      {onCancel && <button type="button" className="ghost" onClick={onCancel}>Cancel</button>}
+      <button type="submit" className="primary-button" disabled={busy || !draft.task.trim()}>{busy ? "Saving…" : submitLabel}</button>
+      {onCancel && <button type="button" className="ghost-button" onClick={onCancel}>Cancel</button>}
     </div>
   </form>;
 }
@@ -245,7 +245,7 @@ export function Schedule() {
   const routines = cron.data || [];
   return <div className="page">
     <PageHeader eyebrow="Automation" title="Schedule" subtitle="Queued work and recurring routines."
-      actions={<button onClick={startCreate}>+ New routine</button>}/>
+      actions={<button className="primary-button" onClick={startCreate}>+ New routine</button>}/>
     {(jobs.error || cron.error || error) && <ErrorNotice message={jobs.error || cron.error || error}/>}
     <div className="two-column">
       <Panel title="Recurring" label={`${routines.length} routines`}>
@@ -262,14 +262,14 @@ export function Schedule() {
               </small>
             </div>
             <div className="schedule-actions">
-              <button onClick={() => setEnabled(entry, !entry.enabled)} disabled={busy}>
+              <button className="ghost-button" onClick={() => setEnabled(entry, !entry.enabled)} disabled={busy}>
                 {entry.enabled ? "Pause" : "Resume"}
               </button>
-              <button onClick={() => startEdit(entry)} disabled={busy}>Edit</button>
+              <button className="ghost-button" onClick={() => startEdit(entry)} disabled={busy}>Edit</button>
               {/* A built-in lives in the source, so it can only be un-edited, never
                   removed - and there is nothing to undo until it has been edited. */}
               {entry.source === "builtin"
-                ? entry.modified && <button onClick={() => restore(entry)} disabled={busy}>Restore default</button>
+                ? entry.modified && <button className="ghost-button" onClick={() => restore(entry)} disabled={busy}>Restore default</button>
                 : <button className="danger-link" onClick={() => remove(entry)} disabled={busy}>Delete</button>}
             </div>
             {editing === entry.name && <ScheduleForm draft={draft} setDraft={setDraft}
@@ -365,6 +365,12 @@ interface ProviderAuthState {
   account_hint?: string;
 }
 
+// The embeddings row is the only provider with no key and no login, so it is
+// the only one whose identifying detail has to come from elsewhere.
+function isLocalEmbeddings(provider: any) {
+  return !provider.env_key && provider.auth_kind !== "oauth_pkce";
+}
+
 export function SystemPage() {
   const overview = useResource<any>("/web/api/system", 8000);
   const metrics = useResource<any>("/orchestrator/metrics?days=30", 15000);
@@ -376,6 +382,9 @@ export function SystemPage() {
   const [expandedPool, setExpandedPool] = useState<string | null>(null);
   const authWindows = useRef<Record<string, Window | null>>({});
   const providers = overview.data?.providers || [];
+  const embeddings = overview.data?.embeddings;
+  const embeddingsFor = (provider: any) =>
+    isLocalEmbeddings(provider) && embeddings?.model ? embeddings.model : "";
   const totalCost = Number(costs.data?.total_cost_usd ?? metrics.data?.total_cost_usd ?? 0);
   const pendingAuthIds = Object.values(providerAuth)
     .filter(state => state.state === "starting" || state.state === "pending")
@@ -476,7 +485,11 @@ export function SystemPage() {
           const waiting = auth?.state === "starting" || auth?.state === "pending";
           const configured = auth ? auth.configured : provider.configured;
           return <div className="provider-row" key={provider.id}>
-            <div><b>{provider.name}</b><small>{provider.description} · {provider.auth_kind === "oauth_pkce" ? "Browser login" : provider.env_key}</small></div>
+            {/* The trailing detail is whatever identifies the provider: the env var
+                holding its key, "Browser login" for OAuth, or - for the on-device
+                embedder, which has no key at all - the model it runs. Without the
+                last case the row ended on a dangling separator. */}
+            <div><b>{provider.name}</b><small>{[provider.description, provider.auth_kind === "oauth_pkce" ? "Browser login" : provider.env_key || embeddingsFor(provider)].filter(Boolean).join(" · ")}</small></div>
             <div className="provider-controls">
               <span className={configured ? "provider-state configured" : "provider-state"}>
                 {waiting ? "Waiting for browser login" : configured ? `Ready ${auth?.account_hint || provider.credential_hint}` : "Not configured"}
@@ -501,7 +514,18 @@ export function SystemPage() {
     </div>
     <div className="two-column">
       <Panel title="Cost by model" label="Month to date">{Object.entries(costs.data?.by_model || {}).map(([name,value]) => <div className="list-row" key={name}><b>{name}</b><span>${Number(value).toFixed(4)}</span></div>)}{!Object.keys(costs.data?.by_model || {}).length && <Empty>No recorded inference costs yet.</Empty>}</Panel>
-      <Panel title="Runtime configuration"><div className="list-row"><b>Power</b><span>{overview.data?.settings?.power || "–"}</span></div><div className="list-row"><b>Autonomy</b><span>{overview.data?.settings?.autonomy || "–"}</span></div><div className="list-row"><b>Bootstrap</b><span>{overview.data?.bootstrap?.status || "–"}</span></div></Panel>
+      <Panel title="Runtime configuration">
+        <div className="list-row"><b>Power</b><span>{overview.data?.settings?.power || "–"}</span></div>
+        <div className="list-row"><b>Autonomy</b><span>{overview.data?.settings?.autonomy || "–"}</span></div>
+        <div className="list-row"><b>Bootstrap</b><span>{overview.data?.bootstrap?.status || "–"}</span></div>
+        {/* The one model north runs itself. Worth naming: every stored vector is
+            stamped with it, so "which embeddings am I on?" decides which memories
+            can still be compared with which. */}
+        <div className="list-row">
+          <div><b>Embeddings</b><small>{overview.data?.embeddings?.local ? "on-device · no data leaves this machine" : overview.data?.embeddings?.provider || "not configured"}</small></div>
+          <span className="pool-availability">{overview.data?.embeddings?.model || "–"}</span>
+        </div>
+      </Panel>
     </div>
   </div>;
 }
