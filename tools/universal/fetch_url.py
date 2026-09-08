@@ -25,9 +25,13 @@ class FetchUrlTool(Tool):
 
     name = "fetch_url"
     description = (
-        "Fetch a public URL and return its readable text content. "
-        "Use for reading documentation pages, articles, job postings, or any specific URL "
-        "whose full content matters. Returns plain text, not HTML. "
+        "Fetch a public URL and return its readable text content. The first thing to reach "
+        "for when you have a URL and need what it says: documentation, articles, job "
+        "postings, any page whose words are the point. Returns plain text, not HTML, and "
+        "does not run JavaScript. "
+        "If the text comes back empty, tiny, or is clearly a page shell waiting for "
+        "JavaScript, that page needs the browser tool instead. So does anything behind a "
+        "login, or any page you must click or type into. "
         "Private/internal network addresses are blocked."
     )
     parameters_schema = {

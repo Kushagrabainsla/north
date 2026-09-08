@@ -21,8 +21,9 @@ class WebSearchTool(Tool):
         "training data or the local workspace. Phrase the query as plain natural-language "
         "keywords; do NOT use operators like site:, quotes, or AND/OR, which many search "
         "backends ignore. Results are short snippets only - to read a page in full, follow "
-        "up with fetch_url on its URL. To find code or files in the user's own project, use "
-        "search_files, search_code, or glob instead."
+        "up with fetch_url on its URL, or with the browser tool if that page needs a login, "
+        "a click, or renders itself in JavaScript. To find code or files in the user's own "
+        "project, use search_files, search_code, or glob instead."
     )
     parameters_schema = {
         "type": "object",

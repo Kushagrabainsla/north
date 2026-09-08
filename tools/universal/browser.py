@@ -452,7 +452,13 @@ class BrowserTool(Tool):
     name = "browser"
     is_mutating = False
     description = (
-        "Autonomous browser automation and structured web extraction via Chrome CDP. "
+        "Drive a real Chrome browser. Use it ONLY when plain text is not enough: the page "
+        "needs a login or a click, it builds itself in JavaScript so fetch_url returns an "
+        "empty or skeleton page, you must fill in a form, or you want the rows of a table "
+        "or listing as structured records rather than prose. "
+        "For an ordinary article, documentation page or any URL you only need to READ, use "
+        "fetch_url instead - it is one request against this tool's whole browser, so reach "
+        "for a browser only after text has failed or the task needs hands. "
         "Actions:\n"
         "  - 'goto' (or 'navigate'): Navigate to URL. Supports --stealth, --copy-cookies, --connect.\n"
         "  - 'extract': Discover and extract structured lists/tables as JSON records (saves 80% tokens).\n"
