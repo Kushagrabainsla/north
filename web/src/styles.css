@@ -282,6 +282,15 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
 .schedule-form input { padding: 7px 8px; font-size: 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); }
 .schedule-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .schedule-form-actions { display: flex; gap: 8px; }
+.schedule-form-error { margin: 0; color: var(--danger, #d98a7a); font-size: 11px; }
+.schedule-confirm { display: flex; align-items: center; gap: 10px; }
+.schedule-confirm > span { color: var(--muted); font-size: 10px; text-align: right; }
+/* A "Next up" row previews what a routine will do; the routine itself is
+   edited below. The two lists show the same task, so they must not look
+   like the same kind of row. */
+.schedule-row.upcoming .schedule-main b { font-weight: 500; }
+.schedule-upcoming-kind { color: var(--muted); font: 9px "DM Mono", monospace; white-space: nowrap; }
+.panel > header .primary-button { font-size: 10px; padding: 6px 10px; align-self: center; }
 .day-picker { display: flex; flex-wrap: wrap; gap: 5px; }
 .day-picker .day { padding: 5px 9px; font: 10px "DM Mono", monospace; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); }
 .day-picker .day.on { border-color: var(--accent); color: var(--accent); }

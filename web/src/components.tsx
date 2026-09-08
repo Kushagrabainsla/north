@@ -38,8 +38,11 @@ export function PageHeader({ eyebrow, title, subtitle, actions }: { eyebrow?: st
   return <header className="page-header"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div><div className="header-actions">{actions}</div></header>;
 }
 
-export function Panel({ title, label, children, to, className = "" }: { title: string; label?: string; children: ReactNode; to?: string; className?: string }) {
-  return <section className={`panel ${className}`}><header><div>{label && <span>{label}</span>}<h2>{title}</h2></div>{to && <NavLink to={to}>View all <span>→</span></NavLink>}</header><div className="panel-content">{children}</div></section>;
+// `actions` puts a control in the panel's own header, beside the thing it acts
+// on. "+ New routine" lived in the page header instead, a heading away from the
+// list it added to and next to nothing it was related to.
+export function Panel({ title, label, children, to, actions, className = "" }: { title: string; label?: string; children: ReactNode; to?: string; actions?: ReactNode; className?: string }) {
+  return <section className={`panel ${className}`}><header><div>{label && <span>{label}</span>}<h2>{title}</h2></div>{actions}{to && <NavLink to={to}>View all <span>→</span></NavLink>}</header><div className="panel-content">{children}</div></section>;
 }
 
 export function Status({ value }: { value?: string }) {

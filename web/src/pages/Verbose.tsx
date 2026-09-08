@@ -132,7 +132,10 @@ export function Approvals() {
   return <div className="page"><PageHeader eyebrow="Attention" title="Approvals" subtitle="Questions and consequential actions waiting for your decision."/>{resource.error && <ErrorNotice message={resource.error}/>}<div className="approval-stack">{pending.map(card => <article className="approval-card" key={card.id}><div className="approval-type">{card.type}</div><h2>{card.title}</h2><p>{card.message}</p><small>{card.agent} · {timeAgo(card.created_at)}</small><div className="approval-actions">{card.type === "question" ? card.options.map(option => <button key={option} onClick={() => decide(card, "answered", option)}>{option}</button>) : <><button className="primary-button" onClick={() => decide(card, "approved")}>Approve</button><button className="danger-button" onClick={() => decide(card, "rejected")}>Reject</button></>}</div></article>)}</div>{!pending.length && <Empty>Nothing needs your attention.</Empty>}<h2 className="section-title">Resolved</h2><div className="table-list">{history.map(card => <div className="table-row" key={card.id}><div className="row-main"><b>{card.title}</b><small>{card.agent} · {timeAgo(card.created_at)}</small></div><Status value={card.status}/></div>)}</div></div>;
 }
 
-interface Job { job_id: string; agent: string; task: string; status: string; scheduled_at: string; }
+interface Job {
+  job_id: string; agent: string; task: string; status: string;
+  scheduled_at: string; scheduled_epoch: number; scheduled_local: string;
+}
 
 interface Cron {
   name: string; agent: string; task: string; hour: number; minute: number;
@@ -141,7 +144,25 @@ interface Cron {
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// Statuses a job cannot come back from, and so the only ones that are history.
+const FINISHED = new Set(["completed", "failed", "cancelled"]);
 const hhmm = (hour: number, minute: number) => `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+
+// One way of saying when, used by everything on this page. The page previously
+// mixed the server's "2026-09-08 03:00 PDT" with a browser toLocaleString
+// ("9/7/2026, 8:00:00 AM") in adjacent panels, which read as two different kinds
+// of fact rather than one fact twice.
+function whenFromNow(epoch: number): string {
+  const seconds = epoch - Date.now() / 1000;
+  if (seconds < 0) return "now";
+  if (seconds < 90) return "in under a minute";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = seconds / 3600;
+  if (hours < 24) return `in ${Math.round(hours)} h`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "tomorrow" : `in ${days} days`;
+}
 
 // The form's own idea of a schedule, before it becomes a request. Days live here
 // as a set of numbers because that is what the day buttons toggle; the API is
@@ -160,61 +181,92 @@ function DayPicker({ days, onChange }: { days: number[]; onChange: (days: number
   return <div className="day-picker">
     {DAY_LABELS.map((label, day) =>
       <button type="button" key={label} className={days.includes(day) ? "day on" : "day"}
-               onClick={() => toggle(day)}>{label}</button>)}
+        onClick={() => toggle(day)}>{label}</button>)}
     <button type="button" className="day-preset" onClick={() => onChange([])}>Every day</button>
     <button type="button" className="day-preset" onClick={() => onChange([0, 1, 2, 3, 4])}>Weekdays</button>
     <button type="button" className="day-preset" onClick={() => onChange([5, 6])}>Weekends</button>
   </div>;
 }
 
-function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy }: {
+function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, error }: {
   draft: Draft; setDraft: (d: Draft) => void; onSubmit: () => void;
-  onCancel?: () => void; submitLabel: string; busy: boolean;
+  onCancel: () => void; submitLabel: string; busy: boolean; error: string;
 }) {
+  // An empty or half-typed time field must not silently become midnight, which
+  // is what `"".split(":").map(Number)` plus `|| 0` did.
+  const setTime = (value: string) => {
+    const [hour, minute] = value.split(":").map(Number);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return;
+    setDraft({ ...draft, hour, minute });
+  };
   return <form className="schedule-form" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
     <label>What should north do?
-      <input value={draft.task} placeholder="e.g. remind me to stretch"
-               onChange={e => setDraft({ ...draft, task: e.target.value })}/>
+      <input value={draft.task} placeholder="e.g. remind me to stretch" autoFocus
+        onChange={e => setDraft({ ...draft, task: e.target.value })}/>
     </label>
     <div className="schedule-form-row">
       <label>Time
-        <input type="time" value={hhmm(draft.hour, draft.minute)} onChange={e => {
-          const [hour, minute] = e.target.value.split(":").map(Number);
-          setDraft({ ...draft, hour: hour || 0, minute: minute || 0 });
-        }}/>
+        <input type="time" value={hhmm(draft.hour, draft.minute)} onChange={e => setTime(e.target.value)}/>
       </label>
       <label>Agent
         <input value={draft.agent} onChange={e => setDraft({ ...draft, agent: e.target.value })}/>
       </label>
     </div>
-    <DayPicker days={draft.days} onChange={days => setDraft({ ...draft, days })}/>
+    <label>Which days
+      <DayPicker days={draft.days} onChange={days => setDraft({ ...draft, days })}/>
+    </label>
+    {/* Beside the field that caused it, not at the top of the page. */}
+    {error && <p className="schedule-form-error">{error}</p>}
     <div className="schedule-form-actions">
-      <button type="submit" className="primary-button" disabled={busy || !draft.task.trim()}>{busy ? "Saving…" : submitLabel}</button>
-      {onCancel && <button type="button" className="ghost-button" onClick={onCancel}>Cancel</button>}
+      <button type="submit" className="primary-button" disabled={busy || !draft.task.trim()}>
+        {busy ? "Saving…" : submitLabel}
+      </button>
+      <button type="button" className="ghost-button" onClick={onCancel}>Cancel</button>
     </div>
   </form>;
 }
 
+// An in-page confirmation. window.confirm is an operating-system dialog in an
+// app that styles everything else itself, and it cannot say what will happen
+// afterwards.
+function ConfirmRow({ question, confirmLabel, onConfirm, onCancel, busy }: {
+  question: string; confirmLabel: string; onConfirm: () => void; onCancel: () => void; busy: boolean;
+}) {
+  return <div className="schedule-confirm">
+    <span>{question}</span>
+    <div className="schedule-actions">
+      <button className="ghost-button danger-link" onClick={onConfirm} disabled={busy}>{confirmLabel}</button>
+      <button className="ghost-button" onClick={onCancel} disabled={busy}>Keep it</button>
+    </div>
+  </div>;
+}
+
 export function Schedule() {
-  const jobs = useResource<Job[]>("/orchestrator/jobs?limit=100", 10000);
-  const cron = useResource<Cron[]>("/orchestrator/cron", 10000);
   const [editing, setEditing] = useState("");
-  const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [creating, setCreating] = useState(false);
+  const [confirming, setConfirming] = useState("");
+  const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Polling is paused while a form or confirmation is open: a list refreshing
+  // under an open editor moves the row being edited.
+  const settled = !editing && !creating && !confirming;
+  const cron = useResource<Cron[]>("/orchestrator/cron", settled ? 10000 : 0);
+  const pending = useResource<Job[]>("/orchestrator/jobs?status=pending&limit=50", settled ? 10000 : 0);
+  const history = useResource<Job[]>("/orchestrator/jobs?limit=20", settled ? 20000 : 0);
 
-  // Every mutation runs through here so that one place decides what happens on
-  // failure: the message is shown and the list is re-read, rather than the row
+  // Every mutation runs through here so one place decides what happens on
+  // failure: the message is shown and the lists are re-read, rather than a row
   // silently keeping whatever the optimistic guess was.
   const act = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
     try {
       await work();
-      await cron.reload();
+      await Promise.all([cron.reload(), pending.reload()]);
       setEditing("");
       setCreating(false);
+      setConfirming("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -222,70 +274,112 @@ export function Schedule() {
     }
   };
 
-  const create = () => act(() => post("/orchestrator/cron", {
+  const body = () => ({
     task: draft.task, agent: draft.agent, hour: draft.hour, minute: draft.minute, days: daysField(draft.days),
-  }));
-  const save = (name: string) => act(() => patch(`/orchestrator/cron/${encodeURIComponent(name)}`, {
-    task: draft.task, agent: draft.agent, hour: draft.hour, minute: draft.minute, days: daysField(draft.days),
-  }));
+  });
+  const create = () => act(() => post("/orchestrator/cron", body()));
+  const save = (name: string) => act(() => patch(`/orchestrator/cron/${encodeURIComponent(name)}`, body()));
   const setEnabled = (entry: Cron, enabled: boolean) =>
     act(() => patch(`/orchestrator/cron/${encodeURIComponent(entry.name)}`, { enabled }));
-  const restore = (entry: Cron) => {
-    if (!window.confirm(`Put "${entry.name}" back to the settings north ships with?`)) return;
-    return act(() => del(`/orchestrator/cron/${encodeURIComponent(entry.name)}`));
-  };
-  const remove = (entry: Cron) => {
-    if (!window.confirm(`Delete "${entry.task}"? This cannot be undone.`)) return;
-    return act(() => del(`/orchestrator/cron/${encodeURIComponent(entry.name)}`));
-  };
+  const removeOrRestore = (entry: Cron) =>
+    act(() => del(`/orchestrator/cron/${encodeURIComponent(entry.name)}`));
+  const cancelJob = (job: Job) => act(() => del(`/orchestrator/jobs/${encodeURIComponent(job.job_id)}`));
 
-  const startCreate = () => { setDraft(emptyDraft()); setCreating(true); setEditing(""); };
-  const startEdit = (entry: Cron) => { setDraft(draftOf(entry)); setEditing(entry.name); setCreating(false); };
+  const close = () => { setEditing(""); setCreating(false); setConfirming(""); setError(""); };
+  const startCreate = () => { close(); setDraft(emptyDraft()); setCreating(true); };
+  const startEdit = (entry: Cron) => { close(); setDraft(draftOf(entry)); setEditing(entry.name); };
 
   const routines = cron.data || [];
+  const upcomingJobs = (pending.data || []).filter(job => job.status === "pending");
+  // Only work that is over belongs under "Recently run" - a job still running
+  // is not history, and appeared there as one.
+  const finished = (history.data || []).filter(job => FINISHED.has(job.status)).slice(0, 6);
+  const running = (history.data || []).filter(job => job.status === "running");
+  // One timeline: a pending one-shot and a routine's next firing are the same
+  // kind of fact - something north is going to do - and were split across two
+  // panels that also disagreed about how to write a time.
+  const upcoming = [
+    ...running.map(job => ({
+      key: job.job_id, task: job.task, agent: job.agent, epoch: 0,
+      absolute: "started " + job.scheduled_local, kind: "running now" as const, job: undefined,
+    })),
+    ...upcomingJobs.map(job => ({
+      key: job.job_id, task: job.task, agent: job.agent, epoch: job.scheduled_epoch,
+      absolute: job.scheduled_local, kind: "once" as const, job,
+    })),
+    ...routines.filter(entry => entry.enabled).map(entry => ({
+      key: entry.name, task: entry.task, agent: entry.agent, epoch: entry.next_run_epoch,
+      absolute: entry.next_run_local, kind: entry.cadence, job: undefined,
+    })),
+  ].sort((a, b) => a.epoch - b.epoch);
+
   return <div className="page">
-    <PageHeader eyebrow="Automation" title="Schedule" subtitle="Queued work and recurring routines."
-      actions={<button className="primary-button" onClick={startCreate}>+ New routine</button>}/>
-    {(jobs.error || cron.error || error) && <ErrorNotice message={jobs.error || cron.error || error}/>}
-    <div className="two-column">
-      <Panel title="Recurring" label={`${routines.length} routines`}>
-        {creating && <ScheduleForm draft={draft} setDraft={setDraft} onSubmit={create}
-          onCancel={() => setCreating(false)} submitLabel="Create" busy={busy}/>}
-        {cron.loading ? <Loading/> : routines.length ? routines.map(entry => (
-          <div className={entry.enabled ? "schedule-row" : "schedule-row paused"} key={entry.name}>
-            <div className="schedule-main">
-              <b>{entry.task}</b>
-              <small>
-                {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
-                {entry.source === "builtin" && (entry.modified ? " · built-in, edited" : " · built-in")}
-                {" · "}{entry.enabled ? `next ${entry.next_run_local}` : "paused"}
-              </small>
-            </div>
-            <div className="schedule-actions">
-              <button className="ghost-button" onClick={() => setEnabled(entry, !entry.enabled)} disabled={busy}>
-                {entry.enabled ? "Pause" : "Resume"}
-              </button>
-              <button className="ghost-button" onClick={() => startEdit(entry)} disabled={busy}>Edit</button>
-              {/* A built-in lives in the source, so it can only be un-edited, never
-                  removed - and there is nothing to undo until it has been edited. */}
-              {entry.source === "builtin"
-                ? entry.modified && <button className="ghost-button" onClick={() => restore(entry)} disabled={busy}>Restore default</button>
-                : <button className="danger-link" onClick={() => remove(entry)} disabled={busy}>Delete</button>}
-            </div>
-            {editing === entry.name && <ScheduleForm draft={draft} setDraft={setDraft}
-              onSubmit={() => save(entry.name)} onCancel={() => setEditing("")}
-              submitLabel="Save" busy={busy}/>}
+    <PageHeader eyebrow="Automation" title="Schedule" subtitle="What north will do next, and the routines behind it."/>
+    {(cron.error || pending.error) && <ErrorNotice message={cron.error || pending.error}/>}
+
+    <Panel title="Next up" label="soonest first">
+      {cron.loading || pending.loading ? <Loading/> : upcoming.length ? upcoming.slice(0, 8).map(item =>
+        <div className="schedule-row upcoming" key={item.key}>
+          <div className="schedule-main">
+            <b>{item.task}</b>
+            <small title={item.absolute}>{whenFromNow(item.epoch)} · {item.absolute} · {item.kind} · {item.agent}</small>
           </div>
-        )) : <Empty>No recurring routines.</Empty>}
-      </Panel>
-      <Panel title="Agenda" label={`${jobs.data?.length || 0} jobs`}>
-        {jobs.loading ? <Loading/> : jobs.data?.length ? jobs.data.map(job =>
-          <div className="list-row" key={job.job_id}>
-            <div><b>{job.task}</b><small>{job.agent} · {new Date(job.scheduled_at).toLocaleString()}</small></div>
-            <Status value={job.status}/>
-          </div>) : <Empty>No queued work.</Empty>}
-      </Panel>
-    </div>
+          {item.job
+            ? confirming === item.key
+              ? <ConfirmRow question="Cancel this one-off?" confirmLabel="Cancel it" busy={busy}
+                  onConfirm={() => cancelJob(item.job!)} onCancel={() => setConfirming("")}/>
+              : <div className="schedule-actions">
+                  <button className="ghost-button" onClick={() => setConfirming(item.key)} disabled={busy}>Cancel</button>
+                </div>
+            : <span className="schedule-upcoming-kind">from a routine</span>}
+        </div>) : <Empty>Nothing is scheduled. Add a routine below, or ask north to remind you about something.</Empty>}
+    </Panel>
+
+    <Panel title="Routines" label={`${routines.length} recurring`}
+      actions={<button className="primary-button" onClick={startCreate}>+ New routine</button>}>
+      {creating && <ScheduleForm draft={draft} setDraft={setDraft} onSubmit={create} onCancel={close}
+        submitLabel="Create routine" busy={busy} error={error}/>}
+      {cron.loading ? <Loading/> : routines.length ? routines.map(entry => (
+        <div className={entry.enabled ? "schedule-row" : "schedule-row paused"} key={entry.name}>
+          <div className="schedule-main">
+            <b>{entry.task}</b>
+            <small>
+              {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
+              {entry.source === "builtin" && (entry.modified ? " · built-in, edited" : " · built-in")}
+              {entry.enabled ? ` · next ${entry.next_run_local}` : " · paused"}
+            </small>
+          </div>
+          {confirming === entry.name
+            ? <ConfirmRow busy={busy} onCancel={() => setConfirming("")} onConfirm={() => removeOrRestore(entry)}
+                question={entry.source === "builtin"
+                  ? "Put this back to the settings north ships with?"
+                  : "Delete this routine? It will not run again."}
+                confirmLabel={entry.source === "builtin" ? "Restore" : "Delete"}/>
+            : <div className="schedule-actions">
+                <button className="ghost-button" onClick={() => setEnabled(entry, !entry.enabled)} disabled={busy}>
+                  {entry.enabled ? "Pause" : "Resume"}
+                </button>
+                <button className="ghost-button" onClick={() => startEdit(entry)} disabled={busy}>Edit</button>
+                {/* A built-in lives in the source, so it can only be un-edited,
+                    never removed - and there is nothing to undo until it has
+                    been edited. */}
+                {entry.source === "builtin"
+                  ? entry.modified && <button className="ghost-button" onClick={() => setConfirming(entry.name)} disabled={busy}>Restore default</button>
+                  : <button className="ghost-button danger-link" onClick={() => setConfirming(entry.name)} disabled={busy}>Delete</button>}
+              </div>}
+          {editing === entry.name && <ScheduleForm draft={draft} setDraft={setDraft} onCancel={close}
+            onSubmit={() => save(entry.name)} submitLabel="Save changes" busy={busy} error={error}/>}
+        </div>
+      )) : <Empty>No recurring routines yet.</Empty>}
+    </Panel>
+
+    <Panel title="Recently run" label="history">
+      {finished.length ? finished.map(job =>
+        <div className="list-row" key={job.job_id}>
+          <div><b>{job.task}</b><small>{job.agent} · {job.scheduled_local}</small></div>
+          <Status value={job.status}/>
+        </div>) : <Empty>Nothing has run yet.</Empty>}
+    </Panel>
   </div>;
 }
 
