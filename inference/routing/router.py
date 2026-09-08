@@ -4,25 +4,31 @@ This is the whole selection path in one place: take the part's chain, narrow it
 to what this call needs, walk it honouring the scope of every failure, and record
 what happened. Model choice never consults a name, a tier table or a pool.
 
-It deliberately owns none of the plumbing around it - providers, cost, the
-per-model success EMA and the legacy pool path stay with the dispatcher, which
-passes what this needs in. That keeps "which model, and why" a thing you can
-read in one file.
+It deliberately owns none of the plumbing around it - providers, cost and the
+per-model success EMA stay with the dispatcher, which passes what this needs in.
+That keeps "which model, and why" a thing you can read in one file.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 from inference.decisions import EXHAUSTED, FAILED, DecisionLog, RoutingDecision
-from inference.exceptions import AllModelsRateLimitedError, ContextTooLargeError
+from inference.exceptions import (
+    AllModelsRateLimitedError,
+    ContextTooLargeError,
+    PinnedModelUnavailableError,
+)
 from inference.facts.catalog import FactsCatalog
 from inference.facts.identity import canonical
 from inference.facts.models import Entitlement
 from inference.failure import OutageCorroboration, Scope, classify, invalid_response
+from inference.model_policy import model_matches
 from inference.routing.availability import AvailabilityView
 from inference.routing.chain import Candidate, ChainWalk, Requirements, context_of, narrow
 from inference.routing.parts import PartProfile, profile_for, with_pool, with_power
@@ -35,6 +41,18 @@ OutcomeSink = Callable[[str, str, bool], None]
 # (model_id, provider, seconds, tokens_out) - one observed generation rate.
 LatencySink = Callable[[str, str, float, int], None]
 ProviderLookup = Callable[[str], Any]
+
+# A walk that ends with every candidate merely cooling down is waited out and
+# retried once, rather than failing a call that would have worked a second later.
+# Above this, the wait is the caller's to decide on and the error carries how long.
+_MAX_INLINE_WAIT_SECONDS = 40.0
+# Cooldowns expire on a clock this process does not own, so the retry sleeps a
+# little past the deadline rather than racing it.
+_WAIT_GRACE_SECONDS = 0.5
+
+# Distinguishes "the walk produced no answer" from a call that legitimately
+# returned None.
+_NO_RESULT = object()
 
 
 class ChainRouter:
@@ -54,6 +72,7 @@ class ChainRouter:
         demoted: Callable[[str], bool] | None = None,
         slow: Callable[[str], bool] | None = None,
         power: Callable[[], str | None] | None = None,
+        pinned: Callable[[], str] | None = None,
     ) -> None:
         self._catalog = catalog
         self._decisions = decisions
@@ -65,6 +84,9 @@ class ChainRouter:
         self._on_latency = on_latency
         self._demoted = demoted
         self._slow = slow
+        # Manual routing: the one model the user chose, read live so switching
+        # back to auto takes effect on the next call rather than the next restart.
+        self._pinned = pinned
         self._power = power
 
     @property
@@ -99,7 +121,7 @@ class ChainRouter:
         profile = profile_for(component, self._profiles)
         profile = with_pool(profile, pool)
         profile = with_power(profile, self._power() if self._power else None)
-        full = self._catalog.chain_for(profile, self._demoted)
+        full = self._only_pinned(self._catalog.chain_for(profile, self._demoted))
         eligible = narrow(
             full,
             Requirements(capabilities=requirements.capabilities, exclude=requirements.exclude),
@@ -114,6 +136,11 @@ class ChainRouter:
                 sorted(requirements.exclude),
                 profile.part,
             )
+            # Dropped from `requirements` too, not just from this step: the final
+            # narrow below applies them in full, and re-applying the exclusion
+            # there emptied the chain again - so the call failed anyway, having
+            # logged that it would not.
+            requirements = replace(requirements, exclude=frozenset())
             eligible = narrow(full, Requirements(capabilities=requirements.capabilities))
 
         # Context and payload are separated deliberately. Compaction is the fix
@@ -127,6 +154,34 @@ class ChainRouter:
             largest = max((context_of(c.facts, c.endpoints) or 0) for c in eligible)
             raise ContextTooLargeError(requirements.min_context, largest)
         return self._quickest_first(narrow(fits_context, requirements)), profile
+
+    def _only_pinned(self, chain: list[Candidate]) -> list[Candidate]:
+        """Under manual routing, reduce the chain to the one model that was named.
+
+        A *hard* pin, unlike ``PartProfile.pinned_model``, which moves a model to
+        the head and keeps the rest behind it. Falling back is right when north is
+        choosing and wrong when the user has: the point of naming a model is that
+        the answer came from that model, so a pin that cannot be honoured is an
+        error rather than a preference north quietly declines.
+
+        Requirements still apply afterwards. A pinned model too small for the part
+        fails as a context overflow, which is the true reason, rather than being
+        reported as an unavailable pin.
+        """
+        pin = (self._pinned() if self._pinned else "") or ""
+        if not pin:
+            return chain
+        kept = [
+            candidate
+            for candidate in chain
+            if any(model_matches(pin, e.provider, e.provider_model_id) for e in candidate.endpoints)
+        ]
+        if not kept:
+            raise PinnedModelUnavailableError(
+                f"Manual routing is pinned to {pin!r}, which nothing in the model catalog matches. "
+                "Pick another model, or switch routing back to auto."
+            )
+        return kept
 
     def _quickest_first(self, candidates: list[Candidate]) -> list[Candidate]:
         """Move models this install has measured as slow to the tail, order intact.
@@ -156,7 +211,45 @@ class ChainRouter:
         task_id: str | None = None,
         pool: str | None = None,
     ) -> Any:
-        """Walk the chain for *component* until one endpoint returns a usable answer."""
+        """Walk the chain for *component* until one endpoint returns a usable answer.
+
+        A walk where nothing was left but cooling-down endpoints is waited out and
+        walked again, once, when the soonest of those cooldowns is short: a model
+        rate-limited for a tenth of a second is not a reason to fail a call. The
+        chain is rebuilt after the wait, because what is available has changed.
+        """
+        result, walk, profile = await self._walk(
+            component, requirements, call_fn, is_valid, capability, task_id, pool
+        )
+        if result is not _NO_RESULT:
+            return result
+
+        wait = walk.soonest_retry()
+        if wait is not None and 0 < wait <= _MAX_INLINE_WAIT_SECONDS:
+            logger.info("Every candidate is cooling down - waiting %.1fs and walking again", wait)
+            await asyncio.sleep(wait + _WAIT_GRACE_SECONDS)
+            result, walk, profile = await self._walk(
+                component, requirements, call_fn, is_valid, capability, task_id, pool
+            )
+            if result is not _NO_RESULT:
+                return result
+
+        raise AllModelsRateLimitedError(
+            f"No model could serve {profile.part} - {walk.exhaustion_summary(requirements)}",
+            retry_after=walk.soonest_retry(),
+        )
+
+    async def _walk(
+        self,
+        component: str,
+        requirements: Requirements,
+        call_fn: Callable[[Any, str], Awaitable[Any]],
+        is_valid: Callable[[Any], bool] | None,
+        capability: str | None,
+        task_id: str | None,
+        pool: str | None,
+    ) -> tuple[Any, ChainWalk, PartProfile]:
+        """One pass down the chain. Returns ``_NO_RESULT`` when it is exhausted."""
         chain, profile = self.chain_for(component, requirements, pool)
         decision = RoutingDecision(
             part=profile.part,
@@ -200,14 +293,11 @@ class ChainRouter:
             self._succeed(attempt)
             decision.chose(attempt.model_id, attempt.provider)
             self._decisions.record(_finish(decision, walk))
-            return result
+            return result, walk, profile
 
         decision.outcome = EXHAUSTED
         self._decisions.record(_finish(decision, walk))
-        raise AllModelsRateLimitedError(
-            f"No model could serve {profile.part} - {walk.exhaustion_summary(requirements)}",
-            retry_after=walk.soonest_retry(),
-        )
+        return _NO_RESULT, walk, profile
 
     # ---- outcome handling ----
 

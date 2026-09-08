@@ -11,6 +11,7 @@ from inference.models import (
     CompletionResponse,
 )
 from inference.provider import Provider
+from tests.unit.inference._catalog import publish_catalog
 
 
 class _DummyProvider(Provider):
@@ -54,13 +55,20 @@ class _DummyProvider(Provider):
         raise NotImplementedError
 
 
-def _make_info(model_id: str, provider: str, caps: frozenset[ModelCapability], quality: float = 0.5) -> ModelInfo:
+def _make_info(
+    model_id: str,
+    provider: str,
+    caps: frozenset[ModelCapability],
+    quality: float = 0.5,
+    cost: float = 0.0,
+    ctx: int = 8192,
+) -> ModelInfo:
     return ModelInfo(
         model_id=model_id,
         provider_name=provider,
         capabilities=caps,
-        context_window=8192,
-        cost_per_token=0.0,
+        context_window=ctx,
+        cost_per_token=cost,
         base_quality=quality,
     )
 
@@ -129,38 +137,34 @@ async def test_concurrent_refresh_with_graceful_failure_retention(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dynamic_pool_candidate_routing(tmp_path):
-    """Verify that specifying pool='reasoning' or pool='speed' selects appropriate candidates."""
-    m_reason = _make_info(
-        "claude-opus-5", "zen", frozenset({ModelCapability.COMPLETION, ModelCapability.REASONING}), quality=0.95
+async def test_a_pool_name_now_only_orders_the_chain(tmp_path):
+    """``model_pool`` survives on agent configs, but it no longer picks the members.
+
+    It is read as an ordering hint: "reasoning" asks for the strongest model,
+    "speed" for the cheapest. Both chains contain both models - which is the whole
+    change from pools, where asking for speed meant a different, smaller list.
+    """
+    strong = _make_info(
+        "claude-opus-5", "zen", frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
+        quality=0.95, cost=1e-5, ctx=400_000,
     )
-    m_speed = _make_info(
-        "groq-compound-mini", "groq", frozenset({ModelCapability.COMPLETION, ModelCapability.SPEED}), quality=0.4
-    )
-    m_vision = _make_info(
-        "gemini-vision-pro", "gemini", frozenset({ModelCapability.COMPLETION, ModelCapability.VISION}), quality=0.8
+    cheap = _make_info(
+        "groq-compound-mini", "groq", frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
+        quality=0.40, cost=0.0, ctx=400_000,
     )
 
-    p1 = _DummyProvider("zen", {"claude-opus-5": m_reason})
-    p2 = _DummyProvider("groq", {"groq-compound-mini": m_speed})
-    p3 = _DummyProvider("gemini", {"gemini-vision-pro": m_vision})
+    disp = ModelDispatcher(
+        [_DummyProvider("zen", {"claude-opus-5": strong}), _DummyProvider("groq", {"groq-compound-mini": cheap})],
+        cooldowns_path=tmp_path / "cooldowns.json",
+        models_db_path=tmp_path / "models.db",
+    )
+    publish_catalog(disp)
 
-    disp = ModelDispatcher([p1, p2, p3], cooldowns_path=tmp_path / "cooldowns.json")
+    reasoning = await disp.complete(CompletionRequest(prompt="design it", component="coder", pool="reasoning"))
+    assert reasoning.model_used == "claude-opus-5"
 
-    # Request with pool="reasoning"
-    req_reason = CompletionRequest(prompt="design architecture", component="coder", pool="reasoning")
-    resp_reason = await disp.complete(req_reason)
-    assert resp_reason.model_used == "claude-opus-5"
-
-    # Request with pool="speed"
-    req_speed = CompletionRequest(prompt="classify intent", component="router", pool="speed")
-    resp_speed = await disp.complete(req_speed)
-    assert resp_speed.model_used == "groq-compound-mini"
-
-    # Request with pool="vision"
-    req_vision = CompletionRequest(prompt="describe diagram", component="reviewer", pool="vision")
-    resp_vision = await disp.complete(req_vision)
-    assert resp_vision.model_used == "gemini-vision-pro"
+    speed = await disp.complete(CompletionRequest(prompt="classify", component="router", pool="speed"))
+    assert speed.model_used == "groq-compound-mini"
 
 
 def test_current_pools_exposes_all_capability_pools(tmp_path):

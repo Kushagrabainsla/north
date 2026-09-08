@@ -1,15 +1,15 @@
-"""End-to-end router selection tests: best-model pick, multi-provider fallback,
-and rate-limit cooldown behaviour.
+"""End-to-end router selection: best-model pick, fallthrough, cooldown, exhaustion.
 
 These drive the REAL ModelDispatcher with fake multi-provider catalogs (same
 Provider interface production uses), so the routing decisions asserted here are
 exactly what ships - just without hitting the network.
 
 What this proves:
-  * the router picks the highest-quality model for HIGH priority
-  * a failing/broken model falls through to the next candidate (same or other provider)
-  * a rate-limited model is cooled down and skipped, another provider answers
-  * FREE-first ordering applies for MEDIUM priority
+  * the router picks the highest-scoring model that meets the part's needs
+  * a failing model falls through to the next candidate on another provider
+  * a rate-limited model is cooled down and skipped on the next call
+  * price breaks a tie between models of equal measured score
+  * every candidate failing is reported, not papered over
 """
 
 from __future__ import annotations
@@ -33,9 +33,10 @@ from inference.models import (
     TranscriptionRequest,
     TranscriptionResponse,
 )
+from tests.unit.inference._catalog import publish_catalog
 
 
-def _mi(model_id: str, *, provider: str, quality: float, cost: float = 0.0, ctx: int = 100_000) -> ModelInfo:
+def _mi(model_id: str, *, provider: str, quality: float, cost: float = 0.0, ctx: int = 400_000) -> ModelInfo:
     return ModelInfo(
         model_id=model_id,
         provider_name=provider,
@@ -86,16 +87,22 @@ class _Catalog:
         raise NotImplementedError
 
 
-def _disp(providers: list[_Catalog], tmp_path, preferred: dict[str, list[str]] | None = None) -> ModelDispatcher:
-    ns = NorthSettings(tmp_path / "settings.json", default_preferred_models=preferred or {})
-    return ModelDispatcher(providers=providers, north_settings=ns, cooldowns_path=tmp_path / "cd.json")
+def _disp(providers: list[_Catalog], tmp_path) -> ModelDispatcher:
+    """A dispatcher with a catalog already published - i.e. one that can route."""
+    dispatcher = ModelDispatcher(
+        providers=providers,
+        north_settings=NorthSettings(tmp_path / "settings.json"),
+        cooldowns_path=tmp_path / "cd.json",
+        models_db_path=tmp_path / "models.db",
+    )
+    publish_catalog(dispatcher)
+    return dispatcher
 
 
 @pytest.mark.asyncio
-async def test_best_model_chosen_for_high_priority(tmp_path):
-    # Two providers, each with models; HIGH priority should pick the single
-    # highest family-tier model regardless of which provider owns it.
-    # (The scorer ranks by family tier, not the legacy price-derived quality.)
+async def test_the_highest_scoring_model_is_chosen(tmp_path):
+    # Two providers, each with one model. The chain ranks on measured score, so
+    # the better model wins regardless of which provider happens to own it.
     a = _Catalog("openrouter", [_mi("gpt-oss-20b", provider="openrouter", quality=0.4)], lambda m, r: _resp(m))
     b = _Catalog("opencode_zen", [_mi("claude-opus-4-8", provider="opencode_zen", quality=0.95)], lambda m, r: _resp(m))
     disp = _disp([a, b], tmp_path)
@@ -143,12 +150,13 @@ async def test_rate_limited_model_is_cooldown_and_skipped(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_free_first_for_medium_priority(tmp_path):
-    # MEDIUM priority puts free models first even if a paid one is higher quality.
-    paid_models = [_mi("or-paid", provider="openrouter", quality=0.95, cost=0.001)]
-    paid = _Catalog("openrouter", paid_models, lambda m, r: _resp(m))
-    free_models = [_mi("zen-free", provider="opencode_zen", quality=0.4, cost=0.0, ctx=200_000)]
-    free = _Catalog("opencode_zen", free_models, lambda m, r: _resp(m))
+async def test_price_breaks_a_tie_between_equal_models(tmp_path):
+    # Cost is never blended into the score - it decides only between models the
+    # measurements cannot tell apart, which is what makes the cheaper one win here.
+    paid = _Catalog("openrouter", [_mi("or-paid", provider="openrouter", quality=0.7, cost=0.001)],
+                    lambda m, r: _resp(m))
+    free = _Catalog("opencode_zen", [_mi("zen-free", provider="opencode_zen", quality=0.7, cost=0.0, ctx=400_000)],
+                    lambda m, r: _resp(m))
     disp = _disp([paid, free], tmp_path)
     resp = await disp.complete(CompletionRequest(prompt="chat", priority=PoolPriority.MEDIUM, component="general"))
     assert resp.model_used == "zen-free"

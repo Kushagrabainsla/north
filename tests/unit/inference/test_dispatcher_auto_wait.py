@@ -1,4 +1,4 @@
-"""Unit tests for ModelDispatcher in-flight auto-wait on transient rate limits."""
+"""In-flight auto-wait: a short rate limit is waited out, a long one is reported."""
 
 from __future__ import annotations
 
@@ -8,6 +8,18 @@ from inference.capability import ModelInfo
 from inference.dispatcher import ModelDispatcher
 from inference.exceptions import AllModelsRateLimitedError, ModelRateLimitedError
 from inference.models import CompletionRequest, CompletionResponse, PoolPriority
+from tests.unit.inference._catalog import publish_catalog
+
+
+def _ready(providers, tmp_path) -> ModelDispatcher:
+    """A dispatcher with a catalog already published - i.e. one that can route."""
+    dispatcher = ModelDispatcher(
+        providers,
+        cooldowns_path=tmp_path / "cooldowns.json",
+        models_db_path=tmp_path / "models.db",
+    )
+    publish_catalog(dispatcher)
+    return dispatcher
 
 
 class MockTransientRateLimitedProvider:
@@ -44,9 +56,9 @@ class MockTransientRateLimitedProvider:
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_auto_waits_for_short_rate_limit():
+async def test_dispatcher_auto_waits_for_short_rate_limit(tmp_path):
     provider = MockTransientRateLimitedProvider("openrouter", "stealth/ox-alpha", retry_after=0.1)
-    dispatcher = ModelDispatcher([provider])
+    dispatcher = _ready([provider], tmp_path)
     req = CompletionRequest(prompt="hello", component="general", priority=PoolPriority.MEDIUM)
 
     # Dispatcher should catch the 0.1s rate limit, sleep briefly, and succeed on the second attempt
@@ -56,9 +68,9 @@ async def test_dispatcher_auto_waits_for_short_rate_limit():
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_raises_with_retry_after_when_exceeding_wait_cap():
+async def test_dispatcher_raises_with_retry_after_when_exceeding_wait_cap(tmp_path):
     provider = MockTransientRateLimitedProvider("openrouter", "stealth/ox-alpha", retry_after=60.0)
-    dispatcher = ModelDispatcher([provider])
+    dispatcher = _ready([provider], tmp_path)
     req = CompletionRequest(prompt="hello", component="general", priority=PoolPriority.MEDIUM)
 
     # 60s exceeds the 30s in-flight wait threshold, so it should raise

@@ -9,6 +9,25 @@ class InferenceError(NorthError):
     """Base class for inference-layer failures."""
 
 
+class RoutingNotReadyError(InferenceError):
+    """Routing was asked for a model before the catalog it ranks from had loaded.
+
+    Its own class because it is the one inference failure that is nobody's fault
+    and fixes itself: the facts catalog is fetched after startup, and until it
+    lands there is no second router to answer instead - the pool router that used
+    to cover this window was removed with its selection rules.
+    """
+
+
+class PinnedModelUnavailableError(InferenceError):
+    """Manual routing named a model that nothing in the live catalog matches.
+
+    Loud on purpose. Manual mode exists so that one model, and only that model,
+    answers - a run that quietly fell back to another has answered a different
+    question from the one that was asked, and the numbers from it are worthless.
+    """
+
+
 class AllModelsRateLimitedError(InferenceError):
     """Every candidate in the dispatch chain was exhausted."""
 

@@ -112,7 +112,7 @@ class TestSelection:
     """Embedding choice must be deterministic - alternating models rebuilds every index."""
 
     def _dispatcher(self, tmp_path, providers) -> ModelDispatcher:
-        return ModelDispatcher(providers, cooldowns_path=tmp_path / "cooldowns.json", routing_mode="legacy")
+        return ModelDispatcher(providers, cooldowns_path=tmp_path / "cooldowns.json")
 
     @pytest.mark.asyncio
     async def test_local_is_chosen_over_an_equally_free_remote(self, tmp_path) -> None:

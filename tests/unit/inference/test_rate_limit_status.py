@@ -22,6 +22,21 @@ from inference.rate_limit_status import (
     compute_wait_seconds,
     format_status_markdown,
 )
+from tests.unit.inference._catalog import publish_catalog
+
+
+def _ready(providers, tmp_path, **kwargs):
+    """A dispatcher with a catalog already published - i.e. one that can route."""
+    from inference.dispatcher import ModelDispatcher
+
+    dispatcher = ModelDispatcher(
+        providers,
+        cooldowns_path=tmp_path / "cooldowns.json",
+        models_db_path=tmp_path / "models.db",
+        **kwargs,
+    )
+    publish_catalog(dispatcher)
+    return dispatcher
 
 # ── header parsing helpers ──────────────────────────────────────────────────
 
@@ -257,7 +272,6 @@ def test_dispatcher_records_status_with_precise_wait(tmp_path) -> None:
     """A 429 in the dispatch chain is recorded with the provider's real wait."""
     from config.strategy import NorthSettings
     from inference.capability import ModelCapability, ModelInfo
-    from inference.dispatcher import ModelDispatcher
     from inference.provider import Provider
 
     class _Bad(Provider):
@@ -300,11 +314,7 @@ def test_dispatcher_records_status_with_precise_wait(tmp_path) -> None:
         async def aclose(self):
             return None
 
-    disp = ModelDispatcher(
-        providers=[_Bad()],
-        north_settings=NorthSettings(tmp_path / "settings.json", default_preferred_models={}),
-        cooldowns_path=tmp_path / "cd.json",
-    )
+    disp = _ready([_Bad()], tmp_path, north_settings=NorthSettings(tmp_path / "settings.json"))
     from inference.models import CompletionRequest
 
     with pytest.raises(AllModelsRateLimitedError):

@@ -1,4 +1,9 @@
-"""NORTH_ROUTING selects which router serves a call, and whether it is audited."""
+"""Routing readiness: what happens before the catalog north ranks from has loaded.
+
+There is one router now. The pool router that used to serve calls while the
+facts catalog was still being fetched is gone, so this window has to announce
+itself rather than being quietly covered by a second set of selection rules.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ import pytest
 
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher
+from inference.exceptions import RoutingNotReadyError
 from inference.models import CompletionRequest, CompletionResponse
 
 
@@ -41,44 +47,41 @@ def _models() -> dict[str, ModelInfo]:
     }
 
 
-def _dispatcher(tmp_path, mode: str) -> ModelDispatcher:
+def _dispatcher(tmp_path, *, persist: bool = True) -> ModelDispatcher:
+    """A dispatcher over one fake provider. ``persist=False`` gives it nowhere to store."""
+    if not persist:
+        return ModelDispatcher([_FakeProvider(_models())])
     return ModelDispatcher(
         [_FakeProvider(_models())],
         cooldowns_path=tmp_path / "cooldowns.json",
         models_db_path=tmp_path / "models.db",
-        routing_mode=mode,
     )
 
 
-def test_legacy_mode_builds_no_chain_router(tmp_path) -> None:
-    dispatcher = _dispatcher(tmp_path, "legacy")
-    assert dispatcher._chain_router is None
-    assert dispatcher.uses_chain_routing is False
+def test_a_chain_router_is_built_whenever_there_is_a_catalog_to_open(tmp_path) -> None:
+    dispatcher = _dispatcher(tmp_path)
+    assert dispatcher._chain_router is not None
     assert dispatcher.routing_decisions() == []
 
 
-def test_an_unrecognised_mode_falls_back_to_legacy(tmp_path) -> None:
-    assert _dispatcher(tmp_path, "nonsense")._chain_router is None
-
-
-def test_shadow_mode_prepares_a_chain_but_does_not_route_on_it(tmp_path) -> None:
-    dispatcher = _dispatcher(tmp_path, "shadow")
-    assert dispatcher._chain_router is not None
-    assert dispatcher.uses_chain_routing is False
-
-
-def test_chain_mode_waits_for_a_catalog_before_taking_over(tmp_path) -> None:
-    """An empty models.db must never mean "no models available"."""
-    dispatcher = _dispatcher(tmp_path, "chain")
-    assert dispatcher._chain_router is not None
-    assert dispatcher.uses_chain_routing is False  # nothing fetched yet
+def test_no_catalog_path_means_no_router_at_all(tmp_path) -> None:
+    """A dispatcher told not to persist must not reach for the user's real catalog."""
+    assert _dispatcher(tmp_path, persist=False)._chain_router is None
 
 
 @pytest.mark.asyncio
-async def test_the_legacy_path_still_serves_when_there_is_no_catalog(tmp_path) -> None:
-    dispatcher = _dispatcher(tmp_path, "chain")
-    response = await dispatcher.complete(CompletionRequest(prompt="hello", component="coder"))
-    assert response.model_used in _models()
+async def test_a_completion_before_the_catalog_loads_says_so(tmp_path) -> None:
+    """The failure a person can act on: wait, rather than a silent second opinion."""
+    dispatcher = _dispatcher(tmp_path)
+    with pytest.raises(RoutingNotReadyError):
+        await dispatcher.complete(CompletionRequest(prompt="hello", component="coder"))
+
+
+@pytest.mark.asyncio
+async def test_the_same_is_true_with_no_router_at_all(tmp_path) -> None:
+    dispatcher = _dispatcher(tmp_path, persist=False)
+    with pytest.raises(RoutingNotReadyError):
+        await dispatcher.complete(CompletionRequest(prompt="hello", component="coder"))
 
 
 @pytest.mark.asyncio

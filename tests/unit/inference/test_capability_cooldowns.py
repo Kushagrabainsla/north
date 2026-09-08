@@ -21,12 +21,14 @@ from inference.models import (
 )
 from inference.provider import Provider
 from inference.providers.openai_compat import OpenAICompatibleProvider
+from tests.unit.inference._catalog import publish_catalog
 
 
 class FakeProvider(Provider):
     def __init__(self, name: str, models: dict[str, ModelInfo]) -> None:
         self._name = name
         self._models = models
+        self.calls: list[str] = []
 
     @property
     def name(self) -> str:
@@ -47,6 +49,7 @@ class FakeProvider(Provider):
     async def complete_with_tools(
         self, model_id: str, request: ToolCallRequest, token_callback=None
     ) -> ToolCallResponse:
+        self.calls.append(model_id)
         if model_id == "gpt-5-flaky":
             raise ModelDegenerateError(model_id, self.name, reason="upstream stream error (network_error)")
         return ToolCallResponse(
@@ -58,7 +61,7 @@ class FakeProvider(Provider):
 
 
 @pytest.mark.asyncio
-async def test_tool_failure_suspends_only_tool_capability() -> None:
+async def test_tool_failure_suspends_only_tool_capability(tmp_path) -> None:
     model1 = ModelInfo(
         model_id="gpt-5-flaky",
         provider_name="fake",
@@ -76,7 +79,12 @@ async def test_tool_failure_suspends_only_tool_capability() -> None:
         base_quality=0.50,
     )
     provider = FakeProvider("fake", {"gpt-5-flaky": model1, "gpt-4o-mini-working": model2})
-    dispatcher = ModelDispatcher([provider])
+    dispatcher = ModelDispatcher(
+        [provider],
+        cooldowns_path=tmp_path / "cooldowns.json",
+        models_db_path=tmp_path / "models.db",
+    )
+    publish_catalog(dispatcher)
 
     # 1. Dispatch complete_with_tools: flaky model fails, dispatcher falls over to model2
     req = ToolCallRequest(
@@ -92,18 +100,16 @@ async def test_tool_failure_suspends_only_tool_capability() -> None:
     assert dispatcher._cooldowns.is_capability_active(("gpt-5-flaky", "fake"), "tool_calls") is True
     assert dispatcher._cooldowns.is_active(("gpt-5-flaky", "fake")) is False
 
-    # 3. Plain completion should still pick and succeed on gpt-5-flaky (still available for chat)
-    comp_candidates = dispatcher._candidates(ModelCapability.COMPLETION, PoolPriority.HIGH, 100)
-    assert "gpt-5-flaky" in [c[0].model_id for c in comp_candidates]
+    # 3. Plain completion still picks the flaky model - only its tool calling is suspended
     comp_req = CompletionRequest(prompt="hello", priority=PoolPriority.HIGH, component="test")
     comp_resp = await dispatcher.complete(comp_req)
     assert comp_resp.model_used == "gpt-5-flaky"
 
-    # 4. Next complete_with_tools call automatically filters out flaky model upfront without retrying it
-    candidates = dispatcher._candidates(ModelCapability.TOOL_CALLS, PoolPriority.HIGH, 100)
-    candidate_ids = [c[0].model_id for c in candidates]
-    assert "gpt-5-flaky" not in candidate_ids
-    assert "gpt-4o-mini-working" in candidate_ids
+    # 4. The next tool call skips it up front rather than paying to learn again
+    provider.calls.clear()
+    resp2 = await dispatcher.complete_with_tools(req)
+    assert resp2.model_used == "gpt-4o-mini-working"
+    assert "gpt-5-flaky" not in provider.calls
 
 
 

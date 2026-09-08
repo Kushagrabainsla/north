@@ -11,7 +11,6 @@ from inference.models import (
     EmbedRequest,
     EmbedResponse,
     ModelPool,
-    PoolPriority,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -38,10 +37,6 @@ class InferenceRouter(ABC):
     @abstractmethod
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         """Run one audio-transcription call via the same provider."""
-
-    @abstractmethod
-    async def get_model(self, priority: PoolPriority) -> str:
-        """Return the current primary model for `priority`."""
 
     @abstractmethod
     async def refresh_pools(self) -> None:

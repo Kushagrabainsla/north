@@ -5,6 +5,21 @@ from __future__ import annotations
 import pytest
 
 from inference.provider_health import ProviderHealthTracker
+from tests.unit.inference._catalog import publish_catalog
+
+
+def _ready(providers, tmp_path, **kwargs):
+    """A dispatcher with a catalog already published - i.e. one that can route."""
+    from inference.dispatcher import ModelDispatcher
+
+    dispatcher = ModelDispatcher(
+        providers,
+        cooldowns_path=tmp_path / "cooldowns.json",
+        models_db_path=tmp_path / "models.db",
+        **kwargs,
+    )
+    publish_catalog(dispatcher)
+    return dispatcher
 
 
 def test_provider_mark_down_blocks_until_expiry(monkeypatch) -> None:
@@ -41,7 +56,6 @@ def test_provider_success_clears_health_state() -> None:
 async def test_model_404_does_not_degrade_provider(tmp_path) -> None:
     """Individual model 404s or 400s must cool down only that model without degrading provider."""
     from inference.capability import ModelCapability, ModelInfo
-    from inference.dispatcher import ModelDispatcher
     from inference.exceptions import ModelNotFoundError
     from inference.models import CompletionRequest, CompletionResponse, PoolPriority
 
@@ -73,7 +87,7 @@ async def test_model_404_does_not_degrade_provider(tmp_path) -> None:
                 raise ModelNotFoundError(model_id, self.name)
             return CompletionResponse(text="hello", model_used=model_id, tokens_in=10, tokens_out=10, cost_usd=0.0)
 
-    disp = ModelDispatcher([MockProvider()], cooldowns_path=tmp_path / "cooldowns.json")
+    disp = _ready([MockProvider()], tmp_path)
 
     # Provider should remain available and dispatch should reach working-model
     resp = await disp.complete(CompletionRequest(prompt="hi", priority=PoolPriority.HIGH, component="test"))

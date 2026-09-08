@@ -16,14 +16,11 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from inference.registry import PROVIDER_DEFINITIONS
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-
-if TYPE_CHECKING:
-    from inference.model_scorer import ScoringConfig
 
 
 def _upsert_env_key(path: Path, key: str, value: str) -> None:
@@ -60,38 +57,12 @@ _INFERENCE_KEYS = frozenset(definition.env_key for definition in PROVIDER_DEFINI
 _KEY_PREFIX = "NORTH_"
 # Shorthand a user is likely to type for a key north stores under its own prefix.
 _KEY_ALIASES = {"FAL_KEY": "NORTH_FAL_KEY"}
-_SCORING_KEYS = ("family_weight", "ema_weight", "curation_weight", "family_tiers")
 _SHOWED_CURRENT = " (no value given -> showed current)"
 
 
 def _dial_output(dial: str, value: str, note: str = "") -> ToolOutput:
     return ToolOutput(success=True, data={"action": dial, "value": value, "note": note})
 
-
-def _scoring_config(current: ScoringConfig, params: dict) -> ScoringConfig:
-    from inference.model_scorer import ScoringConfig
-
-    return ScoringConfig(
-        family_weight=float(params.get("family_weight", current.family_weight)),
-        ema_weight=float(params.get("ema_weight", current.ema_weight)),
-        curation_weight=float(params.get("curation_weight", current.curation_weight)),
-        unknown_family_quality=current.unknown_family_quality,
-        family_tiers=dict(params.get("family_tiers", current.family_tiers)),
-    )
-
-
-def _reload_live_scoring() -> bool:
-    """Push new scoring to the running router. False when north is not serving."""
-    from config.runtime import get_runtime
-
-    deps = get_runtime()
-    if deps is None:
-        return False
-    inner = deps.cost_tracker.get_inner()
-    if inner is None or not hasattr(inner, "reload_scoring"):
-        return False
-    inner.reload_scoring()
-    return True
 
 class NorthConfigTool(Tool):
     """Read and update north's configuration (.env file).
@@ -121,10 +92,9 @@ class NorthConfigTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "get", "set", "scoring", "power", "autonomy"],
+                "enum": ["list", "get", "set", "power", "autonomy"],
                 "description": "Actions: 'list' (show all keys), "
                 "'get <key>' (show one), 'set <key>=<value>' (write a key), "
-                "'scoring' (get/set model-quality scoring weights live), "
                 "'power [eco|cruise|sport]' (get/set model-selection dial), "
                 "'autonomy [interactive|auto|autonomous]' (get/set approval dial)",
             },
@@ -135,26 +105,6 @@ class NorthConfigTool(Tool):
             "value": {
                 "type": "string",
                 "description": "Value to set for 'set' action",
-            },
-            "family_weight": {
-                "type": "number",
-                "description": "scoring action: weight for the static family-tier prior (0..1+)",
-            },
-            "ema_weight": {
-                "type": "number",
-                "description": "scoring action: weight for the live per-model success EMA (0..1+)",
-            },
-            "curation_weight": {
-                "type": "number",
-                "description": "scoring action: weight for the curated preferred-model boost (0..1+)",
-            },
-            "family_tiers": {
-                "type": "object",
-                "additionalProperties": {"type": "number"},
-                "description": (
-                    "scoring action: per-family quality overrides (substring -> 0..1). "
-                    'E.g. {"opus": 0.97, "custom-model": 0.85}'
-                ),
             },
         },
         "required": ["action"],
@@ -247,21 +197,6 @@ class NorthConfigTool(Tool):
             value = data.get("value", "")
             note = data.get("note", "")
             return f"✅ Written `{key}={self._mask(key, value)}` to `{self._env_path()}`.{note}"
-        elif action == "scoring":
-            cfg = data.get("config", {})
-            note = data.get("note", "")
-            lines = [
-                "Model scoring weights:",
-                f"  family_weight={cfg.get('family_weight')}",
-                f"  ema_weight={cfg.get('ema_weight')}",
-                f"  curation_weight={cfg.get('curation_weight')}",
-                f"  unknown_family_quality={cfg.get('unknown_family_quality')}",
-            ]
-            if "family_tiers" in cfg and cfg["family_tiers"]:
-                lines.append("  family_tiers:")
-                for k, v in sorted(cfg["family_tiers"].items()):
-                    lines.append(f"    {k}={v}")
-            return "\n".join(lines) + f"{note}"
         elif action in ("power", "autonomy"):
             value = data.get("value", "")
             note = data.get("note", "")
@@ -309,21 +244,6 @@ class NorthConfigTool(Tool):
             data={"action": "set", "key": key, "value": value, "note": self._apply_runtime(key)},
         )
 
-    async def _scoring(self, params: dict) -> ToolOutput:
-        from config.settings import reload_settings
-        from config.strategy import NorthSettings
-
-        # Use NorthSettings (which has the scoring property) not config.settings
-        north_settings = NorthSettings(self._settings_path())
-        reload_settings()  # still reload .env for any API key changes
-        if not any(key in params for key in _SCORING_KEYS):
-            return ToolOutput(success=True, data={"action": "scoring", "config": north_settings.scoring.to_dict()})
-
-        updated = _scoring_config(north_settings.scoring, params)
-        north_settings.set_scoring(updated)
-        note = "" if _reload_live_scoring() else "\n⚠️ north not running as a server — applies on next restart."
-        return ToolOutput(success=True, data={"action": "scoring", "config": updated.to_dict(), "note": note})
-
     async def _power(self, params: dict) -> ToolOutput:
         from config.strategy import NorthSettings, StrategyMode
 
@@ -361,7 +281,6 @@ _ACTIONS: dict[str, Callable[[NorthConfigTool, dict], Awaitable[ToolOutput]]] = 
     "list": NorthConfigTool._list,
     "get": NorthConfigTool._get,
     "set": NorthConfigTool._set,
-    "scoring": NorthConfigTool._scoring,
     "power": NorthConfigTool._power,
     "autonomy": NorthConfigTool._autonomy,
 }

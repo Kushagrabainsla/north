@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from approval.mode import ApprovalMode
-    from inference.model_scorer import ScoringConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +18,20 @@ class StrategyMode(StrEnum):
     ECO = "eco"  # cheapest model first - maximise cost savings
     CRUISE = "cruise"  # role-aware best fit (default)
     SPORT = "sport"  # most capable model first - maximise quality
+
+
+class RoutingMode(StrEnum):
+    """Who picks the model: north, or the user.
+
+    ``AUTO`` is the whole of what north does today - rank every model it can
+    reach against what this part of the task needs, and walk that chain. ``MANUAL``
+    names one model and calls only that, which is what makes an experiment
+    repeatable: hold the model still, change one thing, compare. Everything the
+    ranking would have decided is skipped, so the power dial means nothing here.
+    """
+
+    AUTO = "auto"
+    MANUAL = "manual"
 
 
 # `power` is the user-facing name for the model-selection dial.
@@ -31,38 +44,28 @@ _DESCRIPTIONS = {
     StrategyMode.SPORT: "Most capable model first. Best quality; higher cost.",
 }
 
+_ROUTING_DESCRIPTIONS = {
+    RoutingMode.AUTO: "North picks the model for each part of a task.",
+    RoutingMode.MANUAL: "One model answers everything. Power has no effect.",
+}
+
+
+def describe_routing(mode: RoutingMode) -> str:
+    return _ROUTING_DESCRIPTIONS[mode]
+
 
 def describe(mode: StrategyMode) -> str:
     return _DESCRIPTIONS[mode]
-
-
-def _coerce_preferred(raw: object) -> dict[str, list[str]]:
-    """Coerce a settings.json value into a ``{pool: [specs]}`` map, dropping junk.
-
-    Kept dependency-free (no inference import) so the config layer stays
-    independent; the wiring layer parses env/defaults via
-    ``inference.model_policy.parse_preferred``.
-    """
-    if not isinstance(raw, dict):
-        return {}
-    out: dict[str, list[str]] = {}
-    for pool, val in raw.items():
-        if not isinstance(pool, str) or not isinstance(val, list):
-            continue
-        specs = [str(s).strip() for s in val if str(s).strip()]
-        if specs:
-            out[pool] = specs
-    return out
 
 
 class NorthSettings:
     """Persistent user settings stored at ~/.north/settings.json."""
 
     _DEFAULT_POWER = StrategyMode.CRUISE
+    _DEFAULT_ROUTING = RoutingMode.AUTO
     _DEFAULT_APPROVAL_TIMEOUT = 300.0
 
-    def __init__(self, path: Path, default_approval_mode: ApprovalMode | None = None,
-                 default_preferred_models: dict[str, list[str]] | None = None) -> None:
+    def __init__(self, path: Path, default_approval_mode: ApprovalMode | None = None) -> None:
         from approval.mode import ApprovalMode
 
         self._path = path
@@ -70,26 +73,15 @@ class NorthSettings:
         self._approval_timeout_seconds: float = self._DEFAULT_APPROVAL_TIMEOUT
         # Startup default (e.g. from NORTH_APPROVAL_MODE); settings.json overrides it.
         self._autonomy: ApprovalMode = default_approval_mode or ApprovalMode.INTERACTIVE
-        # Curated preferred models per pool (see inference/model_policy.py). The
-        # startup default comes from env/DEFAULT_PREFERRED_MODELS via the wiring
-        # layer; a "preferred_models" key in settings.json overrides it live.
-        # `_preferred_explicit` tracks whether the value was *deliberately* chosen
-        # (loaded from a file that had the key, or set via set_preferred_models) so
-        # a routine _save (e.g. changing power) never freezes the built-in
-        # default into settings.json - which would otherwise stop future default
-        # improvements from ever reaching the user.
-        self._preferred_models: dict[str, list[str]] = dict(default_preferred_models or {})
-        self._preferred_explicit: bool = False
-        # Model-quality scoring weights (see inference/model_scorer.py). The
-        # startup default comes from ScoringConfig(); a "scoring" key in
-        # settings.json overrides it live (reloadable, no restart needed).
-        from inference.model_scorer import ScoringConfig
-
-        self._scoring: ScoringConfig = ScoringConfig()
         # Per-part routing overrides (see inference/routing/parts.py). Profiles are
         # data, so an install can retune which part gets which model without a code
         # change. Persisted only when deliberately set, like scoring above.
         self._routing_parts: dict[str, object] = {}
+        # Who picks the model, and - in manual mode - which one. The model is kept
+        # even while the mode is auto, so switching back to manual does not make
+        # the user find their model again.
+        self._routing_mode: RoutingMode = self._DEFAULT_ROUTING
+        self._routing_model: str = ""
         self._load()
 
     def _load(self) -> None:
@@ -104,16 +96,18 @@ class NorthSettings:
             self._approval_timeout_seconds = float(data.get("approval_timeout_seconds", self._DEFAULT_APPROVAL_TIMEOUT))
             raw_autonomy = data.get("autonomy")
             self._autonomy = parse_approval_mode(raw_autonomy) or self._autonomy
-            if "preferred_models" in data:
-                self._preferred_models = _coerce_preferred(data.get("preferred_models"))
-                self._preferred_explicit = True
-            if "scoring" in data:
-                from inference.model_scorer import ScoringConfig
-
-                self._scoring = ScoringConfig.from_dict(data.get("scoring"))
             routing = data.get("routing")
-            if isinstance(routing, dict) and isinstance(routing.get("parts"), dict):
-                self._routing_parts = routing["parts"]
+            if isinstance(routing, dict):
+                if isinstance(routing.get("parts"), dict):
+                    self._routing_parts = routing["parts"]
+                # An unreadable mode falls back to auto rather than failing the
+                # load: north picking a model is always a working answer, where
+                # a half-understood manual setting is not.
+                try:
+                    self._routing_mode = RoutingMode(str(routing.get("mode") or self._DEFAULT_ROUTING.value))
+                except ValueError:
+                    logger.warning("Unknown routing mode %r in settings.json - using auto", routing.get("mode"))
+                self._routing_model = str(routing.get("model") or "")
         except Exception as exc:
             logger.warning(
                 "settings.json is unreadable - resetting to defaults (%s): %s",
@@ -134,14 +128,24 @@ class NorthSettings:
         return self._autonomy
 
     @property
-    def preferred_models(self) -> dict[str, list[str]]:
-        """Curated preferred models per pool. Empty pools fall back to price ranking."""
-        return self._preferred_models
+    def routing_mode(self) -> RoutingMode:
+        """Whether north picks the model, or the user has pinned one."""
+        return self._routing_mode
 
     @property
-    def scoring(self) -> ScoringConfig:
-        """Model-quality scoring weights. Live-reloadable via set_scoring()."""
-        return self._scoring
+    def routing_model(self) -> str:
+        """The pinned model as ``provider:model_id``. Only meaningful in manual mode."""
+        return self._routing_model
+
+    @property
+    def pinned_model(self) -> str:
+        """The model to route to, or "" when north is choosing.
+
+        The one question routing actually asks. Reading the mode and the model
+        separately is how a pin left behind by a switch back to auto ends up
+        silently applied.
+        """
+        return self._routing_model if self._routing_mode is RoutingMode.MANUAL else ""
 
     @property
     def routing_parts(self) -> dict[str, object]:
@@ -152,17 +156,16 @@ class NorthSettings:
         self._routing_parts = parts if isinstance(parts, dict) else {}
         self._save()
 
-    def set_scoring(self, config: ScoringConfig) -> None:
-        self._scoring = config
+    def set_routing(self, mode: RoutingMode | None = None, model: str | None = None) -> None:
+        """Change who picks the model, the model itself, or both."""
+        if mode is not None:
+            self._routing_mode = mode
+        if model is not None:
+            self._routing_model = model.strip()
         self._save()
 
     def set_power(self, mode: StrategyMode) -> None:
         self._power = mode
-        self._save()
-
-    def set_preferred_models(self, mapping: dict[str, list[str]]) -> None:
-        self._preferred_models = _coerce_preferred(mapping)
-        self._preferred_explicit = True
         self._save()
 
     def set_approval_timeout(self, seconds: float) -> None:
@@ -175,29 +178,18 @@ class NorthSettings:
 
     def _save(self) -> None:
         try:
-            from inference.model_scorer import ScoringConfig
-
             self._path.parent.mkdir(parents=True, exist_ok=True)
             data: dict[str, object] = {
                 "power": self._power.value,
                 "approval_timeout_seconds": self._approval_timeout_seconds,
                 "autonomy": self._autonomy.value,
             }
-            # Only persist preferred_models when the user deliberately chose it, so
-            # a routine save never freezes the built-in default and block future
-            # default improvements from reaching this install.
-            if self._preferred_explicit:
-                data["preferred_models"] = self._preferred_models
+            routing: dict[str, object] = {"mode": self._routing_mode.value}
+            if self._routing_model:
+                routing["model"] = self._routing_model
             if self._routing_parts:
-                data["routing"] = {"parts": self._routing_parts}
-            # Persist scoring only when the user overrode the default weights, so a
-            # routine save doesn't freeze the built-in defaults.
-            if data.get("scoring") is not None or self._scoring != ScoringConfig():
-                if self._scoring != ScoringConfig():
-                    data["scoring"] = self._scoring.to_dict()
-                elif "scoring" in data:
-                    # user reset to defaults - drop the key
-                    del data["scoring"]
+                routing["parts"] = self._routing_parts
+            data["routing"] = routing
             self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning("Failed to persist settings to %s: %s", self._path, exc)

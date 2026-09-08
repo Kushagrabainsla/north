@@ -8,6 +8,18 @@ from inference.capability import ModelInfo
 from inference.dispatcher import ModelDispatcher
 from inference.exceptions import AllModelsRateLimitedError, InferenceError, PaymentRequiredError
 from inference.models import CompletionRequest, CompletionResponse, PoolPriority
+from tests.unit.inference._catalog import publish_catalog
+
+
+def _dispatcher(providers, tmp_path) -> ModelDispatcher:
+    """A dispatcher with a catalog already published - i.e. one that can route."""
+    dispatcher = ModelDispatcher(
+        providers,
+        cooldowns_path=tmp_path / "cooldowns.json",
+        models_db_path=tmp_path / "models.db",
+    )
+    publish_catalog(dispatcher)
+    return dispatcher
 
 
 class MockProvider:
@@ -25,7 +37,7 @@ class MockProvider:
 
 
 @pytest.mark.asyncio
-async def test_payment_required_does_not_mark_provider_down():
+async def test_payment_required_does_not_mark_provider_down(tmp_path):
     paid_info = ModelInfo(
         model_id="openrouter/paid-model",
         provider_name="openrouter",
@@ -47,7 +59,7 @@ async def test_payment_required_does_not_mark_provider_down():
         "openrouter/free-model": free_info,
     })
 
-    dispatcher = ModelDispatcher([provider])
+    dispatcher = _dispatcher([provider], tmp_path)
     req = CompletionRequest(prompt="test", component="test", priority=PoolPriority.HIGH)
     resp = await dispatcher.complete(req)
     assert resp.text == "free success"
@@ -57,7 +69,7 @@ async def test_payment_required_does_not_mark_provider_down():
 
 
 @pytest.mark.asyncio
-async def test_generic_inference_error_recorded_as_status_error():
+async def test_generic_inference_error_recorded_as_status_error(tmp_path):
     """A generic InferenceError (5xx, timeout, bad JSON, etc.) must surface in the
     status store as kind 'error' - not be invisible as a silent "all available".
     TranscriptionError subclasses InferenceError, so it is covered by the same branch.
@@ -80,7 +92,7 @@ async def test_generic_inference_error_recorded_as_status_error():
         async def complete(self, model_id: str, request: CompletionRequest):
             raise InferenceError("upstream 500 from provider")
 
-    dispatcher = ModelDispatcher([FlakyProvider()])
+    dispatcher = _dispatcher([FlakyProvider()], tmp_path)
     req = CompletionRequest(prompt="test", component="test", priority=PoolPriority.HIGH)
     with pytest.raises(AllModelsRateLimitedError):
         await dispatcher.complete(req)
@@ -91,7 +103,7 @@ async def test_generic_inference_error_recorded_as_status_error():
 
 
 @pytest.mark.asyncio
-async def test_success_marks_model_checked():
+async def test_success_marks_model_checked(tmp_path):
     info = ModelInfo(
         model_id="openrouter/ok-model",
         provider_name="openrouter",
@@ -110,7 +122,7 @@ async def test_success_marks_model_checked():
         async def complete(self, model_id: str, request: CompletionRequest):
             return CompletionResponse(text="ok", model_used=model_id, tokens_in=1, tokens_out=1, cost_usd=0.0)
 
-    dispatcher = ModelDispatcher([OkProvider()])
+    dispatcher = _dispatcher([OkProvider()], tmp_path)
     req = CompletionRequest(prompt="test", component="test", priority=PoolPriority.HIGH)
     await dispatcher.complete(req)
     assert dispatcher._rate_limit_status.checked_count() == 1

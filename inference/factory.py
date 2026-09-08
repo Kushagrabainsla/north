@@ -25,7 +25,6 @@ def build_router(
     confidence_tracker: ConfidenceTracker | None = None,
     cooldowns_path: Path | None = None,
     models_db_path: Path | None = None,
-    routing_mode: str = "chain",
     provider_settings: object | None = None,
 ) -> InferenceRouter:
     """Assemble a ModelDispatcher from configured provider definitions.
@@ -56,5 +55,4 @@ def build_router(
         confidence_tracker,
         cooldowns_path,
         models_db_path=models_db_path,
-        routing_mode=routing_mode,
     )

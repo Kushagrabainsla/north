@@ -341,7 +341,14 @@ async def system_overview() -> dict[str, Any]:
     return {
         "providers": providers,
         "embeddings": _embeddings_overview(),
-        "settings": {"power": settings.power.value, "autonomy": settings.autonomy.value},
+        "settings": {
+            "power": settings.power.value,
+            "autonomy": settings.autonomy.value,
+            "routing": settings.routing_mode.value,
+            # The model actually in force, so the page never reports a pin that
+            # a switch back to auto has already released.
+            "model": settings.pinned_model,
+        },
         "bootstrap": {
             "status": "complete" if bootstrapped else ("in_progress" if progress else "not_started"),
             "completed": completed,

@@ -1236,21 +1236,18 @@ def _print_cache_usage(period: str) -> None:
 @inference_app.command("models")
 def inference_models() -> None:
     """Show current model pool state and discovered models."""
-    from config.settings import settings
-
     response = _api("GET", "/orchestrator/inference/models")
     pools = response.json()
     _console.print()
-    if settings.routing.strip().lower() != "legacy":
-        # Pools are price-derived bins. Under chain routing they no longer decide
-        # anything, and showing them as if they did is how a user ends up tuning
-        # the wrong thing.
-        _console.print(
-            "  [yellow]Pools below are a catalog view only.[/yellow] "
-            f"[bright_black]NORTH_ROUTING={settings.routing} selects per part from fetched "
-            "facts - run `north routing` to see the actual decisions.[/bright_black]"
-        )
-        _console.print()
+    # Pools are price-derived bins. They no longer decide anything - routing
+    # ranks the whole catalog per part of a task - and showing them as if they
+    # did is how a user ends up tuning the wrong thing.
+    _console.print(
+        "  [yellow]Pools below are a catalog view only.[/yellow] "
+        "[bright_black]Routing selects per part from fetched facts - "
+        "run `north routing` to see the actual decisions.[/bright_black]"
+    )
+    _console.print()
     for pool_name, pool_data in pools.items():
         models = pool_data.get("models", [])
         _console.print(f"  [bold white]{pool_name}[/bold white]  [bright_black]{len(models)} models[/bright_black]")

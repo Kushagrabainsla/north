@@ -26,7 +26,6 @@ from inference.models import (
     EmbedRequest,
     EmbedResponse,
     ModelPool,
-    PoolPriority,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -90,9 +89,6 @@ class CostTracker(InferenceRouter):
         response = await self._inner.transcribe(request)
         self._add_cost(request.task_id, response.cost_usd)
         return response
-
-    async def get_model(self, priority: PoolPriority) -> str:
-        return await self._inner.get_model(priority)
 
     async def refresh_pools(self) -> None:
         await self._inner.refresh_pools()

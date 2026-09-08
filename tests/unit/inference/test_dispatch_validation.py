@@ -8,6 +8,19 @@ from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher, _completion_has_text, _toolcall_has_output
 from inference.exceptions import ProviderAuthError
 from inference.models import CompletionRequest, CompletionResponse, PoolPriority
+from tests.unit.inference._catalog import publish_catalog
+
+
+def _ready(providers, tmp_path, **kwargs):
+    """A dispatcher with a catalog already published - i.e. one that can route."""
+    dispatcher = ModelDispatcher(
+        providers,
+        cooldowns_path=tmp_path / "cooldowns.json",
+        models_db_path=tmp_path / "models.db",
+        **kwargs,
+    )
+    publish_catalog(dispatcher)
+    return dispatcher
 
 
 def _resp(text: str, model: str) -> CompletionResponse:
@@ -100,14 +113,14 @@ class _MultiModelProvider:
 async def test_json_ignoring_model_is_skipped(tmp_path):
     # 'bad' ranks first but returns a <thought> trace instead of JSON; 'good' returns JSON.
     bad = _FakeProvider(
-        "p", "claude-opus-4-8", quality=0.99,
+        "bad-provider", "claude-opus-4-8", quality=0.99,
         responder=lambda m, r: _resp("<thought>not json</thought>", m),
     )
     good = _FakeProvider(
-        "p", "gpt-oss-20b", quality=0.5,
+        "good-provider", "gpt-oss-20b", quality=0.5,
         responder=lambda m, r: _resp('{"ok": true}', m),
     )
-    disp = ModelDispatcher(providers=[bad, good], cooldowns_path=tmp_path / "cd.json")
+    disp = _ready([bad, good], tmp_path)
 
     resp = await disp.complete(
         CompletionRequest(prompt="classify", priority=PoolPriority.HIGH, component="planner", json_mode=True)
@@ -119,9 +132,9 @@ async def test_json_ignoring_model_is_skipped(tmp_path):
 
 @pytest.mark.asyncio
 async def test_empty_completion_is_skipped(tmp_path):
-    empty = _FakeProvider("p", "claude-opus-4-8", quality=0.99, responder=lambda m, r: _resp("   ", m))
-    good = _FakeProvider("p", "gpt-oss-20b", quality=0.5, responder=lambda m, r: _resp("hello", m))
-    disp = ModelDispatcher(providers=[empty, good], cooldowns_path=tmp_path / "cd.json")
+    empty = _FakeProvider("empty-provider", "claude-opus-4-8", quality=0.99, responder=lambda m, r: _resp("   ", m))
+    good = _FakeProvider("good-provider", "gpt-oss-20b", quality=0.5, responder=lambda m, r: _resp("hello", m))
+    disp = _ready([empty, good], tmp_path)
 
     resp = await disp.complete(CompletionRequest(prompt="hi", priority=PoolPriority.HIGH, component="planner"))
     assert resp.text == "hello"
@@ -140,7 +153,7 @@ async def test_provider_auth_error_opens_circuit_and_falls_through(tmp_path):
         a_responder,
     )
     b = _MultiModelProvider("groq", [("llama-3.1-8b-instant", 0.7)], lambda m, r: _resp(m, m))
-    disp = ModelDispatcher(providers=[a, b], cooldowns_path=tmp_path / "cd.json")
+    disp = _ready([a, b], tmp_path)
 
     resp = await disp.complete(CompletionRequest(prompt="think", priority=PoolPriority.HIGH, component="planner"))
 

@@ -608,13 +608,115 @@ export function Insights() {
   return <div className="page"><PageHeader eyebrow="Performance" title="Insights" subtitle="Usage, cost, reliability, and model availability."/><div className="metric-cards"><div><span>Tasks · 30 days</span><strong>{metrics.data?.total_tasks || 0}</strong></div><div><span>Input tokens</span><strong>{Number(metrics.data?.total_tokens_in || 0).toLocaleString()}</strong></div><div><span>Output tokens</span><strong>{Number(metrics.data?.total_tokens_out || 0).toLocaleString()}</strong></div><div><span>Model cost</span><strong>${Number(costs.data?.total_cost_usd || 0).toFixed(4)}</strong></div></div><div className="two-column"><Panel title="Cost by model">{Object.entries(costs.data?.by_model || {}).map(([name,value]) => <div className="list-row" key={name}><b>{name}</b><span>${Number(value).toFixed(4)}</span></div>)}</Panel><Panel title="Model pools">{Object.entries(models.data || {}).map(([name, pool]: [string, any]) => <div className="list-row" key={name}><div><b>{name}</b><small>{pool.models?.length || 0} models available</small></div><span className="pool-availability">Available</span></div>)}</Panel></div></div>;
 }
 
-interface SettingsData { power: string; autonomy: string; }
+interface SettingsData { power: string; autonomy: string; routing: string; model: string; }
+interface ProviderModels { provider: string; models: string[]; }
+
+// Which model answers, when the user is choosing it rather than north. Provider
+// first, then that provider's models: a flat list of several hundred ids is not
+// a choice anyone can make, and the provider is the half people know.
+function ModelPicker({ value, onPick, busy }: { value: string; onPick: (spec: string) => void; busy: boolean }) {
+  const catalog = useResource<ProviderModels[]>("/orchestrator/inference/catalog");
+  const providers = catalog.data || [];
+  // A stored pin is "provider:model_id", but only the provider half is a fixed
+  // vocabulary - a model id may itself contain a colon, so it is split once.
+  const [chosenProvider, chosenModel] = (() => {
+    const at = value.indexOf(":");
+    return at > 0 ? [value.slice(0, at), value.slice(at + 1)] : ["", value];
+  })();
+  const provider = chosenProvider || providers[0]?.provider || "";
+  const models = providers.find(row => row.provider === provider)?.models || [];
+
+  if (catalog.loading) return <Loading/>;
+  if (!providers.length) return <Empty>No models are reachable. Check your provider keys under System.</Empty>;
+  return <div className="model-picker">
+    <label>Provider
+      <select value={provider} disabled={busy}
+        onChange={event => onPick(`${event.target.value}:${(providers.find(r => r.provider === event.target.value)?.models || [])[0] || ""}`)}>
+        {providers.map(row => <option value={row.provider} key={row.provider}>{row.provider}</option>)}
+      </select>
+    </label>
+    <label>Model
+      <select value={chosenModel} disabled={busy || !models.length}
+        onChange={event => onPick(`${provider}:${event.target.value}`)}>
+        {(models.includes(chosenModel) || !chosenModel ? models : [chosenModel, ...models]).map(id =>
+          <option value={id} key={id}>{id}</option>)}
+      </select>
+    </label>
+  </div>;
+}
+
 export function SettingsPage() {
   const resource = useResource<SettingsData>("/orchestrator/settings");
   const [typeScale, setTypeScale] = useState(() => localStorage.getItem("north-type-scale") || "comfortable");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   useEffect(() => { document.documentElement.dataset.typeScale = typeScale; localStorage.setItem("north-type-scale", typeScale); }, [typeScale]);
-  const update = async (body: Partial<SettingsData>) => { await post("/orchestrator/settings", body); await resource.reload(); };
-  return <div className="page"><PageHeader eyebrow="Configuration" title="Settings" subtitle="Control how North balances capability, cost, autonomy, and readability."/><div className="settings-grid"><Panel title="Power" label="Model strategy"><div className="segmented">{["eco","cruise","sport"].map(value => <button className={resource.data?.power === value ? "active" : ""} onClick={() => update({ power:value })} key={value}>{value}</button>)}</div><p className="muted">Choose how aggressively North selects capable models.</p></Panel><Panel title="Autonomy" label="Approval behavior"><div className="segmented">{["interactive","auto","autonomous"].map(value => <button className={resource.data?.autonomy === value ? "active" : ""} onClick={() => update({ autonomy:value })} key={value}>{value}</button>)}</div><p className="muted">Consequential and destructive actions remain governed by North's safety policy.</p></Panel><Panel title="Text size" label="Personal preference"><div className="segmented text-scale-selector">{[["compact","Compact"],["comfortable","Comfortable"],["large","Large"]].map(([value,label]) => <button className={typeScale === value ? "active" : ""} onClick={() => setTypeScale(value)} key={value}>{label}</button>)}</div><p className="muted">Choose the reading scale used throughout the web interface.</p></Panel></div></div>;
+  const update = async (body: Partial<SettingsData>) => {
+    setBusy(true);
+    setError("");
+    try { await post("/orchestrator/settings", body); await resource.reload(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  const routing = resource.data?.routing || "auto";
+  const manual = routing === "manual";
+  // Manual routing needs a model, and the server refuses the switch without one.
+  // So choosing "manual" with nothing stored opens the picker and waits: the
+  // switch is made by picking a model, which is the decision anyway.
+  const [choosing, setChoosing] = useState(false);
+  const pickManual = () => (resource.data?.model ? update({ routing: "manual" }) : setChoosing(true));
+  return <div className="page">
+    <PageHeader eyebrow="Configuration" title="Settings"
+      subtitle="Control how North balances capability, cost, autonomy, and readability."/>
+    {error && <ErrorNotice message={error}/>}
+    <div className="settings-grid">
+      <Panel title="Model routing" label="Who picks">
+        <div className="segmented two">
+          <button className={!manual ? "active" : ""} disabled={busy}
+            onClick={() => { setChoosing(false); update({ routing: "auto" }); }}>auto</button>
+          <button className={manual || choosing ? "active" : ""} disabled={busy} onClick={pickManual}>manual</button>
+        </div>
+        <p className="muted">
+          {manual
+            ? "One model answers everything. North's ranking is skipped, and a model it cannot reach fails the call rather than falling back."
+            : choosing
+              ? "Pick the model that should answer everything."
+              : "North ranks every model it can reach against what each part of a task needs, and calls them in that order."}
+        </p>
+        {(manual || choosing) && <ModelPicker value={resource.data?.model || ""} busy={busy}
+          onPick={spec => { setChoosing(false); update({ routing: "manual", model: spec }); }}/>}
+      </Panel>
+      {/* Ordering a chain of one is meaningless, so under manual the dial is
+          shown switched off rather than left looking live. */}
+      <Panel title="Power" label={manual ? "not in use" : "Model strategy"} className={manual ? "panel-inert" : ""}>
+        <div className="segmented">
+          {["eco","cruise","sport"].map(value =>
+            <button className={resource.data?.power === value ? "active" : ""} disabled={busy || manual}
+              onClick={() => update({ power: value })} key={value}>{value}</button>)}
+        </div>
+        <p className="muted">
+          {manual
+            ? "Nothing to order while one model is pinned. Switch routing to auto to use this."
+            : "Choose how aggressively North selects capable models."}
+        </p>
+      </Panel>
+      <Panel title="Autonomy" label="Approval behavior">
+        <div className="segmented">
+          {["interactive","auto","autonomous"].map(value =>
+            <button className={resource.data?.autonomy === value ? "active" : ""} disabled={busy}
+              onClick={() => update({ autonomy: value })} key={value}>{value}</button>)}
+        </div>
+        <p className="muted">Consequential and destructive actions remain governed by North's safety policy.</p>
+      </Panel>
+      <Panel title="Text size" label="Personal preference">
+        <div className="segmented text-scale-selector">
+          {[["compact","Compact"],["comfortable","Comfortable"],["large","Large"]].map(([value,label]) =>
+            <button className={typeScale === value ? "active" : ""} onClick={() => setTypeScale(value)} key={value}>{label}</button>)}
+        </div>
+        <p className="muted">Choose the reading scale used throughout the web interface.</p>
+      </Panel>
+    </div>
+  </div>;
 }
 
 interface ProviderAuthState {
@@ -776,7 +878,12 @@ export function SystemPage() {
     <div className="two-column">
       <Panel title="Cost by model" label="Month to date">{Object.entries(costs.data?.by_model || {}).map(([name,value]) => <div className="list-row" key={name}><b>{name}</b><span>${Number(value).toFixed(4)}</span></div>)}{!Object.keys(costs.data?.by_model || {}).length && <Empty>No recorded inference costs yet.</Empty>}</Panel>
       <Panel title="Runtime configuration">
-        <div className="list-row"><b>Power</b><span>{overview.data?.settings?.power || "–"}</span></div>
+        <div className="list-row"><b>Routing</b><span>{overview.data?.settings?.routing || "–"}</span></div>
+        {/* Only shown when it is in force: a remembered pin that auto has released
+            would read here as the model north is using, which it is not. */}
+        {overview.data?.settings?.model &&
+          <div className="list-row"><b>Pinned model</b><span>{overview.data.settings.model}</span></div>}
+        <div className="list-row"><b>Power</b><span>{overview.data?.settings?.routing === "manual" ? "not in use" : (overview.data?.settings?.power || "–")}</span></div>
         <div className="list-row"><b>Autonomy</b><span>{overview.data?.settings?.autonomy || "–"}</span></div>
         <div className="list-row"><b>Bootstrap</b><span>{overview.data?.bootstrap?.status || "–"}</span></div>
         {/* The one model north runs itself. Worth naming: every stored vector is

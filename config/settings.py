@@ -177,21 +177,6 @@ class Settings(BaseSettings):
     # Set NORTH_TELEGRAM_ALLOWED_CHAT_IDS="12345678,87654321" in environment or .env.
     telegram_allowed_chat_ids: str = ""
 
-    # Curated preferred models per pool, as a JSON object string, e.g.
-    #   NORTH_PREFERRED_MODELS='{"reasoning": ["anthropic/claude-sonnet", "openai/gpt-4.1"]}'
-    # This is the startup default; a "preferred_models" key in ~/.north/settings.json
-    # overrides it live. Empty = use the built-in DEFAULT_PREFERRED_MODELS. See
-    # inference/model_policy.py. Entries are family-matched against the live catalog.
-    preferred_models: str = ""
-
-    # Which router selects models. "chain" ranks the whole catalog from fetched
-    # facts (measured coding/agentic scores, declared capabilities) per part of a
-    # task. "legacy" is the pre-facts pool router, kept for one release so a bad
-    # catalog can be routed around without a downgrade. "shadow" routes on legacy
-    # but records where chain would have chosen differently, so the switch can be
-    # audited on live traffic before it is made. See inference/routing/.
-    routing: str = "chain"
-
     # A task whose heartbeat has not advanced for this long is considered stuck and
     # is cancelled/failed by the watchdog; the same age caps how old an interrupted
     # task may be before startup fails it instead of resuming. Default 24 hours.

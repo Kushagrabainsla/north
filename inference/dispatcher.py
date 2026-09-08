@@ -1,14 +1,16 @@
-"""ModelDispatcher - multi-provider inference router.
+"""ModelDispatcher - what the rest of north calls to reach a model.
 
-Implements InferenceRouter over an ordered list of Provider instances.
-Routing logic:
-  1. Collect all models from all providers that satisfy the requested capability.
-  2. Filter models whose context window is too small for the input.
-  3. Exclude models on cooldown (rate limited or payment exhausted).
-  4. Rank by priority: HIGH → effective_quality desc, LOW → cost asc, MEDIUM → free first.
-  5. Within each quality tier, candidates are shuffled randomly for uniform load distribution.
-  6. Try each in order, applying cooldowns on failure, raising
-     AllModelsRateLimitedError when every candidate is exhausted.
+Implements InferenceRouter over an ordered list of Provider instances. It no
+longer decides *which* model answers a completion: that is the chain router's
+job (``inference/routing/``), which ranks the whole catalog per part of a task
+from fetched facts. What lives here is everything around that decision -
+
+  * the provider registry, and the catalog refresh that keeps it current
+  * cooldowns, provider health, and precise rate-limit status
+  * the per-model success and generation-rate EMAs this install has measured
+  * embeddings and transcription, which are selected here rather than by the
+    chain: no catalog source declares either capability, so the provider's own
+    flags are the only place that knowledge exists
 
 Context overflow: raises ContextTooLargeError so the agent layer can compact
 the conversation and retry. See agents/context_compaction.py.
@@ -19,14 +21,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from config.strategy import NorthSettings, StrategyMode
+from config.strategy import NorthSettings
 from inference.base import InferenceRouter
 from inference.capability import ModelCapability, ModelInfo
 from inference.constants import (
@@ -39,13 +40,11 @@ from inference.constants import (
     _PREFERRED_MIN_USES,
     _QUALITY_TIER_HIGH,
     _QUALITY_TIER_MEDIUM,
-    _STICKY_MAX_ENTRIES,
 )
 from inference.cooldowns import CooldownStore, _CooldownKey
-from inference.decisions import DIVERGED, DecisionLog, RoutingDecision
+from inference.decisions import DecisionLog
 from inference.exceptions import (
     AllModelsRateLimitedError,
-    ContextTooLargeError,
     InferenceError,
     ModelDegenerateError,
     ModelNotFoundError,
@@ -54,21 +53,18 @@ from inference.exceptions import (
     PaymentRequiredError,
     ProviderAuthError,
     ProviderUnavailableError,
+    RoutingNotReadyError,
 )
 from inference.facts.catalog import FactsCatalog
 from inference.facts.identity import canonical
 from inference.facts.store import ModelFactsStore
-from inference.model_policy import model_matches
-from inference.model_scorer import ModelScorer, ScoringConfig
 from inference.models import (
-    PRIORITY_TO_POOL,
     CompletionRequest,
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
     ModelEntry,
     ModelPool,
-    PoolPriority,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -78,9 +74,7 @@ from inference.provider import Provider
 from inference.provider_health import ProviderHealthTracker
 from inference.providers.local_embeddings import PROVIDER_NAME as LOCAL_EMBEDDINGS
 from inference.rate_limit_status import _PAYLOAD_TOO_LARGE_SECS, RateLimitStatusStore
-from inference.routing import _Candidate, shuffle_groups
 from inference.routing.availability import AvailabilityView, EntitlementLedger
-from inference.routing.chain import Requirements
 from inference.routing.parts import parse_profiles
 from inference.routing.router import ChainRouter, requirements_from
 from utils.text import extract_json
@@ -89,6 +83,11 @@ from utils.text import extract_json
 # for the max_payload_chars fit check. Keeps providers with tiny request caps
 # (e.g. Groq free) out of candidate selection for large prompts that would 413.
 _SYSTEM_PROMPT_CHARS = 8_000
+
+# One model paired with the provider that serves it. Only the infrastructure
+# calls - embeddings and transcription - still work in these terms; the chain
+# router speaks in endpoints, which carry the facts it ranks on.
+_Candidate = tuple[ModelInfo, Provider]
 
 # Assumed window for a model absent from the live catalog (an id the provider
 # reported for a call but not in /models). Conservative enough that compaction
@@ -103,12 +102,6 @@ logger = logging.getLogger(__name__)
 # Seconds to batch model-confidence DB writes. Scores change on every inference
 # call; writing each one individually doubles the DB traffic for no benefit.
 _SCORE_FLUSH_INTERVAL_SECONDS = 30.0
-
-# Below this many name-tagged REASONING models, the reasoning pool is widened to
-# every tool-capable model. A pool of one or two is not a choice, and the tag is
-# a naming heuristic that lags every new model family.
-_MIN_REASONING_CANDIDATES = 4
-
 
 # Cooldown key for "this model cannot produce structured output". Kept separate
 # from ModelCapability because it is not a selection filter - any completion
@@ -161,27 +154,6 @@ def _toolcall_has_output(resp: Any) -> bool:
     return bool(reasoning and reasoning.strip())
 
 
-class _Deferred:
-    """A candidate list built only if it is actually needed, then memoised.
-
-    The free-tier fallback is consulted only when the primary chain is exhausted,
-    which is the rare path - but building it costs a full registry scan, a quality
-    score per model, a sort and a shuffle. Wrapping it keeps that cost off every
-    successful call while leaving the exhaustion path unchanged.
-    """
-
-    __slots__ = ("_build", "_value")
-
-    def __init__(self, build: Callable[[], list[_Candidate]]) -> None:
-        self._build = build
-        self._value: list[_Candidate] | None = None
-
-    def get(self) -> list[_Candidate]:
-        if self._value is None:
-            self._value = self._build()
-        return self._value
-
-
 # Returned by a candidate call that failed in a way the next candidate can answer.
 _NO_RESULT = object()
 
@@ -197,29 +169,18 @@ class _DispatchPlan:
 
     call_fn: Callable[[Provider, str], Awaitable]
     is_valid: Callable[[Any], bool] | None = None
-    sticky_key: tuple[str, str, str, str] | None = None
-    fallback_candidates: list[_Candidate] | _Deferred | None = None
     allow_wait: bool = True
     capability: ModelCapability | str | None = None
-
-    def resolved_fallback(self) -> list[_Candidate]:
-        """The fallback chain, built only where it is needed."""
-        if self.fallback_candidates is None:
-            return []
-        if isinstance(self.fallback_candidates, _Deferred):
-            return self.fallback_candidates.get()
-        return self.fallback_candidates
 
 class ModelDispatcher(InferenceRouter):
     """Routes inference calls across multiple providers with per-model cooldowns."""
 
-    # Chain routing is assembled in __init__ and is absent on the legacy path, so
-    # these carry class-level defaults rather than being read through getattr at
-    # every use site.
+    # Chain routing is assembled in __init__ and is absent until the catalog
+    # opens, so these carry class-level defaults rather than being read through
+    # getattr at every use site.
     _chain_router: ChainRouter | None = None
     _decisions: DecisionLog | None = None
     _availability: AvailabilityView | None = None
-    _shadow_routing: bool = False
 
     def __init__(
         self,
@@ -228,7 +189,6 @@ class ModelDispatcher(InferenceRouter):
         confidence_tracker: ConfidenceTracker | None = None,
         cooldowns_path: Path | None = None,
         models_db_path: Path | None = None,
-        routing_mode: str = "chain",
     ) -> None:
         self._providers = providers
         self._north_settings = north_settings
@@ -253,14 +213,8 @@ class ModelDispatcher(InferenceRouter):
         # Scores changed since the last batched DB flush.
         self._dirty_scores: set[_CooldownKey] = set()
         self._flush_task: asyncio.Task | None = None
-        # Per-task model stickiness: (task_id, component, capability, priority) →
-        # (model_id, provider_name) of the first model that succeeded, reused for
-        # that task's later steps. Bounded LRU (see _remember_sticky).
-        self._sticky: OrderedDict[tuple[str, str, str, str], tuple[str, str]] = OrderedDict()
-        # Bumped whenever the registry is rebuilt (a pool refresh or provider swap),
-        # which is the only thing that invalidates a cached candidate list.
+        # Bumped whenever the registry is rebuilt (a pool refresh or provider swap).
         self._generation: int = 0
-        self._candidate_cache: dict[tuple, tuple[int, list[_Candidate]]] = {}
         self._context_windows: dict[str, int] = {}
         self._context_windows_normalised: dict[str, int] = {}
         # Provider catalogues are fetched over the network after construction, so
@@ -270,32 +224,16 @@ class ModelDispatcher(InferenceRouter):
         self._build_registry()
         self._cooldowns.load()
         self._rate_limit_status.load()
-        # Price-free quality scorer (family tier + live EMA + curation). Built
-        # from the live NorthSettings so weight edits apply without a restart.
-        _nh = getattr(self._north_settings, "_path", None)
-        _tiers = (_nh.parent / "model_tiers.json") if _nh is not None else (Path.home() / ".north" / "model_tiers.json")
-        self._scorer = ModelScorer(
-            config=self._north_settings.scoring if self._north_settings is not None else ScoringConfig(),
-            tiers_path=_tiers,
-        )
-        self._validate_preferred()
-        mode = routing_mode.strip().lower()
-        self._shadow_routing = mode == "shadow"
-        self._chain_router = self._build_chain_router(models_db_path, cooldowns_path, mode)
+        self._chain_router = self._build_chain_router(models_db_path, cooldowns_path)
 
-    def _build_chain_router(
-        self, models_db_path: Path | None, cooldowns_path: Path | None, mode: str
-    ) -> ChainRouter | None:
-        """Assemble the facts-driven router, or None to stay on the pool router.
+    def _build_chain_router(self, models_db_path: Path | None, cooldowns_path: Path | None) -> ChainRouter | None:
+        """Assemble the facts-driven router, or None when there is no catalog to read.
 
-        Returns None rather than raising when no store is configured or it cannot
-        be opened: routing is the one thing north cannot do without, so a missing
-        or broken models.db degrades to the pool router instead of taking the
-        process down.
+        Returns None rather than raising: a dispatcher is constructed at startup,
+        before anything is routed, and a missing or unreadable models.db must not
+        take the process down. Calls made while it is None fail one at a time,
+        with a message that says so - see ``_chain``.
         """
-        if mode not in ("chain", "shadow"):
-            logger.info("Model routing: legacy pool router (NORTH_ROUTING=%s)", mode)
-            return None
         db_path = models_db_path or (cooldowns_path.parent / "models.db" if cooldowns_path is not None else None)
         if db_path is None:
             # No path was given, which is how this dispatcher says "do not persist"
@@ -303,13 +241,13 @@ class ModelDispatcher(InferenceRouter):
             # Reaching for ~/.north here instead meant a dispatcher constructed in
             # a test or a script silently read and wrote the user's real catalog,
             # and behaved differently depending on what was in it.
-            logger.debug("Model routing: no models.db path given - staying on the pool router")
+            logger.debug("Model routing: no models.db path given - routing is unavailable")
             return None
         try:
             catalog = FactsCatalog(ModelFactsStore(db_path))
             decisions = DecisionLog(db_path)
         except Exception:
-            logger.warning("Could not open %s - falling back to the pool router", db_path, exc_info=True)
+            logger.warning("Could not open %s - routing is unavailable", db_path, exc_info=True)
             return None
         self._decisions = decisions
         self._availability = AvailabilityView(
@@ -326,11 +264,22 @@ class ModelDispatcher(InferenceRouter):
             demoted=self._is_demoted,
             slow=self._is_slow,
             power=self._power_mode,
+            pinned=self._pinned_model,
         )
 
     def _power_mode(self) -> str | None:
-        """The user's current power setting, read live so a change needs no restart."""
-        return self._north_settings.power.value if self._north_settings is not None else None
+        """The user's current power setting, read live so a change needs no restart.
+
+        Meaningless under manual routing - a chain of one has nothing to order -
+        so it is not even offered there.
+        """
+        if self._north_settings is None or self._north_settings.pinned_model:
+            return None
+        return self._north_settings.power.value
+
+    def _pinned_model(self) -> str:
+        """The model manual routing pins every call to, or "" when north is choosing."""
+        return self._north_settings.pinned_model if self._north_settings is not None else ""
 
     # ---- chain routing support ----
 
@@ -401,38 +350,19 @@ class ModelDispatcher(InferenceRouter):
             return False
         return all(uses >= _PREFERRED_MIN_USES and ema < _PREFERRED_HEALTH_FLOOR for ema, uses in scores)
 
-    @property
-    def uses_chain_routing(self) -> bool:
-        """True when this call will be routed from fetched facts rather than pools."""
-        return not self._shadow_routing and self._chain_router is not None and self._chain_router.is_ready
+    def _chain(self) -> ChainRouter:
+        """The router every completion goes through, or a clear failure.
 
-    def _record_divergence(self, component: str, requirements: Requirements, served_model: str) -> None:
-        """Shadow mode: note where the new router would have chosen differently.
-
-        The old router still serves the call. Each divergence is then triaged as
-        "the new one is right" - the codex line, the tier inversions - or as a
-        real defect, which is what makes switching a decision rather than a leap.
+        There is no second router to fall back to since the pool router was
+        removed, and that is deliberate: a catalog that has not loaded is
+        reported as what it is, rather than quietly served by a different
+        selection rule whose answers nobody would be able to account for.
         """
-        if not self._shadow_routing or self._chain_router is None or self._decisions is None:
-            return
-        try:
-            chain, profile = self._chain_router.chain_for(component, requirements)
-        except InferenceError:
-            return
-        would_choose = next(
-            (e.provider_model_id for c in chain[:1] for e in c.endpoints), None
-        )
-        if would_choose is None or would_choose == served_model:
-            return
-        decision = RoutingDecision(
-            part=profile.part,
-            requirements={"served_by_legacy": served_model},
-            considered=len(chain),
-            chosen_model=would_choose,
-            chosen_provider=chain[0].endpoints[0].provider,
-            outcome=DIVERGED,
-        )
-        self._decisions.record(decision)
+        if self._chain_router is None or not self._chain_router.is_ready:
+            raise RoutingNotReadyError(
+                "Model routing is not ready - the model catalog has not loaded yet. Retry shortly."
+            )
+        return self._chain_router
 
     def routing_decisions(self, *, task_id: str | None = None, part: str | None = None, limit: int = 50) -> list[dict]:
         """Recent routing decisions - "why did the coder run on a free model?"."""
@@ -469,12 +399,10 @@ class ModelDispatcher(InferenceRouter):
     def _index_registry(self) -> None:
         """Rebuild the lookups derived from the registry.
 
-        Bumps the generation so any per-call candidate cache keyed on it is
-        invalidated in one step, and rebuilds the context-window tables that
+        Bumps the generation, and rebuilds the context-window tables that
         `get_context_window` reads on every turn.
         """
         self._generation += 1
-        self._candidate_cache.clear()
         self._context_windows = {}
         self._context_windows_normalised = {}
         # Keyed off info.model_id, not the registry key: every other read path uses
@@ -484,22 +412,6 @@ class ModelDispatcher(InferenceRouter):
                 continue
             self._context_windows.setdefault(info.model_id, info.context_window)
             self._context_windows_normalised.setdefault(info.model_id.lower().strip(), info.context_window)
-
-    def _effective_priority(self, requested: PoolPriority) -> PoolPriority:
-        """Apply the user's strategy setting to the requested priority.
-
-        SPORT forces every call to the highest-quality pool; ECO forces every
-        call to the lowest-cost pool; CRUISE (default) respects the caller.
-        embed/transcribe/get_model are infrastructure calls and bypass this.
-        """
-        if self._north_settings is None:
-            return requested
-        strategy = self._north_settings.power
-        if strategy == StrategyMode.SPORT:
-            return PoolPriority.HIGH
-        if strategy == StrategyMode.ECO:
-            return PoolPriority.LOW
-        return requested  # CRUISE: honour caller
 
     # ---- InferenceRouter ABC ----
 
@@ -526,64 +438,21 @@ class ModelDispatcher(InferenceRouter):
         # COMPLETION - otherwise one JSON request would evict a good chat model
         # from the general pool for an hour.
         capability = _STRUCTURED_OUTPUT if request.wants_json else ModelCapability.COMPLETION
-        if self.uses_chain_routing:
-            return await self._chain_router.dispatch(
-                component=request.component,
-                requirements=requirements_from(
-                    estimated_tokens=estimated,
-                    payload_chars=len(request.prompt) + _SYSTEM_PROMPT_CHARS,
-                    needs_structured=request.wants_json,
-                    needs_vision=bool(request.images),
-                    exclude_models=request.exclude_models,
-                ),
-                call_fn=_call,
-                is_valid=_valid,
-                capability=str(capability),
-                task_id=request.task_id,
-                pool=request.pool,
-            )
-
-        priority = self._effective_priority(request.priority)
-        candidates = self._candidates(ModelCapability.COMPLETION, priority, estimated, pool=request.pool)
-        # Deferred: building the free-tier list is a full registry scan, score, sort
-        # and shuffle, and it is only consulted when the primary chain is exhausted.
-        # Exclusions are applied *inside* the thunk so the fallback honours them too -
-        # otherwise a reviewer forced off the coder's model silently gets it back the
-        # moment the primary pool runs dry.
-        free_tier = _Deferred(
-            lambda: self._apply_exclusions(
-                self._free_fallback_candidates(ModelCapability.COMPLETION, estimated),
-                request.exclude_models,
-            )
-        )
-        fallback: _Deferred | None = free_tier
-        if not candidates:
-            # Primary pool exhausted (out of credits / all rate-limited / down) -
-            # fall back to the free tier so the request still completes.
-            candidates = free_tier.get()
-            fallback = None
-        candidates = self._apply_exclusions(candidates, request.exclude_models)
-        response = await self._dispatch(
-            candidates,
-            _DispatchPlan(
-                call_fn=_call,
-                is_valid=_valid,
-                sticky_key=self._sticky_key(request, capability, priority),
-                fallback_candidates=fallback,
-                capability=capability,
-            ),
-        )
-        self._record_divergence(
-            request.component,
-            requirements_from(
+        return await self._chain().dispatch(
+            component=request.component,
+            requirements=requirements_from(
                 estimated_tokens=estimated,
+                payload_chars=len(request.prompt) + _SYSTEM_PROMPT_CHARS,
                 needs_structured=request.wants_json,
                 needs_vision=bool(request.images),
                 exclude_models=request.exclude_models,
             ),
-            response.model_used,
+            call_fn=_call,
+            is_valid=_valid,
+            capability=str(capability),
+            task_id=request.task_id,
+            pool=request.pool,
         )
-        return response
 
     async def complete_with_tools(
         self,
@@ -633,60 +502,24 @@ class ModelDispatcher(InferenceRouter):
                 forwarded = False
             return await provider.complete_with_tools(model_id, request, wrapped_cb)
 
-        if self.uses_chain_routing:
-            return await self._chain_router.dispatch(
-                component=request.component,
-                requirements=requirements_from(
-                    estimated_tokens=estimated,
-                    payload_chars=(estimated * 4) + _SYSTEM_PROMPT_CHARS,
-                    needs_tools=bool(request.tools),
-                    needs_vision=_messages_carry_images(request.messages),
-                    exclude_models=request.exclude_models,
-                ),
-                call_fn=_call,
-                is_valid=_toolcall_has_output,
-                capability=str(ModelCapability.TOOL_CALLS),
-                task_id=request.task_id,
-                pool=request.pool,
-            )
-
-        priority = self._effective_priority(request.priority)
-        candidates = self._candidates(ModelCapability.TOOL_CALLS, priority, estimated, pool=request.pool)
-        free_tier = _Deferred(
-            lambda: self._apply_exclusions(
-                self._free_fallback_candidates(ModelCapability.TOOL_CALLS, estimated),
-                request.exclude_models,
-            )
-        )
-        fallback: _Deferred | None = free_tier
-        if not candidates:
-            candidates = free_tier.get()
-            fallback = None
-        candidates = self._apply_exclusions(candidates, request.exclude_models)
-        sticky = self._sticky_key(request, ModelCapability.TOOL_CALLS, priority)
-        response = await self._dispatch(
-            candidates,
-            _DispatchPlan(
-                call_fn=_call,
-                is_valid=_toolcall_has_output,
-                sticky_key=sticky,
-                fallback_candidates=fallback,
-                capability=ModelCapability.TOOL_CALLS,
-            ),
-        )
-        self._record_divergence(
-            request.component,
-            requirements_from(
+        return await self._chain().dispatch(
+            component=request.component,
+            requirements=requirements_from(
                 estimated_tokens=estimated,
+                payload_chars=(estimated * 4) + _SYSTEM_PROMPT_CHARS,
                 needs_tools=bool(request.tools),
+                needs_vision=_messages_carry_images(request.messages),
                 exclude_models=request.exclude_models,
             ),
-            response.model_used,
+            call_fn=_call,
+            is_valid=_toolcall_has_output,
+            capability=str(ModelCapability.TOOL_CALLS),
+            task_id=request.task_id,
+            pool=request.pool,
         )
-        return response
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
-        candidates = self._prefer_local(self._candidates(ModelCapability.EMBEDDING, PoolPriority.MEDIUM, 0))
+        candidates = self._prefer_local(self._infrastructure_candidates(ModelCapability.EMBEDDING))
 
         async def _call(provider: Provider, model_id: str) -> EmbedResponse:
             return await provider.embed(model_id, request)
@@ -747,7 +580,7 @@ class ModelDispatcher(InferenceRouter):
                 if mid == request.model and info.supports(ModelCapability.TRANSCRIPTION):
                     return await provider.transcribe(mid, request)
 
-        candidates = self._candidates(ModelCapability.TRANSCRIPTION, PoolPriority.MEDIUM, 0)
+        candidates = self._infrastructure_candidates(ModelCapability.TRANSCRIPTION)
 
         async def _call(provider: Provider, model_id: str) -> TranscriptionResponse:
             return await provider.transcribe(model_id, request)
@@ -755,14 +588,6 @@ class ModelDispatcher(InferenceRouter):
         return await self._dispatch(
             candidates, _DispatchPlan(call_fn=_call, capability=ModelCapability.TRANSCRIPTION)
         )
-
-    async def get_model(self, priority: PoolPriority) -> str:
-        candidates = self._candidates(ModelCapability.COMPLETION, priority, 0)
-        if not candidates:
-            candidates = self._free_fallback_candidates(ModelCapability.COMPLETION, 0)
-        if not candidates:
-            raise AllModelsRateLimitedError("No completion models are available")
-        return candidates[0][0].model_id
 
     def get_context_window(self, model_id: str) -> int:
         """Return the published context window (tokens) for model_id from the live registry.
@@ -837,7 +662,6 @@ class ModelDispatcher(InferenceRouter):
         # answered. An empty catalogue from here on is a real fault, not a
         # not-yet-loaded one - see health_summary().
         self._catalog_refreshed = True
-        self._validate_preferred()
         await self._refresh_facts()
 
     async def _refresh_facts(self) -> None:
@@ -1030,426 +854,33 @@ class ModelDispatcher(InferenceRouter):
                 self._dirty_scores.update(dirty)
                 logger.warning("Failed to persist model scores batch (%d items)", len(items), exc_info=True)
 
-    def _effective_quality(self, info: ModelInfo) -> float:
-        """Price-free quality score: family tier + live EMA + curation boost.
+    # ---- Candidate selection (infrastructure calls) ----
 
-        Replaces the old price-derived base_quality blend. When all providers
-        are free, price carries no signal; this scorer uses a static family
-        prior plus the live per-model success EMA so a 7B and a 200B model are
-        no longer treated as equals.
+    def _infrastructure_candidates(self, capability: ModelCapability) -> list[_Candidate]:
+        """Every model that can serve an embedding or transcription call, cheapest first.
+
+        Completions and tool calls are routed by the chain, from fetched facts.
+        These two are not, and they do not want to be: there is typically one
+        model for each, the measured scores the chain ranks on say nothing about
+        embedding or transcription quality, and *which* model answers an
+        embedding call is a correctness question rather than a quality one (see
+        ``_prefer_local``). So the rule here is only "can it, and is it up", in a
+        deterministic order - never a shuffle.
         """
-        key: _CooldownKey = (info.model_id, info.provider_name)
-        score, uses = self._model_confidence.get(key, (_DEFAULT_MODEL_CONFIDENCE, 0))
-        is_preferred = self._is_preferred(info, key)
-        power_mode = self._north_settings.power if self._north_settings is not None else StrategyMode.CRUISE
-        return self._scorer.score(
-            model_id=info.model_id,
-            ema_score=score,
-            is_preferred=is_preferred,
-            power=power_mode,
-        )
-
-    def reload_scoring(self) -> None:
-        """Re-read scoring weights + family-tier overrides without a restart.
-
-        Called by the live-config-reload path (north_config tool / _apply_runtime)
-        so weight edits in settings.json and ~/.north/model_tiers.json take effect
-        on the running dispatcher immediately.
-        """
-        if self._north_settings is not None:
-            self._scorer.set_config(self._north_settings.scoring)
-        self._scorer.reload()
-
-    # ---- Candidate selection ----
-
-    def _capability_supported(self, req_cap: ModelCapability, capability: ModelCapability) -> list[_Candidate]:
-        """Registry entries supporting both capabilities, cached per generation.
-
-        Pure over the registry, so it is rebuilt only when the catalog is (a pool
-        refresh or a provider swap) rather than rescanned on every inference call.
-        """
-        cache_key = (req_cap, capability)
-        cached = self._candidate_cache.get(cache_key)
-        if cached is not None and cached[0] == self._generation:
-            return cached[1]
-        supported = [
-            pair for pair in self._registry.values() if pair[0].supports(req_cap) and pair[0].supports(capability)
-        ]
-        self._candidate_cache[cache_key] = (self._generation, supported)
-        return supported
-
-    def _capability_cooled(self, info: ModelInfo, *capabilities: ModelCapability) -> bool:
-        """True when *info* is under a capability cooldown for any of *capabilities*."""
-        key: _CooldownKey = (info.model_id, info.provider_name)
-        return any(self._cooldowns.is_capability_active(key, str(cap)) for cap in capabilities)
-
-    def _candidates(
-        self,
-        capability: ModelCapability,
-        priority: PoolPriority,
-        estimated_tokens: int,
-        pool: str | None = None,
-    ) -> list[_Candidate]:
-        target_pool = (pool or PRIORITY_TO_POOL.get(priority, "speed")).lower()
-        if target_pool == "reasoning":
-            req_cap = ModelCapability.REASONING
-        elif target_pool in ("speed", "fast_cheap"):
-            req_cap = ModelCapability.SPEED
-        elif target_pool == "vision":
-            req_cap = ModelCapability.VISION
-        elif target_pool in ("transcription", "audio"):
-            req_cap = capability
-        elif target_pool in ("embeddings", "embedding"):
-            req_cap = ModelCapability.EMBEDDING
-        else:
-            req_cap = capability
-
-        # Which models *can* serve this (req_cap, capability) pair is a pure function
-        # of the registry, so it is cached per registry generation; every dynamic
-        # check (capability cooldowns, rate limits, provider health) still runs below
-        # on each call, so a cooling-down model is never served from cache.
-        supports_both = self._capability_supported(req_cap, capability)
-        capable = [pair for pair in supports_both if not self._capability_cooled(pair[0], req_cap, capability)]
-        # REASONING is inferred from model *names*, which ages badly: on a free-tier
-        # catalog only one of nineteen tool-capable models carried the tag, so the
-        # reasoning pool was a single model and every real choice happened in the
-        # unranked fallback instead. When the pool is this thin, widen to the base
-        # capability and let quality ranking and preferences decide. Widening only
-        # appends candidates behind the tagged ones, so a strong model still wins.
-        if len(capable) < _MIN_REASONING_CANDIDATES and req_cap is ModelCapability.REASONING:
-            tagged = {(i.model_id, i.provider_name) for i, _ in capable}
-            capable += [
-                pair
-                for pair in self._capability_supported(capability, capability)
-                if (pair[0].model_id, pair[0].provider_name) not in tagged
-                and not self._capability_cooled(pair[0], capability)
-            ]
-        if not capable:
-            supports_base = self._capability_supported(capability, capability)
-            capable = [pair for pair in supports_base if not self._capability_cooled(pair[0], capability)]
-        if not capable:
-            return []
-
-        if estimated_tokens > 0:
-            fitting = [
-                (info, provider)
-                for info, provider in capable
-                # context_window == 0 means "not applicable" (e.g. transcription)
-                if info.context_window == 0 or info.context_window >= estimated_tokens
-            ]
-            if not fitting:
-                largest = max(
-                    (i.context_window for i, _ in capable if i.context_window > 0),
-                    default=0,
-                )
-                raise ContextTooLargeError(estimated_tokens, largest)
-        else:
-            fitting = capable
-
-        # Payload-size fit: a model with a max_payload_chars cap is skipped when the
-        # estimated total request (user prompt + a system-prompt allowance) exceeds it.
-        # This routes large north prompts (planner system prompt + context) away from
-        # providers with tiny request caps (e.g. Groq free, which 413s) toward models
-        # that accept the payload. request_chars is None when the prompt is empty.
-        if estimated_tokens > 0:
-            estimated_payload_chars = (estimated_tokens * 4) + _SYSTEM_PROMPT_CHARS
-            fitting = [
-                (info, provider)
-                for info, provider in fitting
-                if info.max_payload_chars is None or estimated_payload_chars <= info.max_payload_chars
-            ]
-
-        available: list[_Candidate] = [
+        available = [
             (info, provider)
-            for info, provider in fitting
-            if not self._cooldowns.is_active((info.model_id, info.provider_name))
-            and self._provider_health.is_available(info.provider_name)
+            for info, provider in self._registry.values()
+            if info.supports(capability) and not self._is_unusable(info, capability)
         ]
-
-        if not available:
-            # Fallback to any healthy model supporting the base capability that fits payload
-            estimated_payload_chars = (estimated_tokens * 4) + _SYSTEM_PROMPT_CHARS if estimated_tokens > 0 else 0
-            available = [
-                (info, provider)
-                for info, provider in self._registry.values()
-                if info.supports(capability)
-                and not self._cooldowns.is_capability_active((info.model_id, info.provider_name), str(capability))
-                and (info.context_window == 0 or estimated_tokens <= 0 or info.context_window >= estimated_tokens)
-                and (
-                    info.max_payload_chars is None
-                    or estimated_payload_chars <= 0
-                    or estimated_payload_chars <= info.max_payload_chars
-                )
-                and not self._cooldowns.is_active((info.model_id, info.provider_name))
-                and self._provider_health.is_available(info.provider_name)
-            ]
-
-        # Precompute quality scores once to avoid repeated EMA calculations during sort/shuffle.
-        quality: dict[_CooldownKey, float] = {
-            (info.model_id, info.provider_name): self._effective_quality(info) for info, _ in available
-        }
-
-        if target_pool == "reasoning" or priority == PoolPriority.HIGH:
-            available.sort(key=lambda x: quality[(x[0].model_id, x[0].provider_name)], reverse=True)
-            available = shuffle_groups(available, key=lambda x: round(quality[(x[0].model_id, x[0].provider_name)], 6))
-        elif priority == PoolPriority.LOW or target_pool == "high_volume":
-            available.sort(
-                key=lambda x: (
-                    x[0].cost_per_token,
-                    x[0].context_window if x[0].context_window > 0 else float("inf"),
-                    -quality[(x[0].model_id, x[0].provider_name)],
-                )
-            )
-            available = shuffle_groups(
-                available,
-                key=lambda x: (
-                    x[0].cost_per_token,
-                    x[0].context_window if x[0].context_window > 0 else float("inf"),
-                ),
-            )
-        else:  # SPEED / MEDIUM: free models first, shuffle within each free/paid tier.
-            available.sort(key=lambda x: (not x[0].is_free, -quality[(x[0].model_id, x[0].provider_name)]))
-            available = shuffle_groups(
-                available,
-                key=lambda x: (not x[0].is_free, round(quality[(x[0].model_id, x[0].provider_name)], 6)),
-            )
-
-        return self._promote_preferred(available, capability, priority)
-
-    def _free_fallback_candidates(self, capability: ModelCapability, estimated_tokens: int) -> list[_Candidate]:
-        """All free, healthy, context-fitting models - the safety net.
-
-        Used when a priority pool (e.g. reasoning/fast_cheap) is entirely
-        unavailable (out of credits, rate-limited, down). Returns the same kind of
-        candidate list as ``_candidates`` but drawn from free models only, so a
-        request can still complete on the free tier instead of failing with
-        "No models available". Excludes models in cooldown or behind a dead
-        provider breaker, and respects the payload-size cap.
-        """
-        capable = [
-            pair
-            for pair in self._registry.values()
-            if pair[0].supports(capability)
-            and not self._cooldowns.is_capability_active((pair[0].model_id, pair[0].provider_name), str(capability))
-        ]
-        if estimated_tokens > 0:
-            capable = [
-                (info, provider)
-                for info, provider in capable
-                if info.context_window == 0 or info.context_window >= estimated_tokens
-            ]
-        estimated_payload_chars = (estimated_tokens * 4) + _SYSTEM_PROMPT_CHARS if estimated_tokens > 0 else 0
-        free: list[_Candidate] = [
-            (info, provider)
-            for info, provider in capable
-            if info.is_free
-            and not self._cooldowns.is_active((info.model_id, info.provider_name))
-            and self._provider_health.is_available(info.provider_name)
-            and (
-                info.max_payload_chars is None
-                or estimated_payload_chars <= 0
-                or estimated_payload_chars <= info.max_payload_chars
-            )
-        ]
-        if not free:
-            return []
-        # Free-first ranking (best quality first within the free tier).
-        quality: dict[_CooldownKey, float] = {
-            (info.model_id, info.provider_name): self._effective_quality(info) for info, _ in free
-        }
-        free.sort(key=lambda x: (not x[0].is_free, -quality[(x[0].model_id, x[0].provider_name)]))
-        return self._promote_preferred(
-            shuffle_groups(
-                free,
-                key=lambda x: (not x[0].is_free, round(quality[(x[0].model_id, x[0].provider_name)], 6)),
-            ),
-            capability,
-            PoolPriority.LOW,
-        )
-
-    def _apply_exclusions(self, candidates: list[_Candidate], exclude_models: list[str]) -> list[_Candidate]:
-        """Drop excluded model ids from candidates, degrading gracefully.
-
-        Used to force an independent model choice (e.g. a reviewer that must not
-        reuse the coder's model). If excluding would leave no candidates - the
-        excluded model is the only one available - the exclusion is skipped and a
-        warning logged, so a task is never blocked on model scarcity (the DoD gate
-        then honestly flags the review as non-independent).
-        """
-        if not exclude_models:
-            return candidates
-        excluded = {m.strip().lower() for m in exclude_models if m.strip()}
-        if not excluded:
-            return candidates
-        filtered = [(i, p) for i, p in candidates if i.model_id.lower() not in excluded]
-        if not filtered:
-            logger.warning(
-                "exclude_models %s left no candidates - proceeding without exclusion "
-                "(an independent second opinion is not possible right now)",
-                sorted(excluded),
-            )
-            return candidates
-        return filtered
-
-    def _is_preferred(self, info: ModelInfo, key: _CooldownKey) -> bool:
-        """True if the model matches any curated preferred spec.
-
-        Used as a light ranking nudge by the scorer; health-gated promotion is
-        handled separately in _promote_preferred.
-        """
-        if self._north_settings is None:
-            return False
-        for specs in self._north_settings.preferred_models.values():
-            for spec in specs:
-                if model_matches(spec, info.provider_name, info.model_id):
-                    return True
-        return False
-
-    def _preferred_specs(self, pool: str | None) -> list[str]:
-        """Curated preferred specs for a pool, from live settings (empty if unset)."""
-        if self._north_settings is None or not pool:
-            return []
-        try:
-            return self._north_settings.preferred_models.get(pool, [])
-        except Exception:
-            return []
-
-    def _preferred_healthy(self, key: _CooldownKey) -> bool:
-        """False once a preferred model has enough failed history to stop promoting it.
-
-        A preferred model that keeps failing (EMA below the floor after enough
-        uses) drops back to its normal price position instead of being retried
-        first on every call - so a bad preference can't pin errors/latency to the
-        front of the queue. Its cooldown/fallback handling is otherwise unchanged.
-        """
-        score, uses = self._model_confidence.get(key, (_DEFAULT_MODEL_CONFIDENCE, 0))
-        return not (uses >= _PREFERRED_MIN_USES and score < _PREFERRED_HEALTH_FLOOR)
-
-    def _promote_preferred(
-        self, available: list[_Candidate], capability: ModelCapability, priority: PoolPriority
-    ) -> list[_Candidate]:
-        """Move available, healthy preferred models to the front in curated order.
-
-        The price-ranked remainder is kept behind as a resilient fallback, so a
-        stale/unavailable preference never blocks a call - it simply degrades to
-        today's behaviour. Only applies to chat/tool-call routing; embeddings and
-        transcription are unaffected. The preferred front is deterministic (not
-        shuffled) so a coding task is done by a consistent model.
-        """
-        if capability not in (ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS):
-            return available
-        specs = self._preferred_specs(PRIORITY_TO_POOL.get(priority))
-        if not specs:
-            return available
-
-        front: list[_Candidate] = []
-        seen: set[_CooldownKey] = set()
-        for spec in specs:
-            for info, provider in available:
-                key: _CooldownKey = (info.model_id, info.provider_name)
-                if key in seen:
-                    continue
-                if model_matches(spec, info.provider_name, info.model_id) and self._preferred_healthy(key):
-                    front.append((info, provider))
-                    seen.add(key)
-        if not front:
-            # Preferred configured but none available/healthy right now: fall back
-            # to price ranking. Kept at debug so a busy pool doesn't spam logs.
-            logger.debug("preferred: no preferred model available for priority %s - using price fallback", priority)
-            return available
-        rest = [(i, p) for i, p in available if (i.model_id, i.provider_name) not in seen]
-        return front + rest
-
-    def _validate_preferred(self) -> None:
-        """Warn when a curated preferred spec matches no model in the live catalog.
-
-        Runs at startup and after every pool refresh so a stale/renamed model id
-        is surfaced (and then silently falls back to price ranking) instead of
-        appearing configured while actually routing by price.
-        """
-        if self._north_settings is None:
-            return
-        try:
-            preferred = self._north_settings.preferred_models
-        except Exception:
-            return
-        registry = list(self._registry.values())
-        if not registry:
-            # Catalog not fetched yet (providers populate on the first async
-            # refresh_pools()); skip now to avoid warning about every spec, and
-            # re-validate once the live catalog is loaded.
-            return
-        for pool, specs in preferred.items():
-            for spec in specs:
-                if not any(model_matches(spec, info.provider_name, info.model_id) for info, _ in registry):
-                    logger.warning(
-                        "preferred model %r (pool %s) matches no model in the live catalog - "
-                        "it will be skipped until it appears; check the id or your provider keys",
-                        spec,
-                        pool,
-                    )
-
-    # ---- Per-task model stickiness ----
-
-    @staticmethod
-    def _sticky_key(
-        request: CompletionRequest | ToolCallRequest,
-        capability: ModelCapability | str,
-        priority: PoolPriority,
-    ) -> tuple[str, str, str, str] | None:
-        """Stickiness key for a request, or None when there is no task to scope to.
-
-        ``capability`` may be a plain string (``_STRUCTURED_OUTPUT``), which is
-        deliberately not a ModelCapability member, so it is stringified rather
-        than read through ``.value``.
-        """
-        task_id = getattr(request, "task_id", None)
-        if not task_id:
-            return None
-        component = getattr(request, "component", "") or ""
-        return (task_id, component, str(capability), priority.value)
-
-    def _apply_stickiness(
-        self, sticky_key: tuple[str, str, str, str], candidates: list[_Candidate]
-    ) -> list[_Candidate]:
-        """Move this task's already-chosen model to the front if it's still a candidate.
-
-        If the pinned model is absent now (on cooldown, dropped from the catalog,
-        or no longer fits the context) the list is returned unchanged and normal
-        preferred/price ordering applies - the pin is refreshed on the next success.
-        """
-        pinned = self._sticky.get(sticky_key)
-        if pinned is None:
-            return candidates
-        for idx, (info, _) in enumerate(candidates):
-            if (info.model_id, info.provider_name) == pinned:
-                if idx == 0:
-                    return candidates
-                return [candidates[idx], *candidates[:idx], *candidates[idx + 1 :]]
-        return candidates
-
-    def _remember_sticky(self, sticky_key: tuple[str, str, str, str], key: _CooldownKey) -> None:
-        """Record the model that just succeeded for this task; bounded LRU eviction."""
-        prev = self._sticky.get(sticky_key)
-        if prev is not None and prev != key:
-            logger.info(
-                "model switched for task %s/%s: %s → %s",
-                sticky_key[0],
-                sticky_key[1],
-                prev[0],
-                key[0],
-            )
-        self._sticky[sticky_key] = key
-        self._sticky.move_to_end(sticky_key)
-        while len(self._sticky) > _STICKY_MAX_ENTRIES:
-            self._sticky.popitem(last=False)
+        available.sort(key=lambda pair: (pair[0].cost_per_token, pair[0].model_id))
+        return available
 
     # ---- Dispatch ----
 
     async def _dispatch(self, candidates: list[_Candidate], plan: _DispatchPlan) -> Any:
-        candidates, used_fallback = self._starting_candidates(candidates, plan)
-        if plan.sticky_key is not None:
-            candidates = self._apply_stickiness(plan.sticky_key, candidates)
+        """Try each candidate in turn. Used by embeddings and transcription only."""
+        if not candidates:
+            raise AllModelsRateLimitedError("No models available for this request")
 
         for info, provider in candidates:
             if self._is_unusable(info, plan.capability):
@@ -1458,20 +889,7 @@ class ModelDispatcher(InferenceRouter):
             if result is not _NO_RESULT:
                 return result
 
-        return await self._all_candidates_failed(candidates, plan, used_fallback=used_fallback)
-
-    def _starting_candidates(self, candidates: list[_Candidate], plan: _DispatchPlan) -> tuple[list[_Candidate], bool]:
-        """The chain to try, and whether it is already the fallback chain.
-
-        Nothing in the primary pool means going straight to the fallback (free
-        tier) if one was supplied, otherwise failing fast.
-        """
-        if candidates:
-            return candidates, False
-        resolved = plan.resolved_fallback()
-        if not resolved:
-            raise AllModelsRateLimitedError("No models available for this request")
-        return resolved, True
+        return await self._all_candidates_failed(candidates, plan)
 
     def _is_unusable(self, info: ModelInfo, capability: ModelCapability | str | None) -> bool:
         """True when this model is cooling down, or its provider is down."""
@@ -1522,21 +940,19 @@ class ModelDispatcher(InferenceRouter):
             self._record_failure(key)
             raise
 
-        self._record_success(info, plan.sticky_key)
+        self._record_success(info)
         return result
 
     def _record_failure(self, key: _CooldownKey) -> None:
         self._record_model_outcome(key, False)
         self._persist_model_score(key)
 
-    def _record_success(self, info: ModelInfo, sticky_key: tuple[str, str, str, str] | None) -> None:
+    def _record_success(self, info: ModelInfo) -> None:
         key: _CooldownKey = (info.model_id, info.provider_name)
         self._record_model_outcome(key, True)
         self._persist_model_score(key)
         self._provider_health.record_success(info.provider_name)
         self._rate_limit_status.mark_ok(info.provider_name, info.model_id)
-        if sticky_key is not None:
-            self._remember_sticky(sticky_key, key)
 
     def _penalise_degenerate(
         self,
@@ -1640,23 +1056,9 @@ class ModelDispatcher(InferenceRouter):
             error,
         )
 
-    async def _all_candidates_failed(
-        self,
-        candidates: list[_Candidate],
-        plan: _DispatchPlan,
-        *,
-        used_fallback: bool,
-    ) -> Any:
-        """Every candidate is out: try the free tier, then wait out a short cooldown."""
-        # Primary pool exhausted (all paid models out of credits / rate-limited /
-        # down). If a free-tier fallback was supplied, try it before giving up.
-        # This is the first point that needs the fallback, so it is built here.
-        fallback = [] if used_fallback else plan.resolved_fallback()
-        if fallback:
-            logger.info("Primary pool exhausted - falling back to free-tier models")
-            return await self._dispatch(fallback, replace(plan, fallback_candidates=None))
-
-        wait = self._shortest_transient_wait(candidates + fallback)
+    async def _all_candidates_failed(self, candidates: list[_Candidate], plan: _DispatchPlan) -> Any:
+        """Every candidate is out: wait out a short cooldown, or report exhaustion."""
+        wait = self._shortest_transient_wait(candidates)
         if plan.allow_wait and 0 < wait <= _MAX_INLINE_WAIT_SECONDS:
             logger.info(
                 "All candidates transiently rate-limited - pausing in-flight for %.1fs before retrying",

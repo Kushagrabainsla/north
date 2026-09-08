@@ -19,8 +19,20 @@ from ledger.models import LedgerEntry, LedgerSource
 from memory import FileContextStore
 from orchestrator.orchestrator import Orchestrator
 from tests.conftest import MockInferenceRouter
+from tests.unit.inference._catalog import publish_catalog
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
+
+
+def _ready(providers, tmp_path):
+    """A dispatcher with a catalog already published - i.e. one that can route."""
+    dispatcher = ModelDispatcher(
+        providers=providers,
+        cooldowns_path=tmp_path / "cd.json",
+        models_db_path=tmp_path / "models.db",
+    )
+    publish_catalog(dispatcher)
+    return dispatcher
 
 AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
 
@@ -33,7 +45,7 @@ def _mi(model_id: str, quality: float) -> ModelInfo:
         model_id=model_id,
         provider_name="p",
         capabilities=frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
-        context_window=100_000,
+        context_window=400_000,
         cost_per_token=0.0,
         base_quality=quality,
     )
@@ -66,7 +78,7 @@ def _resp(m):
 
 async def test_exclude_models_skips_excluded(tmp_path):
     cat = _Catalog([_mi("model-a", 0.9), _mi("model-b", 0.5)], _resp)
-    disp = ModelDispatcher(providers=[cat], cooldowns_path=tmp_path / "cd.json")
+    disp = _ready([cat], tmp_path)
     # model-a ranks first, but is excluded → model-b answers.
     r = await disp.complete(
         CompletionRequest(prompt="x", priority=PoolPriority.HIGH, component="reviewer", exclude_models=["model-a"])
@@ -76,7 +88,7 @@ async def test_exclude_models_skips_excluded(tmp_path):
 
 async def test_exclude_models_degrades_when_only_excluded_left(tmp_path):
     cat = _Catalog([_mi("only-model", 0.9)], _resp)
-    disp = ModelDispatcher(providers=[cat], cooldowns_path=tmp_path / "cd.json")
+    disp = _ready([cat], tmp_path)
     # Excluding the only model must NOT block - it degrades to using it.
     r = await disp.complete(
         CompletionRequest(prompt="x", priority=PoolPriority.HIGH, component="reviewer", exclude_models=["only-model"])
@@ -86,7 +98,7 @@ async def test_exclude_models_degrades_when_only_excluded_left(tmp_path):
 
 async def test_exclude_models_is_case_insensitive(tmp_path):
     cat = _Catalog([_mi("Model-A", 0.9), _mi("model-b", 0.5)], _resp)
-    disp = ModelDispatcher(providers=[cat], cooldowns_path=tmp_path / "cd.json")
+    disp = _ready([cat], tmp_path)
     r = await disp.complete(
         CompletionRequest(prompt="x", priority=PoolPriority.HIGH, component="reviewer", exclude_models=["model-a"])
     )
