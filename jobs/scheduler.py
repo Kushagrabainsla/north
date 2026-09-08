@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from jobs.base import JobProcessor
-from jobs.models import Job, JobPriority, JobType
+from jobs.models import Job, JobPriority, JobStatus, JobType
 from utils.ids import generate_id
 from utils.time import from_epoch, local_timezone_name, now_epoch, resolve_timezone, to_epoch
 
@@ -27,9 +27,34 @@ logger = logging.getLogger(__name__)
 WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
+WEEKDAYS = frozenset({0, 1, 2, 3, 4})
+WEEKENDS = frozenset({5, 6})
+_EVERY_DAY = frozenset(range(7))
+
+
+def normalise_weekdays(value: object) -> frozenset[int] | None:
+    """Coerce a stored or caller-supplied weekday selection to the canonical form.
+
+    ``None`` means every day, and so does any selection that names all seven -
+    "Mon through Sun" and "daily" are the same rule, and keeping two spellings of
+    it would let ``describe()`` say "every Mon, Tue, Wed, Thu, Fri, Sat, Sun".
+    A lone integer is accepted because that is what single-day schedules were
+    stored as before this field held a set.
+    """
+    if value is None:
+        return None
+    days = frozenset({int(value)}) if isinstance(value, int) else frozenset(int(day) for day in value)
+    if not days:
+        return None
+    for day in days:
+        if not 0 <= day <= 6:
+            raise ValueError(f"weekday must be in [0, 6], got {day}")
+    return None if days == _EVERY_DAY else days
+
+
 @dataclass(frozen=True)
 class CronEntry:
-    """One scheduled job. `weekday` is 0=Mon..6=Sun, or None for daily.
+    """One scheduled job. `weekdays` is a set of 0=Mon..6=Sun, or None for daily.
 
     `hour`/`minute` are wall-clock time in `tz` (an IANA name; None means the
     machine's own zone), never UTC. A recurrence is a rule, not an instant, so
@@ -37,6 +62,11 @@ class CronEntry:
     shift, where a fixed epoch interval would slide to 06:00 or 08:00. Every
     *instant* the rule produces - the next firing, the job it enqueues - is an
     epoch, and is rendered in local time for the user.
+
+    `weekdays` is a set rather than a single day because the most ordinary
+    request there is - "every weekday at 9:30" - cannot be said with one day and
+    is not daily either. Held as one int, that request reached the tool as a list
+    and died in `int()`, so north could schedule Tuesdays but not weekdays.
     """
 
     name: str
@@ -44,16 +74,19 @@ class CronEntry:
     task: str
     hour: int
     minute: int
-    weekday: int | None = None
+    weekdays: frozenset[int] | None = None
     tz: str | None = None
+    enabled: bool = True
 
     def __post_init__(self) -> None:
         if not (0 <= self.hour <= 23):
             raise ValueError(f"hour must be in [0, 23], got {self.hour}")
         if not (0 <= self.minute <= 59):
             raise ValueError(f"minute must be in [0, 59], got {self.minute}")
-        if self.weekday is not None and not (0 <= self.weekday <= 6):
-            raise ValueError(f"weekday must be in [0, 6] or None, got {self.weekday}")
+        # Frozen, so the canonical form is written back through object.__setattr__:
+        # every reader downstream can then assume "None means daily" without
+        # re-deriving it from a set of seven.
+        object.__setattr__(self, "weekdays", normalise_weekdays(self.weekdays))
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> CronEntry:
@@ -64,8 +97,9 @@ class CronEntry:
             task=row["task"],
             hour=row["hour"],
             minute=row["minute"],
-            weekday=row["weekday"],
+            weekdays=row.get("weekdays"),
             tz=row.get("tz"),
+            enabled=bool(row.get("enabled", True)),
         )
 
     @property
@@ -74,10 +108,23 @@ class CronEntry:
         return self.tz or local_timezone_name()
 
     def describe(self) -> str:
-        """One line a person can check: "daily at 07:00 (Asia/Kolkata)"."""
-        when = f"{self.hour:02d}:{self.minute:02d}"
-        cadence = "daily" if self.weekday is None else f"every {WEEKDAY_NAMES[self.weekday]}"
-        return f"{cadence} at {when} ({self.zone_name})"
+        """One line a person can check: "weekdays at 07:00 (Asia/Kolkata)"."""
+        return f"{self.cadence} at {self.hour:02d}:{self.minute:02d} ({self.zone_name})"
+
+    @property
+    def cadence(self) -> str:
+        """How often this runs, in the words a person would use for it."""
+        if self.weekdays is None:
+            return "daily"
+        if self.weekdays == WEEKDAYS:
+            return "weekdays"
+        if self.weekdays == WEEKENDS:
+            return "weekends"
+        if len(self.weekdays) == 6:
+            # Six days listed out is a sentence nobody reads to the end of.
+            (missing,) = _EVERY_DAY - self.weekdays
+            return f"every day except {WEEKDAY_NAMES[missing]}"
+        return "every " + ", ".join(WEEKDAY_NAMES[day] for day in sorted(self.weekdays))
 
 
 def _wall_clock(entry: CronEntry, reference: datetime) -> datetime:
@@ -100,10 +147,17 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
     candidate = _wall_clock(entry, after)
     if candidate <= after:
         candidate = candidate + timedelta(days=1)
-    if entry.weekday is None:
+    if entry.weekdays is None:
         return candidate
-    days_ahead = (entry.weekday - candidate.weekday()) % 7
-    return candidate + timedelta(days=days_ahead)
+    # Step a day at a time rather than computing an offset to one weekday: with a
+    # set, the answer is the nearest member, and stepping is the reading of that.
+    # Whole days are added to the *wall clock*, so an 07:00 rule stays 07:00 when
+    # the walk crosses a DST boundary.
+    for _ in range(7):
+        if candidate.weekday() in entry.weekdays:
+            return candidate
+        candidate = candidate + timedelta(days=1)
+    raise ValueError(f"{entry.name} has no runnable weekday")  # pragma: no cover - normalise_weekdays
 
 
 def previous_firing(entry: CronEntry, at: datetime) -> datetime:
@@ -115,10 +169,13 @@ def previous_firing(entry: CronEntry, at: datetime) -> datetime:
     candidate = _wall_clock(entry, at)
     if candidate > at:
         candidate = candidate - timedelta(days=1)
-    if entry.weekday is None:
+    if entry.weekdays is None:
         return candidate
-    days_back = (candidate.weekday() - entry.weekday) % 7
-    return candidate - timedelta(days=days_back)
+    for _ in range(7):
+        if candidate.weekday() in entry.weekdays:
+            return candidate
+        candidate = candidate - timedelta(days=1)
+    raise ValueError(f"{entry.name} has no runnable weekday")  # pragma: no cover - normalise_weekdays
 
 
 def next_firing_epoch(entry: CronEntry, after_epoch: float | None = None) -> float:
@@ -156,6 +213,12 @@ class CronScheduler:
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def _all_entries(self) -> list[CronEntry]:
+        """Every entry that should fire: built-ins, plus the user's own that are not paused.
+
+        A paused entry is dropped here rather than skipped at firing time, so it
+        never becomes the "next due" entry the loop sleeps until - otherwise the
+        scheduler would wake for work it has already decided not to do.
+        """
         entries = list(self._builtin_entries)
         if self._cron_store is not None:
             try:
@@ -163,7 +226,7 @@ class CronScheduler:
                 entries.extend(CronEntry.from_row(u) for u in user)
             except Exception:
                 logger.exception("CronScheduler: failed to load user cron entries")
-        return entries
+        return [entry for entry in entries if entry.enabled]
 
     def build_job(self, entry: CronEntry, scheduled_at: datetime) -> Job:
         """Construct the `Job` that will be enqueued for one firing of `entry`."""
@@ -187,10 +250,16 @@ class CronScheduler:
         return not self._builtin_entries and self._cron_store is None
 
     async def _already_fired(self, entry: CronEntry, slot: datetime) -> bool:
-        """True if a job for this entry's slot was already enqueued (any status).
+        """True if this entry's slot already ran, or is still running.
 
         Keeps the wide catch-up window idempotent: a given scheduled slot fires at
         most once, no matter how often north restarts within the window.
+
+        A firing that *failed* does not count, because the slot never produced
+        what it was for. Asking only whether a job had been enqueued is how one
+        bad morning cost a whole day: the 08:00 briefing died at the planner, and
+        every restart that day looked at the failed job, called the slot spent,
+        and declined to try again.
         """
         try:
             jobs = await self._processor.list_jobs(limit=200)
@@ -201,6 +270,7 @@ class CronScheduler:
             (job.payload or {}).get("cron_entry") == entry.name
             and job.scheduled_at is not None
             and job.scheduled_at >= slot
+            and job.status is not JobStatus.FAILED
             for job in jobs
         )
 

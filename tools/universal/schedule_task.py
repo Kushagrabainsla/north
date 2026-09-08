@@ -5,9 +5,32 @@ from __future__ import annotations
 from jobs.models import Job, JobPriority, JobType
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.universal._schedules import entry_view, resolve_zone_name, schedule_name
+from tools.universal._schedules import entry_view, parse_weekdays, resolve_zone_name
 from utils.ids import generate_id
 from utils.time import format_local, from_epoch, parse_local
+
+
+def _whole_number(params: dict, field: str, ceiling: int, default: int | None = None) -> int:
+    """One numeric field, read the way a person would check it.
+
+    Raises ValueError naming the field and its range. Reporting these as a bare
+    ``int()`` TypeError told the caller nothing about what it should send
+    instead, so a recoverable mistake ended the task.
+    """
+    raw = params.get(field)
+    if raw is None:
+        if default is None:
+            raise ValueError(f"{field} is required for a repeating schedule (0-{ceiling})")
+        return default
+    if isinstance(raw, bool | list | tuple | dict):
+        raise ValueError(f"{field} must be a single number in 0-{ceiling}, got {raw!r}")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a number in 0-{ceiling}, got {raw!r}") from None
+    if not 0 <= value <= ceiling:
+        raise ValueError(f"{field} must be in 0-{ceiling}, got {value}")
+    return value
 
 
 class ScheduleTaskTool(Tool):
@@ -19,11 +42,13 @@ class ScheduleTaskTool(Tool):
         "scheduled time under the named agent. Times are the USER'S LOCAL TIME - pass the "
         "hour they said, do not convert to UTC. For a single future run, pass run_at as "
         "'YYYY-MM-DDTHH:MM' local (an explicit offset or trailing Z is honoured if given). "
-        "For a repeating run, pass hour (0-23) plus optional minute (0-59) and weekday "
-        "(0=Mon … 6=Sun; omit for daily). Pass tz only to schedule in a zone other than the "
-        "user's own, as an IANA name like 'Asia/Kolkata'. Good for reminders, digests, and "
-        "check-ins. Use list_schedules to see what is scheduled, update_schedule to change "
-        "one, and cancel_schedule to remove one."
+        "For a repeating run, pass hour (0-23) plus optional minute (0-59) and days (omit "
+        "days for every day). 'days' takes a list of day names or numbers (0=Mon … 6=Sun), "
+        "or one of the words 'weekdays', 'weekends', 'daily' - so \"every weekday at 9:30\" "
+        "is hour 9, minute 30, days 'weekdays'. Pass tz only to schedule in a zone other "
+        "than the user's own, as an IANA name like 'Asia/Kolkata'. Good for reminders, "
+        "digests, and check-ins. Use list_schedules to see what is scheduled, "
+        "update_schedule to change one, and cancel_schedule to remove one."
     )
     parameters_schema = {
         "type": "object",
@@ -37,7 +62,12 @@ class ScheduleTaskTool(Tool):
             "run_at": {"type": "string", "description": "Local ISO 8601 datetime for a one-shot run"},
             "hour": {"type": "integer", "description": "Hour (0-23), local, for a recurring schedule"},
             "minute": {"type": "integer", "description": "Minute (0-59, default 0)"},
-            "weekday": {"type": "integer", "description": "Weekday 0=Mon…6=Sun (omit for daily)"},
+            "days": {
+                "description": (
+                    "Which days it runs: a list of day names or numbers (0=Mon…6=Sun), or "
+                    "'weekdays' / 'weekends' / 'daily'. Omit for every day."
+                ),
+            },
             "tz": {"type": "string", "description": "IANA zone, only if not the user's own"},
         },
         "required": ["task"],
@@ -97,18 +127,20 @@ class ScheduleTaskTool(Tool):
         from jobs.scheduler import CronEntry
 
         tz = resolve_zone_name(params.get("tz"))
+        # `weekday` is the old single-day spelling; still read so a caller working
+        # from a cached description of this tool is not simply refused.
+        days = params.get("days", params.get("weekday"))
         try:
-            weekday_raw = params.get("weekday")
             entry = CronEntry(
-                name=schedule_name(task),
+                name=await self._cron_store.unique_name(task),
                 agent=agent,
                 task=task,
-                hour=int(params["hour"]),
-                minute=int(params.get("minute", 0)),
-                weekday=int(weekday_raw) if weekday_raw is not None else None,
+                hour=_whole_number(params, "hour", 23),
+                minute=_whole_number(params, "minute", 59, default=0),
+                weekdays=parse_weekdays(days),
                 tz=tz,
             )
-        except (ValueError, KeyError, TypeError) as exc:
+        except ValueError as exc:
             return ToolOutput(success=False, error=str(exc))
 
         await self._cron_store.add(
@@ -117,7 +149,7 @@ class ScheduleTaskTool(Tool):
             task=entry.task,
             hour=entry.hour,
             minute=entry.minute,
-            weekday=entry.weekday,
+            weekdays=entry.weekdays,
             tz=entry.tz,
         )
         row = await self._cron_store.get(entry.name)

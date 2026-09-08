@@ -4,18 +4,21 @@ from __future__ import annotations
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.universal._schedules import BUILTIN_NAMES, entry_view, resolve_zone_name
+from tools.universal._schedules import BUILTIN_NAMES, entry_view, parse_weekdays, resolve_zone_name
 
 
 class UpdateScheduleTool(Tool):
     name = "update_schedule"
     excluded_domains = frozenset({"engineering"})
     description = (
-        "Change an existing recurring schedule: its time, its day, the task it runs, or "
-        "the agent that runs it. Address it by the 'name' shown by list_schedules, and "
-        "pass only the fields that change - anything omitted is left alone. Times are the "
-        "user's local time. To move a one-shot task instead, cancel it and schedule a new "
-        "one. To stop a schedule entirely, use cancel_schedule."
+        "Change an existing recurring schedule: its time, its days, the task it runs, the "
+        "agent that runs it, or whether it is paused. Address it by the 'name' shown by "
+        "list_schedules, and pass only the fields that change - anything omitted is left "
+        "alone. Times are the user's local time. 'days' takes day names or numbers "
+        "(0=Mon … 6=Sun), or 'weekdays' / 'weekends' / 'daily'; pass 'daily' to go back to "
+        "running every day. Pass enabled false to pause a schedule without losing it, and "
+        "true to resume it. To move a one-shot task instead, cancel it and schedule a new "
+        "one. To remove a schedule for good, use cancel_schedule."
     )
     is_mutating = True
     parameters_schema = {
@@ -26,7 +29,13 @@ class UpdateScheduleTool(Tool):
             "agent": {"type": "string", "description": "New agent to run it"},
             "hour": {"type": "integer", "description": "New hour (0-23), local"},
             "minute": {"type": "integer", "description": "New minute (0-59)"},
-            "weekday": {"type": "integer", "description": "New weekday 0=Mon…6=Sun"},
+            "days": {
+                "description": (
+                    "New days: names or numbers (0=Mon…6=Sun), or 'weekdays' / 'weekends' / "
+                    "'daily'. Pass 'daily' to clear a day restriction."
+                ),
+            },
+            "enabled": {"type": "boolean", "description": "false pauses the schedule, true resumes it"},
             "tz": {"type": "string", "description": "New IANA zone"},
         },
         "required": ["name"],
@@ -57,24 +66,38 @@ class UpdateScheduleTool(Tool):
 
     @staticmethod
     def _changes(params: dict) -> dict[str, object]:
-        """Pick out the fields the caller actually set, validated and typed."""
+        """Pick out the fields the caller actually set, validated and typed.
+
+        A field the caller did not mention is absent from the result, not None:
+        "leave the days alone" and "clear the days back to daily" are different
+        requests, and collapsing both to None made the second one impossible.
+        """
         changes: dict[str, object] = {}
         for field in ("task", "agent"):
             if params.get(field) is not None:
                 changes[field] = str(params[field])
-        for field, ceiling in (("hour", 23), ("minute", 59), ("weekday", 6)):
+        for field, ceiling in (("hour", 23), ("minute", 59)):
             if params.get(field) is None:
                 continue
             value = int(params[field])
             if not 0 <= value <= ceiling:
                 raise ValueError(f"{field} must be in [0, {ceiling}], got {value}")
             changes[field] = value
+        days = params.get("days", params.get("weekday"))
+        if days is not None:
+            changes["weekdays"] = parse_weekdays(days)
+        if params.get("enabled") is not None:
+            changes["enabled"] = bool(params["enabled"])
         if params.get("tz") is not None:
             changes["tz"] = resolve_zone_name(str(params["tz"]))
         return changes
 
     def format_output(self, data: dict) -> str:
+        state = "" if data.get("enabled", True) else " (paused)"
         if not data.get("changed"):
-            return f"{data['name']} is unchanged: {data['schedule']}, next run {data['next_run']}."
+            return f"{data['name']} is unchanged: {data['schedule']}{state}, next run {data['next_run']}."
         changed = ", ".join(data["changed"])
-        return f"Updated {data['name']} ({changed}): now {data['schedule']}, next run {data['next_run']}."
+        return (
+            f"Updated {data['name']} ({changed}): now {data['schedule']}{state}, "
+            f"next run {data['next_run']}."
+        )

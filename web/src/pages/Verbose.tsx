@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { api, post } from "../api";
+import { api, del, patch, post } from "../api";
 import { Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
 import type { Approval, Artifact, LedgerEntry, RoutingDecision, RoutingSkip } from "../types";
@@ -133,11 +133,154 @@ export function Approvals() {
 }
 
 interface Job { job_id: string; agent: string; task: string; status: string; scheduled_at: string; }
-interface Cron { name: string; agent: string; task: string; hour: number; minute: number; weekday?: number; }
+
+interface Cron {
+  name: string; agent: string; task: string; hour: number; minute: number;
+  weekdays: number[]; cadence: string; enabled: boolean; tz: string;
+  schedule: string; next_run_local: string; next_run_epoch: number; source: string;
+}
+
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const hhmm = (hour: number, minute: number) => `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+
+// The form's own idea of a schedule, before it becomes a request. Days live here
+// as a set of numbers because that is what the day buttons toggle; the API is
+// given "daily" when none are picked, which is what an empty selection means.
+interface Draft { task: string; agent: string; hour: number; minute: number; days: number[]; }
+
+const emptyDraft = (): Draft => ({ task: "", agent: "general", hour: 9, minute: 0, days: [] });
+const draftOf = (entry: Cron): Draft => ({
+  task: entry.task, agent: entry.agent, hour: entry.hour, minute: entry.minute, days: [...entry.weekdays],
+});
+const daysField = (days: number[]) => (days.length ? days : "daily");
+
+function DayPicker({ days, onChange }: { days: number[]; onChange: (days: number[]) => void }) {
+  const toggle = (day: number) =>
+    onChange(days.includes(day) ? days.filter(d => d !== day) : [...days, day].sort());
+  return <div className="day-picker">
+    {DAY_LABELS.map((label, day) =>
+      <button type="button" key={label} className={days.includes(day) ? "day on" : "day"}
+               onClick={() => toggle(day)}>{label}</button>)}
+    <button type="button" className="day-preset" onClick={() => onChange([])}>Every day</button>
+    <button type="button" className="day-preset" onClick={() => onChange([0, 1, 2, 3, 4])}>Weekdays</button>
+    <button type="button" className="day-preset" onClick={() => onChange([5, 6])}>Weekends</button>
+  </div>;
+}
+
+function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy }: {
+  draft: Draft; setDraft: (d: Draft) => void; onSubmit: () => void;
+  onCancel?: () => void; submitLabel: string; busy: boolean;
+}) {
+  return <form className="schedule-form" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
+    <label>What should north do?
+      <input value={draft.task} placeholder="e.g. remind me to stretch"
+               onChange={e => setDraft({ ...draft, task: e.target.value })}/>
+    </label>
+    <div className="schedule-form-row">
+      <label>Time
+        <input type="time" value={hhmm(draft.hour, draft.minute)} onChange={e => {
+          const [hour, minute] = e.target.value.split(":").map(Number);
+          setDraft({ ...draft, hour: hour || 0, minute: minute || 0 });
+        }}/>
+      </label>
+      <label>Agent
+        <input value={draft.agent} onChange={e => setDraft({ ...draft, agent: e.target.value })}/>
+      </label>
+    </div>
+    <DayPicker days={draft.days} onChange={days => setDraft({ ...draft, days })}/>
+    <div className="schedule-form-actions">
+      <button type="submit" disabled={busy || !draft.task.trim()}>{busy ? "Saving…" : submitLabel}</button>
+      {onCancel && <button type="button" className="ghost" onClick={onCancel}>Cancel</button>}
+    </div>
+  </form>;
+}
+
 export function Schedule() {
   const jobs = useResource<Job[]>("/orchestrator/jobs?limit=100", 10000);
   const cron = useResource<Cron[]>("/orchestrator/cron", 10000);
-  return <div className="page"><PageHeader eyebrow="Automation" title="Schedule" subtitle="Queued work and recurring routines."/>{(jobs.error || cron.error) && <ErrorNotice message={jobs.error || cron.error}/>}<div className="two-column"><Panel title="Agenda" label={`${jobs.data?.length || 0} jobs`}>{jobs.loading ? <Loading/> : jobs.data?.length ? jobs.data.map(job => <div className="list-row" key={job.job_id}><div><b>{job.task}</b><small>{job.agent} · {new Date(job.scheduled_at).toLocaleString()}</small></div><Status value={job.status}/></div>) : <Empty>No queued work.</Empty>}</Panel><Panel title="Recurring" label={`${cron.data?.length || 0} routines`}>{cron.loading ? <Loading/> : cron.data?.length ? cron.data.map(item => <div className="list-row" key={item.name}><div><b>{item.name}</b><small>{item.task} · {String(item.hour).padStart(2,"0")}:{String(item.minute).padStart(2,"0")}</small></div><span>{item.agent}</span></div>) : <Empty>No recurring routines.</Empty>}</Panel></div></div>;
+  const [editing, setEditing] = useState("");
+  const [draft, setDraft] = useState<Draft>(emptyDraft());
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  // Every mutation runs through here so that one place decides what happens on
+  // failure: the message is shown and the list is re-read, rather than the row
+  // silently keeping whatever the optimistic guess was.
+  const act = async (work: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await work();
+      await cron.reload();
+      setEditing("");
+      setCreating(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const create = () => act(() => post("/orchestrator/cron", {
+    task: draft.task, agent: draft.agent, hour: draft.hour, minute: draft.minute, days: daysField(draft.days),
+  }));
+  const save = (name: string) => act(() => patch(`/orchestrator/cron/${encodeURIComponent(name)}`, {
+    task: draft.task, agent: draft.agent, hour: draft.hour, minute: draft.minute, days: daysField(draft.days),
+  }));
+  const setEnabled = (entry: Cron, enabled: boolean) =>
+    act(() => patch(`/orchestrator/cron/${encodeURIComponent(entry.name)}`, { enabled }));
+  const remove = (entry: Cron) => {
+    if (!window.confirm(`Delete "${entry.task}"? This cannot be undone.`)) return;
+    return act(() => del(`/orchestrator/cron/${encodeURIComponent(entry.name)}`));
+  };
+
+  const startCreate = () => { setDraft(emptyDraft()); setCreating(true); setEditing(""); };
+  const startEdit = (entry: Cron) => { setDraft(draftOf(entry)); setEditing(entry.name); setCreating(false); };
+
+  const routines = cron.data || [];
+  return <div className="page">
+    <PageHeader eyebrow="Automation" title="Schedule" subtitle="Queued work and recurring routines."
+      actions={<button onClick={startCreate}>+ New routine</button>}/>
+    {(jobs.error || cron.error || error) && <ErrorNotice message={jobs.error || cron.error || error}/>}
+    <div className="two-column">
+      <Panel title="Recurring" label={`${routines.length} routines`}>
+        {creating && <ScheduleForm draft={draft} setDraft={setDraft} onSubmit={create}
+          onCancel={() => setCreating(false)} submitLabel="Create" busy={busy}/>}
+        {cron.loading ? <Loading/> : routines.length ? routines.map(entry => (
+          <div className={entry.enabled ? "schedule-row" : "schedule-row paused"} key={entry.name}>
+            <div className="schedule-main">
+              <b>{entry.task}</b>
+              <small>
+                {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
+                {entry.source === "builtin" && " · built-in"}
+                {" · "}{entry.enabled ? `next ${entry.next_run_local}` : "paused"}
+              </small>
+            </div>
+            {entry.source === "builtin"
+              ? <span className="schedule-locked" title="Ships with north">built-in</span>
+              : <div className="schedule-actions">
+                  <button onClick={() => setEnabled(entry, !entry.enabled)} disabled={busy}>
+                    {entry.enabled ? "Pause" : "Resume"}
+                  </button>
+                  <button onClick={() => startEdit(entry)} disabled={busy}>Edit</button>
+                  <button className="danger-link" onClick={() => remove(entry)} disabled={busy}>Delete</button>
+                </div>}
+            {editing === entry.name && <ScheduleForm draft={draft} setDraft={setDraft}
+              onSubmit={() => save(entry.name)} onCancel={() => setEditing("")}
+              submitLabel="Save" busy={busy}/>}
+          </div>
+        )) : <Empty>No recurring routines.</Empty>}
+      </Panel>
+      <Panel title="Agenda" label={`${jobs.data?.length || 0} jobs`}>
+        {jobs.loading ? <Loading/> : jobs.data?.length ? jobs.data.map(job =>
+          <div className="list-row" key={job.job_id}>
+            <div><b>{job.task}</b><small>{job.agent} · {new Date(job.scheduled_at).toLocaleString()}</small></div>
+            <Status value={job.status}/>
+          </div>) : <Empty>No queued work.</Empty>}
+      </Panel>
+    </div>
+  </div>;
 }
 
 const docs = ["user.md", "north_stars.md", "judgement_rules.md", "soul.md"];

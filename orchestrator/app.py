@@ -10,6 +10,7 @@ import datetime
 import logging
 import os
 import sys
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -508,6 +509,63 @@ def _prune_routing_decisions(deps, retention_days: int) -> int:
     return prune(retention_days) if prune is not None else 0
 
 
+# A scheduled firing is watched until the task it started actually finishes.
+# Polled rather than awaited because `submit_task` deliberately returns as soon
+# as the task is accepted; the poll is cheap and each job already runs in its own
+# asyncio task, so waiting here holds nothing else up.
+_SCHEDULED_POLL_SECONDS = 15.0
+# Comfortably inside the job processor's one-hour stale lease, so a watched task
+# is given up on by this loop rather than reaped out from under it.
+_SCHEDULED_TIMEOUT_SECONDS = 2_700.0
+_TASK_STILL_GOING = frozenset({"pending", "running", "queued", "paused"})
+
+
+class ScheduledTaskFailed(Exception):
+    """A scheduled firing ran and the task it started did not succeed.
+
+    Raised so the job processor's existing retry-with-backoff applies to cron
+    firings. Without it, `_dispatch_job` returned the moment a task was
+    *accepted* and every firing was recorded as a success - which is how the
+    daily briefing died at the planner one morning, was marked completed, and
+    was never attempted again that day.
+    """
+
+
+async def _run_scheduled_task(
+    orchestrator: Orchestrator,
+    prompt: str,
+    *,
+    poll_seconds: float = _SCHEDULED_POLL_SECONDS,
+    timeout_seconds: float = _SCHEDULED_TIMEOUT_SECONDS,
+) -> None:
+    """Start a scheduled task and wait to see whether it worked.
+
+    Returns on success, and on a cancellation - someone cancelling a task is a
+    decision, not a fault, and must not be retried over. Raises
+    :class:`ScheduledTaskFailed` when the task failed.
+
+    A task still running at the timeout is *not* treated as failed. north cannot
+    tell a slow task from a stuck one, and retrying a slow one would run a second
+    copy alongside the first; a firing that outlives the window is left alone and
+    logged.
+    """
+    response = await orchestrator.submit_task(TaskRequest(prompt=prompt, source=LedgerSource.CRON))
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        await asyncio.sleep(poll_seconds)
+        task = await orchestrator.get_task(response.task_id)
+        if task is None or task.status in _TASK_STILL_GOING:
+            continue
+        if task.status == "failed":
+            raise ScheduledTaskFailed(f"scheduled task {response.task_id} failed")
+        return
+    logger.warning(
+        "Scheduled task %s still running after %.0fs - leaving it be rather than retrying",
+        response.task_id,
+        timeout_seconds,
+    )
+
+
 def _launch_background_tasks(
     deps,
     orchestrator: Orchestrator,
@@ -554,7 +612,7 @@ def _launch_background_tasks(
                 )
             )
             return
-        await orchestrator.submit_task(TaskRequest(prompt=f"[scheduled] {job.task}", source=LedgerSource.CRON))
+        await _run_scheduled_task(orchestrator, f"[scheduled] {job.task}")
 
     cron_scheduler = CronScheduler(
         processor=deps.job_processor,

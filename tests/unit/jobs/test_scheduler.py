@@ -29,7 +29,7 @@ def test_cron_entry_rejects_out_of_range_minute() -> None:
 
 def test_cron_entry_rejects_out_of_range_weekday() -> None:
     with pytest.raises(ValueError):
-        CronEntry(name="x", agent="a", task="t", hour=0, minute=0, weekday=7, tz="UTC")
+        CronEntry(name="x", agent="a", task="t", hour=0, minute=0, weekdays={7}, tz="UTC")
 
 
 # next_firing - daily (weekday=None)
@@ -65,7 +65,7 @@ def test_next_firing_weekly_advances_to_correct_weekday() -> None:
         task="summary",
         hour=8,
         minute=0,
-        weekday=0,  # Monday,
+        weekdays={0},  # Monday,
         tz="UTC",
     )
     # next Monday is 2026-05-25
@@ -80,7 +80,7 @@ def test_next_firing_weekly_same_weekday_later_today() -> None:
         task="t",
         hour=8,
         minute=0,
-        weekday=3,  # Thursday,
+        weekdays={3},  # Thursday,
         tz="UTC",
     )
     assert next_firing(entry, after) == datetime(2026, 5, 21, 8, 0, tzinfo=UTC)
@@ -94,7 +94,7 @@ def test_next_firing_weekly_same_weekday_already_passed_today_goes_next_week() -
         task="t",
         hour=8,
         minute=0,
-        weekday=3,  # Thursday 8am,
+        weekdays={3},  # Thursday 8am,
         tz="UTC",
     )
     assert next_firing(entry, after) == datetime(2026, 5, 28, 8, 0, tzinfo=UTC)
@@ -111,7 +111,7 @@ def test_next_due_entry_picks_earliest_firing() -> None:
     after = datetime(2026, 5, 21, 6, 0, tzinfo=UTC)
     early = CronEntry(name="early", agent="a", task="t", hour=7, minute=0, tz="UTC")
     late = CronEntry(name="late", agent="a", task="t", hour=22, minute=0, tz="UTC")
-    weekly = CronEntry(name="weekly", agent="a", task="t", hour=5, minute=0, weekday=0, tz="UTC")
+    weekly = CronEntry(name="weekly", agent="a", task="t", hour=5, minute=0, weekdays={0}, tz="UTC")
 
     entry, firing = next_due_entry([late, early, weekly], after)
     assert entry.name == "early"

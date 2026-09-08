@@ -646,19 +646,26 @@ def cancel_any(
 cron_app = typer.Typer(help="Recurring schedules: list, add, change, remove.", invoke_without_command=True)
 app.add_typer(cron_app, name="cron")
 
-# Days as a person writes them, mapped to the scheduler's 0=Mon..6=Sun.
-_WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+def _day_selection(days: str | None) -> list[str] | str | None:
+    """Turn --days into what the API takes, checking it here so errors land locally.
 
-
-def _weekday_number(day: str | None) -> int | None:
-    """Turn --day mon into 0. Anything unrecognized is the user's typo, not a daily schedule."""
-    if day is None:
+    "mon,wed" becomes ["mon", "wed"]; a group word like "weekdays" is passed
+    through whole. Validated against the same reader the API uses, so the CLI
+    cannot accept a spelling the server would reject, or vice versa.
+    """
+    if days is None:
         return None
-    number = _WEEKDAYS.get(day.strip().lower()[:3])
-    if number is None:
-        typer.secho(f"Unknown day {day!r}. Use one of: {', '.join(_WEEKDAYS)}.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
-    return number
+    from tools.universal._schedules import parse_weekdays
+
+    selection: list[str] | str = (
+        [part.strip() for part in days.split(",") if part.strip()] if "," in days else days.strip()
+    )
+    try:
+        parse_weekdays(selection)
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    return selection
 
 
 def _print_cron_entries(entries: list[dict]) -> None:
@@ -709,7 +716,12 @@ def add_cron(
     task: str = typer.Argument(..., help="What north should do, in plain language."),
     hour: int = typer.Option(..., "--hour", "-h", help="Hour to run, 0-23, your local time."),
     minute: int = typer.Option(0, "--minute", "-m", help="Minute to run, 0-59."),
-    day: str | None = typer.Option(None, "--day", "-d", help="Day for a weekly run (mon…sun). Omit for daily."),
+    days: str | None = typer.Option(
+        None,
+        "--days",
+        "-d",
+        help="Days to run: mon…sun (comma-separated), or weekdays / weekends / daily. Omit for daily.",
+    ),
     agent: str = typer.Option("general", "--agent", "-a", help="Agent that runs it."),
     name: str | None = typer.Option(None, "--name", help="Name to address it by (default: from the task)."),
 ) -> None:
@@ -720,7 +732,7 @@ def add_cron(
         "task": task,
         "hour": hour,
         "minute": minute,
-        "weekday": _weekday_number(day),
+        "days": _day_selection(days),
     }
     entry = _api("POST", "/orchestrator/cron", json=body).json()
     typer.secho(f"✓ {entry['name']}: {entry['schedule']} - next run {entry['next_run_local']}.", fg=typer.colors.GREEN)
@@ -731,16 +743,30 @@ def set_cron(
     name: str = typer.Argument(..., help="Schedule name (see `north cron`)."),
     hour: int | None = typer.Option(None, "--hour", "-h", help="New hour, 0-23, local."),
     minute: int | None = typer.Option(None, "--minute", "-m", help="New minute, 0-59."),
-    day: str | None = typer.Option(None, "--day", "-d", help="New day (mon…sun)."),
+    days: str | None = typer.Option(
+        None, "--days", "-d", help="New days: mon…sun (comma-separated), or weekdays / weekends / daily."
+    ),
     task: str | None = typer.Option(None, "--task", help="New task text."),
     agent: str | None = typer.Option(None, "--agent", "-a", help="New agent."),
+    pause: bool = typer.Option(False, "--pause", help="Pause it without deleting it."),
+    resume: bool = typer.Option(False, "--resume", help="Resume a paused schedule."),
 ) -> None:
     """Change a schedule. Only the options you pass are changed."""
-    body = {"hour": hour, "minute": minute, "weekday": _weekday_number(day), "task": task, "agent": agent}
+    if pause and resume:
+        typer.secho("Pass either --pause or --resume, not both.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    body = {
+        "hour": hour,
+        "minute": minute,
+        "days": _day_selection(days),
+        "task": task,
+        "agent": agent,
+        "enabled": False if pause else (True if resume else None),
+    }
     changes = {k: v for k, v in body.items() if v is not None}
     if not changes:
         typer.secho(
-            "Nothing to change - pass --hour, --minute, --day, --task or --agent.",
+            "Nothing to change - pass --hour, --minute, --days, --task, --agent, --pause or --resume.",
             fg=typer.colors.RED,
             err=True,
         )
