@@ -1,0 +1,30 @@
+# Compatibility baseline for existing forbidden module import pairs.
+# New pairs are rejected by tests; remove entries only after the corresponding
+# dependency has been replaced and regression-tested.
+application.agents -> application.approval
+application.agents -> integrations.tools
+application.approval -> integrations.gateways
+application.approval -> integrations.tools
+application.jobs -> application.approval
+application.orchestration -> application.agents
+application.orchestration -> application.approval
+application.orchestration -> application.jobs
+application.orchestration -> integrations.tools
+integrations.gateways -> integrations.tools
+integrations.tools -> application.agents
+integrations.tools -> application.approval
+integrations.tools -> application.jobs
+integrations.tools -> application.orchestration
+integrations.tools -> integrations.gateways
+intelligence.inference -> integrations.tools
+intelligence.memory -> intelligence.inference
+intelligence.skills -> intelligence.inference
+intelligence.skills -> intelligence.memory
+intelligence.workspace_context -> integrations.tools
+intelligence.workspace_context -> intelligence.inference
+interfaces.cli -> integrations.tools
+interfaces.web -> integrations.tools
+platform.common -> platform.config
+platform.config -> application.approval
+platform.config -> composition.app
+platform.ledger -> platform.common

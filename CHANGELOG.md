@@ -4,6 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **AST import-boundary compatibility gate** (`architecture/imports.py`, `architecture/import-baseline.txt`). New forbidden module-layer dependency pairs now fail regression tests; 27 pre-existing pairs are explicit debt to remove incrementally.
 - **Executable module-contract validation** (`architecture/contracts.py`, `tests/unit/architecture/test_contracts.py`). The catalog now loads through strict typed contracts and a regression test proves every current tracked production path has exactly one owner.
 - **A current-state module catalog and machine-readable boundary manifest** (`docs/MODULES.md`, `architecture/modules.yaml`). They assign ownership, public contracts, path scopes, protections, validation responsibilities, and explicitly temporary dependency exemptions before enforcement begins.
 - **Architecture decision records for the clean-architecture program** (`docs/adr/`). They bind later work to enforceable self-edit scopes, composition-root-only wiring, and compatibility-first staged migration.

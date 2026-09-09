@@ -35,8 +35,8 @@ This ledger is the durable execution record for [the approved refactor program](
 
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
-| Load and validate module contracts in code | Ready to commit | Pending | Targeted pytest — 3 passed; full pytest — 1,959 passed, 3 skipped; ruff format/check; mypy — no issues in 2 files | `architecture.contracts` resolves sole ownership and protects the manifest from malformed contracts. |
-| Enforce dependency direction with AST tests | Not started | — | — | Start with forbidden new dependencies and explicit temporary exemptions. |
+| Load and validate module contracts in code | Complete | `640fc64` | Targeted pytest — 3 passed; full pytest — 1,959 passed, 3 skipped; ruff format/check; mypy — no issues in 2 files | `architecture.contracts` resolves sole ownership and protects the manifest from malformed contracts. |
+| Enforce dependency direction with AST tests | Ready to commit | Pending | Architecture pytest — 6 passed; ruff format/check | AST analysis rejects new cross-module layer violations while `architecture/import-baseline.txt` makes 27 existing forbidden pairs explicit for staged removal. |
 | Enforce task edit scopes in source-mutating tools | Not started | — | — | Must fail closed outside an approved module/path scope. |
 
 ## Stages 1–8
