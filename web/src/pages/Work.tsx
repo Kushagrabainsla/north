@@ -15,7 +15,7 @@
 // run, and dropping them would lose the only place they are visible.
 
 import { useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useResource } from "../hooks";
 import { Empty, ErrorNotice, Loading, PageHeader, Panel, Status, timeAgo } from "../components";
 import type { AgentRun, Approval, Artifact, LedgerEntry, TaskDetail } from "../types";
@@ -56,14 +56,26 @@ export function summarise(entries: LedgerEntry[]): TaskSummary[] {
 
 // ── One event ────────────────────────────────────────────────────────────────
 
-function EventRow({ entry }: { entry: LedgerEntry }) {
+// `showTask` is on in the unscoped stream and off inside a task, where saying
+// which task you are looking at for the fortieth time is noise. Activity showed
+// it on every row because it had no other way to tell you - and then you had to
+// copy the id to the other page by hand, which is what the merge is for, so here
+// it is the link instead.
+function EventRow({ entry, showTask = false }: { entry: LedgerEntry; showTask?: boolean }) {
   const body = entry.output || entry.input || "";
   return <div className="event-row">
     <span className={`event-dot ${entry.status || ""}`}/>
     <div>
       <b>{entry.action?.replaceAll("_", " ") || entry.source}</b>
       <small>
-        {entry.agent || entry.source} · {new Date(entry.timestamp).toLocaleString()}
+        {entry.agent || entry.source}
+        {showTask && <> · {entry.task_id
+          ? <Link className="event-task" to={`/work/${entry.task_id}`}>{entry.task_id}</Link>
+          // north's own events - startup, cron ticks, recovery sweeps - belong to
+          // no run. Activity called that "system"; keeping the word means the
+          // column never reads as a missing value.
+          : "system"}</>}
+        {" · "}{new Date(entry.timestamp).toLocaleString()}
         {entry.model_used && ` · ${entry.model_used}`}
         {entry.duration_ms ? ` · ${(entry.duration_ms / 1000).toFixed(1)}s` : ""}
       </small>
@@ -181,7 +193,7 @@ function AllEvents({ entries, query }: { entries: LedgerEntry[]; query: string }
     [entries, query],
   );
   if (!rows.length) return <Empty>No events match.</Empty>;
-  return <div className="event-list verbose-events">{rows.map(entry => <EventRow key={entry.id} entry={entry}/>)}</div>;
+  return <div className="event-list verbose-events">{rows.map(entry => <EventRow key={entry.id} entry={entry} showTask/>)}</div>;
 }
 
 export function Work() {

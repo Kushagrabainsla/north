@@ -382,3 +382,9 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
 .run-error { color: var(--red); font: 10px/1.5 "DM Mono", monospace; margin: 6px 0 0; white-space: pre-wrap; }
 /* A task row opens the run rather than expanding in place, so it reads as a link. */
 .task-row { cursor: pointer; }
+
+/* The task an event belongs to, in the unscoped stream. A link rather than an
+   id to copy: reaching the run it came from was the whole reason Tasks and
+   Activity were two pages. */
+.event-task { color: var(--accent); text-decoration: none; }
+.event-task:hover { text-decoration: underline; }
