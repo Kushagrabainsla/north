@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from approval.models import ApprovalDecision, Card, CardType
+from approval.models import ApprovalDecision, Card, CardField, CardFieldType, CardType
 from approval.store import ApprovalStore
 from orchestrator.constants import MAX_CONCURRENT_TASKS
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
@@ -65,9 +65,7 @@ async def test_north_star_conflict_still_blocks_the_task() -> None:
     """A real conflict is unchanged: it surfaces a card and blocks on rejection."""
     orch = _orchestrator()
     orch._north_star_checker.check_alignment = AsyncMock(return_value=(False, "conflicts with savings goal", "r"))
-    orch._interaction.request_decision = AsyncMock(
-        return_value=SimpleNamespace(status=ApprovalDecision.REJECTED)
-    )
+    orch._interaction.request_decision = AsyncMock(return_value=SimpleNamespace(status=ApprovalDecision.REJECTED))
     classification = IntentClassification(is_consequential=True, domain="finance", reasoning="r", confidence=1.0)
 
     with pytest.raises(NorthStarConflictError):
@@ -165,3 +163,89 @@ def test_store_resolve_refuses_double_resolution() -> None:
     assert store.resolve("card-1", "rejected") is False
     assert store.get("card-1").status == "approved"
     assert store.resolve("ghost", "approved") is False
+
+
+# ── #11: a card that carries work resolves to server-validated values ────────
+
+
+def _work_card(store: ApprovalStore) -> Card:
+    card = Card(
+        id="card-work",
+        type=CardType.APPROVAL,
+        task_id="task-real",
+        agent="job",
+        title="Application ready",
+        message="Submit?",
+        options=["Approve", "Reject"],
+        fields=[
+            CardField(name="url", type=CardFieldType.LINK, value="https://acme.test/jobs/1", editable=False),
+            CardField(name="cover_letter", type=CardFieldType.TEXTAREA, value="Dear team,", editable=True),
+        ],
+    )
+    store.add(card)
+    return card
+
+
+async def test_an_edit_reaches_the_resolved_card() -> None:
+    store = ApprovalStore()
+    orch = _orchestrator(store)
+    _work_card(store)
+
+    await orch.respond_approval(
+        card_id="card-work", decision="approved", chosen_option="", values={"cover_letter": "Dear Acme,"}
+    )
+
+    assert store.get("card-work").response["cover_letter"] == "Dear Acme,"
+
+
+async def test_a_client_cannot_rewrite_a_read_only_field_through_the_orchestrator() -> None:
+    """The approval must bind to what was shown, not to what the client sends back."""
+    store = ApprovalStore()
+    orch = _orchestrator(store)
+    _work_card(store)
+
+    await orch.respond_approval(
+        card_id="card-work", decision="approved", chosen_option="", values={"url": "https://evil.test/collect"}
+    )
+
+    assert store.get("card-work").response["url"] == "https://acme.test/jobs/1"
+
+
+async def test_edited_field_names_are_announced_but_their_values_are_not() -> None:
+    """Names say whether the work was corrected; the values stay on the card."""
+    store = ApprovalStore()
+    orch = _orchestrator(store)
+    _work_card(store)
+
+    await orch.respond_approval(
+        card_id="card-work", decision="approved", chosen_option="", values={"cover_letter": "secret salary talk"}
+    )
+
+    _, _, payload = orch._stream_manager.emit.call_args[0]
+    assert payload["edited_fields"] == ["cover_letter"]
+    assert "secret salary talk" not in str(payload)
+
+
+async def test_an_approved_value_is_never_written_to_the_ledger() -> None:
+    """The ledger is permanent, so form contents must not reach it."""
+    store = ApprovalStore()
+    orch = _orchestrator(store)
+    _work_card(store)
+
+    await orch.respond_approval(
+        card_id="card-work", decision="approved", chosen_option="", values={"cover_letter": "secret salary talk"}
+    )
+
+    entry = orch._ledger.write.call_args[0][0]
+    assert "secret salary talk" not in entry.model_dump_json()
+
+
+async def test_a_plain_card_still_announces_no_edits() -> None:
+    store = ApprovalStore()
+    orch = _orchestrator(store)
+    _pending_card(store)
+
+    await orch.respond_approval(card_id="card-1", decision="approved", chosen_option="Approve")
+
+    _, _, payload = orch._stream_manager.emit.call_args[0]
+    assert payload["edited_fields"] == []

@@ -20,7 +20,7 @@ import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from approval.models import ApprovalDecision, Card, CardType
+from approval.models import ApprovalDecision, Card, CardField, CardType
 from utils.ids import generate_id
 
 if TYPE_CHECKING:
@@ -117,6 +117,28 @@ class UserInteraction:
         resolved = await self.request_decision(card, event=CardEvent.APPROVAL, timeout=timeout)
         return resolved.status
 
+    async def request_work_approval(
+        self,
+        *,
+        task_id: str | None,
+        agent: str,
+        title: str,
+        message: str,
+        fields: list[CardField],
+        context: str = "",
+        options: tuple[str, ...] | list[str] = APPROVAL_DEFAULT_OPTIONS,
+        timeout: float | None = None,
+    ) -> Card:
+        """Hand over filled-in work for a decision; return the resolved card.
+
+        The resolved card carries ``response`` - the field values as the user
+        left them, including any edits. Returning the card rather than a bool is
+        the whole point: the caller needs what was decided, not only that
+        something was.
+        """
+        card = self._build(CardType.APPROVAL, task_id, agent, title, message, list(options), fields, context)
+        return await self.request_decision(card, event=CardEvent.APPROVAL, timeout=timeout)
+
     async def ask_user(
         self,
         *,
@@ -155,10 +177,15 @@ class UserInteraction:
         resolved = await self._store.wait_for_decision(card.id, timeout=timeout or self._default_timeout)
         if resolved is not None:
             return resolved
+        # These two copies bypass the store, so they must carry what the store
+        # would have written: a card that holds work always reports its values,
+        # and a caller reading `response` on an unanswered card gets what north
+        # proposed rather than a bare {} it has to special-case.
+        timed_out = {"status": ApprovalDecision.TIMEOUT_REJECTED, "response": card.field_values()}
         if self._store.resolve(card.id, ApprovalDecision.TIMEOUT_REJECTED):
-            return card.model_copy(update={"status": ApprovalDecision.TIMEOUT_REJECTED})
+            return card.model_copy(update=timed_out)
         late = self._store.get(card.id)
-        return late if late is not None else card.model_copy(update={"status": ApprovalDecision.TIMEOUT_REJECTED})
+        return late if late is not None else card.model_copy(update=timed_out)
 
     async def notify(self, card: Card, *, event: CardEvent | None = None) -> Card:
         """Register and surface *card* without blocking; return it.
@@ -212,12 +239,23 @@ class UserInteraction:
                 "title": card.title,
                 _EVENT_BODY_KEY[event]: card.message,
                 "options": card.options,
+                # Sent even when empty so a client can tell a card that carries
+                # work from one that is only a question, without re-fetching it.
+                "fields": [field.model_dump(mode="json") for field in card.fields],
+                "context": card.context,
             },
         )
 
     @staticmethod
     def _build(
-        card_type: CardType, task_id: str | None, agent: str, title: str, body: str, options: list[str]
+        card_type: CardType,
+        task_id: str | None,
+        agent: str,
+        title: str,
+        body: str,
+        options: list[str],
+        fields: list[CardField] | None = None,
+        context: str = "",
     ) -> Card:
         return Card(
             id=generate_id(),
@@ -227,4 +265,6 @@ class UserInteraction:
             title=title,
             message=body,
             options=options,
+            fields=fields or [],
+            context=context,
         )

@@ -85,6 +85,15 @@ export interface Artifact {
   content?: string;
 }
 
+export interface CardField {
+  name: string;
+  label: string;
+  type: "text" | "textarea" | "number" | "boolean" | "select" | "link";
+  value: unknown;
+  editable: boolean;
+  options: string[];
+}
+
 export interface Approval {
   id: string;
   type: string;
@@ -96,6 +105,12 @@ export interface Approval {
   status: string;
   chosen_option: string;
   created_at: string;
+  // Work North filled in and is handing over. Empty for a plain "may I?" card.
+  fields: CardField[];
+  // Read-only source material shown beside the fields.
+  context: string;
+  // The values as decided, once resolved.
+  response: Record<string, unknown>;
 }
 
 export interface DashboardData {

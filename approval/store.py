@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from typing import Any
 
 from approval.models import ApprovalDecision, Card
 
@@ -97,17 +98,32 @@ class ApprovalStore:
             logger.info("Cancelled %d pending approval card(s) for ended task %s", len(cancelled), task_id)
         return cancelled
 
-    def resolve(self, card_id: str, status: str, chosen_option: str = "") -> bool:
+    def resolve(
+        self,
+        card_id: str,
+        status: str,
+        chosen_option: str = "",
+        values: dict[str, Any] | None = None,
+    ) -> bool:
         """Resolve a pending card and wake any waiting coroutines.
 
         Returns True when the card existed and was pending. A card that is
         unknown or already resolved is left untouched (False) - a decision
         binds to exactly one issued card and cannot be replayed or overwritten.
+
+        *values* are the field values the user decided on. They are merged
+        against the issued card rather than stored as sent, so a card that
+        carries work always resolves to a complete, server-validated set - and
+        a card resolved without any (a timeout, a learned rule) still reports
+        what north had proposed.
         """
         card = self._cards.get(card_id)
         if card is None or card.status != _PENDING:
             return False
-        self._cards[card_id] = card.model_copy(update={"status": status, "chosen_option": chosen_option})
+        update: dict[str, Any] = {"status": status, "chosen_option": chosen_option}
+        if card.fields:
+            update["response"] = card.merge_response(values)
+        self._cards[card_id] = card.model_copy(update=update)
         event = self._events.get(card_id)
         if event is not None:
             event.set()

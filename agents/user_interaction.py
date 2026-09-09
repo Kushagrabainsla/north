@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, UserInteraction
-from approval.models import Card, CardType
+from approval.models import Card, CardField, CardType
 from utils.ids import generate_id
 
 if TYPE_CHECKING:
@@ -38,6 +38,8 @@ async def surface_card(
     body: str,
     options: list[str],
     event: CardEvent,
+    fields: list[CardField] | None = None,
+    context: str = "",
 ) -> Card:
     """Surface a card and block until it resolves; return it resolved.
 
@@ -60,5 +62,7 @@ async def surface_card(
         title=title,
         message=body,
         options=options,
+        fields=fields or [],
+        context=context,
     )
     return await interaction.request_decision(card, event=event, timeout=timeout)

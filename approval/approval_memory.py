@@ -102,9 +102,7 @@ class ApprovalMemory:
         """
         try:
             with open_db_connection(self._db_path) as conn:
-                removed = conn.execute(
-                    "DELETE FROM approval_decisions WHERE fingerprint = ?", (fingerprint,)
-                ).rowcount
+                removed = conn.execute("DELETE FROM approval_decisions WHERE fingerprint = ?", (fingerprint,)).rowcount
         except Exception:
             logger.warning("ApprovalMemory: failed to forget %s", fingerprint, exc_info=True)
             return False

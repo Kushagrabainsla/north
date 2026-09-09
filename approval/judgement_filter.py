@@ -40,7 +40,6 @@ NEVER_AUTO_APPROVE_AGENTS: frozenset[str] = frozenset(
 )
 
 
-
 class JudgementFilter:
     """Checks a Card against judgement_rules.md before it reaches the Notifier.
 

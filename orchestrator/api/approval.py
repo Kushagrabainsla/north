@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from orchestrator.api.deps import _get_orchestrator, router
 
@@ -12,6 +14,11 @@ class ApprovalResponse(BaseModel):
     card_id: str
     decision: str
     chosen_option: str = ""
+    # Field values as the user left them, for a card that carries work. Merged
+    # against the issued card rather than trusted: unknown names are dropped and
+    # read-only fields keep what north put there, so an approval can only ever
+    # approve what was actually shown.
+    values: dict[str, Any] = Field(default_factory=dict)
     # Legacy fields - ignored. The decision binds to the server-issued card:
     # task_id and agent are read from the stored card, never trusted from the client.
     task_id: str = ""
@@ -30,6 +37,7 @@ async def respond_approval(body: ApprovalResponse) -> None:
             card_id=body.card_id,
             decision=body.decision,
             chosen_option=body.chosen_option,
+            values=body.values,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None

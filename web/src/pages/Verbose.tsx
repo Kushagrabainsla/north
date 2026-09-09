@@ -2,7 +2,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "reac
 import { api, del, patch, post } from "../api";
 import { Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
-import type { Approval, Artifact, LedgerEntry, RoutingDecision, RoutingSkip } from "../types";
+import type { Approval, Artifact, CardField, LedgerEntry, RoutingDecision, RoutingSkip } from "../types";
 
 // One provider's part in a routing walk: what north called and what came back,
 // kept apart from what it never called. A walk touches hundreds of endpoints,
@@ -123,13 +123,57 @@ function ArtifactLibrary({ newsOnly = false }: { newsOnly?: boolean }) {
 
 export function Artifacts() { return <div className="page"><PageHeader eyebrow="Outputs" title="Artifacts" subtitle="Every report, briefing, note, plan, and file North has produced."/><ArtifactLibrary/></div>; }
 
+const fieldLabel = (field: CardField) => field.label || (field.name.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()));
+
+// One filled-in field. Read-only ones render as text so the card reads as work
+// to check rather than a form to fill: the point is to see what North put there,
+// and only the parts it offered as editable invite typing.
+function CardFieldRow({ field, value, onChange }: { field: CardField; value: unknown; onChange: (v: unknown) => void }) {
+  const text = value === null || value === undefined ? "" : String(value);
+  let control;
+  if (!field.editable) {
+    control = field.type === "link"
+      ? <a className="card-field-value" href={text} target="_blank" rel="noreferrer">{text}</a>
+      : <div className="card-field-value">{field.type === "boolean" ? (value ? "yes" : "no") : text || "—"}</div>;
+  } else if (field.type === "textarea") {
+    control = <textarea value={text} rows={6} onChange={e => onChange(e.target.value)}/>;
+  } else if (field.type === "boolean") {
+    control = <input type="checkbox" checked={Boolean(value)} onChange={e => onChange(e.target.checked)}/>;
+  } else if (field.type === "select") {
+    control = <select value={text} onChange={e => onChange(e.target.value)}>{field.options.map(o => <option key={o} value={o}>{o}</option>)}</select>;
+  } else {
+    control = <input type={field.type === "number" ? "number" : "text"} value={text} onChange={e => onChange(e.target.value)}/>;
+  }
+  return <label className="card-field"><span>{fieldLabel(field)}{field.editable && <em> editable</em>}</span>{control}</label>;
+}
+
+function ApprovalCard({ card, onDecide }: { card: Approval; onDecide: (decision: string, chosen_option: string, values: Record<string, unknown>) => void }) {
+  const fields = card.fields || [];
+  const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries(fields.map(f => [f.name, f.value])));
+  const [showContext, setShowContext] = useState(false);
+  const edited = fields.filter(f => f.editable && values[f.name] !== f.value).length;
+  return <article className="approval-card">
+    <div className="approval-type">{card.type}</div>
+    <h2>{card.title}</h2>
+    {card.message && <p>{card.message}</p>}
+    {fields.length > 0 && <div className="card-fields">{fields.map(field => <CardFieldRow key={field.name} field={field} value={values[field.name]} onChange={v => setValues(prev => ({ ...prev, [field.name]: v }))}/>)}</div>}
+    {card.context && <div className="card-context"><button className="link-button" onClick={() => setShowContext(!showContext)}>{showContext ? "Hide" : "Show"} source</button>{showContext && <pre>{card.context}</pre>}</div>}
+    <small>{card.agent} · {timeAgo(card.created_at)}{edited > 0 && ` · ${edited} field${edited > 1 ? "s" : ""} edited`}</small>
+    <div className="approval-actions">
+      {card.type === "question"
+        ? card.options.map(option => <button key={option} onClick={() => onDecide("answered", option, values)}>{option}</button>)
+        : <><button className="primary-button" onClick={() => onDecide("approved", "", values)}>Approve</button><button className="danger-button" onClick={() => onDecide("rejected", "", values)}>Reject</button></>}
+    </div>
+  </article>;
+}
+
 export function Approvals() {
   const resource = useResource<Approval[]>("/web/api/approvals", 4000);
-  const decide = async (card: Approval, decision: string, chosen_option = "") => { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option }); await resource.reload(); };
+  const decide = async (card: Approval, decision: string, chosen_option = "", values: Record<string, unknown> = {}) => { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option, values }); await resource.reload(); };
   if (resource.loading) return <Loading/>;
   const pending = (resource.data || []).filter(card => card.status === "pending");
   const history = (resource.data || []).filter(card => card.status !== "pending");
-  return <div className="page"><PageHeader eyebrow="Attention" title="Approvals" subtitle="Questions and consequential actions waiting for your decision."/>{resource.error && <ErrorNotice message={resource.error}/>}<div className="approval-stack">{pending.map(card => <article className="approval-card" key={card.id}><div className="approval-type">{card.type}</div><h2>{card.title}</h2><p>{card.message}</p><small>{card.agent} · {timeAgo(card.created_at)}</small><div className="approval-actions">{card.type === "question" ? card.options.map(option => <button key={option} onClick={() => decide(card, "answered", option)}>{option}</button>) : <><button className="primary-button" onClick={() => decide(card, "approved")}>Approve</button><button className="danger-button" onClick={() => decide(card, "rejected")}>Reject</button></>}</div></article>)}</div>{!pending.length && <Empty>Nothing needs your attention.</Empty>}<h2 className="section-title">Resolved</h2><div className="table-list">{history.map(card => <div className="table-row" key={card.id}><div className="row-main"><b>{card.title}</b><small>{card.agent} · {timeAgo(card.created_at)}</small></div><Status value={card.status}/></div>)}</div></div>;
+  return <div className="page"><PageHeader eyebrow="Attention" title="Approvals" subtitle="Questions and consequential actions waiting for your decision."/>{resource.error && <ErrorNotice message={resource.error}/>}<div className="approval-stack">{pending.map(card => <ApprovalCard key={card.id} card={card} onDecide={(d, o, v) => decide(card, d, o, v)}/>)}</div>{!pending.length && <Empty>Nothing needs your attention.</Empty>}<h2 className="section-title">Resolved</h2><div className="table-list">{history.map(card => <div className="table-row" key={card.id}><div className="row-main"><b>{card.title}</b><small>{card.agent} · {timeAgo(card.created_at)}</small></div><Status value={card.status}/></div>)}</div></div>;
 }
 
 interface Job {

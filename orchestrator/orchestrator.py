@@ -585,12 +585,15 @@ class Orchestrator:
         card_id: str,
         decision: str,
         chosen_option: str,
+        values: dict[str, Any] | None = None,
     ) -> None:
         """Record a user approval decision from the notification callback or Web UI.
 
         The decision is bound to the server-issued card: task_id and agent are
         taken from the stored card, never from the client, and a card can only
-        be resolved while it is pending.
+        be resolved while it is pending. *values* are the field values for a
+        card that carries work; they are merged against the issued card, so an
+        edit can only touch a field north offered as editable.
 
         Raises:
             LookupError: card_id does not correspond to an issued card.
@@ -602,8 +605,14 @@ class Orchestrator:
         if card.status != "pending":
             raise ValueError(f"Approval card {card_id!r} is already resolved ({card.status}).")
 
-        if not self._approval_store.resolve(card_id, decision, chosen_option=chosen_option):
+        if not self._approval_store.resolve(card_id, decision, chosen_option=chosen_option, values=values):
             raise ValueError(f"Approval card {card_id!r} could not be resolved.")
+        # Which fields the user changed, by name only. Whether the work was
+        # accepted as offered or corrected is the useful signal; the values
+        # themselves can hold anything the form did, so they go no further than
+        # the resolved card. Nothing below writes them to the ledger.
+        proposed = card.field_values()
+        edited = sorted(name for name, value in card.merge_response(values).items() if value != proposed.get(name))
 
         # An answered question is a durable preference in the user's own words  -
         # record it from a *learnable* source (the extraction pipeline reads it),
@@ -638,7 +647,12 @@ class Orchestrator:
             input=ledger_input,
             output=f"chosen_option={chosen_option or decision}",
             event="approval_responded",
-            payload={"card_id": card_id, "decision": decision, "chosen_option": chosen_option},
+            payload={
+                "card_id": card_id,
+                "decision": decision,
+                "chosen_option": chosen_option,
+                "edited_fields": edited,
+            },
         )
 
     async def emit_steer(self, task_id: str, instruction: str) -> None:
@@ -805,9 +819,7 @@ class Orchestrator:
 
         self._north_settings.set_power(mode)
         msg = f"Strategy set to **{mode.value}**. {describe(mode)}"
-        await self._journal.record(
-            task_id, "agent_completed", agent="orchestrator", output=msg, event="task_completed"
-        )
+        await self._journal.record(task_id, "agent_completed", agent="orchestrator", output=msg, event="task_completed")
         await self._stream_manager.emit_done(task_id)
         return True
 
@@ -862,9 +874,7 @@ class Orchestrator:
         logger.warning("Task %s rejected: conflicts with North Star goals", task_id)
         await self._mark_task_failed(task_id)
         await self._stream_manager.emit(task_id, "task_rejected", {"reason": str(error)})
-        await self._record_task_failure(
-            task_id, task_start, str(error), LedgerStatus.CANCELLED, "north_star_conflict"
-        )
+        await self._record_task_failure(task_id, task_start, str(error), LedgerStatus.CANCELLED, "north_star_conflict")
         await self._stream_manager.emit_done(task_id)
 
     async def _report_task_failure(self, task_id: str, task_start: float, error: Exception) -> None:
@@ -1338,9 +1348,7 @@ class Orchestrator:
         )
         return issues
 
-    async def _commit_coder_work(
-        self, task_id: str, prompt: str, workspace: str, *, round_label: str = ""
-    ) -> None:
+    async def _commit_coder_work(self, task_id: str, prompt: str, workspace: str, *, round_label: str = "") -> None:
         """Branch and commit whatever the coder changed. Never raises.
 
         Committing is bookkeeping, so it must not be able to fail a task whose

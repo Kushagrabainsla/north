@@ -50,9 +50,7 @@ class MacOSNotifier(Notifier):
         """
         alerter_path = shutil.which("alerter")
         if not alerter_path:
-            logger.warning(
-                "alerter not found on PATH - falling back to terminal notifier for card %s", card.id
-            )
+            logger.warning("alerter not found on PATH - falling back to terminal notifier for card %s", card.id)
             await self._terminal_fallback.notify(card)
             return
 
