@@ -48,10 +48,30 @@ _FAMILY_KEYWORDS: tuple[tuple[str, frozenset[str]], ...] = (
     # Immigration and identity paperwork. Grouped and capped hard because these
     # are near-duplicates of each other and consist largely of numbers the
     # extraction prompt is required to never emit.
-    ("identity", frozenset({
-        "passport", "license", "licence", "visa", "insurance", "ssn", "aadhaar",
-        "i9", "i20", "i94", "i589", "ds160", "ead", "opt", "cpt", "sevis", "greencard",
-    })),
+    (
+        "identity",
+        frozenset(
+            {
+                "passport",
+                "license",
+                "licence",
+                "visa",
+                "insurance",
+                "ssn",
+                "aadhaar",
+                "i9",
+                "i20",
+                "i94",
+                "i589",
+                "ds160",
+                "ead",
+                "opt",
+                "cpt",
+                "sevis",
+                "greencard",
+            }
+        ),
+    ),
     ("goals", frozenset({"goals", "plan", "roadmap", "okr", "journal", "reflection"})),
     ("writing", frozenset({"article", "post", "blog", "essay", "draft", "linkedin"})),
     ("project", frozenset({"readme", "spec", "design", "architecture", "findings", "blueprint"})),
@@ -98,8 +118,30 @@ _MIN_USEFUL_SCORE = 25
 # Words that say nothing about what a document is, so they must not decide which
 # family it belongs to.
 _STOPWORD_TOKENS: frozenset[str] = frozenset(
-    {"a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "my", "copy",
-     "final", "draft", "latest", "new", "old", "v", "pdf", "doc", "docx", "signed"}
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "of",
+        "for",
+        "to",
+        "in",
+        "on",
+        "my",
+        "copy",
+        "final",
+        "draft",
+        "latest",
+        "new",
+        "old",
+        "v",
+        "pdf",
+        "doc",
+        "docx",
+        "signed",
+    }
 )
 
 # How many meaningful words name an unrecognised family. Two is too coarse

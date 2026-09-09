@@ -52,7 +52,6 @@ _PROMPT_SOURCES = frozenset(
 )
 
 
-
 class EpisodeConsolidator:
     """Projects terminal ledger entries into episodic memory, one episode per task."""
 

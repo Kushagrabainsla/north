@@ -467,6 +467,7 @@ def _configure_routers(
         episodic_store=deps.episodic_store,
         approval_memory=approval_memory,
         unattended_rules=deps.unattended_rules,
+        card_continuations=deps.card_continuations,
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
     )

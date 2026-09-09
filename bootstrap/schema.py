@@ -56,8 +56,7 @@ class FactItem(BaseModel):
         min_length=10,
         max_length=500,
         description=(
-            "Specific factual statement about the user "
-            "(habits, finances, health, schedule, preferences, background)."
+            "Specific factual statement about the user (habits, finances, health, schedule, preferences, background)."
         ),
     )
     subject: FactSubject = Field(

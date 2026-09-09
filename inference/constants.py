@@ -59,7 +59,7 @@ MODEL_FAMILY_TIERS: dict[str, float] = {
     "claude-opus-4": 0.96,
     "claude-opus": 0.95,
     "gpt-5": 0.95,
-    "codex": 0.95,         # OpenAI's dedicated coding line
+    "codex": 0.95,  # OpenAI's dedicated coding line
     "claude-fable": 0.94,
     "gemini-3.1-pro": 0.94,
     "gemini-3-pro": 0.93,
@@ -79,26 +79,26 @@ MODEL_FAMILY_TIERS: dict[str, float] = {
     "minimax-m2.7": 0.76,
     "nemotron-3-super": 0.74,
     "deepseek-r1": 0.78,
-    "gemini-pro": 0.78,   # generic pro catch-all
-    "claude": 0.75,        # generic claude catch-all
+    "gemini-pro": 0.78,  # generic pro catch-all
+    "claude": 0.75,  # generic claude catch-all
     # Mid
     "llama-3.3-70b": 0.62,
     "gemini-3.1-flash": 0.72,
     "gemini-3-flash": 0.72,
-    "gemini-3": 0.72,      # any other gemini-3.x (3.6/3.7/3.8 flash) - not the 0.50 floor
+    "gemini-3": 0.72,  # any other gemini-3.x (3.6/3.7/3.8 flash) - not the 0.50 floor
     "gemini-2.5-flash": 0.70,
     "gemini-flash": 0.65,  # generic flash catch-all
     "qwen3.6-27b": 0.60,
     "qwen3-32b": 0.58,
     "deepseek": 0.60,
-    "gpt": 0.60,           # generic gpt catch-all
+    "gpt": 0.60,  # generic gpt catch-all
     # Small / fast
     "llama-3.1-8b": 0.32,
     "llama-3-8b": 0.30,
     "gpt-oss-20b": 0.42,
     "allam": 0.25,
     "llama": 0.40,
-    "gemini": 0.50,        # generic gemini catch-all (floor for unmatched gemini)
+    "gemini": 0.50,  # generic gemini catch-all (floor for unmatched gemini)
 }
 
 # (task_id, component, capability, priority) is reused for that task's later

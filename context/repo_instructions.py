@@ -8,7 +8,7 @@ fresh each call - no cache layer (see CODING_STYLE §22).
 
 Security: these files come from whatever repository the agent happens to be
 working in, so their content is attacker-influenced (prompt injection). They
-are returned clearly delimited and labeled as non-authoritative project data  - 
+are returned clearly delimited and labeled as non-authoritative project data  -
 never merged into system instructions - and the wrapper explicitly tells the
 model to ignore any instruction inside them that tries to change its
 behaviour, tools, or approval requirements.
@@ -107,9 +107,7 @@ def _load_sync(workspace: str) -> str:
                     rel_label = str(resolved.relative_to(top_base))
                 except ValueError:
                     rel_label = resolved.name
-                sections.append(
-                    f"<<<BEGIN UNTRUSTED REPO FILE: {rel_label}>>>\n{text}\n<<<END UNTRUSTED REPO FILE>>>"
-                )
+                sections.append(f"<<<BEGIN UNTRUSTED REPO FILE: {rel_label}>>>\n{text}\n<<<END UNTRUSTED REPO FILE>>>")
 
     if not sections:
         return ""
@@ -123,4 +121,3 @@ def _load_sync(workspace: str) -> str:
     if len(merged) > _MAX_INSTRUCTION_CHARS:
         merged = merged[:_MAX_INSTRUCTION_CHARS] + "\n\n[… repo conventions truncated]"
     return merged
-

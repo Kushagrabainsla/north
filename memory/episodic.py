@@ -282,8 +282,7 @@ class EpisodicStore:
     def _recent_sync(self, limit: int) -> list[dict[str, object]]:
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT id, task_id, domain, outcome, summary, timestamp "
-                "FROM episodes ORDER BY timestamp DESC LIMIT ?",
+                "SELECT id, task_id, domain, outcome, summary, timestamp FROM episodes ORDER BY timestamp DESC LIMIT ?",
                 (max(1, min(limit, 500)),),
             ).fetchall()
         return [dict(row) for row in rows]

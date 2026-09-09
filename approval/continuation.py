@@ -84,17 +84,34 @@ class CardContinuations:
 
     def __init__(self) -> None:
         self._handlers: dict[str, NextStep] = {}
+        # What each handler will do, in words, for the card to show before the
+        # decision is made. A card that submits an application and one that only
+        # files a draft must not look identical.
+        self._descriptions: dict[str, str] = {}
         # Kept so tasks are not garbage-collected mid-flight, and so tests can
         # await them rather than sleeping.
         self._running: set[asyncio.Task] = set()
 
-    def register(self, source: str, handler: NextStep) -> None:
+    def register(self, source: str, handler: NextStep, describes: str = "") -> None:
+        """Register the next step for *source*.
+
+        *describes* is shown on the card before you decide - "submits the
+        application" reads very differently from "saves a draft", and a review
+        page that renders both the same way is asking you to approve something
+        without saying what approving means.
+        """
         if not source:
             raise ValueError("a continuation needs a source to be registered against")
         self._handlers[source] = handler
+        self._descriptions[source] = describes
 
     def unregister(self, source: str) -> None:
         self._handlers.pop(source, None)
+        self._descriptions.pop(source, None)
+
+    def description_for(self, source: str) -> str:
+        """What deciding this card will cause, or "" if nothing is registered."""
+        return self._descriptions.get(source, "")
 
     def registered_for(self, source: str) -> bool:
         return source in self._handlers

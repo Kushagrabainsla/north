@@ -66,11 +66,7 @@ def skills_to_retire(
             tally[0] += 1
             if outcome in BAD_OUTCOMES:
                 tally[1] += 1
-    return sorted(
-        name
-        for name, (uses, bad) in tallies.items()
-        if uses >= min_uses and bad / uses >= failure_ratio
-    )
+    return sorted(name for name, (uses, bad) in tallies.items() if uses >= min_uses and bad / uses >= failure_ratio)
 
 
 def retire(learned_dir: Path, names: Iterable[str]) -> list[str]:
@@ -140,9 +136,7 @@ async def sweep(ledger, learned_dir: Path, *, days: int = 30) -> list[str]:
     from ledger.base import LedgerFilters
 
     try:
-        entries = await ledger.query(
-            LedgerFilters(since=datetime.now(UTC) - timedelta(days=days), limit=20_000)
-        )
+        entries = await ledger.query(LedgerFilters(since=datetime.now(UTC) - timedelta(days=days), limit=20_000))
     except Exception:
         logger.warning("Skill retirement: could not read the ledger", exc_info=True)
         return []

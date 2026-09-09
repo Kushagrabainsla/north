@@ -240,9 +240,6 @@ _EXT_DENSITY = {
 }
 
 
-
-
-
 def _get_user_tokens() -> set[str]:
     """Name tokens identifying the primary user, from the system account.
 

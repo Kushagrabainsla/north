@@ -116,6 +116,10 @@ export interface Approval {
   blocking: boolean;
   // What produced a card that outlives the task that made it.
   source: string;
+  // What deciding this card will cause, in words. Empty when nothing is
+  // registered for its source. "Submits the application" and "saves a draft"
+  // must not be identical-looking buttons.
+  next_step?: string;
 }
 
 export interface DashboardData {

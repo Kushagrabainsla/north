@@ -72,21 +72,13 @@ def inferred_facts(models: dict[str, ModelInfo]) -> list[ModelFacts]:
                 context_window=(
                     fact(info.context_window, Rank.INFERRED, SOURCE, when) if info.context_window > 0 else None
                 ),
-                supports_completion=fact(
-                    ModelCapability.COMPLETION in caps, Rank.INFERRED, INFERRED_SOURCE, when
-                ),
-                supports_tools=fact(
-                    ModelCapability.TOOL_CALLS in caps, Rank.INFERRED, INFERRED_SOURCE, when
-                ),
-                supports_reasoning=fact(
-                    ModelCapability.REASONING in caps, Rank.INFERRED, INFERRED_SOURCE, when
-                ),
+                supports_completion=fact(ModelCapability.COMPLETION in caps, Rank.INFERRED, INFERRED_SOURCE, when),
+                supports_tools=fact(ModelCapability.TOOL_CALLS in caps, Rank.INFERRED, INFERRED_SOURCE, when),
+                supports_reasoning=fact(ModelCapability.REASONING in caps, Rank.INFERRED, INFERRED_SOURCE, when),
                 # No source declares this and no name reliably implies it, so the
                 # assumption is "probably yes, until a call proves otherwise" -
                 # an OBSERVED contradiction is what settles it.
-                supports_structured=fact(
-                    ModelCapability.COMPLETION in caps, Rank.INFERRED, INFERRED_SOURCE, when
-                ),
+                supports_structured=fact(ModelCapability.COMPLETION in caps, Rank.INFERRED, INFERRED_SOURCE, when),
                 input_modalities=fact(modalities, Rank.INFERRED, INFERRED_SOURCE, when),
             )
         )

@@ -112,23 +112,17 @@ DEFAULT_PART_PROFILES: dict[str, PartProfile] = {
     "planner": PartProfile(
         "planner", frozenset({STRUCTURED}), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR
     ),
-    "synthesizer": PartProfile(
-        "synthesizer", frozenset(), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR
-    ),
+    "synthesizer": PartProfile("synthesizer", frozenset(), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR),
 }
 DEFAULT_PART_PROFILES.update(
     {
-        part: PartProfile(
-            part, frozenset({STRUCTURED}), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR
-        )
+        part: PartProfile(part, frozenset({STRUCTURED}), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR)
         for part in _TINY_STRUCTURED_PARTS
     }
 )
 DEFAULT_PART_PROFILES.update(
     {
-        part: PartProfile(
-            part, frozenset({STRUCTURED}), 0, Order.CHEAPEST, quality_floor_percentile=_BACKGROUND_FLOOR
-        )
+        part: PartProfile(part, frozenset({STRUCTURED}), 0, Order.CHEAPEST, quality_floor_percentile=_BACKGROUND_FLOOR)
         for part in _BACKGROUND_PARTS
     }
 )
@@ -246,9 +240,7 @@ def parse_profiles(raw: object) -> dict[str, PartProfile]:
                 order_by=str(spec.get("order_by", base.order_by)),
                 max_price=(None if spec.get("max_price") is None else float(spec["max_price"])),
                 quality_floor_percentile=(
-                    None
-                    if spec.get("quality_floor_percentile") is None
-                    else float(spec["quality_floor_percentile"])
+                    None if spec.get("quality_floor_percentile") is None else float(spec["quality_floor_percentile"])
                 ),
                 pinned_model=(str(spec["pinned_model"]) if spec.get("pinned_model") else None),
             )

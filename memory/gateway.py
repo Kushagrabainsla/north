@@ -132,9 +132,7 @@ class LocalMemoryGateway(MemoryGateway):
 
     # ------------------------------------------------------------------ #
 
-    async def _recall_facts(
-        self, query: str, limit: int, allowed_topics: frozenset[str] | None = None
-    ) -> list[str]:
+    async def _recall_facts(self, query: str, limit: int, allowed_topics: frozenset[str] | None = None) -> list[str]:
         if self._fact_store is None:
             return []
         try:

@@ -44,7 +44,6 @@ CLUSTER_SIMILARITY = 0.60
 MAX_LEARNED_SKILLS = 24
 
 
-
 class SkillDistiller:
     """Distils learned skills from clusters of similar successful episodes."""
 

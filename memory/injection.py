@@ -28,7 +28,6 @@ _DOCUMENT_MAP: dict[str, ContextDocument] = {
 }
 
 
-
 class ContextInjector:
     """Accepts text, file bytes, or a URL and adds the content to the context layer.
 

@@ -147,18 +147,37 @@ function CardFieldRow({ field, value, onChange }: { field: CardField; value: unk
   return <label className="card-field"><span>{fieldLabel(field)}{field.editable && <em> editable</em>}</span>{control}</label>;
 }
 
+// Reviewing does not need to be fast. This page is where something goes out in
+// your name, so optimising it for throughput optimises for the failure it exists
+// to prevent - a queue cleared in forty seconds and a queue rubber-stamped are
+// indistinguishable afterwards. Everything here is in aid of judging one item
+// well: the source material beside the work, what the decision will cause said
+// out loud, and no way to decide more than one thing at a time.
 function ApprovalCard({ card, onDecide }: { card: Approval; onDecide: (decision: string, chosen_option: string, values: Record<string, unknown>) => void }) {
   const fields = card.fields || [];
   const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries(fields.map(f => [f.name, f.value])));
   const [showContext, setShowContext] = useState(false);
   const edited = fields.filter(f => f.editable && values[f.name] !== f.value).length;
-  return <article className="approval-card">
-    <div className="approval-type">{card.type}</div>
-    <h2>{card.title}</h2>
+  // Prepared work is judged against its source, so the source is shown. For a
+  // guard-rail the context is incidental and stays behind a toggle - collapsing
+  // it there is right, and collapsing it here would make deciding-without-
+  // looking the default path, which is the specific thing to make harder.
+  const sideBySide = !card.blocking && Boolean(card.context);
+  const body = <>
     {card.message && <p>{card.message}</p>}
     {fields.length > 0 && <div className="card-fields">{fields.map(field => <CardFieldRow key={field.name} field={field} value={values[field.name]} onChange={v => setValues(prev => ({ ...prev, [field.name]: v }))}/>)}</div>}
-    {card.context && <div className="card-context"><button className="link-button" onClick={() => setShowContext(!showContext)}>{showContext ? "Hide" : "Show"} source</button>{showContext && <pre>{card.context}</pre>}</div>}
+    {card.context && !sideBySide && <div className="card-context"><button className="link-button" onClick={() => setShowContext(!showContext)}>{showContext ? "Hide" : "Show"} source</button>{showContext && <pre>{card.context}</pre>}</div>}
+  </>;
+  return <article className="approval-card">
+    <div className="approval-type">{card.type}{!card.blocking && <span className="card-unblocking"> · nothing is waiting on this</span>}</div>
+    <h2>{card.title}</h2>
+    {sideBySide
+      ? <div className="approval-split"><div className="approval-work">{body}</div><aside className="approval-source"><div className="editor-label">Source</div><pre>{card.context}</pre></aside></div>
+      : body}
     <small>{card.agent} · {timeAgo(card.created_at)}{edited > 0 && ` · ${edited} field${edited > 1 ? "s" : ""} edited`}</small>
+    {/* What approving will actually do. Two cards with identical buttons can
+        submit an application and save a draft respectively. */}
+    {card.next_step && <p className="approval-consequence">Approving will <b>{card.next_step}</b>.</p>}
     <div className="approval-actions">
       {card.type === "question"
         ? card.options.map(option => <button key={option} onClick={() => onDecide("answered", option, values)}>{option}</button>)
@@ -168,12 +187,59 @@ function ApprovalCard({ card, onDecide }: { card: Approval; onDecide: (decision:
 }
 
 export function Approvals() {
-  const resource = useResource<Approval[]>("/web/api/approvals", 4000);
+  // A slow poll as the floor, with SSE on top. The stream is what makes a new
+  // card appear; the poll is what stops a dropped connection turning into a
+  // queue that has silently stopped updating.
+  const resource = useResource<Approval[]>("/web/api/approvals", 30000);
+  const { reload } = resource;
+  useEffect(() => {
+    const stream = new EventSource("/orchestrator/stream");
+    for (const event of ["approval_required", "question_required", "approval_responded"]) {
+      stream.addEventListener(event, () => { void reload(); });
+    }
+    return () => stream.close();
+  }, [reload]);
+
   const decide = async (card: Approval, decision: string, chosen_option = "", values: Record<string, unknown> = {}) => { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option, values }); await resource.reload(); };
   if (resource.loading) return <Loading/>;
   const pending = (resource.data || []).filter(card => card.status === "pending");
   const history = (resource.data || []).filter(card => card.status !== "pending");
-  return <div className="page"><PageHeader eyebrow="Attention" title="Approvals" subtitle="Questions and consequential actions waiting for your decision."/>{resource.error && <ErrorNotice message={resource.error}/>}<div className="approval-stack">{pending.map(card => <ApprovalCard key={card.id} card={card} onDecide={(d, o, v) => decide(card, d, o, v)}/>)}</div>{!pending.length && <Empty>Nothing needs your attention.</Empty>}<h2 className="section-title">Resolved</h2><div className="table-list">{history.map(card => <div className="table-row" key={card.id}><div className="row-main"><b>{card.title}</b><small>{card.agent} · {timeAgo(card.created_at)}</small></div><Status value={card.status}/></div>)}</div></div>;
+
+  // Split on whether anything is waiting, not on urgency-as-styling. An agent
+  // frozen mid-action and an application that can wait until tonight have
+  // different costs of being missed, and one undifferentiated stack hides that.
+  // Two pages was considered and rejected: two inboxes means missed items.
+  const blocking = pending.filter(card => card.blocking);
+  const prepared = pending.filter(card => !card.blocking);
+
+  // Deliberately no "approve all". Reject-all would be fine; a bulk approve is
+  // the fastest possible review and the worst one, and this page exists for
+  // per-item judgement.
+  const section = (cards: Approval[]) =>
+    <div className="approval-stack">{cards.map(card => <ApprovalCard key={card.id} card={card} onDecide={(d, o, v) => decide(card, d, o, v)}/>)}</div>;
+
+  return <div className="page">
+    <PageHeader eyebrow="Attention" title="Approvals"
+      subtitle={pending.length ? `${pending.length} waiting · ${blocking.length} blocking something` : "Questions and consequential actions waiting for your decision."}/>
+    {resource.error && <ErrorNotice message={resource.error}/>}
+
+    {blocking.length > 0 && <>
+      <h2 className="section-title">Needs you now</h2>
+      <p className="muted memory-note">Something is stopped until you answer.</p>
+      {section(blocking)}
+    </>}
+
+    {prepared.length > 0 && <>
+      <h2 className="section-title">When you have a minute</h2>
+      <p className="muted memory-note">Work north finished and left for you. Nothing is blocked; take the time to read it.</p>
+      {section(prepared)}
+    </>}
+
+    {!pending.length && <Empty>Nothing needs your attention.</Empty>}
+
+    <h2 className="section-title">Resolved</h2>
+    <div className="table-list">{history.map(card => <div className="table-row" key={card.id}><div className="row-main"><b>{card.title}</b><small>{card.agent} · {timeAgo(card.created_at)}</small></div><Status value={card.status}/></div>)}</div>
+  </div>;
 }
 
 interface Job {

@@ -52,9 +52,7 @@ class OnnxTextEncoder:
         options.intra_op_num_threads = 1
         options.inter_op_num_threads = 1
         options.log_severity_level = 3  # warnings and worse only
-        self._session = onnxruntime.InferenceSession(
-            weights, sess_options=options, providers=["CPUExecutionProvider"]
-        )
+        self._session = onnxruntime.InferenceSession(weights, sess_options=options, providers=["CPUExecutionProvider"])
         self._input_names = {i.name for i in self._session.get_inputs()}
 
     def encode(self, texts: list[str]) -> list[list[float]]:

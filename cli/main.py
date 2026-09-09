@@ -283,6 +283,7 @@ def _launch_tui(
 
 # ── task ─────────────────────────────────────────────────────────────────────
 
+
 # A plain command, not a command group. As a group with a positional `prompt`,
 # the first word of every prompt was parsed as a subcommand name first: the
 # documented `north task cancel <id>` failed with "No such command <id>", and
@@ -645,6 +646,7 @@ def cancel_any(
 
 cron_app = typer.Typer(help="Recurring schedules: list, add, change, remove.", invoke_without_command=True)
 app.add_typer(cron_app, name="cron")
+
 
 def _day_selection(days: str | None) -> list[str] | str | None:
     """Turn --days into what the API takes, checking it here so errors land locally.
@@ -1343,8 +1345,7 @@ def inference_routing(
             _console.print(f"    [bright_black]needs {rendered}[/bright_black]")
         skipped = row.get("skipped") or []
         _console.print(
-            f"    [bright_black]considered {row.get('considered', 0)}, "
-            f"passed over {len(skipped)}[/bright_black]"
+            f"    [bright_black]considered {row.get('considered', 0)}, passed over {len(skipped)}[/bright_black]"
         )
         for skip in skipped[:5]:
             _console.print(
@@ -2474,9 +2475,12 @@ def _north_processes(port: int = 8000) -> list:
             # function's whole purpose is to send SIGKILL to what it matches.
             name = (proc.info.get("name") or "").lower()
             looks_like_north = name.startswith("python") or name in {"north", "uvicorn"}
-            if looks_like_north and any(
-                k in cmdline for k in ("north start", "orchestrator.app:app", "bin/north")
-            ) or proc.info.get("username") == me and _listens_on(proc, port):
+            if (
+                looks_like_north
+                and any(k in cmdline for k in ("north start", "orchestrator.app:app", "bin/north"))
+                or proc.info.get("username") == me
+                and _listens_on(proc, port)
+            ):
                 remember(proc)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue

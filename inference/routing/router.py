@@ -218,9 +218,7 @@ class ChainRouter:
         rate-limited for a tenth of a second is not a reason to fail a call. The
         chain is rebuilt after the wait, because what is available has changed.
         """
-        result, walk, profile = await self._walk(
-            component, requirements, call_fn, is_valid, capability, task_id, pool
-        )
+        result, walk, profile = await self._walk(component, requirements, call_fn, is_valid, capability, task_id, pool)
         if result is not _NO_RESULT:
             return result
 

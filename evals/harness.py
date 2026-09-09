@@ -107,9 +107,7 @@ def load_tasks(root: Path) -> list[EvalTask]:
 
 
 def _run(argv: list[str], cwd: Path, timeout: int = _GIT_TIMEOUT_S) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv, cwd=str(cwd), capture_output=True, text=True, timeout=timeout, check=False
-    )
+    return subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True, timeout=timeout, check=False)
 
 
 def prepare_workspace(task: EvalTask, dest: Path) -> Path:

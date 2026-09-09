@@ -94,9 +94,9 @@ _STEP_LABELS: dict[str, str] = {
 }
 
 
-
 # ── Context documents + config keys ─────────────────────────────────────────
 _VALID_DOCS = ["user", "judgement_rules", "north_stars", "soul"]
+
 
 def _bool_cast(v: str) -> bool:
     if isinstance(v, bool):

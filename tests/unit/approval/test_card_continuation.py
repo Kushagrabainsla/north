@@ -78,7 +78,7 @@ async def test_rejecting_also_leads_somewhere(wiring) -> None:
 
 @pytest.mark.asyncio
 async def test_a_chosen_option_reaches_the_step(wiring) -> None:
-    """"Approve / Reject / Approve without the cover letter" is three next steps."""
+    """ "Approve / Reject / Approve without the cover letter" is three next steps."""
     continuations, store = wiring
     started: list[CardOutcome] = []
     continuations.register("job_applications", lambda outcome: _record(started, outcome))
@@ -108,7 +108,7 @@ async def test_the_step_runs_on_your_edits_not_the_proposal(wiring) -> None:
 
 @pytest.mark.asyncio
 async def test_an_expired_card_is_not_a_refusal(wiring) -> None:
-    """"Nobody was there" must not be learned from as "you said no"."""
+    """ "Nobody was there" must not be learned from as "you said no"."""
     continuations, store = wiring
     started: list[CardOutcome] = []
     continuations.register("job_applications", lambda outcome: _record(started, outcome))

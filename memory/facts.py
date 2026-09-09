@@ -36,28 +36,74 @@ logger = logging.getLogger(__name__)
 _SECRET_RE = SECRET_RE
 _CC_RE = CC_RE
 
+
 def _contains_secret(text: str) -> bool:
     """Check if text contains secrets, API keys, passwords, credit cards, etc."""
     return bool(_SECRET_RE.search(text) or _CC_RE.search(text))
 
+
 def _normalize_for_dedup(text: str) -> str:
     """Normalize text for deduplication comparison.
-    
+
     Lowercases, removes punctuation, normalizes whitespace, removes common filler words.
     """
     # Lowercase
     text = text.lower()
     # Remove punctuation
-    text = re.sub(r'[^\w\s]', ' ', text)
+    text = re.sub(r"[^\w\s]", " ", text)
     # Normalize whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
     # Remove common filler words that don't affect meaning
-    filler_words = {'the', 'a', 'an', 'is', 'was', 'were', 'am', 'are', 'be', 'been', 'being',
-                    'has', 'have', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
-                    'my', 'your', 'his', 'her', 'their', 'our', 'its', 'this', 'that', 'these', 'those',
-                    'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'or', 'and', 'but'}
+    filler_words = {
+        "the",
+        "a",
+        "an",
+        "is",
+        "was",
+        "were",
+        "am",
+        "are",
+        "be",
+        "been",
+        "being",
+        "has",
+        "have",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "my",
+        "your",
+        "his",
+        "her",
+        "their",
+        "our",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "from",
+        "as",
+        "or",
+        "and",
+        "but",
+    }
     words = [w for w in text.split() if w not in filler_words]
-    return ' '.join(words)
+    return " ".join(words)
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS context_facts (
@@ -158,10 +204,35 @@ _DEDUP_SCAN_LIMIT: int = 500
 # class" never matches "the user's CS 249 instructor is ...".
 _IDENTIFIER_RE = re.compile(r"\b(?:[A-Z]{2,4}\s?\d{2,3}|[A-Z]{3,}[a-zA-Z]*)\b")
 # Acronyms so common they are their own meaning, or too generic to expand well.
-_IDENTIFIER_STOPWORDS: frozenset[str] = frozenset({
-    "THE", "AND", "USD", "GPA", "PHD", "SJSU", "USA", "API", "APIs", "PDF", "SQL", "AWS",
-    "GPU", "GPUs", "CPU", "RAM", "URL", "HTTP", "JSON", "YAML", "CSV", "PST", "UTC", "AI", "ML",
-})
+_IDENTIFIER_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "THE",
+        "AND",
+        "USD",
+        "GPA",
+        "PHD",
+        "SJSU",
+        "USA",
+        "API",
+        "APIs",
+        "PDF",
+        "SQL",
+        "AWS",
+        "GPU",
+        "GPUs",
+        "CPU",
+        "RAM",
+        "URL",
+        "HTTP",
+        "JSON",
+        "YAML",
+        "CSV",
+        "PST",
+        "UTC",
+        "AI",
+        "ML",
+    }
+)
 # An identifier used in only one fact has nothing to disambiguate against.
 _IDENTIFIER_MIN_USES: int = 2
 
@@ -232,9 +303,7 @@ def _retention_rank_sql() -> str:
     exactly one definition. Categories outside the topic set - facts learned in
     conversation, filed under their context document - take the default rank.
     """
-    whens = " ".join(
-        f"WHEN category = '{topic}' THEN {rank}" for topic, rank in sorted(_TOPIC_RETENTION_RANK.items())
-    )
+    whens = " ".join(f"WHEN category = '{topic}' THEN {rank}" for topic, rank in sorted(_TOPIC_RETENTION_RANK.items()))
     return f"(CASE {whens} ELSE {_DEFAULT_RETENTION_RANK} END)"
 
 
@@ -315,8 +384,11 @@ class FactStore:
             return 0
         try:
             candidates = await asyncio.to_thread(
-                self._candidates_in_band_sync, category, new_emb,
-                _SUPERSEDE_MIN_SIMILARITY, _DEDUP_SIMILARITY_THRESHOLD,
+                self._candidates_in_band_sync,
+                category,
+                new_emb,
+                _SUPERSEDE_MIN_SIMILARITY,
+                _DEDUP_SIMILARITY_THRESHOLD,
             )
             if not candidates:
                 return 0
@@ -353,8 +425,8 @@ class FactStore:
         try:
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(
-                    sql, (emb_json, category, _STATUS_ACTIVE, _DEDUP_SCAN_LIMIT,
-                          low, high, _SUPERSEDE_MAX_CANDIDATES),
+                    sql,
+                    (emb_json, category, _STATUS_ACTIVE, _DEDUP_SCAN_LIMIT, low, high, _SUPERSEDE_MAX_CANDIDATES),
                 ).fetchall()
             return [(r["id"], r["content"]) for r in rows]
         except Exception:
@@ -424,10 +496,7 @@ class FactStore:
         candidates = sorted(k for k, n in uses.items() if n >= _IDENTIFIER_MIN_USES)
         if not candidates:
             return 0
-        context = {
-            token: [c for _, c in facts if token in c][:6]
-            for token in candidates
-        }
+        context = {token: [c for _, c in facts if token in c][:6] for token in candidates}
         try:
             glossary = await self._glossary_fn(context)
         except Exception:
@@ -454,9 +523,7 @@ class FactStore:
 
     def _active_id_rows_sync(self) -> list[tuple[str, str]]:
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute(
-                "SELECT id, content FROM context_facts WHERE status = ?", (_STATUS_ACTIVE,)
-            ).fetchall()
+            rows = conn.execute("SELECT id, content FROM context_facts WHERE status = ?", (_STATUS_ACTIVE,)).fetchall()
         return [(r["id"], r["content"]) for r in rows]
 
     async def deduplicate(self) -> int:
@@ -612,8 +679,7 @@ class FactStore:
     def _unembedded_sync(self) -> list[tuple[str, str]]:
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT id, content FROM context_facts "
-                "WHERE embedding IS NULL OR embedding = '' OR embedding = '[]'"
+                "SELECT id, content FROM context_facts WHERE embedding IS NULL OR embedding = '' OR embedding = '[]'"
             ).fetchall()
         return [(r["id"], r["content"]) for r in rows]
 
@@ -667,19 +733,19 @@ class FactStore:
         content = content.strip()
         if not content:
             return False
-        
+
         # Filter secrets before persistence - defense in depth
         if _contains_secret(content):
             logger.warning("FactStore: rejected fact containing secret/credential")
             return False
-        
+
         # Exact-match dedup runs BEFORE any embedding call: identical content
         # is a duplicate by definition, and skipping the embed for it saves
         # rate-limit budget as well as rows.
         if await asyncio.to_thread(self._find_exact_sync, category, content):
             await asyncio.to_thread(self._touch_sync, category, content)
             return False
-        
+
         # Normalized text dedup (catches paraphrases like
         # "User studies CS at SJSU" vs "User studies computer science at San Jose State University")
         matched_id = await asyncio.to_thread(self._find_normalized_sync, category, content)
@@ -703,9 +769,17 @@ class FactStore:
 
         inserted, fact_id = await asyncio.to_thread(
             self._insert_or_replace_sync,
-            content, category, emb_json, replace_id,
-            subject, confidence, status,
-            source_path, source_hash, source_mtime, evidence
+            content,
+            category,
+            emb_json,
+            replace_id,
+            subject,
+            confidence,
+            status,
+            source_path,
+            source_hash,
+            source_mtime,
+            evidence,
         )
         if self._cache is not None:
             if not inserted and replace_id:
@@ -763,9 +837,7 @@ class FactStore:
         scored = [
             (content, cosine_similarity(qvec, emb))
             for _, content, emb, category, _, _ in cache
-            if emb
-            and len(emb) == len(qvec)
-            and (allowed_categories is None or category in allowed_categories)
+            if emb and len(emb) == len(qvec) and (allowed_categories is None or category in allowed_categories)
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
         return _apply_recall_cutoff(scored, max_results)
@@ -914,7 +986,7 @@ class FactStore:
 
     def _find_normalized_sync(self, category: str, content: str) -> str | None:
         """Find existing fact with normalized text match in *category*.
-        
+
         Returns the id of the matching fact if found, else None.
         """
         normalized = _normalize_for_dedup(content)
@@ -989,10 +1061,20 @@ class FactStore:
                 pass
         return None
 
-    def _insert_or_replace_sync(self, content: str, category: str, emb_json: str, replace_id: str | None,
-                             subject: str = "user", confidence: float = 0.8, status: str = "active",
-                             source_path: str | None = None, source_hash: str | None = None,
-                             source_mtime: float | None = None, evidence: str | None = None) -> tuple[bool, str]:
+    def _insert_or_replace_sync(
+        self,
+        content: str,
+        category: str,
+        emb_json: str,
+        replace_id: str | None,
+        subject: str = "user",
+        confidence: float = 0.8,
+        status: str = "active",
+        source_path: str | None = None,
+        source_hash: str | None = None,
+        source_mtime: float | None = None,
+        evidence: str | None = None,
+    ) -> tuple[bool, str]:
         """Insert *content*; returns (is_new_row, fact_id).
 
         When *replace_id* is set the existing row is updated in place (cosine
@@ -1012,8 +1094,21 @@ class FactStore:
                 (id, content, category, embedding, updated_at, subject, confidence, status,
                  source_path, source_hash, source_mtime, evidence, observed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (fact_id, content, category, emb_json, now, subject, confidence, status,
-                 source_path, source_hash, source_mtime, evidence, now),
+                (
+                    fact_id,
+                    content,
+                    category,
+                    emb_json,
+                    now,
+                    subject,
+                    confidence,
+                    status,
+                    source_path,
+                    source_hash,
+                    source_mtime,
+                    evidence,
+                    now,
+                ),
             )
             # Retention: keep the store (and every scan over it) bounded, giving
             # up superseded rows first, then the least defining topics, and only
@@ -1032,8 +1127,7 @@ class FactStore:
     def _load_all_sync(self) -> list[tuple[str, str, str, str, str, str]]:
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT id, content, embedding, category, subject, status FROM context_facts "
-                "WHERE status = ?",
+                "SELECT id, content, embedding, category, subject, status FROM context_facts WHERE status = ?",
                 (_STATUS_ACTIVE,),
             ).fetchall()
         return [

@@ -80,10 +80,5 @@ class InferenceRouter(ABC):
 
     def health_summary(self) -> dict[str, int | bool]:
         """Return whether the router currently has at least one usable model."""
-        models = {
-            (model.provider, model.id)
-            for pool in self.current_pools().values()
-            for model in pool.models
-        }
+        models = {(model.provider, model.id) for pool in self.current_pools().values() for model in pool.models}
         return {"ready": bool(models), "models": len(models), "providers": len({p for p, _ in models})}
-

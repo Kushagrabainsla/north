@@ -356,9 +356,7 @@ class RateLimitStatusStore:
             snapshot = list(self._records.values())
             self._dirty = False
             try:
-                await asyncio.get_running_loop().run_in_executor(
-                    None, self._persist_sync, snapshot
-                )
+                await asyncio.get_running_loop().run_in_executor(None, self._persist_sync, snapshot)
             except Exception:
                 logger.warning("Failed to persist rate-limit status", exc_info=True)
 
@@ -375,13 +373,7 @@ class RateLimitStatusStore:
             try:
                 now = time.time()
                 recs = records if records is not None else list(self._records.values())
-                data = {
-                    "records": [
-                        r.to_dict()
-                        for r in recs
-                        if r.available_at_epoch > now
-                    ]
-                }
+                data = {"records": [r.to_dict() for r in recs if r.available_at_epoch > now]}
                 tmp_path = self._path.with_suffix(".tmp")
                 tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
                 tmp_path.replace(self._path)

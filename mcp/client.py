@@ -100,9 +100,7 @@ class McpClient:
         )
         return McpCallResult.model_validate(result)
 
-    async def _send_request(
-        self, method: str, params: dict[str, Any], timeout: float | None = None
-    ) -> dict[str, Any]:
+    async def _send_request(self, method: str, params: dict[str, Any], timeout: float | None = None) -> dict[str, Any]:
         if self._proc is None or self._proc.stdin is None or self._closed:
             raise McpError(f"MCP server {self.name!r} is not running")
 

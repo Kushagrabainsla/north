@@ -288,19 +288,23 @@ class CodexCredentialProvider:
         return CodexToken(access, refresh, time.time() + expires_in, account_id)
 
     async def _exchange_code(self, code: str, verifier: str) -> CodexToken:
-        return await self._request_token({
-            "grant_type": "authorization_code",
-            "client_id": CODEX_CLIENT_ID,
-            "code": code,
-            "code_verifier": verifier,
-            "redirect_uri": CODEX_REDIRECT_URI,
-        })
+        return await self._request_token(
+            {
+                "grant_type": "authorization_code",
+                "client_id": CODEX_CLIENT_ID,
+                "code": code,
+                "code_verifier": verifier,
+                "redirect_uri": CODEX_REDIRECT_URI,
+            }
+        )
 
     async def _refresh(self, token: CodexToken) -> CodexToken:
         if not token.refresh_token:
             raise ProviderAuthError("OpenAI Codex refresh token is missing; log in again")
-        return await self._request_token({
-            "grant_type": "refresh_token",
-            "client_id": CODEX_CLIENT_ID,
-            "refresh_token": token.refresh_token,
-        })
+        return await self._request_token(
+            {
+                "grant_type": "refresh_token",
+                "client_id": CODEX_CLIENT_ID,
+                "refresh_token": token.refresh_token,
+            }
+        )

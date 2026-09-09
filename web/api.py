@@ -284,7 +284,21 @@ async def web_task_detail(task_id: str) -> dict[str, Any]:
 
 @router.get("/approvals")
 async def approvals(limit: int = 100) -> list[dict[str, Any]]:
-    return [card.model_dump(mode="json") for card in current_services().require("approval_store").all(limit)]
+    """Every card, with what deciding it will actually cause.
+
+    `next_step` is the part the page cannot work out for itself. Since resolving
+    a card runs the step its creator registered, "this submits the application"
+    and "this saves a draft" are different consequences behind identical-looking
+    buttons - and the review page exists so you can judge before deciding.
+    """
+    continuations = current_services().card_continuations
+    cards = current_services().require("approval_store").all(limit)
+    payload = []
+    for card in cards:
+        item = card.model_dump(mode="json")
+        item["next_step"] = "" if continuations is None else continuations.description_for(card.source)
+        payload.append(item)
+    return payload
 
 
 @router.get("/routing/decisions")

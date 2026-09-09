@@ -116,23 +116,42 @@ def capabilities_from_model_id(model_id: str, provider_name: str = "") -> frozen
     # Deep Reasoning / Complex Coding. "codex" sits alongside "coder": the
     # gpt-*-codex models are OpenAI's coding line and belong in this pool.
     reasoning_tokens = (
-        "sonnet", "opus", "gpt-5", "gpt-4o", "gpt-4.1", "pro", "r1", "coder", "codex", "70b", "405b", "120b",
+        "sonnet",
+        "opus",
+        "gpt-5",
+        "gpt-4o",
+        "gpt-4.1",
+        "pro",
+        "r1",
+        "coder",
+        "codex",
+        "70b",
+        "405b",
+        "120b",
     )
     reasoning_keywords = [
-        "deepseek-r1", "deepseek-chat", "deepseek-v3", "qwen3-coder", "qwen-2.5-coder",
+        "deepseek-r1",
+        "deepseek-chat",
+        "deepseek-v3",
+        "qwen3-coder",
+        "qwen-2.5-coder",
         "qwen3.6-27b",
         # Current strong open families. Without these the free tier had exactly one
         # reasoning-tagged model, so no real choice was ever made in the pool.
-        "minimax-m", "glm-4.6", "glm-5", "kimi-k", "nemotron-3-ultra", "nemotron-3-super",
-        "inkling", "laguna-s", "laguna-xs",
+        "minimax-m",
+        "glm-4.6",
+        "glm-5",
+        "kimi-k",
+        "nemotron-3-ultra",
+        "nemotron-3-super",
+        "inkling",
+        "laguna-s",
+        "laguna-xs",
         *alpha_variants,
     ]
     is_reasoning = _family_matches(lower, tokens, reasoning_tokens) or any(k in lower for k in reasoning_keywords)
     is_mini_nano = (
-        ("mini" in tokens and "gemini" not in tokens)
-        or "nano" in tokens
-        or "flash-lite" in lower
-        or "guard" in lower
+        ("mini" in tokens and "gemini" not in tokens) or "nano" in tokens or "flash-lite" in lower or "guard" in lower
     )
     if is_reasoning and not is_mini_nano:
         caps.add(ModelCapability.REASONING)

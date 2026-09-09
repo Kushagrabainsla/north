@@ -73,9 +73,7 @@ def _item_descriptor(item: dict) -> dict[str, str]:
 
 def _message_text(item: dict) -> str:
     return "".join(
-        str(part.get("text", ""))
-        for part in item.get("content") or []
-        if part.get("type") in {"output_text", "text"}
+        str(part.get("text", "")) for part in item.get("content") or [] if part.get("type") in {"output_text", "text"}
     )
 
 
@@ -89,9 +87,7 @@ class _RequestTrace:
 
     def observe(self, headers: httpx.Headers) -> None:
         self.request_id = headers.get("x-request-id", "")
-        self.rate_limits = {
-            key: value for key, value in headers.items() if key.lower().startswith("x-ratelimit-")
-        }
+        self.rate_limits = {key: value for key, value in headers.items() if key.lower().startswith("x-ratelimit-")}
 
 
 class _ResponsesStream:
@@ -308,12 +304,14 @@ def _assistant_call_items(message: dict) -> list[dict]:
         arguments = function.get("arguments", "{}")
         if not isinstance(arguments, str):
             arguments = json.dumps(arguments)
-        items.append({
-            "type": "function_call",
-            "call_id": str(call.get("id", "")),
-            "name": str(function.get("name", "")),
-            "arguments": arguments,
-        })
+        items.append(
+            {
+                "type": "function_call",
+                "call_id": str(call.get("id", "")),
+                "name": str(function.get("name", "")),
+                "arguments": arguments,
+            }
+        )
     return items
 
 
@@ -409,11 +407,13 @@ class OpenAICodexProvider:
             live[model_id] = ModelInfo(
                 model_id=model_id,
                 provider_name=self.name,
-                capabilities=frozenset({
-                    ModelCapability.COMPLETION,
-                    ModelCapability.TOOL_CALLS,
-                    ModelCapability.REASONING,
-                }),
+                capabilities=frozenset(
+                    {
+                        ModelCapability.COMPLETION,
+                        ModelCapability.TOOL_CALLS,
+                        ModelCapability.REASONING,
+                    }
+                ),
                 context_window=context_window,
                 cost_per_token=0.0,
                 base_quality=0.9,

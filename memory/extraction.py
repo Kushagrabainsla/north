@@ -55,7 +55,6 @@ _USER_AUTHORED_SOURCES = frozenset(
 _SKIPPED_STATUSES = {LedgerStatus.FAILED, LedgerStatus.CANCELLED}
 
 
-
 # Deterministic dedup thresholds, measured as Jaccard overlap of content tokens.
 # At/above _DEDUP_CERTAIN a new fact is a duplicate outright (no LLM call); at/above
 # _DEDUP_MAYBE - or sharing ≥2 content words - it is ambiguous enough to spend one
@@ -80,7 +79,6 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
 _MAX_DOCUMENT_CHARS = 8_000  # trim when a context doc exceeds this
 _TRIM_TARGET_CHARS = 5_000  # target size after trimming
 _BACKUP_INTERVAL_HOURS = 24  # minimum hours between full context backups
-
 
 
 class ExtractionPipeline:
@@ -148,11 +146,7 @@ class ExtractionPipeline:
         north "user gives standing approval for matching roles" - a consent
         recorded from a conversation the user walked out of.
         """
-        return {
-            entry.task_id
-            for entry in entries
-            if entry.task_id and entry.status is LedgerStatus.CANCELLED
-        }
+        return {entry.task_id for entry in entries if entry.task_id and entry.status is LedgerStatus.CANCELLED}
 
     def _filter_valid_entries(self, entries: list[LedgerEntry]) -> list[LedgerEntry]:
         """Keep only the user's own non-trivial messages; advance the watermark past the rest.

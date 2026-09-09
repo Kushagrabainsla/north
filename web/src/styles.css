@@ -319,3 +319,17 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
 .rule-disabled { opacity: 0.5; }
 .rule-disabled .memory-main b { text-decoration: line-through; }
 .fact-editor select { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+
+/* The review page. Prepared work is judged against its source, so the two sit
+   side by side rather than the source hiding behind a disclosure - collapsed by
+   default would make deciding-without-looking the default path. */
+.approval-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.85fr); gap: 20px; align-items: start; }
+.approval-work { min-width: 0; }
+.approval-source { min-width: 0; border-left: 1px solid var(--line-soft); padding-left: 18px; }
+.approval-source pre { max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 10px; line-height: 1.6; color: var(--muted); }
+@media (max-width: 900px) { .approval-split { grid-template-columns: 1fr; } .approval-source { border-left: 0; border-top: 1px solid var(--line-soft); padding-left: 0; padding-top: 14px; } }
+/* What approving actually does. Two cards with identical buttons can submit an
+   application and save a draft. */
+.approval-consequence { margin: 10px 0 0; font-size: 10px; color: var(--muted); }
+.approval-consequence b { color: var(--text); }
+.card-unblocking { color: var(--muted); text-transform: none; letter-spacing: 0; }

@@ -58,7 +58,5 @@ class Skill:
         if not self.directory.is_dir():
             return []
         return sorted(
-            entry.name
-            for entry in self.directory.iterdir()
-            if entry.is_file() and entry.name != SKILL_FILENAME
+            entry.name for entry in self.directory.iterdir() if entry.is_file() and entry.name != SKILL_FILENAME
         )

@@ -172,6 +172,7 @@ class _DispatchPlan:
     allow_wait: bool = True
     capability: ModelCapability | str | None = None
 
+
 class ModelDispatcher(InferenceRouter):
     """Routes inference calls across multiple providers with per-model cooldowns."""
 
@@ -329,8 +330,7 @@ class ModelDispatcher(InferenceRouter):
         if not rates:
             return False
         return all(
-            samples >= _MODEL_SPEED_MIN_SAMPLES and rate < _MODEL_SPEED_FLOOR_TOK_PER_SEC
-            for rate, samples in rates
+            samples >= _MODEL_SPEED_MIN_SAMPLES and rate < _MODEL_SPEED_FLOOR_TOK_PER_SEC for rate, samples in rates
         )
 
     def _is_demoted(self, canonical_id: str) -> bool:
@@ -524,9 +524,7 @@ class ModelDispatcher(InferenceRouter):
         async def _call(provider: Provider, model_id: str) -> EmbedResponse:
             return await provider.embed(model_id, request)
 
-        return await self._dispatch(
-            candidates, _DispatchPlan(call_fn=_call, capability=ModelCapability.EMBEDDING)
-        )
+        return await self._dispatch(candidates, _DispatchPlan(call_fn=_call, capability=ModelCapability.EMBEDDING))
 
     def embedding_model_id(self) -> str:
         """The model embeddings will come from, resolvable before the first call.
@@ -586,9 +584,7 @@ class ModelDispatcher(InferenceRouter):
         async def _call(provider: Provider, model_id: str) -> TranscriptionResponse:
             return await provider.transcribe(model_id, request)
 
-        return await self._dispatch(
-            candidates, _DispatchPlan(call_fn=_call, capability=ModelCapability.TRANSCRIPTION)
-        )
+        return await self._dispatch(candidates, _DispatchPlan(call_fn=_call, capability=ModelCapability.TRANSCRIPTION))
 
     def get_context_window(self, model_id: str) -> int:
         """Return the published context window (tokens) for model_id from the live registry.

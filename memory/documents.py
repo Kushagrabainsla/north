@@ -31,13 +31,9 @@ class SQLiteContextStore(ContextStore):
         self._locks: dict[str, asyncio.Lock] = {}
         with open_db_connection(db_path) as conn:
             conn.execute(
-                "CREATE TABLE IF NOT EXISTS context_documents "
-                "(document TEXT PRIMARY KEY, content TEXT NOT NULL)"
+                "CREATE TABLE IF NOT EXISTS context_documents (document TEXT PRIMARY KEY, content TEXT NOT NULL)"
             )
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS context_metadata "
-                "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-            )
+            conn.execute("CREATE TABLE IF NOT EXISTS context_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             migrated = conn.execute(
                 "SELECT 1 FROM context_metadata WHERE key = 'markdown_migration_complete'"
             ).fetchone()
@@ -52,10 +48,7 @@ class SQLiteContextStore(ContextStore):
                             "INSERT INTO context_documents(document, content) VALUES (?, ?)",
                             (document.value, path.read_text(encoding="utf-8")),
                         )
-                conn.execute(
-                    "INSERT INTO context_metadata(key, value) VALUES "
-                    "('markdown_migration_complete', '1')"
-                )
+                conn.execute("INSERT INTO context_metadata(key, value) VALUES ('markdown_migration_complete', '1')")
 
     async def read(self, document: ContextDocument) -> str:
         return await asyncio.to_thread(self._read_sync, document)

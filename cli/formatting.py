@@ -310,7 +310,6 @@ def _format_turn_details(turn: dict) -> list[str]:
     return lines
 
 
-
 def _format_help_table(commands: dict[str, str]) -> Table:
     """Render a styled help command palette table."""
     t = Table(title="Available Slash Commands & Keybindings", box=ROUNDED, header_style="bold cyan")

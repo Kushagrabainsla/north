@@ -168,7 +168,7 @@ def _name_position(text: str, symbol: str) -> tuple[int, int] | None:
             line_idx = node.lineno - 1
             if 0 <= line_idx < len(lines):
                 line_text = lines[line_idx]
-                match = re.search(r"\b" + re.escape(symbol) + r"\b", line_text[node.col_offset:])
+                match = re.search(r"\b" + re.escape(symbol) + r"\b", line_text[node.col_offset :])
                 if match:
                     return line_idx, node.col_offset + match.start()
             if isinstance(node, ast.ClassDef):

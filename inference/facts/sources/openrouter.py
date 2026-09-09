@@ -94,27 +94,19 @@ def facts_from_catalog(raw_models: list[dict]) -> tuple[list[ModelFacts], list[E
         facts.append(
             ModelFacts(
                 canonical_id=canonical_id,
-                context_window=(
-                    fact(int(context_length), Rank.DECLARED, SOURCE, when) if context_length else None
-                ),
+                context_window=(fact(int(context_length), Rank.DECLARED, SOURCE, when) if context_length else None),
                 max_output_tokens=(fact(int(max_output), Rank.DECLARED, SOURCE, when) if max_output else None),
                 # A model that does not emit text is not a completion model,
                 # however cheap it is.
-                supports_completion=(
-                    fact("text" in outputs, Rank.DECLARED, SOURCE, when) if outputs else None
-                ),
-                supports_tools=fact(
-                    any(p in params for p in _TOOL_PARAMS), Rank.DECLARED, SOURCE, when
-                ),
+                supports_completion=(fact("text" in outputs, Rank.DECLARED, SOURCE, when) if outputs else None),
+                supports_tools=fact(any(p in params for p in _TOOL_PARAMS), Rank.DECLARED, SOURCE, when),
                 supports_reasoning=fact(
                     any(p in params for p in _REASONING_PARAMS) or bool(model.get("reasoning")),
                     Rank.DECLARED,
                     SOURCE,
                     when,
                 ),
-                supports_structured=fact(
-                    any(p in params for p in _STRUCTURED_PARAMS), Rank.DECLARED, SOURCE, when
-                ),
+                supports_structured=fact(any(p in params for p in _STRUCTURED_PARAMS), Rank.DECLARED, SOURCE, when),
                 input_modalities=(fact(modalities, Rank.DECLARED, SOURCE, when) if modalities else None),
                 coding_score=_index(benchmarks, "coding_index", when),
                 agentic_score=_index(benchmarks, "agentic_index", when),
@@ -176,9 +168,9 @@ def enrich_from_endpoints(endpoint: Endpoint, payload: dict) -> Endpoint:
         provider_model_id=endpoint.provider_model_id,
         price_in=cheapest.price_in if cheapest.price_in is not None else endpoint.price_in,
         price_out=cheapest.price_out if cheapest.price_out is not None else endpoint.price_out,
-        quantization=("mixed:" + ",".join(quantizations)) if quantization_mismatch(upstreams) else (
-            quantizations[0] if quantizations else endpoint.quantization
-        ),
+        quantization=("mixed:" + ",".join(quantizations))
+        if quantization_mismatch(upstreams)
+        else (quantizations[0] if quantizations else endpoint.quantization),
         max_payload_chars=endpoint.max_payload_chars,
         entitlement=endpoint.entitlement,
         uptime=max(uptimes) if uptimes else endpoint.uptime,

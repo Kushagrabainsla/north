@@ -121,7 +121,6 @@ class CooldownStore:
         self._capability_expiry[cap_key] = time.monotonic() + duration
 
     def set_rate_limit(self, key: _CooldownKey, seconds: float | None = None) -> None:
-
         """Apply a short rate-limit cooldown (memory-only).
 
         Uses *seconds* when a provider supplied a Retry-After (clamped to

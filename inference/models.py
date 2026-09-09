@@ -237,7 +237,6 @@ class ToolCallResponse(BaseModel):
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-
 class TranscriptionRequest(BaseModel):
     """Input to an audio-transcription call. See README 8.6 and 16.6."""
 

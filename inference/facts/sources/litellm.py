@@ -60,12 +60,8 @@ def facts_from_catalog(raw: dict, when: datetime | None = None) -> list[ModelFac
                 context_window=(
                     fact(int(context_window), Rank.DECLARED, SOURCE, fetched_at) if context_window else None
                 ),
-                max_output_tokens=(
-                    fact(int(max_output), Rank.DECLARED, SOURCE, fetched_at) if max_output else None
-                ),
-                supports_tools=fact(
-                    bool(entry.get("supports_function_calling")), Rank.DECLARED, SOURCE, fetched_at
-                ),
+                max_output_tokens=(fact(int(max_output), Rank.DECLARED, SOURCE, fetched_at) if max_output else None),
+                supports_tools=fact(bool(entry.get("supports_function_calling")), Rank.DECLARED, SOURCE, fetched_at),
                 supports_reasoning=fact(bool(entry.get("supports_reasoning")), Rank.DECLARED, SOURCE, fetched_at),
                 supports_structured=fact(
                     bool(entry.get("supports_response_schema")), Rank.DECLARED, SOURCE, fetched_at

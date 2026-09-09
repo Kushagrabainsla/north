@@ -820,7 +820,6 @@ class NorthApp(App[None]):
         self._render_status_bar()
         self._set_status("")
 
-
         self.set_interval(0.08, self._tick)
         self.run_worker(self._listen(), exclusive=False)
         self.query_one("#prompt", Input).focus()
@@ -941,7 +940,6 @@ class NorthApp(App[None]):
             self.query_one("#header-meta", Static).update(f"[dim]{strat}  ·  {cost} [/dim]")
 
     def _render_status_bar(self) -> None:
-
         """Compose the live status bar, dropping low-priority segments as the
         terminal narrows so the bar never wraps or truncates mid-segment."""
         from agents.context_compaction import context_window_for
@@ -1053,17 +1051,21 @@ class NorthApp(App[None]):
         if thoughts:
             tokens = int(turn.get("thought_tokens") or max(1, len(thoughts) // 4))
             state = "hide" if turn.get("thoughts_expanded") else "show"
-            items.append(RichText.from_markup(
-                f"  [cyan]Thinking[/cyan] [bright_black]· {tokens} tokens · Ctrl+T to {state}[/bright_black]"
-            ))
+            items.append(
+                RichText.from_markup(
+                    f"  [cyan]Thinking[/cyan] [bright_black]· {tokens} tokens · Ctrl+T to {state}[/bright_black]"
+                )
+            )
             if turn.get("thoughts_expanded"):
                 items.append(RichPadding(RichText(thoughts, style="dim"), (0, 0, 0, 4)))
 
         done, total = self._plan_progress(turn)
         if total:
-            items.append(RichText.from_markup(
-                f"  [cyan]Plan[/cyan] [bright_black]· {done}/{total} complete · Ctrl+P to inspect[/bright_black]"
-            ))
+            items.append(
+                RichText.from_markup(
+                    f"  [cyan]Plan[/cyan] [bright_black]· {done}/{total} complete · Ctrl+P to inspect[/bright_black]"
+                )
+            )
 
         interaction = turn.get("interaction")
         if interaction:
@@ -1282,7 +1284,6 @@ class NorthApp(App[None]):
             if st:
                 history_entry["duration"] = max(0.01, time.monotonic() - st)
 
-
         if task_id and task_id in self._task_tool_activity:
             tools = self._task_tool_activity[task_id]
             if tools:
@@ -1333,12 +1334,14 @@ class NorthApp(App[None]):
                     self._current_turn_activity[task_id]["thought_duration"] = dur
                     self._current_turn_activity[task_id]["thought_tokens"] = toks
                     self._current_turn_activity[task_id]["thoughts"] = thoughts
-                self._recent_thoughts.append({
-                    "task_id": task_id,
-                    "thoughts": thoughts,
-                    "tokens": toks,
-                    "duration": dur,
-                })
+                self._recent_thoughts.append(
+                    {
+                        "task_id": task_id,
+                        "thoughts": thoughts,
+                        "tokens": toks,
+                        "duration": dur,
+                    }
+                )
             self._set_status("")
         self._update_streaming(task_id)
         self._render_status_bar()
@@ -1611,7 +1614,6 @@ class NorthApp(App[None]):
             for i, opt in enumerate(options, 1):
                 self._log(f"    [bright_black][{i}][/bright_black]  {opt}")
 
-
     async def _on_design_phase(self, task_id: str, data: dict) -> None:
         step = data.get("step", "")
         self._active_phase = f"design phase: {step}"
@@ -1624,7 +1626,7 @@ class NorthApp(App[None]):
     async def _on_plan_seeded(self, task_id: str, data: dict) -> None:
         tasks = data.get("tasks", 0)
         default_steps = [
-            {"step_id": i + 1, "task": f"Task Step {i+1}", "agent": "coder", "status": "pending"}
+            {"step_id": i + 1, "task": f"Task Step {i + 1}", "agent": "coder", "status": "pending"}
             for i in range(tasks)
         ]
         steps = data.get("steps") or default_steps
@@ -1644,12 +1646,14 @@ class NorthApp(App[None]):
             mark = next((candidate for candidate in marks if stripped.startswith(candidate)), None)
             if mark is None:
                 continue
-            steps.append({
-                "step_id": index,
-                "agent": "",
-                "task": stripped[len(mark):].strip(),
-                "status": marks[mark],
-            })
+            steps.append(
+                {
+                    "step_id": index,
+                    "agent": "",
+                    "task": stripped[len(mark) :].strip(),
+                    "status": marks[mark],
+                }
+            )
         turn = self._current_turn_activity.get(task_id)
         if turn is not None:
             if steps:
@@ -1676,10 +1680,12 @@ class NorthApp(App[None]):
         cmd = data.get("command", "")
         passed = data.get("passed", False)
         if task_id in self._current_turn_activity:
-            self._current_turn_activity[task_id]["verifications"].append({
-                "command": cmd,
-                "passed": passed,
-            })
+            self._current_turn_activity[task_id]["verifications"].append(
+                {
+                    "command": cmd,
+                    "passed": passed,
+                }
+            )
             self._current_turn_activity[task_id]["phase"] = "verification passed" if passed else "verification failed"
             self._render_active_turns()
 
@@ -1919,12 +1925,14 @@ class NorthApp(App[None]):
         turn = self._current_turn_activity.get(task_id)
         if turn is not None:
             pending = turn.get("interaction") or {}
-            turn.setdefault("interactions", []).append({
-                "kind": pending.get("kind", "question" if is_question else "approval"),
-                "message": pending.get("message", ""),
-                "chosen": chosen,
-                "decision": decision,
-            })
+            turn.setdefault("interactions", []).append(
+                {
+                    "kind": pending.get("kind", "question" if is_question else "approval"),
+                    "message": pending.get("message", ""),
+                    "chosen": chosen,
+                    "decision": decision,
+                }
+            )
             turn["interaction"] = None
             turn["phase"] = f"{decision} · {chosen}"
             self._render_active_turns()
@@ -1948,7 +1956,6 @@ class NorthApp(App[None]):
                 )
         except Exception:
             pass
-
 
     # ── input ─────────────────────────────────────────────────────────────────
 
@@ -2265,9 +2272,7 @@ class NorthApp(App[None]):
                         self._log(
                             f"    [white]{document}.md[/white] [bright_black]({len(r.text)} chars)[/bright_black]"
                         )
-                self._log(
-                    "    [bright_black]Type '/context <doc>' or '/context show <doc>' to inspect[/bright_black]"
-                )
+                self._log("    [bright_black]Type '/context <doc>' or '/context show <doc>' to inspect[/bright_black]")
         except Exception as exc:
             self._log(f"  [red]error fetching context: {exc}[/red]")
 
@@ -2349,8 +2354,6 @@ class NorthApp(App[None]):
             # Preserve any in-flight active turn currently running
             log.scroll_end(animate=False)
             self._render_active_turns()
-
-
 
     def action_toggle_reasoning(self) -> None:
         """Toggle thoughts inside the active/latest message."""
@@ -2650,8 +2653,9 @@ def _describe_turn(turn: dict) -> str:
     """One past exchange, rendered for the conversation context sent to the server."""
     parts = [f"User: {turn['user']}"]
     actions = [
-        f"{call['tool']}({call['params']}) → {call['result']}" if call.get("params") else
-        f"{call['tool']} → {call['result']}"
+        f"{call['tool']}({call['params']}) → {call['result']}"
+        if call.get("params")
+        else f"{call['tool']} → {call['result']}"
         for call in turn.get("tools") or []
         if call.get("result")
     ]
@@ -2664,6 +2668,7 @@ def _describe_turn(turn: dict) -> str:
 def _estimated_tokens(text: str) -> int:
     """Rough token count for the session meter - four characters to a token."""
     return max(1, len(text) // 4)
+
 
 def _slash_argument(text: str) -> str | None:
     """The first argument of a slash command, or None when it was given bare."""
@@ -2729,6 +2734,7 @@ def _prefixed_slash_handler(command: str) -> Callable[[NorthApp, str], Awaitable
         if command.startswith(prefix):
             return handler
     return None
+
 
 async def run(
     base_url: str,

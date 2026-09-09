@@ -71,6 +71,9 @@ class ApiServices:
     # runs without asking can be read and changed on the page rather than only
     # in a source file.
     unattended_rules: Any | None = None
+    # What each card source leads to once decided. The approvals page reads it
+    # to say what approving will cause, before you approve.
+    card_continuations: Any | None = None
     skill_registry: Any | None = None
     north_home: Any | None = None
     # Mutable per-app runtime state for the web layer (in-flight logins,

@@ -26,9 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Fields stored as JSON because their value is a set, not a scalar.
 _JSON_FIELDS = frozenset({"input_modalities"})
-_BOOL_FIELDS = frozenset(
-    {"supports_completion", "supports_tools", "supports_reasoning", "supports_structured"}
-)
+_BOOL_FIELDS = frozenset({"supports_completion", "supports_tools", "supports_reasoning", "supports_structured"})
 _REAL_FIELDS = frozenset({"coding_score", "agentic_score", "intelligence_score"})
 
 # SQLite type per fact field, used both by CREATE TABLE above and by the additive

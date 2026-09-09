@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS context_embeddings (
 """
 
 
-
 def _split_paragraphs(text: str) -> list[str]:
     return [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
 
