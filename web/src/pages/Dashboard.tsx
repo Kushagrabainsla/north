@@ -42,7 +42,7 @@ export function Dashboard() {
       <Panel title="Usage" label="Last 7 days" to="/insights">
         <div className="metric-row"><div className="metric"><strong>{String(data.metrics.total_tasks || 0)}</strong><span>tasks</span></div><div className="metric"><strong>${totalCost.toFixed(3)}</strong><span>model cost</span></div></div>
       </Panel>
-      <Panel title="Activity" label="Latest events" to="/activity" className="full-panel">
+      <Panel title="Activity" label="Latest events" to="/tasks?view=everything" className="full-panel">
         <div className="activity-line">{data.activity.slice(0, 8).map(entry => <div key={entry.id}><span className={`event-dot ${entry.status || ""}`}/><b>{entry.action?.replaceAll("_", " ") || entry.source}</b><small>{entry.agent || "north"} · {timeAgo(entry.timestamp)}</small></div>)}</div>
       </Panel>
     </div>

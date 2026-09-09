@@ -3,7 +3,7 @@
 // every field the task list shows has to be recovered from it.
 
 import { describe, expect, it } from "vitest";
-import { isTerminal, summarise } from "./Work";
+import { isTerminal, summarise } from "./Tasks";
 import type { LedgerEntry } from "../types";
 
 let counter = 0;

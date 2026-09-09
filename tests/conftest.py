@@ -49,10 +49,18 @@ def _isolated_north_home(tmp_path_factory, monkeypatch):
     The lru_caches over the resolved roots are cleared on the way in and out, so
     no test inherits a path that was resolved under a different home.
     """
+    from config.settings import settings
     from tools import _path
 
     home = tmp_path_factory.mktemp("north_home")
     monkeypatch.setenv("NORTH_HOME", str(home))
+    # The env var alone is not enough. `settings` is instantiated at import, so
+    # it read NORTH_HOME once and never again - anything asking
+    # `settings.north_home` was still being pointed at the developer's real
+    # ~/.north. The integration test that boots the whole app was reading live
+    # approval cards from it, and passed or failed depending on what was sitting
+    # in that database.
+    monkeypatch.setattr(settings, "north_home", home)
     _path._handoff_root.cache_clear()
     _path._resolved_blocked_prefixes.cache_clear()
     yield home

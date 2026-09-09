@@ -38,7 +38,13 @@ WIRED_COMPONENTS = (
 
 @pytest.fixture
 async def booted_app(monkeypatch):
-    """The real app, through the real lifespan, against a throwaway home."""
+    """The real app, through the real lifespan, against a throwaway home.
+
+    One boot for the whole module. Booting per test meant eleven full startups -
+    catalog refresh, embedding model, recovery sweep - for eleven read-only
+    assertions about the same wiring, which took minutes. Nothing here mutates
+    the app, so they can share it.
+    """
     monkeypatch.setenv("NORTH_ENV", "test")
     from orchestrator.app import app
 
@@ -47,27 +53,23 @@ async def booted_app(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_server_starts(booted_app) -> None:
-    """If this fails, `north start` and `north update` are broken for everyone."""
-    assert services_of(booted_app) is not None
+async def test_the_server_starts_with_every_component_wired(booted_app) -> None:
+    """If this fails, `north start` and `north update` are broken for everyone.
 
-
-@pytest.mark.parametrize("component", WIRED_COMPONENTS)
-@pytest.mark.asyncio
-async def test_every_component_reaches_the_api_layer(booted_app, component: str) -> None:
-    """Constructed in the lifespan is not the same as reachable from a request.
-
-    A component can be built, assigned to `deps`, and still never arrive - the
-    keyword that carries it has to exist on the function that takes it.
+    Constructed in the lifespan is not the same as reachable from a request: a
+    component can be built, assigned to `deps`, and still never arrive, because
+    the keyword that carries it has to exist on the function that takes it. That
+    is exactly how the server came to die on boot.
     """
-    assert getattr(services_of(booted_app), component, None) is not None, (
-        f"{component} was not wired through to the API layer"
-    )
+    services = services_of(booted_app)
+    assert services is not None
+    missing = [name for name in WIRED_COMPONENTS if getattr(services, name, None) is None]
+    assert not missing, f"built in the lifespan but never wired through: {missing}"
 
 
 @pytest.mark.asyncio
-async def test_the_approvals_endpoint_answers(booted_app) -> None:
-    """One real read through the wiring, rather than trusting it looks right."""
+async def test_a_read_through_the_wiring_answers(booted_app) -> None:
+    """One real request, rather than trusting the wiring looks right."""
     from orchestrator.api_context import bind_services
     from web import api as web_api
 

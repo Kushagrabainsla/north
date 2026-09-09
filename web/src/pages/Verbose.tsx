@@ -77,20 +77,6 @@ export function RoutingAttempts({ taskId }: { taskId: string }) {
   return <div className="routing-detail">{decisions.map(d => <DecisionCard decision={d} key={d.id}/>)}</div>;
 }
 
-export function Tasks() {
-  const resource = useResource<LedgerEntry[]>("/orchestrator/ledger?limit=500", 7000);
-  const [opened, setOpened] = useState("");
-  if (resource.loading) return <Loading/>;
-  const tasks = new Map<string, LedgerEntry[]>();
-  for (const entry of resource.data || []) if (entry.task_id) tasks.set(entry.task_id, [...(tasks.get(entry.task_id) || []), entry]);
-  return <div className="page"><PageHeader eyebrow="Work" title="Tasks" subtitle="Every task, from prompt to final outcome."/>{resource.error && <ErrorNotice message={resource.error}/>}<div className="table-list">
-    {[...tasks].map(([id, entries]) => { const latest = entries[0]; const terminal = entries.find(e => e.action?.startsWith("task_completed") || ["task_failed", "task_cancelled"].includes(e.action || "")); const prompt = [...entries].reverse().find(e => e.action === "task_received")?.input; return <div key={id}>
-      <div className="table-row task-row" onClick={() => setOpened(opened === id ? "" : id)}><div className="row-main"><b>{prompt || id}</b><small>{id} · {timeAgo(latest.timestamp)} · {opened === id ? "hide" : "show"} models tried</small></div><span>{[...new Set(entries.map(e => e.agent).filter(Boolean))].join(", ") || "orchestrator"}</span><Status value={terminal?.status || "running"}/></div>
-      {opened === id && <RoutingAttempts taskId={id}/>}
-    </div>; })}
-  </div>{!tasks.size && <Empty>No task history yet.</Empty>}</div>;
-}
-
 // The pipeline stages, in the order they run - so a task's artifacts read as the
 // story of that run rather than in whatever order the filesystem returned them.
 const stageOrder = ["research", "architecture", "implementation", "qa"];
@@ -954,13 +940,6 @@ export function Skills() {
   const open = async (name: string) => { try { const detail = await api<SkillDetail>(`/web/api/skills/${name}`); setSelected(name); setContent(detail.content); setMessage(""); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
   const save = async () => { if (!selected) return; try { await api(`/web/api/skills/${selected}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Skill saved and reloaded."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
   return <div className="page"><PageHeader eyebrow="Procedures" title="Skills" subtitle="Inspect and edit the playbooks North injects into specialist work." actions={<button className="primary-button" disabled={!selected} onClick={save}>Save skill</button>}/>{skills.error && <ErrorNotice message={skills.error}/>} {message && <div className="notice">{message}</div>}<div className="skills-layout"><div className="skill-library">{skills.loading ? <Loading/> : (skills.data || []).map(skill => <button className={selected === skill.name ? "active" : ""} key={skill.name} onClick={() => open(skill.name)}><b>{skill.name}</b><small>{skill.source} · v{skill.version} · {skill.domains.join(", ")}</small><p>{skill.description}</p></button>)}</div><section className="skill-editor">{selected ? <><div className="editor-label">{selected}/SKILL.md</div><textarea value={content} onChange={event => setContent(event.target.value)}/></> : <Empty>Select a skill to inspect or edit it.</Empty>}</section></div></div>;
-}
-
-export function Activity() {
-  const resource = useResource<LedgerEntry[]>("/orchestrator/ledger?limit=300", 5000);
-  const [query, setQuery] = useState("");
-  const rows = useMemo(() => (resource.data || []).filter(item => JSON.stringify(item).toLowerCase().includes(query.toLowerCase())), [resource.data, query]);
-  return <div className="page"><PageHeader eyebrow="Audit trail" title="Activity" subtitle="Every important action and state transition across North." actions={<input className="header-search" placeholder="Filter events" value={query} onChange={e => setQuery(e.target.value)}/>}/>{resource.loading ? <Loading/> : <div className="event-list verbose-events">{rows.map(entry => <div className="event-row" key={entry.id}><span className={`event-dot ${entry.status || ""}`}/><div><b>{entry.action?.replaceAll("_", " ") || entry.source}</b><small>{entry.agent || entry.source} · {entry.task_id || "system"} · {new Date(entry.timestamp).toLocaleString()}</small>{(entry.output || entry.input) && <p>{(entry.output || entry.input || "").slice(0,600)}</p>}</div><Status value={entry.status}/></div>)}</div>}</div>;
 }
 
 export function Insights() {

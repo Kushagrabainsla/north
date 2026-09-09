@@ -12,8 +12,6 @@ const nav: [string, string, string, boolean?][] = [
   ["/artifacts", "Artifacts", "◇"],
   ["/schedule", "Schedule", "◷"], ["/approvals", "Approvals", "!"],
   ["/memory", "Memory", "◎"], ["/agents", "Agents", "△"], ["/skills", "Skills", "✦"],
-  ["/activity", "Activity", "≋"],
-  ["/work", "Work", "❑", true],
   ["/system", "System", "◉"], ["/settings", "Settings", "⚙"]
 ];
 

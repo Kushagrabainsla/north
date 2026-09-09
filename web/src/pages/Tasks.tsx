@@ -1,6 +1,6 @@
-// Tasks and Activity, merged.
+// A task, and everything it did.
 //
-// They were two pages describing one thing. Tasks listed the runs and, on
+// This was two pages describing one thing. Tasks listed the runs and, on
 // click, showed which models were tried. Activity was the same ledger with the
 // task grouping taken off - so answering "what happened in this run?" meant
 // opening Activity, filtering by hand for a task id copied from the other page,
@@ -15,7 +15,7 @@
 // run, and dropping them would lose the only place they are visible.
 
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useResource } from "../hooks";
 import { Empty, ErrorNotice, Loading, PageHeader, Panel, Status, timeAgo } from "../components";
 import type { AgentRun, Approval, Artifact, LedgerEntry, TaskDetail } from "../types";
@@ -70,7 +70,7 @@ function EventRow({ entry, showTask = false }: { entry: LedgerEntry; showTask?: 
       <small>
         {entry.agent || entry.source}
         {showTask && <> · {entry.task_id
-          ? <Link className="event-task" to={`/work/${entry.task_id}`}>{entry.task_id}</Link>
+          ? <Link className="event-task" to={`/tasks/${entry.task_id}`}>{entry.task_id}</Link>
           // north's own events - startup, cron ticks, recovery sweeps - belong to
           // no run. Activity called that "system"; keeping the word means the
           // column never reads as a missing value.
@@ -130,20 +130,20 @@ function TaskActivity({ taskId }: { taskId: string }) {
   // heading that claims it is the answer.
   const finished = ["completed", "failed", "cancelled"].includes(String(status));
 
-  return <div className="page work-detail">
+  return <div className="page task-detail">
     <PageHeader eyebrow="Task" title={prompt}
       subtitle={`${taskId} · ${timeAgo(detail.data?.task?.created_at || entries[0]?.timestamp || "")}`}
-      actions={<button className="work-back" onClick={() => navigate("/work")}>← All tasks</button>}/>
+      actions={<button className="task-back" onClick={() => navigate("/tasks")}>← All tasks</button>}/>
 
     <div className="metric-cards">
-      <div><span>Status</span><strong className="work-status">{status}</strong></div>
+      <div><span>Status</span><strong className="task-status">{status}</strong></div>
       <div><span>Agent runs</span><strong>{runs.length}</strong></div>
       <div><span>Events</span><strong>{entries.length}</strong></div>
       <div><span>Cost</span><strong>${spend.toFixed(4)}</strong></div>
     </div>
 
     {finished && detail.data?.output && <Panel title="Result">
-      <p className="work-output">{detail.data.output}</p>
+      <p className="task-output">{detail.data.output}</p>
     </Panel>}
 
     {!!runs.length && <Panel title="Agent runs" label={`${runs.length} in this task`}>
@@ -196,12 +196,17 @@ function AllEvents({ entries, query }: { entries: LedgerEntry[]; query: string }
   return <div className="event-list verbose-events">{rows.map(entry => <EventRow key={entry.id} entry={entry} showTask/>)}</div>;
 }
 
-export function Work() {
+export function Tasks() {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const resource = useResource<LedgerEntry[]>("/orchestrator/ledger?limit=500", 7000);
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<"tasks" | "everything">("tasks");
+  // The tab is in the URL so the old /activity path can land on the stream
+  // rather than dropping someone on the task list and making them find it.
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("view") === "everything" ? "everything" : "tasks";
+  const showTab = (next: "tasks" | "everything") =>
+    setParams(next === "everything" ? { view: "everything" } : {}, { replace: true });
 
   if (taskId) return <TaskActivity taskId={taskId}/>;
   if (resource.loading) return <Loading/>;
@@ -222,15 +227,15 @@ export function Work() {
 
     {/* Most of the time you want the runs. The raw stream is still here because
         startup, cron ticks and recovery sweeps have no task to belong to. */}
-    <div className="segmented work-tabs">
-      <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}>Tasks</button>
-      <button className={tab === "everything" ? "active" : ""} onClick={() => setTab("everything")}>Everything</button>
+    <div className="segmented task-tabs">
+      <button className={tab === "tasks" ? "active" : ""} onClick={() => showTab("tasks")}>Tasks</button>
+      <button className={tab === "everything" ? "active" : ""} onClick={() => showTab("everything")}>Everything</button>
     </div>
 
     {tab === "tasks"
       ? <>
           <div className="table-list">
-            {shown.map(task => <div className="table-row task-row" key={task.id} onClick={() => navigate(`/work/${task.id}`)}>
+            {shown.map(task => <div className="table-row task-row" key={task.id} onClick={() => navigate(`/tasks/${task.id}`)}>
               <div className="row-main">
                 <b>{task.prompt}</b>
                 <small>{task.id} · {timeAgo(task.latest)} · {task.entries.length} events</small>
