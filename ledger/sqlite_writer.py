@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS ledger (
     tokens_in       INTEGER,
     tokens_out      INTEGER,
     cached_tokens   INTEGER,
+    cache_missed_tokens INTEGER,
+    cache_miss_count INTEGER,
     cost_usd        REAL,
     status          TEXT,
     duration_ms     INTEGER,
@@ -105,6 +107,8 @@ _MIGRATIONS = [
     # Prompt tokens served from a provider's cache. Recorded so a cache that
     # silently stops working is visible - see inference/usage.py.
     "ALTER TABLE ledger ADD COLUMN cached_tokens INTEGER",
+    "ALTER TABLE ledger ADD COLUMN cache_missed_tokens INTEGER",
+    "ALTER TABLE ledger ADD COLUMN cache_miss_count INTEGER",
 ]
 
 # Column order for INSERTs. Placeholders are derived from this tuple so the two
@@ -127,6 +131,8 @@ _INSERT_COLUMN_NAMES = (
     "tokens_in",
     "tokens_out",
     "cached_tokens",
+    "cache_missed_tokens",
+    "cache_miss_count",
     "cost_usd",
     "status",
     "duration_ms",
@@ -198,6 +204,8 @@ class SQLiteLedgerWriter(LedgerWriter):
                     entry.tokens_in,
                     entry.tokens_out,
                     entry.cached_tokens,
+                    entry.cache_missed_tokens,
+                    entry.cache_miss_count,
                     entry.cost_usd,
                     entry.status.value if entry.status is not None else None,
                     entry.duration_ms,
@@ -591,6 +599,9 @@ class SQLiteLedgerWriter(LedgerWriter):
             model_used=row["model_used"],
             tokens_in=row["tokens_in"],
             tokens_out=row["tokens_out"],
+            cached_tokens=row["cached_tokens"],
+            cache_missed_tokens=row["cache_missed_tokens"],
+            cache_miss_count=row["cache_miss_count"],
             cost_usd=row["cost_usd"],
             status=LedgerStatus(row["status"]) if row["status"] else None,
             duration_ms=row["duration_ms"],

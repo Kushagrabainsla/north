@@ -2199,6 +2199,8 @@ class Orchestrator:
                 tokens_in=result.tokens_in,
                 tokens_out=result.tokens_out,
                 cached_tokens=result.cached_tokens,
+                cache_missed_tokens=result.cache_missed_tokens,
+                cache_miss_count=result.cache_miss_count,
                 model_used=", ".join(result.models_used) or None,
             )
         )

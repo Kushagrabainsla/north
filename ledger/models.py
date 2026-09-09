@@ -108,6 +108,10 @@ class LedgerEntry(BaseModel):
     # None when the provider said nothing about caching, which is not the same as
     # a cache miss.
     cached_tokens: int | None = None
+    # Conservative count of prompt tokens/turns that likely missed an observed
+    # provider cache; see inference/cache_stats.py.
+    cache_missed_tokens: int | None = None
+    cache_miss_count: int | None = None
     cost_usd: float | None = None
     status: LedgerStatus | None = None
     duration_ms: int | None = None

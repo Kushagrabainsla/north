@@ -8,6 +8,7 @@ from agents.context_compaction import (
     compact_if_needed,
     context_window_for,
     estimate_messages_tokens,
+    file_context_for_summary,
     render_exchange_for_summary,
 )
 from inference.base import InferenceRouter
@@ -176,6 +177,63 @@ async def test_compact_if_needed_skips_when_under_threshold() -> None:
     assert len(messages) == 4
 
 
+
+
+def test_file_context_for_summary_tracks_read_and_modified_paths() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"function": {"name": "read_file", "arguments": '{"path":"src/a.py"}'}},
+                {"function": {"name": "patch_file", "arguments": '{"path":"src/a.py"}'}},
+                {"function": {"name": "write_file", "arguments": '{"path":"docs/notes.md"}'}},
+            ],
+        }
+    ]
+
+    context = file_context_for_summary(messages)
+
+    assert "Files read: src/a.py" in context
+    assert "Files modified: src/a.py, docs/notes.md" in context
+
+
+@pytest.mark.asyncio
+async def test_compaction_prompt_includes_file_context() -> None:
+    router = DummyRouter(windows={"small-model": 1_000})
+    messages = [
+        {"role": "system", "content": "System prompt"},
+        {"role": "user", "content": "Task description"},
+    ]
+    for i in range(4):
+        name = "patch_file" if i == 0 else "read_file"
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": f"call_{i}",
+                            "function": {"name": name, "arguments": f'{{"path":"file_{i}.py"}}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": f"call_{i}", "content": "A" * 800},
+            ]
+        )
+
+    await compact_if_needed(
+        messages,
+        model_used="small-model",
+        inference_router=router,
+        task_id="task_123",
+        keep_recent=2,
+    )
+
+    prompt = router.complete_calls[0].prompt
+    assert "<file_context>" in prompt
+    assert "Files modified: file_0.py" in prompt
+    assert "Files read: file_1.py" in prompt
 def test_render_exchange_preserves_multi_round_compacted_summary() -> None:
     long_summary = (
         "## Earlier context (auto-compacted)\n"

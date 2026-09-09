@@ -39,6 +39,7 @@ from agents.schemas import ASK_USER_SCHEMA, REQUEST_APPROVAL_SCHEMA, delegate_ta
 from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface_card
 from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
+from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import ContextTooLargeError
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
@@ -112,6 +113,7 @@ class _RunTally:
     tokens_in: int = 0
     tokens_out: int = 0
     cached_tokens: int = 0
+    cache_waste: CacheWasteTracker = field(default_factory=CacheWasteTracker)
     last_tokens_in: int = 0
     last_model_used: str = ""
     tools_used: list[str] = field(default_factory=list)
@@ -123,6 +125,11 @@ class _RunTally:
         self.tokens_in += response.tokens_in
         self.tokens_out += response.tokens_out
         self.cached_tokens += response.cached_tokens
+        self.cache_waste.add(
+            tokens_in=response.tokens_in,
+            cached_tokens=response.cached_tokens,
+            cache_write_tokens=response.cache_write_tokens,
+        )
         self.last_tokens_in = response.tokens_in
         self.last_model_used = response.model_used
         if response.model_used:
@@ -145,6 +152,8 @@ class _RunTally:
             self.tokens_out,
             models_used=self.models_used,
             cached_tokens=self.cached_tokens,
+            cache_missed_tokens=self.cache_waste.totals.missed_tokens,
+            cache_miss_count=self.cache_waste.totals.miss_count,
         )
 
 
@@ -1195,6 +1204,8 @@ def _final_answer(
     tokens_out: int = 0,
     models_used: list[str] | None = None,
     cached_tokens: int = 0,
+    cache_missed_tokens: int = 0,
+    cache_miss_count: int = 0,
 ) -> dict[str, Any]:
     return {
         "output": output,
@@ -1208,6 +1219,8 @@ def _final_answer(
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "cached_tokens": cached_tokens,
+        "cache_missed_tokens": cache_missed_tokens,
+        "cache_miss_count": cache_miss_count,
         "tools_used": tools_used or [],
         # Always a list for agentic agents (even when empty) so the orchestrator
         # treats the output as verifiable; None would skip verification.

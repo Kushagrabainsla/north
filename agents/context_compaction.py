@@ -197,6 +197,43 @@ def render_exchange_for_summary(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# Paths are exact context, not prose: losing "which file did we edit?" during
+# compaction causes needless re-search and risky edits. Derive them from the
+# agent's own tool-call history so no separate mutable tracker can drift.
+_READ_FILE_TOOLS = frozenset({"read_file"})
+_EDIT_FILE_TOOLS = frozenset({"patch_file", "write_file", "rename_symbol"})
+_MAX_COMPACTION_FILES = 40
+
+
+def file_context_for_summary(messages: list[dict]) -> str:
+    """Return compact, stable lists of files read and changed in *messages*."""
+    read: list[str] = []
+    modified: list[str] = []
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            function = call.get("function", {})
+            name = function.get("name")
+            if name not in _READ_FILE_TOOLS | _EDIT_FILE_TOOLS:
+                continue
+            try:
+                args = json.loads(function.get("arguments", "{}"))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            path = args.get("path") if isinstance(args, dict) else None
+            if not isinstance(path, str) or not path:
+                continue
+            target = read if name in _READ_FILE_TOOLS else modified
+            if path not in target and len(target) < _MAX_COMPACTION_FILES:
+                target.append(path)
+
+    def render(label: str, paths: list[str]) -> str:
+        return f"{label}: " + (", ".join(paths) if paths else "none")
+
+    return "\n".join((render("Files read", read), render("Files modified", modified)))
+
+
 def _already_shrunk(content: str) -> bool:
     """Whether this result has already been retired once.
 
@@ -522,8 +559,13 @@ async def compact_if_needed(
         return
 
     history_text = render_exchange_for_summary(to_summarise)
+    file_context = file_context_for_summary(to_summarise)
     max_words = int(max_summary_tokens * 0.70)
-    prompt = load_prompt("prompts/context_compaction.md").format(max_words=max_words, history_text=history_text)
+    prompt = load_prompt("prompts/context_compaction.md").format(
+        max_words=max_words,
+        history_text=history_text,
+        file_context=file_context,
+    )
 
     if inference_router is not None and hasattr(inference_router, "complete"):
         try:

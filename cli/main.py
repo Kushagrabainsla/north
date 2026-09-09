@@ -1213,10 +1213,14 @@ def _print_cache_usage(period: str) -> None:
         # A ledger written before caching was recorded has no such column. That is
         # not "no data" - it is "every call so far was uncached", which is worth
         # saying out loud rather than showing an empty section.
-        has_column = "cached_tokens" in {row[1] for row in conn.execute("PRAGMA table_info(ledger)")}
-        cached_expr = "SUM(COALESCE(cached_tokens,0))" if has_column else "0"
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(ledger)")}
+        # Older ledgers have no cache columns. Treat absent fields as unavailable,
+        # not as proof a cache never missed.
+        cached_expr = "SUM(COALESCE(cached_tokens,0))" if "cached_tokens" in columns else "0"
+        missed_expr = "SUM(COALESCE(cache_missed_tokens,0))" if "cache_missed_tokens" in columns else "0"
+        miss_count_expr = "SUM(COALESCE(cache_miss_count,0))" if "cache_miss_count" in columns else "0"
         rows = conn.execute(
-            f"SELECT model_used, SUM(COALESCE(tokens_in,0)), {cached_expr}"
+            f"SELECT model_used, SUM(COALESCE(tokens_in,0)), {cached_expr}, {missed_expr}, {miss_count_expr}"
             " FROM ledger WHERE model_used IS NOT NULL"
             f" AND created_at >= datetime('now', '-{days} days')"
             " GROUP BY model_used HAVING SUM(COALESCE(tokens_in,0)) > 0"
@@ -1229,19 +1233,29 @@ def _print_cache_usage(period: str) -> None:
 
     total_in = sum(r[1] for r in rows)
     total_cached = sum(r[2] for r in rows)
+    total_missed = sum(r[3] for r in rows)
+    miss_count = sum(r[4] for r in rows)
     _console.print("\n  [dim]prompt cache[/dim]")
     if total_cached == 0:
         _console.print(
             f"    [bright_black]0 of {total_in:,} prompt tokens reused"
             " - no configured provider is caching[/bright_black]"
         )
+        if miss_count:
+            _console.print(
+                f"    [yellow]likely cache misses:[/yellow] {total_missed:,} prompt tokens across {miss_count} turn(s)"
+            )
         return
     share = 100 * total_cached / total_in
     _console.print(f"    [dim]{'reused across all models':<40}[/dim]  {total_cached:,} / {total_in:,} ({share:.0f}%)")
-    for model, tokens_in, cached in sorted(rows, key=lambda r: -r[2]):
+    for model, tokens_in, cached, _missed, _misses in sorted(rows, key=lambda r: -r[2]):
         if cached:
             pct = 100 * cached / tokens_in
             _console.print(f"    [dim]{str(model)[:40]:<40}[/dim]  {cached:,} / {tokens_in:,} ({pct:.0f}%)")
+    if miss_count:
+        _console.print(
+            f"    [yellow]likely cache misses:[/yellow] {total_missed:,} prompt tokens across {miss_count} turn(s)"
+        )
     _console.print()
 
 

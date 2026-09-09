@@ -78,6 +78,10 @@ class AgentResult(BaseModel):
     # re-sends the same opening block every turn, so this is the difference
     # between paying for it once and paying for it once per turn.
     cached_tokens: int = 0
+    # Conservative estimate: turns that likely should have reused the previous
+    # prompt but did not, after this provider reported cache activity.
+    cache_missed_tokens: int = 0
+    cache_miss_count: int = 0
     duration_ms: int | None = None
     tools_used: list[str] = Field(default_factory=list)  # deduplicated, ordered by first call
     # Tools that succeeded at least once, deduplicated and ordered by first success.
