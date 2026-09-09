@@ -27,6 +27,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from approval.continuation import CardContinuations, CardOutcome
 from approval.models import ApprovalDecision, Card
 from utils.db import open_db_connection
 
@@ -66,10 +67,14 @@ class ApprovalStore:
     is not the shape the server uses.
     """
 
-    def __init__(self, db_path: Path | None = None) -> None:
+    def __init__(self, db_path: Path | None = None, continuations: CardContinuations | None = None) -> None:
         self._cards: dict[str, Card] = {}
         self._events: dict[str, asyncio.Event] = {}
         self._db_path = db_path
+        # What runs after a decision, if the card's source registered anything.
+        # Optional: without it, resolving records the decision and stops, which
+        # is what every guard-rail card wants.
+        self._continuations = continuations
         if db_path is not None:
             db_path.parent.mkdir(parents=True, exist_ok=True)
             with open_db_connection(db_path) as conn:
@@ -139,6 +144,10 @@ class ApprovalStore:
     # ── Registry ──────────────────────────────────────────────────────────────
 
     def add(self, card: Card) -> None:
+        # Scrubbed on the way in, not on the way to disk. The queue is read by
+        # the web UI and the notifiers as well as written to SQLite, so a card
+        # redacted only at `_write` would still hand a credential to Telegram.
+        card = card.scrubbed()
         self._cards[card.id] = card
         self._events[card.id] = asyncio.Event()
         self._write(card)
@@ -227,7 +236,7 @@ class ApprovalStore:
         update: dict[str, Any] = {"status": status, "chosen_option": chosen_option}
         if card.fields:
             update["response"] = card.merge_response(values)
-        resolved = card.model_copy(update=update)
+        resolved = card.model_copy(update=update).scrubbed()
         self._cards[card_id] = resolved
         self._write(resolved)
         event = self._events.get(card_id)
@@ -237,6 +246,18 @@ class ApprovalStore:
         # go over its cap. Trimming only on `add` left the count one past the
         # limit until the next card happened to arrive.
         self._evict_resolved()
+        # Last, and deliberately after the decision is durable: a decision is
+        # recorded whether or not anything follows it, and must not be able to
+        # fail because the follow-up did.
+        if self._continuations is not None and resolved.source:
+            self._continuations.dispatch(
+                CardOutcome(
+                    card=resolved,
+                    decision=status,
+                    chosen_option=chosen_option,
+                    values=dict(resolved.response),
+                )
+            )
         return True
 
     async def wait_for_decision(self, card_id: str, timeout: float = 300.0) -> Card | None:

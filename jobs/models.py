@@ -26,6 +26,12 @@ class JobStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # Failed, and not safe to retry automatically. A step that submits something
+    # on your behalf half-fails constantly - session expired, captcha, submit
+    # clicked but the response lost - and a retry then applies twice. Applying
+    # twice is worse than not applying, so these surface to you and are retried
+    # by hand rather than disappearing into a log or silently repeating.
+    NEEDS_ATTENTION = "needs_attention"
 
 
 class JobPriority(int, Enum):

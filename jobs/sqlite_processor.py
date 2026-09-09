@@ -53,7 +53,15 @@ _LEGACY_TIME_COLUMNS = {
     "created_at": "created_epoch",
 }
 
-_TERMINAL_STATUSES = (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
+# NEEDS_ATTENTION is terminal in the same sense the others are: the queue is
+# finished with the job. It differs in why - not "this is over" but "only a
+# person can decide what happens next" - so it is never re-queued automatically.
+_TERMINAL_STATUSES = (
+    JobStatus.COMPLETED,
+    JobStatus.FAILED,
+    JobStatus.CANCELLED,
+    JobStatus.NEEDS_ATTENTION,
+)
 
 # How often the poll loop requeues jobs stranded in RUNNING (their worker died),
 # and the lease past which a still-RUNNING job is considered abandoned. On
@@ -425,8 +433,21 @@ class SQLiteJobProcessor(JobProcessor):
             raise
         except Exception:
             logger.exception("JobProcessor: job %s failed", job.job_id)
+            if job.max_retries <= 0:
+                # A job that must not be retried is not simply failed: it is
+                # unfinished work only a person can resolve. A submit that
+                # half-failed - session expired, captcha, response lost - may
+                # already have gone through, so retrying could apply twice and
+                # failing silently would hide that it might not have applied at
+                # all. Neither is safe to decide automatically.
+                await self.mark_needs_attention(job.job_id)
+                return
             retry_after = datetime.now(UTC) + timedelta(seconds=_retry_delay_seconds(job.retry_count))
             await self.mark_failed(job.job_id, retry_after=retry_after)
+
+    async def mark_needs_attention(self, job_id: str) -> None:
+        """Park a job for a person, rather than retrying or burying it."""
+        await asyncio.to_thread(self._set_terminal_sync, job_id, JobStatus.NEEDS_ATTENTION)
 
     def _list_sync(self, status: JobStatus | None, limit: int) -> list[sqlite3.Row]:
         with open_db_connection(self._db_path) as conn:

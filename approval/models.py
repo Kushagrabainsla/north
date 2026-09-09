@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from utils.ids import generate_id
+from utils.secrets import REDACTED, contains_secret, is_secret_field_name, redact
 
 
 class CardType(StrEnum):
@@ -143,6 +144,38 @@ class Card(BaseModel):
     def outlives_task(self) -> bool:
         """Whether this card survives its task reaching a terminal state."""
         return bool(self.source) or not self.blocking
+
+    def scrubbed(self) -> Card:
+        """A copy with anything that looks like a credential taken out.
+
+        A card can carry work north filled in, and those values are written to
+        SQLite and audit-logged permanently - a filled-in form is exactly where
+        an API key or a password ends up. `memory/facts.py` already refuses to
+        *store* a fact containing one; a card cannot refuse, because it is the
+        thing the user has to read before deciding, so it redacts instead.
+
+        A field whose *name* says it holds a secret is redacted whatever its
+        value: a password of "hunter2" matches no pattern, and the label is the
+        evidence.
+        """
+
+        def is_secret(name: str, value: Any) -> bool:
+            return is_secret_field_name(name) or (isinstance(value, str) and contains_secret(value))
+
+        fields = [
+            field.model_copy(update={"value": REDACTED}) if is_secret(field.name, field.value) else field
+            for field in self.fields
+        ]
+        response = {name: REDACTED if is_secret(name, value) else value for name, value in self.response.items()}
+        message, context = redact(self.message), redact(self.context)
+
+        # Most cards carry no secret, and every card passes through here on the
+        # way into the queue. Returning self keeps that case free - and keeps a
+        # card's identity, which callers holding the object they just added rely
+        # on.
+        if fields == self.fields and response == self.response and message == self.message and context == self.context:
+            return self
+        return self.model_copy(update={"fields": fields, "response": response, "message": message, "context": context})
 
     def field_values(self) -> dict[str, Any]:
         """The values as north filled them in, before the user touched anything."""

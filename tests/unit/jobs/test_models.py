@@ -18,6 +18,9 @@ def test_job_status_enum_matches_spec() -> None:
         "completed",
         "failed",
         "cancelled",
+        # Failed and deliberately not retried - a step that submits something
+        # cannot be safely repeated. Surfaces to the user instead.
+        "needs_attention",
     }
 
 

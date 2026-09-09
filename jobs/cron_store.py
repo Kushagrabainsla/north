@@ -130,9 +130,7 @@ class UserCronStore:
         enabled: bool = True,
         label: str = "",
     ) -> None:
-        await asyncio.to_thread(
-            self._add_sync, name, agent, task, hour, minute, weekdays, tz, enabled, label
-        )
+        await asyncio.to_thread(self._add_sync, name, agent, task, hour, minute, weekdays, tz, enabled, label)
 
     def _add_sync(
         self,

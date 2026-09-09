@@ -25,34 +25,16 @@ from inference.models import EmbedFn, GlossaryFn, SupersedeFn
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.math import cosine_similarity
+from utils.secrets import CC_RE, SECRET_RE
 from utils.vector_space import ensure_vector_space_reembed
 
 logger = logging.getLogger(__name__)
 
-# Secret detection patterns
-_SECRET_RE = re.compile(
-    r"""(?ix)
-    (?:^|[\s\W])
-    (?:
-        (?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token)
-        |(?:password|passwd|pwd)
-        |(?:private[_-]?key|ssh[_-]?key)
-        |(?:aws[_-]?access[_-]?key|aws[_-]?secret[_-]?key)
-        |(?:github[_-]?token|gh[_-]?token|ghp_)
-        |(?:slack[_-]?token|xox[baprs]-)
-        |(?:stripe[_-]?key|sk_live_|pk_live_)
-        |(?:jwt[_-]?token|eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*)
-        |(?:credit[_-]?card|cc[_-]?num)
-        |(?:seed[_-]?phrase|mnemonic)
-    )
-    [\s:=]+
-    [A-Za-z0-9_\-+/=]{8,}
-    """,
-)
-
-_CC_RE = re.compile(
-    r"\b(?:\d[ -]*?){13,19}\b"
-)
+# Secret detection lives in utils/secrets.py: cards need the same recognition for
+# a different purpose (redacting a filled-in form before it is audit-logged), and
+# two copies of these patterns would drift.
+_SECRET_RE = SECRET_RE
+_CC_RE = CC_RE
 
 def _contains_secret(text: str) -> bool:
     """Check if text contains secrets, API keys, passwords, credit cards, etc."""

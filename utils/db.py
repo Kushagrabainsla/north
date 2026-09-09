@@ -135,5 +135,3 @@ def close_all_pools() -> None:
 
 
 atexit.register(close_all_pools)
-
-

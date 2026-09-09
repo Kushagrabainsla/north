@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from approval import Notifier, TerminalNotifier
+from approval.continuation import CardContinuations
 from approval.store import ApprovalStore
 from config.settings import settings
 from config.strategy import NorthSettings
@@ -90,6 +91,9 @@ class Dependencies:
     # lifespan (it needs no async init, but the approval policy is built there),
     # and read by the web API so the rules can be edited on the page.
     unattended_rules: Any | None = field(default=None)
+    # Which next step belongs to which card source. Resolving a card dispatches
+    # through this; registering is how a flow says what its approval leads to.
+    card_continuations: Any | None = field(default=None)
 
 
 _EMBED_CACHE_MAX_SIZE = 512
@@ -325,6 +329,9 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
 
     tasks_db = settings.north_home / "tasks" / "tasks.db"
     agent_run_store = AgentRunStore(tasks_db)
+    # What runs after a card is decided. Empty until something registers
+    # against a card source, so a guard-rail card is unaffected.
+    card_continuations = CardContinuations()
     return Dependencies(
         context_store=context_store,
         ledger=ledger,
@@ -334,7 +341,8 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
         cost_tracker=cost_tracker,
         stream_manager=EventStreamManager(run_store=agent_run_store),
-        approval_store=ApprovalStore(settings.north_home / "approvals.db"),
+        approval_store=ApprovalStore(settings.north_home / "approvals.db", continuations=card_continuations),
+        card_continuations=card_continuations,
         cron_store=UserCronStore(settings.north_home / "jobs.db"),
         confidence_tracker=confidence_tracker,
         episodic_store=episodic_store,
