@@ -94,3 +94,35 @@ async def test_no_endpoint_decides_more_than_one_card(wiring) -> None:
 
 async def _noop(outcome) -> None:
     return None
+
+
+# ── Learning from decisions (#17) ────────────────────────────────────────────
+
+
+async def test_flow_stats_report_how_a_source_is_doing(tmp_path) -> None:
+    """A flow you reject 90% of the time is wasting your attention."""
+    from approval.decisions import APPROVED, REJECTED, DecisionLog
+
+    log = DecisionLog(tmp_path / "approval_memory.db")
+    log.record(_prepared(), APPROVED)
+    log.record(_prepared(), REJECTED, reason="too junior")
+
+    with bind_services(ApiServices(decision_log=log)):
+        stats = await web_api.flow_stats()
+
+    assert stats[0]["source"] == "job_applications"
+    assert stats[0]["approve_rate"] == 0.5
+    assert stats[0]["rejection_reasons"] == ["too junior"]
+
+
+async def test_filtered_candidates_are_visible_and_reversible(tmp_path) -> None:
+    """Auto-rejection is only acceptable if you can check what it threw away."""
+    from approval.decisions import DecisionLog
+
+    log = DecisionLog(tmp_path / "approval_memory.db")
+    log.record_filtered("job_applications", "cand-1", "Junior Developer at Co", "closer to your rejections")
+
+    with bind_services(ApiServices(decision_log=log)):
+        assert len(await web_api.filtered_candidates()) == 1
+        await web_api.unfilter_candidate("cand-1")
+        assert await web_api.filtered_candidates() == []

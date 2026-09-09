@@ -19,6 +19,9 @@ class ApprovalResponse(BaseModel):
     # read-only fields keep what north put there, so an approval can only ever
     # approve what was actually shown.
     values: dict[str, Any] = Field(default_factory=dict)
+    # Why, for a rejection. Without one a rejection says only "no", which cannot
+    # be learned from - and this is the highest-quality signal north gets.
+    reason: str = Field(default="", max_length=2000)
     # Legacy fields - ignored. The decision binds to the server-issued card:
     # task_id and agent are read from the stored card, never trusted from the client.
     task_id: str = ""
@@ -38,6 +41,7 @@ async def respond_approval(body: ApprovalResponse) -> None:
             decision=body.decision,
             chosen_option=body.chosen_option,
             values=body.values,
+            reason=body.reason,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None

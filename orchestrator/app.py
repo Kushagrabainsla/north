@@ -25,6 +25,7 @@ from agents.registry import AgentRegistry
 from approval.approval_memory import ApprovalMemory
 from approval.batching import BatchingNotifier
 from approval.callback_server import app as callback_app
+from approval.decisions import DecisionLog
 from approval.judgement_filter import JudgementFilter
 from approval.policy import ApprovalPolicy
 from approval.telegram import TelegramNotifier
@@ -422,6 +423,7 @@ def _build_orchestrator(
         idempotency_window_seconds=settings.idempotency_window_seconds,
         critic=settings.critic_enabled,
         approval_memory=approval_memory,
+        decision_log=deps.decision_log,
         plan_store=deps.plan_store,
     )
 
@@ -468,6 +470,7 @@ def _configure_routers(
         approval_memory=approval_memory,
         unattended_rules=deps.unattended_rules,
         card_continuations=deps.card_continuations,
+        decision_log=deps.decision_log,
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
     )
@@ -768,6 +771,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # answer "what may north do without asking me", and it saves a 16th SQLite
     # file in ~/.north. Shipped rules are seeded here on first run.
     unattended_rules = UnattendedRuleStore(settings.north_home / "approval_memory.db")
+    # How prepared work was decided, and why. The signal a flow improves on.
+    decision_log = DecisionLog(settings.north_home / "approval_memory.db")
+    deps.decision_log = decision_log
     deps.unattended_rules = unattended_rules
     judgement_filter = JudgementFilter(
         memory=deps.memory,

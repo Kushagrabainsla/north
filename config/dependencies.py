@@ -94,6 +94,8 @@ class Dependencies:
     # Which next step belongs to which card source. Resolving a card dispatches
     # through this; registering is how a flow says what its approval leads to.
     card_continuations: Any | None = field(default=None)
+    # How prepared work was decided, and why - the training signal for a flow.
+    decision_log: Any | None = field(default=None)
 
 
 _EMBED_CACHE_MAX_SIZE = 512

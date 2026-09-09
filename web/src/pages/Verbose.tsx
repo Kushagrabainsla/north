@@ -153,10 +153,17 @@ function CardFieldRow({ field, value, onChange }: { field: CardField; value: unk
 // indistinguishable afterwards. Everything here is in aid of judging one item
 // well: the source material beside the work, what the decision will cause said
 // out loud, and no way to decide more than one thing at a time.
-function ApprovalCard({ card, onDecide }: { card: Approval; onDecide: (decision: string, chosen_option: string, values: Record<string, unknown>) => void }) {
+// Chips for the reasons that come up over and over, plus free text for the one
+// that does not. A rejection without a reason says only "no", which cannot be
+// learned from - and this is the highest-quality signal north ever gets.
+const REJECTION_REASONS = ["Not relevant", "Wrong details", "Already handled", "Bad timing", "Not interested"];
+
+function ApprovalCard({ card, onDecide }: { card: Approval; onDecide: (decision: string, chosen_option: string, values: Record<string, unknown>, reason?: string) => void }) {
   const fields = card.fields || [];
   const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries(fields.map(f => [f.name, f.value])));
   const [showContext, setShowContext] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
   const edited = fields.filter(f => f.editable && values[f.name] !== f.value).length;
   // Prepared work is judged against its source, so the source is shown. For a
   // guard-rail the context is incidental and stays behind a toggle - collapsing
@@ -178,11 +185,28 @@ function ApprovalCard({ card, onDecide }: { card: Approval; onDecide: (decision:
     {/* What approving will actually do. Two cards with identical buttons can
         submit an application and save a draft respectively. */}
     {card.next_step && <p className="approval-consequence">Approving will <b>{card.next_step}</b>.</p>}
-    <div className="approval-actions">
-      {card.type === "question"
-        ? card.options.map(option => <button key={option} onClick={() => onDecide("answered", option, values)}>{option}</button>)
-        : <><button className="primary-button" onClick={() => onDecide("approved", "", values)}>Approve</button><button className="danger-button" onClick={() => onDecide("rejected", "", values)}>Reject</button></>}
-    </div>
+    {/* Asked only for prepared work. A guard-rail rejection is a decision about
+        one action in one task, not an example of what should be proposed, so
+        interrupting it for a reason would cost a click and teach nothing. */}
+    {rejecting
+      ? <div className="reject-reason">
+          <div className="editor-label">Why? This is what makes the next batch better.</div>
+          <div className="reason-chips">
+            {REJECTION_REASONS.map(chip =>
+              <button key={chip} className={reason === chip ? "active" : ""} onClick={() => setReason(chip)}>{chip}</button>)}
+          </div>
+          <input value={reason} onChange={e => setReason(e.target.value)} placeholder="or say why in your own words…"/>
+          <div className="approval-actions">
+            <button className="danger-button" onClick={() => onDecide("rejected", "", values, reason)}>Reject</button>
+            <button onClick={() => { setRejecting(false); setReason(""); }}>Cancel</button>
+          </div>
+        </div>
+      : <div className="approval-actions">
+          {card.type === "question"
+            ? card.options.map(option => <button key={option} onClick={() => onDecide("answered", option, values)}>{option}</button>)
+            : <><button className="primary-button" onClick={() => onDecide("approved", "", values)}>Approve</button>
+                <button className="danger-button" onClick={() => (card.source ? setRejecting(true) : onDecide("rejected", "", values))}>Reject</button></>}
+        </div>}
   </article>;
 }
 
@@ -200,7 +224,7 @@ export function Approvals() {
     return () => stream.close();
   }, [reload]);
 
-  const decide = async (card: Approval, decision: string, chosen_option = "", values: Record<string, unknown> = {}) => { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option, values }); await resource.reload(); };
+  const decide = async (card: Approval, decision: string, chosen_option = "", values: Record<string, unknown> = {}, reason = "") => { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option, values, reason }); await resource.reload(); };
   if (resource.loading) return <Loading/>;
   const pending = (resource.data || []).filter(card => card.status === "pending");
   const history = (resource.data || []).filter(card => card.status !== "pending");
@@ -216,7 +240,7 @@ export function Approvals() {
   // the fastest possible review and the worst one, and this page exists for
   // per-item judgement.
   const section = (cards: Approval[]) =>
-    <div className="approval-stack">{cards.map(card => <ApprovalCard key={card.id} card={card} onDecide={(d, o, v) => decide(card, d, o, v)}/>)}</div>;
+    <div className="approval-stack">{cards.map(card => <ApprovalCard key={card.id} card={card} onDecide={(d, o, v, r) => decide(card, d, o, v, r)}/>)}</div>;
 
   return <div className="page">
     <PageHeader eyebrow="Attention" title="Approvals"

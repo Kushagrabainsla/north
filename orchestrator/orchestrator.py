@@ -16,6 +16,7 @@ from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier, UserInteraction
 from approval.approval_memory import ApprovalMemory
+from approval.decisions import DecisionLog
 from approval.mode import ApprovalMode, resolve_approval_mode
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
@@ -222,6 +223,7 @@ class Orchestrator:
         idempotency_window_seconds: int = 60,
         critic: bool = False,
         approval_memory: ApprovalMemory | None = None,
+        decision_log: DecisionLog | None = None,
         plan_store: Any | None = None,
     ) -> None:
         self._ledger = ledger
@@ -268,6 +270,7 @@ class Orchestrator:
         self._idempotency = IdempotencyCache(idempotency_window_seconds) if idempotency_window_seconds > 0 else None
         self._critic = critic
         self._approval_memory = approval_memory
+        self._decision_log = decision_log
         # Maps task_id → running asyncio.Task so cancel_task() can stop it.
         self._active_tasks: dict[str, asyncio.Task] = {}
         # Makes the capacity check-then-register in submit_task atomic - without
@@ -586,6 +589,7 @@ class Orchestrator:
         decision: str,
         chosen_option: str,
         values: dict[str, Any] | None = None,
+        reason: str = "",
     ) -> None:
         """Record a user approval decision from the notification callback or Web UI.
 
@@ -613,6 +617,12 @@ class Orchestrator:
         # the resolved card. Nothing below writes them to the ledger.
         proposed = card.field_values()
         edited = sorted(name for name, value in card.merge_response(values).items() if value != proposed.get(name))
+
+        # Log the decision as an example of the user's taste, before anything
+        # else. Only cards with a source: a guard-rail is a question about one
+        # action in one task, not evidence about what should be proposed.
+        if self._decision_log is not None and card.source:
+            self._decision_log.record(card, decision, reason=reason, edited_fields=edited)
 
         # An answered question is a durable preference in the user's own words  -
         # record it from a *learnable* source (the extraction pipeline reads it),
