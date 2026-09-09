@@ -25,8 +25,8 @@ This ledger is the durable execution record for [the approved refactor program](
 
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
-| Define current-state module catalog and transitional dependency policy | Ready to commit | Pending | YAML parse and documentation-link validation pending | The catalog preserves existing paths while defining owners, contracts, protected surfaces, and temporary dependency exemptions. |
-| Correct architecture repository map | Not started | — | — | Must match the actual current tree and link to the catalog. |
+| Define current-state module catalog and transitional dependency policy | Complete | `b63bf9b` | YAML ownership validation — 18 modules own 378 tracked production paths exactly once; ruff format/check; full pytest — 1,956 passed, 3 skipped | The catalog preserves existing paths while defining owners, contracts, protected surfaces, and temporary dependency exemptions. |
+| Correct architecture repository map | Ready to commit | Pending | Markdown-link validation and documentation diff inspection pending | Replaces obsolete package/API/agent layout details with the current tree and links to the ownership catalog. |
 | Validate every production path has one module owner | Not started | — | — | Will become an automated test in Stage 2. |
 
 ## Stages 1–8
