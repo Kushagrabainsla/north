@@ -19,7 +19,6 @@ import logging
 
 from approval.base import Notifier
 from approval.models import Card, CardType
-from utils.ids import generate_id
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +62,7 @@ class BatchingNotifier(Notifier):
             return
         agents = sorted({card.agent for card in batch})
         await self._fallback.notify(
-            Card(
-                id=generate_id(),
+            Card.new(
                 type=CardType.INFORMATION,
                 task_id=batch[-1].task_id,
                 agent=", ".join(agents),

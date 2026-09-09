@@ -1043,8 +1043,7 @@ class Orchestrator:
         JudgementFilter and Notifier are applied consistently with every other
         approval card.
         """
-        card = Card(
-            id=generate_id(),
+        card = Card.new(
             type=CardType.APPROVAL,
             task_id=task_id,
             agent="orchestrator",
@@ -2196,8 +2195,7 @@ class Orchestrator:
 
         if result.requires_approval or result.has_question:
             card_type = CardType.QUESTION if result.has_question else CardType.APPROVAL
-            card = Card(
-                id=generate_id(),
+            card = Card.new(
                 type=card_type,
                 task_id=task_id,
                 agent=agent.name,
@@ -2207,8 +2205,7 @@ class Orchestrator:
             )
             await self._interaction.notify(card)
         else:
-            card = Card(
-                id=generate_id(),
+            card = Card.new(
                 type=CardType.INFORMATION,
                 task_id=task_id,
                 agent=agent.name,

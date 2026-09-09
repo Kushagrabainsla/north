@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any
 from approval.mode import approve_option
 from approval.models import ApprovalDecision, Card, CardField, CardType
 from approval.policy import Action, ActionKind, Verdict
-from utils.ids import generate_id
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -329,10 +328,9 @@ class UserInteraction:
         fields: list[CardField] | None = None,
         context: str = "",
     ) -> Card:
-        return Card(
-            id=generate_id(),
+        return Card.new(
             type=card_type,
-            task_id=task_id or "",
+            task_id=task_id,
             agent=agent,
             title=title,
             message=body,

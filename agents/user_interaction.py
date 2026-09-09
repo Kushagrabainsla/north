@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, UserInteraction
 from approval.models import Card, CardField, CardType
-from utils.ids import generate_id
 
 if TYPE_CHECKING:
     from approval.base import Notifier
@@ -54,8 +53,7 @@ async def surface_card(
         stream_manager=stream_manager,
         default_timeout=timeout,
     )
-    card = Card(
-        id=generate_id(),
+    card = Card.new(
         type=card_type,
         task_id=task_id,
         agent=agent_name,

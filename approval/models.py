@@ -1,15 +1,18 @@
 """Pydantic models and enums for the Approval Layer.
 
-See docs/CODING_STYLE.md Section 7.3 and README Section 9.
+See docs/CODING_STYLE.md Section 7.4 and README Section 9.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from utils.ids import generate_id
 
 
 class CardType(StrEnum):
@@ -100,6 +103,41 @@ class Card(BaseModel):
     # for prepared work: the task finishing is the *normal* case there, not the
     # reason to throw the card away. Empty for an ordinary in-flight question.
     source: str = ""
+
+    @classmethod
+    def new(
+        cls,
+        *,
+        type: CardType,
+        agent: str,
+        title: str,
+        message: str,
+        task_id: str | None = "",
+        options: Sequence[str] = (),
+        fields: Sequence[CardField] = (),
+        context: str = "",
+        blocking: bool = True,
+        source: str = "",
+    ) -> Card:
+        """Build a card with a fresh id and the defaults every caller wants.
+
+        The one way a card comes into being. Six places used to assemble one by
+        hand, each remembering to generate an id and coerce ``task_id`` - and
+        each a place a new field could be forgotten. Mirrors ``LedgerEntry.new``.
+        """
+        return cls(
+            id=generate_id(),
+            type=type,
+            task_id=task_id or "",
+            agent=agent,
+            title=title,
+            message=message,
+            options=list(options),
+            fields=list(fields),
+            context=context,
+            blocking=blocking,
+            source=source,
+        )
 
     @property
     def outlives_task(self) -> bool:

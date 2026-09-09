@@ -658,6 +658,10 @@ GET    /orchestrator/stream/{task_id}    -> SSE stream for real-time task progre
                                             tool calls, approval cards, completion)
 
 POST   /orchestrator/approval/respond    -> receive approval decision from callback server
+                                            (body: card_id, decision, chosen_option, values)
+                                            `values` are the edited field values for a card
+                                            carrying work; merged against the issued card,
+                                            never trusted as sent
 
 POST   /orchestrator/transcribe          -> transcribe raw audio bytes via OpenRouter Whisper
                                             body: raw WAV/MP3 bytes
@@ -1103,7 +1107,7 @@ The Approval Layer is the primary interface between north and the user for conse
 
 ### 9.1 Notifications and Security
 
-The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. An optional `MacOSNotifier` uses the `alerter` subprocess for native macOS notification banners with action buttons - swap it in via `config/dependencies.py` if running on macOS and alerter is installed. At runtime the active notifier is wrapped by `TUIAwareNotifier`, which stays silent while the interactive TUI is attached (the TUI shows cards inline) and fires the underlying notifier otherwise. A local callback server runs on `localhost:8001` and receives button taps.
+The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. An optional `MacOSNotifier` uses the `alerter` subprocess for native macOS notification banners with action buttons - swap it in via `config/dependencies.py` if running on macOS and alerter is installed. At runtime the active notifier is wrapped by `TUIAwareNotifier`, which stays silent while the interactive TUI is attached (the TUI shows cards inline) and fires the underlying notifier otherwise, and that in turn by `BatchingNotifier`, which coalesces prepared work into one alert per batch (§9.8). A local callback server runs on `localhost:8001` and receives button taps.
 
 **Security:** the notification callback server is secured with a shared secret generated at first startup and stored at `~/.north/secret.key`. Every notification payload embeds this secret in the callback URL or request body. Every callback request to `localhost:8001` must include the `X-North-Secret` header with the correct value. Requests without a valid secret are rejected with HTTP 403. This prevents any other local process from faking an approval action.
 
@@ -1144,13 +1148,62 @@ Agent completes work
   [Shinjuku]  [Shibuya]  [View Detail]
 ```
 
+An Approval card can also carry **work north has already filled in** rather than
+only a sentence: `fields` (typed, individually editable), `context` (the source
+material, shown beside them), and `response` (the values as decided, so an edit
+reaches north rather than only a yes/no).
+
+```
+"Submit this application?"
+  Company           Acme                     (read-only)
+  Role              Senior Python            (read-only)
+  Cover letter      Dear team, …             (editable)
+  [Approve]  [Reject]
+```
+
+Values posted back are merged against the issued card, never trusted as sent:
+unknown names are dropped and read-only fields keep what north put there, so an
+approval can only ever approve what was actually shown.
+
 ### 9.3 View Detail
 
 For complex outputs that do not fit in a notification (full itineraries, research summaries, meal plans), the [View Detail] action shows the full card in the TUI, and the CLI prints the full detail inline. The user can approve, reject, or answer questions there without interacting with the notification banner.
 
-### 9.4 Judgement Rules Filtering
+### 9.4 The Decision: `ApprovalPolicy`
 
-Before surfacing any card, the Orchestrator checks `judgement_rules.md`. If a rule clearly covers the situation at confidence 8/10 or above, it auto-approves, auto-rejects, or pre-fills a recommendation. Cards only surface when the situation is novel or when no high-confidence rule covers it. Over time the approval layer gets quieter.
+Whether north acts without asking is decided in exactly one place -
+`ApprovalPolicy.rule()` in `approval/policy.py`. A tool describes what it is
+about to do as an `Action`; the policy rules on it. Tools do not read the
+approval mode.
+
+Precedence, hardest evidence first. The first tier that matches wins, so a
+later, softer tier can never overturn an earlier, harder one:
+
+| # | Tier | interactive | auto | autonomous |
+|---|---|---|---|---|
+| 1 | Read-only / non-mutating | allow | allow | allow |
+| 2 | Allow-all | – | – | **allow** |
+| 3 | Recognised as catastrophic (`rm -rf /`, force-push) | refuse | refuse | (allowed by 2) |
+| 4 | **Card carries work for review** | **ask** | **ask** | (allowed by 2) |
+| 5 | Deterministic safe subset: allowlisted command, in-workspace edit, local git | ask | **allow** | – |
+| 6 | The user's own prior decision, replayed | ask | **allow / refuse** | – |
+| 7 | Learned judgement rules, via a model | ask | **allow / refuse** | – |
+| 8 | Anything else | ask | ask | – |
+
+Tier 7 is `judgement_filter.py`: it reads `judgement_rules.md` and asks a fast
+model whether an existing rule covers the situation at confidence 8/10 or above.
+It is consulted **last, and only in `auto` and above** - it previously ran in
+every mode, including `interactive`, which meant a model could decide to skip
+asking you.
+
+Tier 4 is why a card carrying prepared work is never auto-decided below
+`autonomous`: the fields exist precisely because a human is meant to read them.
+It is a property of the card, not a list of agent names - a list only protects
+what somebody remembered to add to it.
+
+An action allowed without asking still leaves a **resolved card** behind, naming
+the rule that allowed it. Something north did unasked has to be visible
+afterwards.
 
 ### 9.5 Trust Thresholds
 
@@ -1162,7 +1215,12 @@ medium_stakes:            notify        # calendar changes, research outputs
 high_stakes_irreversible: always ask    # money movement, bookings, commitments
 ```
 
-High-stakes-irreversible actions always surface an Approval card regardless of judgement rule confidence. This is a hard override that cannot be bypassed by learned rules.
+High-stakes-irreversible actions always surface an Approval card regardless of judgement rule confidence. This is a hard override that cannot be bypassed by learned rules - tier 4 of §9.4 sits above every learned tier, so nothing north has learned can answer on your behalf for work it prepared.
+
+The one mode where it does not hold is `autonomous`, and deliberately: that mode
+allows everything, including the patterns other modes refuse outright. Choosing
+it is choosing to make the mode the only authority. There is no hard-danger
+floor beneath it.
 
 ### 9.6 Feedback Loop
 
@@ -1184,7 +1242,37 @@ for _ in range(300):
 card = await approval_store.wait_for_decision(card_id, timeout=300.0)
 ```
 
-`ApprovalStore` allocates an `asyncio.Event` for each card on `add()`.  `resolve()` calls `event.set()`.  `wait_for_decision()` awaits the event with a 300-second `asyncio.wait_for` timeout.  Under load with many concurrent pending approvals, zero CPU is consumed while waiting - each coroutine is simply suspended until its specific event fires.
+`ApprovalStore` allocates an `asyncio.Event` for each card on `add()`.  `resolve()` calls `event.set()`.  `wait_for_decision()` awaits the event with an `asyncio.wait_for` timeout (default 30 minutes; the real ceiling is the stuck-task watchdog at 24h).  Under load with many concurrent pending approvals, zero CPU is consumed while waiting - each coroutine is simply suspended until its specific event fires.
+
+### 9.8 Blocking and Non-Blocking Cards
+
+A card records whether anything is waiting on the answer.
+
+**Blocking** (`blocking=True`, the default) is a guard-rail: an agent mid-action
+that cannot continue until you decide. It behaves as above - the caller awaits
+the event, and the card dies with its task.
+
+**Non-blocking** is prepared work. north has finished; the task ends, the card
+stays, and you decide whenever. Raised with `UserInteraction.hand_over()`
+alongside `request_work_approval()`, which still waits.
+
+Three things follow from a card outliving its task:
+
+- **Cards are persisted** to `~/.north/approvals.db` and read back at startup, so
+  the queue survives a restart. The `asyncio.Event` a blocking caller waits on
+  cannot be persisted and neither can its coroutine, so a *blocking* card found
+  pending at startup is retired as `task_ended` - answering it would wake nobody.
+- **`cancel_for_task` skips a card that outlives its task** (`Card.outlives_task`:
+  it has a `source`, or it is non-blocking). For prepared work the task finishing
+  is the normal case, so sweeping there would delete the queue at the moment it
+  filled up.
+- **Eviction never touches pending cards.** Only resolved history is capped. A
+  queue of unanswered work is the feature, not overhead to be trimmed.
+
+Notifications for prepared work are coalesced by `BatchingNotifier` into one
+alert per batch - eight finished applications is one event in your day, not
+eight. A blocking card still goes straight through, because something is waiting
+on it.
 
 ---
 
@@ -1446,6 +1534,8 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
   episodic.db            <- per-task summaries with embeddings for episodic retrieval
   tool_index.db          <- per-tool embedding vectors for semantic tool selection
   facts.db               <- per-fact embedding vectors for semantic context retrieval
+  approvals.db           <- approval cards, so prepared work waiting on you survives a restart
+  approval_memory.db     <- how you decided past actions, replayed in `auto` mode
   settings.json          <- user settings (inference strategy, etc.)
   secret.key             <- shared secret for notification callbacks and REST API auth
   tasks/

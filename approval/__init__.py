@@ -1,6 +1,6 @@
 """Notification and approval user-interaction layer for north.
 
-See docs/CODING_STYLE.md Section 7.3.
+See docs/CODING_STYLE.md Sections 7.3 (one decision, one place) and 7.4.
 """
 
 from __future__ import annotations

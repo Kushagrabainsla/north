@@ -388,7 +388,60 @@ __all__ = [
 ]
 ```
 
-### 7.3 Standard Module Layout
+### 7.3 One Decision, One Place
+
+Whether north acts without asking is decided in exactly one place:
+`ApprovalPolicy.rule()` in `approval/policy.py`. Nothing else may branch on the
+approval mode to answer that question.
+
+It was previously decided in seven - two short-circuits inside `bash`, one each
+in `git` and `patch_file`, and three tiers in `JudgementFilter`. They drifted:
+the model-backed tier had no mode check at all, so it auto-approved in
+`interactive`, the default. No file could answer "what does north do without
+asking me?"
+
+**The split: a tool classifies, the policy decides.**
+
+```python
+# correct - the tool reports facts about itself
+refused = await gate_action(
+    Action(
+        agent="bash",
+        kind=ActionKind.SHELL_COMMAND,
+        summary=command,
+        command=command,
+        read_only=self._safety_inspector.is_instantly_safe(command),
+        mutating=not self._safety_inspector.is_instantly_safe(command),
+    ),
+    policy=self._policy,
+    approval_store=self._approval_store,
+    ...
+)
+if refused is not None:
+    return refused
+
+# wrong - the tool deciding what its own facts mean
+if self._mode() in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS):
+    if self._unattended.approves_command(command):
+        return ApprovalDecision.APPROVED
+```
+
+A tool keeps the knowledge that is genuinely its own - bash knows whether a
+command chains, git knows whether an action mutates, patch_file knows whether a
+path is inside the workspace - and expresses it as fields on an `Action`. It
+does not read the mode, hold an allowlist, or reach a verdict.
+
+Two consequences worth keeping:
+
+- **Rules key on facts, never on an agent's name.** A hardcoded list of names
+  only protects what somebody remembered to add to it, so every new agent starts
+  out unprotected. `carries_work=True` is a property of the card; being called
+  `job` is not.
+- **Every ruling names the rule that produced it,** and an action allowed
+  without asking still leaves a resolved card behind. An auto-approval nobody
+  can see is indistinguishable from one that never happened.
+
+### 7.4 Standard Module Layout
 
 Every module follows the same internal structure. This makes every module immediately predictable.
 
@@ -452,15 +505,18 @@ inference/
 approval/
   __init__.py
   base.py             <- Notifier (ABC)
-  models.py           <- Card, CardType, ApprovalDecision
+  models.py           <- Card (+ Card.new), CardField, CardType, ApprovalDecision
   exceptions.py       <- NotificationError
   macos.py            <- MacOSNotifier (optional native macOS alerts)
   terminal.py         <- TerminalNotifier (default)
   tui.py              <- TUIAwareNotifier (wraps a Notifier; silent while the TUI is attached)
+  batching.py         <- BatchingNotifier (one alert per batch of prepared work)
   interaction.py      <- UserInteraction (single path for approval/question/information cards)
   callback_server.py  <- FastAPI app on port 8001
-  store.py            <- module-level approval_store singleton (card registry)
-  judgement_filter.py <- pre-screens cards against judgement_rules.md
+  store.py            <- ApprovalStore (card registry, SQLite-backed)
+  policy.py           <- ApprovalPolicy: the ONE decision point (see 7.4)
+  unattended.py       <- UnattendedPolicy (the deterministic safe subset)
+  judgement_filter.py <- one tier of that decision: what the learned rules say
 
 agents/
   __init__.py
@@ -556,7 +612,7 @@ tests/
 
 ## 8. Project Structure
 
-Follow the layout in Section 7.3 exactly. Do not create new top-level directories without a spec update.
+Follow the layout in Section 7.4 exactly. Do not create new top-level directories without a spec update.
 
 ---
 

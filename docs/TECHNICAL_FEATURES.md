@@ -294,7 +294,12 @@ card = await approval_store.wait_for_decision(card_id, timeout=300.0)
 # wakes exactly when resolve() is called - zero CPU while waiting
 ```
 
-**Implementation:** `ApprovalStore.add()` allocates a `asyncio.Event` per card. `resolve()` calls `event.set()`. `wait_for_decision()` uses `asyncio.wait_for(event.wait(), timeout=300.0)`. Under load with many concurrent pending approvals (e.g., multiple parallel agent tasks each waiting for sign-off), each coroutine is independently suspended with no shared state contention.
+**Implementation:** `ApprovalStore.add()` allocates a `asyncio.Event` per card. `resolve()` calls `event.set()`. `wait_for_decision()` uses `asyncio.wait_for(event.wait(), timeout=...)` (default 30 minutes). Under load with many concurrent pending approvals (e.g., multiple parallel agent tasks each waiting for sign-off), each coroutine is independently suspended with no shared state contention.
+
+**Only for cards something is waiting on.** A card carrying prepared work is
+non-blocking: the task ends, the card is written to `~/.north/approvals.db`, and
+it is still there after a restart. Nothing awaits an event for it, so it has no
+timeout - see ARCHITECTURE §9.8.
 
 ---
 

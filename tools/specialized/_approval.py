@@ -23,7 +23,6 @@ from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, UserIntera
 from approval.models import ApprovalDecision, Card, CardType
 from approval.policy import Action, ApprovalPolicy, Verdict
 from tools.models import ToolOutput
-from utils.ids import generate_id
 
 if TYPE_CHECKING:
     from approval.base import Notifier
@@ -90,10 +89,9 @@ async def gate_action(
         default_timeout=timeout,
     )
     card = await interaction.request_decision(
-        Card(
-            id=generate_id(),
+        Card.new(
             type=CardType.APPROVAL,
-            task_id=task_id or "",
+            task_id=task_id,
             agent=action.agent,
             title=title,
             message=message,
@@ -125,10 +123,9 @@ def _record_auto_decision(
     """Leave an already-resolved card for an action that ran without asking."""
     if approval_store is None:
         return
-    card = Card(
-        id=generate_id(),
+    card = Card.new(
         type=CardType.APPROVAL,
-        task_id=task_id or "",
+        task_id=task_id,
         agent=action.agent,
         title=title,
         message=message,

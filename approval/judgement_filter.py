@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from approval.approval_memory import ApprovalMemory
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS
@@ -35,6 +36,15 @@ from utils.prompts import load_prompt
 from utils.text import extract_json
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _Verdict:
+    """What the learned rules said. Abstaining is the default."""
+
+    decision: str | None = None
+    chosen_option: str = ""
+    rule: str = ""
 
 _AUTO_CONFIDENCE_THRESHOLD = 0.8
 # Below this much learned text (rules + preferences) there is nothing to match on.
@@ -67,7 +77,6 @@ class JudgementFilter:
         self._inference_router = inference_router
         self._approval_memory = approval_memory
         self._mode_provider = mode_provider
-        self._last_rule = ""
 
     def _mode(self) -> ApprovalMode:
         return self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
@@ -81,38 +90,59 @@ class JudgementFilter:
 
         Returns ("approved"|"rejected", rule) or (None, "") to abstain.
         """
-        card = Card(
-            id="",
-            type=CardType.APPROVAL,
-            task_id="",
+        verdict = await self._consult(
+            card_type=CardType.APPROVAL,
             agent=action.agent,
             title=action.summary,
-            message=action.describe(),
+            body=action.describe(),
             options=list(APPROVAL_DEFAULT_OPTIONS),
         )
-        decision, _ = await self.check(card)
-        return decision, self._last_rule
+        return verdict.decision, verdict.rule
 
     async def check(self, card: Card) -> tuple[str | None, str]:
         """Return (decision, chosen_option) or (None, '') if nothing fires.
 
-        Consults only the learned judgement rules, via a model. The approval
-        mode, the deterministic safe subset, and the user's replayed decisions
-        all live in `approval/policy.py` now - keeping a second copy here is how
-        the two drifted apart, one of them without a mode check.
+        The card-shaped entry point, used for QUESTION cards. `advise` is the
+        action-shaped one. Both ask the same question of the same rules - the
+        consultation itself lives in `_consult` so the two cannot drift.
         """
         # INFORMATION cards never need filtering - they carry no decision.
         if card.type == CardType.INFORMATION:
             return None, ""
+        verdict = await self._consult(
+            card_type=card.type,
+            agent=card.agent,
+            title=card.title,
+            body=card.message,
+            options=card.options,
+            task_id=card.task_id,
+        )
+        return verdict.decision, verdict.chosen_option
 
+    async def _consult(
+        self,
+        *,
+        card_type: CardType,
+        agent: str,
+        title: str,
+        body: str,
+        options: list[str],
+        task_id: str = "",
+    ) -> _Verdict:
+        """Ask the learned rules about one thing. The only place that does.
+
+        Takes the primitives rather than a Card so the policy can consult it
+        about an `Action` without first inventing a card to carry it - a fake
+        card whose id and task were blank, built only to be taken apart again.
+        """
         rules = await self._memory.read_document(ContextDocument.JUDGEMENT_RULES)
         preferences = ""
-        if card.type == CardType.QUESTION:
+        if card_type == CardType.QUESTION:
             preferences = await self._memory.read_document(ContextDocument.USER)
 
         # Need at least some learned context to act on, or there is nothing to match.
         if len((rules + preferences).strip()) < _MIN_LEARNED_CONTEXT_CHARS:
-            return None, ""
+            return _Verdict()
 
         prompt = load_prompt("prompts/judgement_filter.md").format(
             rules=rules[:3000] or "(no rules learned yet)",
@@ -121,11 +151,11 @@ class JudgementFilter:
                 if preferences.strip()
                 else ""
             ),
-            card_type=card.type.value,
-            agent=card.agent,
-            title=card.title,
-            message=card.message[:500],
-            options=", ".join(card.options) if card.options else "none",
+            card_type=card_type.value,
+            agent=agent,
+            title=title,
+            message=body[:500],
+            options=", ".join(options) if options else "none",
             threshold=_AUTO_CONFIDENCE_THRESHOLD,
         )
 
@@ -135,41 +165,39 @@ class JudgementFilter:
                     prompt=prompt,
                     priority=PoolPriority.MEDIUM,
                     component="judgement_filter",
-                    task_id=card.task_id,
+                    task_id=task_id,
                     json_mode=True,
                 )
             )
             result = extract_json(response.text)
         except Exception:
-            logger.debug("JudgementFilter: LLM call failed, surfacing card %s", card.id)
-            return None, ""
+            logger.debug("JudgementFilter: LLM call failed - surfacing to the user")
+            return _Verdict()
 
         decision = result.get("decision", "none")
         confidence = float(result.get("confidence", 0.0))
         chosen_option = str(result.get("chosen_option", ""))
         rule = result.get("rule", "")
-        self._last_rule = rule
 
         if decision == "none" or confidence < _AUTO_CONFIDENCE_THRESHOLD:
-            return None, ""
+            return _Verdict()
 
         # Fail-closed gate: destructive tool classes always require a human for
         # approval. This check is here - in the single producer of auto-decisions
         # - so every caller (BashTool, ShellTool, PatchFileTool, CreateToolTool,
         # GitTool, GhTool, agents, the orchestrator) inherits it.
-        if decision == "approved" and card.type == CardType.APPROVAL and card.agent in NEVER_AUTO_APPROVE_AGENTS:
+        if decision == "approved" and card_type == CardType.APPROVAL and agent in NEVER_AUTO_APPROVE_AGENTS:
             logger.info(
-                "JudgementFilter: refusing to auto-approve high-stakes card %s from %r - surfacing to user",
-                card.id,
-                card.agent,
+                "JudgementFilter: refusing to auto-approve a high-stakes action from %r - surfacing to user",
+                agent,
             )
-            return None, ""
+            return _Verdict()
 
         logger.info(
-            "JudgementFilter: auto-%s card %s (confidence=%.2f, rule=%r)",
+            "JudgementFilter: auto-%s an action from %r (confidence=%.2f, rule=%r)",
             decision,
-            card.id,
+            agent,
             confidence,
             rule,
         )
-        return decision, chosen_option
+        return _Verdict(decision=decision, chosen_option=chosen_option, rule=rule)
