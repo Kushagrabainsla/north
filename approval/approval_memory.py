@@ -16,6 +16,7 @@ import hashlib
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from utils.db import open_db_connection
 
@@ -32,23 +33,76 @@ CREATE TABLE IF NOT EXISTS approval_decisions (
 )
 """
 
+_META_SCHEMA = """
+CREATE TABLE IF NOT EXISTS approval_memory_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)
+"""
+
+# Marks the one-time removal of decisions keyed by the old prefix fingerprint.
+_PREFIX_PURGE_KEY = "prefix_fingerprints_dropped"
+
+
+def _drop_prefix_fingerprints(conn: Any) -> None:
+    """Delete decisions recorded under the 80-character prefix fingerprint, once.
+
+    Those rows cannot be re-keyed: the fingerprint is a hash, and the full text
+    it should have covered was never stored. Leaving them would be worse than
+    dropping them - they would sit in the cockpit looking like remembered
+    decisions while never matching anything again, and any one of them might be
+    a collision that recorded a verdict the user never gave for that action.
+
+    So they go, loudly. The cost is being asked again about actions already
+    decided; the alternative is trusting verdicts that may not be theirs.
+    """
+    if conn.execute("SELECT 1 FROM approval_memory_meta WHERE key = ?", (_PREFIX_PURGE_KEY,)).fetchone():
+        return
+    dropped = conn.execute("DELETE FROM approval_decisions").rowcount
+    conn.execute("INSERT INTO approval_memory_meta(key, value) VALUES (?, '1')", (_PREFIX_PURGE_KEY,))
+    if dropped:
+        logger.info(
+            "ApprovalMemory: dropped %d learned decision(s) keyed by the old 80-character prefix "
+            "fingerprint - it could not tell two actions with a long shared prefix apart. "
+            "north will ask about those actions again.",
+            dropped,
+        )
+
+
 _FENCE_RE = re.compile(r"```[a-z]*")
 _WS_RE = re.compile(r"\s+")
-# How much of the normalized action text defines its identity. Enough to tell
-# "npm install x" from "pytest", short enough that volatile tails (a commit
-# message, a specific diff hunk) don't make every action look unique.
-_SIGNATURE_CHARS = 80
+# How much of the action text is shown as its label in the cockpit. Display
+# only - identity is the whole message (see `_fingerprint`).
+_DISPLAY_SIGNATURE_CHARS = 80
 
 
 def _normalize(message: str) -> str:
+    """The action text with formatting noise removed. Not truncated."""
     text = _FENCE_RE.sub(" ", message or "")
     text = text.replace("`", " ").strip().lower()
-    return _WS_RE.sub(" ", text)[:_SIGNATURE_CHARS]
+    return _WS_RE.sub(" ", text)
+
+
+def _display_signature(message: str) -> str:
+    """A short label for the cockpit's list of remembered decisions."""
+    return _normalize(message)[:_DISPLAY_SIGNATURE_CHARS]
 
 
 def _fingerprint(agent: str, message: str) -> str:
-    sig = _normalize(message)
-    return hashlib.sha256(f"{agent}::{sig}".encode()).hexdigest()
+    """Identity of an action, over its *whole* normalized text.
+
+    This used to hash only the first 80 characters, which made any two actions
+    sharing a long prefix the same action. A `cd`-and-activate preamble is
+    routinely longer than that, so "run the tests" and "delete the data
+    directory" could carry one fingerprint - and approving the first taught
+    north to replay that approval for the second.
+
+    Hashing everything makes a fingerprint narrower, not wider: a volatile tail
+    (a diff hunk, a commit message) now makes an action look unique, so north
+    asks again instead of replaying. That is the safe direction to be wrong in -
+    an extra question costs a moment, a false match acts without being asked.
+    """
+    return hashlib.sha256(f"{agent}::{_normalize(message)}".encode()).hexdigest()
 
 
 class ApprovalMemory:
@@ -60,6 +114,8 @@ class ApprovalMemory:
         with open_db_connection(self._db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_SCHEMA)
+            conn.execute(_META_SCHEMA)
+            _drop_prefix_fingerprints(conn)
         # fingerprint -> decision, loaded lazily and kept in sync on record().
         self._cache: dict[str, str] | None = None
 
@@ -115,7 +171,7 @@ class ApprovalMemory:
         if decision not in ("approved", "rejected"):
             return  # only learn from clear approve/reject signals
         fp = _fingerprint(agent, message)
-        sig = _normalize(message)
+        sig = _display_signature(message)
         try:
             with open_db_connection(self._db_path) as conn:
                 conn.execute(
