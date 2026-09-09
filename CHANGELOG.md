@@ -13,6 +13,7 @@ All notable changes to north are documented here.
 - Every page spaces its blocks alike: 28px under the header, 18px between blocks, matching the gap panels already had side by side.
 
 ### Fixed
+- **The repository formatter gate is clean** (`tests/unit/agents/test_context_compaction.py`, `tests/unit/web/test_css_cascade.py`). Corrected two pre-existing ruff formatting discrepancies without changing test behavior.
 - The collapsed sidebar centres its icons. Two CSS faults stacked: `max-width: 0` cannot shrink a flex item whose `min-width` defaults to its content, and the collapsed rule tied on specificity with the expanded one and lost on source order - leaving 8px of room for an 18px icon.
 - Test isolation: `settings.north_home` is patched as well as the environment variable, so tests can no longer read or write the developer's real `~/.north`.
 

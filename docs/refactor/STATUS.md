@@ -13,8 +13,9 @@ This ledger is the durable execution record for [the approved refactor program](
 
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
-| Persist approved plan and status ledger | In progress | — | Pending documentation checks, baseline capture, commit, and push | Created before refactor code changes so execution remains recoverable after context compaction. |
-| Capture backend/frontend/packaging baseline | Not started | — | — | Must distinguish existing failures from refactor regressions. |
+| Persist approved plan and status ledger | Complete | `a265963` | `git diff --check`; `uv run ruff check .`; `uv run pytest` — 1,956 passed, 3 skipped | The initial format check exposed two pre-existing test formatting discrepancies; the isolated repair is recorded below. |
+| Repair pre-existing formatter violations | Ready to commit | Pending | `uv run ruff format --check .`; `uv run ruff check .`; targeted pytest — 13 passed; full pytest — 1,956 passed, 3 skipped | Behavior-preserving changes limited to ruff formatting in two test files. |
+| Capture backend/frontend/packaging baseline | In progress | — | Backend: ruff format/check pass; pytest — 1,956 passed, 3 skipped | Frontend, package-install, CLI, and deployment baseline commands remain. |
 | Add ADR index and baseline decision records | Not started | — | — | No architecture implementation moves before this control plane is complete. |
 
 ## Stages 1–8

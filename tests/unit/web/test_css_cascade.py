@@ -95,10 +95,7 @@ def test_no_layout_property_is_silently_overridden_by_source_order(prop: str) ->
     conflicts = []
     for combination in _class_combinations():
         setters = [
-            (order, name)
-            for name in combination
-            for order, block in rules.get(name, [])
-            if _declares(block, prop)
+            (order, name) for name in combination for order, block in rules.get(name, []) if _declares(block, prop)
         ]
         if len(setters) < 2:
             continue
@@ -108,7 +105,7 @@ def test_no_layout_property_is_silently_overridden_by_source_order(prop: str) ->
         if not losers:
             continue  # one class declared twice is a plain redefinition, not this bug
         conflicts.append(
-            f"class=\"{' '.join(sorted(combination))}\": .{winner} wins {prop} over "
+            f'class="{" ".join(sorted(combination))}": .{winner} wins {prop} over '
             f"{', '.join('.' + name for name in losers)} on source order alone"
         )
     assert not conflicts, (

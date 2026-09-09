@@ -177,8 +177,6 @@ async def test_compact_if_needed_skips_when_under_threshold() -> None:
     assert len(messages) == 4
 
 
-
-
 def test_file_context_for_summary_tracks_read_and_modified_paths() -> None:
     messages = [
         {
@@ -234,6 +232,8 @@ async def test_compaction_prompt_includes_file_context() -> None:
     assert "<file_context>" in prompt
     assert "Files modified: file_0.py" in prompt
     assert "Files read: file_1.py" in prompt
+
+
 def test_render_exchange_preserves_multi_round_compacted_summary() -> None:
     long_summary = (
         "## Earlier context (auto-compacted)\n"
