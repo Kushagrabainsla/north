@@ -77,6 +77,9 @@ def configure(
     skill_registry=None,
     episodic_store=None,
     approval_memory=None,
+    unattended_rules=None,
+    card_continuations=None,
+    decision_log=None,
 ) -> None:
     """Contribute the web layer's wiring to *app*.
 
@@ -97,6 +100,9 @@ def configure(
         fact_store=fact_store,
         episodic_store=episodic_store,
         approval_memory=approval_memory,
+        unattended_rules=unattended_rules,
+        card_continuations=card_continuations,
+        decision_log=decision_log,
         inference_router=inference_router,
         skill_registry=skill_registry,
         conversation_store=ConversationStore(north_home / "web.db"),

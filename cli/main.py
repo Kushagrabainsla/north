@@ -36,6 +36,7 @@ import datetime
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,16 @@ from utils.time import local_timezone_name
 from utils.version import NORTH_VERSION
 
 _console = Console(force_terminal=sys.stdout.isatty())
+# Errors go to stderr, and rich decides that at construction - `Console.print`
+# has no `err=` argument. Passing one raises TypeError, which is survivable
+# anywhere except where it was: the two calls that report a failed startup. A
+# server that died on boot printed a TypeError about the error reporter instead
+# of saying the server had died.
+_err_console = Console(stderr=True, force_terminal=sys.stderr.isatty())
+
+# The last line of a Python traceback: "TypeError: configure() got an ...".
+# That line is the answer; the frames above it are context.
+_EXCEPTION_LINE = re.compile(r"^\s*(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Exit|Interrupt)\b\s*:")
 
 
 def _load_env_keys(env_file: Path) -> dict[str, str]:
@@ -1896,17 +1907,54 @@ def _wait_for_server(
     deadline = time.time() + timeout
     while time.time() < deadline:
         if proc is not None and proc.poll() is not None:
-            _console.print(
-                f"  [red]server process exited unexpectedly (code {proc.returncode})[/red]",
-                err=True,
-            )
-            raise typer.Exit(1) from None
+            _report_startup_failure(f"server process exited unexpectedly (code {proc.returncode})")
         if _is_north_server(host, port):
             _console.print("  [dim green]✓[/dim green]  server ready")
             return
         time.sleep(0.25)
-    _console.print("  [red]server did not respond in time[/red]", err=True)
+    _report_startup_failure("server did not respond in time")
+
+
+def _report_startup_failure(what: str) -> None:
+    """Say the server failed, and where the reason is written down.
+
+    The traceback goes to the log, not to this terminal - the server is a
+    subprocess with its output redirected there. Without this pointer the CLI
+    reports that something failed and gives no way to find out what, which is a
+    long way to walk for a one-line error.
+    """
+    from config.settings import settings
+
+    _err_console.print(f"  [red]{what}[/red]")
+    log = settings.north_home / "north.log"
+    if log.exists():
+        _err_console.print(f"  [dim]the reason is at the end of {log}[/dim]")
+        for line in _last_error_lines(log):
+            _err_console.print(f"  [red]{line}[/red]")
     raise typer.Exit(1) from None
+
+
+def _last_error_lines(log: Path, limit: int = 3) -> list[str]:
+    """The exception the server died on, if the log ends in one.
+
+    Looks for the exception line rather than the "Traceback" header: the header
+    arrives wrapped in whatever prefix the logger added ("ERROR:    Traceback"),
+    while the final line of a traceback is the one that actually says what
+    broke. Structured log records are skipped - they are JSON, and none of them
+    is the crash.
+
+    Best-effort by design: this runs while reporting another failure, so it must
+    never raise one of its own.
+    """
+    try:
+        raw = log.read_text(errors="replace").splitlines()
+    except Exception:
+        return []
+    lines = [line.rstrip() for line in raw[-400:] if line.strip() and not line.lstrip().startswith("{")]
+    for index in range(len(lines) - 1, -1, -1):
+        if _EXCEPTION_LINE.match(lines[index]):
+            return lines[max(0, index - limit + 1) : index + 1]
+    return lines[-limit:]
 
 
 @dataclass(frozen=True)
