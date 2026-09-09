@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "reac
 import { api, del, patch, post } from "../api";
 import { Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
+import { useDialog } from "../dialog";
 import type { Approval, Artifact, CardField, LedgerEntry, RoutingDecision, RoutingSkip } from "../types";
 
 // One provider's part in a routing walk: what north called and what came back,
@@ -776,6 +777,7 @@ const KIND_HELP: Record<string, string> = {
 // of it. approval_memory next door already settled the principle - a decision
 // that cannot be withdrawn is not consent - and a hardcoded allowlist fails it.
 function SafeActionsPanel() {
+  const dialog = useDialog();
   const resource = useResource<UnattendedRules>("/web/api/unattended/rules", 10000);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -790,12 +792,15 @@ function SafeActionsPanel() {
   };
   const toggle = (row: UnattendedRule) =>
     run(row.id, () => patch(`/web/api/unattended/rules/${encodeURIComponent(row.id)}`, { enabled: !row.enabled }));
-  const remove = (row: UnattendedRule) => {
+  const remove = async (row: UnattendedRule) => {
     const shipped = row.source === "builtin";
-    const question = shipped
-      ? `Disable the shipped rule "${row.pattern}"? It stays listed so you can restore it.`
-      : `Delete the rule "${row.pattern}"?`;
-    if (!window.confirm(question)) return;
+    const ok = await dialog.confirm(
+      shipped
+        ? "It stays in the list, switched off, so you can restore it later."
+        : "This rule is yours, so removing it deletes it.",
+      { title: shipped ? `Disable "${row.pattern}"?` : `Delete "${row.pattern}"?`,
+        confirmLabel: shipped ? "Disable" : "Delete", danger: true });
+    if (!ok) return;
     return run(row.id, () => del(`/web/api/unattended/rules/${encodeURIComponent(row.id)}`));
   };
   const add = () => {
@@ -886,6 +891,7 @@ function EpisodesPanel() {
 }
 
 export function Memory() {
+  const dialog = useDialog();
   const [tab, setTab] = useState<MemoryTab>("documents");
   const [doc, setDoc] = useState(docs[0]);
   const resource = useResource<ContextDoc>(`/orchestrator/context/${doc}`);
@@ -896,9 +902,17 @@ export function Memory() {
   const isUserFacts = doc === "user.md";
   const content = isUserFacts ? "" : (draft ?? resource.data?.content ?? "");
   const save = async () => { await api(`/orchestrator/context/${doc}`, { method: "PUT", body: JSON.stringify({ content }) }); setDraft(null); await resource.reload(); };
-  const removeDocument = async () => { if (!window.confirm(`Reset ${docLabels[doc]}?`)) return; await api(`/orchestrator/context/${doc}`, { method: "DELETE" }); setDraft(null); await resource.reload(); };
+  const removeDocument = async () => {
+    if (!await dialog.confirm(`This puts ${docLabels[doc]} back to what north ships with. Anything written here is lost.`,
+      { title: `Reset ${docLabels[doc]}?`, confirmLabel: "Reset", danger: true })) return;
+    await api(`/orchestrator/context/${doc}`, { method: "DELETE" }); setDraft(null); await resource.reload();
+  };
   const saveFact = async () => { if (!factDraft.trim()) return; if (editingFact) await api(`/web/api/memory/facts/${editingFact}`, { method: "PATCH", body: JSON.stringify({ content: factDraft, category: "user" }) }); else await post("/web/api/memory/facts", { content: factDraft, category: "user" }); setFactDraft(""); setEditingFact(null); await facts.reload(); };
-  const removeFact = async (id: string) => { if (!window.confirm("Delete this fact?")) return; await api(`/web/api/memory/facts/${id}`, { method: "DELETE" }); await facts.reload(); };
+  const removeFact = async (id: string) => {
+    if (!await dialog.confirm("north will stop using it, and stop recalling it for future tasks.",
+      { title: "Forget this fact?", confirmLabel: "Forget", danger: true })) return;
+    await api(`/web/api/memory/facts/${id}`, { method: "DELETE" }); await facts.reload();
+  };
   const onDocuments = tab === "documents";
   return <div className="page">
     <PageHeader eyebrow="Knowledge" title="Memory" subtitle="Everything north has learned about you, and from you."

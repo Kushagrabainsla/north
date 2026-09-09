@@ -4,9 +4,10 @@ import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
 import { Activity, Agents, Approvals, Artifacts, Insights, Memory, Schedule, SettingsPage, Skills, SystemPage, Tasks } from "./pages/Verbose";
 import { Work } from "./pages/Work";
+import { DialogProvider } from "./dialog";
 
 export function App() {
-  return <Routes><Route element={<Layout/>}>
+  return <DialogProvider><Routes><Route element={<Layout/>}>
     <Route path="/" element={<Dashboard/>}/>
     <Route path="/chat" element={<Chat/>}/>
     <Route path="/chat/:conversationId" element={<Chat/>}/>
@@ -29,5 +30,5 @@ export function App() {
     <Route path="/system" element={<SystemPage/>}/>
     <Route path="/settings" element={<SettingsPage/>}/>
     <Route path="*" element={<Navigate to="/" replace/>}/>
-  </Route></Routes>;
+  </Route></Routes></DialogProvider>;
 }

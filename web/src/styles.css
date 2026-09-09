@@ -38,7 +38,7 @@ a { color: inherit; text-decoration: none; }
 .sidebar-toggle:hover { border-color: var(--accent); box-shadow: 0 0 12px rgba(181,243,109,.2); }
 .brand > div, .new-chat, .health-indicator > div, .sidebar nav a > span:last-child { max-width: 190px; overflow: hidden; white-space: nowrap; transition: opacity .18s ease, max-width .24s ease, transform .24s ease; }
 .sidebar nav a { transition: background-color .18s ease, color .18s ease, gap .24s ease, padding .24s ease; }
-.sidebar-collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }.sidebar-collapsed .brand > div, .sidebar-collapsed .new-chat, .sidebar-collapsed .health-indicator > div, .sidebar-collapsed .sidebar-footer .server-state, .sidebar-collapsed nav a > span:last-child { max-width: 0; opacity: 0; transform: translateX(-8px); pointer-events: none; }.sidebar-collapsed .sidebar-footer { justify-content: center; flex-direction: column; }.sidebar-collapsed .health-indicator { min-height: 18px; }.sidebar-collapsed .sidebar-toggle { align-self: center; margin: 0; }.sidebar-collapsed nav a { justify-content: center; gap: 0; padding-left: 8px; padding-right: 8px; }
+.sidebar-collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }/* `min-width: 0` is what makes `max-width: 0` bite. These are all flex items, and a flex item's default `min-width: auto` resolves to its content width, which beats max-width - so every label kept its full size, the nav link grew to 48px inside a 68px rail, and `overflow: hidden` hid the spill while the icon sat 6px left of centre. Animating max-width still works. */.sidebar-collapsed .brand > div, .sidebar-collapsed .new-chat, .sidebar-collapsed .health-indicator > div, .sidebar-collapsed .sidebar-footer .server-state, .sidebar-collapsed nav a > span:last-child { min-width: 0; max-width: 0; opacity: 0; transform: translateX(-8px); pointer-events: none; }.sidebar-collapsed .sidebar-footer { justify-content: center; flex-direction: column; }.sidebar-collapsed .health-indicator { min-height: 18px; }.sidebar-collapsed .sidebar-toggle { align-self: center; margin: 0; }/* `.sidebar .sidebar-collapsed` rather than `.sidebar-collapsed nav a`: that selector ties with `.sidebar nav a` on specificity, and the tie is broken by source order, which put the expanded rule last. So the collapsed rail kept the expanded 11px gap and 10px padding, leaving 8px for an 18px icon - the icon was shrunk to fit and pushed off centre. Being more specific means order cannot decide it. */.sidebar-collapsed .sidebar nav a { justify-content: center; gap: 0; padding-left: 8px; padding-right: 8px; }
 
 @media (prefers-reduced-motion: reduce) {
   .app-shell, .brand > div, .new-chat, .health-indicator > div, .sidebar nav a, .sidebar nav a > span:last-child { transition: none; }
@@ -388,3 +388,18 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
    Activity were two pages. */
 .event-task { color: var(--accent); text-decoration: none; }
 .event-task:hover { text-decoration: underline; }
+
+/* An in-app question. <dialog> puts this in the top layer, so no z-index here,
+   and ::backdrop is the browser's own overlay rather than a div pretending. */
+.dialog { border: 0; padding: 0; background: transparent; max-width: min(440px, calc(100vw - 32px)); color: var(--text); }
+.dialog::backdrop { background: rgba(4, 6, 8, .72); backdrop-filter: blur(3px); }
+.dialog-body { border: 1px solid var(--line); border-radius: 13px; padding: 22px; background: linear-gradient(145deg, rgba(19,23,28,.98), rgba(14,17,21,.98)); box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+.dialog-body h2 { margin: 0 0 8px; font-size: 16px; letter-spacing: -.02em; }
+.dialog-body p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.dialog-body input { width: 100%; margin-top: 14px; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; }
+.dialog-body input:focus { outline: 0; border-color: var(--accent); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.dialog-actions button { border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 8px 13px; font-size: 11px; cursor: pointer; }
+.dialog-actions .primary-button { background: var(--accent); color: #11170b; border-color: var(--accent); font-weight: 700; }
+.dialog-actions .danger-button { color: var(--red); border-color: rgba(226,122,110,.4); }
+.dialog-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

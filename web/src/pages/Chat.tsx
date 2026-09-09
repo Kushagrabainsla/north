@@ -4,6 +4,7 @@ import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { api, patch, post } from "../api";
 import { Empty, ErrorNotice, Loading, Markdown, PageHeader, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
+import { useDialog } from "../dialog";
 import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn } from "../types";
 
 /** North's self-checks, rendered live rather than only reachable in the ledger.
@@ -145,6 +146,9 @@ function TurnBundle({ turn, streamed, signals = [], expandAll, reload, pendingAp
 }
 
 export function Chat() {
+  // Namespaced rather than destructured: `prompt` is already the composer's
+  // text here, and `confirm`/`alert` would shadow the globals they replace.
+  const dialog = useDialog();
   const { conversationId } = useParams();
   const navigate = useNavigate();
   const chats = useResource<Conversation[]>("/web/api/conversations", 5000);
@@ -217,7 +221,7 @@ export function Chat() {
   };
   const toggleMic = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) { window.alert("Voice dictation is not available in this browser."); return; }
+    if (!SpeechRecognition) { void dialog.alert("Voice dictation is not available in this browser.", { title: "No dictation here" }); return; }
     const recognition = new SpeechRecognition();
     recognition.lang = navigator.language || "en-US";
     recognition.interimResults = false;
@@ -247,11 +251,13 @@ export function Chat() {
   const respondApproval = async (card: Approval, decision: string, answer = "") => { try { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option: answer }); setNotice("Response received. North is continuing the task."); await Promise.all([approvalResource.reload(), room.reload()]); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
   const rename = async () => {
     if (!room.data) return;
-    const title = window.prompt("Conversation title", room.data.title);
+    const title = await dialog.prompt("What should this conversation be called?", room.data.title,
+      { title: "Rename conversation", confirmLabel: "Rename" });
     if (title) { await patch(`/web/api/conversations/${room.data.id}`, { title }); await Promise.all([room.reload(), chats.reload()]); }
   };
   const deleteChat = async (id: string) => {
-    if (!window.confirm("Delete this conversation and its turns?")) return;
+    if (!await dialog.confirm("This removes the conversation and every turn in it. It cannot be undone.",
+      { title: "Delete this conversation?", confirmLabel: "Delete", danger: true })) return;
     await api(`/web/api/conversations/${id}`, { method: "DELETE" });
     await chats.reload();
     if (id === conversationId) navigate("/chat");
