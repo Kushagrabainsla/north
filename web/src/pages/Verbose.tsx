@@ -67,7 +67,7 @@ function DecisionCard({ decision }: { decision: RoutingDecision }) {
   </div>;
 }
 
-function RoutingAttempts({ taskId }: { taskId: string }) {
+export function RoutingAttempts({ taskId }: { taskId: string }) {
   const resource = useResource<RoutingDecision[]>(`/web/api/routing/decisions?task_id=${encodeURIComponent(taskId)}`);
   if (resource.loading) return <Loading/>;
   if (resource.error) return <ErrorNotice message={resource.error}/>;
@@ -93,7 +93,7 @@ export function Tasks() {
 // The pipeline stages, in the order they run - so a task's artifacts read as the
 // story of that run rather than in whatever order the filesystem returned them.
 const stageOrder = ["research", "architecture", "implementation", "qa"];
-const stageIcon: Record<string, string> = { news: "☼", notes: "✎", wellness: "♥", research: "◇", architecture: "▣", implementation: "▸", qa: "✓" };
+export const stageIcon: Record<string, string> = { news: "☼", notes: "✎", wellness: "♥", research: "◇", architecture: "▣", implementation: "▸", qa: "✓" };
 
 function ArtifactLibrary({ newsOnly = false }: { newsOnly?: boolean }) {
   const resource = useResource<Artifact[]>("/web/api/artifacts", 10000);

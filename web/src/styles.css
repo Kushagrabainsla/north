@@ -361,3 +361,24 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
   .approval-source { border-left: 0; border-top: 1px solid var(--line-soft); padding-left: 0; padding-top: 14px; }
   .approval-stack { grid-template-columns: 1fr; }
 }
+
+/* A nav entry that will replace one already in the list, running beside it
+   until it is trusted. Small and quiet - it marks the page, it is not the
+   point of it. */
+.nav-beta { margin-left: 6px; padding: 1px 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font: 700 7px "DM Mono", monospace; font-style: normal; letter-spacing: .08em; text-transform: uppercase; vertical-align: middle; }
+.sidebar-collapsed .nav-beta { display: none; }
+
+/* Tasks and Activity merged (/work). */
+.work-tabs { max-width: 280px; margin-bottom: 18px; }
+/* A word, not a number, so it reads at a size a word can be read at - the 24px
+   the other cards use is sized for "4" and "$0.0000". */
+.work-status { font-size: 15px !important; text-transform: capitalize; }
+/* A prompt is a sentence, and it was being set as a 42px headline: three lines
+   tall, pushing the back button into a two-line stack beside it. */
+.work-detail .page-header h1 { font-size: clamp(19px, 2vw, 25px); line-height: 1.28; max-width: 62ch;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.work-back { white-space: nowrap; }
+.work-output { white-space: pre-wrap; word-break: break-word; color: #c8c9c7; font-size: 11px; line-height: 1.65; margin: 0; max-height: clamp(240px, 40vh, 700px); overflow: auto; }
+.run-error { color: var(--red); font: 10px/1.5 "DM Mono", monospace; margin: 6px 0 0; white-space: pre-wrap; }
+/* A task row opens the run rather than expanding in place, so it reads as a link. */
+.task-row { cursor: pointer; }

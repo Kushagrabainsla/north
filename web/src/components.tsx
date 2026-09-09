@@ -5,12 +5,15 @@ import { post } from "./api";
 import { useHealth } from "./hooks";
 import type { Conversation } from "./types";
 
-const nav = [
+// [path, label, icon, beta?]. A beta entry is one that will replace something
+// already in this list, running beside it until it is trusted.
+const nav: [string, string, string, boolean?][] = [
   ["/", "Dashboard", "⌘"], ["/chat", "Chat", "◫"], ["/tasks", "Tasks", "✓"],
   ["/artifacts", "Artifacts", "◇"],
   ["/schedule", "Schedule", "◷"], ["/approvals", "Approvals", "!"],
   ["/memory", "Memory", "◎"], ["/agents", "Agents", "△"], ["/skills", "Skills", "✦"],
   ["/activity", "Activity", "≋"],
+  ["/work", "Work", "❑", true],
   ["/system", "System", "◉"], ["/settings", "Settings", "⚙"]
 ];
 
@@ -25,8 +28,8 @@ export function Layout() {
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src="https://repository-images.githubusercontent.com/1221207908/a9516630-e5f6-475f-ab80-44b2dd6dc9c8" alt="North logo"/><div><b>north</b><small>personal operating system</small></div></div>
       <button className="new-chat" onClick={newChat}>+ New conversation</button>
-      <nav>{nav.map(([to, label, icon]) => <NavLink key={to} to={to} end={to === "/"}>
-        <span className="nav-icon">{icon}</span><span>{label}</span>
+      <nav>{nav.map(([to, label, icon, beta]) => <NavLink key={to} to={to} end={to === "/"}>
+        <span className="nav-icon">{icon}</span><span>{label}{beta && <em className="nav-beta">beta</em>}</span>
       </NavLink>)}</nav>
       <div className="sidebar-footer"><HealthIndicator/><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>
     </aside>

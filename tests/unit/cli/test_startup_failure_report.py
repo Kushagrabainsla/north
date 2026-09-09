@@ -42,9 +42,23 @@ def test_no_console_print_passes_err() -> None:
     assert not offenders, f"Console.print() does not accept err= (lines {offenders})"
 
 
-def test_reporting_a_failure_exits_instead_of_raising(tmp_path, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+@pytest.fixture
+def north_home(tmp_path, monkeypatch):
+    """Point the CLI's idea of home at a throwaway directory.
 
+    `settings` is instantiated at import, so it reads NORTH_HOME once and never
+    again - setting the environment variable here would do nothing. The first
+    version of these tests did exactly that and passed anyway, because they were
+    reading the developer's own ~/.north/north.log. CI has no such file, so the
+    log-pointer assertion failed there and only there.
+    """
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "north_home", tmp_path)
+    return tmp_path
+
+
+def test_reporting_a_failure_exits_instead_of_raising(north_home, capsys) -> None:
     with pytest.raises(typer.Exit) as exit_info:
         cli._report_startup_failure("server process exited unexpectedly (code 3)")
 
@@ -52,10 +66,9 @@ def test_reporting_a_failure_exits_instead_of_raising(tmp_path, monkeypatch, cap
     assert "exited unexpectedly" in capsys.readouterr().err
 
 
-def test_the_message_points_at_the_log(tmp_path, monkeypatch, capsys) -> None:
+def test_the_message_points_at_the_log(north_home, capsys) -> None:
     """Reporting that something failed without saying where to look is a long walk."""
-    monkeypatch.setenv("NORTH_HOME", str(tmp_path))
-    (tmp_path / "north.log").write_text("some earlier line\n")
+    (north_home / "north.log").write_text("some earlier line\n")
 
     with pytest.raises(typer.Exit):
         cli._report_startup_failure("server did not respond in time")
@@ -95,3 +108,13 @@ def test_a_log_with_no_traceback_still_says_something(tmp_path) -> None:
 def test_a_missing_or_unreadable_log_is_not_a_second_failure(tmp_path) -> None:
     """This runs while reporting a failure; it must never raise one of its own."""
     assert cli._last_error_lines(tmp_path / "does-not-exist.log") == []
+
+
+def test_no_log_means_no_pointer_at_one(north_home, capsys) -> None:
+    """The case CI had and this machine did not: a home with no log in it."""
+    with pytest.raises(typer.Exit):
+        cli._report_startup_failure("server did not respond in time")
+
+    err = capsys.readouterr().err
+    assert "did not respond" in err
+    assert "north.log" not in err, "do not point at a file that is not there"

@@ -67,6 +67,36 @@ jobs:
       - name: Type check
         run: mypy --ignore-missing-imports --follow-imports=silent inference/
 
+  web:
+    # The browser interface had no CI at all: a type error or a broken unit test
+    # in web/src reached main as long as Python was green. `npm run build` runs
+    # `tsc -b` first, so this covers the types as well as the bundle.
+    name: Web (build + vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Build (type check + bundle)
+        run: npm run build
+        working-directory: web
+
+      - name: Test
+        run: npm test
+        working-directory: web
+
   test:
     name: Test (pytest)
     runs-on: ubuntu-latest

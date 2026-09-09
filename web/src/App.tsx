@@ -3,6 +3,7 @@ import { Layout } from "./components";
 import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
 import { Activity, Agents, Approvals, Artifacts, Insights, Memory, Schedule, SettingsPage, Skills, SystemPage, Tasks } from "./pages/Verbose";
+import { Work } from "./pages/Work";
 
 export function App() {
   return <Routes><Route element={<Layout/>}>
@@ -18,6 +19,11 @@ export function App() {
     <Route path="/agents" element={<Agents/>}/>
     <Route path="/skills" element={<Skills/>}/>
     <Route path="/activity" element={<Activity/>}/>
+    {/* Tasks and Activity merged. Beta: it runs beside the two pages it
+        replaces so they can be compared, rather than replacing them
+        unseen. When it is trusted, /tasks and /activity redirect here. */}
+    <Route path="/work" element={<Work/>}/>
+    <Route path="/work/:taskId" element={<Work/>}/>
     <Route path="/bootstrap" element={<Navigate to="/memory" replace/>}/>
     <Route path="/insights" element={<Navigate to="/system" replace/>}/>
     <Route path="/system" element={<SystemPage/>}/>
