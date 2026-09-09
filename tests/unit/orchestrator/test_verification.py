@@ -181,4 +181,3 @@ def test_claimed_relative_file_path_in_workspace_ok(tmp_path) -> None:
     output = "Report saved to docs/report.md"
     violations = verify_claims(output, ["write_file"], workspace=str(tmp_path))
     assert violations == []
-

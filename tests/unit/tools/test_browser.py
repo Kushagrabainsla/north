@@ -137,11 +137,13 @@ async def test_run_error_with_hint():
     mock_proc = MagicMock()
     mock_proc.pid = 12345
     mock_proc.returncode = 1
-    mock_stdout = json.dumps({
-        "ok": False,
-        "error": "Node n12 not found in accessibility tree.",
-        "hint": "run inspect to refresh element UIDs",
-    }).encode("utf-8")
+    mock_stdout = json.dumps(
+        {
+            "ok": False,
+            "error": "Node n12 not found in accessibility tree.",
+            "hint": "run inspect to refresh element UIDs",
+        }
+    ).encode("utf-8")
     mock_stderr = b""
     mock_proc.communicate = AsyncMock(return_value=(mock_stdout, mock_stderr))
 
@@ -164,9 +166,7 @@ async def test_run_assert_unmet_exit_code_2():
     mock_proc.communicate = AsyncMock(return_value=(mock_stdout, mock_stderr))
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-        output = await tool.run(
-            ToolInput(params={"action": "assert", "assert_type": "text", "value": "Welcome"})
-        )
+        output = await tool.run(ToolInput(params={"action": "assert", "assert_type": "text", "value": "Welcome"}))
         assert output.success is False
         assert output.data["held"] is False
         assert "Assertion unmet" in output.error

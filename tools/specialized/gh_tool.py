@@ -18,9 +18,10 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from approval.policy import Action, ActionKind
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_mutating_action
+from tools.specialized._approval import gate_action
 from tools.specialized._subprocess import format_diff_output, run_capture
 
 _TIMEOUT = 30
@@ -124,19 +125,27 @@ class GhTool(ApprovalGatedTool):
 
         cmd = ["gh", *_ACTIONS[action], *arg_parts]
 
-        if action in _MUTATING_ACTIONS:
-            denial = await gate_mutating_action(
-                self._approval_store,
+        denial = await gate_action(
+            Action(
                 agent="gh",
-                title="GitHub Operation - Approval Required",
-                message=f"```\n{' '.join(cmd)}\n```",
-                task_id=input.params.get("task_id"),
-                stream_manager=self._stream_manager,
-                judgement_filter=self._judgement_filter,
-                notifier=self._notifier,
-                timeout=self._approval_timeout_seconds,
-            )
-            if denial is not None:
-                return denial
+                kind=ActionKind.GITHUB,
+                summary=" ".join(cmd),
+                operation=action,
+                args=args,
+                mutating=action in _MUTATING_ACTIONS,
+                read_only=action not in _MUTATING_ACTIONS,
+            ),
+            policy=self._policy,
+            approval_store=self._approval_store,
+            title="GitHub Operation - Approval Required",
+            message=f"```\n{' '.join(cmd)}\n```",
+            task_id=input.params.get("task_id"),
+            stream_manager=self._stream_manager,
+            notifier=self._notifier,
+            timeout=self._approval_timeout_seconds,
+            declined="GitHub operation rejected by user.",
+        )
+        if denial is not None:
+            return denial
 
         return await asyncio.to_thread(run_capture, cmd, cwd, timeout=_TIMEOUT)

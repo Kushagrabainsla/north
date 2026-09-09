@@ -1626,9 +1626,7 @@ def _agent_named(name: str):
 
 
 @pytest.mark.parametrize("agent_name", ["researcher", "architect"])
-def test_document_writing_agents_are_not_accused_of_unverified_code_changes(
-    tmp_path: Path, agent_name: str
-) -> None:
+def test_document_writing_agents_are_not_accused_of_unverified_code_changes(tmp_path: Path, agent_name: str) -> None:
     """Writing `context.md` or `spec.md` is the job, not an unchecked code edit.
 
     These agents produce handoff documents with `write_file`, which the gate read

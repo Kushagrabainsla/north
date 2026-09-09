@@ -83,5 +83,3 @@ async def add_context(
         doc = await injector.inject_text(text)
         return {"document": doc.value, "source": "text"}
     raise HTTPException(status_code=422, detail="Provide text, url, or a file upload")
-
-

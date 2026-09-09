@@ -151,13 +151,9 @@ class TestSurvivingARestart:
 
     def test_a_dispatcher_starts_from_what_was_measured_before(self, tmp_path) -> None:
         tracker = ConfidenceTracker(db_path=tmp_path / "tools.db")
-        tracker._save_model_scores_batch_sync(
-            [("crawler", "openrouter", 0.9, 12, 1.0, _MODEL_SPEED_MIN_SAMPLES)]
-        )
+        tracker._save_model_scores_batch_sync([("crawler", "openrouter", 0.9, 12, 1.0, _MODEL_SPEED_MIN_SAMPLES)])
 
-        dispatcher = ModelDispatcher(
-            providers=[], cooldowns_path=tmp_path / "cd.json", confidence_tracker=tracker
-        )
+        dispatcher = ModelDispatcher(providers=[], cooldowns_path=tmp_path / "cd.json", confidence_tracker=tracker)
 
         assert dispatcher._is_slow("crawler") is True, "a restart must not forget a slow model"
 
@@ -173,9 +169,7 @@ class TestSurvivingARestart:
                 "uses_total INTEGER NOT NULL DEFAULT 0, last_updated DATETIME NOT NULL,"
                 "PRIMARY KEY (model_id, provider))"
             )
-            conn.execute(
-                "INSERT INTO model_confidence VALUES ('legacy', 'openrouter', 0.7, 9, '2026-01-01')"
-            )
+            conn.execute("INSERT INTO model_confidence VALUES ('legacy', 'openrouter', 0.7, 9, '2026-01-01')")
 
         tracker = ConfidenceTracker(db_path=db)
 

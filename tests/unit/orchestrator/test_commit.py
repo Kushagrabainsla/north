@@ -72,9 +72,7 @@ class _FakeGit:
 
 
 async def _commit(git, task_id: str = "task_1") -> str | None:
-    return await WorkCommitter(git).commit(
-        workspace="/ws", task_id=task_id, message="implement: thing"
-    )
+    return await WorkCommitter(git).commit(workspace="/ws", task_id=task_id, message="implement: thing")
 
 
 class TestCommittingTheWork:

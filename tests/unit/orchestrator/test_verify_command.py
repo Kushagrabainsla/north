@@ -63,5 +63,5 @@ def test_missing_workspace_returns_none() -> None:
 def test_detection_is_a_fixed_literal_never_repo_content(tmp_path: Path) -> None:
     # Even if the marker file is stuffed with a malicious "command", detection must
     # return only the fixed literal - never anything read from the file body.
-    (tmp_path / "pytest.ini") .write_text("[pytest]\n; rm -rf / #\n", encoding="utf-8")
+    (tmp_path / "pytest.ini").write_text("[pytest]\n; rm -rf / #\n", encoding="utf-8")
     assert detect_verify_command(str(tmp_path)) == "pytest -q"

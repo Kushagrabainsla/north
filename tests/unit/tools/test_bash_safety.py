@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from approval.models import ApprovalDecision
+from tests.conftest import approval_policy, rejecting_store
 from tools.models import ToolInput
 from tools.specialized.bash import BashTool, CommandSafetyInspector
 
@@ -88,110 +88,81 @@ class TestCommandSafetyInspector:
 
 
 class TestBashToolApprovalBypass:
-    """Verifies that _request_approval short-circuits correctly."""
+    """What bash does before it would surface a card.
 
-    def _make_tool(self, *, judgement_filter: MagicMock | None = None) -> BashTool:
+    The tool no longer decides any of this - it reports facts about the command
+    and `ApprovalPolicy` rules on them. These assert the outcome the user sees.
+    """
+
+    def _tool(self, *, mode=None, advisor=None) -> BashTool:
         return BashTool(
             approval_store=MagicMock(),
             stream_manager=None,
             approval_timeout_seconds=5.0,
-            judgement_filter=judgement_filter,
+            policy=approval_policy(mode, advisor=advisor),
         )
 
     @pytest.mark.asyncio
     async def test_instantly_safe_command_skips_all_gates(self) -> None:
-        tool = self._make_tool()
-        decision = await tool._request_approval("task-1", "git status")
-        assert decision == ApprovalDecision.APPROVED
-        # approval_store.add should never have been called
+        tool = self._tool()
+
+        assert await tool._gate("task-1", "git status") is None
         tool._approval_store.add.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_judgement_filter_auto_approves(self) -> None:
-        jf = MagicMock()
-        jf.check = AsyncMock(return_value=("approved", "learned rule"))
-        tool = self._make_tool(judgement_filter=jf)
+    async def test_a_read_only_command_is_not_recorded_as_a_decision(self) -> None:
+        """Recording every `ls` would bury the decisions that mattered."""
+        tool = self._tool()
 
-        decision = await tool._request_approval("task-1", "npm test")
-        assert decision == ApprovalDecision.APPROVED
-        jf.check.assert_awaited_once()
-        # The auto-approved card is still recorded in the store (added + resolved)
-        # for audit; the point is that the user is never asked (no wait).
+        await tool._gate("task-1", "git status")
+
+        tool._approval_store.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_learned_rule_can_approve_in_auto(self) -> None:
+        from approval.mode import ApprovalMode
+
+        async def advisor(action):
+            return "approved", "learned rule"
+
+        tool = self._tool(mode=ApprovalMode.AUTO, advisor=advisor)
+
+        assert await tool._gate("task-1", "npm run deploy") is None
+
+    @pytest.mark.asyncio
+    async def test_a_learned_rule_is_not_consulted_in_interactive(self) -> None:
+        """The bug this replaced: the model tier ran in the default mode."""
+        consulted = False
+
+        async def advisor(action):
+            nonlocal consulted
+            consulted = True
+            return "approved", ""
+
+        tool = self._tool(advisor=advisor)
+        tool._approval_store = rejecting_store()
+
+        assert await tool._gate("task-1", "npm run deploy") is not None
+        assert not consulted
+
+    @pytest.mark.asyncio
+    async def test_an_auto_approved_command_is_still_recorded(self) -> None:
+        """Something north did unasked has to be visible afterwards."""
+        from approval.mode import ApprovalMode
+
+        tool = self._tool(mode=ApprovalMode.AUTO)
+
+        assert await tool._gate("task-1", "pytest -q") is None
         tool._approval_store.add.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_unattended_mode_auto_approves_safe_command(self) -> None:
+    async def test_auto_mode_still_gates_a_command_off_the_allowlist(self) -> None:
         from approval.mode import ApprovalMode
-        from approval.unattended import UnattendedPolicy
 
-        tool = BashTool(
-            approval_store=MagicMock(), unattended=UnattendedPolicy(), mode_provider=lambda: ApprovalMode.AUTO
-        )
-        decision = await tool._request_approval("task-1", "pytest -q")
-        assert decision == ApprovalDecision.APPROVED
-        tool._approval_store.add.assert_not_called()  # never surfaced a card
+        tool = self._tool(mode=ApprovalMode.AUTO)
+        tool._approval_store = rejecting_store()
 
-    @pytest.mark.asyncio
-    async def test_unattended_mode_still_gates_unsafe_command(self) -> None:
-        from approval.mode import ApprovalMode
-        from approval.unattended import UnattendedPolicy
-
-        jf = MagicMock()
-        jf.check = AsyncMock(return_value=("rejected", "unsafe"))
-        tool = BashTool(
-            approval_store=MagicMock(),
-            judgement_filter=jf,
-            unattended=UnattendedPolicy(),
-            mode_provider=lambda: ApprovalMode.AUTO,
-        )
-        # not on the allowlist -> unattended does not bypass, falls through to the gate
-        decision = await tool._request_approval("task-1", "rm -rf /tmp/x")
-        assert decision != ApprovalDecision.APPROVED
-        jf.check.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_judgement_filter_auto_rejects(self) -> None:
-        jf = MagicMock()
-        jf.check = AsyncMock(return_value=("rejected", "user rule"))
-        tool = self._make_tool(judgement_filter=jf)
-
-        decision = await tool._request_approval("task-1", "rm -rf node_modules")
-        assert decision != ApprovalDecision.APPROVED
-
-    @pytest.mark.asyncio
-    async def test_judgement_filter_undecided_falls_through_to_manual(self) -> None:
-        jf = MagicMock()
-        jf.check = AsyncMock(return_value=(None, ""))
-        tool = self._make_tool(judgement_filter=jf)
-
-        # Simulate user approving via the approval store
-        resolved_card = MagicMock()
-        resolved_card.chosen_option = "Run"
-        resolved_card.status = "approved"
-        tool._approval_store.wait_for_decision = AsyncMock(return_value=resolved_card)
-
-        decision = await tool._request_approval("task-1", "python setup.py install")
-        assert decision == ApprovalDecision.APPROVED
-        tool._approval_store.add.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_judgement_filter_exception_falls_through(self) -> None:
-        jf = MagicMock()
-        jf.check = AsyncMock(side_effect=RuntimeError("LLM unavailable"))
-        tool = self._make_tool(judgement_filter=jf)
-
-        resolved_card = MagicMock()
-        resolved_card.chosen_option = "Run"
-        resolved_card.status = "approved"
-        tool._approval_store.wait_for_decision = AsyncMock(return_value=resolved_card)
-
-        decision = await tool._request_approval("task-1", "make build")
-        assert decision == ApprovalDecision.APPROVED  # fell through to manual, user approved
-
-
-# ---------------------------------------------------------------------------
-# BashTool.run - end-to-end with obvious destructive check
-# ---------------------------------------------------------------------------
+        assert await tool._gate("task-1", "rm -rf /tmp/x") is not None
 
 
 class TestBashToolDestructiveBlock:
@@ -202,14 +173,14 @@ class TestBashToolDestructiveBlock:
         tool = BashTool(approval_store=MagicMock(), stream_manager=None)
         result = await tool.run(ToolInput(params={"command": "rm -rf /"}))
         assert result.success is False
-        assert "Blocked pattern" in result.error
+        assert "recognised as catastrophic" in result.error
 
     @pytest.mark.asyncio
     async def test_dd_blocked(self) -> None:
         tool = BashTool(approval_store=MagicMock(), stream_manager=None)
         result = await tool.run(ToolInput(params={"command": "dd if=/dev/zero of=/dev/sda"}))
         assert result.success is False
-        assert "Blocked pattern" in result.error
+        assert "recognised as catastrophic" in result.error
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +194,7 @@ class TestBashAllowDangerous:
         tool = BashTool(approval_store=MagicMock())
         out = await tool.run(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
         assert out.success is False
-        assert "Blocked pattern" in (out.error or "")
+        assert "recognised as catastrophic" in (out.error or "")
 
     @pytest.mark.asyncio
     async def test_destructive_pattern_allowed_when_allow_dangerous(self, monkeypatch) -> None:
@@ -249,7 +220,7 @@ class TestBashAllowDangerous:
         store.wait_for_decision = AsyncMock(return_value=resolved)
         from approval.mode import ApprovalMode
 
-        tool = BashTool(approval_store=store, mode_provider=lambda: ApprovalMode.AUTONOMOUS)
+        tool = BashTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTONOMOUS))
         out = await tool.run(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
         assert out.success is True  # not pre-blocked; reached execution
 
@@ -282,6 +253,7 @@ class TestBashAllowDangerous:
 
         import asyncio
         import os
+
         monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_exec_shell)
         monkeypatch.setattr(os, "killpg", fake_killpg)
         monkeypatch.setattr(os, "getpgid", lambda pid: pid)
@@ -291,7 +263,8 @@ class TestBashAllowDangerous:
         store.wait_for_decision = AsyncMock(return_value=resolved)
 
         from approval.mode import ApprovalMode
-        tool = BashTool(approval_store=store, mode_provider=lambda: ApprovalMode.AUTONOMOUS)
+
+        tool = BashTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTONOMOUS))
         out = await tool.run(ToolInput(params={"command": "sleep 100", "timeout": 1}))
 
         assert out.success is False
@@ -309,9 +282,8 @@ class TestBashApprovalOutcomes:
 
     @staticmethod
     def _tool(store):
-        from approval.unattended import UnattendedPolicy
 
-        return BashTool(approval_store=store, unattended=UnattendedPolicy(), approval_timeout_seconds=0.01)
+        return BashTool(approval_store=store, approval_timeout_seconds=0.01, policy=approval_policy())
 
     @pytest.mark.asyncio
     async def test_an_unanswered_command_is_refused_not_failed(self) -> None:

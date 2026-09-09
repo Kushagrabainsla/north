@@ -56,5 +56,3 @@ async def receive_webhook(source: str, request: Request) -> dict:
     orch = _get_orchestrator()
     result = await orch.submit_task(task_req)
     return {"task_id": result.task_id, "status": result.status, "source": source}
-
-

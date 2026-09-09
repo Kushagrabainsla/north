@@ -98,8 +98,4 @@ async def cancel_any(target_id: str) -> dict[str, str]:
     if job is not None and job.status in (JobStatus.PENDING, JobStatus.RUNNING):
         await processor.cancel(target_id)
         return {"cancelled": "job", "id": target_id}
-    raise HTTPException(
-        status_code=404, detail=f"{target_id!r} is not an active task or a pending/running job."
-    )
-
-
+    raise HTTPException(status_code=404, detail=f"{target_id!r} is not an active task or a pending/running job.")

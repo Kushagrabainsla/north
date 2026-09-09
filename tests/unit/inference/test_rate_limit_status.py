@@ -38,6 +38,7 @@ def _ready(providers, tmp_path, **kwargs):
     publish_catalog(dispatcher)
     return dispatcher
 
+
 # ── header parsing helpers ──────────────────────────────────────────────────
 
 
@@ -129,9 +130,7 @@ def test_bogus_huge_signal_is_ignored_for_soonest() -> None:
 def test_record_rate_limit_persists_and_reloads(tmp_path) -> None:
     path = tmp_path / "rls.json"
     store = RateLimitStatusStore(path)
-    store.record_rate_limit(
-        "gemini", "gemini-flash", status_code=429, headers={"retry-after": "12"}, is_free=True
-    )
+    store.record_rate_limit("gemini", "gemini-flash", status_code=429, headers={"retry-after": "12"}, is_free=True)
     assert store.is_active("gemini", "gemini-flash")
     rec = store.snapshot()[0]
     assert rec.wait_seconds == pytest.approx(12.0)
@@ -214,9 +213,7 @@ def test_mark_ok_tracks_checked_count(tmp_path) -> None:
 
 def test_format_status_unknown_footer(tmp_path) -> None:
     # No failures but pool only partially probed -> honest "unknown" note.
-    text = format_status_markdown(
-        tmp_path / "missing.json", checked=3, pool_total=10
-    )
+    text = format_status_markdown(tmp_path / "missing.json", checked=3, pool_total=10)
     assert "no active cooldowns" in text
     assert "3/10" in text
     assert "not yet tried" in text

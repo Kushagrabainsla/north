@@ -1,4 +1,5 @@
 """Unit tests for utils.text.extract_json (lenient JSON extraction)."""
+
 from __future__ import annotations
 
 from utils.text import extract_json

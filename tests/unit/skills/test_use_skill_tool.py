@@ -12,9 +12,7 @@ from tools.universal.use_skill import UseSkillTool
 def _write_skill(base: Path, name: str, body: str = "do the thing", reference: str | None = None) -> None:
     directory = base / name
     directory.mkdir(parents=True)
-    (directory / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: Use when foo\n---\n{body}", encoding="utf-8"
-    )
+    (directory / "SKILL.md").write_text(f"---\nname: {name}\ndescription: Use when foo\n---\n{body}", encoding="utf-8")
     if reference is not None:
         (directory / reference).write_text("reference content", encoding="utf-8")
 

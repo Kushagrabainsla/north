@@ -32,9 +32,7 @@ class _RemoteEmbedder:
         return None
 
     async def embed(self, model_id: str, request: EmbedRequest) -> EmbedResponse:
-        return EmbedResponse(
-            embeddings=[[0.5] * 8 for _ in request.texts], model_used=model_id, cost_usd=0.0
-        )
+        return EmbedResponse(embeddings=[[0.5] * 8 for _ in request.texts], model_used=model_id, cost_usd=0.0)
 
 
 class _StubLocal(LocalEmbeddingProvider):

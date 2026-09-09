@@ -25,6 +25,7 @@ from agents.registry import AgentRegistry
 from approval.approval_memory import ApprovalMemory
 from approval.callback_server import app as callback_app
 from approval.judgement_filter import JudgementFilter
+from approval.policy import ApprovalPolicy
 from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
 from bootstrap.onboarding import run_bootstrap_if_needed
@@ -135,12 +136,9 @@ def _attach_embedding_index(deps) -> None:
 
 
 def _build_tool_registry(
-    deps, tool_graph, judgement_filter: JudgementFilter | None = None
+    deps, tool_graph, policy: ApprovalPolicy | None = None
 ) -> tuple[ToolRegistry, CreateAgentTool]:
     tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
-    # Live approval mode: read from NorthSettings at decision time so a runtime change
-    # (via the settings API) takes effect immediately, no restart.
-    mode_provider = lambda: deps.north_settings.autonomy  # noqa: E731
     # The four schedule verbs travel together: an agent that can create a
     # schedule must also be able to show, change and remove one, or the user can
     # only ever add.
@@ -159,7 +157,7 @@ def _build_tool_registry(
             approval_store=deps.approval_store,
             stream_manager=deps.stream_manager,
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-            judgement_filter=judgement_filter,
+            policy=policy,
             notifier=deps.notifier,
         )
     )
@@ -185,11 +183,9 @@ def _build_tool_registry(
             approval_store=deps.approval_store,
             stream_manager=deps.stream_manager,
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-            judgement_filter=judgement_filter,
+            policy=policy,
             notifier=deps.notifier,
             sandbox=SandboxConfig.from_settings(settings),
-            unattended=UnattendedPolicy.from_settings(settings),
-            mode_provider=mode_provider,
         )
     )
     tool_registry.register(
@@ -197,7 +193,7 @@ def _build_tool_registry(
             approval_store=deps.approval_store,
             stream_manager=deps.stream_manager,
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-            judgement_filter=judgement_filter,
+            policy=policy,
             notifier=deps.notifier,
         )
     )
@@ -208,30 +204,25 @@ def _build_tool_registry(
             approval_store=deps.approval_store,
             stream_manager=deps.stream_manager,
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-            judgement_filter=judgement_filter,
+            policy=policy,
             notifier=deps.notifier,
-            unattended=UnattendedPolicy.from_settings(settings),
-            mode_provider=mode_provider,
         )
     )
     # Override the auto-discovered (gate-less, fail-closed) GitTool/GhTool/KasaTool
     # with instances wired to the approval flow so their mutating actions surface
     # approval cards instead of being refused outright.
-    unattended_policy = UnattendedPolicy.from_settings(settings)
+    # Which of these may run unasked is the policy's call, from the facts each
+    # tool reports - not a per-tool switch here.
     for tool_cls in (GitTool, GhTool, KasaTool):
-        kwargs: dict = {
-            "approval_store": deps.approval_store,
-            "stream_manager": deps.stream_manager,
-            "approval_timeout_seconds": deps.north_settings.approval_timeout_seconds,
-            "judgement_filter": judgement_filter,
-            "notifier": deps.notifier,
-        }
-        # Only the local git tool honours unattended auto-approval; gh (network) and
-        # kasa (device control) always require a human.
-        if tool_cls is GitTool:
-            kwargs["unattended"] = unattended_policy
-            kwargs["mode_provider"] = mode_provider
-        tool_registry.register(tool_cls(**kwargs))
+        tool_registry.register(
+            tool_cls(
+                approval_store=deps.approval_store,
+                stream_manager=deps.stream_manager,
+                approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+                policy=policy,
+                notifier=deps.notifier,
+            )
+        )
     return tool_registry, create_agent_tool
 
 
@@ -265,8 +256,16 @@ def _build_tool_index(deps) -> ToolIndex | None:
 # Identity first: a profile is read top-down, and who someone is comes before
 # what they are working on.
 _PROFILE_TOPIC_ORDER = [
-    "identity", "preferences", "jobs", "education", "projects",
-    "skills", "schedule", "health", "finances", "other",
+    "identity",
+    "preferences",
+    "jobs",
+    "education",
+    "projects",
+    "skills",
+    "schedule",
+    "health",
+    "finances",
+    "other",
 ]
 
 
@@ -284,7 +283,9 @@ async def _refresh_fact_store(fact_store, context_store=None) -> None:
     if embedded or merged or explained:
         logger.info(
             "Fact store: re-embedded %d fact(s), merged %d duplicate(s), explained %d identifier use(s)",
-            embedded, merged, explained,
+            embedded,
+            merged,
+            explained,
         )
     # Rebuild the readable profile from the store rather than leaving whatever
     # bootstrap happened to write. Facts learned, superseded or recovered since
@@ -755,7 +756,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         approval_memory=approval_memory,
         mode_provider=lambda: deps.north_settings.autonomy,
     )
-    tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, judgement_filter)
+    # The one decision point every tool, agent and the orchestrator share.
+    # Reads the mode at decision time, so a runtime change via the settings
+    # API takes effect immediately - no restart.
+    approval_policy = ApprovalPolicy(
+        mode_provider=lambda: deps.north_settings.autonomy,
+        unattended=UnattendedPolicy.from_settings(settings),
+        approval_memory=approval_memory,
+        llm_advisor=judgement_filter.advise,
+    )
+    deps.approval_policy = approval_policy
+    tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, approval_policy)
 
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)
@@ -803,9 +814,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     _step("configuring API router")
-    _configure_routers(
-        app, orchestrator, deps, agent_registry, context_injector, skill_registry, approval_memory
-    )
+    _configure_routers(app, orchestrator, deps, agent_registry, context_injector, skill_registry, approval_memory)
 
     _step("configuring callback server")
     callback_server = _build_callback_server()

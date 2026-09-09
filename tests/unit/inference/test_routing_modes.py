@@ -89,8 +89,12 @@ async def test_an_image_in_the_tool_loop_requires_a_vision_model(tmp_path) -> No
     """Agents send screenshots as image_url parts, not through request.images."""
     from inference.dispatcher import _messages_carry_images
 
-    with_image = [{"role": "user", "content": [{"type": "text", "text": "look"},
-                                               {"type": "image_url", "image_url": {"url": "data:..."}}]}]
+    with_image = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": "data:..."}}],
+        }
+    ]
     assert _messages_carry_images(with_image) is True
     assert _messages_carry_images([{"role": "user", "content": "plain text"}]) is False
     assert _messages_carry_images([{"role": "user", "content": [{"type": "text", "text": "x"}]}]) is False

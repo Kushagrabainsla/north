@@ -26,14 +26,14 @@ import signal
 import time
 from typing import TYPE_CHECKING, Any
 
-from approval.models import ApprovalDecision
+from approval.policy import Action, ActionKind
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import refusal_output, request_approval_status
+from tools.specialized._approval import gate_action
 
 if TYPE_CHECKING:
     from approval.base import Notifier
-    from approval.judgement_filter import JudgementFilter
+    from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
 
@@ -170,10 +170,10 @@ class ShellTool(ApprovalGatedTool):
         approval_store: ApprovalStore,
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
+        policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,
     ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter, notifier)
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
         self._sessions: dict[str, _ShellSession] = {}
 
     def format_output(self, data: dict[str, Any]) -> str:
@@ -216,9 +216,8 @@ class ShellTool(ApprovalGatedTool):
                 error=f"Too many active sessions ({_MAX_SESSIONS}). Stop one before starting another.",
             )
 
-        status = await self._request_approval(params.get("task_id"), f"start shell:\n{command}")
-        refused = refusal_output(
-            status, timeout=self._approval_timeout_seconds, declined="Shell start cancelled by user."
+        refused = await self._gate(
+            params.get("task_id"), command, f"start shell:\n{command}", "Shell start cancelled by user."
         )
         if refused is not None:
             return refused
@@ -256,9 +255,11 @@ class ShellTool(ApprovalGatedTool):
         if text is None:
             return ToolOutput(success=False, error="action=write requires 'input'.")
 
-        status = await self._request_approval(params.get("task_id"), f"send to shell {session.shell_id}:\n{text}")
-        refused = refusal_output(
-            status, timeout=self._approval_timeout_seconds, declined="Shell input cancelled by user."
+        refused = await self._gate(
+            params.get("task_id"),
+            text,
+            f"send to shell {session.shell_id}:\n{text}",
+            "Shell input cancelled by user.",
         )
         if refused is not None:
             return refused
@@ -314,18 +315,23 @@ class ShellTool(ApprovalGatedTool):
             with contextlib.suppress(Exception):
                 await s.stop()
 
-    async def _request_approval(self, task_id: str | None, message: str) -> ApprovalDecision:
-        """Gate a command/input behind the shared tool approval flow; report the outcome."""
-        return await request_approval_status(
-            self._approval_store,
-            task_id=task_id,
-            agent="shell",
+    async def _gate(self, task_id: str | None, command: str, summary: str, declined: str) -> ToolOutput | None:
+        """``None`` when it may proceed; otherwise what the tool must return.
+
+        An interactive shell session is never read-only: whatever is typed into
+        it runs, so there is nothing here for the tool to classify as safe.
+        """
+        return await gate_action(
+            Action(agent="shell", kind=ActionKind.SHELL_COMMAND, summary=summary, command=command),
+            policy=self._policy,
+            approval_store=self._approval_store,
             title="Shell Session - Approval Required",
-            message=f"```\n{message}\n```",
+            message=f"```\n{summary}\n```",
+            task_id=task_id,
             stream_manager=self._stream_manager,
-            judgement_filter=self._judgement_filter,
             notifier=self._notifier,
             timeout=self._approval_timeout_seconds,
+            declined=declined,
         )
 
 

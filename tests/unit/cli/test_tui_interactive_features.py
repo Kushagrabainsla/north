@@ -57,7 +57,7 @@ async def test_reasoning_is_inline_and_buffer_accumulates():
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         assert not app._reasoning_visible
-        
+
         tid = "t_reason"
         app._user_task_ids.add(tid)
         app._current_turn_activity[tid] = {
@@ -97,23 +97,29 @@ async def test_tool_history_recording_and_inspector_modal():
         await pilot.pause()
         tid = "t_tool"
         app._user_task_ids.add(tid)
-        
+
         # Tool call and result
-        await app._handle_event("tool_called", {
-            "task_id": tid,
-            "tool": "patch_file",
-            "params": {"path": "auth.py", "old_string": "x = 1", "new_string": "x = 2"},
-        })
+        await app._handle_event(
+            "tool_called",
+            {
+                "task_id": tid,
+                "tool": "patch_file",
+                "params": {"path": "auth.py", "old_string": "x = 1", "new_string": "x = 2"},
+            },
+        )
         await pilot.pause()
         assert len(app._tool_history) == 1
         assert app._tool_history[0]["tool"] == "patch_file"
 
-        await app._handle_event("tool_result", {
-            "task_id": tid,
-            "tool": "patch_file",
-            "success": True,
-            "formatted": "Patched 1 block successfully.",
-        })
+        await app._handle_event(
+            "tool_result",
+            {
+                "task_id": tid,
+                "tool": "patch_file",
+                "success": True,
+                "formatted": "Patched 1 block successfully.",
+            },
+        )
         await pilot.pause()
         assert app._tool_history[0]["success"] is True
         assert "Patched 1 block" in app._tool_history[0]["formatted"]
@@ -138,19 +144,25 @@ async def test_plan_cockpit_modal_and_dod_evaluation():
         tid = "t_plan"
         app._user_task_ids.add(tid)
 
-        await app._handle_event("plan_seeded", {
-            "task_id": tid,
-            "tasks": 2,
-            "steps": [
-                {"step_id": 1, "agent": "coder", "task": "Write schema", "status": "done"},
-                {"step_id": 2, "agent": "verifier", "task": "Run tests", "status": "in_progress"},
-            ],
-        })
-        await app._handle_event("dod_evaluated", {
-            "task_id": tid,
-            "passed": True,
-            "reasons": ["all test assertions passed", "clean git diff"],
-        })
+        await app._handle_event(
+            "plan_seeded",
+            {
+                "task_id": tid,
+                "tasks": 2,
+                "steps": [
+                    {"step_id": 1, "agent": "coder", "task": "Write schema", "status": "done"},
+                    {"step_id": 2, "agent": "verifier", "task": "Run tests", "status": "in_progress"},
+                ],
+            },
+        )
+        await app._handle_event(
+            "dod_evaluated",
+            {
+                "task_id": tid,
+                "passed": True,
+                "reasons": ["all test assertions passed", "clean git diff"],
+            },
+        )
         await pilot.pause()
 
         assert len(app._plan_steps) == 2

@@ -62,5 +62,3 @@ async def search_ledger(
             ) from None
     results = await _get_ledger().search(query=q, limit=limit, agent=agent, source=src)
     return [SearchOut(entry=r.entry, rank=r.rank, snippet=r.snippet) for r in results]
-
-

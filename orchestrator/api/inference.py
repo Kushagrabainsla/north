@@ -70,8 +70,5 @@ async def inference_catalog() -> list[ProviderModelsOut]:
         for entry in pool.models:
             by_provider.setdefault(entry.provider, set()).add(entry.id)
     return [
-        ProviderModelsOut(provider=provider, models=sorted(models))
-        for provider, models in sorted(by_provider.items())
+        ProviderModelsOut(provider=provider, models=sorted(models)) for provider, models in sorted(by_provider.items())
     ]
-
-

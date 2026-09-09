@@ -3,6 +3,7 @@
 If the SSE event is delivered twice (two clients / reconnect), a second
 approval_required for the same card_id must be ignored, not re-prompted.
 """
+
 import sys
 from unittest.mock import AsyncMock
 

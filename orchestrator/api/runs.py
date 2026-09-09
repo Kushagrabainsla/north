@@ -58,5 +58,3 @@ async def agent_run_events(run_id: str) -> list[dict[str, Any]]:
     if await _get_agent_run_store().get(run_id) is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
     return await _get_agent_run_store().list_events(run_id)
-
-

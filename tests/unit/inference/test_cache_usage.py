@@ -108,8 +108,11 @@ class TestItReachesTheLedger:
 
         await SQLiteLedgerWriter(db).write(
             LedgerEntry.new(
-                source=LedgerSource.SYSTEM, action="new", status=LedgerStatus.COMPLETED,
-                tokens_in=100, cached_tokens=80,
+                source=LedgerSource.SYSTEM,
+                action="new",
+                status=LedgerStatus.COMPLETED,
+                tokens_in=100,
+                cached_tokens=80,
             )
         )
 

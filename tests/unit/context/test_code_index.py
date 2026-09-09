@@ -149,4 +149,3 @@ async def test_polyglot_syntax_chunks(tmp_path: Path) -> None:
     res_rs = await idx.search(str(tmp_path), "compute sum add", max_results=1)
     assert res_rs
     assert res_rs[0][0] == "engine.rs"
-

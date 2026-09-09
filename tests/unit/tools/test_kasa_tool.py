@@ -277,7 +277,7 @@ async def test_devices_are_released_after_a_command(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_dim_is_the_word_people_use(monkeypatch: pytest.MonkeyPatch) -> None:
-    """"dim my lights to 50%" reached the tool as an undefined action and was
+    """ "dim my lights to 50%" reached the tool as an undefined action and was
     reported as a missing device, which blamed the request for the vocabulary."""
     from tools.models import ToolInput
 

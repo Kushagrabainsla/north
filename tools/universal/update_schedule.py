@@ -120,7 +120,4 @@ class UpdateScheduleTool(Tool):
         if not data.get("changed"):
             return f"{data['name']} is unchanged: {data['schedule']}{state}, next run {data['next_run']}."
         changed = ", ".join(data["changed"])
-        return (
-            f"Updated {data['name']} ({changed}): now {data['schedule']}{state}, "
-            f"next run {data['next_run']}."
-        )
+        return f"Updated {data['name']} ({changed}): now {data['schedule']}{state}, next run {data['next_run']}."

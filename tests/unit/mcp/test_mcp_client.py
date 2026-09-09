@@ -84,11 +84,13 @@ def test_mcp_manager_discovery_and_registration(tmp_path: Path):
     dot_north = ws / ".north"
     dot_north.mkdir()
     (dot_north / "mcp.json").write_text(
-        json.dumps({
-            "mcpServers": {
-                "local_db": {"command": "echo", "args": ["hi"]},
+        json.dumps(
+            {
+                "mcpServers": {
+                    "local_db": {"command": "echo", "args": ["hi"]},
+                }
             }
-        }),
+        ),
         encoding="utf-8",
     )
 
@@ -100,9 +102,7 @@ def test_mcp_manager_discovery_and_registration(tmp_path: Path):
     # Test registration with mocked client
     registry = ToolRegistry()
     mock_client = AsyncMock(spec=McpClient)
-    mock_client.tools = [
-        McpToolDefinition(name="query_db", description="Executes SQL query")
-    ]
+    mock_client.tools = [McpToolDefinition(name="query_db", description="Executes SQL query")]
     manager._clients["local_db"] = mock_client
 
     registered = manager.register_tools(registry)

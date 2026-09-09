@@ -134,7 +134,6 @@ SPEC_CRITIQUE_INJECTION: str = (
 )
 
 
-
 def clean_issues(raw: object) -> list[str]:
     """Keep only concrete, non-trivial, de-duplicated critique issues, capped.
 

@@ -183,7 +183,7 @@ class TestWalk:
             next(attempts)
 
     def test_exhaustion_says_why_not_just_that(self) -> None:
-        """"All N candidates exhausted" is not actionable; a tally of reasons is."""
+        """ "All N candidates exhausted" is not actionable; a tally of reasons is."""
         ledger = EntitlementLedger()
         ledger.needs_billing("opencode_zen", "no payment method")
         ledger.needs_billing("openrouter", "no credit")

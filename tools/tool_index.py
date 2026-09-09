@@ -57,7 +57,7 @@ class ToolIndex:
     async def update_tool(self, name: str, description: str) -> None:
         """Embed and upsert a tool. Call once per tool at registration time.
 
-        Skips the embedding call when the stored description is unchanged  - 
+        Skips the embedding call when the stored description is unchanged  -
         the whole registry is re-indexed at every startup, and without this
         each boot would re-embed every tool.
         """
@@ -93,8 +93,9 @@ class ToolIndex:
             logger.warning("ToolIndex: batch embed failed - %d tool(s) not indexed", len(changed))
             return 0
         if len(embeddings) != len(changed):
-            logger.warning("ToolIndex: embed returned %d vectors for %d tools - skipping batch",
-                           len(embeddings), len(changed))
+            logger.warning(
+                "ToolIndex: embed returned %d vectors for %d tools - skipping batch", len(embeddings), len(changed)
+            )
             return 0
         rows = [(name, desc, json.dumps(vec)) for (name, desc), vec in zip(changed, embeddings, strict=True)]
         await asyncio.to_thread(self._upsert_many_sync, rows)

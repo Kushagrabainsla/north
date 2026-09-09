@@ -41,9 +41,7 @@ class TakeScreenshotTool(Tool):
         "properties": {
             "path": {
                 "type": "string",
-                "description": (
-                    "Destination image file path, e.g. 'screenshot.png' or 'docs/screen.png' (optional)."
-                ),
+                "description": ("Destination image file path, e.g. 'screenshot.png' or 'docs/screen.png' (optional)."),
             },
             "workspace": {"type": "string", "description": "Workspace root (optional)"},
             "display": {

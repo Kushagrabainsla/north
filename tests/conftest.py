@@ -14,7 +14,10 @@ from pathlib import Path
 
 import pytest
 
+from approval.mode import ApprovalMode
+from approval.policy import ApprovalPolicy
 from approval.terminal import TerminalNotifier
+from approval.unattended import UnattendedPolicy
 from inference.base import InferenceRouter
 from inference.models import (
     CompletionRequest,
@@ -55,7 +58,6 @@ def _isolated_north_home(tmp_path_factory, monkeypatch):
     yield home
     _path._handoff_root.cache_clear()
     _path._resolved_blocked_prefixes.cache_clear()
-
 
 
 class MockInferenceRouter(InferenceRouter):
@@ -156,3 +158,44 @@ def mock_inference() -> MockInferenceRouter:
 def test_deps(tmp_path: Path):
     """Full dependency bundle with isolated SQLite databases and mock inference."""
     return build_test_dependencies(tmp_path)
+
+
+def approval_policy(
+    mode: ApprovalMode | None = None,
+    *,
+    memory=None,
+    advisor=None,
+):
+    """The real ApprovalPolicy, wired for a test.
+
+    One helper so a change to how north decides is made in one place rather
+    than echoed into every tool test - which is how the seven copies this
+    replaced came to disagree with each other.
+    """
+    resolved = mode or ApprovalMode.INTERACTIVE
+    return ApprovalPolicy(
+        mode_provider=lambda: resolved,
+        unattended=UnattendedPolicy(),
+        approval_memory=memory,
+        llm_advisor=advisor,
+    )
+
+
+def approving_store():
+    """An ApprovalStore stand-in whose card always comes back approved."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = MagicMock()
+    resolved = MagicMock(chosen_option="Approve", status="approved")
+    store.wait_for_decision = AsyncMock(return_value=resolved)
+    return store
+
+
+def rejecting_store():
+    """An ApprovalStore stand-in whose card always comes back rejected."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = MagicMock()
+    resolved = MagicMock(chosen_option="Reject", status="rejected")
+    store.wait_for_decision = AsyncMock(return_value=resolved)
+    return store

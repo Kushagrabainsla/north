@@ -108,20 +108,25 @@ async def test_compact_if_needed_triggers_at_threshold() -> None:
     ]
     # Add 5 exchanges with substantial output (> 800 chars each)
     for i in range(5):
-        messages.extend([
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {"id": f"call_{i}", "function": {"name": "read_file", "arguments": f'{{"path": "file_{i}.py"}}'}},
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": f"call_{i}",
-                "content": "A" * 800,  # ~200 tokens per exchange -> total > 800 tokens (> 75% of 1,000)
-            },
-        ])
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": f"call_{i}",
+                            "function": {"name": "read_file", "arguments": f'{{"path": "file_{i}.py"}}'},
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": f"call_{i}",
+                    "content": "A" * 800,  # ~200 tokens per exchange -> total > 800 tokens (> 75% of 1,000)
+                },
+            ]
+        )
 
     initial_len = len(messages)
     await compact_if_needed(
@@ -177,8 +182,7 @@ def test_render_exchange_preserves_multi_round_compacted_summary() -> None:
         "- Step 1: created auth.py\n"
         "- Step 2: created database.py\n"
         "- Step 3: fixed login issue in views.py\n"
-        "- Step 4: passed all test suites\n"
-        + "x" * 500
+        "- Step 4: passed all test suites\n" + "x" * 500
     )
     messages = [
         {"role": "user", "content": long_summary},

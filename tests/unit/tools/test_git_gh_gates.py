@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from approval.mode import ApprovalMode
+from tests.conftest import approval_policy
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import gh_tool as gh_module
 from tools.specialized import git_tool as git_module
@@ -102,12 +103,12 @@ class TestGitGate:
         tool = GitTool(approval_store=_approving_store())
         result = await tool.run(ToolInput(params={"action": "push", "args": args}))
         assert result.success is False
-        assert "blocked" in result.error.lower()
+        assert "blocked" in result.error.lower() and "new branch" in result.error
         assert not fake_run_capture
 
     async def test_force_push_allowed_when_allow_dangerous(self, fake_run_capture) -> None:
         """In autonomous mode (allow_dangerous), the force-push hard refusal is lifted."""
-        tool = GitTool(approval_store=_approving_store(), mode_provider=lambda: _AUTONOMOUS)
+        tool = GitTool(approval_store=_approving_store(), policy=approval_policy(_AUTONOMOUS))
         result = await tool.run(ToolInput(params={"action": "push", "args": "origin main --force"}))
         assert result.success is True
         assert fake_run_capture  # it actually ran (after approval), not pre-blocked
@@ -291,6 +292,6 @@ class TestUnansweredApproval:
         tool = GitTool(approval_store=_rejecting_store())
         result = await tool.run(ToolInput(params={"action": "commit", "args": "wip"}))
         assert result.success is False
-        assert result.error == "Action rejected by user."
+        assert result.error == "Git operation rejected by user."
         assert result.failure_kind == "refused"
         assert result.data.get("unanswered") is not True

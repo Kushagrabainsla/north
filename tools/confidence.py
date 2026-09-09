@@ -236,8 +236,7 @@ class ConfidenceTracker:
         """
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT model_id, provider, tokens_per_sec, speed_samples FROM model_confidence "
-                "WHERE speed_samples > 0"
+                "SELECT model_id, provider, tokens_per_sec, speed_samples FROM model_confidence WHERE speed_samples > 0"
             ).fetchall()
         return {(r["model_id"], r["provider"]): (r["tokens_per_sec"], r["speed_samples"]) for r in rows}
 
@@ -303,9 +302,7 @@ class ConfidenceTracker:
                 (new_agent, now, source_agent),
             )
 
-    async def record_task_outcome(
-        self, agent: str, tools_used: list[str], was_successful: bool
-    ) -> None:
+    async def record_task_outcome(self, agent: str, tools_used: list[str], was_successful: bool) -> None:
         """Closed-loop learning: update confidence for tools used in a task based on overall task outcome."""
         for tool in set(tools_used):
             await self.record_use(agent, tool, was_successful)

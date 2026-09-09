@@ -144,7 +144,6 @@ async def test_telegram_gateway_slash_commands(monkeypatch: pytest.MonkeyPatch) 
     assert "Available Controls" in gw._send_message.call_args[0][1]
     assert gw._send_message.call_args[1].get("reply_to") == 1
 
-
     # /cancel command when pending
     gw._pending[(12345, 99)] = {"message_id": 99, "task_id": "task_abc"}
     await gw._process_message({"message_id": 2, "chat": {"id": 12345}, "text": "/cancel"})
@@ -185,5 +184,3 @@ async def test_telegram_gateway_callback_query_approval(monkeypatch: pytest.Monk
     gw._edit_message_text.assert_awaited_once()
     assert "Approved" in gw._edit_message_text.call_args[0][2]
     gw._answer_callback_query.assert_awaited_once_with("cb_123", text="✅ Decision recorded: approved")
-
-

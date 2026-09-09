@@ -90,9 +90,10 @@ async def test_an_unconfigured_provider_does_not_disqualify_the_model(tmp_path) 
             Endpoint("worse", "openrouter", "vendor/worse", 1e-5, 1e-5),
         ],
     )
-    assert await router.dispatch(
-        component="coder", requirements=requirements_from(needs_tools=True), call_fn=_call
-    ) == "openrouter:vendor/best"
+    assert (
+        await router.dispatch(component="coder", requirements=requirements_from(needs_tools=True), call_fn=_call)
+        == "openrouter:vendor/best"
+    )
 
 
 class TestObservedContradiction:

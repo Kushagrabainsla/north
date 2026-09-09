@@ -180,17 +180,20 @@ class FitnessApiTool(Tool):
                 if not name and ex.get("translations"):
                     name = ex["translations"][0].get("name", "Unknown")
 
-                exercises.append({
-                    "name": name,
-                    "muscles": [m.get("name_en") or m.get("name", "") for m in ex.get("muscles", [])],
-                    "muscles_secondary": [
-                        m.get("name_en") or m.get("name", "")
-                        for m in ex.get("muscles_secondary", [])
-                    ],
-                    "equipment": [e.get("name", "") for e in ex.get("equipment", [])],
-                    "category": ex.get("category", {}).get("name", "") if isinstance(ex.get("category"), dict) else "",
-                    "images": [img.get("image", "") for img in ex.get("images", [])[:1]],
-                })
+                exercises.append(
+                    {
+                        "name": name,
+                        "muscles": [m.get("name_en") or m.get("name", "") for m in ex.get("muscles", [])],
+                        "muscles_secondary": [
+                            m.get("name_en") or m.get("name", "") for m in ex.get("muscles_secondary", [])
+                        ],
+                        "equipment": [e.get("name", "") for e in ex.get("equipment", [])],
+                        "category": ex.get("category", {}).get("name", "")
+                        if isinstance(ex.get("category"), dict)
+                        else "",
+                        "images": [img.get("image", "") for img in ex.get("images", [])[:1]],
+                    }
+                )
 
             return {"source": "wger.de", "count": len(exercises), "exercises": exercises}
 
@@ -236,22 +239,22 @@ class FitnessApiTool(Tool):
             foods = []
             for item in data.get("foods", []):
                 nutrients = {
-                    n["nutrientName"]: n.get("value", 0)
-                    for n in item.get("foodNutrients", [])
-                    if n.get("nutrientName")
+                    n["nutrientName"]: n.get("value", 0) for n in item.get("foodNutrients", []) if n.get("nutrientName")
                 }
-                foods.append({
-                    "name": item.get("description", ""),
-                    "brand": item.get("brandOwner", ""),
-                    "fdc_id": item.get("fdcId"),
-                    "calories": nutrients.get("Energy", 0),
-                    "protein_g": nutrients.get("Protein", 0),
-                    "fat_g": nutrients.get("Total lipid (fat)", 0),
-                    "carbs_g": nutrients.get("Carbohydrate, by difference", 0),
-                    "fiber_g": nutrients.get("Fiber, total dietary", 0),
-                    "sugar_g": nutrients.get("Sugars, total including NLEA", 0),
-                    "serving": item.get("servingSizeUnit", "") + " " + str(item.get("servingSize", "")),
-                })
+                foods.append(
+                    {
+                        "name": item.get("description", ""),
+                        "brand": item.get("brandOwner", ""),
+                        "fdc_id": item.get("fdcId"),
+                        "calories": nutrients.get("Energy", 0),
+                        "protein_g": nutrients.get("Protein", 0),
+                        "fat_g": nutrients.get("Total lipid (fat)", 0),
+                        "carbs_g": nutrients.get("Carbohydrate, by difference", 0),
+                        "fiber_g": nutrients.get("Fiber, total dietary", 0),
+                        "sugar_g": nutrients.get("Sugars, total including NLEA", 0),
+                        "serving": item.get("servingSizeUnit", "") + " " + str(item.get("servingSize", "")),
+                    }
+                )
 
             return {"source": "USDA FoodData Central", "count": len(foods), "foods": foods}
 
@@ -380,5 +383,6 @@ class FitnessApiTool(Tool):
 def _strip_html(text: str) -> str:
     """Crude HTML tag stripper for wger descriptions."""
     import re
+
     clean = re.sub(r"<[^>]+>", "", text)
     return clean.strip()[:500]

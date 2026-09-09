@@ -36,12 +36,18 @@ class _MockStreamTransport(httpx.AsyncBaseTransport):
 async def test_reasoning_tokens_streamed_and_fallback_to_content() -> None:
     """When a model only returns reasoning tokens and empty content, it is preserved."""
     sse_events = [
-        "data: " + json.dumps({
-            "choices": [{"delta": {"reasoning": "Let me think about this step by step..."}}],
-        }),
-        "data: " + json.dumps({
-            "choices": [{"delta": {"reasoning": "\nHere is the answer: 42."}}],
-        }),
+        "data: "
+        + json.dumps(
+            {
+                "choices": [{"delta": {"reasoning": "Let me think about this step by step..."}}],
+            }
+        ),
+        "data: "
+        + json.dumps(
+            {
+                "choices": [{"delta": {"reasoning": "\nHere is the answer: 42."}}],
+            }
+        ),
         "data: [DONE]",
     ]
     client = httpx.AsyncClient(transport=_MockStreamTransport(sse_events), base_url="http://test")
@@ -74,12 +80,18 @@ async def test_reasoning_tokens_streamed_and_fallback_to_content() -> None:
 async def test_reasoning_with_subsequent_content() -> None:
     """When a model streams reasoning then final content, tokens and content are distinct."""
     sse_events = [
-        "data: " + json.dumps({
-            "choices": [{"delta": {"reasoning": "Thinking..."}}],
-        }),
-        "data: " + json.dumps({
-            "choices": [{"delta": {"content": "Final answer."}}],
-        }),
+        "data: "
+        + json.dumps(
+            {
+                "choices": [{"delta": {"reasoning": "Thinking..."}}],
+            }
+        ),
+        "data: "
+        + json.dumps(
+            {
+                "choices": [{"delta": {"content": "Final answer."}}],
+            }
+        ),
         "data: [DONE]",
     ]
     client = httpx.AsyncClient(transport=_MockStreamTransport(sse_events), base_url="http://test")
@@ -121,6 +133,7 @@ def test_403_is_scoped_to_the_request_not_the_account() -> None:
 
 def test_dispatcher_get_context_window_from_registry() -> None:
     """Dispatcher returns live API context window for models in its registry."""
+
     class DummyProvider:
         name = "test_prov"
 

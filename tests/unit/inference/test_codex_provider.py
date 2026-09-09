@@ -19,9 +19,13 @@ from inference.registry import AuthKind, get_provider_definition
 
 
 def _jwt(account_id: str) -> str:
-    payload = base64.urlsafe_b64encode(
-        json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}}).encode()
-    ).rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(
+            json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}}).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
     return f"header.{payload}.signature"
 
 
@@ -82,11 +86,14 @@ async def test_browser_login_validates_callback_and_exchanges_code(tmp_path, mon
         assert form["grant_type"] == ["authorization_code"]
         assert form["code"] == ["test-code"]
         assert form["code_verifier"][0]
-        return httpx.Response(200, json={
-            "access_token": _jwt("browser-account"),
-            "refresh_token": "browser-refresh",
-            "expires_in": 3600,
-        })
+        return httpx.Response(
+            200,
+            json={
+                "access_token": _jwt("browser-account"),
+                "refresh_token": "browser-refresh",
+                "expires_in": 3600,
+            },
+        )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(token_handler))
 
@@ -142,19 +149,23 @@ def test_factory_activates_codex_from_north_owned_token(tmp_path, monkeypatch) -
 
 
 def test_message_conversion_preserves_tool_call_continuity() -> None:
-    instructions, items = _message_items([
-        {"role": "system", "content": "Be concise"},
-        {"role": "user", "content": "Check it"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{
-                "id": "call-1",
-                "function": {"name": "shell", "arguments": '{"cmd":"pwd"}'},
-            }],
-        },
-        {"role": "tool", "tool_call_id": "call-1", "content": "/tmp/project"},
-    ])
+    instructions, items = _message_items(
+        [
+            {"role": "system", "content": "Be concise"},
+            {"role": "user", "content": "Check it"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {"name": "shell", "arguments": '{"cmd":"pwd"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": "/tmp/project"},
+        ]
+    )
 
     assert instructions == "Be concise"
     assert items[1] == {
@@ -228,18 +239,21 @@ async def test_codex_tool_stream_normalizes_function_call() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(await request.aread())
         assert body["tools"][0]["name"] == "read_file"
-        return httpx.Response(200, content=_sse(
-            {
-                "type": "response.output_item.added",
-                "item": {"id": "item-1", "type": "function_call", "call_id": "call-1", "name": "read_file"},
-            },
-            {"type": "response.function_call_arguments.delta", "item_id": "item-1", "delta": '{"path":'},
-            {"type": "response.function_call_arguments.delta", "item_id": "item-1", "delta": '"README.md"}'},
-            {
-                "type": "response.completed",
-                "response": {"model": "codex-model", "usage": {"input_tokens": 10, "output_tokens": 4}},
-            },
-        ))
+        return httpx.Response(
+            200,
+            content=_sse(
+                {
+                    "type": "response.output_item.added",
+                    "item": {"id": "item-1", "type": "function_call", "call_id": "call-1", "name": "read_file"},
+                },
+                {"type": "response.function_call_arguments.delta", "item_id": "item-1", "delta": '{"path":'},
+                {"type": "response.function_call_arguments.delta", "item_id": "item-1", "delta": '"README.md"}'},
+                {
+                    "type": "response.completed",
+                    "response": {"model": "codex-model", "usage": {"input_tokens": 10, "output_tokens": 4}},
+                },
+            ),
+        )
 
     client = httpx.AsyncClient(base_url="https://example.test", transport=httpx.MockTransport(handler))
     provider = OpenAICodexProvider(ApiKeyCredentialProvider("test", "token"), client=client)
@@ -300,9 +314,7 @@ async def test_a_bare_json_schema_is_sent_in_the_shape_responses_expects() -> No
         "properties": {"facts": {"type": "array", "items": {"type": "string"}}},
         "required": ["facts"],
     }
-    body = await _capture_body(
-        CompletionRequest(prompt="hi", component="bootstrap", response_schema=bare_schema)
-    )
+    body = await _capture_body(CompletionRequest(prompt="hi", component="bootstrap", response_schema=bare_schema))
 
     fmt = body["text"]["format"]
     assert fmt["type"] == "json_schema", "the schema's own type must never overwrite the format type"
@@ -313,9 +325,9 @@ async def test_a_bare_json_schema_is_sent_in_the_shape_responses_expects() -> No
 @pytest.mark.asyncio
 async def test_an_already_wrapped_schema_is_passed_through() -> None:
     wrapped = {"name": "answer", "schema": {"type": "object", "properties": {}}, "strict": True}
-    fmt = (await _capture_body(
-        CompletionRequest(prompt="hi", component="critic", response_schema=wrapped)
-    ))["text"]["format"]
+    fmt = (await _capture_body(CompletionRequest(prompt="hi", component="critic", response_schema=wrapped)))["text"][
+        "format"
+    ]
 
     assert fmt == {"type": "json_schema", **wrapped}
 

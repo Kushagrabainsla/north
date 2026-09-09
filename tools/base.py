@@ -10,7 +10,7 @@ from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
     from approval.base import Notifier
-    from approval.judgement_filter import JudgementFilter
+    from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
 
@@ -19,7 +19,7 @@ class Tool(ABC):
     """Base class for every tool an agent can call.
 
     Subclasses set the class-level `name` and `description` strings and
-    implement `run()`. The Orchestrator only ever sees this interface  - 
+    implement `run()`. The Orchestrator only ever sees this interface  -
     it does not know whether the concrete tool hits an external API, a
     local cache, or a mocked test double.
     """
@@ -74,20 +74,26 @@ class Tool(ABC):
 
 
 class ApprovalGatedTool(Tool, ABC):
-    """Base class for tools that gate actions behind user approval."""
+    """Base class for tools that gate actions behind user approval.
+
+    A subclass describes what it is about to do as an `approval.policy.Action`
+    and passes it to `tools.specialized._approval.gate_action`. It does not read
+    the approval mode, hold an allowlist, or decide anything - `policy` does all
+    three, in one place, for every tool.
+    """
 
     def __init__(
         self,
         approval_store: ApprovalStore | None = None,
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
+        policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,
     ) -> None:
         self._approval_store = approval_store
         self._stream_manager = stream_manager
         self._approval_timeout_seconds = approval_timeout_seconds
-        self._judgement_filter = judgement_filter
+        self._policy = policy
         self._notifier = notifier
 
 

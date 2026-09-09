@@ -20,8 +20,9 @@ from utils.time import utcnow
 
 
 def _pipeline(tmp_path: Path) -> ExtractionPipeline:
-    return ExtractionPipeline(AsyncMock(), FileContextStore(tmp_path / "context"), AsyncMock(), tmp_path,
-                              fact_store=AsyncMock())
+    return ExtractionPipeline(
+        AsyncMock(), FileContextStore(tmp_path / "context"), AsyncMock(), tmp_path, fact_store=AsyncMock()
+    )
 
 
 def _entry(entry_id: str, *, task: str, status: LedgerStatus, text: str = "", source=LedgerSource.CLARIFICATION):
@@ -71,8 +72,13 @@ def test_a_cancellation_that_arrives_after_the_answer_still_counts(tmp_path: Pat
 def test_another_task_in_the_same_batch_is_untouched(tmp_path: Path) -> None:
     """One abandoned conversation must not erase what was said in a different one."""
     pipeline = _pipeline(tmp_path)
-    kept = _entry("c", task="task_other", status=LedgerStatus.COMPLETED,
-                  text="I prefer window seats on long flights", source=LedgerSource.PROMPT)
+    kept = _entry(
+        "c",
+        task="task_other",
+        status=LedgerStatus.COMPLETED,
+        text="I prefer window seats on long flights",
+        source=LedgerSource.PROMPT,
+    )
     entries = [
         _entry("a", task="task_jobs", status=LedgerStatus.COMPLETED, text=_ANSWER),
         _entry("b", task="task_jobs", status=LedgerStatus.CANCELLED, source=LedgerSource.SYSTEM),

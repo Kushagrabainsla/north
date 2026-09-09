@@ -214,4 +214,3 @@ async def test_drain_queued_tasks_loop_resumes_task(running_task_store: RunningT
     queued = await running_task_store.list_queued()
     assert len(queued) == 0
     assert writes[-1].action == "task_resumed"
-

@@ -54,7 +54,6 @@ class TestRaiseCooldownStatus:
         with pytest.raises(ModelRefusedError):
             self._provider()._raise_cooldown_status(httpx.Response(403), "model")
 
-
     def test_429_raises_rate_limited(self) -> None:
         with pytest.raises(ModelRateLimitedError):
             self._provider()._raise_cooldown_status(httpx.Response(429), "model")
@@ -171,9 +170,7 @@ class TestRaiseCooldownStatus:
     ("status", "expected"),
     [(402, PaymentRequiredError), (429, ModelRateLimitedError)],
 )
-async def test_openrouter_transcribe_maps_cooldown_statuses(
-    status: int, expected: type[Exception]
-) -> None:
+async def test_openrouter_transcribe_maps_cooldown_statuses(status: int, expected: type[Exception]) -> None:
     provider = OpenRouterRouter(api_key="k", client=_client_returning(status))
     try:
         with pytest.raises(expected):
@@ -196,9 +193,7 @@ def test_openrouter_uses_task_as_sticky_prompt_cache_session() -> None:
     ("status", "expected"),
     [(402, PaymentRequiredError), (429, ModelRateLimitedError)],
 )
-async def test_groq_transcribe_maps_cooldown_statuses(
-    status: int, expected: type[Exception]
-) -> None:
+async def test_groq_transcribe_maps_cooldown_statuses(status: int, expected: type[Exception]) -> None:
     provider = GroqRouter(api_key="k")
     provider._client = _client_returning(status)
     try:
@@ -241,9 +236,7 @@ async def test_completion_retries_without_response_format_on_400() -> None:
     provider = OpenAICompatibleProvider.__new__(OpenAICompatibleProvider)
     provider._client = _RecordingClient()
     provider.name = "fake"
-    req = CompletionRequest(
-        prompt="hi", component="test", response_schema={"name": "x", "schema": {"type": "object"}}
-    )
+    req = CompletionRequest(prompt="hi", component="test", response_schema={"name": "x", "schema": {"type": "object"}})
     resp = await provider.complete("fake-model", req)
     assert resp.text == "ok"
     assert provider._client.calls == 2
@@ -302,9 +295,7 @@ def test_groq_free_models_have_payload_cap() -> None:
     # Build a minimal GroqRouter without network by injecting a fake client.
     p = GroqRouter.__new__(GroqRouter)
     p._models = {}
-    p._client = types.SimpleNamespace(
-        get=lambda: _FakeResp()
-    )
+    p._client = types.SimpleNamespace(get=lambda: _FakeResp())
     # Simulate refresh by populating _models directly via the same ModelInfo path.
     from inference.capability import ModelCapability, ModelInfo, quality_from_cost
 

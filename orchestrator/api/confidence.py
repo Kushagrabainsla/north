@@ -44,5 +44,3 @@ async def tool_confidence(agent: str | None = None) -> list[ToolConfidenceOut]:
         results.extend(agent_results)
 
     return results
-
-

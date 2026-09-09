@@ -20,7 +20,9 @@ import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from approval.mode import approve_option
 from approval.models import ApprovalDecision, Card, CardField, CardType
+from approval.policy import Action, ActionKind, Verdict
 from utils.ids import generate_id
 
 if TYPE_CHECKING:
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
 
     from approval.base import Notifier
     from approval.judgement_filter import JudgementFilter
+    from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
 
 logger = logging.getLogger(__name__)
@@ -69,6 +72,7 @@ class UserInteraction:
         notifier: Notifier | None = None,
         judgement_filter: JudgementFilter | None = None,
         stream_manager: Any | None = None,
+        policy: ApprovalPolicy | None = None,
         on_auto_resolve: Callable[[Card, str, str], Awaitable[None]] | None = None,
         default_timeout: float = 300.0,
     ) -> None:
@@ -76,6 +80,7 @@ class UserInteraction:
         self._notifier = notifier
         self._judgement_filter = judgement_filter
         self._stream = stream_manager
+        self._policy = policy
         self._on_auto_resolve = on_auto_resolve
         self._default_timeout = default_timeout
 
@@ -204,13 +209,50 @@ class UserInteraction:
             await self._notifier.notify(card)
         return card
 
-    async def _auto_resolve(self, card: Card) -> Card | None:
-        """Resolve *card* from a learned rule, or return None to surface it.
+    async def _rule_on(self, card: Card) -> Card | None:
+        """Ask the ApprovalPolicy about a directly-raised approval card."""
+        if self._policy is None:
+            return None
+        action = Action(
+            agent=card.agent,
+            kind=ActionKind.OTHER,
+            summary=card.title,
+            command=card.message,
+            carries_work=bool(card.fields),
+        )
+        try:
+            ruling = await self._policy.rule(action)
+        except Exception:
+            logger.debug("ApprovalPolicy failed for card %s - surfacing it", card.id)
+            return None
+        if ruling.verdict is Verdict.ASK:
+            return None
+        decision = ApprovalDecision.APPROVED if ruling.allowed else ApprovalDecision.REJECTED
+        chosen = approve_option(card.options) if ruling.allowed else ""
+        self._store.add(card)
+        self._store.resolve(card.id, decision, chosen_option=chosen)
+        if self._on_auto_resolve is not None:
+            await self._on_auto_resolve(card, decision, chosen)
+        logger.info("ApprovalPolicy: auto-%s card %s (%s)", decision, card.id, ruling.rule)
+        return card.model_copy(update={"status": decision, "chosen_option": chosen})
 
-        A JudgementFilter error never blocks the user from being asked - we log
-        and fall through to surfacing the card.
+    async def _auto_resolve(self, card: Card) -> Card | None:
+        """Resolve *card* without the user, or return None to surface it.
+
+        An APPROVAL card raised directly - by an agent, or by the orchestrator,
+        rather than through a tool's `gate_action` - is ruled on by the same
+        `ApprovalPolicy` every tool uses, so there is one answer to "what does
+        north do without asking" and not two that can drift apart.
+
+        A QUESTION is not an action, so the policy has nothing to say about it;
+        those still go to the learned judgement rules.
+
+        Neither path may block the user from being asked: any error here logs
+        and falls through to surfacing the card.
         """
-        if self._judgement_filter is None:
+        if card.type is CardType.APPROVAL:
+            return await self._rule_on(card)
+        if self._judgement_filter is None or card.type is not CardType.QUESTION:
             return None
         try:
             decision, chosen_option = await self._judgement_filter.check(card)

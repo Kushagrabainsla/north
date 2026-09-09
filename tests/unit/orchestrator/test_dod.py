@@ -149,18 +149,14 @@ def test_a_poor_reproduction_command_does_not_sink_an_otherwise_verified_fix():
 
 def test_a_regression_test_alone_is_enough_to_hold_the_fix_up():
     r = _eval_bugfix(
-        _passing_bugfix(
-            {"reproduction_command": "pytest", "pre_fix_failed": False, "regression_test_added": True}
-        )
+        _passing_bugfix({"reproduction_command": "pytest", "pre_fix_failed": False, "regression_test_added": True})
     )
     assert r.passed is True, r.reasons
 
 
 def test_a_post_fix_pass_alone_is_enough_too():
     r = _eval_bugfix(
-        _passing_bugfix(
-            {"reproduction_command": "pytest", "pre_fix_failed": False, "post_fix_passed": True}
-        )
+        _passing_bugfix({"reproduction_command": "pytest", "pre_fix_failed": False, "post_fix_passed": True})
     )
     assert r.passed is True, r.reasons
 

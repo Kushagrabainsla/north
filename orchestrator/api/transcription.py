@@ -51,5 +51,3 @@ async def transcribe_audio(request: Request) -> TranscriptionOut:
         model_used=result.model_used,
         cost_usd=result.cost_usd,
     )
-
-

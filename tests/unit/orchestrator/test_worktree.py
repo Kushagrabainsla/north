@@ -186,4 +186,3 @@ async def test_worktree_integrates_binary_file_cleanly(repo: Path, tmp_path: Pat
     assert res.applied is True
     assert res.changed is True
     assert (repo / "image.png").read_bytes() == binary_data
-

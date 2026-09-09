@@ -34,6 +34,7 @@ def _ready(providers, tmp_path):
     publish_catalog(dispatcher)
     return dispatcher
 
+
 AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
 
 

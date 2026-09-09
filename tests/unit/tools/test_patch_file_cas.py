@@ -9,7 +9,7 @@ import pytest
 
 from approval.mode import ApprovalMode
 from approval.models import ApprovalDecision, Card, CardType
-from approval.unattended import UnattendedPolicy
+from tests.conftest import approval_policy
 from tools.models import ToolInput
 from tools.specialized.patch_file import PatchFileTool
 
@@ -20,6 +20,7 @@ async def test_patch_file_rejects_concurrent_modification(tmp_path: Path):
     f.write_text("initial_value = 10\n")
 
     store = MagicMock()
+
     # Simulate a user taking time to approve, while another process modifies the file
     async def simulate_concurrent_edit(card_id, timeout=300.0):
         # Modify the file on disk behind the tool's back before approval returns
@@ -37,8 +38,7 @@ async def test_patch_file_rejects_concurrent_modification(tmp_path: Path):
     store.wait_for_decision = AsyncMock(side_effect=simulate_concurrent_edit)
     tool = PatchFileTool(
         approval_store=store,
-        unattended=UnattendedPolicy(),
-        mode_provider=lambda: ApprovalMode.INTERACTIVE,
+        policy=approval_policy(ApprovalMode.INTERACTIVE),
     )
 
     out = await tool.run(

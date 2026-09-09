@@ -89,5 +89,3 @@ async def update_settings(body: SettingsUpdate) -> SettingsOut:
             settings_obj.set_autonomy(approval_mode)
 
     return _settings_out(settings_obj)
-
-

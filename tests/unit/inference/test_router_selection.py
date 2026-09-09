@@ -153,10 +153,14 @@ async def test_rate_limited_model_is_cooldown_and_skipped(tmp_path):
 async def test_price_breaks_a_tie_between_equal_models(tmp_path):
     # Cost is never blended into the score - it decides only between models the
     # measurements cannot tell apart, which is what makes the cheaper one win here.
-    paid = _Catalog("openrouter", [_mi("or-paid", provider="openrouter", quality=0.7, cost=0.001)],
-                    lambda m, r: _resp(m))
-    free = _Catalog("opencode_zen", [_mi("zen-free", provider="opencode_zen", quality=0.7, cost=0.0, ctx=400_000)],
-                    lambda m, r: _resp(m))
+    paid = _Catalog(
+        "openrouter", [_mi("or-paid", provider="openrouter", quality=0.7, cost=0.001)], lambda m, r: _resp(m)
+    )
+    free = _Catalog(
+        "opencode_zen",
+        [_mi("zen-free", provider="opencode_zen", quality=0.7, cost=0.0, ctx=400_000)],
+        lambda m, r: _resp(m),
+    )
     disp = _disp([paid, free], tmp_path)
     resp = await disp.complete(CompletionRequest(prompt="chat", priority=PoolPriority.MEDIUM, component="general"))
     assert resp.model_used == "zen-free"
@@ -168,6 +172,7 @@ async def test_all_models_exhausted(tmp_path):
     # silently return garbage.
     def boom(model_id, request):
         return (_ for _ in ()).throw(InferenceError("down"))
+
     a = _Catalog("openrouter", [_mi("or-best", provider="openrouter", quality=0.95)], boom)
     b = _Catalog("groq", [_mi("groq-mid", provider="groq", quality=0.7)], boom)
     disp = _disp([a, b], tmp_path)

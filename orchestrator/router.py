@@ -69,20 +69,22 @@ _DEPLOY_KINDS: frozenset[str] = frozenset({"deploy", "ship"})
 # Tools that produce raw sensory, perceptual, search, or shell output that requires
 # model interpretation (e.g. answering "what is on my screen?", "search the web for X",
 # "what are these files?"). They must never run in blind single_tool mode.
-_INTERPRETATION_TOOLS: frozenset[str] = frozenset({
-    "take_screenshot",
-    "take_photo",
-    "web_search",
-    "fetch_url",
-    "browser",
-    "chrome_agent",
-    "bash",
-    "shell",
-    "search_code",
-    "find_references",
-    "goto_definition",
-    "search_symbols",
-})
+_INTERPRETATION_TOOLS: frozenset[str] = frozenset(
+    {
+        "take_screenshot",
+        "take_photo",
+        "web_search",
+        "fetch_url",
+        "browser",
+        "chrome_agent",
+        "bash",
+        "shell",
+        "search_code",
+        "find_references",
+        "goto_definition",
+        "search_symbols",
+    }
+)
 
 
 def _plan_cache_key(prompt: str, conversation: str = "") -> str:
@@ -168,8 +170,7 @@ def _normalize_plan_json(parsed: Any) -> dict[str, Any]:
         if parsed and all(isinstance(item, str) for item in parsed):
             return {"agents": list(parsed)}
         raise RoutingError(
-            "planner returned a JSON list with no plan object: "
-            f"{parsed[:3]!r}{'...' if len(parsed) > 3 else ''}"
+            f"planner returned a JSON list with no plan object: {parsed[:3]!r}{'...' if len(parsed) > 3 else ''}"
         )
     # Scalars / None are not a usable plan.
     raise RoutingError(f"planner returned a non-object JSON value: {parsed!r}")
@@ -332,11 +333,7 @@ class ExecutionPlanner:
             direct_tool = data.get("direct_tool")
             direct_tool_params = data.get("direct_tool_params") or {}
             # Sensory, perceptual, search, and interactive tools require an agent's ReAct loop
-            if (
-                not direct_tool
-                or not isinstance(direct_tool_params, dict)
-                or direct_tool in _INTERPRETATION_TOOLS
-            ):
+            if not direct_tool or not isinstance(direct_tool_params, dict) or direct_tool in _INTERPRETATION_TOOLS:
                 return self.build_fallback_plan(domain, task_id)
             # Verify the tool actually exists
             if self._tool_registry is not None:

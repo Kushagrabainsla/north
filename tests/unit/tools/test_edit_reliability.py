@@ -82,7 +82,7 @@ class TestFindingTheTextToReplace:
         assert "when indentation is ignored" in error
 
     def test_a_miss_shows_what_is_actually_in_the_file(self) -> None:
-        """"not found" tells the model nothing it did not already know."""
+        """ "not found" tells the model nothing it did not already know."""
         match, error = find_unique(SOURCE, "        return amount - (amount * pct)")
 
         assert match is None

@@ -22,18 +22,15 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from approval.mode import ApprovalMode
-from approval.unattended import UnattendedPolicy
+from approval.policy import Action, ActionKind
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_mutating_action
+from tools.specialized._approval import gate_action
 from tools.specialized._subprocess import format_diff_output, run_capture
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from approval.base import Notifier
-    from approval.judgement_filter import JudgementFilter
+    from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
 
@@ -45,9 +42,18 @@ _BARE_COUNT = re.compile(r"-\d+")
 # requires in-code approval before the subprocess is spawned.
 _READONLY_ACTIONS: frozenset[str] = frozenset({"status", "diff", "log", "show"})
 # `branch` is read-only only when listing; these flags keep it on the fast path.
-_BRANCH_LIST_FLAGS: frozenset[str] = frozenset({
-    "-a", "-r", "-v", "-vv", "-l", "--list", "--all", "--show-current",
-})
+_BRANCH_LIST_FLAGS: frozenset[str] = frozenset(
+    {
+        "-a",
+        "-r",
+        "-v",
+        "-vv",
+        "-l",
+        "--list",
+        "--all",
+        "--show-current",
+    }
+)
 # ...and these put `branch` into list mode, where a positional is a glob pattern
 # to filter by rather than a branch name to create. `git branch --list foo*`
 # cannot mutate anything; `git branch foo` creates a branch.
@@ -60,32 +66,95 @@ _BRANCH_LIST_MODE_FLAGS: frozenset[str] = frozenset({"-l", "--list"})
 # runs a diff driver configured in the repo. Flags are therefore allowlisted,
 # not blocklisted: a blocklist has to predict every future git option that
 # touches the disk, and misses the first one it does not know about.
-_SAFE_DIFF_FLAGS: frozenset[str] = frozenset({
-    "--stat", "--numstat", "--shortstat", "--summary", "--dirstat", "--raw",
-    "--name-only", "--name-status", "--diff-filter", "--relative",
-    "-p", "-u", "--patch", "--no-patch", "-s",
-    "--cached", "--staged", "--merge-base",
-    "-U", "--unified", "--function-context", "-W",
-    "-w", "-b", "--ignore-all-space", "--ignore-space-change",
-    "--ignore-blank-lines", "--ignore-cr-at-eol",
-    "--color", "--no-color", "--word-diff", "--color-words",
-    "-M", "-C", "--find-renames", "--find-copies", "--find-copies-harder",
-    "-R", "--text", "--binary", "--full-index", "--abbrev",
-    "--src-prefix", "--dst-prefix", "--no-prefix",
-    # Explicitly safe counterparts of the two options that can run a command.
-    "--no-ext-diff", "--no-textconv",
-})
-_SAFE_LOG_FLAGS: frozenset[str] = frozenset({
-    "--oneline", "--graph", "--decorate", "--no-decorate",
-    "--all", "--branches", "--tags", "--remotes",
-    "--first-parent", "--merges", "--no-merges",
-    "--reverse", "--topo-order", "--date-order", "--author-date-order",
-    "-n", "--max-count", "--skip",
-    "--since", "--after", "--until", "--before",
-    "--author", "--committer", "--grep", "--regexp-ignore-case", "-i",
-    "--follow", "--date", "--pretty", "--format",
-    "--abbrev-commit", "--no-abbrev-commit",
-})
+_SAFE_DIFF_FLAGS: frozenset[str] = frozenset(
+    {
+        "--stat",
+        "--numstat",
+        "--shortstat",
+        "--summary",
+        "--dirstat",
+        "--raw",
+        "--name-only",
+        "--name-status",
+        "--diff-filter",
+        "--relative",
+        "-p",
+        "-u",
+        "--patch",
+        "--no-patch",
+        "-s",
+        "--cached",
+        "--staged",
+        "--merge-base",
+        "-U",
+        "--unified",
+        "--function-context",
+        "-W",
+        "-w",
+        "-b",
+        "--ignore-all-space",
+        "--ignore-space-change",
+        "--ignore-blank-lines",
+        "--ignore-cr-at-eol",
+        "--color",
+        "--no-color",
+        "--word-diff",
+        "--color-words",
+        "-M",
+        "-C",
+        "--find-renames",
+        "--find-copies",
+        "--find-copies-harder",
+        "-R",
+        "--text",
+        "--binary",
+        "--full-index",
+        "--abbrev",
+        "--src-prefix",
+        "--dst-prefix",
+        "--no-prefix",
+        # Explicitly safe counterparts of the two options that can run a command.
+        "--no-ext-diff",
+        "--no-textconv",
+    }
+)
+_SAFE_LOG_FLAGS: frozenset[str] = frozenset(
+    {
+        "--oneline",
+        "--graph",
+        "--decorate",
+        "--no-decorate",
+        "--all",
+        "--branches",
+        "--tags",
+        "--remotes",
+        "--first-parent",
+        "--merges",
+        "--no-merges",
+        "--reverse",
+        "--topo-order",
+        "--date-order",
+        "--author-date-order",
+        "-n",
+        "--max-count",
+        "--skip",
+        "--since",
+        "--after",
+        "--until",
+        "--before",
+        "--author",
+        "--committer",
+        "--grep",
+        "--regexp-ignore-case",
+        "-i",
+        "--follow",
+        "--date",
+        "--pretty",
+        "--format",
+        "--abbrev-commit",
+        "--no-abbrev-commit",
+    }
+)
 # `status` builds its own fixed argument list and drops whatever the agent
 # passed, so it has no user-controlled flags to check.
 _SAFE_FLAGS_BY_ACTION: dict[str, frozenset[str]] = {
@@ -192,17 +261,10 @@ class GitTool(ApprovalGatedTool):
         approval_store: ApprovalStore | None = None,
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
+        policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,
-        unattended: UnattendedPolicy | None = None,
-        mode_provider: Callable[[], ApprovalMode] | None = None,
     ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter, notifier)
-        self._unattended = unattended or UnattendedPolicy()
-        self._mode_provider = mode_provider
-
-    def _mode(self) -> ApprovalMode:
-        return self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
 
     async def run(self, input: ToolInput) -> ToolOutput:
         action = str(input.params.get("action", "")).strip()
@@ -224,15 +286,6 @@ class GitTool(ApprovalGatedTool):
                 f"Valid: status, diff, log, branch, show, add, commit, push, pull, checkout, stash, merge.",
             )
 
-        # Force pushes are hard-refused - lifted in autonomous mode, where the
-        # operator has made the approval mode the only authority.
-        mode = self._mode()
-        if mode != ApprovalMode.AUTONOMOUS and action == "push" and any(_is_force_flag(t) for t in cmd[2:]):
-            return ToolOutput(
-                success=False,
-                error="Force-push is blocked - too destructive. Push to a new branch instead.",
-            )
-
         # An action that runs without an approval card has nobody checking its
         # arguments, so the allowlist is the only thing between the agent and
         # `git diff --output=/anywhere`.
@@ -247,21 +300,32 @@ class GitTool(ApprovalGatedTool):
                 ),
             )
 
-        auto_git = mode in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS) and self._unattended.approves_git(action, args)
-        if mutating and not auto_git:
-            denial = await gate_mutating_action(
-                self._approval_store,
+        forced = action == "push" and any(_is_force_flag(t) for t in cmd[2:])
+        refused = await gate_action(
+            Action(
                 agent="git",
-                title="Git Operation - Approval Required",
-                message=f"```\n{' '.join(cmd)}\n```",
-                task_id=input.params.get("task_id"),
-                stream_manager=self._stream_manager,
-                judgement_filter=self._judgement_filter,
-                notifier=self._notifier,
-                timeout=self._approval_timeout_seconds,
-            )
-            if denial is not None:
-                return denial
+                kind=ActionKind.GIT,
+                summary=" ".join(cmd),
+                operation=action,
+                args=args,
+                workspace=str(cwd),
+                mutating=mutating,
+                read_only=not mutating,
+                obviously_destructive=forced,
+            ),
+            policy=self._policy,
+            approval_store=self._approval_store,
+            title="Git Operation - Approval Required",
+            message=f"```\n{' '.join(cmd)}\n```",
+            task_id=input.params.get("task_id"),
+            stream_manager=self._stream_manager,
+            notifier=self._notifier,
+            timeout=self._approval_timeout_seconds,
+            declined="Git operation rejected by user.",
+            refused_hint="Push to a new branch instead.",
+        )
+        if refused is not None:
+            return refused
 
         return await asyncio.to_thread(run_capture, cmd, cwd, timeout=_TIMEOUT)
 

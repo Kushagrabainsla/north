@@ -116,5 +116,3 @@ def test_sqlite_vec_loaded(tmp_path: Path):
     with open_db_connection(db_path) as conn:
         version = conn.execute("SELECT vec_version()").fetchone()[0]
         assert version.startswith("v")
-
-

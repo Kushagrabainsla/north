@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from approval.mode import ApprovalMode
-from approval.unattended import UnattendedPolicy
+from tests.conftest import approval_policy
 from tools.models import ToolInput
 from tools.specialized.patch_file import PatchFileTool
 
@@ -19,7 +19,7 @@ async def test_unattended_applies_in_workspace_edit_without_card(tmp_path: Path)
     f.write_text("value = 1\n")
     store = MagicMock()
     store.wait_for_decision = AsyncMock()  # must never be called
-    tool = PatchFileTool(approval_store=store, unattended=UnattendedPolicy(), mode_provider=lambda: ApprovalMode.AUTO)
+    tool = PatchFileTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTO))
 
     out = await tool.run(
         ToolInput(
@@ -43,9 +43,7 @@ async def test_unattended_disabled_still_gates(tmp_path: Path):
     store = MagicMock()
     # reject any surfaced decision
     store.wait_for_decision = AsyncMock(return_value=None)
-    tool = PatchFileTool(
-        approval_store=store, unattended=UnattendedPolicy(), mode_provider=lambda: ApprovalMode.INTERACTIVE
-    )
+    tool = PatchFileTool(approval_store=store, policy=approval_policy(ApprovalMode.INTERACTIVE))
 
     out = await tool.run(
         ToolInput(

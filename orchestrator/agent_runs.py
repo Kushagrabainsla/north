@@ -145,6 +145,7 @@ class AgentRunStore:
                     now,
                 ),
             )
+
     async def complete(self, run_id: str, result: Any) -> None:
         await asyncio.to_thread(self._complete_sync, run_id, result)
 
@@ -275,10 +276,7 @@ class AgentRunStore:
             rows = conn.execute(
                 "SELECT event, data, timestamp FROM agent_run_events WHERE run_id=? ORDER BY id", (run_id,)
             ).fetchall()
-        return [
-            {"event": row["event"], "data": json.loads(row["data"]), "timestamp": row["timestamp"]}
-            for row in rows
-        ]
+        return [{"event": row["event"], "data": json.loads(row["data"]), "timestamp": row["timestamp"]} for row in rows]
 
     @staticmethod
     def _to_run(row: sqlite3.Row) -> AgentRun:

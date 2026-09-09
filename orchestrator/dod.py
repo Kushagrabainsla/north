@@ -111,9 +111,7 @@ def evaluate_engineering_dod(
             reasons.append("coder model was not recorded - cannot confirm an independent review")
         elif set(coder_models) & set(reviewer_models):
             shared = ", ".join(sorted(set(coder_models) & set(reviewer_models)))
-            reasons.append(
-                f"review used the same model as the coder ({shared}) - not an independent second opinion"
-            )
+            reasons.append(f"review used the same model as the coder ({shared}) - not an independent second opinion")
 
     # Kind-specific fix evidence (bugfix/debug), only on recorded contradictions.
     if review is not None and (kind or "").strip().lower() in _BUGFIX_KINDS:

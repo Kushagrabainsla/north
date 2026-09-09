@@ -18,21 +18,17 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from approval.mode import ApprovalMode
-from approval.models import ApprovalDecision
-from approval.unattended import UnattendedPolicy
+from approval.policy import Action, ActionKind
 from tools._path import resolve_path
 from tools._read_tracker import record_read, was_read
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import refusal_output, request_approval_status
+from tools.specialized._approval import gate_action
 from tools.specialized._edit_match import find_unique, indents_for, reindent
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from approval.base import Notifier
-    from approval.judgement_filter import JudgementFilter
+    from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
 
@@ -98,21 +94,10 @@ class PatchFileTool(ApprovalGatedTool):
         approval_store: ApprovalStore | None = None,
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
+        policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,
-        unattended: UnattendedPolicy | None = None,
-        mode_provider: Callable[[], ApprovalMode] | None = None,
     ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter, notifier)
-        self._unattended = unattended or UnattendedPolicy()
-        self._mode_provider = mode_provider
-
-    def _auto_edits(self, resolved: Path, workspace: str | None) -> bool:
-        """True when the current mode auto-approves this in-workspace edit."""
-        mode = self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
-        return mode in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS) and self._unattended.approves_edit(
-            resolved, workspace
-        )
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
 
     async def run(self, input: ToolInput) -> ToolOutput:
         path_str = input.params.get("path")
@@ -150,11 +135,13 @@ class PatchFileTool(ApprovalGatedTool):
         if new_content == old_content:
             return ToolOutput(success=True, data={"path": str(resolved), "blocks_applied": 0, "unchanged": True})
 
-        if self._approval_store is not None and not self._auto_edits(resolved, input.params.get("workspace")):
-            task_id = input.params.get("task_id")
-            status = await self._request_diff_approval(task_id, resolved, old_content, new_content)
-            refused = refusal_output(
-                status, timeout=self._approval_timeout_seconds, declined="Edit cancelled by user."
+        # An instance with no approval store is the plain, auto-discovered file
+        # writer the coder uses; app.py replaces it with a gated one at startup.
+        # Whether this tool is wired for approval is its own business - what the
+        # gate then decides is not.
+        if self._approval_store is not None:
+            refused = await self._gate(
+                input.params.get("task_id"), resolved, input.params.get("workspace"), old_content, new_content
             )
             if refused is not None:
                 return refused
@@ -164,21 +151,29 @@ class PatchFileTool(ApprovalGatedTool):
             record_read(input.params.get("task_id"), str(resolved))
         return written
 
-    async def _request_diff_approval(
-        self, task_id: str | None, path: Path, old: str, new: str
-    ) -> ApprovalDecision:
+    async def _gate(
+        self, task_id: str | None, path: Path, workspace: str | None, old: str, new: str
+    ) -> ToolOutput | None:
+        """``None`` when the edit may be written; otherwise what to return instead."""
         diff = _unified_diff(path, old, new)
-        return await request_approval_status(
-            self._approval_store,
-            task_id=task_id,
-            agent="patch_file",
+        return await gate_action(
+            Action(
+                agent="patch_file",
+                kind=ActionKind.FILE_EDIT,
+                summary=f"edit {path}",
+                path=path,
+                workspace=workspace or "",
+            ),
+            policy=self._policy,
+            approval_store=self._approval_store,
             title="File Edit - Approval Required",
             message=f"Apply this change to `{path}`?\n```diff\n{diff}\n```",
             options=("Apply", "Cancel"),
+            task_id=task_id,
             stream_manager=self._stream_manager,
-            judgement_filter=self._judgement_filter,
             notifier=self._notifier,
             timeout=self._approval_timeout_seconds,
+            declined="Edit cancelled by user.",
         )
 
 
@@ -235,7 +230,7 @@ def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
         if sorted_by_start[i][1] > sorted_by_start[i + 1][0]:
             return ToolOutput(
                 success=False,
-                error=f"Edits {sorted_by_start[i][3]} and {sorted_by_start[i+1][3]} overlap in the target file.",
+                error=f"Edits {sorted_by_start[i][3]} and {sorted_by_start[i + 1][3]} overlap in the target file.",
             )
 
     # Apply replacements from end to start so character offsets remain exact

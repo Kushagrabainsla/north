@@ -36,12 +36,16 @@ def test_malformed_json_returns_none(handoff):
 
 
 def test_valid_pass_is_read(handoff):
-    _write(handoff, "t1", {
-        "status": "PASS",
-        "must_fix": [],
-        "tests": {"passed": True, "command": "pytest -q"},
-        "summary": "all good",
-    })
+    _write(
+        handoff,
+        "t1",
+        {
+            "status": "PASS",
+            "must_fix": [],
+            "tests": {"passed": True, "command": "pytest -q"},
+            "summary": "all good",
+        },
+    )
     r = read_review_result("t1")
     assert r is not None
     assert r.status == "PASS"
@@ -61,13 +65,15 @@ def test_fail_with_must_fix(handoff):
 
 
 def test_json_fenced_content_is_tolerated(handoff):
-    _write(handoff, "t1", "```json\n{\"status\": \"PASS\", \"must_fix\": []}\n```")
+    _write(handoff, "t1", '```json\n{"status": "PASS", "must_fix": []}\n```')
     r = read_review_result("t1")
     assert r is not None and r.passed is True
 
 
-@pytest.mark.parametrize("raw,expected", [("pass", "PASS"), ("PASS", "PASS"), ("passed", "PASS"),
-                                          ("fail", "FAIL"), ("FAILED", "FAIL"), ("weird", "FAIL")])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("pass", "PASS"), ("PASS", "PASS"), ("passed", "PASS"), ("fail", "FAIL"), ("FAILED", "FAIL"), ("weird", "FAIL")],
+)
 def test_status_normalization(raw, expected):
     assert ReviewResult.parse({"status": raw}).status == expected
 
@@ -112,9 +118,7 @@ def test_verification_defaults_to_unknown_when_absent():
 
 
 def test_verification_ignores_non_bool_and_empty_values():
-    r = ReviewResult.parse(
-        {"status": "PASS", "verification": {"post_fix_passed": "yes", "regression_test_path": "  "}}
-    )
+    r = ReviewResult.parse({"status": "PASS", "verification": {"post_fix_passed": "yes", "regression_test_path": "  "}})
     # A non-bool must become None (unknown), not a truthy coercion; blank path -> None.
     assert r.verification.post_fix_passed is None
     assert r.verification.regression_test_path is None

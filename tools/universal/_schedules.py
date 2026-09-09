@@ -44,18 +44,36 @@ BUILTIN_NAMES = frozenset(entry.name for entry in V1_CRON_ENTRIES)
 # reasonable ways to say so, and every one it picks that north rejects turns a
 # working feature into an error message.
 _DAY_WORDS: dict[str, int] = {
-    "mon": 0, "monday": 0,
-    "tue": 1, "tues": 1, "tuesday": 1,
-    "wed": 2, "weds": 2, "wednesday": 2,
-    "thu": 3, "thur": 3, "thurs": 3, "thursday": 3,
-    "fri": 4, "friday": 4,
-    "sat": 5, "saturday": 5,
-    "sun": 6, "sunday": 6,
+    "mon": 0,
+    "monday": 0,
+    "tue": 1,
+    "tues": 1,
+    "tuesday": 1,
+    "wed": 2,
+    "weds": 2,
+    "wednesday": 2,
+    "thu": 3,
+    "thur": 3,
+    "thurs": 3,
+    "thursday": 3,
+    "fri": 4,
+    "friday": 4,
+    "sat": 5,
+    "saturday": 5,
+    "sun": 6,
+    "sunday": 6,
 }
 _DAY_GROUPS: dict[str, frozenset[int] | None] = {
-    "weekday": WEEKDAYS, "weekdays": WEEKDAYS, "workday": WEEKDAYS, "workdays": WEEKDAYS,
-    "weekend": WEEKENDS, "weekends": WEEKENDS,
-    "daily": None, "everyday": None, "every day": None, "all": None,
+    "weekday": WEEKDAYS,
+    "weekdays": WEEKDAYS,
+    "workday": WEEKDAYS,
+    "workdays": WEEKDAYS,
+    "weekend": WEEKENDS,
+    "weekends": WEEKENDS,
+    "daily": None,
+    "everyday": None,
+    "every day": None,
+    "all": None,
 }
 
 
@@ -106,9 +124,7 @@ def _one_selection(item: object) -> frozenset[int]:
 
 def describe_weekdays(weekdays: frozenset[int] | None) -> str:
     """The cadence in words, for a message back to the user."""
-    return CronEntry(
-        name="_", agent="_", task="_", hour=0, minute=0, weekdays=weekdays
-    ).cadence
+    return CronEntry(name="_", agent="_", task="_", hour=0, minute=0, weekdays=weekdays).cadence
 
 
 def resolve_zone_name(tz: str | None) -> str:

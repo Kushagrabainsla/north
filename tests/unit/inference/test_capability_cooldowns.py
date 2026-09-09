@@ -112,9 +112,6 @@ async def test_tool_failure_suspends_only_tool_capability(tmp_path) -> None:
     assert "gpt-5-flaky" not in provider.calls
 
 
-
-
-
 class _MockStreamTransport(httpx.AsyncBaseTransport):
     def __init__(self, sse_lines: list[str], status_code: int = 200) -> None:
         self._lines = sse_lines
@@ -135,9 +132,14 @@ class _MockStreamTransport(httpx.AsyncBaseTransport):
 @pytest.mark.asyncio
 async def test_openai_compat_detects_native_finish_network_error() -> None:
     sse_events = [
-        "data: " + json.dumps({
-            "choices": [{"delta": {"content": ""}, "finish_reason": "stop", "native_finish_reason": "network_error"}],
-        }),
+        "data: "
+        + json.dumps(
+            {
+                "choices": [
+                    {"delta": {"content": ""}, "finish_reason": "stop", "native_finish_reason": "network_error"}
+                ],
+            }
+        ),
         "data: [DONE]",
     ]
     client = httpx.AsyncClient(transport=_MockStreamTransport(sse_events), base_url="http://test")
@@ -157,9 +159,12 @@ async def test_openai_compat_detects_native_finish_network_error() -> None:
 @pytest.mark.asyncio
 async def test_openai_compat_detects_empty_stream() -> None:
     sse_events = [
-        "data: " + json.dumps({
-            "choices": [{"delta": {"content": ""}}],
-        }),
+        "data: "
+        + json.dumps(
+            {
+                "choices": [{"delta": {"content": ""}}],
+            }
+        ),
         "data: [DONE]",
     ]
     client = httpx.AsyncClient(transport=_MockStreamTransport(sse_events), base_url="http://test")

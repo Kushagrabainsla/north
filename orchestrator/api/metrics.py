@@ -14,5 +14,3 @@ async def get_metrics(days: int = 7) -> dict:
     """
     days = max(1, min(days, 365))
     return await _get_ledger().get_metrics(days=days)
-
-

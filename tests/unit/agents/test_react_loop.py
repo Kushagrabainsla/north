@@ -465,8 +465,18 @@ async def test_core_tools_never_dropped_by_semantic_filter(tmp_path):
 
     # More than SEMANTIC_FILTER_MIN tools, mixing core and non-core.
     names = [
-        "read_file", "patch_file", "check_types", "bash", "list_dir", "search_files",
-        "glob", "write_file", "web_search", "fetch_url", "kasa", "git",
+        "read_file",
+        "patch_file",
+        "check_types",
+        "bash",
+        "list_dir",
+        "search_files",
+        "glob",
+        "write_file",
+        "web_search",
+        "fetch_url",
+        "kasa",
+        "git",
     ]
     agent._deps.tool_registry = MagicMock()
     agent._deps.tool_registry.tools_for_agent.return_value = [_tool(n) for n in names]
@@ -625,9 +635,21 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
 
     # Register 15 tools
     names = [
-        "read_file", "patch_file", "check_types", "bash", "list_dir", "search_files",
-        "glob", "write_file", "web_search", "fetch_url", "kasa", "git",
-        "take_screenshot", "take_photo", "custom_tool"
+        "read_file",
+        "patch_file",
+        "check_types",
+        "bash",
+        "list_dir",
+        "search_files",
+        "glob",
+        "write_file",
+        "web_search",
+        "fetch_url",
+        "kasa",
+        "git",
+        "take_screenshot",
+        "take_photo",
+        "custom_tool",
     ]
     agent._deps.tool_registry = MagicMock()
     agent._deps.tool_registry.tools_for_agent.return_value = [_tool(n) for n in names]
@@ -662,8 +684,6 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
     assert "take_screenshot" in loaded_names
     assert "take_photo" in loaded_names
     assert "custom_tool" in loaded_names
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -858,12 +878,8 @@ class _CapturingRouter(MockInferenceRouter):
 
     async def complete_with_tools(self, request, token_callback=None):
         self.tool_names = [t.get("function", {}).get("name", "") for t in (request.tools or [])]
-        self.system_prompt = next(
-            (m["content"] for m in request.messages if m.get("role") == "system"), ""
-        )
-        return ToolCallResponse(
-            type="message", content="ok", calls=[], model_used="mock", tokens_in=1, tokens_out=1
-        )
+        self.system_prompt = next((m["content"] for m in request.messages if m.get("role") == "system"), "")
+        return ToolCallResponse(type="message", content="ok", calls=[], model_used="mock", tokens_in=1, tokens_out=1)
 
 
 async def _capture(tmp_path: Path, scores: list[tuple[str, float]]) -> _CapturingRouter:
@@ -903,6 +919,4 @@ async def test_system_prompt_carries_no_minute_resolution_clock(tmp_path: Path) 
     assert not _re.search(r"\d{2}:\d{2}", router.system_prompt), (
         f"system prompt still carries a clock: {router.system_prompt[:200]!r}"
     )
-    assert _re.search(r"Current date: \d{4}-\d{2}-\d{2}", router.system_prompt), (
-        "agents still need to know the date"
-    )
+    assert _re.search(r"Current date: \d{4}-\d{2}-\d{2}", router.system_prompt), "agents still need to know the date"

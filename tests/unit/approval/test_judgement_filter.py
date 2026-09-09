@@ -78,40 +78,6 @@ def _mode_filter(mode, recalled=None):
     )
 
 
-async def test_autonomous_approves_everything() -> None:
-    """Autonomous mode approves any permission card - the mode is the only authority.
-    (The tools' own hard refusals, e.g. bash blocking `rm -rf /`, are lifted separately.)"""
-    card = Card(
-        id="c9",
-        type=CardType.APPROVAL,
-        task_id="t1",
-        agent="bash",
-        title="T",
-        message="```\nrm -rf /tmp/scratch\n```",
-        options=["Run", "Cancel"],
-    )
-    decision, option = await _mode_filter("autonomous").check(card)
-    assert decision == "approved"
-    assert option == "Run"
-
-
-async def test_autonomous_ignores_prior_rejection() -> None:
-    """Autonomous allows everything - it does NOT replay learned rejections (that is auto's job)."""
-    decision, _ = await _mode_filter("autonomous", recalled="rejected").check(_card("bash"))
-    assert decision == "approved"
-
-
-async def test_auto_replays_prior_approval() -> None:
-    decision, option = await _mode_filter("auto", recalled="approved").check(_card("bash"))
-    assert decision == "approved"
-    assert option == "Run"
-
-
-async def test_auto_replays_prior_rejection() -> None:
-    decision, _ = await _mode_filter("auto", recalled="rejected").check(_card("bash"))
-    assert decision == "rejected"
-
-
 async def test_auto_surfaces_unknown_action() -> None:
     """In auto mode an action with no learned decision falls through to ask the user."""
     # memory returns None (unknown); read_document returns "" so the LLM path also yields None.
@@ -122,21 +88,3 @@ async def test_auto_surfaces_unknown_action() -> None:
 async def test_interactive_does_not_auto_resolve_mutations() -> None:
     decision, _ = await _mode_filter("interactive", recalled="approved").check(_card("bash"))
     assert decision is None
-
-
-async def test_mode_is_read_live() -> None:
-    """Changing the mode provider's value changes behaviour with no rebuild."""
-    from approval.mode import ApprovalMode
-
-    box = {"mode": ApprovalMode.INTERACTIVE}
-    memory = MagicMock()
-    memory.read_document = AsyncMock(return_value="")
-    router = MagicMock()
-    router.complete = AsyncMock(return_value=MagicMock(text='{"decision":"none","confidence":0.0}'))
-    f = JudgementFilter(memory=memory, inference_router=router, mode_provider=lambda: box["mode"])
-
-    # interactive: surfaces (no auto-approve)
-    assert (await f.check(_card("bash")))[0] is None
-    # flip to autonomous live -> now approves
-    box["mode"] = ApprovalMode.AUTONOMOUS
-    assert (await f.check(_card("bash")))[0] == "approved"

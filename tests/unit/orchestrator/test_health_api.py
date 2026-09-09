@@ -49,7 +49,13 @@ async def test_health_check_reports_real_ready_components() -> None:
 
     assert result["status"] == "ok"
     assert set(result["checks"]) == {
-        "api", "orchestrator", "ledger", "memory", "scheduler", "event_stream", "inference"
+        "api",
+        "orchestrator",
+        "ledger",
+        "memory",
+        "scheduler",
+        "event_stream",
+        "inference",
     }
     assert result["checks"]["inference"]["models"] == 2
 

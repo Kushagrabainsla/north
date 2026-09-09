@@ -11,13 +11,14 @@ import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from approval.policy import Action, ActionKind
 from tools.base import ApprovalGatedTool, Tool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import request_approval_decision
+from tools.specialized._approval import gate_action
 
 if TYPE_CHECKING:
     from approval.base import Notifier
-    from approval.judgement_filter import JudgementFilter
+    from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
     from tools.registry import ToolRegistry
@@ -132,10 +133,10 @@ class CreateToolTool(ApprovalGatedTool):
         approval_store: ApprovalStore | None = None,
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
+        policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,
     ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter, notifier)
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
         self._registry = tool_registry
 
     def format_output(self, data: dict[str, Any]) -> str:
@@ -182,22 +183,15 @@ class CreateToolTool(ApprovalGatedTool):
         if action in ("create", "update"):
             # Fail closed: model-authored code may be hot-loaded into the live
             # process, so it must never land without a human looking at it.
-            if self._approval_store is None:
-                return ToolOutput(
-                    success=False,
-                    error=(
-                        "create_tool: tool create/update requires user approval, but no approval "
-                        "gate is configured for this tool instance. Refusing (fail closed)."
-                    ),
-                )
-            if not await self._request_approval(input.params, action):
-                return ToolOutput(success=False, error="Tool creation cancelled by user.")
+            refused = await self._gate(input.params, action)
+            if refused is not None:
+                return refused
             return self._create(input.params) if action == "create" else self._update(input.params)
 
         return ToolOutput(success=False, error=f"Unknown action '{action}'. Use: list, read, create, update.")
 
-    async def _request_approval(self, params: dict, action: str) -> bool:
-        """Show the proposed tool code to the user and wait for a decision."""
+    async def _gate(self, params: dict, action: str) -> ToolOutput | None:
+        """Show the proposed code and wait. ``None`` when it may be written."""
         name = params.get("name", "unknown")
         tool_type = params.get("tool_type", "specialized")
         content = (params.get("content") or "").strip()
@@ -205,17 +199,24 @@ class CreateToolTool(ApprovalGatedTool):
         message = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
             f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)"
         )
-        return await request_approval_decision(
-            self._approval_store,
-            task_id=params.get("task_id"),
-            agent="create_tool",
+        return await gate_action(
+            Action(
+                agent="create_tool",
+                kind=ActionKind.TOOL_CHANGE,
+                summary=f"{action} the {name!r} tool ({tool_type})",
+                operation=action,
+                args=name,
+            ),
+            policy=self._policy,
+            approval_store=self._approval_store,
             title="Tool Change - Approval Required",
             message=message,
             options=("Approve", "Reject"),
+            task_id=params.get("task_id"),
             stream_manager=self._stream_manager,
-            judgement_filter=self._judgement_filter,
             notifier=self._notifier,
             timeout=self._approval_timeout_seconds,
+            declined="Tool creation cancelled by user.",
         )
 
     # ── Action handlers ───────────────────────────────────────────────────────

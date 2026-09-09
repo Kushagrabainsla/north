@@ -8,12 +8,23 @@ Three ordered tiers, from most to least supervised:
   for engineering work - editing files inside the task workspace, running an
   allowlist of test/lint/build commands, and local git (add/commit/branch). Any
   other mutating action still asks.
-- ``autonomous``: auto-approves everything except a hard-danger floor (force-push,
-  ``rm -rf /``, ``curl | sh``, ``sudo``, PR merges, ...), replaying the user's own
-  prior decisions. Fully hands-off.
+- ``autonomous``: auto-approves everything. There is no hard-danger floor - the
+  patterns other modes refuse outright (``rm -rf /``, force-push) are allowed
+  here, because choosing this mode is choosing to make the mode the only
+  authority. Fully hands-off, and meant that way.
 
 This replaces the older ``unattended_mode`` / ``autonomous_mode`` boolean pair; both
 are still honoured as a fallback so existing configs keep working.
+
+Whether an action may run without asking is decided in exactly one place -
+``approval/policy.py``. Nothing else may branch on the mode to answer *that*
+question: seven scattered copies of it is what this replaced, and one of them
+had forgotten to check the mode at all.
+
+A different question - "is there a human here to ask?" - is read from the mode
+in two other places (the agent loop before asking a clarifying question, and the
+Orchestrator's ``_human_available``). Those decide whether to *interrupt*, not
+whether something is permitted, so they are not copies of the above.
 """
 
 from __future__ import annotations
@@ -24,7 +35,7 @@ from enum import StrEnum
 class ApprovalMode(StrEnum):
     INTERACTIVE = "interactive"  # read-only auto; every mutation asks (default)
     AUTO = "auto"  # + auto-approve the safe engineering subset
-    AUTONOMOUS = "autonomous"  # auto-approve everything except hard-danger
+    AUTONOMOUS = "autonomous"  # auto-approve everything, no exceptions
 
 
 # Friendly synonyms so a user can write what they mean.

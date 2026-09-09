@@ -15,16 +15,13 @@ import contextlib
 import os
 import re
 import signal
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from approval.mode import ApprovalMode
-from approval.models import ApprovalDecision
-from approval.unattended import UnattendedPolicy
+from approval.policy import Action, ActionKind
 from tools._path import references_sensitive_path
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import refusal_output, request_approval_status
+from tools.specialized._approval import gate_action
 from tools.specialized._sandbox import (
     SandboxConfig,
     build_run_argv,
@@ -33,7 +30,7 @@ from tools.specialized._sandbox import (
 
 if TYPE_CHECKING:
     from approval.base import Notifier
-    from approval.judgement_filter import JudgementFilter
+    from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
     from orchestrator.stream import EventStreamManager
 
@@ -153,49 +150,42 @@ class BashTool(ApprovalGatedTool):
         approval_store: ApprovalStore,
         stream_manager: EventStreamManager | None = None,
         approval_timeout_seconds: float = 300.0,
-        judgement_filter: JudgementFilter | None = None,
+        policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,
         sandbox: SandboxConfig | None = None,
-        unattended: UnattendedPolicy | None = None,
-        mode_provider: Callable[[], ApprovalMode] | None = None,
     ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, judgement_filter, notifier)
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
         self._safety_inspector = CommandSafetyInspector()
         self._sandbox = sandbox or SandboxConfig()
-        self._unattended = unattended or UnattendedPolicy()
-        self._mode_provider = mode_provider
 
-    def _mode(self) -> ApprovalMode:
-        return self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
+    def _describe(self, command: str) -> Action:
+        """What this command is, as facts. What that *means* is the policy's call."""
+        return Action(
+            agent="bash",
+            kind=ActionKind.SHELL_COMMAND,
+            summary=command,
+            command=command,
+            read_only=self._safety_inspector.is_instantly_safe(command),
+            mutating=not self._safety_inspector.is_instantly_safe(command),
+            obviously_destructive=any(hint in command for hint in _OBVIOUS_DESTRUCTIVE_HINTS),
+        )
 
     def format_output(self, data: dict[str, Any]) -> str:
         return str(data.get("stdout", data.get("output", ""))).strip()
 
-    async def _request_approval(self, task_id: str | None, command: str) -> ApprovalDecision:
-        """Emit an approval card for the command; report how it resolved.
-
-        The status, not a bool: a card nobody answered has to be told apart from
-        one a person declined, or the agent goes hunting for another way to run
-        the same command and stalls for the timeout again on every attempt.
-        """
-        if self._safety_inspector.is_instantly_safe(command):
-            return ApprovalDecision.APPROVED
-        # In auto/autonomous mode, deterministically auto-approve a safe test/lint/
-        # build command so the run isn't blocked. Anything else still asks (and in
-        # autonomous mode the JudgementFilter approves it downstream).
-        if self._mode() in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS) and self._unattended.approves_command(command):
-            return ApprovalDecision.APPROVED
-
-        return await request_approval_status(
-            self._approval_store,
-            task_id=task_id,
-            agent="bash",
+    async def _gate(self, task_id: str | None, command: str) -> ToolOutput | None:
+        """``None`` when the command may run; otherwise what to return instead."""
+        return await gate_action(
+            self._describe(command),
+            policy=self._policy,
+            approval_store=self._approval_store,
             title="Shell Command - Approval Required",
             message=f"```\n{command}\n```",
+            task_id=task_id,
             stream_manager=self._stream_manager,
-            judgement_filter=self._judgement_filter,
             notifier=self._notifier,
             timeout=self._approval_timeout_seconds,
+            declined="Command cancelled by user.",
         )
 
     async def _resolve_execution(
@@ -225,16 +215,9 @@ class BashTool(ApprovalGatedTool):
         if not command:
             return ToolOutput(success=False, error="Parameter 'command' is required.")
 
-        # Hard-refusal of a few catastrophic patterns - lifted in autonomous mode,
-        # where the operator has explicitly made the approval mode the only authority.
-        if self._mode() != ApprovalMode.AUTONOMOUS:
-            for blocked in _OBVIOUS_DESTRUCTIVE_HINTS:
-                if blocked in command:
-                    return ToolOutput(success=False, error=f"Blocked pattern in command: {blocked!r}")
-
-        task_id: str | None = input.params.get("task_id")
-        status = await self._request_approval(task_id, command)
-        refused = refusal_output(status, timeout=self._approval_timeout_seconds, declined="Command cancelled by user.")
+        # Whether a catastrophic pattern is refused, and in which modes, is the
+        # policy's call - this tool only reports that it recognises one.
+        refused = await self._gate(input.params.get("task_id"), command)
         if refused is not None:
             return refused
 

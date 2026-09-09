@@ -61,12 +61,18 @@ def test_use_conductor_requires_domain_agents_and_code():
     from orchestrator.models import ExecutionMode, ExecutionPlan
 
     code_plan = ExecutionPlan(
-        task_id="t", agents=["coder", "reviewer"], parallel_groups=[["coder"], ["reviewer"]],
-        dependencies={}, mode=ExecutionMode.HIERARCHICAL,
+        task_id="t",
+        agents=["coder", "reviewer"],
+        parallel_groups=[["coder"], ["reviewer"]],
+        dependencies={},
+        mode=ExecutionMode.HIERARCHICAL,
     )
     noncode_plan = ExecutionPlan(
-        task_id="t", agents=["researcher"], parallel_groups=[["researcher"]],
-        dependencies={}, mode=ExecutionMode.SINGLE_AGENT,
+        task_id="t",
+        agents=["researcher"],
+        parallel_groups=[["researcher"]],
+        dependencies={},
+        mode=ExecutionMode.SINGLE_AGENT,
     )
     on = _orch()
     assert on._use_conductor("engineering", code_plan) is True
@@ -82,8 +88,12 @@ def test_deploy_uses_deploy_flow_not_conductor():
     from orchestrator.models import ExecutionMode, ExecutionPlan
 
     deploy_plan = ExecutionPlan(
-        task_id="t", agents=["coder"], parallel_groups=[["coder"]],
-        dependencies={}, mode=ExecutionMode.SINGLE_AGENT, engineering_kind="deploy",
+        task_id="t",
+        agents=["coder"],
+        parallel_groups=[["coder"]],
+        dependencies={},
+        mode=ExecutionMode.SINGLE_AGENT,
+        engineering_kind="deploy",
     )
     orch = _orch()
     # Deploy has a coder, but must NOT be handled by the conductor (no code DoD) -
@@ -92,8 +102,12 @@ def test_deploy_uses_deploy_flow_not_conductor():
     assert orch._use_deploy_flow("engineering", deploy_plan) is True
     # A normal code plan is not a deploy flow.
     code_plan = ExecutionPlan(
-        task_id="t", agents=["coder", "reviewer"], parallel_groups=[["coder"], ["reviewer"]],
-        dependencies={}, mode=ExecutionMode.HIERARCHICAL, engineering_kind="bugfix",
+        task_id="t",
+        agents=["coder", "reviewer"],
+        parallel_groups=[["coder"], ["reviewer"]],
+        dependencies={},
+        mode=ExecutionMode.HIERARCHICAL,
+        engineering_kind="bugfix",
     )
     assert orch._use_deploy_flow("engineering", code_plan) is False
 
@@ -122,8 +136,12 @@ def _plan(kind: str):
     from orchestrator.models import ExecutionMode, ExecutionPlan
 
     return ExecutionPlan(
-        task_id="t", agents=["coder", "reviewer"], parallel_groups=[["coder"]],
-        dependencies={}, mode=ExecutionMode.HIERARCHICAL, engineering_kind=kind,
+        task_id="t",
+        agents=["coder", "reviewer"],
+        parallel_groups=[["coder"]],
+        dependencies={},
+        mode=ExecutionMode.HIERARCHICAL,
+        engineering_kind=kind,
     )
 
 

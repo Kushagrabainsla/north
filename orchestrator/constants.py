@@ -33,7 +33,7 @@ WATCHDOG_POLL_INTERVAL_SECONDS = 600
 # the user on borderline-classified tasks (e.g. "schedule a reminder").
 NORTH_STAR_CONFIDENCE_THRESHOLD = 0.7
 
-# Minimum seconds between reactive pool refreshes triggered by agent failures  - 
+# Minimum seconds between reactive pool refreshes triggered by agent failures  -
 # prevents refresh storms when many agents fail concurrently.
 POOL_REFRESH_COOLDOWN = 60.0
 

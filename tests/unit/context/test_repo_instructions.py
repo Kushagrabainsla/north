@@ -67,4 +67,3 @@ async def test_hierarchical_nested_repo_instructions(tmp_path: Path) -> None:
     pos_root = text.index("global root rule")
     pos_sub = text.index("api package rule")
     assert pos_root < pos_sub
-

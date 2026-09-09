@@ -66,9 +66,7 @@ def _router(tmp_path, behaviour: dict[str, object]) -> tuple[ChainRouter, dict[s
             Endpoint("glm-5-2", "openrouter", "z-ai/glm-5.2:free", 0.0, 0.0),
         ],
     )
-    providers = {
-        name: _FakeProvider(name, behaviour) for name in ("openrouter", "opencode_zen")
-    }
+    providers = {name: _FakeProvider(name, behaviour) for name in ("openrouter", "opencode_zen")}
     decisions = DecisionLog(tmp_path / "models.db")
     availability = AvailabilityView(CooldownStore(), ProviderHealthTracker(), EntitlementLedger())
     router = ChainRouter(catalog, decisions, availability, providers.get)
@@ -129,9 +127,7 @@ async def test_an_unfunded_account_lands_on_the_best_free_model(tmp_path) -> Non
 @pytest.mark.asyncio
 async def test_one_gateway_error_does_not_bench_the_provider(tmp_path) -> None:
     """PROVIDER_DOWN needs corroboration; a single 503 must not reach it."""
-    router, providers, _ = _router(
-        tmp_path, {"claude-fable-5.1": ProviderUnavailableError("503 gateway")}
-    )
+    router, providers, _ = _router(tmp_path, {"claude-fable-5.1": ProviderUnavailableError("503 gateway")})
     result = await router.dispatch(
         component="coder",
         requirements=requirements_from(needs_tools=True),
@@ -159,9 +155,10 @@ async def test_a_reviewer_never_reuses_the_coders_model(tmp_path) -> None:
 async def test_compaction_runs_on_the_cheapest_model_not_the_coders(tmp_path) -> None:
     """The part label already existed; using it is what frees the coder's budget."""
     router, _, _ = _router(tmp_path, {})
-    assert await router.dispatch(
-        component="coder:compact", requirements=Requirements(), call_fn=_call
-    ) == "openrouter:z-ai/glm-5.2:free"
+    assert (
+        await router.dispatch(component="coder:compact", requirements=Requirements(), call_fn=_call)
+        == "openrouter:z-ai/glm-5.2:free"
+    )
 
 
 @pytest.mark.asyncio
@@ -235,9 +232,7 @@ async def test_a_successful_call_does_not_rewrite_the_endpoint_table(tmp_path) -
         writes.append(provider) or 0
     )
     for _ in range(3):
-        await router.dispatch(
-            component="coder", requirements=requirements_from(needs_tools=True), call_fn=_call
-        )
+        await router.dispatch(component="coder", requirements=requirements_from(needs_tools=True), call_fn=_call)
     assert writes == []
 
 
@@ -251,9 +246,7 @@ async def test_entitlement_is_persisted_when_a_restricted_account_starts_working
     router._availability.entitlements.needs_billing("opencode_zen", "no payment method")  # noqa: SLF001
     router._availability.entitlements._paid["opencode_zen"].until = None  # noqa: SLF001
 
-    await router.dispatch(
-        component="coder", requirements=requirements_from(needs_tools=True), call_fn=_call
-    )
+    await router.dispatch(component="coder", requirements=requirements_from(needs_tools=True), call_fn=_call)
     assert ("openrouter", "OK") not in writes  # a different provider is untouched
 
 
@@ -298,9 +291,7 @@ async def test_a_slow_model_loses_its_place_to_a_quicker_one(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_a_slow_model_still_runs_when_it_is_the_only_one_left(tmp_path) -> None:
     """Ranking, never filtering. Being slow here is not being unusable."""
-    router, _providers, _decisions, _timings = _speed_router(
-        tmp_path, {"claude-fable-5-1", "claude-opus-5", "glm-5-2"}
-    )
+    router, _providers, _decisions, _timings = _speed_router(tmp_path, {"claude-fable-5-1", "claude-opus-5", "glm-5-2"})
 
     result = await router.dispatch(
         component="coder",

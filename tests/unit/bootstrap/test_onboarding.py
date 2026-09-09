@@ -212,11 +212,13 @@ async def test_extract_facts_cleans_dict_payload(tmp_path: Path) -> None:
     path = tmp_path / "notes.txt"
     path.write_text("content", encoding="utf-8")
     router = _FakeRouter(
-        {"facts": [
-            {"content": "User A", "subject": "user", "confidence": 0.9},
-            {"content": "User B", "subject": "user", "confidence": 0.8},
-            {"content": "User C", "subject": "user", "confidence": 0.7},
-        ]}
+        {
+            "facts": [
+                {"content": "User A", "subject": "user", "confidence": 0.9},
+                {"content": "User B", "subject": "user", "confidence": 0.8},
+                {"content": "User C", "subject": "user", "confidence": 0.7},
+            ]
+        }
     )
     result = await _extract_facts(path, router)
     assert len(result) == 3
@@ -237,10 +239,14 @@ async def test_extract_facts_strips_markdown_fences(tmp_path: Path) -> None:
 
     # With structured output (response_schema), providers don't wrap in markdown fences.
     # This test verifies the new behavior works correctly - no fence stripping needed.
-    router = _FakeRouter({"facts": [
-        {"content": "User fact one", "subject": "user", "confidence": 0.9},
-        {"content": "User fact two", "subject": "user", "confidence": 0.8},
-    ]})
+    router = _FakeRouter(
+        {
+            "facts": [
+                {"content": "User fact one", "subject": "user", "confidence": 0.9},
+                {"content": "User fact two", "subject": "user", "confidence": 0.8},
+            ]
+        }
+    )
     result = await _extract_facts(path, router)
     assert len(result) == 2
     assert result[0]["content"] == "User fact one"
@@ -523,20 +529,32 @@ def test_rank_prefers_dense_small_files_over_huge_labs() -> None:
     home = _P.home()
     resume = home / "Documents" / "resume.md"
     lab = home / "Documents" / "lab05_complex.pdf"
+
     # Use monkeypatched-free comparison via stub files' attributes only.
     class _Stub:
         def __init__(self, p: _P, size: int) -> None:
             self._p = p
             self._size = size
-        def resolve(self): return self._p
+
+        def resolve(self):
+            return self._p
+
         @property
-        def suffix(self): return self._p.suffix
+        def suffix(self):
+            return self._p.suffix
+
         @property
-        def stem(self): return self._p.stem
-        def stat(self): 
+        def stem(self):
+            return self._p.stem
+
+        def stat(self):
             import os
-            return os.stat_result((0,0,0,0,0,0,self._size,0,0,0))
-        def relative_to(self, other): return self._p.relative_to(other)
+
+            return os.stat_result((0, 0, 0, 0, 0, 0, self._size, 0, 0, 0))
+
+        def relative_to(self, other):
+            return self._p.relative_to(other)
+
     r_resume = _rank_file(_Stub(resume, 200), "documents")
     r_lab = _rank_file(_Stub(lab, 3_000_000), "documents")
     # Lower tuple = higher priority.
@@ -592,15 +610,25 @@ def test_token_boundary_prevents_substring_false_positives() -> None:
         def __init__(self, p: Path, size: int = 1000) -> None:
             self._p = p
             self._size = size
-        def resolve(self): return self._p
+
+        def resolve(self):
+            return self._p
+
         @property
-        def suffix(self): return self._p.suffix
+        def suffix(self):
+            return self._p.suffix
+
         @property
-        def stem(self): return self._p.stem
+        def stem(self):
+            return self._p.stem
+
         def stat(self):
             import os
+
             return os.stat_result((0, 0, 0, 0, 0, 0, self._size, 0, 0, 0))
-        def relative_to(self, other): return self._p.relative_to(other)
+
+        def relative_to(self, other):
+            return self._p.relative_to(other)
 
     rank_recv = _rank_file(_Stub(recv_file), "downloads", user_tokens=set())
     rank_cv = _rank_file(_Stub(cv_file), "downloads", user_tokens=set())
@@ -621,15 +649,25 @@ def test_user_identity_boosts_user_named_resumes() -> None:
         def __init__(self, p: Path, size: int = 1000) -> None:
             self._p = p
             self._size = size
-        def resolve(self): return self._p
+
+        def resolve(self):
+            return self._p
+
         @property
-        def suffix(self): return self._p.suffix
+        def suffix(self):
+            return self._p.suffix
+
         @property
-        def stem(self): return self._p.stem
+        def stem(self):
+            return self._p.stem
+
         def stat(self):
             import os
+
             return os.stat_result((0, 0, 0, 0, 0, 0, self._size, 0, 0, 0))
-        def relative_to(self, other): return self._p.relative_to(other)
+
+        def relative_to(self, other):
+            return self._p.relative_to(other)
 
     user_tokens = {"kushagra", "bainsla"}
     rank_user_file = _rank_file(_Stub(user_file), "downloads", user_tokens=user_tokens)
@@ -640,9 +678,7 @@ def test_user_identity_boosts_user_named_resumes() -> None:
     assert rank_user_file < rank_generic
 
 
-async def test_bootstrap_pauses_without_marker_on_rate_limit(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_bootstrap_pauses_without_marker_on_rate_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """When models fail or are rate-limited, bootstrap must NOT mark done."""
     from inference.exceptions import AllModelsRateLimitedError
 
@@ -688,4 +724,3 @@ def test_survey_caps_repeated_versions_of_one_document(tmp_path: Path) -> None:
 
     assert [item.family for item in report.kept] == ["resume", "resume"]
     assert report.drop_reasons["surplus resume"] == 5
-

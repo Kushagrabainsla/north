@@ -113,11 +113,15 @@ class _MultiModelProvider:
 async def test_json_ignoring_model_is_skipped(tmp_path):
     # 'bad' ranks first but returns a <thought> trace instead of JSON; 'good' returns JSON.
     bad = _FakeProvider(
-        "bad-provider", "claude-opus-4-8", quality=0.99,
+        "bad-provider",
+        "claude-opus-4-8",
+        quality=0.99,
         responder=lambda m, r: _resp("<thought>not json</thought>", m),
     )
     good = _FakeProvider(
-        "good-provider", "gpt-oss-20b", quality=0.5,
+        "good-provider",
+        "gpt-oss-20b",
+        quality=0.5,
         responder=lambda m, r: _resp('{"ok": true}', m),
     )
     disp = _ready([bad, good], tmp_path)

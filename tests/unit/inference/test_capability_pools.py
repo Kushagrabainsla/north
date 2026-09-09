@@ -145,12 +145,20 @@ async def test_a_pool_name_now_only_orders_the_chain(tmp_path):
     change from pools, where asking for speed meant a different, smaller list.
     """
     strong = _make_info(
-        "claude-opus-5", "zen", frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
-        quality=0.95, cost=1e-5, ctx=400_000,
+        "claude-opus-5",
+        "zen",
+        frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
+        quality=0.95,
+        cost=1e-5,
+        ctx=400_000,
     )
     cheap = _make_info(
-        "groq-compound-mini", "groq", frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
-        quality=0.40, cost=0.0, ctx=400_000,
+        "groq-compound-mini",
+        "groq",
+        frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
+        quality=0.40,
+        cost=0.0,
+        ctx=400_000,
     )
 
     disp = ModelDispatcher(

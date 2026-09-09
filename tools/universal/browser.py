@@ -276,6 +276,7 @@ _ACTION_ARGUMENT_BUILDERS: dict[str, Callable[[dict[str, Any]], list[str]]] = {
     "status": _status_args,
 }
 
+
 class _ChromeAgentError(RuntimeError):
     """The chrome-agent process could not be started, or did not finish in time."""
 
@@ -445,6 +446,7 @@ def _format_article(article: dict[str, Any]) -> str:
 def _format_assertion(data: dict[str, Any]) -> str:
     outcome = "PASS" if data.get("held", True) else "FAIL"
     return f"Assertion [{outcome}]: {json.dumps(data)}"
+
 
 class BrowserTool(Tool):
     """Automate Chrome and extract structured web data via Chrome DevTools Protocol."""

@@ -1,12 +1,19 @@
-"""Judgement Rules Filter - pre-screens cards against learned rules.
+"""Judgement Rules Filter - what the user's learned rules say about a card.
 
-Before any card reaches the Notifier, this filter reads judgement_rules.md
-and asks a fast LLM whether an existing rule clearly covers the situation.
-Confidence >= 0.8 triggers an automatic decision (approved / rejected /
-answered); anything below surfaces the card to the user as normal.
+Reads judgement_rules.md and asks a fast LLM whether an existing rule clearly
+covers the situation. Confidence >= 0.8 produces an answer; anything below
+abstains and the card goes to the user as normal.
 
-High-stakes APPROVAL cards from specific agents are never auto-resolved
-regardless of confidence - the user always gets to see them.
+This is *one tier of* the approval decision, not the decision. For an action,
+``ApprovalPolicy`` calls ``advise`` last and only in ``auto`` and above - this
+module no longer reads the approval mode, replays learned decisions, or knows
+about the safe subset. It used to do all three, in a copy that had drifted from
+the tools' copies, and its own tier had no mode check at all.
+
+``check`` still answers QUESTION cards directly, because a question is not an
+action and the policy has nothing to say about it.
+
+High-stakes agents are never auto-approved here regardless of confidence.
 
 See README Sections 9.4 and 9.5.
 """
@@ -17,8 +24,10 @@ import logging
 from collections.abc import Callable
 
 from approval.approval_memory import ApprovalMemory
-from approval.mode import ApprovalMode, approve_option
+from approval.interaction import APPROVAL_DEFAULT_OPTIONS
+from approval.mode import ApprovalMode
 from approval.models import Card, CardType
+from approval.policy import Action
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from memory import ContextDocument, MemoryGateway
@@ -58,42 +67,43 @@ class JudgementFilter:
         self._inference_router = inference_router
         self._approval_memory = approval_memory
         self._mode_provider = mode_provider
+        self._last_rule = ""
 
     def _mode(self) -> ApprovalMode:
         return self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
 
+    async def advise(self, action: Action) -> tuple[str | None, str]:
+        """The learned judgement rules' opinion on *action*, for `ApprovalPolicy`.
+
+        One tier of the decision, not the decision. The policy calls this last
+        and only in `auto` and above; it used to be reached in every mode, which
+        is how a model came to approve actions in `interactive`.
+
+        Returns ("approved"|"rejected", rule) or (None, "") to abstain.
+        """
+        card = Card(
+            id="",
+            type=CardType.APPROVAL,
+            task_id="",
+            agent=action.agent,
+            title=action.summary,
+            message=action.describe(),
+            options=list(APPROVAL_DEFAULT_OPTIONS),
+        )
+        decision, _ = await self.check(card)
+        return decision, self._last_rule
+
     async def check(self, card: Card) -> tuple[str | None, str]:
         """Return (decision, chosen_option) or (None, '') if nothing fires.
 
-        The approval mode decides how much is resolved without a human:
-        - ``autonomous``: every permission card is approved (the mode is the only
-          authority; the tools' own refusals are lifted separately).
-        - ``auto``: a card that reaches here is outside the deterministic safe
-          subset, so it is resolved from the user's *learned* prior decisions -
-          approve/reject what they decided before, otherwise surface it to ask
-          (and the answer is recorded, so ``auto`` learns over time).
-        - ``interactive``: no auto-resolution beyond the existing learned rules.
-
-        QUESTION cards are never auto-answered; only permission cards.
+        Consults only the learned judgement rules, via a model. The approval
+        mode, the deterministic safe subset, and the user's replayed decisions
+        all live in `approval/policy.py` now - keeping a second copy here is how
+        the two drifted apart, one of them without a mode check.
         """
         # INFORMATION cards never need filtering - they carry no decision.
         if card.type == CardType.INFORMATION:
             return None, ""
-
-        if card.type == CardType.APPROVAL:
-            mode = self._mode()
-            if mode == ApprovalMode.AUTONOMOUS:
-                logger.info("Autonomous: auto-approving card %s from %r", card.id, card.agent)
-                return "approved", approve_option(card.options)
-            if mode == ApprovalMode.AUTO and self._approval_memory is not None:
-                recalled = self._approval_memory.recall(card.agent, card.message)
-                if recalled == "approved":
-                    logger.info("Auto: replaying prior approval for card %s (%r)", card.id, card.agent)
-                    return "approved", approve_option(card.options)
-                if recalled == "rejected":
-                    logger.info("Auto: replaying prior rejection for card %s (%r)", card.id, card.agent)
-                    return "rejected", ""
-                # Unknown action in auto mode: fall through to surface it (ask).
 
         rules = await self._memory.read_document(ContextDocument.JUDGEMENT_RULES)
         preferences = ""
@@ -138,6 +148,7 @@ class JudgementFilter:
         confidence = float(result.get("confidence", 0.0))
         chosen_option = str(result.get("chosen_option", ""))
         rule = result.get("rule", "")
+        self._last_rule = rule
 
         if decision == "none" or confidence < _AUTO_CONFIDENCE_THRESHOLD:
             return None, ""

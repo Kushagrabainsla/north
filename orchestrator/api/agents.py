@@ -62,8 +62,6 @@ async def run_agent(request: AgentRunRequest) -> TaskResponse:
     )
 
 
-
-
 class AgentCreateRequest(BaseModel):
     name: str
     domain: str
@@ -102,5 +100,3 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
         )
     )
     return AgentCreateResponse(name=body.name, system_prompt=result.text)
-
-

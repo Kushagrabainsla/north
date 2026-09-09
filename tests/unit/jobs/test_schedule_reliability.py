@@ -154,6 +154,4 @@ async def test_a_cancelled_scheduled_task_is_not_retried() -> None:
 async def test_a_task_still_running_at_the_timeout_is_left_alone() -> None:
     """north cannot tell slow from stuck, and retrying a slow one runs it twice."""
     orchestrator = _FakeOrchestrator(["running"] * 5)
-    await _run_scheduled_task(
-        orchestrator, "[scheduled] brief", poll_seconds=0, timeout_seconds=0.05
-    )
+    await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0, timeout_seconds=0.05)

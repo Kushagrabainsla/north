@@ -54,10 +54,13 @@ async def test_payment_required_does_not_mark_provider_down(tmp_path):
         cost_per_token=0.0,
         base_quality=0.35,
     )
-    provider = MockProvider("openrouter", {
-        "openrouter/paid-model": paid_info,
-        "openrouter/free-model": free_info,
-    })
+    provider = MockProvider(
+        "openrouter",
+        {
+            "openrouter/paid-model": paid_info,
+            "openrouter/free-model": free_info,
+        },
+    )
 
     dispatcher = _dispatcher([provider], tmp_path)
     req = CompletionRequest(prompt="test", component="test", priority=PoolPriority.HIGH)
@@ -97,9 +100,7 @@ async def test_generic_inference_error_recorded_as_status_error(tmp_path):
     with pytest.raises(AllModelsRateLimitedError):
         await dispatcher.complete(req)
     status = dispatcher.rate_limit_status()
-    assert any(
-        r["kind"] == "error" and r["model"] == "openrouter/flaky-model" for r in status
-    )
+    assert any(r["kind"] == "error" and r["model"] == "openrouter/flaky-model" for r in status)
 
 
 @pytest.mark.asyncio

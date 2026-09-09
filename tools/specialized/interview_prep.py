@@ -202,12 +202,14 @@ class InterviewPrepTool(Tool):
         research = _load_json("research.json")
         if "companies" not in research:
             research["companies"] = []
-        research["companies"].append({
-            "company": company,
-            "role": role,
-            "created_at": datetime.now().isoformat(),
-            "status": "framework_generated",
-        })
+        research["companies"].append(
+            {
+                "company": company,
+                "role": role,
+                "created_at": datetime.now().isoformat(),
+                "status": "framework_generated",
+            }
+        )
         _save_json("research.json", research)
 
         return {"brief": brief, "company": company, "role": role}
@@ -324,11 +326,13 @@ class InterviewPrepTool(Tool):
         data = _load_json("followups.json")
         if "emails" not in data:
             data["emails"] = []
-        data["emails"].append({
-            "company": company,
-            "role": role,
-            "drafted_at": datetime.now().isoformat(),
-        })
+        data["emails"].append(
+            {
+                "company": company,
+                "role": role,
+                "drafted_at": datetime.now().isoformat(),
+            }
+        )
         _save_json("followups.json", data)
 
         return {"email": email, "company": company, "role": role}

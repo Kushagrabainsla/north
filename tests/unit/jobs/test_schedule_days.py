@@ -155,9 +155,7 @@ async def test_a_single_day_row_written_before_sets_still_reads(tmp_path) -> Non
             " task TEXT NOT NULL, hour INTEGER NOT NULL, minute INTEGER NOT NULL,"
             " weekday INTEGER, created_at DATETIME)"
         )
-        conn.execute(
-            "INSERT INTO user_cron_entries VALUES ('user_old', 'general', 'water', 15, 0, 2, NULL)"
-        )
+        conn.execute("INSERT INTO user_cron_entries VALUES ('user_old', 'general', 'water', 15, 0, 2, NULL)")
 
     store = UserCronStore(db)
     (row,) = await store.list()
@@ -265,8 +263,15 @@ def test_an_override_without_a_name_inherits_the_shipped_one() -> None:
     from jobs.scheduler import V1_CRON_ENTRIES, merge_entries
 
     row = {
-        "name": "task_context_cleanup", "agent": "system", "task": "task_context_cleanup",
-        "hour": 3, "minute": 0, "weekdays": None, "tz": "UTC", "enabled": True, "label": "",
+        "name": "task_context_cleanup",
+        "agent": "system",
+        "task": "task_context_cleanup",
+        "hour": 3,
+        "minute": 0,
+        "weekdays": None,
+        "tz": "UTC",
+        "enabled": True,
+        "label": "",
     }
     merged = {e.name: e for e in merge_entries(list(V1_CRON_ENTRIES), [row])}
     assert merged["task_context_cleanup"].title == "Nightly cleanup"
@@ -277,8 +282,14 @@ def test_an_override_that_was_renamed_keeps_its_own_name() -> None:
     from jobs.scheduler import V1_CRON_ENTRIES, merge_entries
 
     row = {
-        "name": "news_daily_briefing", "agent": "news_briefing", "task": "brief me",
-        "hour": 7, "minute": 0, "weekdays": None, "tz": "UTC", "enabled": True,
+        "name": "news_daily_briefing",
+        "agent": "news_briefing",
+        "task": "brief me",
+        "hour": 7,
+        "minute": 0,
+        "weekdays": None,
+        "tz": "UTC",
+        "enabled": True,
         "label": "My morning news",
     }
     merged = {e.name: e for e in merge_entries(list(V1_CRON_ENTRIES), [row])}
