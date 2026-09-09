@@ -4,4 +4,8 @@
 # surfaced via slash commands (/power, /autonomy) and `north config`,
 # not the general chat agent, so free-text tasks mentioning dial names
 # (e.g. "switch to sport") are answered, not interpreted as config edits.
-tools: []
+tools:
+  # Inherited from the `job` agent directory, which was scaffolded but never
+  # built (no config.yaml, no agent.py) and so was never registered. The tool
+  # works; only the agent around it was missing.
+  - interview_prep

@@ -22,7 +22,7 @@ You will receive:
 | Research a topic (non-code) | `general` | "compare React vs Vue", "latest AI trends" |
 | Get news/headlines | `news_briefing` | "what's happening today", "AI news" |
 | Work out, eat healthy, track fitness | `wellness` | "chest exercises", "calories in banana" |
-| Prepare for interview | `job` | "STAR story", "company research" |
+| Prepare for interview | `general` | "STAR story", "company research" |
 | Control smart home devices | `home` | "turn on lights", "set thermostat" |
 | Write/draft something | `general` | "draft an email", "write a cover letter" |
 | Plan/organize something | `general` | "meal plan", "weekly schedule" |

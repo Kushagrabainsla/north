@@ -13,7 +13,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,7 +35,7 @@ from agents.context_compaction import (
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.reasoning import ReasoningStreamSplitter, strip_reasoning
-from agents.schemas import ASK_USER_SCHEMA, DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA
+from agents.schemas import ASK_USER_SCHEMA, REQUEST_APPROVAL_SCHEMA, delegate_task_schema
 from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface_card
 from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
@@ -84,7 +84,7 @@ MAX_UNANSWERED_APPROVALS = 2
 _SUMMARY_CHARS = 120
 
 
-def _tool_schemas(tool_map: dict[str, Tool], *, allow_delegation: bool) -> list[dict]:
+def _tool_schemas(tool_map: dict[str, Tool], *, allow_delegation: bool, agent_names: Sequence[str] = ()) -> list[dict]:
     """Every tool definition sent to the model this turn.
 
     Sorted by name, not by confidence. Tool definitions are the largest stable
@@ -93,10 +93,14 @@ def _tool_schemas(tool_map: dict[str, Tool], *, allow_delegation: bool) -> list[
     between runs and threw the cache away. The ranking still reaches the model,
     as text, in the reliability hints at the end of the task message where it
     costs nothing.
+
+    `agent_names` is sorted for the same reason: the registry returns insertion
+    order, which would reorder the delegation schema between runs and cost the
+    cached prefix that sorting the tools above exists to protect.
     """
     internal = [REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
     if allow_delegation:
-        internal.insert(0, DELEGATE_TASK_SCHEMA)
+        internal.insert(0, delegate_task_schema(sorted(agent_names)))
     return [tool_map[name].schema() for name in sorted(tool_map)] + internal
 
 
@@ -148,6 +152,7 @@ def _append_once(seen: list[str], value: str) -> None:
     """Keep first-seen order without a parallel set to go stale."""
     if value not in seen:
         seen.append(value)
+
 
 class AgenticLLMAgent(LLMAgent):
     """LLMAgent that runs a ReAct loop via native function calling.
@@ -420,7 +425,11 @@ class AgenticLLMAgent(LLMAgent):
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
             _sync_hot_loaded_tools(self._deps, self.name, tool_map, known_registry_tools)
-            tools = _tool_schemas(tool_map, allow_delegation=payload.allow_delegation)
+            tools = _tool_schemas(
+                tool_map,
+                allow_delegation=payload.allow_delegation,
+                agent_names=self._delegatable_agent_names(),
+            )
             token_cb = self._make_token_callback(payload.task_id)
 
             try:
@@ -456,9 +465,7 @@ class AgenticLLMAgent(LLMAgent):
 
             for call in response.calls:
                 tally.note_call(call.name)
-            evidence, unanswered = await self._handle_tool_calls_response(
-                response.calls, payload, tool_map, messages
-            )
+            evidence, unanswered = await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
             for name, success in evidence:
                 if success:
                     tally.note_success(name)
@@ -636,10 +643,12 @@ class AgenticLLMAgent(LLMAgent):
             return call, result_str, success, []
         if call.name == "request_approval":
             decision = await self._request_approval(payload, params)
-            result_str = json.dumps({
-                "decision": decision,
-                "unanswered": decision == ApprovalDecision.TIMEOUT_REJECTED,
-            })
+            result_str = json.dumps(
+                {
+                    "decision": decision,
+                    "unanswered": decision == ApprovalDecision.TIMEOUT_REJECTED,
+                }
+            )
             return call, result_str, not _is_rejection(decision), []
         if call.name == "ask_user":
             result_str = await self._ask_user(payload, params)
@@ -705,6 +714,22 @@ class AgenticLLMAgent(LLMAgent):
             f"## Context\n{background or '(none)'}\n\n"
             f"## Tool reliability hints\n{reliability_lines or '(none)'}\n"
         )
+
+    def _delegatable_agent_names(self) -> list[str]:
+        """The agents `delegate_task` may name, from the live registry.
+
+        Empty when there is no registry, which makes the schema say only that
+        the caller must use a registered agent. Advertising a guess here is what
+        this replaced: four invented names that raised on use.
+        """
+        registry = self._deps.agent_registry
+        if registry is None:
+            return []
+        try:
+            return list(registry.names())
+        except Exception:
+            logger.warning("Could not read agent names for delegate_task schema", exc_info=True)
+            return []
 
     def _make_token_callback(self, task_id: str) -> Callable[[str], Awaitable[None]] | None:
         if self._deps.stream_manager is None or not task_id:
