@@ -445,7 +445,7 @@ function ConfirmRow({ question, confirmLabel, onConfirm, onCancel, busy }: {
 // change it: the row says what it is for, and "Details" opens the whole
 // definition. Listing these among the user's own routines made north's own
 // housekeeping look like something they had set up and forgotten.
-function BuiltinRow({ entry, restore }: { entry: Cron; restore?: ReactNode }) {
+function BuiltinRow({ entry, restore, confirm }: { entry: Cron; restore?: ReactNode; confirm?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const facts: [string, string][] = [
     ["Runs", entry.task],
@@ -470,13 +470,17 @@ function BuiltinRow({ entry, restore }: { entry: Cron; restore?: ReactNode }) {
         {facts.map(([term, value]) => <div key={term}><dt>{term}</dt><dd>{value}</dd></div>)}
       </dl>}
     </div>
+    {/* Both actions in one cluster. "Restore default" used to sit on its own
+        full-width line under the description, which read as unrelated to the
+        row it belongs to and left a gap the eye had to cross. */}
     <div className="schedule-actions">
       <span className="schedule-locked">built-in</span>
+      {restore}
       <button className="ghost-button" aria-expanded={open} onClick={() => setOpen(!open)}>
         {open ? "Hide" : "Details"}
       </button>
     </div>
-    {restore}
+    {confirm}
   </div>;
 }
 
@@ -660,17 +664,16 @@ export function Schedule() {
         would otherwise be stranded with no way back to the shipped values. */}
     <Panel title="Built into north" label="read-only">
       {cron.loading ? <Loading/> : builtins.length ? builtins.map(entry =>
-        <BuiltinRow key={entry.name} entry={entry} restore={entry.modified && (
-          confirming === entry.name
-            ? <div className="schedule-restore">
-                <ConfirmRow busy={busy} onCancel={() => setConfirming("")} onConfirm={() => removeOrRestore(entry)}
-                  question="Put this back to the settings north ships with?" confirmLabel="Restore"/>
-              </div>
-            : <div className="schedule-restore">
-                <button className="ghost-button" onClick={() => setConfirming(entry.name)} disabled={busy}>
-                  Restore default
-                </button>
-              </div>)}/>
+        <BuiltinRow key={entry.name} entry={entry}
+          restore={entry.modified && confirming !== entry.name && (
+            <button className="ghost-button" onClick={() => setConfirming(entry.name)} disabled={busy}>
+              Restore default
+            </button>)}
+          confirm={entry.modified && confirming === entry.name && (
+            <div className="schedule-restore">
+              <ConfirmRow busy={busy} onCancel={() => setConfirming("")} onConfirm={() => removeOrRestore(entry)}
+                question="Put this back to the settings north ships with?" confirmLabel="Restore"/>
+            </div>)}/>
       ) : <Empty>North has no built-in schedules.</Empty>}
     </Panel>
 
@@ -1017,7 +1020,7 @@ export function SettingsPage() {
     {error && <ErrorNotice message={error}/>}
     <div className="settings-grid">
       <Panel title="Model routing" label="Who picks">
-        <div className="segmented two">
+        <div className="segmented">
           <button className={!manual && !choosing ? "active" : ""} disabled={busy}
             onClick={() => { setChoosing(false); update({ routing: "auto" }); }}>auto</button>
           <button className={manual || choosing ? "active" : ""} disabled={busy} onClick={pickManual}>manual</button>
