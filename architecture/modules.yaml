@@ -1,0 +1,191 @@
+version: 1
+status: transitional
+
+# This catalog describes current paths. It is intentionally independent of the
+# future src/north layout so import and edit boundaries can be enforced before
+# any mechanical package migration.
+principles:
+  - Modules may depend only inward, toward lower layers, except for explicit temporary exemptions.
+  - A coding task must name permitted modules and paths before it mutates source.
+  - Protected modules cannot be widened, disabled, or edited by an agent without explicit user approval.
+  - New exceptions require an ADR, an expiry/removal stage, and tests.
+
+layers:
+  platform:
+    may_import: []
+  intelligence:
+    may_import: [platform]
+  application:
+    may_import: [platform, intelligence]
+  integrations:
+    may_import: [platform, intelligence]
+  interfaces:
+    may_import: [platform, intelligence, application]
+  composition:
+    may_import: [platform, intelligence, application, integrations, interfaces]
+
+modules:
+  platform.config:
+    paths: [config/**]
+    excludes: [config/dependencies.py]
+    layer: platform
+    owner: platform
+    editable_by: [coder]
+    public_contracts: [NORTH_* environment variables, settings.toml]
+    validation: [tests/unit/config, tests/unit/utils/test_security_*.py]
+
+  platform.ledger:
+    paths: [ledger/**]
+    layer: platform
+    owner: platform
+    editable_by: [coder]
+    public_contracts: [LedgerWriter, LedgerEntry, SQLite persistence]
+    validation: [tests/unit/ledger]
+
+  platform.common:
+    paths: [utils/**, exceptions.py]
+    layer: platform
+    owner: platform
+    editable_by: [coder]
+    public_contracts: [shared utility functions]
+    validation: [tests/unit/utils]
+
+  intelligence.inference:
+    paths: [inference/**]
+    layer: intelligence
+    owner: intelligence
+    editable_by: [coder]
+    public_contracts: [InferenceRouter, provider authentication, model routing]
+    validation: [tests/unit/inference]
+
+  intelligence.memory:
+    paths: [memory/**]
+    layer: intelligence
+    owner: intelligence
+    editable_by: [coder]
+    public_contracts: [ContextStore, MemoryGateway, user data migrations]
+    validation: [tests/unit/context/test_*store*.py, tests/unit/context/test_fact_store.py]
+
+  intelligence.workspace_context:
+    paths: [context/**]
+    layer: intelligence
+    owner: intelligence
+    editable_by: [coder]
+    public_contracts: [workspace instructions, code index, LSP integration]
+    validation: [tests/unit/context]
+
+  intelligence.skills:
+    paths: [skills/**]
+    layer: intelligence
+    owner: intelligence
+    editable_by: [coder]
+    public_contracts: [SkillRegistry, skill file format]
+    validation: [tests/unit/skills]
+
+  application.orchestration:
+    paths: [orchestrator/**]
+    excludes: [orchestrator/app.py]
+    layer: application
+    owner: runtime
+    editable_by: [coder]
+    public_contracts: [task lifecycle, execution plans, event stream]
+    validation: [tests/unit/orchestrator, tests/integration/test_orchestrator.py]
+
+  application.agents:
+    paths: [agents/**]
+    layer: application
+    owner: runtime
+    editable_by: [coder]
+    public_contracts: [agent configuration, discovery, delegation]
+    validation: [tests/unit/agents, tests/integration/agents]
+
+  application.approval:
+    paths: [approval/**]
+    layer: application
+    owner: safety
+    editable_by: [coder]
+    protected: true
+    public_contracts: [approval cards, unattended policy, decision persistence]
+    validation: [tests/unit/approval, tests/unit/tools/test_*safety.py, tests/unit/tools/test_git_gh_gates.py]
+
+  application.jobs:
+    paths: [jobs/**, bootstrap/**]
+    layer: application
+    owner: runtime
+    editable_by: [coder]
+    public_contracts: [scheduled jobs, cron data, onboarding]
+    validation: [tests/unit/jobs, tests/unit/bootstrap]
+
+  integrations.tools:
+    paths: [tools/**]
+    layer: integrations
+    owner: integrations
+    editable_by: [coder]
+    protected: true
+    public_contracts: [tool discovery, tool schemas, mutation guards]
+    validation: [tests/unit/tools]
+
+  integrations.gateways:
+    paths: [gateways/**, mcp/**]
+    layer: integrations
+    owner: integrations
+    editable_by: [coder]
+    public_contracts: [Telegram and MCP integrations]
+    validation: [tests/unit/gateways, tests/unit/mcp]
+
+  interfaces.cli:
+    paths: [cli/**]
+    layer: interfaces
+    owner: developer_experience
+    editable_by: [coder]
+    public_contracts: [north command names and options]
+    validation: [tests/unit/cli]
+
+  interfaces.web:
+    paths: [web/api.py, web/conversations.py, web/__init__.py, web/src/**, web/dist/**, web/index.html, web/package.json, web/package-lock.json, web/tsconfig*.json, web/vite.config.ts]
+    layer: interfaces
+    owner: developer_experience
+    editable_by: [coder]
+    public_contracts: [HTTP cockpit routes, browser UI]
+    validation: [tests/unit/web, web:npm-test, web:npm-build]
+
+  composition.app:
+    paths: [orchestrator/app.py, config/dependencies.py]
+    layer: composition
+    owner: platform
+    editable_by: [coder]
+    protected: true
+    public_contracts: [server startup, dependency assembly]
+    validation: [tests/integration/test_app_boots.py, tests/unit/orchestrator/test_health_api.py]
+
+  architecture:
+    paths: [architecture/**, docs/adr/**, docs/refactor/**, docs/MODULES.md]
+    layer: composition
+    owner: architecture
+    editable_by: []
+    protected: true
+    public_contracts: [module boundaries, architectural decisions, refactor status]
+    validation: [architecture:manifest, architecture:markdown-links]
+
+  safety_policy:
+    paths: [policies/safety.md, policies/clean-code.md, SECURITY.md]
+    layer: composition
+    owner: safety
+    editable_by: []
+    protected: true
+    public_contracts: [binding safety and security policy]
+    validation: [tests/unit/agents/test_policy.py, tests/unit/tools/test_*safety.py]
+
+temporary_exemptions:
+  - from: application.orchestration
+    to: integrations.tools
+    reason: Orchestration currently constructs and invokes concrete tools; Stage 3 and Stage 4 replace this with composition-root wiring and injected ports.
+    removal_stage: 4
+  - from: integrations.tools
+    to: application.orchestration
+    reason: UpdatePlanTool imports PlanStore directly; Stage 4 replaces this dependency with an injected port.
+    removal_stage: 4
+  - from: platform.config
+    to: application.orchestration
+    reason: Existing type-only and dependency wiring references remain while composition wiring moves to the app layer.
+    removal_stage: 3
