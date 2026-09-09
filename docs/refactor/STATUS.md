@@ -37,7 +37,7 @@ This ledger is the durable execution record for [the approved refactor program](
 |---|---|---|---|---|
 | Load and validate module contracts in code | Complete | `640fc64` | Targeted pytest — 3 passed; full pytest — 1,959 passed, 3 skipped; ruff format/check; mypy — no issues in 2 files | `architecture.contracts` resolves sole ownership and protects the manifest from malformed contracts. |
 | Enforce dependency direction with AST tests | Complete | `0bfd003` | Architecture pytest — 6 passed; full pytest — 1,962 passed, 3 skipped; ruff format/check; mypy — no issues in 3 files | AST analysis rejects new cross-module layer violations while `architecture/import-baseline.txt` makes 27 existing forbidden pairs explicit for staged removal. |
-| Define fail-closed task edit-scope policy | Ready to commit | Pending | Pending targeted regression tests | `TaskEditScope` will authorize ordinary module/path edits and require an explicit user-authorized path for protected modules. |
+| Define fail-closed task edit-scope policy | Complete | `37302e2` | Targeted pytest — 3 passed; full pytest — 1,965 passed, 3 skipped; ruff format/check; mypy — no issues in 4 files | `TaskEditScope` authorizes ordinary module/path edits and requires an explicit user-authorized path for protected modules. |
 | Enforce task edit scopes in source-mutating tools | Not started | — | — | Must fail closed outside an approved module/path scope. |
 
 ## Stages 1–8
