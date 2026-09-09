@@ -403,3 +403,14 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
 .dialog-actions .primary-button { background: var(--accent); color: #11170b; border-color: var(--accent); font-weight: 700; }
 .dialog-actions .danger-button { color: var(--red); border-color: rgba(226,122,110,.4); }
 .dialog-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* A chain: the models north would try for one part, in walk order. */
+.chain-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 10px; }
+.chain-row:last-child { border-bottom: 0; }
+.chain-rank { color: var(--faint); font: 9px "DM Mono", monospace; }
+.chain-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chain-meta { color: var(--muted); font: 9px "DM Mono", monospace; text-align: right; }
+/* A rung north would walk past right now - still listed, because "why did it
+   use the fourth one?" is answered by seeing the three above it skipped. */
+.chain-skipped b, .chain-skipped .chain-meta { opacity: .45; }
+.chain-why { grid-column: 2 / -1; color: var(--amber); font: 9px "DM Mono", monospace; font-style: normal; }

@@ -96,6 +96,9 @@ class CostTracker(InferenceRouter):
     def current_pools(self) -> dict[str, ModelPool]:
         return self._inner.current_pools()
 
+    def part_chains(self, limit: int = 6) -> list[dict]:
+        return self._inner.part_chains(limit)
+
     def get_context_window(self, model_id: str) -> int:
         return self._inner.get_context_window(model_id)
 

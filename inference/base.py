@@ -74,6 +74,15 @@ class InferenceRouter(ABC):
         """
         return ""
 
+    def part_chains(self, limit: int = 6) -> list[dict]:
+        """The models this router would try for each part of a task, in order.
+
+        Concrete with an empty default rather than abstract: a router that does
+        not route by chains has nothing to say here, and should not be forced to
+        implement a stub. Callers get a list either way.
+        """
+        return []
+
     def get_context_window(self, model_id: str) -> int:
         """Return the published context window (in tokens) for model_id from the live registry."""
         return 128_000

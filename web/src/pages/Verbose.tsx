@@ -970,6 +970,16 @@ export function Insights() {
   return <div className="page"><PageHeader eyebrow="Performance" title="Insights" subtitle="Usage, cost, reliability, and model availability."/><div className="metric-cards"><div><span>Tasks · 30 days</span><strong>{metrics.data?.total_tasks || 0}</strong></div><div><span>Input tokens</span><strong>{Number(metrics.data?.total_tokens_in || 0).toLocaleString()}</strong></div><div><span>Output tokens</span><strong>{Number(metrics.data?.total_tokens_out || 0).toLocaleString()}</strong></div><div><span>Model cost</span><strong>${Number(costs.data?.total_cost_usd || 0).toFixed(4)}</strong></div></div><div className="two-column"><Panel title="Cost by model">{Object.entries(costs.data?.by_model || {}).map(([name,value]) => <div className="list-row" key={name}><b>{name}</b><span>${Number(value).toFixed(4)}</span></div>)}</Panel><Panel title="Model pools">{Object.entries(models.data || {}).map(([name, pool]: [string, any]) => <div className="list-row" key={name}><div><b>{name}</b><small>{pool.models?.length || 0} models available</small></div><span className="pool-availability">Available</span></div>)}</Panel></div></div>;
 }
 
+interface ChainModel {
+  model: string; score: number; price: number | null;
+  providers: string[]; available: boolean; skipped_because: string;
+}
+/** One part of a task, and the models north would try for it, in order. */
+interface PartChain {
+  part: string; requires: string[]; order_by: string; min_context: number;
+  eligible: number; models: ChainModel[];
+}
+
 interface SettingsData { power: string; autonomy: string; routing: string; model: string; }
 interface ProviderModels { provider: string; models: string[]; }
 
@@ -1101,7 +1111,7 @@ export function SystemPage() {
   const overview = useResource<any>("/web/api/system", 8000);
   const metrics = useResource<any>("/orchestrator/metrics?days=30", 15000);
   const costs = useResource<any>("/orchestrator/inference/costs?period=month", 15000);
-  const models = useResource<Record<string, any>>("/orchestrator/inference/models", 15000);
+  const chains = useResource<PartChain[]>("/orchestrator/inference/chains", 20000);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [providerMessage, setProviderMessage] = useState("");
   const [providerAuth, setProviderAuth] = useState<Record<string, ProviderAuthState>>({});
@@ -1195,7 +1205,7 @@ export function SystemPage() {
   }, [pendingAuthIds]);
 
   return <div className="page">
-    <PageHeader eyebrow="Runtime" title="System" subtitle="Every detail about North's runtime, providers, model pools, costs, and health."/>
+    <PageHeader eyebrow="Runtime" title="System" subtitle="Providers, how a model gets picked, what it costs, and whether north is healthy."/>
     <div className="system-hero"><HealthIndicator variant="hero"/></div>
     <div className="metric-cards">
       <div><span>Tasks · 30 days</span><strong>{metrics.data?.total_tasks || 0}</strong></div>
@@ -1236,7 +1246,40 @@ export function SystemPage() {
           </div>;
         })}</div>
       </Panel>
-      <Panel title="Model pools" label="Available now"><div>{Object.entries(models.data || {}).map(([name, pool]: [string, any]) => <div className="model-pool" key={name}><button className="model-pool-toggle" onClick={() => setExpandedPool(expandedPool === name ? null : name)}><span><b>{name}</b><small>{pool.models?.length || 0} models available</small></span><span className="pool-availability">{expandedPool === name ? "Hide" : "Inspect"}</span></button>{expandedPool === name && <div className="model-list">{(pool.models || []).map((model: any) => <div className="model-row" key={`${model.provider}-${model.id}`}><b>{model.id}</b><span>{model.provider}</span></div>)}</div>}</div>)}</div></Panel>
+      {/* What actually picks a model. This panel used to show "model pools" -
+          capability buckets recomputed for the panel alone, left over from the
+          router that was deleted. Grouping is not selection: routing ranks a
+          chain per part of a task and walks it in order, which is what this is. */}
+      <Panel title="How a model is picked" label="Live chain per part">
+        <div>{(chains.data || []).map(part => <div className="model-pool" key={part.part}>
+          <button className="model-pool-toggle" onClick={() => setExpandedPool(expandedPool === part.part ? null : part.part)}>
+            <span>
+              <b>{part.part}</b>
+              <small>
+                {part.eligible} eligible · ranked by {part.order_by.replace(/_/g, " ")}
+                {part.requires.length ? ` · needs ${part.requires.join(", ")}` : ""}
+              </small>
+            </span>
+            <span className="pool-availability">{expandedPool === part.part ? "Hide" : `1. ${part.models[0]?.model || "—"}`}</span>
+          </button>
+          {expandedPool === part.part && <div className="model-list">
+            {part.models.map((model, index) => <div className={model.available ? "chain-row" : "chain-row chain-skipped"} key={model.model}>
+              <span className="chain-rank">{index + 1}</span>
+              <b>{model.model}</b>
+              <span className="chain-meta">
+                {model.providers.join(", ")}
+                {" · "}{model.price ? `$${model.price.toFixed(6)}/tok` : "free"}
+                {" · "}score {model.score.toFixed(3)}
+              </span>
+              {/* Why north would walk past this rung right now. */}
+              {!model.available && <em className="chain-why">{model.skipped_because}</em>}
+            </div>)}
+            {!part.models.length && <Empty>Nothing qualifies for this part right now.</Empty>}
+          </div>}
+        </div>)}
+        {!chains.loading && !(chains.data || []).length && <Empty>Routing is not ready - the model catalog has not loaded yet.</Empty>}
+        </div>
+      </Panel>
     </div>
     <div className="two-column">
       <Panel title="Cost by model" label="Month to date">{Object.entries(costs.data?.by_model || {}).map(([name,value]) => <div className="list-row" key={name}><b>{name}</b><span>${Number(value).toFixed(4)}</span></div>)}{!Object.keys(costs.data?.by_model || {}).length && <Empty>No recorded inference costs yet.</Empty>}</Panel>

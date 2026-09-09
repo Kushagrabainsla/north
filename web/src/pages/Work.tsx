@@ -112,7 +112,6 @@ function TaskActivity({ taskId }: { taskId: string }) {
   // adding a per-task variant of each for a page that already has them cached.
   const artifacts = useResource<Artifact[]>("/web/api/artifacts", 30000);
   const approvals = useResource<Approval[]>("/web/api/approvals", 30000);
-  const [showRouting, setShowRouting] = useState(false);
 
   if (detail.loading) return <Loading/>;
   if (detail.error) return <div className="page"><ErrorNotice message={detail.error}/></div>;
@@ -175,12 +174,13 @@ function TaskActivity({ taskId }: { taskId: string }) {
         : <Empty>Nothing was recorded for this task.</Empty>}
     </Panel>
 
-    {/* Its own request, so it is fetched only when asked for. */}
-    <Panel title="Models tried"
-      actions={<button className="ghost-button" onClick={() => setShowRouting(!showRouting)}>
-        {showRouting ? "Hide" : "Show"}
-      </button>}>
-      {showRouting ? <RoutingAttempts taskId={taskId}/> : <Empty>Every endpoint this task called or skipped.</Empty>}
+    {/* Shown, not hidden behind a button. Which models a task tried is part of
+        what it did, and the page exists to answer that in one place - putting it
+        behind a click recreated the trip to another view the merge removed. It
+        is one more request when a task is opened, next to the three already
+        made, which is not a reason to make someone ask twice. */}
+    <Panel title="Models tried" label="In walk order">
+      <RoutingAttempts taskId={taskId}/>
     </Panel>
   </div>;
 }
