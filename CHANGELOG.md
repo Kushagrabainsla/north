@@ -4,6 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **Executable module-contract validation** (`architecture/contracts.py`, `tests/unit/architecture/test_contracts.py`). The catalog now loads through strict typed contracts and a regression test proves every current tracked production path has exactly one owner.
 - **A current-state module catalog and machine-readable boundary manifest** (`docs/MODULES.md`, `architecture/modules.yaml`). They assign ownership, public contracts, path scopes, protections, validation responsibilities, and explicitly temporary dependency exemptions before enforcement begins.
 - **Architecture decision records for the clean-architecture program** (`docs/adr/`). They bind later work to enforceable self-edit scopes, composition-root-only wiring, and compatibility-first staged migration.
 - **A durable clean-architecture refactor program** (`docs/refactor/CLEAN_ARCHITECTURE_PLAN.md`, `docs/refactor/STATUS.md`). It records the staged migration to enforceable module boundaries, agent edit permissions, compatibility gates, and a status ledger that survives chat-context compaction. No runtime behavior changes in this control-plane step.

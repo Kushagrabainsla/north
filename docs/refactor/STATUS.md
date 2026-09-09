@@ -26,8 +26,18 @@ This ledger is the durable execution record for [the approved refactor program](
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
 | Define current-state module catalog and transitional dependency policy | Complete | `b63bf9b` | YAML ownership validation — 18 modules own 378 tracked production paths exactly once; ruff format/check; full pytest — 1,956 passed, 3 skipped | The catalog preserves existing paths while defining owners, contracts, protected surfaces, and temporary dependency exemptions. |
-| Correct architecture repository map | Ready to commit | Pending | Markdown-link validation and documentation diff inspection pending | Replaces obsolete package/API/agent layout details with the current tree and links to the ownership catalog. |
-| Validate every production path has one module owner | Not started | — | — | Will become an automated test in Stage 2. |
+| Correct architecture repository map | Complete | `13a3f1e` | Relative Markdown links; ruff format/check | Replaced obsolete package/API/agent layout details with the current tree and linked the ownership catalog. |
+| Validate every production path has one module owner | Complete | `b63bf9b` | Manifest validation — 18 modules own 378 tracked production paths exactly once | The equivalent check is now becoming a committed regression test in Stage 2. |
+
+**Stage 1 status: Complete.** The current repository has an accurate map, a durable module catalog, one owner per tracked production path, declared temporary exceptions, and explicit protected surfaces.
+
+## Stage 2 — Enforce boundaries and edit permissions
+
+| Unit | Status | Commit | Validation evidence | Notes |
+|---|---|---|---|---|
+| Load and validate module contracts in code | Ready to commit | Pending | Targeted pytest — 3 passed; full pytest — 1,959 passed, 3 skipped; ruff format/check; mypy — no issues in 2 files | `architecture.contracts` resolves sole ownership and protects the manifest from malformed contracts. |
+| Enforce dependency direction with AST tests | Not started | — | — | Start with forbidden new dependencies and explicit temporary exemptions. |
+| Enforce task edit scopes in source-mutating tools | Not started | — | — | Must fail closed outside an approved module/path scope. |
 
 ## Stages 1–8
 
