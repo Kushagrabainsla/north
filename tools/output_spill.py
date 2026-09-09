@@ -186,6 +186,33 @@ def store_overflow(tool_name: str, text: str) -> str:
     return _store.store(tool_name, text)
 
 
+def carries_handle(text: str) -> bool:
+    """Whether *text* is a result that has already been spilled and shrunk.
+
+    Callers use this to avoid shrinking a shrunken result a second time, which
+    would spill the truncated copy as a new entry and evict the original it
+    points at.
+    """
+    return _HANDLE_PREFIX in text
+
+
+def summary_note(handle: str, total_chars: int) -> str:
+    """The marker left on a result that was replaced by a summary.
+
+    Differs from `overflow_note` in what it can honestly promise. A truncated
+    result shows the first few hundred characters and says nothing about the
+    rest; a summary was written from the whole output, so the agent has been
+    told what was in all of it. It still needs to know the summary is lossy and
+    how to reach the original.
+    """
+    return (
+        f"The {total_chars}-character output of this call was summarised above rather than kept in full. "
+        f"The original is under handle '{handle}'. The summary was written from the whole output, but it "
+        "is lossy - if you need an exact value it does not give you, call read_tool_output with this handle "
+        "(action='find' with a regex to locate it, or action='read' with an offset to page on)."
+    )
+
+
 def overflow_note(handle: str, shown_chars: int, total_chars: int) -> str:
     """The marker left on a truncated result, phrased so the agent acts on it.
 
