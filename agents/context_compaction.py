@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from inference.models import CompletionRequest, PoolPriority
+from tools.output_spill import overflow_note, store_overflow
 from utils.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,11 @@ def _truncate_tool_messages(messages: list[dict], indices_to_compact: list[int])
         msg = messages[idx]
         content = msg.get("content")
         if isinstance(content, str) and len(content) > _COMPACT_TRUNCATE_THRESHOLD:
+            # Keep the full text before shrinking it, so retiring an old result
+            # from the window is reversible. The agent has already read this one,
+            # but "already read" is not "still remembered" once the history it
+            # lived in has been compacted away.
+            handle = store_overflow("history", content)
             truncated = True
             try:
                 data = json.loads(content)
@@ -211,13 +217,15 @@ def _truncate_tool_messages(messages: list[dict], indices_to_compact: list[int])
                         minimal["success"] = data["success"]
                     if "error" in data:
                         minimal["error"] = data["error"]
-                    minimal["_note"] = "Large tool output truncated to save context window."
+                    minimal["_handle"] = handle
+                    minimal["_note"] = overflow_note(handle, 0, len(content))
                     msg["content"] = json.dumps(minimal)
                     truncated = False
             except Exception:
                 pass
             if truncated:
-                msg["content"] = content[:_COMPACT_TRUNCATE_KEEP] + "... [Large tool output truncated to save context]"
+                kept = content[:_COMPACT_TRUNCATE_KEEP]
+                msg["content"] = f"{kept}... [{overflow_note(handle, len(kept), len(content))}]"
 
         call_id = msg.get("tool_call_id")
         if call_id and call_id in call_id_to_assistant:

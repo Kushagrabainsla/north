@@ -45,6 +45,7 @@ from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
+from tools.output_spill import overflow_note, store_overflow
 from utils.execution_context import current_execution
 from utils.tasks import spawn
 from utils.text import normalize_dashes
@@ -987,10 +988,10 @@ class AgenticLLMAgent(LLMAgent):
         except Exception as exc:
             logger.warning("Tool '%s' raised: %s", tool_name, exc, exc_info=True)
             return _failed_json(str(exc)), []
-        return _cap_tool_result(data), images
+        return _cap_tool_result(data, tool_name), images
 
 
-def _cap_tool_result(data: dict[str, Any]) -> str:
+def _cap_tool_result(data: dict[str, Any], tool_name: str = "") -> str:
     """Serialize a tool result, bounded to MAX_TOOL_RESULT_CHARS.
 
     A single large tool response must not exhaust the model's context window.
@@ -998,12 +999,20 @@ def _cap_tool_result(data: dict[str, Any]) -> str:
     is always syntactically valid: first each string field is capped, then  -
     when non-string fields (large lists/dicts) still blow the budget - the
     whole data block is replaced with a bounded summary.
+
+    What does not fit is kept, not dropped. The full serialization goes to the
+    overflow store and the note carries its handle, so ``read_tool_output`` can
+    search or page the remainder. Cutting a long output down to its head lost
+    whatever was in the middle - a grep match, a value in the body of a page -
+    and the agent had no way to know, because a truncated result reads exactly
+    like a complete one.
     """
     raw = json.dumps(data)
     if len(raw) <= MAX_TOOL_RESULT_CHARS:
         return raw
 
-    omitted = len(raw) - MAX_TOOL_RESULT_CHARS
+    handle = store_overflow(tool_name or "tool", raw)
+    total = len(raw)
     inner = data.get("data", {})
     if isinstance(inner, dict):
         per_field = max(
@@ -1014,12 +1023,21 @@ def _cap_tool_result(data: dict[str, Any]) -> str:
             k: (v[:per_field] + "…[truncated]" if isinstance(v, str) and len(v) > per_field else v)
             for k, v in inner.items()
         }
-    data["_note"] = f"{omitted} chars omitted from original output."
+    data["_handle"] = handle
+    data["_note"] = overflow_note(handle, MAX_TOOL_RESULT_CHARS, total)
     raw = json.dumps(data)
     if len(raw) > MAX_TOOL_RESULT_CHARS:
-        summary = json.dumps(data["data"])[: MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS]
-        data["data"] = {"_truncated": summary + "…"}
-        raw = json.dumps(data)
+        # Trim against the *serialized* length, not an estimate of it: escaping
+        # a summary back into JSON can double its size, so a budget computed up
+        # front overshoots and the "bounded" result is not bounded.
+        summary = json.dumps(data["data"])
+        while True:
+            data["data"] = {"_truncated": summary + "…"}
+            raw = json.dumps(data)
+            overshoot = len(raw) - MAX_TOOL_RESULT_CHARS
+            if overshoot <= 0 or len(summary) <= _TOOL_RESULT_MIN_FIELD_CHARS:
+                break
+            summary = summary[: max(_TOOL_RESULT_MIN_FIELD_CHARS, len(summary) - overshoot)]
     return raw
 
 
