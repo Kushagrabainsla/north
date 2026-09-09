@@ -168,6 +168,18 @@ class Settings(BaseSettings):
     unattended_extra_commands: tuple[str, ...] = ()
     autonomous_mode: bool = False
 
+    # How long a blocking card waits when north can reach the user somewhere
+    # other than the machine it is running on (see approval/telegram.py). The
+    # 300s default is right for someone sitting at a prompt and wrong for a card
+    # sent to a phone at 03:00 - it expires before anyone sees it, and an expiry
+    # denies the action. 12 hours covers a night.
+    #
+    # The cost is a held task slot: a guard-rail card blocks its task while it
+    # waits, so enough unanswered ones reach MAX_CONCURRENT_TASKS. That is why
+    # prepared work is non-blocking instead (see Card.blocking) - this longer
+    # wait is only for the case where an agent genuinely cannot continue.
+    approval_reachable_timeout_seconds: float = 43_200.0
+
     # Telegram bot token for the Telegram gateway.
     # Set NORTH_TELEGRAM_BOT_TOKEN in environment or .env.
     telegram_bot_token: str = ""

@@ -18,21 +18,26 @@ from dataclasses import dataclass
 import httpx
 
 from config.settings import settings
+from gateways.telegram_api import (
+    HTTP_TIMEOUT as _HTTP_TIMEOUT,
+)
+from gateways.telegram_api import (
+    approval_keyboard,
+    bot_url,
+    parse_approval_callback,
+    send_message,
+    within_telegram_limit,
+)
 
 logger = logging.getLogger(__name__)
 
-_TELEGRAM_API = "https://api.telegram.org/bot"
 _POLL_INTERVAL = 2.0  # seconds between long-poll requests
 _TASK_POLL_INTERVAL = 1.0  # seconds between checking task status
 _TASK_POLL_MAX_ATTEMPTS = 90  # 90 × 1s = 90s max wait for task completion
 _MAX_RETRIES = 3
-_HTTP_TIMEOUT = 30.0
 
 _MAX_LISTED_TASKS = 5
 _APPROVAL_MODES = ("interactive", "auto", "autonomous")
-# Telegram rejects anything over 4096 characters; the rest of the budget is the
-# note explaining where the full answer lives.
-_MAX_MESSAGE_CHARS = 3900
 
 
 @dataclass(frozen=True)
@@ -49,12 +54,6 @@ def _is_allowed_sender(msg: dict) -> bool:
         return True
     from_id = msg.get("from", {}).get("id")
     return msg["chat"]["id"] in allowed or (from_id is not None and from_id in allowed)
-
-
-def _within_telegram_limit(output: str) -> str:
-    if len(output) <= _MAX_MESSAGE_CHARS:
-        return output
-    return output[:_MAX_MESSAGE_CHARS] + "\n\n[truncated — see north for full response]"
 
 
 _LEDGER_POLL_LIMIT = 50
@@ -94,11 +93,6 @@ def _finished_output(entries: list[dict], task_id: str, poll: int) -> str | None
             logger.info("Task %s found agent_completed output at poll %d", task_id, poll)
             return entry["output"]
     return None
-
-
-
-def _bot_url(method: str) -> str:
-    return f"{_TELEGRAM_API}{settings.telegram_bot_token}/{method}"
 
 
 def _headers() -> dict[str, str]:
@@ -146,7 +140,7 @@ class TelegramGateway:
         """Long-poll Telegram for new messages and callback queries."""
         try:
             resp = await self._http.post(
-                _bot_url("getUpdates"),
+                bot_url("getUpdates"),
                 json={
                     "offset": self._offset,
                     "timeout": 25,  # long-poll (seconds)
@@ -171,33 +165,7 @@ class TelegramGateway:
         reply_markup: dict | None = None,
     ) -> dict | None:
         """Send a message to a Telegram chat."""
-        payload: dict = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown",
-        }
-        if reply_to:
-            payload["reply_to_message_id"] = reply_to
-        if reply_markup:
-            payload["reply_markup"] = reply_markup
-        try:
-            resp = await self._http.post(_bot_url("sendMessage"), json=payload)
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPStatusError as exc:
-            # Markdown parsing failed (e.g. unescaped code characters), retry as plain text
-            if exc.response.status_code == 400 and payload.get("parse_mode"):
-                payload.pop("parse_mode", None)
-                try:
-                    resp = await self._http.post(_bot_url("sendMessage"), json=payload)
-                    resp.raise_for_status()
-                    return resp.json()
-                except httpx.RequestError as retry_exc:
-                    logger.error("Failed to send Telegram plain message to %s: %s", chat_id, retry_exc)
-            logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
-        except httpx.RequestError as exc:
-            logger.error("Failed to send Telegram message to %s: %s", chat_id, exc)
-        return None
+        return await send_message(self._http, chat_id, text, reply_to=reply_to, reply_markup=reply_markup)
 
     async def _edit_message_text(
         self,
@@ -216,14 +184,14 @@ class TelegramGateway:
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         try:
-            resp = await self._http.post(_bot_url("editMessageText"), json=payload)
+            resp = await self._http.post(bot_url("editMessageText"), json=payload)
             resp.raise_for_status()
             return True
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 400 and payload.get("parse_mode"):
                 payload.pop("parse_mode", None)
                 try:
-                    resp = await self._http.post(_bot_url("editMessageText"), json=payload)
+                    resp = await self._http.post(bot_url("editMessageText"), json=payload)
                     resp.raise_for_status()
                     return True
                 except httpx.RequestError:
@@ -239,7 +207,7 @@ class TelegramGateway:
         if text:
             payload["text"] = text
         try:
-            await self._http.post(_bot_url("answerCallbackQuery"), json=payload)
+            await self._http.post(bot_url("answerCallbackQuery"), json=payload)
         except httpx.RequestError as exc:
             logger.debug("Failed to answer callback query %s: %s", callback_query_id, exc)
 
@@ -300,7 +268,7 @@ class TelegramGateway:
     async def _send_chat_action(self, chat_id: int, action: str = "typing") -> None:
         """Show a typing indicator in the chat."""
         with contextlib.suppress(httpx.RequestError):
-            await self._http.post(_bot_url("sendChatAction"), json={"chat_id": chat_id, "action": action})
+            await self._http.post(bot_url("sendChatAction"), json={"chat_id": chat_id, "action": action})
 
     async def _typing_keepalive(self, chat_id: int, stop_event: asyncio.Event) -> None:
         """Periodically refresh the typing status until stop_event is set."""
@@ -376,20 +344,13 @@ class TelegramGateway:
             f"⚠️ **Approval Required**\n\n"
             f"Task `{task_id}` requires your confirmation to proceed:\n"
             f"_{entry.get('message', 'Confirm action')}_",
-            reply_markup={
-                "inline_keyboard": [
-                    [
-                        {"text": "✅ Approve", "callback_data": f"approval:approved:{card_id}"},
-                        {"text": "❌ Reject", "callback_data": f"approval:rejected:{card_id}"},
-                    ]
-                ]
-            },
+            reply_markup=approval_keyboard(card_id),
         )
 
     async def _download_file(self, file_id: str) -> bytes | None:
         """Download a file from Telegram by its file_id."""
         try:
-            resp = await self._http.get(_bot_url("getFile"), params={"file_id": file_id})
+            resp = await self._http.get(bot_url("getFile"), params={"file_id": file_id})
             resp.raise_for_status()
             data = resp.json()
             if not data.get("ok"):
@@ -435,28 +396,23 @@ class TelegramGateway:
             await self._answer_callback_query(cb_id, text="⛔ Unauthorized")
             return
 
-        if data.startswith("approval:"):
-            # Format: approval:<decision>:<card_id>
-            parts = data.split(":", 2)
-            if len(parts) == 3:
-                decision = parts[1]
-                card_id = parts[2]
-                success = await self._respond_approval(card_id, decision)
-                status_icon = "✅" if decision == "approved" else "❌"
-                if success:
-                    msg_id = msg.get("message_id")
-                    if chat_id and msg_id:
-                        orig_text = msg.get("text", "Approval Request")
-                        new_text = f"{orig_text}\n\n{status_icon} **Decision:** {decision.capitalize()} (via Telegram)"
-                        await self._edit_message_text(chat_id, msg_id, new_text, reply_markup={"inline_keyboard": []})
-                    await self._answer_callback_query(cb_id, text=f"{status_icon} Decision recorded: {decision}")
-                else:
-                    await self._answer_callback_query(  # noqa: E501
-                        cb_id, text="❌ Failed to record decision (already resolved or error)"
-                    )
-                return
+        parsed = parse_approval_callback(data)
+        if parsed is None:
+            await self._answer_callback_query(cb_id)
+            return
 
-        await self._answer_callback_query(cb_id)
+        decision, card_id = parsed
+        if not await self._respond_approval(card_id, decision):
+            await self._answer_callback_query(cb_id, text="❌ Failed to record decision (already resolved or error)")
+            return
+
+        status_icon = "❌" if decision == "rejected" else "✅"
+        msg_id = msg.get("message_id")
+        if chat_id and msg_id:
+            orig_text = msg.get("text", "Approval Request")
+            new_text = f"{orig_text}\n\n{status_icon} **Decision:** {decision.capitalize()} (via Telegram)"
+            await self._edit_message_text(chat_id, msg_id, new_text, reply_markup={"inline_keyboard": []})
+        await self._answer_callback_query(cb_id, text=f"{status_icon} Decision recorded: {decision}")
 
     async def _process_message(self, msg: dict) -> None:
         """Process one incoming Telegram message."""
@@ -607,7 +563,7 @@ class TelegramGateway:
             self._pending.pop(pending_key, None)
 
         if output:
-            await self._reply(chat, _within_telegram_limit(output))
+            await self._reply(chat, within_telegram_limit(output))
         else:
             await self._reply(chat, f"✅ Task submitted (ID: `{task_id}`). Check north for results.")
 

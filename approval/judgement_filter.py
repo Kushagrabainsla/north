@@ -46,6 +46,7 @@ class _Verdict:
     chosen_option: str = ""
     rule: str = ""
 
+
 _AUTO_CONFIDENCE_THRESHOLD = 0.8
 # Below this much learned text (rules + preferences) there is nothing to match on.
 _MIN_LEARNED_CONTEXT_CHARS = 20

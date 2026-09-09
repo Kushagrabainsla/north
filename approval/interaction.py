@@ -34,6 +34,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _telegram_configured() -> bool:
+    """Whether north has somewhere to send a card other than this machine.
+
+    Read at call time, not at construction: turning Telegram on should change
+    how long the next card waits without a restart.
+    """
+    from config.settings import settings
+
+    return bool(settings.telegram_bot_token and settings.parsed_telegram_allowed_chat_ids)
+
+
 # Default choices for an approval card when the caller supplies none.
 APPROVAL_DEFAULT_OPTIONS: tuple[str, str] = ("Approve", "Reject")
 
@@ -74,6 +86,9 @@ class UserInteraction:
         policy: ApprovalPolicy | None = None,
         on_auto_resolve: Callable[[Card, str, str], Awaitable[None]] | None = None,
         default_timeout: float = 300.0,
+        # Both exist to be overridden in tests; production reads settings.
+        reachable_timeout: float | None = None,
+        reachable: Callable[[], bool] | None = None,
     ) -> None:
         self._store = store
         self._notifier = notifier
@@ -82,6 +97,8 @@ class UserInteraction:
         self._policy = policy
         self._on_auto_resolve = on_auto_resolve
         self._default_timeout = default_timeout
+        self._reachable_timeout = reachable_timeout
+        self._reachable = reachable or _telegram_configured
 
     async def request_approval(
         self,
@@ -206,7 +223,7 @@ class UserInteraction:
         if surfaced.status != _PENDING:
             return surfaced  # auto-resolved by a learned rule
 
-        resolved = await self._store.wait_for_decision(card.id, timeout=timeout or self._default_timeout)
+        resolved = await self._store.wait_for_decision(card.id, timeout=timeout or self._timeout_for(card))
         if resolved is not None:
             return resolved
         # These two copies bypass the store, so they must carry what the store
@@ -218,6 +235,27 @@ class UserInteraction:
             return card.model_copy(update=timed_out)
         late = self._store.get(card.id)
         return late if late is not None else card.model_copy(update=timed_out)
+
+    def _timeout_for(self, card: Card) -> float:
+        """How long to wait for an answer, given where the card can be answered.
+
+        The 300s default assumes a person at a prompt. When north can reach the
+        user off this machine - Telegram configured - that assumption is wrong
+        for every card, not only scheduled ones: a card raised at 03:00 expires
+        long before anyone sees it, and an expiry denies the action. So a
+        reachable card waits far longer, and `TIMEOUT_REJECTED` keeps saying
+        "nobody answered" rather than "the user said no" when it does give up.
+
+        Only blocking cards use a timeout at all - prepared work is non-blocking
+        and nothing awaits it.
+        """
+        if not self._reachable():
+            return self._default_timeout
+        if self._reachable_timeout is not None:
+            return self._reachable_timeout
+        from config.settings import settings
+
+        return settings.approval_reachable_timeout_seconds
 
     async def notify(self, card: Card, *, event: CardEvent | None = None) -> Card:
         """Register and surface *card* without blocking; return it.

@@ -27,6 +27,7 @@ from approval.batching import BatchingNotifier
 from approval.callback_server import app as callback_app
 from approval.judgement_filter import JudgementFilter
 from approval.policy import ApprovalPolicy
+from approval.telegram import TelegramNotifier
 from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
 from bootstrap.onboarding import run_bootstrap_if_needed
@@ -119,15 +120,19 @@ def _validate_config() -> None:
 
 
 def _attach_tui_notifier(deps) -> None:
-    # Suppress macOS/terminal alerts while the TUI is connected - the global
-    # SSE stream handles approvals inline. Outside the TUI, prepared work is
-    # coalesced so a batch of it is one alert rather than one per item; a
-    # guard-rail card still goes straight through, because something is
-    # waiting on it.
+    # The chain, outermost first:
+    #
+    #   BatchingNotifier   coalesce a burst of prepared work into one alert
+    #   TUIAwareNotifier   stay quiet only for a card the TUI is already showing
+    #   TelegramNotifier   reach the operator when they are not at the keyboard
+    #   TerminalNotifier   last resort, and what an unconfigured install uses
+    #
+    # Telegram sits inside the batcher deliberately: north finishing eight job
+    # applications is one event in the user's day, not eight phone buzzes.
     deps.notifier = BatchingNotifier(
         TUIAwareNotifier(
             stream_manager=deps.stream_manager,
-            fallback=deps.notifier,
+            fallback=TelegramNotifier(fallback=deps.notifier),
         )
     )
 
