@@ -4,6 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **A durable clean-architecture refactor program** (`docs/refactor/CLEAN_ARCHITECTURE_PLAN.md`, `docs/refactor/STATUS.md`). It records the staged migration to enforceable module boundaries, agent edit permissions, compatibility gates, and a status ledger that survives chat-context compaction. No runtime behavior changes in this control-plane step.
 - **A task page that shows everything a task did** (`web/src/pages/Tasks.tsx`). Agent runs with their models, tokens and cost; the full event timeline; the endpoints tried and why each was skipped; what the task produced and what it stopped to ask. The event stream that has no task - startup, cron ticks, recovery sweeps - is a tab on the same page rather than a page beside it.
 - **The System page shows how a model is picked** (`inference/dispatcher.py`, `orchestrator/api/inference.py`). One ranked chain per part of a task, with what the part requires, what it ranks on, and whether north could call each model right now.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
