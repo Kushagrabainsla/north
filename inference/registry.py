@@ -11,6 +11,7 @@ from pathlib import Path
 
 from inference.codex_auth import CodexCredentialProvider
 from inference.provider import Provider
+from inference.providers.anthropic_api import AnthropicProvider
 from inference.providers.gemini import GeminiRouter
 from inference.providers.groq import GroqRouter
 from inference.providers.local_embeddings import LocalEmbeddingProvider
@@ -126,6 +127,17 @@ PROVIDER_DEFINITIONS: tuple[ProviderDefinition, ...] = (
         setup_url="https://opencode.ai/auth",
         fallback_order=30,
         factory=OpenCodeZenRouter,
+    ),
+    ProviderDefinition(
+        id="anthropic",
+        display_name="Anthropic",
+        description="Claude models direct from Anthropic (Console API key)",
+        auth_kind=AuthKind.API_KEY,
+        settings_field="anthropic_api_key",
+        env_key="NORTH_ANTHROPIC_API_KEY",
+        setup_url="https://platform.claude.com/settings/keys",
+        fallback_order=20,
+        factory=AnthropicProvider,
     ),
     ProviderDefinition(
         id="openai_codex",
