@@ -36,15 +36,15 @@ This ledger is the durable execution record for [the approved refactor program](
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
 | Load and validate module contracts in code | Complete | `640fc64` | Targeted pytest — 3 passed; full pytest — 1,959 passed, 3 skipped; ruff format/check; mypy — no issues in 2 files | `architecture.contracts` resolves sole ownership and protects the manifest from malformed contracts. |
-| Enforce dependency direction with AST tests | Ready to commit | Pending | Architecture pytest — 6 passed; ruff format/check | AST analysis rejects new cross-module layer violations while `architecture/import-baseline.txt` makes 27 existing forbidden pairs explicit for staged removal. |
+| Enforce dependency direction with AST tests | Complete | `0bfd003` | Architecture pytest — 6 passed; full pytest — 1,962 passed, 3 skipped; ruff format/check; mypy — no issues in 3 files | AST analysis rejects new cross-module layer violations while `architecture/import-baseline.txt` makes 27 existing forbidden pairs explicit for staged removal. |
 | Enforce task edit scopes in source-mutating tools | Not started | — | — | Must fail closed outside an approved module/path scope. |
 
 ## Stages 1–8
 
 | Stage | Status | Preconditions | Completion evidence |
 |---|---|---|---|
-| 1. Architecture map and ownership contracts | Not started | Stage 0 complete | Module map, contracts, manifest schema validation |
-| 2. Enforce boundaries and edit permissions | Not started | Stage 1 complete | Import and edit-scope enforcement tests |
+| 1. Architecture map and ownership contracts | Complete | Stage 0 complete | Module map, contracts, manifest schema validation |
+| 2. Enforce boundaries and edit permissions | In progress | Stage 1 complete | Import and edit-scope enforcement tests |
 | 3. Composition root | Not started | Stage 2 complete | Startup, CLI, API compatibility checks |
 | 4. Remove reverse dependencies | Not started | Stage 3 complete | Boundary checks and cycle report |
 | 5. Split oversized modules | Not started | Stage 4 complete | Focused extraction and regression tests |
