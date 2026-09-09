@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -24,7 +25,15 @@ from tools._read_tracker import record_read, was_read
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import gate_action
-from tools.specialized._edit_match import find_unique, indents_for, reindent
+from tools.specialized._edit_match import (
+    detect_line_ending,
+    find_unique,
+    indents_for,
+    normalize_to_lf,
+    reindent,
+    restore_line_ending,
+    split_bom,
+)
 
 if TYPE_CHECKING:
     from approval.base import Notifier
@@ -130,9 +139,8 @@ class PatchFileTool(ApprovalGatedTool):
         plan = await asyncio.to_thread(_plan, resolved, edits, old_string, new_string)
         if isinstance(plan, ToolOutput):
             return plan  # error
-        new_content, old_content, blocks_applied = plan
 
-        if new_content == old_content:
+        if plan.new_content == plan.old_content:
             return ToolOutput(success=True, data={"path": str(resolved), "blocks_applied": 0, "unchanged": True})
 
         # An instance with no approval store is the plain, auto-discovered file
@@ -141,12 +149,16 @@ class PatchFileTool(ApprovalGatedTool):
         # gate then decides is not.
         if self._approval_store is not None:
             refused = await self._gate(
-                input.params.get("task_id"), resolved, input.params.get("workspace"), old_content, new_content
+                input.params.get("task_id"),
+                resolved,
+                input.params.get("workspace"),
+                plan.old_content,
+                plan.new_content,
             )
             if refused is not None:
                 return refused
 
-        written = await asyncio.to_thread(_write, resolved, old_content, new_content, blocks_applied)
+        written = await asyncio.to_thread(_write, resolved, plan)
         if written.success:
             record_read(input.params.get("task_id"), str(resolved))
         return written
@@ -190,27 +202,88 @@ def _unified_diff(path: Path, old: str, new: str) -> str:
     return diff
 
 
-def _plan(path: Path, edits: Any, old_string: str | None, new_string: str | None) -> tuple[str, str, int] | ToolOutput:
+@dataclass(frozen=True, slots=True)
+class EditPlan:
+    """A computed, not-yet-written change, in LF space plus how to restore bytes.
+
+    Matching and diffing happen on LF-normalized, BOM-stripped text so a model's
+    ``old_string`` (always ``\\n``, never an invisible BOM) matches a CRLF or
+    BOM file. The original bytes are rebuilt on write from ``bom`` + the file's
+    own line ending, and ``raw_original`` is what the concurrent-modification
+    check compares against so an on-disk change is still caught exactly.
+    """
+
+    old_content: str  # LF-normalized, BOM-stripped
+    new_content: str  # LF-normalized, BOM-stripped
+    blocks_applied: int
+    bom: str
+    ending: str
+    raw_original: str
+
+
+def _plan(path: Path, edits: Any, old_string: str | None, new_string: str | None) -> EditPlan | ToolOutput:
     """Compute the would-be new file content without writing it.
 
-    Returns (new_content, old_content, blocks_applied) or a ToolOutput on error.
+    Returns an :class:`EditPlan` or a ToolOutput on error. All matching is done
+    in LF-normalized, BOM-stripped space; the plan carries what is needed to
+    restore the file's original line ending and BOM on write.
     """
     if not path.exists() or not path.is_file():
         return ToolOutput(success=False, error=f"File not found: {path}", failure_kind="not_found")
     try:
-        content = path.read_text(encoding="utf-8")
+        # Read raw bytes, not read_text: universal-newline mode would translate
+        # CRLF to LF on read and the original ending would be lost before we can
+        # record it.
+        raw = path.read_bytes().decode("utf-8")
     except UnicodeDecodeError:
         return ToolOutput(success=False, error=f"Binary file cannot be patched: {path}")
 
+    bom, body = split_bom(raw)
+    ending = detect_line_ending(body)
+    content = normalize_to_lf(body)
+
     if edits is not None:
-        return _plan_edits(content, edits)
-    return _plan_blocks_or_legacy(content, old_string, new_string or "")
+        result = _plan_edits(content, edits)
+    else:
+        result = _plan_blocks_or_legacy(content, old_string, new_string or "")
+    if isinstance(result, ToolOutput):
+        return result
+    new_content, blocks_applied = result
+    return EditPlan(
+        old_content=content,
+        new_content=new_content,
+        blocks_applied=blocks_applied,
+        bom=bom,
+        ending=ending,
+        raw_original=raw,
+    )
 
 
-def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
+def _apply_spans(content: str, spans: list[tuple[int, int, str, str]]) -> tuple[str, str] | ToolOutput:
+    """Overlap-check *spans* against *content* and apply them end-to-start.
+
+    Each span is ``(start, end, replacement, label)`` where offsets are into the
+    original *content* - never a buffer mutated by an earlier edit - so two edits
+    that touch the same region are caught up front rather than one silently
+    failing to match. Returns ``(new_content, "")`` or a ToolOutput on overlap.
+    """
+    by_start = sorted(spans, key=lambda s: s[0])
+    for i in range(len(by_start) - 1):
+        if by_start[i][1] > by_start[i + 1][0]:
+            return ToolOutput(
+                success=False,
+                error=f"Edits {by_start[i][3]} and {by_start[i + 1][3]} overlap in the target file.",
+            )
+    new_content = content
+    for start, end, replacement, _label in sorted(spans, key=lambda s: s[0], reverse=True):
+        new_content = new_content[:start] + replacement + new_content[end:]
+    return new_content, ""
+
+
+def _plan_edits(content: str, edits: Any) -> tuple[str, int] | ToolOutput:
     if not isinstance(edits, list) or not edits:
         return ToolOutput(success=False, error="'edits' must be a non-empty list.")
-    spans: list[tuple[int, int, str, int]] = []
+    spans: list[tuple[int, int, str, str]] = []
     for index, edit in enumerate(edits):
         if not isinstance(edit, dict):
             return ToolOutput(success=False, error=f"Edit {index} is not an object.")
@@ -218,27 +291,18 @@ def _plan_edits(content: str, edits: Any) -> tuple[str, str, int] | ToolOutput:
         replacement = edit.get("new_string")
         if old_string is None or replacement is None:
             return ToolOutput(success=False, error=f"Edit {index} needs both 'old_string' and 'new_string'.")
+        old_string = normalize_to_lf(old_string)
+        replacement = normalize_to_lf(replacement)
         match, error = find_unique(content, old_string)
         if match is None:
             return ToolOutput(success=False, error=f"Edit {index}: {error}")
         needle_indent, file_indent = indents_for(content, old_string, match)
-        spans.append((match.start, match.end, reindent(replacement, needle_indent, file_indent), index))
+        spans.append((match.start, match.end, reindent(replacement, needle_indent, file_indent), f"#{index}"))
 
-    # Check for overlapping edit spans
-    sorted_by_start = sorted(spans, key=lambda s: s[0])
-    for i in range(len(sorted_by_start) - 1):
-        if sorted_by_start[i][1] > sorted_by_start[i + 1][0]:
-            return ToolOutput(
-                success=False,
-                error=f"Edits {sorted_by_start[i][3]} and {sorted_by_start[i + 1][3]} overlap in the target file.",
-            )
-
-    # Apply replacements from end to start so character offsets remain exact
-    new_content = content
-    for start, end, replacement, _ in sorted(spans, key=lambda s: s[0], reverse=True):
-        new_content = new_content[:start] + replacement + new_content[end:]
-
-    return new_content, content, len(edits)
+    applied = _apply_spans(content, spans)
+    if isinstance(applied, ToolOutput):
+        return applied
+    return applied[0], len(edits)
 
 
 def _parse_search_replace_blocks(text: str) -> list[tuple[str, str]]:
@@ -273,38 +337,47 @@ def _parse_search_replace_blocks(text: str) -> list[tuple[str, str]]:
     return blocks
 
 
-def _plan_blocks_or_legacy(content: str, old_string: str | None, new_string: str) -> tuple[str, str, int] | ToolOutput:
+def _plan_blocks_or_legacy(content: str, old_string: str | None, new_string: str) -> tuple[str, int] | ToolOutput:
     blocks = _parse_search_replace_blocks(new_string)
     if blocks:
-        new_content = content
-        for search_val, replace_val in blocks:
-            match, error = find_unique(new_content, search_val)
+        # Match every block against the *original* content and overlap-check once,
+        # the same discipline as the edits[] path, so overlapping blocks are
+        # reported up front rather than mis-applying against a mutated buffer.
+        spans: list[tuple[int, int, str, str]] = []
+        for i, (search_val, replace_val) in enumerate(blocks):
+            match, error = find_unique(content, search_val)
             if match is None:
-                return ToolOutput(success=False, error=f"SEARCH block: {error}")
-            needle_indent, file_indent = indents_for(new_content, search_val, match)
-            shifted = reindent(replace_val, needle_indent, file_indent)
-            new_content = new_content[: match.start] + shifted + new_content[match.end :]
-        return new_content, content, len(blocks)
+                return ToolOutput(success=False, error=f"SEARCH block {i}: {error}")
+            needle_indent, file_indent = indents_for(content, search_val, match)
+            spans.append((match.start, match.end, reindent(replace_val, needle_indent, file_indent), f"block {i}"))
+        applied = _apply_spans(content, spans)
+        if isinstance(applied, ToolOutput):
+            return applied
+        return applied[0], len(blocks)
 
     if old_string is None:
         return ToolOutput(
             success=False,
             error="Either old_string must be provided, or new_string must contain SEARCH/REPLACE blocks.",
         )
+    old_string = normalize_to_lf(old_string)
     match, error = find_unique(content, old_string)
     if match is None:
         return ToolOutput(success=False, error=error)
     needle_indent, file_indent = indents_for(content, old_string, match)
     shifted = reindent(new_string, needle_indent, file_indent)
-    return content[: match.start] + shifted + content[match.end :], content, 1
+    return content[: match.start] + shifted + content[match.end :], 1
 
 
-def _write(path: Path, old_content: str, new_content: str, blocks_applied: int) -> ToolOutput:
+def _write(path: Path, plan: EditPlan) -> ToolOutput:
     try:
-        current_content = path.read_text(encoding="utf-8")
+        # Raw bytes, to compare and write without newline translation.
+        current_raw = path.read_bytes().decode("utf-8")
     except OSError as exc:
         return ToolOutput(success=False, error=str(exc))
-    if current_content != old_content:
+    except UnicodeDecodeError as exc:
+        return ToolOutput(success=False, error=str(exc))
+    if current_raw != plan.raw_original:
         return ToolOutput(
             success=False,
             error=(
@@ -312,16 +385,17 @@ def _write(path: Path, old_content: str, new_content: str, blocks_applied: int) 
                 "Edit aborted to prevent data loss."
             ),
         )
+    final = plan.bom + restore_line_ending(plan.new_content, plan.ending)
     try:
-        path.write_text(new_content, encoding="utf-8")
+        path.write_bytes(final.encode("utf-8"))
     except OSError as exc:
         return ToolOutput(success=False, error=str(exc))
     return ToolOutput(
         success=True,
         data={
             "path": str(path),
-            "bytes_before": len(old_content.encode("utf-8")),
-            "bytes_after": len(new_content.encode("utf-8")),
-            "blocks_applied": blocks_applied,
+            "bytes_before": len(plan.raw_original.encode("utf-8")),
+            "bytes_after": len(final.encode("utf-8")),
+            "blocks_applied": plan.blocks_applied,
         },
     )

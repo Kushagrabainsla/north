@@ -20,11 +20,77 @@ than failing.
 from __future__ import annotations
 
 import difflib
+import re
+import unicodedata
 from dataclasses import dataclass
 
 # How much of the file to show around the closest match. Enough to re-anchor an
 # edit; short enough not to flood the model's context on every miss.
 _CONTEXT_LINES = 3
+
+# BOM (byte-order mark). Python's utf-8 decode keeps it as a leading character,
+# so it sits invisibly at the front of the string and defeats a match on text
+# the model copied from the top of the file. Split it off before matching and
+# put it back on write.
+_BOM = "\ufeff"
+
+
+def split_bom(text: str) -> tuple[str, str]:
+    """``(bom, body)`` - the leading BOM (or "") and the rest of the text."""
+    if text.startswith(_BOM):
+        return _BOM, text[len(_BOM) :]
+    return "", text
+
+
+def detect_line_ending(text: str) -> str:
+    r"""The file's dominant line ending: ``"\r\n"`` or ``"\n"``.
+
+    Whichever appears first wins - a file is virtually never a mix, and the first
+    ending is what the rest will be restored to on write.
+    """
+    crlf = text.find("\r\n")
+    lf = text.find("\n")
+    if lf == -1 or crlf == -1:
+        return "\n"
+    return "\r\n" if crlf < lf else "\n"
+
+
+def normalize_to_lf(text: str) -> str:
+    r"""Collapse ``\r\n`` and lone ``\r`` to ``\n`` so matching is ending-agnostic.
+
+    The model writes ``old_string`` with ``\n``; the file on Windows has ``\r\n``.
+    Matching in LF space is what makes an exact copy actually match.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def restore_line_ending(text: str, ending: str) -> str:
+    r"""Re-apply the file's original ending to LF-normalized *text* before writing."""
+    return text.replace("\n", "\r\n") if ending == "\r\n" else text
+
+
+# Unicode look-alikes a model emits where the file has plain ASCII: smart quotes,
+# the dash family, and non-breaking / exotic spaces. Folding these is a
+# last-resort match only - and, like every tolerant pass here, is accepted only
+# when it lands in exactly one place.
+_SMART_SINGLE_QUOTES = re.compile("[\u2018\u2019\u201a\u201b]")
+_SMART_DOUBLE_QUOTES = re.compile("[\u201c\u201d\u201e\u201f]")
+_DASHES = re.compile("[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]")
+_SPACES = re.compile("[\u00a0\u2002-\u200a\u202f\u205f\u3000]")
+
+
+def normalize_unicode(text: str) -> str:
+    """Fold Unicode punctuation/spacing to ASCII for a tolerant match.
+
+    NFKC first (canonical compatibility form), then map smart quotes, the dash
+    family, and exotic spaces to their ASCII equivalents. Character count is
+    preserved per substitution so match offsets stay meaningful line-for-line.
+    """
+    text = unicodedata.normalize("NFKC", text)
+    text = _SMART_SINGLE_QUOTES.sub("'", text)
+    text = _SMART_DOUBLE_QUOTES.sub('"', text)
+    text = _DASHES.sub("-", text)
+    return _SPACES.sub(" ", text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +99,9 @@ class Match:
 
     start: int
     end: int
-    #: "exact" or "reindented" - a reindented match had its replacement shifted
-    #: to the file's own indentation.
+    #: "exact", "reindented" (a tolerant match whose replacement was shifted to
+    #: the file's own indentation), or "unicode" (matched after folding Unicode
+    #: look-alikes to ASCII).
     how: str
 
 
@@ -111,6 +178,38 @@ def _tolerant_spans(content: str, needle: str) -> list[tuple[int, int, str, str]
     return spans
 
 
+def _unicode_spans(content: str, needle: str) -> list[tuple[int, int, str, str]]:
+    """Windows matching *needle* once Unicode look-alikes are folded to ASCII.
+
+    Same line-based shape as ``_tolerant_spans`` (so line count and offsets into
+    the original *content* are preserved), but each line is compared after
+    ``normalize_unicode`` and leading/trailing whitespace is ignored. This is the
+    last resort: it catches smart quotes and dash/space look-alikes the model
+    emitted where the file has plain ASCII.
+    """
+    trailing_newline = needle.endswith("\n")
+    body = needle[:-1] if trailing_newline else needle
+    needle_lines = body.split("\n")
+    if not needle_lines or not body.strip():
+        return []
+    wanted = [normalize_unicode(line).strip() for line in needle_lines]
+
+    content_lines = content.split("\n")
+    starts = _line_starts(content)
+    span_count = len(needle_lines)
+    spans: list[tuple[int, int, str, str]] = []
+    for i in range(len(content_lines) - span_count + 1):
+        window = content_lines[i : i + span_count]
+        if [normalize_unicode(line).strip() for line in window] != wanted:
+            continue
+        start = starts[i]
+        end = starts[i + span_count - 1] + len(content_lines[i + span_count - 1])
+        if trailing_newline and end < len(content):
+            end += 1
+        spans.append((start, end, _indent_of(window[0]), _indent_of(needle_lines[0])))
+    return spans
+
+
 def _numbered(content: str, first: int, last: int) -> str:
     lines = content.split("\n")
     lo, hi = max(0, first), min(len(lines), last)
@@ -174,6 +273,21 @@ def find_unique(content: str, needle: str) -> tuple[Match | None, str]:
             "Include more surrounding lines so it matches exactly one place."
         )
 
+    # Last resort: fold Unicode look-alikes (smart quotes, dashes, exotic spaces)
+    # to ASCII. A model quoting text north itself normalized (e.g. prose whose
+    # em-dashes were rewritten) can otherwise miss. Accepted only when unique.
+    unicode_spans = _unicode_spans(content, needle)
+    if len(unicode_spans) == 1:
+        start, end, _file_indent, _needle_indent = unicode_spans[0]
+        return Match(start, end, "unicode"), ""
+    if len(unicode_spans) > 1:
+        lines = sorted({content.count("\n", 0, start) + 1 for start, _e, _f, _n in unicode_spans})
+        shown = ", ".join(str(line) for line in lines[:8])
+        return None, (
+            f"old_string matches {len(unicode_spans)} places when Unicode punctuation is normalized "
+            f"(lines {shown}). Include more surrounding lines so it matches exactly one place."
+        )
+
     region = _closest_region(content, needle)
     hint = f"\nThe closest text in the file is:\n{region}" if region else ""
     return None, (
@@ -184,10 +298,14 @@ def find_unique(content: str, needle: str) -> tuple[Match | None, str]:
 
 
 def indents_for(content: str, needle: str, match: Match) -> tuple[str, str]:
-    """``(needle_indent, file_indent)`` for a reindented match; empty for exact."""
-    if match.how != "reindented":
+    """``(needle_indent, file_indent)`` for a tolerant/unicode match; empty for exact."""
+    if match.how == "reindented":
+        spans = _tolerant_spans(content, needle)
+    elif match.how == "unicode":
+        spans = _unicode_spans(content, needle)
+    else:
         return "", ""
-    for start, _end, file_indent, needle_indent in _tolerant_spans(content, needle):
+    for start, _end, file_indent, needle_indent in spans:
         if start == match.start:
             return needle_indent, file_indent
     return "", ""
