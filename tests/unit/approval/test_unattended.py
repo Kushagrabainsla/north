@@ -54,8 +54,10 @@ def test_no_workspace_rejected(tmp_path: Path):
 
 
 def test_extra_commands_extend_allowlist():
-    p = UnattendedPolicy(allowed_commands=("pytest", "just test"))
+    """A command from settings still extends the list, for configs predating the rule table."""
+    p = UnattendedPolicy(extra_commands=("just test",))
     assert p.approves_command("just test") is True
+    assert p.approves_command("pytest") is True, "the shipped defaults must still apply"
 
 
 def test_safe_git_actions_approved():

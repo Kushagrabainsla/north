@@ -606,13 +606,14 @@ interface ContextDoc { document: string; content: string; }
 // four different states of visibility: the documents were editable here, the
 // facts were listed below them, and the episodes and approval decisions had no
 // endpoint at all - north was learning things nobody could look at.
-type MemoryTab = "documents" | "facts" | "episodes" | "approvals";
+type MemoryTab = "documents" | "facts" | "episodes" | "approvals" | "rules";
 
 const MEMORY_TABS: [MemoryTab, string][] = [
   ["documents", "Documents"],
   ["facts", "Facts"],
   ["episodes", "Episodes"],
   ["approvals", "Approvals"],
+  ["rules", "Safe actions"],
 ];
 
 interface Episode { id: string; task_id: string; domain: string; outcome: string; summary: string; timestamp: string; }
@@ -654,6 +655,120 @@ function ApprovalMemoryPanel() {
         <button className="ghost-button danger-link" disabled={busy === row.fingerprint}
           onClick={() => forget(row)}>Forget</button>
       </div>) : <Empty>Nothing learned yet. Approve or reject an action and it appears here.</Empty>}
+  </Panel>;
+}
+
+interface UnattendedRule {
+  id: string; kind: string; pattern: string; enabled: boolean; source: string;
+  note: string; fire_count: number; last_fired_at: string | null;
+}
+interface UnattendedRules { mode: string; active: boolean; kinds: string[]; rules: UnattendedRule[]; }
+
+const KIND_LABELS: Record<string, string> = {
+  command: "Commands",
+  git: "Git actions",
+  device: "Device toggles",
+  self_message: "Messages to you",
+};
+
+const KIND_HELP: Record<string, string> = {
+  command: "Run without asking. Matched as a whole command or a prefix; chaining, pipes and redirects are always refused.",
+  git: "Local, reversible git only. Push, pull, merge and forced variants are never auto-approved.",
+  device: "Trivially reversible physical actions, where the undo is another toggle.",
+  self_message: "Messages addressed to you. A message to anyone else is never auto-approved.",
+};
+
+// The safe-action list north runs in `auto` mode without asking. It used to be a
+// tuple in a source file: you could not see it, add to it, or take anything out
+// of it. approval_memory next door already settled the principle - a decision
+// that cannot be withdrawn is not consent - and a hardcoded allowlist fails it.
+function SafeActionsPanel() {
+  const resource = useResource<UnattendedRules>("/web/api/unattended/rules", 10000);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [kind, setKind] = useState("command");
+  const [pattern, setPattern] = useState("");
+
+  const run = async (id: string, fn: () => Promise<unknown>) => {
+    setBusy(id); setError("");
+    try { await fn(); await resource.reload(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(""); }
+  };
+  const toggle = (row: UnattendedRule) =>
+    run(row.id, () => patch(`/web/api/unattended/rules/${encodeURIComponent(row.id)}`, { enabled: !row.enabled }));
+  const remove = (row: UnattendedRule) => {
+    const shipped = row.source === "builtin";
+    const question = shipped
+      ? `Disable the shipped rule "${row.pattern}"? It stays listed so you can restore it.`
+      : `Delete the rule "${row.pattern}"?`;
+    if (!window.confirm(question)) return;
+    return run(row.id, () => del(`/web/api/unattended/rules/${encodeURIComponent(row.id)}`));
+  };
+  const add = () => {
+    if (!pattern.trim()) return;
+    return run("new", async () => { await post("/web/api/unattended/rules", { kind, pattern: pattern.trim() }); setPattern(""); });
+  };
+  const restore = () => run("restore", () => post("/web/api/unattended/rules/restore", {}));
+
+  const data = resource.data;
+  const rules = data?.rules || [];
+  const kinds = data?.kinds || Object.keys(KIND_LABELS);
+
+  return <Panel title="Safe actions" label={`${rules.filter(r => r.enabled).length} active`}
+    actions={<button className="ghost-button" disabled={busy === "restore"} onClick={restore}>Restore shipped rules</button>}>
+    {error && <ErrorNotice message={error}/>}
+
+    {/* A rule only ever fires in `auto`. Listing rules that cannot fire, with
+        nothing saying so, is how someone concludes the feature is broken. */}
+    {data && !data.active && <div className="notice">
+      These rules are inactive: north is in <b>{data.mode}</b> mode and asks about everything.
+      They apply in <b>auto</b> mode.
+    </div>}
+
+    <p className="muted memory-note">
+      What north may do without asking, in auto mode. Two things are never on this list, whatever you
+      add: sending something to another person, and spending money. A sent email cannot be unsent.
+    </p>
+
+    <div className="fact-editor">
+      <select value={kind} onChange={e => setKind(e.target.value)}>
+        {kinds.map(k => <option key={k} value={k}>{KIND_LABELS[k] || k}</option>)}
+      </select>
+      <input value={pattern} onChange={e => setPattern(e.target.value)}
+        placeholder={kind === "command" ? "e.g. make lint" : "e.g. fetch"} onKeyDown={e => { if (e.key === "Enter") add(); }}/>
+      <button className="ghost-button" disabled={busy === "new"} onClick={add}>Add rule</button>
+    </div>
+
+    {resource.loading ? <Loading/> : kinds.map(k => {
+      const forKind = rules.filter(r => r.kind === k);
+      if (!forKind.length) return null;
+      return <div className="rule-group" key={k}>
+        <div className="editor-label">{KIND_LABELS[k] || k}</div>
+        <p className="muted memory-note">{KIND_HELP[k]}</p>
+        {forKind.map(row => <div className={`memory-row ${row.enabled ? "" : "rule-disabled"}`} key={row.id}>
+          <div className="memory-main">
+            <b>{row.pattern}</b>
+            <small>
+              {row.source === "builtin" ? "shipped" : "yours"}
+              {!row.enabled && " · disabled"}
+              {/* A rule that has fired 40 times is a different object from one
+                  that never has, and that is what you want to see before keeping it. */}
+              {row.fire_count > 0
+                ? ` · used ${row.fire_count}×${row.last_fired_at ? `, last ${timeAgo(row.last_fired_at)}` : ""}`
+                : " · never used"}
+            </small>
+          </div>
+          <div className="fact-actions">
+            <button disabled={busy === row.id} onClick={() => toggle(row)}>{row.enabled ? "Disable" : "Enable"}</button>
+            <button className="danger-link" disabled={busy === row.id} onClick={() => remove(row)}>
+              {row.source === "builtin" ? "Remove" : "Delete"}
+            </button>
+          </div>
+        </div>)}
+      </div>;
+    })}
+    {!resource.loading && !rules.length && <Empty>No safe actions configured.</Empty>}
   </Panel>;
 }
 
@@ -709,6 +824,7 @@ export function Memory() {
 
     {tab === "episodes" && <EpisodesPanel/>}
     {tab === "approvals" && <ApprovalMemoryPanel/>}
+    {tab === "rules" && <SafeActionsPanel/>}
     {onDocuments && <Bootstrap embedded/>}
   </div>;
 }

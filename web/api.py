@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from approval.unattended_rules import KINDS as RULE_KINDS
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
@@ -33,6 +34,7 @@ router = APIRouter(
     # Bound first so routes can reach this app's wiring via current_services().
     dependencies=[Depends(bind_request_services), Depends(verify_api_access)],
 )
+
 
 @dataclass
 class ProviderAuthSession:
@@ -56,7 +58,6 @@ class WebRuntime:
 
     bootstrap_task: asyncio.Task | None = None
     auth_sessions: dict[str, ProviderAuthSession] = field(default_factory=dict)
-
 
 
 def configure(
@@ -192,9 +193,7 @@ async def _turn_payload(turn: Turn) -> dict[str, Any]:
 
 @router.get("/conversations")
 async def list_conversations(q: str = "", archived: bool = False, limit: int = 100) -> list[dict[str, Any]]:
-    conversations = await current_services().require("conversation_store").list(
-        query=q, archived=archived, limit=limit
-    )
+    conversations = await current_services().require("conversation_store").list(query=q, archived=archived, limit=limit)
     return [_conversation_payload(conversation) for conversation in conversations]
 
 
@@ -206,11 +205,15 @@ async def create_conversation(body: ConversationCreate) -> dict[str, Any]:
 
 @router.patch("/conversations/{conversation_id}")
 async def update_conversation(conversation_id: str, body: ConversationUpdate) -> dict[str, Any]:
-    conversation = await current_services().require("conversation_store").update(
-        conversation_id,
-        title=body.title,
-        pinned=body.pinned,
-        archived=body.archived,
+    conversation = (
+        await current_services()
+        .require("conversation_store")
+        .update(
+            conversation_id,
+            title=body.title,
+            pinned=body.pinned,
+            archived=body.archived,
+        )
     )
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -256,11 +259,15 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
         if answer:
             context_parts.append(f"User: {item.prompt}\nNorth: {answer[:4000]}")
     context = "## Recent conversation\n" + "\n\n".join(context_parts) if context_parts else ""
-    task = await current_services().require("orchestrator").submit_task(
-        TaskRequest(
-            prompt=body.prompt,
-            context=context,
-            idempotency_key=f"web:{conversation_id}:{turn.id}",
+    task = (
+        await current_services()
+        .require("orchestrator")
+        .submit_task(
+            TaskRequest(
+                prompt=body.prompt,
+                context=context,
+                idempotency_key=f"web:{conversation_id}:{turn.id}",
+            )
         )
     )
     await store.attach_task(turn.id, task.task_id)
@@ -285,9 +292,7 @@ async def routing_decisions(
     task_id: str | None = None, part: str | None = None, limit: int = 50
 ) -> list[dict[str, Any]]:
     """Every endpoint a task's calls tried or skipped, and what each one answered."""
-    return current_services().require("inference_router").routing_decisions(
-        task_id=task_id, part=part, limit=limit
-    )
+    return current_services().require("inference_router").routing_decisions(task_id=task_id, part=part, limit=limit)
 
 
 def _bootstrap_overview(home: Path) -> tuple[list, list[str], bool]:
@@ -411,6 +416,73 @@ async def forget_memory_approval(fingerprint: str) -> None:
     memory = current_services().require("approval_memory")
     if not memory.forget(fingerprint):
         raise HTTPException(status_code=404, detail="No learned decision with that fingerprint")
+
+
+class UnattendedRuleCreate(BaseModel):
+    kind: str = Field(max_length=40)
+    pattern: str = Field(min_length=1, max_length=200)
+    note: str = Field(default="", max_length=500)
+
+
+class UnattendedRuleUpdate(BaseModel):
+    enabled: bool | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+@router.get("/unattended/rules")
+async def unattended_rules() -> dict[str, Any]:
+    """The safe-action list: what north runs in `auto` mode without asking.
+
+    Returned with the live approval mode, because a rule only ever fires in
+    `auto` - in `interactive` the whole table is inert. Showing rules that cannot
+    fire, with no indication of that, is how someone concludes the feature is
+    broken.
+    """
+    store = current_services().unattended_rules
+    north_settings = current_services().north_settings
+    mode = str(north_settings.autonomy) if north_settings else "interactive"
+    return {
+        "mode": mode,
+        "active": mode == "auto",
+        "kinds": list(RULE_KINDS),
+        "rules": [] if store is None else [rule.as_dict() for rule in store.all()],
+    }
+
+
+@router.post("/unattended/rules", status_code=201)
+async def add_unattended_rule(body: UnattendedRuleCreate) -> dict[str, Any]:
+    """Add a rule of your own to the safe-action list."""
+    store = current_services().require("unattended_rules")
+    try:
+        return store.add(body.kind, body.pattern, body.note).as_dict()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.patch("/unattended/rules/{rule_id:path}")
+async def update_unattended_rule(rule_id: str, body: UnattendedRuleUpdate) -> dict[str, Any]:
+    """Enable, disable or annotate one rule."""
+    store = current_services().require("unattended_rules")
+    updated = store.update(rule_id, enabled=body.enabled, note=body.note)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No rule with that id")
+    return updated.as_dict()
+
+
+@router.delete("/unattended/rules/{rule_id:path}", status_code=204)
+async def delete_unattended_rule(rule_id: str) -> None:
+    """Remove a rule. A shipped rule is disabled rather than deleted, so an
+    upgrade cannot decide to bring back something you took out."""
+    store = current_services().require("unattended_rules")
+    if not store.delete(rule_id):
+        raise HTTPException(status_code=404, detail="No rule with that id")
+
+
+@router.post("/unattended/rules/restore")
+async def restore_unattended_rules() -> dict[str, int]:
+    """Re-enable every shipped rule, re-adding any that were removed."""
+    store = current_services().require("unattended_rules")
+    return {"restored": store.restore_builtins()}
 
 
 class FactCreate(BaseModel):

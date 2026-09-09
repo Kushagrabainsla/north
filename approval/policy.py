@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from approval.mode import ApprovalMode
+from approval.unattended import forbidden_reason
 
 if TYPE_CHECKING:
     from approval.approval_memory import ApprovalMemory
@@ -92,6 +93,13 @@ class Action:
     # a fork bomb, writing to a raw device). Refused outright below autonomous,
     # where the operator has made the mode the only authority.
     obviously_destructive: bool = False
+    # Sends something to a person other than the operator, or spends money.
+    # Never auto-approved below autonomous, whatever the rule table says: a sent
+    # email cannot be unsent, and a payment cannot be taken back. Tools that know
+    # set these; `forbidden_reason` has a word-list backstop for those that
+    # do not yet.
+    reaches_third_party: bool = False
+    spends_money: bool = False
 
     def describe(self) -> str:
         """A short, stable identity for this action, for learned decisions.
@@ -189,13 +197,25 @@ class ApprovalPolicy:
         return Ruling(Verdict.ASK, "not covered by any rule")
 
     def _safe_subset(self, action: Action) -> Ruling | None:
-        """The deterministic allowlist, or None when it does not apply."""
+        """The deterministic allowlist, or None when it does not apply.
+
+        The hard rules are checked first, so no row in the rule table - and no
+        entry someone adds on the web UI - can make a send or a spend
+        auto-approvable. The table decides what is safe; it does not get to
+        decide what is unsafe.
+        """
         if self.unattended is None:
+            return None
+        if forbidden_reason(action):
             return None
         if action.kind is ActionKind.SHELL_COMMAND and self.unattended.approves_command(action.command):
             return Ruling(Verdict.ALLOW, "auto: safe command allowlist")
         if action.kind is ActionKind.GIT and self.unattended.approves_git(action.operation, action.args):
             return Ruling(Verdict.ALLOW, "auto: local-only git")
+        if action.kind is ActionKind.DEVICE and self.unattended.approves_device(action.operation):
+            return Ruling(Verdict.ALLOW, "auto: reversible device toggle")
+        if self.unattended.approves_self_message(action.operation):
+            return Ruling(Verdict.ALLOW, "auto: message to you")
         if (
             action.kind is ActionKind.FILE_EDIT
             and action.path is not None

@@ -16,7 +16,7 @@ import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from approval import Notifier, TerminalNotifier
 from approval.store import ApprovalStore
@@ -86,6 +86,10 @@ class Dependencies:
     # Semantic code index (#2 code RAG). Present only when embeddings are available;
     # backs the search_code tool. None when no embed_fn is wired.
     code_index: CodeIndex | None = field(default=None)
+    # The editable safe-action list behind the `auto` tier. Attached in the
+    # lifespan (it needs no async init, but the approval policy is built there),
+    # and read by the web API so the rules can be edited on the page.
+    unattended_rules: Any | None = field(default=None)
 
 
 _EMBED_CACHE_MAX_SIZE = 512

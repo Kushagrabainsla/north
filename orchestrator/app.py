@@ -30,6 +30,7 @@ from approval.policy import ApprovalPolicy
 from approval.telegram import TelegramNotifier
 from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
+from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import run_bootstrap_if_needed
 from config.dependencies import build_production_dependencies
 from config.settings import settings
@@ -465,6 +466,7 @@ def _configure_routers(
         fact_store=deps.fact_store,
         episodic_store=deps.episodic_store,
         approval_memory=approval_memory,
+        unattended_rules=deps.unattended_rules,
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
     )
@@ -761,6 +763,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("building tool registry")
     tool_graph = AgentRegistry.build_tool_graph(_AGENTS_DIR)
     approval_memory = ApprovalMemory(settings.north_home / "approval_memory.db")
+    # The safe-action list, in the same database as the learned decisions: both
+    # answer "what may north do without asking me", and it saves a 16th SQLite
+    # file in ~/.north. Shipped rules are seeded here on first run.
+    unattended_rules = UnattendedRuleStore(settings.north_home / "approval_memory.db")
+    deps.unattended_rules = unattended_rules
     judgement_filter = JudgementFilter(
         memory=deps.memory,
         inference_router=deps.cost_tracker,
@@ -772,7 +779,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # API takes effect immediately - no restart.
     approval_policy = ApprovalPolicy(
         mode_provider=lambda: deps.north_settings.autonomy,
-        unattended=UnattendedPolicy.from_settings(settings),
+        unattended=UnattendedPolicy.from_settings(settings, store=unattended_rules),
         approval_memory=approval_memory,
         llm_advisor=judgement_filter.advise,
     )

@@ -67,6 +67,10 @@ class ApiServices:
     # autonomous mode replays. Both are read by the Memory page.
     episodic_store: Any | None = None
     approval_memory: Any | None = None
+    # The editable safe-action list behind the `auto` tier, so the rules north
+    # runs without asking can be read and changed on the page rather than only
+    # in a source file.
+    unattended_rules: Any | None = None
     skill_registry: Any | None = None
     north_home: Any | None = None
     # Mutable per-app runtime state for the web layer (in-flight logins,
