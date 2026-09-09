@@ -89,6 +89,22 @@ class Card(BaseModel):
     # What came back: the field values as decided, after any edits. Written on
     # resolve, so a caller reads the *decided* work rather than what it proposed.
     response: dict[str, Any] = Field(default_factory=dict)
+    # Whether something is waiting on the answer. True for a guard-rail - an
+    # agent mid-action that cannot continue until you say yes. False for work
+    # north has finished and left for you: the task ends, the card stays, and
+    # you decide whenever. A blocking card cannot outlive its task; a
+    # non-blocking one is meant to.
+    blocking: bool = True
+    # What produced this card, for a card that outlives the task that made it.
+    # A card's life is otherwise scoped to its `task_id`, which is exactly wrong
+    # for prepared work: the task finishing is the *normal* case there, not the
+    # reason to throw the card away. Empty for an ordinary in-flight question.
+    source: str = ""
+
+    @property
+    def outlives_task(self) -> bool:
+        """Whether this card survives its task reaching a terminal state."""
+        return bool(self.source) or not self.blocking
 
     def field_values(self) -> dict[str, Any]:
         """The values as north filled them in, before the user touched anything."""

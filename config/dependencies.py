@@ -224,14 +224,10 @@ def _build_glossary_fn(cost_tracker: CostTracker) -> GlossaryFn:
         from inference.models import CompletionRequest, PoolPriority
         from utils.text import extract_json
 
-        blocks = "\n\n".join(
-            f"{token}:\n" + "\n".join(f"  - {c}" for c in facts) for token, facts in context.items()
-        )
+        blocks = "\n\n".join(f"{token}:\n" + "\n".join(f"  - {c}" for c in facts) for token, facts in context.items())
         prompt = load_prompt("prompts/fact_glossary.md").format(blocks=blocks)
         response = await cost_tracker.complete(
-            CompletionRequest(
-                prompt=prompt, priority=PoolPriority.LOW, component="fact_glossary", json_mode=True
-            )
+            CompletionRequest(prompt=prompt, priority=PoolPriority.LOW, component="fact_glossary", json_mode=True)
         )
         parsed = extract_json(response.text.strip())
         raw = parsed.get("glossary") if isinstance(parsed, dict) else None
@@ -334,7 +330,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
         cost_tracker=cost_tracker,
         stream_manager=EventStreamManager(run_store=agent_run_store),
-        approval_store=ApprovalStore(),
+        approval_store=ApprovalStore(settings.north_home / "approvals.db"),
         cron_store=UserCronStore(settings.north_home / "jobs.db"),
         confidence_tracker=confidence_tracker,
         episodic_store=episodic_store,

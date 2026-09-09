@@ -144,6 +144,34 @@ class UserInteraction:
         card = self._build(CardType.APPROVAL, task_id, agent, title, message, list(options), fields, context)
         return await self.request_decision(card, event=CardEvent.APPROVAL, timeout=timeout)
 
+    async def hand_over(
+        self,
+        *,
+        task_id: str | None,
+        agent: str,
+        source: str,
+        title: str,
+        message: str,
+        fields: list[CardField],
+        context: str = "",
+        options: tuple[str, ...] | list[str] = APPROVAL_DEFAULT_OPTIONS,
+    ) -> Card:
+        """Leave finished work for the user and return at once, without waiting.
+
+        The counterpart to `request_work_approval`. That one blocks because the
+        caller needs the answer to continue; this one is for work that is already
+        done - north searched, drafted, and has nothing left to do until you look.
+        The task ends, the card stays, and you decide whenever.
+
+        Returns the card as surfaced (already resolved if the policy ruled on it),
+        so the caller can record which card it left behind. `source` is what keeps
+        the card alive past its task - see `Card.outlives_task`.
+        """
+        card = self._build(
+            CardType.APPROVAL, task_id, agent, title, message, list(options), fields, context
+        ).model_copy(update={"blocking": False, "source": source})
+        return await self.notify(card, event=CardEvent.APPROVAL)
+
     async def ask_user(
         self,
         *,
@@ -285,6 +313,8 @@ class UserInteraction:
                 # work from one that is only a question, without re-fetching it.
                 "fields": [field.model_dump(mode="json") for field in card.fields],
                 "context": card.context,
+                "blocking": card.blocking,
+                "source": card.source,
             },
         )
 

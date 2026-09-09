@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from agents.models import AgentDependencies
 from agents.registry import AgentRegistry
 from approval.approval_memory import ApprovalMemory
+from approval.batching import BatchingNotifier
 from approval.callback_server import app as callback_app
 from approval.judgement_filter import JudgementFilter
 from approval.policy import ApprovalPolicy
@@ -119,10 +120,15 @@ def _validate_config() -> None:
 
 def _attach_tui_notifier(deps) -> None:
     # Suppress macOS/terminal alerts while the TUI is connected - the global
-    # SSE stream handles approvals inline.
-    deps.notifier = TUIAwareNotifier(
-        stream_manager=deps.stream_manager,
-        fallback=deps.notifier,
+    # SSE stream handles approvals inline. Outside the TUI, prepared work is
+    # coalesced so a batch of it is one alert rather than one per item; a
+    # guard-rail card still goes straight through, because something is
+    # waiting on it.
+    deps.notifier = BatchingNotifier(
+        TUIAwareNotifier(
+            stream_manager=deps.stream_manager,
+            fallback=deps.notifier,
+        )
     )
 
 

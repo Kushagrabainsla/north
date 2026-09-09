@@ -111,6 +111,11 @@ export interface Approval {
   context: string;
   // The values as decided, once resolved.
   response: Record<string, unknown>;
+  // Whether something is waiting on the answer. False for work North has
+  // finished and left for you to decide whenever.
+  blocking: boolean;
+  // What produced a card that outlives the task that made it.
+  source: string;
 }
 
 export interface DashboardData {
