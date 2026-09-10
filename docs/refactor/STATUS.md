@@ -80,6 +80,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | Extract update install-spec resolution | Complete | `80a1a79` | Focused pytest — 9 passed; full pytest — 2,073 passed, 3 skipped; ruff format/check; architecture mypy | `cli.update_spec` owns uv git-spec pinning; installation side effects remain in `cli.main`, which retains the existing helper name. |
 | Extract agent tool-result interpretation | Complete | `4c35ab2` | Focused pytest — 60 passed; full pytest — 2,076 passed, 3 skipped; ruff format/check; architecture mypy | `agents.tool_results` owns fail-safe success, refusal, unanswered-approval, and delegation-failure reading; `agents.agentic_llm_agent` keeps its existing private names as aliases. |
 | Extract fact deduplication normalization | Complete | `1d01293` | Focused pytest — 17 passed; full pytest — 2,079 passed, 3 skipped; ruff format/check; architecture mypy | `memory.dedup` owns filler-word canonicalization for duplicate fact detection; `memory.facts` retains its private helper name as an alias. |
+| Extract cockpit artifact path policy | Complete | `db26e31` | Focused pytest — 16 passed; full pytest — 2,083 passed, 3 skipped; ruff format/check; architecture mypy | `web.artifacts` owns permitted roots, state-file exclusion, task attribution, and identifier resolution; `web.api` keeps HTTP mapping. The ownership gate caught the new path and the manifest now declares it. |
 
 ## Stages 1–8
 
