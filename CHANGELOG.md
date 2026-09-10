@@ -4,6 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **Module boundaries are a required CI gate** (`.github/workflows/ci.yml`, `tests/unit/architecture/test_packaging.py`). A dedicated job enforces module ownership, import direction, task edit scopes, and the packaging contract - the `north` console script, package discoverability, and the sdist's exclusion of vendored frontend dependencies. Writing that gate surfaced that `mcp/` ships only as a namespace package, which is now guarded rather than incidental.
 - **Complete source-mutation scope coverage**. Semantic rename now authorizes every LSP workspace edit atomically, and direct-tool execution receives the same server-owned scope.
 - **Runtime task edit-scope enforcement**. Server-owned scopes now propagate from tasks through agents to `write_file` and `patch_file`; denied cross-module and unapproved protected-path writes fail before mutation.
 - **Fail-closed task edit-scope policy** (`architecture/scopes.py`). The reusable policy permits only declared modules/paths and requires explicit path authorization for protected modules.
@@ -17,6 +18,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **One parser reads provider retry timing** (`inference/durations.py`). The rate-limit reader and the OpenAI-compatible provider each carried a byte-identical protobuf Duration parser; a test now asserts both call sites resolve to the same function, so the copy cannot come back.
 - **TUI text and slash-input parsing have a focused owner** (`cli/tui_text.py`). Turn rendering, token estimation, and command-argument parsing are testable without starting the app.
 - **Artifact path policy has a focused web owner** (`web/artifacts.py`). Permitted roots, state-file exclusion, task attribution, and identifier resolution are testable without HTTP, and escape attempts are covered directly.
 - **Fact deduplication normalization has a focused memory owner** (`memory/dedup.py`). The filler-word vocabulary and text canonicalization used to spot restated facts are defined and tested in one place.

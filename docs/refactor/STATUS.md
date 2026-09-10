@@ -83,6 +83,57 @@ This ledger is the durable execution record for [the approved refactor program](
 | Extract cockpit artifact path policy | Complete | `db26e31` | Focused pytest — 16 passed; full pytest — 2,083 passed, 3 skipped; ruff format/check; architecture mypy | `web.artifacts` owns permitted roots, state-file exclusion, task attribution, and identifier resolution; `web.api` keeps HTTP mapping. The ownership gate caught the new path and the manifest now declares it. |
 | Extract TUI text and slash-input parsing | Complete | `d850617` | Focused pytest — 28 passed; full pytest — 2,087 passed, 3 skipped; ruff format/check; architecture mypy | `cli.tui_text` owns turn rendering, token estimation, and slash-argument/context-document parsing; `cli.tui` retains its private names as aliases. |
 
+## Stage 7 — Evidence-based duplication reduction
+
+Duplication was located mechanically, not by impression: an AST pass hashed every
+normalized function body (three or more statements) across the repository and
+grouped identical implementations appearing in more than one file. That found
+**10 groups**, of which exactly **one was production code**; the rest are test
+helpers, where local fixtures are preferable to shared indirection.
+
+| Unit | Status | Commit | Validation evidence | Notes |
+|---|---|---|---|---|
+| Unify the provider duration parser | Complete | `21ee069` | Focused pytest — 59 passed; full pytest — 2,106 passed, 3 skipped; ruff format/check; architecture mypy | `inference.rate_limit_status` and `inference.providers.openai_compat` held byte-identical protobuf Duration parsers. `inference.durations` now owns it; a test asserts both call sites resolve to the same function object, so the copy cannot silently return. |
+
+One near-duplicate was deliberately left alone: `memory.facts` matches
+`SECRET_RE | CC_RE` while `utils.secrets.contains_secret` also matches
+`TOKEN_RE`. Unifying them would make the fact store start rejecting content it
+currently accepts, which is a behavior change and needs its own decision. Recorded
+in [the compatibility-seam register](COMPATIBILITY_SEAMS.md).
+
+**Stage 7 status: Complete.** The one proven production duplicate is gone with
+regression coverage; no other cross-file production duplication is detectable by
+the scan above.
+
+## Stage 8 — Fitness functions and completion audit
+
+| Unit | Status | Commit | Validation evidence | Notes |
+|---|---|---|---|---|
+| Make boundaries, ownership, scopes and packaging required CI gates | Complete | `1aa7e37` | CI YAML parsed; architecture pytest — 14 passed; mypy `inference/ architecture/` — no issues in 51 files; full pytest — 2,106 passed, 3 skipped | New `architecture` job fails fast and names the reason; the type gate now also covers `architecture/`. |
+| Pin the packaging contract | Complete | `0554f2f` | Architecture pytest — 14 passed; `uv build` succeeded; wheel inspected | `test_packaging.py` asserts the `north` console script and target, package discoverability, `tests*` exclusion, and the `web/node_modules` sdist prune. It also caught that `mcp/` has no `__init__.py` and ships only because namespace discovery is enabled - now guarded. |
+| Update contributor and agent guidance | Complete | `1aa7e37` | Reviewed against the enforced tests | `CONTRIBUTING.md` documents each gate, what fails it, and the layer direction. |
+| Track every compatibility shim | Complete | `1aa7e37` | Each claim verified by import and object-identity checks | [COMPATIBILITY_SEAMS.md](COMPATIBILITY_SEAMS.md): no temporary exemptions outstanding; every Stage 5 re-export has an owner and removal condition. |
+
+### Final audit
+
+Measured on `1aa7e37`:
+
+| Property | Result |
+|---|---|
+| Modules declared, each owning its paths exactly once | 18 across 6 layers |
+| Manifest `temporary_exemptions` | None remaining |
+| Forbidden import edges | 23, down from 27 at baseline; graph matches the checked-in baseline exactly |
+| Protected modules requiring explicit authorization to edit | `architecture`, `safety_policy`, `composition.app`, `application.approval`, `integrations.tools` |
+| Architecture gate tests | 14, required in CI |
+| Full suite | 2,106 passed, 3 skipped |
+| Pre-existing non-fatal warnings | 4, unchanged throughout the program |
+
+The 23 remaining edges are declared debt, not exemptions: each is listed in
+`architecture/import-baseline.txt`, and the gate fails on any pair not in that
+file. Paying one down means deleting its line in the same change.
+
+**Stage 8 status: Complete.**
+
 ## Stages 1–8
 
 | Stage | Status | Preconditions | Completion evidence |
@@ -93,8 +144,8 @@ This ledger is the durable execution record for [the approved refactor program](
 | 4. Remove reverse dependencies | Complete | Stage 3 complete | Integration modules no longer import orchestration internals; platform/common has no upward dependencies; forbidden compatibility edges decreased from 27 to 23. |
 | 5. Split oversized modules | Complete | Stage 4 complete | Every priority module in the plan now has at least one cohesive extraction with focused tests: orchestrator, cli/main, cli/tui, agentic agent, memory facts, web api. |
 | 6. Physical package migration | Not executed (decided) | Stage 5 complete | [ADR 0004](../adr/0004-keep-top-level-packages.md): packages stay at the repository root. The verification this stage required is now permanent in `tests/unit/architecture/test_packaging.py`. |
-| 7. Duplication reduction | Not started | Stage 6 complete | Shared-behavior regression coverage |
-| 8. Fitness functions and completion audit | Not started | Stage 7 complete | Required CI architecture gates |
+| 7. Duplication reduction | Complete | Stage 6 decided | An AST duplicate scan found one production duplicate; it is removed with shared-behavior tests (`21ee069`). |
+| 8. Fitness functions and completion audit | Complete | Stage 7 complete | Architecture and packaging gates are required in CI (`1aa7e37`); guidance, shim register, and final audit recorded. |
 
 ## Baseline Failures
 
