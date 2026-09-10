@@ -84,6 +84,7 @@ from cli.provider_env import save_provider_key as _save_provider_key
 from cli.provider_env import update_env_file as _update_env_file
 from cli.scheduling import day_selection
 from cli.tui import run as _tui_run
+from cli.web_build import web_build_is_stale as _web_build_is_stale
 from config.security import load_secret
 from utils.time import local_timezone_name
 from utils.version import NORTH_VERSION
@@ -2050,20 +2051,6 @@ def start(
         )
         raise typer.Exit(1) from None
     _start_with_docker(options, compose_file)
-
-
-def _web_build_is_stale(web_dir: Path) -> bool:
-    """Return whether the bundled web assets are missing or older than inputs."""
-    dist_index = web_dir / "dist" / "index.html"
-    if not dist_index.is_file():
-        return True
-    input_names = ("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "index.html")
-    inputs = [web_dir / name for name in input_names]
-    src_dir = web_dir / "src"
-    if src_dir.is_dir():
-        inputs.extend(path for path in src_dir.rglob("*") if path.is_file())
-    input_mtime = max((path.stat().st_mtime for path in inputs if path.is_file()), default=0)
-    return dist_index.stat().st_mtime < input_mtime
 
 
 def _ensure_web_build() -> None:
