@@ -53,6 +53,7 @@ from orchestrator.engineering_prompts import (
 )
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
 from orchestrator.failure_handler import FailureHandler, classify_error
+from orchestrator.handoff_artifacts import read_artifact as _read_artifact
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.isolation import AgentIsolation
 from orchestrator.journal import TaskJournal
@@ -134,27 +135,6 @@ _TERMINAL_TASK_ACTIONS: dict[str, str] = {
     # Not a failure of north's reasoning: no model was available to do the work.
     "task_skipped_model_unavailable": "skipped",
 }
-
-
-def _read_artifact(path: Path | None, max_chars: int) -> str | None:
-    """Read a handoff artifact file, capped; None if missing, unreadable, or empty.
-
-    Accepts None (an agent with no declared artifact) and returns None, so callers
-    on the fail-open paths never crash on a missing artifact path.
-    """
-    if path is None:
-        return None
-    try:
-        if not path.is_file():
-            return None
-        text = path.read_text(encoding="utf-8", errors="replace").strip()
-    except OSError:
-        return None
-    if not text:
-        return None
-    if len(text) > max_chars:
-        text = text[:max_chars] + f"\n[…{len(text) - max_chars} chars truncated]"
-    return text
 
 
 # Checkbox task line under the spec's "## Tasks" heading, e.g. "- [ ] 1. Do X".
