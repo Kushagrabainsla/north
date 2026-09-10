@@ -52,16 +52,23 @@ This ledger is the durable execution record for [the approved refactor program](
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
 | Replace UpdatePlanTool's concrete PlanStore dependency with a port | Complete | `2ff03d9` | Full pytest — 1,998 passed, 3 skipped; ruff format/check; architecture import-boundary regression | `tools.universal.update_plan` now consumes the platform `PlanStorePort`; `orchestrator.app` still injects the concrete `PlanStore`. |
-| Remove application.orchestration → integrations.tools runtime tool-dispatch dependency | Complete | uncommitted (do-not-commit directive) | Focused pytest — 42 passed (`test_tool_dispatch_boundary.py`, `test_tools_ports.py`, `test_commit.py`, `test_rename_symbol_edit_scope.py`, `test_imports.py`); affected suites — 366 passed (`tests/unit/orchestrator`, `tests/unit/architecture`, `tests/unit/tools`, `test_app_boots.py`); ruff check/format clean on changed files; mypy — no new errors on changed modules (the 6 orchestrator.py errors pre-exist on `5316e76`) | `orchestrator/orchestrator.py` and `orchestrator/commit.py` no longer import `tools`. They dispatch through platform ports in `utils/tools.py` (`ToolDispatchRegistryPort`, `ToolRunnerPort`, `ToolInput`/`ToolInputFactory`) and the platform `ToolNotFoundError` contract, which the concrete `tools.exceptions.ToolNotFoundError` now subclasses. The concrete `ToolInput`/`ToolRegistry` are wired only at the `orchestrator/app.py` composition root. The `application.orchestration → integrations.tools` baseline pair and manifest temporary exemption (removal_stage 4) are removed; the ports AST guard now asserts both dispatch modules are tools-free. |
+| Replace concrete event-stream dependency with EventEmitter port | Complete | `f73e923` | Full pytest — 2,003 passed, 3 skipped; ruff format/check; architecture mypy | Tools emit through the dependency-light `utils.events.EventEmitter` protocol rather than importing orchestration streaming internals. |
+| Replace active-session concrete dependency with a port | Complete | `b13a9a2` | Full pytest — 2,008 passed, 3 skipped; ruff format/check; architecture mypy | `GetActiveSessionsTool` consumes `utils.sessions.ActiveSessionStorePort`, eliminating the final integrations.tools → application.orchestration edge. |
+| Move handoff lifecycle policy to platform utilities | Complete | `e65c974` | Full pytest — 2,013 passed, 3 skipped; ruff format/check; architecture mypy | `utils.handoff` owns dependency-light handoff paths; `tools._path` preserves compatibility re-exports. |
+| Move weekday parsing to platform utilities | Complete | `32f9b78` | Full pytest — 2,038 passed, 3 skipped; ruff format/check; architecture mypy | Scheduling and cron retain the same parser object via compatibility re-exports from `utils.weekdays`. |
+| Introduce type-only tools planning ports | Complete | `8f98bf6` | Full pytest — 2,043 passed, 3 skipped; ruff format/check; architecture mypy | Application planning code depends on `utils.tools` protocols instead of integration tool types. |
+| Move filesystem pruning policy to platform utilities | Complete | `5316e76` | Full pytest — 2,048 passed, 3 skipped; ruff format/check; architecture mypy | `PRUNED_DIRS` has one platform owner while legacy imports retain object identity. |
+| Remove application.orchestration → integrations.tools runtime tool-dispatch dependency | Complete | `5cb5772` | Full pytest — 2,059 passed, 3 skipped; ruff format/check; architecture mypy | Orchestration dispatches through `utils.tools` ports; concrete `ToolInput` and `ToolRegistry` are injected solely at `orchestrator.app`. The baseline pair and its Stage 4 manifest exemption are removed. |
+| Remove platform.config → composition.app type-only dependency | Complete | `5349582` | Full pytest — 2,059 passed, 3 skipped; 524 files formatted; ruff clean; mypy — no issues in 5 files | `config.runtime` stores the live container opaquely, so platform configuration no longer imports the composition container even under `TYPE_CHECKING`. The obsolete baseline pair and stale manifest exemption are removed. |
 
 ## Stages 1–8
 
 | Stage | Status | Preconditions | Completion evidence |
 |---|---|---|---|
 | 1. Architecture map and ownership contracts | Complete | Stage 0 complete | Module map, contracts, manifest schema validation |
-| 2. Enforce boundaries and edit permissions | In progress | Stage 1 complete | Import and edit-scope enforcement tests |
-| 3. Composition root | Not started | Stage 2 complete | Startup, CLI, API compatibility checks |
-| 4. Remove reverse dependencies | Not started | Stage 3 complete | Boundary checks and cycle report |
+| 2. Enforce boundaries and edit permissions | Complete | Stage 1 complete | Import and edit-scope enforcement tests |
+| 3. Composition root | Complete | Stage 2 complete | Startup, CLI, API compatibility checks |
+| 4. Remove reverse dependencies | In progress | Stage 3 complete | Boundary checks and cycle report |
 | 5. Split oversized modules | Not started | Stage 4 complete | Focused extraction and regression tests |
 | 6. Physical package migration | Not started | Stage 5 complete | Install, persistence, API, CLI, Docker, frontend checks |
 | 7. Duplication reduction | Not started | Stage 6 complete | Shared-behavior regression coverage |

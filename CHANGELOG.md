@@ -17,6 +17,8 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Reverse-dependency boundaries are narrower and enforced** (`utils/plan.py`, `utils/events.py`, `utils/sessions.py`, `utils/tools.py`, `utils/handoff.py`, `utils/weekdays.py`, `utils/filesystem.py`). Tools and orchestration now use dependency-light ports and platform utilities rather than concrete reverse imports; compatibility re-exports preserve existing public behavior.
+- **Runtime configuration no longer imports the composition container**, including for static typing (`config/runtime.py`); its live-runtime handle is deliberately opaque and composition wiring remains at approved roots.
 - **Update-plan now uses an injected plan-store port** (`utils/plan.py`), removing its direct integration-to-orchestration dependency while retaining the concrete `PlanStore` at composition.
 - **Web provider-auth uses composition-provided credentials**; browser OAuth endpoints receive a server-wired Codex credential-provider factory while CLI auth remains offline-capable.
 - **Inference-router construction is centralized** in `inference.runtime`; production startup, provider credential refresh, and configuration reload now share one tested builder without interfaces importing the composition root.
