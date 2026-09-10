@@ -26,9 +26,9 @@ from dataclasses import dataclass
 
 from approval.approval_memory import ApprovalMemory
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS
-from approval.mode import ApprovalMode
 from approval.models import Card, CardType
 from approval.policy import Action
+from config.approval_mode import ApprovalMode
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from memory import ContextDocument, MemoryGateway

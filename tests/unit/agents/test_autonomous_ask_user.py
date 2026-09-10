@@ -11,7 +11,7 @@ import pytest
 from agents.agentic_llm_agent import AgenticLLMAgent
 from agents.general.agent import GeneralAgent
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
-from approval.mode import ApprovalMode
+from config.approval_mode import ApprovalMode
 from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
 from tools.confidence import ConfidenceTracker

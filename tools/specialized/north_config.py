@@ -249,7 +249,7 @@ class NorthConfigTool(Tool):
         return _dial_output("power", mode.value)
 
     async def _autonomy(self, params: dict) -> ToolOutput:
-        from approval.mode import parse_approval_mode
+        from config.approval_mode import parse_approval_mode
         from config.strategy import NorthSettings
 
         north_settings = NorthSettings(self._settings_path())

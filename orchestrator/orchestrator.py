@@ -17,8 +17,8 @@ from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier, UserInteraction
 from approval.approval_memory import ApprovalMemory
 from approval.decisions import DecisionLog
-from approval.mode import ApprovalMode, resolve_approval_mode
 from approval.store import ApprovalStore
+from config.approval_mode import ApprovalMode, resolve_approval_mode
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority

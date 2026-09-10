@@ -264,7 +264,7 @@ def _migrate_legacy_public_document(context_dir: Path) -> None:
 
 
 def _default_north_settings() -> NorthSettings:
-    from approval.mode import resolve_approval_mode
+    from config.approval_mode import resolve_approval_mode
 
     return NorthSettings(
         settings.north_home / "settings.json",

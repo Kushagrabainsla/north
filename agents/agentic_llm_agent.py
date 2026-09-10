@@ -957,7 +957,7 @@ class AgenticLLMAgent(LLMAgent):
 
     def _is_autonomous(self) -> bool:
         """True when the live approval mode is autonomous (no human to ask)."""
-        from approval.mode import ApprovalMode
+        from config.approval_mode import ApprovalMode
 
         ns = getattr(self._deps, "north_settings", None)
         return ns is not None and getattr(ns, "autonomy", None) == ApprovalMode.AUTONOMOUS

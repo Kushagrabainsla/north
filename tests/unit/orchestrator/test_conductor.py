@@ -157,7 +157,7 @@ def test_use_design_phase_only_for_feature_and_refactor():
 
 
 def test_design_phase_skipped_in_autonomous_mode():
-    from approval.mode import ApprovalMode
+    from config.approval_mode import ApprovalMode
 
     orch = _orch(names=("researcher", "architect", "coder", "reviewer"))
     orch._north_settings = type("S", (), {"autonomy": ApprovalMode.AUTONOMOUS})()

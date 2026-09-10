@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from approval.mode import ApprovalMode
+from config.approval_mode import ApprovalMode
 from config.strategy import NorthSettings, StrategyMode
 
 

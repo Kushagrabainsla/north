@@ -20,9 +20,9 @@ import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from approval.mode import approve_option
 from approval.models import ApprovalDecision, Card, CardField, CardType
 from approval.policy import Action, ActionKind, Verdict
+from config.approval_mode import approve_option
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

@@ -120,7 +120,7 @@ class TestBashToolApprovalBypass:
 
     @pytest.mark.asyncio
     async def test_a_learned_rule_can_approve_in_auto(self) -> None:
-        from approval.mode import ApprovalMode
+        from config.approval_mode import ApprovalMode
 
         async def advisor(action):
             return "approved", "learned rule"
@@ -148,7 +148,7 @@ class TestBashToolApprovalBypass:
     @pytest.mark.asyncio
     async def test_an_auto_approved_command_is_still_recorded(self) -> None:
         """Something north did unasked has to be visible afterwards."""
-        from approval.mode import ApprovalMode
+        from config.approval_mode import ApprovalMode
 
         tool = self._tool(mode=ApprovalMode.AUTO)
 
@@ -157,7 +157,7 @@ class TestBashToolApprovalBypass:
 
     @pytest.mark.asyncio
     async def test_auto_mode_still_gates_a_command_off_the_allowlist(self) -> None:
-        from approval.mode import ApprovalMode
+        from config.approval_mode import ApprovalMode
 
         tool = self._tool(mode=ApprovalMode.AUTO)
         tool._approval_store = rejecting_store()
@@ -218,7 +218,7 @@ class TestBashAllowDangerous:
         store = MagicMock()
         resolved = MagicMock(status="approved", chosen_option="Run")
         store.wait_for_decision = AsyncMock(return_value=resolved)
-        from approval.mode import ApprovalMode
+        from config.approval_mode import ApprovalMode
 
         tool = BashTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTONOMOUS))
         out = await tool.run(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
@@ -262,7 +262,7 @@ class TestBashAllowDangerous:
         resolved = MagicMock(status="approved", chosen_option="Run")
         store.wait_for_decision = AsyncMock(return_value=resolved)
 
-        from approval.mode import ApprovalMode
+        from config.approval_mode import ApprovalMode
 
         tool = BashTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTONOMOUS))
         out = await tool.run(ToolInput(params={"command": "sleep 100", "timeout": 1}))
