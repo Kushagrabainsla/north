@@ -71,7 +71,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | Extract bounded handoff-artifact reading from Orchestrator | Complete | `5fe0b08` | Focused pytest — 5 passed; full pytest — 2,063 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.handoff_artifacts` owns fail-open capped artifact reads; the existing private reader name remains imported by Orchestrator for compatibility. |
 | Extract primary handoff-artifact path resolution from Orchestrator | Complete | `464126f` | Focused pytest — 6 passed; full pytest — 2,064 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.handoff_artifacts` resolves the first declared stage output from its handoff template; the existing Orchestrator method remains the compatibility seam. |
 | Extract optional CLI dictation helpers | Complete | `03088a9` | Focused pytest — 5 passed; full pytest — 2,065 passed, 3 skipped; ruff format/check; architecture mypy | `cli.dictation` owns hotkey parsing and in-memory PCM WAV encoding; `cli.main` retains its existing helper names as compatibility aliases. |
-| Extract optional CLI dictation helpers | Complete | `03088a9` | Focused pytest — 5 passed; full pytest — 2,065 passed, 3 skipped; ruff format/check; architecture mypy | `cli.dictation` owns hotkey parsing and in-memory PCM WAV encoding; `cli.main` retains its existing helper names as compatibility aliases. |
+| Extract CLI provider environment-file operations | Complete | `58ab44b` | Focused pytest — 9 passed; full pytest — 2,067 passed, 3 skipped; ruff format/check; architecture mypy | `cli.provider_env` owns `.env` parsing, key updates, and process export; `cli.main` retains compatibility aliases. |
 
 ## Stages 1–8
 
