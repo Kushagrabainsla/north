@@ -69,7 +69,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | 1. Architecture map and ownership contracts | Complete | Stage 0 complete | Module map, contracts, manifest schema validation |
 | 2. Enforce boundaries and edit permissions | Complete | Stage 1 complete | Import and edit-scope enforcement tests |
 | 3. Composition root | Complete | Stage 2 complete | Startup, CLI, API compatibility checks |
-| 4. Remove reverse dependencies | In progress | Stage 3 complete | Boundary checks and cycle report |
+| 4. Remove reverse dependencies | Complete | Stage 3 complete | Integration modules no longer import orchestration internals; platform/common has no upward dependencies; forbidden compatibility edges decreased from 27 to 23. |
 | 5. Split oversized modules | Not started | Stage 4 complete | Focused extraction and regression tests |
 | 6. Physical package migration | Not started | Stage 5 complete | Install, persistence, API, CLI, Docker, frontend checks |
 | 7. Duplication reduction | Not started | Stage 6 complete | Shared-behavior regression coverage |
