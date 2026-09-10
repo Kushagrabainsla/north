@@ -78,6 +78,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | Extract frontend asset staleness detection | Complete | `cec6733` | Focused pytest — 9 passed; full pytest — 2,071 passed, 3 skipped; ruff format/check; architecture mypy | `cli.web_build` owns bundled-asset freshness comparison; npm invocation and CLI messaging stay in `cli.main`, which re-exports the existing helper name. |
 | Extract startup-failure log analysis | Complete | `22da021` | Focused pytest — 14 passed; full pytest — 2,071 passed, 3 skipped; ruff format/check; architecture mypy | `cli.startup_report` owns the exception-line pattern and best-effort log tail extraction; `cli.main` keeps failure reporting and its compatibility helper name. |
 | Extract update install-spec resolution | Complete | `80a1a79` | Focused pytest — 9 passed; full pytest — 2,073 passed, 3 skipped; ruff format/check; architecture mypy | `cli.update_spec` owns uv git-spec pinning; installation side effects remain in `cli.main`, which retains the existing helper name. |
+| Extract agent tool-result interpretation | Complete | `4c35ab2` | Focused pytest — 60 passed; full pytest — 2,076 passed, 3 skipped; ruff format/check; architecture mypy | `agents.tool_results` owns fail-safe success, refusal, unanswered-approval, and delegation-failure reading; `agents.agentic_llm_agent` keeps its existing private names as aliases. |
 
 ## Stages 1–8
 

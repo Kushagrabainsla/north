@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Tool-result interpretation has a focused agent owner** (`agents/tool_results.py`). Success, refusal kind, unanswered approvals, and delegation failures are read in one place with their fail-safe behavior covered directly.
 - **Update install-spec resolution has a focused CLI owner** (`cli/update_spec.py`). Git reference pinning is testable apart from `uv` invocation and restart handling.
 - **Startup-failure log analysis has a focused CLI owner** (`cli/startup_report.py`). Exception-tail extraction is independent of console reporting, and the pattern it needs now lives beside it.
 - **Frontend asset staleness has a focused CLI owner** (`cli/web_build.py`). Freshness comparison is separated from npm execution and command output while `cli.main` keeps its existing helper name.
