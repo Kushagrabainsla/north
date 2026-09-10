@@ -75,6 +75,8 @@ from cli.constants import (
     _VALID_DOCS,
     _Provider,
 )
+from cli.dictation import parse_hotkey as _parse_hotkey
+from cli.dictation import wav_bytes as _wav_bytes
 from cli.formatting import _reconstruct_task_output
 from cli.tui import run as _tui_run
 from config.security import load_secret
@@ -1556,33 +1558,6 @@ def status() -> None:
 
 _DICTATE_DEPENDENCIES = ("numpy", "sounddevice", "pynput")
 _TRANSCRIBE_TIMEOUT_SECONDS = 60.0
-
-
-def _parse_hotkey(hotkey: str) -> frozenset:
-    """The hotkey string ("right_alt+space") as the set of pynput keys it names."""
-    from pynput import keyboard as kb
-
-    def _key(part: str) -> object:
-        name = part.strip()
-        return getattr(kb.Key, name) if hasattr(kb.Key, name) else kb.KeyCode.from_char(name)
-
-    return frozenset(_key(part) for part in hotkey.split("+"))
-
-
-def _wav_bytes(captured: list, sample_rate: int) -> bytes:
-    """The captured frames as a 16-bit PCM WAV, in memory."""
-    import io
-    import wave
-
-    import numpy as np
-
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(sample_rate)
-        wf.writeframes(np.concatenate(captured, axis=0).tobytes())
-    return buf.getvalue()
 
 
 class _PushToTalk:
