@@ -53,6 +53,7 @@ from orchestrator.engineering_prompts import (
 )
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
 from orchestrator.failure_handler import FailureHandler, classify_error
+from orchestrator.handoff_artifacts import primary_artifact_path
 from orchestrator.handoff_artifacts import read_artifact as _read_artifact
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.isolation import AgentIsolation
@@ -1550,10 +1551,7 @@ class Orchestrator:
         """Resolve a stage's primary declared handoff artifact (its first `produces`)."""
         agent = self._agent_registry.get(agent_name)
         produces = getattr(agent.config, "produces", None) or []
-        if not produces:
-            return None
-        resolved = produces[0].replace("{handoff_dir}", handoff_dir_for(task_id))
-        return Path(resolved)
+        return primary_artifact_path(produces, handoff_dir_for(task_id))
 
     async def _collect_handoff_artifacts(self, task_id: str, agent_names: list[str]) -> tuple[list[str], list[str]]:
         """Read each stage's primary artifact; return (context snippets, names missing it)."""

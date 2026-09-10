@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from orchestrator.handoff_artifacts import read_artifact
 
 
@@ -17,3 +19,12 @@ def test_read_artifact_strips_and_caps_content(tmp_path) -> None:
     artifact.write_text("  abcdef  ", encoding="utf-8")
 
     assert read_artifact(artifact, 3) == "abc\n[…3 chars truncated]"
+
+
+def test_primary_artifact_path_resolves_only_the_first_declared_output() -> None:
+    from orchestrator.handoff_artifacts import primary_artifact_path
+
+    assert primary_artifact_path([], "/tmp/handoff") is None
+    assert primary_artifact_path(
+        ["{handoff_dir}/architecture/spec.md", "{handoff_dir}/ignored.md"], "/tmp/handoff"
+    ) == Path("/tmp/handoff/architecture/spec.md")
