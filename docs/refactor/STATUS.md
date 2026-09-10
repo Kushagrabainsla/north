@@ -47,6 +47,12 @@ This ledger is the durable execution record for [the approved refactor program](
 | Inject web Codex credential-provider factory | Complete | `2e15e2c` | Full pytest — 1,998 passed, 3 skipped; ruff format/check; architecture mypy; import-boundary regression | `orchestrator.app` now supplies the web OAuth factory; web routes no longer directly construct the provider, while CLI auth remains an offline local adapter. |
 | Centralize runtime inference-router construction | Complete | `98e1a7b` | Full pytest — 1,994 passed, 3 skipped; ruff format/check; architecture mypy; import-boundary regression | `inference.runtime` is the shared intelligence-layer factory; startup remains assembled in `config.dependencies.py`, while web/config reload paths no longer duplicate concrete router wiring. |
 
+## Stage 4 — Remove reverse dependencies
+
+| Unit | Status | Commit | Validation evidence | Notes |
+|---|---|---|---|---|
+| Replace UpdatePlanTool's concrete PlanStore dependency with a port | Complete | `2ff03d9` | Full pytest — 1,998 passed, 3 skipped; ruff format/check; architecture import-boundary regression | `tools.universal.update_plan` now consumes the platform `PlanStorePort`; `orchestrator.app` still injects the concrete `PlanStore`. |
+
 ## Stages 1–8
 
 | Stage | Status | Preconditions | Completion evidence |
