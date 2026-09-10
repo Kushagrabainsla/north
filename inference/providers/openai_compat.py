@@ -375,7 +375,6 @@ class OpenAICompatibleProvider:
         return max(0.0, reset - time.time())
 
     @staticmethod
-    @staticmethod
     def _parse_gemini_retry_delay(body: dict | None) -> float | None:
         """Extract Google's precise retry signal from a 429 error body.
 
