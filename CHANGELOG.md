@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Model-scarcity handling has a focused orchestration owner** (`orchestrator/model_scarcity.py`). Tagged agent failures and the honest pool-exhaustion message are isolated from pipeline flow while compatibility aliases preserve callers.
 - **Orchestrator model attribution has a focused owner** (`orchestrator/model_attribution.py`). Ledger scanning for independently-selected reviewer models is isolated behind the existing orchestrator seam, with stable ordering and fail-open behavior covered directly.
 - **Configuration-backed security now has a configuration owner** (`config/security.py`). Secret-file loading, shared-secret/API verification, and web-session authorization moved out of `utils`, preserving callers and behavior while removing its upward platform dependency.
 - **Reverse-dependency boundaries are narrower and enforced** (`utils/plan.py`, `utils/events.py`, `utils/sessions.py`, `utils/tools.py`, `utils/handoff.py`, `utils/weekdays.py`, `utils/filesystem.py`). Tools and orchestration now use dependency-light ports and platform utilities rather than concrete reverse imports; compatibility re-exports preserve existing public behavior.

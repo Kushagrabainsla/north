@@ -67,6 +67,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
 | Extract ledger-backed model attribution from Orchestrator | Complete | `fd19a3b` | Focused pytest — 15 passed; full pytest — 2,061 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.model_attribution` owns stable, fail-open ledger model attribution; the existing `Orchestrator._models_used_by` seam delegates to it, preserving callers. |
+| Extract model-scarcity classification from Orchestrator | Complete | `a3df595` | Focused pytest — 42 passed; full pytest — 2,061 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.model_scarcity` owns the tagged failure type, canonical user message, and all-model-unavailable classifier. Compatibility aliases retain existing `orchestrator.orchestrator` callers. |
 
 ## Stages 1–8
 
