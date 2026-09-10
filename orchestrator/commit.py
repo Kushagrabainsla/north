@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import logging
 
-from tools._path import PRUNED_DIRS
 from tools.models import ToolInput
+from utils.filesystem import PRUNED_DIRS
 
 logger = logging.getLogger(__name__)
 

@@ -24,6 +24,15 @@ from pathlib import Path
 
 from utils.edit_scope import EditAuthorizer
 
+# The pure filesystem-traversal exclusion set now lives in the platform layer
+# (``utils.filesystem``). It is re-exported here so existing ``tools._path``
+# importers (search_files, glob, context.repo_map) keep working unchanged and so
+# the file-walking tools and the orchestrator commit path share one source of
+# truth for what to prune.
+from utils.filesystem import (
+    PRUNED_DIRS,  # noqa: F401  (re-exported for tools._path compatibility)
+)
+
 # The per-task handoff directory functions now live in the platform layer
 # (``utils.handoff``), which owns where those directories are and their
 # lifecycle. They are re-exported here so the sensitive-path gate in this module
@@ -34,12 +43,6 @@ from utils.handoff import (
     ensure_handoff_dir,  # noqa: F401  (re-exported for tools._path compatibility)
     handoff_dir_for,  # noqa: F401  (re-exported for tools._path compatibility)
     prune_handoff_dirs,  # noqa: F401  (re-exported for tools._path compatibility)
-)
-
-# Directories never worth walking for a coding task. Shared by the
-# file-walking tools (search_files, glob) so the exclusion list cannot drift.
-PRUNED_DIRS: frozenset[str] = frozenset(
-    {".git", "node_modules", "__pycache__", ".venv", "venv", ".ruff_cache", ".pytest_cache", "build", "dist"}
 )
 
 # Home-relative directory names that hold credentials/secrets. File-walking
