@@ -189,3 +189,27 @@ async def test_exclude_models_for_dedups_multiple_models():
     orch = _orch([_completed("coder", "model-a, model-b"), _completed("coder", "model-a")])
     reviewer = _agent("reviewer", ["coder"])
     assert await orch._exclude_models_for("t1", reviewer) == ["model-a", "model-b"]
+
+
+async def test_models_used_by_preserves_first_seen_order() -> None:
+    from orchestrator.model_attribution import models_used_by
+
+    ledger = MagicMock()
+    ledger.query_summaries = AsyncMock(
+        return_value=[
+            _completed("coder", "model-a, model-b"),
+            _completed("reviewer", "model-c"),
+            _completed("coder", "model-a"),
+        ]
+    )
+
+    assert await models_used_by(ledger, "t1", {"coder"}) == ["model-a", "model-b"]
+
+
+async def test_models_used_by_fails_open_when_ledger_is_unavailable() -> None:
+    from orchestrator.model_attribution import models_used_by
+
+    ledger = MagicMock()
+    ledger.query_summaries = AsyncMock(side_effect=RuntimeError("ledger unavailable"))
+
+    assert await models_used_by(ledger, "t1", {"coder"}) == []

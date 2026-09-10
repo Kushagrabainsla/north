@@ -56,6 +56,7 @@ from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.isolation import AgentIsolation
 from orchestrator.journal import TaskJournal
+from orchestrator.model_attribution import models_used_by
 from orchestrator.models import (
     ExecutionMode,
     ExecutionPlan,
@@ -2097,30 +2098,8 @@ class Orchestrator:
         return failed
 
     async def _models_used_by(self, task_id: str, agent_names: set[str]) -> list[str]:
-        """Models the named agents used in this task, from their agent_completed entries.
-
-        De-duplicated in first-seen order; [] on any error. Used both to force an
-        independent second opinion (exclude a prior agent's model) and to check that a
-        critique actually ran on a different model.
-        """
-        if not agent_names:
-            return []
-        try:
-            entries = await self._ledger.query_summaries(LedgerFilters(task_id=task_id, limit=200))
-        except Exception:
-            logger.debug("model lookup failed for task %s", task_id, exc_info=True)
-            return []
-        models: list[str] = []
-        seen: set[str] = set()
-        for entry in entries:
-            if entry.action != "agent_completed" or entry.agent not in agent_names:
-                continue
-            for model in (entry.model_used or "").split(","):
-                model = model.strip()
-                if model and model not in seen:
-                    seen.add(model)
-                    models.append(model)
-        return models
+        """Models the named agents used in this task, from completed ledger entries."""
+        return await models_used_by(self._ledger, task_id, agent_names)
 
     async def _exclude_models_for(self, task_id: str, agent: Agent) -> list[str]:
         """Models *agent* must avoid this run, from its config's `distinct_from`.
