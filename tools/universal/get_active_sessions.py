@@ -10,12 +10,10 @@ See docs/CODING_STYLE.md Section 16.1.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from tools import Tool, ToolInput, ToolOutput
-
-if TYPE_CHECKING:
-    from orchestrator.running_tasks import RunningTaskStore
+from utils.sessions import ActiveSessionStorePort
 
 
 class GetActiveSessionsTool(Tool):
@@ -36,7 +34,7 @@ class GetActiveSessionsTool(Tool):
         "required": [],
     }
 
-    def __init__(self, running_task_store: RunningTaskStore | None = None) -> None:
+    def __init__(self, running_task_store: ActiveSessionStorePort | None = None) -> None:
         self._store = running_task_store
 
     def format_output(self, data: dict[str, Any]) -> str:

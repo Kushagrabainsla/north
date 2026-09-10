@@ -181,10 +181,6 @@ temporary_exemptions:
     to: integrations.tools
     reason: Orchestration currently constructs and invokes concrete tools; Stage 3 and Stage 4 replace this with composition-root wiring and injected ports.
     removal_stage: 4
-  - from: integrations.tools
-    to: application.orchestration
-    reason: UpdatePlanTool imports PlanStore directly; Stage 4 replaces this dependency with an injected port.
-    removal_stage: 4
   - from: platform.config
     to: application.orchestration
     reason: Existing type-only and dependency wiring references remain while composition wiring moves to the app layer.

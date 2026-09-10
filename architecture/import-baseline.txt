@@ -14,7 +14,6 @@ integrations.gateways -> integrations.tools
 integrations.tools -> application.agents
 integrations.tools -> application.approval
 integrations.tools -> application.jobs
-integrations.tools -> application.orchestration
 integrations.tools -> integrations.gateways
 intelligence.inference -> integrations.tools
 intelligence.memory -> intelligence.inference
