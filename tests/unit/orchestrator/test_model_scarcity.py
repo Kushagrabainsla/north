@@ -16,7 +16,8 @@ import pytest
 
 from approval.store import ApprovalStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from orchestrator.orchestrator import AgentFailure, Orchestrator, _is_model_scarcity
+from orchestrator.model_scarcity import AgentFailure, is_model_scarcity
+from orchestrator.orchestrator import Orchestrator
 
 _PREAMBLE = "implement it"
 
@@ -72,13 +73,13 @@ def test_agent_failure_is_a_str_carrying_error_type():
 
 
 def test_is_model_scarcity_requires_every_failure_to_be_model_unavailable():
-    assert _is_model_scarcity([AgentFailure("coder", "model_unavailable")]) is True
+    assert is_model_scarcity([AgentFailure("coder", "model_unavailable")]) is True
     # A real bug mixed in must NOT be treated as a graceful skip.
     mixed = [AgentFailure("coder", "model_unavailable"), AgentFailure("reviewer", "logic_error")]
-    assert _is_model_scarcity(mixed) is False
+    assert is_model_scarcity(mixed) is False
     # Plain strings (no error_type) count as non-model, and empty is not scarcity.
-    assert _is_model_scarcity(["coder"]) is False
-    assert _is_model_scarcity([]) is False
+    assert is_model_scarcity(["coder"]) is False
+    assert is_model_scarcity([]) is False
 
 
 # --------------------------------------------------------------- _finish_task
@@ -194,4 +195,4 @@ async def test_execute_agent_group_tags_real_exhaustion_as_model_unavailable():
     failures = await orch._execute_agent_group("t1", "review it", [agent])
     assert failures == ["reviewer"]
     assert failures[0].error_type == "model_unavailable"
-    assert _is_model_scarcity(failures) is True
+    assert is_model_scarcity(failures) is True

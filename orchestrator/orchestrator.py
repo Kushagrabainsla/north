@@ -57,6 +57,15 @@ from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.isolation import AgentIsolation
 from orchestrator.journal import TaskJournal
 from orchestrator.model_attribution import models_used_by
+from orchestrator.model_scarcity import (
+    MODEL_SCARCITY_MESSAGE as _MODEL_SCARCITY_MESSAGE,
+)
+from orchestrator.model_scarcity import (
+    AgentFailure,
+)
+from orchestrator.model_scarcity import (
+    is_model_scarcity as _is_model_scarcity,
+)
 from orchestrator.models import (
     ExecutionMode,
     ExecutionPlan,
@@ -125,37 +134,6 @@ _TERMINAL_TASK_ACTIONS: dict[str, str] = {
     # Not a failure of north's reasoning: no model was available to do the work.
     "task_skipped_model_unavailable": "skipped",
 }
-
-# User-facing reason for a model-scarcity skip. Kept as one literal string so the
-# ledger, the SSE event, and any report all say the same honest thing.
-_MODEL_SCARCITY_MESSAGE = "model pool exhausted - retry when model access recovers"
-
-
-class AgentFailure(str):
-    """A failed agent's name, tagged with its classified ``error_type``.
-
-    Subclasses ``str`` (its value *is* the agent name), so it flows unchanged
-    through every existing failures-list consumer - ``", ".join(...)``, ``len``,
-    truthiness, equality by name. The terminal-outcome logic reads ``.error_type``
-    to tell genuine failures apart from model scarcity, without re-deriving it
-    from ledger history (which is racy across retries and duplicate names).
-    """
-
-    error_type: str | None
-
-    def __new__(cls, agent_name: str, error_type: str | None = None) -> AgentFailure:
-        obj = super().__new__(cls, agent_name)
-        obj.error_type = error_type
-        return obj
-
-
-def _is_model_scarcity(failures: list[str]) -> bool:
-    """True only when there are failures and *every* one was model unavailability.
-
-    Any non-model failure makes this False, so a real bug is never mislabelled as
-    a graceful skip. Plain ``str`` failures (no ``error_type``) count as non-model.
-    """
-    return bool(failures) and all(getattr(f, "error_type", None) == "model_unavailable" for f in failures)
 
 
 def _read_artifact(path: Path | None, max_chars: int) -> str | None:
