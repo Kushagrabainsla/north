@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from orchestrator.agent_runs import AgentRunStore
     from orchestrator.orchestrator import Orchestrator
     from orchestrator.stream import EventStreamManager
-    from tools.confidence import ConfidenceTracker
+    from utils.tools import ConfidenceTrackerPort
 
 _STATE_ATTR = "north_services"
 
@@ -55,7 +55,7 @@ class ApiServices:
     context_injector: ContextInjector | None = None
     job_processor: JobProcessor | None = None
     inference_router: InferenceRouter | None = None
-    confidence_tracker: ConfidenceTracker | None = None
+    confidence_tracker: ConfidenceTrackerPort | None = None
     cron_store: UserCronStore | None = None
     north_settings: NorthSettings | None = None
     agent_run_store: AgentRunStore | None = None
