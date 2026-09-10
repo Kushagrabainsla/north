@@ -83,6 +83,7 @@ from cli.provider_env import load_env_keys as _load_env_keys
 from cli.provider_env import save_provider_key as _save_provider_key
 from cli.provider_env import update_env_file as _update_env_file
 from cli.scheduling import day_selection
+from cli.startup_report import last_error_lines as _last_error_lines
 from cli.tui import run as _tui_run
 from cli.web_build import web_build_is_stale as _web_build_is_stale
 from config.security import load_secret
@@ -96,10 +97,6 @@ _console = Console(force_terminal=sys.stdout.isatty())
 # server that died on boot printed a TypeError about the error reporter instead
 # of saying the server had died.
 _err_console = Console(stderr=True, force_terminal=sys.stderr.isatty())
-
-# The last line of a Python traceback: "TypeError: configure() got an ...".
-# That line is the answer; the frames above it are context.
-_EXCEPTION_LINE = re.compile(r"^\s*(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Exit|Interrupt)\b\s*:")
 
 
 def _provider_is_configured(provider: _Provider, env_keys: dict[str, str]) -> bool:
@@ -896,7 +893,6 @@ def create_agent(
     output_dir: Path | None = typer.Option(None, "--output-dir", help="Agent folder to create in (default: ./agents/)"),
 ) -> None:
     """Interactively scaffold a new domain-specialist agent."""
-    import re
 
     if name is None:
         name = typer.prompt("Agent name (slug, e.g. travel)")
@@ -1883,29 +1879,6 @@ def _report_startup_failure(what: str) -> None:
         for line in _last_error_lines(log):
             _err_console.print(f"  [red]{line}[/red]")
     raise typer.Exit(1) from None
-
-
-def _last_error_lines(log: Path, limit: int = 3) -> list[str]:
-    """The exception the server died on, if the log ends in one.
-
-    Looks for the exception line rather than the "Traceback" header: the header
-    arrives wrapped in whatever prefix the logger added ("ERROR:    Traceback"),
-    while the final line of a traceback is the one that actually says what
-    broke. Structured log records are skipped - they are JSON, and none of them
-    is the crash.
-
-    Best-effort by design: this runs while reporting another failure, so it must
-    never raise one of its own.
-    """
-    try:
-        raw = log.read_text(errors="replace").splitlines()
-    except Exception:
-        return []
-    lines = [line.rstrip() for line in raw[-400:] if line.strip() and not line.lstrip().startswith("{")]
-    for index in range(len(lines) - 1, -1, -1):
-        if _EXCEPTION_LINE.match(lines[index]):
-            return lines[max(0, index - limit + 1) : index + 1]
-    return lines[-limit:]
 
 
 @dataclass(frozen=True)
