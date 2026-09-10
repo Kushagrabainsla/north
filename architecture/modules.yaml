@@ -177,10 +177,6 @@ modules:
     validation: [tests/unit/agents/test_policy.py, tests/unit/tools/test_*safety.py]
 
 temporary_exemptions:
-  - from: application.orchestration
-    to: integrations.tools
-    reason: Orchestration currently constructs and invokes concrete tools; Stage 3 and Stage 4 replace this with composition-root wiring and injected ports.
-    removal_stage: 4
   - from: platform.config
     to: application.orchestration
     reason: Existing type-only and dependency wiring references remain while composition wiring moves to the app layer.

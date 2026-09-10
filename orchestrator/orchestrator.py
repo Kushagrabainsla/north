@@ -73,9 +73,6 @@ from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from orchestrator.tiering import resolve_model_pool
-from tools.exceptions import ToolNotFoundError
-from tools.models import ToolInput
-from tools.registry import ToolRegistry
 from utils.edit_scope import EditAuthorizer
 from utils.handoff import ensure_handoff_dir, handoff_dir_for
 from utils.ids import generate_id, generate_task_id
@@ -84,6 +81,11 @@ from utils.prompts import load_prompt
 from utils.tasks import spawn
 from utils.text import extract_json
 from utils.time import format_timestamp, utcnow
+from utils.tools import (
+    ToolDispatchRegistryPort,
+    ToolInputFactory,
+    ToolNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +212,8 @@ class Orchestrator:
         synthesizer: ResultSynthesizer | None = None,
         tracked_router: CostTracker | None = None,
         episodic_store: Any | None = None,
-        tool_registry: ToolRegistry | None = None,
+        tool_registry: ToolDispatchRegistryPort | None = None,
+        tool_input_factory: ToolInputFactory | None = None,
         default_workspace: str = "",
         extraction_pipeline: Any | None = None,
         worktree_isolation: bool = False,
@@ -255,6 +258,11 @@ class Orchestrator:
         self._tracked_router = tracked_router
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
+        # Composition-injected factory that builds a tool-call envelope
+        # (``tools.models.ToolInput``) without the orchestrator importing the
+        # concrete tool layer. ``None`` is tolerated so tests that never dispatch
+        # a tool can omit it; dispatch paths guard on it explicitly.
+        self._tool_input_factory = tool_input_factory
         # Task-scoped plan store: the conductor seeds it from the agreed spec's
         # tasks so the coder starts from (and resumes on) the agreed checklist.
         self._plan_store = plan_store
@@ -1382,6 +1390,8 @@ class Orchestrator:
         """
         if self._tool_registry is None:
             return
+        if self._tool_input_factory is None:
+            return
         try:
             git_tool = self._tool_registry.get("git")
         except Exception:
@@ -1389,7 +1399,7 @@ class Orchestrator:
         summary = " ".join(prompt.split())[:60]
         verb = f"fix ({round_label})" if round_label else "implement"
         try:
-            branch = await WorkCommitter(git_tool).commit(
+            branch = await WorkCommitter(git_tool, tool_input_factory=self._tool_input_factory).commit(
                 workspace=workspace,
                 task_id=task_id,
                 message=f"{verb}: {summary} (task {task_id})",
@@ -1843,13 +1853,15 @@ class Orchestrator:
         try:
             if self._tool_registry is None:
                 raise ToolNotFoundError("No tool registry available.")
+            if self._tool_input_factory is None:
+                raise ToolNotFoundError("No tool input factory available.")
             tool = self._tool_registry.get(plan.direct_tool)  # type: ignore[arg-type]
             params = {**plan.direct_tool_params}
             if workspace and "workspace" not in params:
                 params["workspace"] = workspace
             if task_id and "task_id" not in params:
                 params["task_id"] = task_id
-            result = await tool.run(ToolInput(params=params, edit_scope=edit_scope))
+            result = await tool.run(self._tool_input_factory(params=params, edit_scope=edit_scope))
             success = result.success
             output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
             # No image-interpretation branch here on purpose: every tool that returns

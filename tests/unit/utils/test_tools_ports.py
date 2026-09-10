@@ -48,17 +48,19 @@ class TestConcreteClassesSatisfyPorts:
 
 
 class TestPortsAreTypeOnlyForOrchestration:
-    """The type-only orchestration modules must not import from ``tools``."""
+    """The orchestration modules must not import from ``tools``.
+
+    Includes the runtime dispatch core: with the Stage 4 boundary in place, the
+    orchestrator and the work committer construct and invoke tools through
+    composition-injected platform ports (``ToolInputFactory``,
+    ``ToolDispatchRegistryPort``) and the platform ``ToolNotFoundError`` contract,
+    so they no longer reach into ``integrations.tools`` at all.
+    """
 
     TYPE_ONLY_MODULES = (
         "orchestrator/router.py",
         "orchestrator/api_context.py",
         "orchestrator/api/deps.py",
-    )
-
-    # The dispatch core still constructs and invokes concrete tools; the port
-    # extraction deliberately leaves these alone.
-    RUNTIME_DISPATCH_MODULES = (
         "orchestrator/orchestrator.py",
         "orchestrator/commit.py",
     )
@@ -75,9 +77,3 @@ class TestPortsAreTypeOnlyForOrchestration:
     def test_type_only_modules_do_not_import_tools(self) -> None:
         offenders = [m for m in self.TYPE_ONLY_MODULES if self._imports_tools(m)]
         assert offenders == [], f"still importing tools: {offenders}"
-
-    def test_runtime_dispatch_modules_still_import_tools(self) -> None:
-        # Guards the boundary of this refactor: if these ever stop importing
-        # tools it is a real change to dispatch, not a type-only cleanup.
-        missing = [m for m in self.RUNTIME_DISPATCH_MODULES if not self._imports_tools(m)]
-        assert missing == [], f"runtime dispatch no longer imports tools: {missing}"

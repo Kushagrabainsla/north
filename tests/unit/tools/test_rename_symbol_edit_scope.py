@@ -294,6 +294,7 @@ async def test_direct_dispatch_stamps_scope_onto_tool_input() -> None:
 
     orch = Orchestrator.__new__(Orchestrator)  # bypass heavy __init__; exercise one method
     orch._tool_registry = registry
+    orch._tool_input_factory = ToolInput
     orch._running_task_store = None
     orch._stream_manager = MagicMock()
     orch._stream_manager.emit = _async_noop
@@ -333,6 +334,7 @@ async def test_direct_dispatch_none_scope_leaves_input_unrestricted() -> None:
 
     orch = Orchestrator.__new__(Orchestrator)
     orch._tool_registry = registry
+    orch._tool_input_factory = ToolInput
     orch._running_task_store = None
     orch._stream_manager = MagicMock()
     orch._stream_manager.emit = _async_noop

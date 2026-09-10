@@ -9,7 +9,6 @@ application.jobs -> application.approval
 application.orchestration -> application.agents
 application.orchestration -> application.approval
 application.orchestration -> application.jobs
-application.orchestration -> integrations.tools
 integrations.gateways -> integrations.tools
 integrations.tools -> application.agents
 integrations.tools -> application.approval

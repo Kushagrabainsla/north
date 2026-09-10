@@ -580,6 +580,7 @@ async def test_execute_single_tool_passes_task_id(tmp_path):
     import unittest.mock as mock
 
     from orchestrator.models import ExecutionMode, ExecutionPlan
+    from tools.models import ToolInput
 
     orch, _, _ = _make_orchestrator(tmp_path)
 
@@ -591,6 +592,7 @@ async def test_execute_single_tool_passes_task_id(tmp_path):
 
     orch._tool_registry = mock.MagicMock()
     orch._tool_registry.get.return_value = mock_tool
+    orch._tool_input_factory = ToolInput
 
     plan = ExecutionPlan(
         task_id="t1",
@@ -1109,6 +1111,7 @@ async def test_single_tool_marks_side_effect_when_mutating(tmp_path):
 
     from orchestrator.models import ExecutionMode, ExecutionPlan
     from orchestrator.running_tasks import RunningTaskStore
+    from tools.models import ToolInput
 
     orch, _, _ = _make_orchestrator(tmp_path)
     store = RunningTaskStore(tmp_path / "rt.db")
@@ -1122,6 +1125,7 @@ async def test_single_tool_marks_side_effect_when_mutating(tmp_path):
     tool.format_output = mock.MagicMock(return_value="ok")
     orch._tool_registry = mock.MagicMock()
     orch._tool_registry.get.return_value = tool
+    orch._tool_input_factory = ToolInput
 
     plan = ExecutionPlan(
         task_id="t1",
@@ -1143,6 +1147,7 @@ async def test_single_tool_no_side_effect_when_readonly(tmp_path):
 
     from orchestrator.models import ExecutionMode, ExecutionPlan
     from orchestrator.running_tasks import RunningTaskStore
+    from tools.models import ToolInput
 
     orch, _, _ = _make_orchestrator(tmp_path)
     store = RunningTaskStore(tmp_path / "rt.db")
@@ -1156,6 +1161,7 @@ async def test_single_tool_no_side_effect_when_readonly(tmp_path):
     tool.format_output = mock.MagicMock(return_value="noon")
     orch._tool_registry = mock.MagicMock()
     orch._tool_registry.get.return_value = tool
+    orch._tool_input_factory = ToolInput
 
     plan = ExecutionPlan(
         task_id="t1",

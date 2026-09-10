@@ -62,6 +62,7 @@ from skills import retirement as skill_retirement
 from skills.distiller import SkillDistiller
 from tools._path import prune_handoff_dirs
 from tools.confidence import RELIABLE_TOOLS
+from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from tools.semantic.search_code import SearchCodeTool
 from tools.specialized._sandbox import SandboxConfig
@@ -410,6 +411,7 @@ def _build_orchestrator(
         tracked_router=deps.cost_tracker,
         episodic_store=deps.episodic_store,
         tool_registry=tool_registry,
+        tool_input_factory=ToolInput,
         default_workspace=settings.north_workspace,
         extraction_pipeline=extraction_pipeline,
         worktree_isolation=settings.worktree_isolation_enabled,
