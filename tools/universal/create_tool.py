@@ -20,8 +20,8 @@ if TYPE_CHECKING:
     from approval.base import Notifier
     from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
     from tools.registry import ToolRegistry
+    from utils.events import EventEmitter
 
 _TOOLS_ROOT = Path(__file__).parent.parent
 _AGENTS_ROOT = _TOOLS_ROOT.parent / "agents"
@@ -131,7 +131,7 @@ class CreateToolTool(ApprovalGatedTool):
         self,
         tool_registry: ToolRegistry | None = None,
         approval_store: ApprovalStore | None = None,
-        stream_manager: EventStreamManager | None = None,
+        stream_manager: EventEmitter | None = None,
         approval_timeout_seconds: float = 300.0,
         policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,

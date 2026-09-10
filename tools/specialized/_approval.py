@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from approval.base import Notifier
     from approval.policy import Ruling
     from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
+    from utils.events import EventEmitter
 
 _DEFAULT_OPTIONS = ("Run", "Cancel")
 
@@ -47,7 +47,7 @@ async def gate_action(
     message: str,
     task_id: str | None = None,
     options: tuple[str, ...] = _DEFAULT_OPTIONS,
-    stream_manager: EventStreamManager | None = None,
+    stream_manager: EventEmitter | None = None,
     notifier: Notifier | None = None,
     timeout: float = 300.0,
     declined: str = "Action cancelled by user.",

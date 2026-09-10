@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from approval.base import Notifier
     from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
+    from utils.events import EventEmitter
 
 _BLOCK_RE = re.compile(r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE", re.DOTALL)
 _MAX_DIFF_CHARS = 8_000
@@ -101,7 +101,7 @@ class PatchFileTool(ApprovalGatedTool):
     def __init__(
         self,
         approval_store: ApprovalStore | None = None,
-        stream_manager: EventStreamManager | None = None,
+        stream_manager: EventEmitter | None = None,
         approval_timeout_seconds: float = 300.0,
         policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,
