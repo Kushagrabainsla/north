@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from config.security import verify_secret
 from ledger.models import LedgerSource
 from orchestrator.api.deps import _get_orchestrator
 from orchestrator.models import TaskRequest
-from utils.security import verify_secret
 
 #
 # External services (GitHub, calendar, email) POST here to trigger agent tasks.

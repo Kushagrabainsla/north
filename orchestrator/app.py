@@ -34,6 +34,7 @@ from approval.unattended import UnattendedPolicy
 from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import run_bootstrap_if_needed
 from config.dependencies import build_production_dependencies
+from config.security import load_secret
 from config.settings import settings
 from gateways.telegram import TelegramGateway
 from jobs.models import Job
@@ -86,7 +87,6 @@ from tools.universal.update_plan import UpdatePlanTool
 from tools.universal.update_schedule import UpdateScheduleTool
 from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
-from utils.security import load_secret
 from utils.tasks import drain
 from utils.time import utcnow
 from utils.version import NORTH_VERSION

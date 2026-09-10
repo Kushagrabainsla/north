@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from config.security import verify_request_secret, verify_secret
 from config.settings import settings
-from utils.security import verify_request_secret, verify_secret
 
 
 def test_verify_secret_reloads_rotated_file_backed_key(tmp_path, monkeypatch) -> None:

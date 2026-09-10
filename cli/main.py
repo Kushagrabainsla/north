@@ -77,7 +77,7 @@ from cli.constants import (
 )
 from cli.formatting import _reconstruct_task_output
 from cli.tui import run as _tui_run
-from utils.security import load_secret
+from config.security import load_secret
 from utils.time import local_timezone_name
 from utils.version import NORTH_VERSION
 
@@ -272,8 +272,8 @@ def _launch_tui(
     if not _port_in_use(host, port) or not _is_north_server(host, port):
         _console.print("  [dim]server offline - starting…[/dim]")
         # Re-invoke `north start --no-chat` to start the server only, then TUI below.
+        from config.security import load_secret
         from config.settings import settings
-        from utils.security import load_secret
 
         settings.north_home.mkdir(parents=True, exist_ok=True)
         load_secret()

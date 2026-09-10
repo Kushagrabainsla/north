@@ -22,6 +22,5 @@ intelligence.workspace_context -> integrations.tools
 intelligence.workspace_context -> intelligence.inference
 interfaces.cli -> integrations.tools
 interfaces.web -> integrations.tools
-platform.common -> platform.config
 platform.config -> application.approval
 platform.ledger -> platform.common

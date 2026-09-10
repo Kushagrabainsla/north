@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from approval.unattended_rules import KINDS as RULE_KINDS
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
+from config.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
 from ledger.base import LedgerFilters
@@ -24,7 +25,6 @@ from orchestrator.api_context import bind_request_services, current_services, me
 from orchestrator.models import TaskRequest
 from tools._path import DB_SUFFIXES
 from tools.universal.browser import browser_availability
-from utils.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 
 from .conversations import ConversationStore, Turn
 

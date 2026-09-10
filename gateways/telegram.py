@@ -98,7 +98,7 @@ def _finished_output(entries: list[dict], task_id: str, poll: int) -> str | None
 def _headers() -> dict[str, str]:
     # Need both headers: X-Webhook-Secret for the webhook endpoint,
     # X-North-Secret for task-status polling (global Depends).
-    from utils.security import load_secret
+    from config.security import load_secret
 
     secret = load_secret()
     return {

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, FastAPI
 
 from agents.registry import AgentRegistry
+from config.security import verify_api_access
 from config.strategy import NorthSettings
 from inference.base import InferenceRouter
 from jobs.base import JobProcessor
@@ -23,7 +24,6 @@ from orchestrator.agent_runs import AgentRunStore
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
-from utils.security import verify_api_access
 
 if TYPE_CHECKING:
     from utils.tools import ConfidenceTrackerPort

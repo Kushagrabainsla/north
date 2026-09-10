@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from utils.security import verify_api_access
+from config.security import verify_api_access
 from web.api import session_router
 
 
