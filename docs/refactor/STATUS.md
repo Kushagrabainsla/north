@@ -62,6 +62,12 @@ This ledger is the durable execution record for [the approved refactor program](
 | Remove platform.config → composition.app type-only dependency | Complete | `5349582` | Full pytest — 2,059 passed, 3 skipped; 524 files formatted; ruff clean; mypy — no issues in 5 files | `config.runtime` stores the live container opaquely, so platform configuration no longer imports the composition container even under `TYPE_CHECKING`. The obsolete baseline pair and stale manifest exemption are removed. |
 | Move configuration-backed secret handling out of platform common | Complete | `2d33b54` | Full pytest — 2,059 passed, 3 skipped; ruff format/check; mypy — no issues in 5 files | `config.security` now owns secret-file loading, API authentication, and web-session handling; all consumers retain their behavior while `utils` no longer imports `config.settings`. The `platform.common → platform.config` baseline edge is removed. |
 
+## Stage 5 — Split oversized modules
+
+| Unit | Status | Commit | Validation evidence | Notes |
+|---|---|---|---|---|
+| Extract ledger-backed model attribution from Orchestrator | Complete | `fd19a3b` | Focused pytest — 15 passed; full pytest — 2,061 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.model_attribution` owns stable, fail-open ledger model attribution; the existing `Orchestrator._models_used_by` seam delegates to it, preserving callers. |
+
 ## Stages 1–8
 
 | Stage | Status | Preconditions | Completion evidence |
