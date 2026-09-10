@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Primary handoff-artifact resolution now shares its focused owner** (`orchestrator/handoff_artifacts.py`). The first declared stage output is resolved independently of pipeline control flow, preserving the existing Orchestrator seam.
 - **Handoff-artifact reading has a focused orchestration owner** (`orchestrator/handoff_artifacts.py`). Bounded, fail-open reads are isolated from orchestration flow and directly tested.
 - **Model-scarcity handling has a focused orchestration owner** (`orchestrator/model_scarcity.py`). Tagged agent failures and the honest pool-exhaustion message are isolated from pipeline flow while compatibility aliases preserve callers.
 - **Orchestrator model attribution has a focused owner** (`orchestrator/model_attribution.py`). Ledger scanning for independently-selected reviewer models is isolated behind the existing orchestrator seam, with stable ordering and fail-open behavior covered directly.

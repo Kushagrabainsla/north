@@ -69,6 +69,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | Extract ledger-backed model attribution from Orchestrator | Complete | `fd19a3b` | Focused pytest — 15 passed; full pytest — 2,061 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.model_attribution` owns stable, fail-open ledger model attribution; the existing `Orchestrator._models_used_by` seam delegates to it, preserving callers. |
 | Extract model-scarcity classification from Orchestrator | Complete | `a3df595` | Focused pytest — 42 passed; full pytest — 2,061 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.model_scarcity` owns the tagged failure type, canonical user message, and all-model-unavailable classifier. Compatibility aliases retain existing `orchestrator.orchestrator` callers. |
 | Extract bounded handoff-artifact reading from Orchestrator | Complete | `5fe0b08` | Focused pytest — 5 passed; full pytest — 2,063 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.handoff_artifacts` owns fail-open capped artifact reads; the existing private reader name remains imported by Orchestrator for compatibility. |
+| Extract primary handoff-artifact path resolution from Orchestrator | Complete | `464126f` | Focused pytest — 6 passed; full pytest — 2,064 passed, 3 skipped; ruff format/check; architecture mypy | `orchestrator.handoff_artifacts` resolves the first declared stage output from its handoff template; the existing Orchestrator method remains the compatibility seam. |
 
 ## Stages 1–8
 
