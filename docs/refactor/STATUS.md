@@ -44,7 +44,7 @@ This ledger is the durable execution record for [the approved refactor program](
 
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
-| Centralize runtime inference-router construction | Ready to commit | Pending | Full pytest — 1,994 passed, 3 skipped; ruff format/check; architecture mypy; import-boundary regression | `inference.runtime` is the shared intelligence-layer factory; startup remains assembled in `config.dependencies.py`, while web/config reload paths no longer duplicate concrete router wiring. |
+| Centralize runtime inference-router construction | Complete | `98e1a7b` | Full pytest — 1,994 passed, 3 skipped; ruff format/check; architecture mypy; import-boundary regression | `inference.runtime` is the shared intelligence-layer factory; startup remains assembled in `config.dependencies.py`, while web/config reload paths no longer duplicate concrete router wiring. |
 
 ## Stages 1–8
 
