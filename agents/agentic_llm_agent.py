@@ -36,6 +36,11 @@ from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.reasoning import ReasoningStreamSplitter, strip_reasoning
 from agents.schemas import ASK_USER_SCHEMA, REQUEST_APPROVAL_SCHEMA, delegate_task_schema
+from agents.tool_results import extract_success as _extract_success
+from agents.tool_results import failed_json as _failed_json
+from agents.tool_results import failure_kind as _failure_kind
+from agents.tool_results import is_delegation_failure as _is_delegation_failure
+from agents.tool_results import is_unanswered_approval as _is_unanswered_approval
 from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface_card
 from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
@@ -1119,60 +1124,9 @@ class _TokenRelay:
         await self._stream_manager.emit(self._task_id, "stream_reset", {})
 
 
-def _extract_success(tool_result_str: str) -> bool:
-    try:
-        return bool(json.loads(tool_result_str).get("success", False))
-    except (json.JSONDecodeError, AttributeError):
-        return False
-
-
-def _is_unanswered_approval(tool_result_str: str) -> bool:
-    """True when an approval card expired with nobody answering it.
-
-    Two shapes carry the marker: a gated tool's ``ToolOutput`` puts it under
-    ``data``, while the loop's own ``request_approval`` built-in puts it at the
-    top level.
-    """
-    try:
-        parsed = json.loads(tool_result_str)
-    except (json.JSONDecodeError, AttributeError):
-        return False
-    if not isinstance(parsed, dict):
-        return False
-    if parsed.get("unanswered"):
-        return True
-    data = parsed.get("data")
-    return bool(isinstance(data, dict) and data.get("unanswered"))
-
-
-def _failure_kind(tool_result_str: str) -> str:
-    """Why a tool call failed: ``error``, ``not_found`` or ``refused``.
-
-    Anything unparseable is an error - the safe reading, matching
-    ``ToolOutput``'s own default.
-    """
-    try:
-        return str(json.loads(tool_result_str).get("failure_kind") or "error")
-    except (json.JSONDecodeError, AttributeError):
-        return "error"
-
-
-def _is_delegation_failure(tool_result_str: str) -> bool:
-    """True only for a genuine delegation failure (agent missing / sub-agent
-    crashed), not for control-flow guardrails which omit the marker."""
-    try:
-        return bool(json.loads(tool_result_str).get("delegation_failed", False))
-    except (json.JSONDecodeError, AttributeError):
-        return False
-
-
 def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
     """Build a failed tool-call result from an exception raised during execution."""
     return call, _failed_json(str(exc)), False, []
-
-
-def _failed_json(msg: str) -> str:
-    return json.dumps({"success": False, "error": msg})
 
 
 # Decisions that mean the action was not approved (a user reject, a model "reject",
