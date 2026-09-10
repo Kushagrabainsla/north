@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from approval.base import Notifier
     from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
+    from utils.events import EventEmitter
 
 
 class Tool(ABC):
@@ -85,7 +85,7 @@ class ApprovalGatedTool(Tool, ABC):
     def __init__(
         self,
         approval_store: ApprovalStore | None = None,
-        stream_manager: EventStreamManager | None = None,
+        stream_manager: EventEmitter | None = None,
         approval_timeout_seconds: float = 300.0,
         policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,

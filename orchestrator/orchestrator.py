@@ -17,8 +17,8 @@ from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier, UserInteraction
 from approval.approval_memory import ApprovalMemory
 from approval.decisions import DecisionLog
-from approval.mode import ApprovalMode, resolve_approval_mode
 from approval.store import ApprovalStore
+from config.approval_mode import ApprovalMode, resolve_approval_mode
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
@@ -53,9 +53,21 @@ from orchestrator.engineering_prompts import (
 )
 from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
 from orchestrator.failure_handler import FailureHandler, classify_error
+from orchestrator.handoff_artifacts import primary_artifact_path
+from orchestrator.handoff_artifacts import read_artifact as _read_artifact
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
 from orchestrator.isolation import AgentIsolation
 from orchestrator.journal import TaskJournal
+from orchestrator.model_attribution import models_used_by
+from orchestrator.model_scarcity import (
+    MODEL_SCARCITY_MESSAGE as _MODEL_SCARCITY_MESSAGE,
+)
+from orchestrator.model_scarcity import (
+    AgentFailure,
+)
+from orchestrator.model_scarcity import (
+    is_model_scarcity as _is_model_scarcity,
+)
 from orchestrator.models import (
     ExecutionMode,
     ExecutionPlan,
@@ -73,16 +85,19 @@ from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from orchestrator.tiering import resolve_model_pool
-from tools._path import ensure_handoff_dir, handoff_dir_for
-from tools.exceptions import ToolNotFoundError
-from tools.models import ToolInput
-from tools.registry import ToolRegistry
+from utils.edit_scope import EditAuthorizer
+from utils.handoff import ensure_handoff_dir, handoff_dir_for
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
 from utils.prompts import load_prompt
 from utils.tasks import spawn
 from utils.text import extract_json
 from utils.time import format_timestamp, utcnow
+from utils.tools import (
+    ToolDispatchRegistryPort,
+    ToolInputFactory,
+    ToolNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,58 +137,6 @@ _TERMINAL_TASK_ACTIONS: dict[str, str] = {
     "task_skipped_model_unavailable": "skipped",
 }
 
-# User-facing reason for a model-scarcity skip. Kept as one literal string so the
-# ledger, the SSE event, and any report all say the same honest thing.
-_MODEL_SCARCITY_MESSAGE = "model pool exhausted - retry when model access recovers"
-
-
-class AgentFailure(str):
-    """A failed agent's name, tagged with its classified ``error_type``.
-
-    Subclasses ``str`` (its value *is* the agent name), so it flows unchanged
-    through every existing failures-list consumer - ``", ".join(...)``, ``len``,
-    truthiness, equality by name. The terminal-outcome logic reads ``.error_type``
-    to tell genuine failures apart from model scarcity, without re-deriving it
-    from ledger history (which is racy across retries and duplicate names).
-    """
-
-    error_type: str | None
-
-    def __new__(cls, agent_name: str, error_type: str | None = None) -> AgentFailure:
-        obj = super().__new__(cls, agent_name)
-        obj.error_type = error_type
-        return obj
-
-
-def _is_model_scarcity(failures: list[str]) -> bool:
-    """True only when there are failures and *every* one was model unavailability.
-
-    Any non-model failure makes this False, so a real bug is never mislabelled as
-    a graceful skip. Plain ``str`` failures (no ``error_type``) count as non-model.
-    """
-    return bool(failures) and all(getattr(f, "error_type", None) == "model_unavailable" for f in failures)
-
-
-def _read_artifact(path: Path | None, max_chars: int) -> str | None:
-    """Read a handoff artifact file, capped; None if missing, unreadable, or empty.
-
-    Accepts None (an agent with no declared artifact) and returns None, so callers
-    on the fail-open paths never crash on a missing artifact path.
-    """
-    if path is None:
-        return None
-    try:
-        if not path.is_file():
-            return None
-        text = path.read_text(encoding="utf-8", errors="replace").strip()
-    except OSError:
-        return None
-    if not text:
-        return None
-    if len(text) > max_chars:
-        text = text[:max_chars] + f"\n[…{len(text) - max_chars} chars truncated]"
-    return text
-
 
 # Checkbox task line under the spec's "## Tasks" heading, e.g. "- [ ] 1. Do X".
 
@@ -209,7 +172,8 @@ class Orchestrator:
         synthesizer: ResultSynthesizer | None = None,
         tracked_router: CostTracker | None = None,
         episodic_store: Any | None = None,
-        tool_registry: ToolRegistry | None = None,
+        tool_registry: ToolDispatchRegistryPort | None = None,
+        tool_input_factory: ToolInputFactory | None = None,
         default_workspace: str = "",
         extraction_pipeline: Any | None = None,
         worktree_isolation: bool = False,
@@ -254,6 +218,11 @@ class Orchestrator:
         self._tracked_router = tracked_router
         self._episodic_store = episodic_store
         self._tool_registry = tool_registry
+        # Composition-injected factory that builds a tool-call envelope
+        # (``tools.models.ToolInput``) without the orchestrator importing the
+        # concrete tool layer. ``None`` is tolerated so tests that never dispatch
+        # a tool can omit it; dispatch paths guard on it explicitly.
+        self._tool_input_factory = tool_input_factory
         # Task-scoped plan store: the conductor seeds it from the agreed spec's
         # tasks so the coder starts from (and resumes on) the agreed checklist.
         self._plan_store = plan_store
@@ -878,6 +847,7 @@ class Orchestrator:
             domain=classification.domain,
             context=request.context,
             confidence=classification.confidence,
+            edit_scope=request.edit_scope,
         )
 
     async def _reject_conflicting_task(self, task_id: str, task_start: float, error: Exception) -> None:
@@ -1040,6 +1010,7 @@ class Orchestrator:
             workspace,
             context=request.context,
             model_pool=model_pool,
+            edit_scope=request.edit_scope,
         )
         if failures:
             await self._report_execution_failures(task_id, failures)
@@ -1185,7 +1156,13 @@ class Orchestrator:
         )
 
     async def _run_deploy_flow(
-        self, task_id: str, prompt: str, workspace: str, context: str = "", model_pool: str = "reasoning"
+        self,
+        task_id: str,
+        prompt: str,
+        workspace: str,
+        context: str = "",
+        model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Ship already-completed work: a single git/gh-capable agent, human-gated.
 
@@ -1197,7 +1174,7 @@ class Orchestrator:
         coder = self._agent_registry.get("coder")
         deploy_prompt = f"{DEPLOY_PREAMBLE}\n\n{prompt}"
         return await self._execute_agent_group(
-            task_id, deploy_prompt, [coder], workspace, context=context, model_pool=model_pool
+            task_id, deploy_prompt, [coder], workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
         )
 
     def _human_available(self) -> bool:
@@ -1221,7 +1198,13 @@ class Orchestrator:
         )
 
     async def _run_design_phase(
-        self, task_id: str, prompt: str, workspace: str, context: str = "", model_pool: str = "reasoning"
+        self,
+        task_id: str,
+        prompt: str,
+        workspace: str,
+        context: str = "",
+        model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Interactive clarify + design: researcher gathers context (clarifying scope
         with the user if unclear), then the architect proposes and DISCUSSES a solution
@@ -1237,6 +1220,7 @@ class Orchestrator:
             workspace,
             context=context,
             model_pool=model_pool,
+            edit_scope=edit_scope,
         )
         if r_fail:
             return r_fail
@@ -1252,6 +1236,7 @@ class Orchestrator:
             workspace,
             context=design_ctx,
             model_pool=model_pool,
+            edit_scope=edit_scope,
         )
         if a_fail:
             return a_fail
@@ -1365,6 +1350,8 @@ class Orchestrator:
         """
         if self._tool_registry is None:
             return
+        if self._tool_input_factory is None:
+            return
         try:
             git_tool = self._tool_registry.get("git")
         except Exception:
@@ -1372,7 +1359,7 @@ class Orchestrator:
         summary = " ".join(prompt.split())[:60]
         verb = f"fix ({round_label})" if round_label else "implement"
         try:
-            branch = await WorkCommitter(git_tool).commit(
+            branch = await WorkCommitter(git_tool, tool_input_factory=self._tool_input_factory).commit(
                 workspace=workspace,
                 task_id=task_id,
                 message=f"{verb}: {summary} (task {task_id})",
@@ -1396,6 +1383,7 @@ class Orchestrator:
         coder_preamble: str,
         context: str = "",
         model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """The IMPLEMENT + VERIFY phase: one continuous coder (framed by
         ``coder_preamble``), then an independent different-model reviewer with a
@@ -1411,7 +1399,7 @@ class Orchestrator:
 
         coder_prompt = f"{coder_preamble}\n\n{prompt}"
         failures = await self._execute_agent_group(
-            task_id, coder_prompt, [coder], workspace, context=context, model_pool=model_pool
+            task_id, coder_prompt, [coder], workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
         )
         if failures:
             return failures  # coder failed - nothing to review
@@ -1431,6 +1419,7 @@ class Orchestrator:
                 context=context,
                 allow_delegation=False,
                 model_pool=model_pool,
+                edit_scope=edit_scope,
             )
             if review_failures:
                 if _is_model_scarcity(review_failures):
@@ -1481,7 +1470,7 @@ class Orchestrator:
             await self._stream_manager.emit(task_id, "conductor_fix_round", {"round": fix_round + 1})
             fix_prompt = f"{prompt}\n\n{CONDUCTOR_FIX_PREAMBLE.format(items=items[:_HANDOFF_ARTIFACT_MAX_CHARS])}"
             fix_failures = await self._execute_agent_group(
-                task_id, fix_prompt, [coder], workspace, context=context, model_pool=model_pool
+                task_id, fix_prompt, [coder], workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
             if fix_failures:
                 return fix_failures  # coder fix failed
@@ -1499,6 +1488,7 @@ class Orchestrator:
         workspace: str,
         context: str = "",
         model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Execute agents in hierarchical mode, passing results from earlier steps.
 
@@ -1529,7 +1519,13 @@ class Orchestrator:
                 f"{prompt}\n\n## Results from earlier steps\n{prior_context}" if prior_context else prompt
             )
             failed = await self._execute_agent_group(
-                task_id, effective_prompt, agents, workspace, context=context, model_pool=model_pool
+                task_id,
+                effective_prompt,
+                agents,
+                workspace,
+                context=context,
+                model_pool=model_pool,
+                edit_scope=edit_scope,
             )
             all_failures.extend(failed)
 
@@ -1555,10 +1551,7 @@ class Orchestrator:
         """Resolve a stage's primary declared handoff artifact (its first `produces`)."""
         agent = self._agent_registry.get(agent_name)
         produces = getattr(agent.config, "produces", None) or []
-        if not produces:
-            return None
-        resolved = produces[0].replace("{handoff_dir}", handoff_dir_for(task_id))
-        return Path(resolved)
+        return primary_artifact_path(produces, handoff_dir_for(task_id))
 
     async def _collect_handoff_artifacts(self, task_id: str, agent_names: list[str]) -> tuple[list[str], list[str]]:
         """Read each stage's primary artifact; return (context snippets, names missing it)."""
@@ -1596,13 +1589,14 @@ class Orchestrator:
         workspace: str,
         context: str = "",
         model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Execute agents in parallel groups."""
         all_failures: list[str] = []
         for group in plan.parallel_groups:
             agents = [self._agent_registry.get(name) for name in group]
             failed = await self._execute_agent_group(
-                task_id, prompt, agents, workspace, context=context, model_pool=model_pool
+                task_id, prompt, agents, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
             all_failures.extend(failed)
         return all_failures
@@ -1666,6 +1660,7 @@ class Orchestrator:
         domain: str = "general",
         context: str = "",
         confidence: float = 1.0,
+        edit_scope: EditAuthorizer | None = None,
     ) -> None:
         """Stage 4: execute the task, then optionally synthesize.
 
@@ -1689,7 +1684,7 @@ class Orchestrator:
         await self._heartbeat(task_id)
 
         if plan.mode == ExecutionMode.SINGLE_TOOL and plan.direct_tool:
-            await self._execute_single_tool(task_id, prompt, plan, workspace, context=context)
+            await self._execute_single_tool(task_id, prompt, plan, workspace, context=context, edit_scope=edit_scope)
             return
 
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
@@ -1700,14 +1695,14 @@ class Orchestrator:
         model_pool = self._resolve_task_model_pool(plan, domain, confidence)
         if use_deploy:
             all_failures = await self._run_deploy_flow(
-                task_id, prompt, workspace, context=context, model_pool=model_pool
+                task_id, prompt, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
         elif use_design:
             # Cockpit: clarify + agree the design with the user first, an independent
             # different-model critique stress-tests the spec, then the continuous coder
             # implements the AGREED spec (resolving the critique within its scope).
             design_failures = await self._run_design_phase(
-                task_id, prompt, workspace, context=context, model_pool=model_pool
+                task_id, prompt, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
             if design_failures:
                 all_failures = design_failures  # design blocked (incl. no usable spec) - don't implement
@@ -1723,6 +1718,7 @@ class Orchestrator:
                     self._coder_preamble_for_agreed_spec(task_id, spec_critique),
                     context=context,
                     model_pool=model_pool,
+                    edit_scope=edit_scope,
                 )
         elif use_conductor:
             all_failures = await self._run_engineering_conductor(
@@ -1732,14 +1728,15 @@ class Orchestrator:
                 self._coder_preamble_for_kind(plan.engineering_kind),
                 context=context,
                 model_pool=model_pool,
+                edit_scope=edit_scope,
             )
         elif plan.mode == ExecutionMode.HIERARCHICAL:
             all_failures = await self._execute_hierarchical_groups(
-                task_id, prompt, plan, workspace, context=context, model_pool=model_pool
+                task_id, prompt, plan, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
         else:
             all_failures = await self._execute_parallel_groups(
-                task_id, prompt, plan, workspace, context=context, model_pool=model_pool
+                task_id, prompt, plan, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
 
         if all_failures:
@@ -1787,9 +1784,22 @@ class Orchestrator:
         )
 
     async def _execute_single_tool(
-        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
+        self,
+        task_id: str,
+        prompt: str,
+        plan: ExecutionPlan,
+        workspace: str,
+        context: str = "",
+        edit_scope: EditAuthorizer | None = None,
     ) -> None:
-        """Execute a single tool call directly, bypassing the agent layer."""
+        """Execute a single tool call directly, bypassing the agent layer.
+
+        ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`. It is
+        stamped onto ``ToolInput.edit_scope`` (never ``params``) so a mutating tool
+        dispatched directly - e.g. a routed ``rename_symbol`` or ``write_file`` -
+        enforces the same scope it would inside an agent. ``None`` (the default)
+        leaves edits unrestricted, preserving prior behavior.
+        """
         await self._stream_manager.emit(task_id, "executing", {"agents": []})
         await self._stream_manager.emit(
             task_id, "tool_called", {"tool": plan.direct_tool, "params": plan.direct_tool_params}
@@ -1800,13 +1810,15 @@ class Orchestrator:
         try:
             if self._tool_registry is None:
                 raise ToolNotFoundError("No tool registry available.")
+            if self._tool_input_factory is None:
+                raise ToolNotFoundError("No tool input factory available.")
             tool = self._tool_registry.get(plan.direct_tool)  # type: ignore[arg-type]
             params = {**plan.direct_tool_params}
             if workspace and "workspace" not in params:
                 params["workspace"] = workspace
             if task_id and "task_id" not in params:
                 params["task_id"] = task_id
-            result = await tool.run(ToolInput(params=params))
+            result = await tool.run(self._tool_input_factory(params=params, edit_scope=edit_scope))
             success = result.success
             output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
             # No image-interpretation branch here on purpose: every tool that returns
@@ -1822,7 +1834,7 @@ class Orchestrator:
             fallback = self._execution_planner.build_fallback_plan("general", task_id)
             await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
             fallback_failures = await self._execute_parallel_groups(
-                task_id, prompt, fallback, workspace, context=context
+                task_id, prompt, fallback, workspace, context=context, edit_scope=edit_scope
             )
             if fallback_failures:
                 await self._report_execution_failures(task_id, fallback_failures)
@@ -1974,6 +1986,7 @@ class Orchestrator:
         context: str = "",
         allow_delegation: bool = True,
         model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Run a parallel group of agents concurrently; handle per-agent failures.
 
@@ -1981,6 +1994,10 @@ class Orchestrator:
         ``allow_delegation=False`` to run the agents in report-only mode (the
         conductor uses this for the reviewer so it never delegates a fix back to the
         coder - the orchestrator owns that fix loop).
+
+        ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`. When set
+        it is stamped onto every payload so mutating file tools enforce it; ``None``
+        (the default) leaves edits unrestricted, preserving prior behavior.
         """
         await self._heartbeat(task_id)
         # Per-agent payloads: an agent declaring `distinct_from` in its config (e.g.
@@ -1995,6 +2012,7 @@ class Orchestrator:
                 model_pool=model_pool,
                 exclude_models=await self._exclude_models_for(task_id, agent),
                 allow_delegation=allow_delegation,
+                edit_scope=edit_scope,
             )
             for agent in agents
         ]
@@ -2036,30 +2054,8 @@ class Orchestrator:
         return failed
 
     async def _models_used_by(self, task_id: str, agent_names: set[str]) -> list[str]:
-        """Models the named agents used in this task, from their agent_completed entries.
-
-        De-duplicated in first-seen order; [] on any error. Used both to force an
-        independent second opinion (exclude a prior agent's model) and to check that a
-        critique actually ran on a different model.
-        """
-        if not agent_names:
-            return []
-        try:
-            entries = await self._ledger.query_summaries(LedgerFilters(task_id=task_id, limit=200))
-        except Exception:
-            logger.debug("model lookup failed for task %s", task_id, exc_info=True)
-            return []
-        models: list[str] = []
-        seen: set[str] = set()
-        for entry in entries:
-            if entry.action != "agent_completed" or entry.agent not in agent_names:
-                continue
-            for model in (entry.model_used or "").split(","):
-                model = model.strip()
-                if model and model not in seen:
-                    seen.add(model)
-                    models.append(model)
-        return models
+        """Models the named agents used in this task, from completed ledger entries."""
+        return await models_used_by(self._ledger, task_id, agent_names)
 
     async def _exclude_models_for(self, task_id: str, agent: Agent) -> list[str]:
         """Models *agent* must avoid this run, from its config's `distinct_from`.

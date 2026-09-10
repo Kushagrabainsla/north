@@ -7,9 +7,12 @@ themselves live on `app.state` - see `orchestrator/api_context.py`.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Depends, FastAPI
 
 from agents.registry import AgentRegistry
+from config.security import verify_api_access
 from config.strategy import NorthSettings
 from inference.base import InferenceRouter
 from jobs.base import JobProcessor
@@ -21,8 +24,9 @@ from orchestrator.agent_runs import AgentRunStore
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.stream import EventStreamManager
-from tools.confidence import ConfidenceTracker
-from utils.security import verify_api_access
+
+if TYPE_CHECKING:
+    from utils.tools import ConfidenceTrackerPort
 
 router = APIRouter(
     prefix="/orchestrator",
@@ -47,7 +51,7 @@ def configure(
     context_injector: ContextInjector,
     job_processor: JobProcessor,
     inference_router: InferenceRouter,
-    confidence_tracker: ConfidenceTracker,
+    confidence_tracker: ConfidenceTrackerPort,
     cron_store: UserCronStore | None = None,
     north_settings: NorthSettings | None = None,
     agent_run_store: AgentRunStore | None = None,
@@ -111,7 +115,7 @@ def _get_inference_router() -> InferenceRouter:
     return current_services().require("inference_router")
 
 
-def _get_confidence_tracker() -> ConfidenceTracker:
+def _get_confidence_tracker() -> ConfidenceTrackerPort:
     return current_services().require("confidence_tracker")
 
 

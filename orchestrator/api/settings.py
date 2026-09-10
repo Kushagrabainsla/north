@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from approval.mode import parse_approval_mode
+from config.approval_mode import parse_approval_mode
 from config.strategy import NorthSettings, RoutingMode, StrategyMode
 from orchestrator.api.deps import router
 from orchestrator.api_context import current_services

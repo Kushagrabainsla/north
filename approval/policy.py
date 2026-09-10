@@ -27,8 +27,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from approval.mode import ApprovalMode
 from approval.unattended import forbidden_reason
+from config.approval_mode import ApprovalMode
 
 if TYPE_CHECKING:
     from approval.approval_memory import ApprovalMemory

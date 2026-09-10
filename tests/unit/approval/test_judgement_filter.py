@@ -62,7 +62,7 @@ def test_dangerous_set_covers_destructive_tool_classes() -> None:
 
 
 def _mode_filter(mode, recalled=None):
-    from approval.mode import ApprovalMode
+    from config.approval_mode import ApprovalMode
 
     memory = MagicMock()
     memory.read_document = AsyncMock(return_value="")

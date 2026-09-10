@@ -25,6 +25,12 @@ A different question - "is there a human here to ask?" - is read from the mode
 in two other places (the agent loop before asking a clarifying question, and the
 Orchestrator's ``_human_available``). Those decide whether to *interrupt*, not
 whether something is permitted, so they are not copies of the above.
+
+This module lives with configuration rather than with approval because the mode
+is a value the user sets and everything else reads. Keeping it here lets
+``config/strategy.py`` load and persist it without configuration depending
+upward on the approval machinery; the *policy* that interprets it stays in
+``approval/policy.py``.
 """
 
 from __future__ import annotations

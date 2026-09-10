@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from approval.base import Notifier
     from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
+    from utils.events import EventEmitter
 
 # Most output the model needs after one read; a watcher can produce far more, so
 # the per-session buffer keeps only the most recent slice.
@@ -168,7 +168,7 @@ class ShellTool(ApprovalGatedTool):
     def __init__(
         self,
         approval_store: ApprovalStore,
-        stream_manager: EventStreamManager | None = None,
+        stream_manager: EventEmitter | None = None,
         approval_timeout_seconds: float = 300.0,
         policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,

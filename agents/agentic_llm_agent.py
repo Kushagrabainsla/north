@@ -36,6 +36,11 @@ from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.reasoning import ReasoningStreamSplitter, strip_reasoning
 from agents.schemas import ASK_USER_SCHEMA, REQUEST_APPROVAL_SCHEMA, delegate_task_schema
+from agents.tool_results import extract_success as _extract_success
+from agents.tool_results import failed_json as _failed_json
+from agents.tool_results import failure_kind as _failure_kind
+from agents.tool_results import is_delegation_failure as _is_delegation_failure
+from agents.tool_results import is_unanswered_approval as _is_unanswered_approval
 from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface_card
 from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
@@ -47,6 +52,7 @@ from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
 from tools.output_spill import overflow_note, store_overflow
+from utils.edit_scope import EditAuthorizer
 from utils.execution_context import current_execution
 from utils.tasks import spawn
 from utils.text import normalize_dashes
@@ -671,7 +677,7 @@ class AgenticLLMAgent(LLMAgent):
             params["workspace"] = payload.workspace
         if payload.task_id and "task_id" not in params:
             params["task_id"] = payload.task_id
-        result_str, images = await self._call_tool(tool_map, call.name, params)
+        result_str, images = await self._call_tool(tool_map, call.name, params, payload.edit_scope)
         return call, result_str, _extract_success(result_str), images
 
     def _build_task_message(
@@ -824,6 +830,10 @@ class AgenticLLMAgent(LLMAgent):
             exclude_models=list(payload.exclude_models),
             delegation_depth=payload.delegation_depth + 1,
             delegation_chain=[*payload.delegation_chain, self.name],
+            # The task's edit scope is server-owned and must bind delegated
+            # sub-agents too, so a delegate cannot escape the caller's permitted
+            # modules/paths. None (unrestricted) propagates unchanged.
+            edit_scope=payload.edit_scope,
         )
         resolved_agent_name = str(getattr(agent, "name", agent_name))
         try:
@@ -947,7 +957,7 @@ class AgenticLLMAgent(LLMAgent):
 
     def _is_autonomous(self) -> bool:
         """True when the live approval mode is autonomous (no human to ask)."""
-        from approval.mode import ApprovalMode
+        from config.approval_mode import ApprovalMode
 
         ns = getattr(self._deps, "north_settings", None)
         return ns is not None and getattr(ns, "autonomy", None) == ApprovalMode.AUTONOMOUS
@@ -999,11 +1009,12 @@ class AgenticLLMAgent(LLMAgent):
         tool_map: dict[str, Tool],
         tool_name: str,
         params: dict[str, Any],
+        edit_scope: EditAuthorizer | None = None,
     ) -> tuple[str, list[tuple[str, str]]]:
         if tool_name not in tool_map:
             return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}"), []
         try:
-            result = await tool_map[tool_name].run(ToolInput(params=params))
+            result = await tool_map[tool_name].run(ToolInput(params=params, edit_scope=edit_scope))
             images: list[tuple[str, str]] = []
             if result.success:
                 if result.data and "base64_image" in result.data and "mime_type" in result.data:
@@ -1113,60 +1124,9 @@ class _TokenRelay:
         await self._stream_manager.emit(self._task_id, "stream_reset", {})
 
 
-def _extract_success(tool_result_str: str) -> bool:
-    try:
-        return bool(json.loads(tool_result_str).get("success", False))
-    except (json.JSONDecodeError, AttributeError):
-        return False
-
-
-def _is_unanswered_approval(tool_result_str: str) -> bool:
-    """True when an approval card expired with nobody answering it.
-
-    Two shapes carry the marker: a gated tool's ``ToolOutput`` puts it under
-    ``data``, while the loop's own ``request_approval`` built-in puts it at the
-    top level.
-    """
-    try:
-        parsed = json.loads(tool_result_str)
-    except (json.JSONDecodeError, AttributeError):
-        return False
-    if not isinstance(parsed, dict):
-        return False
-    if parsed.get("unanswered"):
-        return True
-    data = parsed.get("data")
-    return bool(isinstance(data, dict) and data.get("unanswered"))
-
-
-def _failure_kind(tool_result_str: str) -> str:
-    """Why a tool call failed: ``error``, ``not_found`` or ``refused``.
-
-    Anything unparseable is an error - the safe reading, matching
-    ``ToolOutput``'s own default.
-    """
-    try:
-        return str(json.loads(tool_result_str).get("failure_kind") or "error")
-    except (json.JSONDecodeError, AttributeError):
-        return "error"
-
-
-def _is_delegation_failure(tool_result_str: str) -> bool:
-    """True only for a genuine delegation failure (agent missing / sub-agent
-    crashed), not for control-flow guardrails which omit the marker."""
-    try:
-        return bool(json.loads(tool_result_str).get("delegation_failed", False))
-    except (json.JSONDecodeError, AttributeError):
-        return False
-
-
 def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
     """Build a failed tool-call result from an exception raised during execution."""
     return call, _failed_json(str(exc)), False, []
-
-
-def _failed_json(msg: str) -> str:
-    return json.dumps({"success": False, "error": msg})
 
 
 # Decisions that mean the action was not approved (a user reject, a model "reject",

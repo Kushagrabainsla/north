@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from approval.mode import ApprovalMode
+    from config.approval_mode import ApprovalMode
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class NorthSettings:
     _SUPERSEDED_APPROVAL_TIMEOUT = 300.0
 
     def __init__(self, path: Path, default_approval_mode: ApprovalMode | None = None) -> None:
-        from approval.mode import ApprovalMode
+        from config.approval_mode import ApprovalMode
 
         self._path = path
         self._power: StrategyMode = self._DEFAULT_POWER
@@ -94,7 +94,7 @@ class NorthSettings:
         self._load()
 
     def _load(self) -> None:
-        from approval.mode import parse_approval_mode
+        from config.approval_mode import parse_approval_mode
 
         if not self._path.exists():
             return

@@ -38,6 +38,32 @@ uv run pytest -m integration   # integration tests only
 
 Test framework, structure, and conventions live in `docs/CODING_STYLE.md` Section 18.
 
+## Architecture boundaries (enforced)
+
+`architecture/modules.yaml` declares which module owns every tracked source
+path, which layer it sits in, and which layers it may import. Four checks in
+`tests/unit/architecture/` enforce that, and CI runs them as a required gate:
+
+| Check | Fails when |
+|---|---|
+| `test_contracts.py` | A tracked production file has no owning module, or two modules claim it. A **new file must be added to the manifest** in the same change. |
+| `test_imports.py` | A change introduces a forbidden cross-layer import beyond the recorded set in `architecture/import-baseline.txt`. Removing a pair from that file is how debt gets paid; adding one is not. |
+| `test_scopes.py` | A task edits outside its declared module, or touches a protected path without explicit authorization. |
+| `test_packaging.py` | The `north` console script changes name or target, a shipped package stops being discoverable, or vendored frontend dependencies would enter the sdist. |
+
+Run them directly with:
+
+```bash
+uv run pytest tests/unit/architecture -q
+```
+
+Layer direction is: `platform` → `intelligence` → `application`/`integrations` →
+`interfaces` → `composition`. Only the composition root
+(`orchestrator/app.py`, `config/dependencies.py`) may assemble concrete
+implementations; see [ADR 0002](docs/adr/0002-composition-root-only-wiring.md).
+Packages stay at the repository root by decision - see
+[ADR 0004](docs/adr/0004-keep-top-level-packages.md).
+
 ## Process rules
 
 All contributors (human or AI) follow `docs/CODING_STYLE.md` Section 23:

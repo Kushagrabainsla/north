@@ -25,7 +25,7 @@ from ledger import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.best_of_n import CandidateOutcome, any_viable, select_best
 from orchestrator.constants import WORKTREE_ISOLATION_AGENTS
 from orchestrator.worktree import GitWorktreeManager, IntegrationResult, Worktree, WorktreeError
-from tools._path import handoff_dir_for
+from utils.handoff import handoff_dir_for
 from utils.ids import generate_id
 
 logger = logging.getLogger(__name__)

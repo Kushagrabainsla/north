@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 
 from approval.approval_memory import ApprovalMemory
-from approval.mode import ApprovalMode
 from approval.policy import Action, ActionKind, ApprovalPolicy, Verdict
 from approval.unattended import UnattendedPolicy
+from config.approval_mode import ApprovalMode
 
 MODES = (ApprovalMode.INTERACTIVE, ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS)
 

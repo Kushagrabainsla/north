@@ -22,7 +22,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from tools._path import handoff_dir_for
+from utils.handoff import handoff_dir_for
 from utils.text import strip_code_fences
 
 logger = logging.getLogger(__name__)

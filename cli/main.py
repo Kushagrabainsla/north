@@ -75,9 +75,19 @@ from cli.constants import (
     _VALID_DOCS,
     _Provider,
 )
+from cli.dictation import parse_hotkey as _parse_hotkey
+from cli.dictation import wav_bytes as _wav_bytes
 from cli.formatting import _reconstruct_task_output
+from cli.provider_env import any_provider_configured, parse_provider_selection, provider_is_configured
+from cli.provider_env import load_env_keys as _load_env_keys
+from cli.provider_env import save_provider_key as _save_provider_key
+from cli.provider_env import update_env_file as _update_env_file
+from cli.scheduling import day_selection
+from cli.startup_report import last_error_lines as _last_error_lines
 from cli.tui import run as _tui_run
-from utils.security import load_secret
+from cli.update_spec import pinned_git_spec as _pinned_git_spec
+from cli.web_build import web_build_is_stale as _web_build_is_stale
+from config.security import load_secret
 from utils.time import local_timezone_name
 from utils.version import NORTH_VERSION
 
@@ -89,72 +99,28 @@ _console = Console(force_terminal=sys.stdout.isatty())
 # of saying the server had died.
 _err_console = Console(stderr=True, force_terminal=sys.stderr.isatty())
 
-# The last line of a Python traceback: "TypeError: configure() got an ...".
-# That line is the answer; the frames above it are context.
-_EXCEPTION_LINE = re.compile(r"^\s*(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Exit|Interrupt)\b\s*:")
-
-
-def _load_env_keys(env_file: Path) -> dict[str, str]:
-    """Parse ``KEY=value`` lines from *env_file* once. Returns {} when absent."""
-    if not env_file.exists():
-        return {}
-    keys: dict[str, str] = {}
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        key, sep, value = line.partition("=")
-        if sep:
-            keys[key.strip()] = value.strip()
-    return keys
-
 
 def _provider_is_configured(provider: _Provider, env_keys: dict[str, str]) -> bool:
-    if provider["auth_kind"] == "oauth_pkce":
-        from inference.registry import get_provider_definition
+    from inference.registry import get_provider_definition
 
-        return get_provider_definition(provider["id"]).is_configured()
-    if os.environ.get(provider["env_key"], "").strip():
-        return True
-    return bool(env_keys.get(provider["env_key"], "").strip())
+    return provider_is_configured(
+        provider, env_keys, lambda provider_id: get_provider_definition(provider_id).is_configured()
+    )
 
 
 def _any_provider_configured(env_file: Path) -> bool:
-    env_keys = _load_env_keys(env_file)
-    return any(_provider_is_configured(p, env_keys) for p in _PROVIDERS)
+    from inference.registry import get_provider_definition
+
+    return any_provider_configured(
+        _PROVIDERS,
+        _load_env_keys(env_file),
+        lambda provider_id: get_provider_definition(provider_id).is_configured(),
+    )
 
 
 def _parse_provider_selection(raw: str) -> list[_Provider]:
-    """Parse a comma-separated string of 1-based indices into provider entries."""
-    seen: set[int] = set()
-    selected: list[_Provider] = []
-    for part in raw.replace(" ", "").split(","):
-        try:
-            idx = int(part) - 1
-        except ValueError:
-            continue
-        if 0 <= idx < len(_PROVIDERS) and idx not in seen:
-            selected.append(_PROVIDERS[idx])
-            seen.add(idx)
-    return selected
-
-
-def _update_env_file(env_file: Path, env_key: str, value: str) -> None:
-    """Write or replace a key=value line in an .env file and export it to the process."""
-    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
-    prefix = f"{env_key}="
-    updated = False
-    for i, line in enumerate(lines):
-        if line.startswith(prefix):
-            lines[i] = f"{env_key}={value}"
-            updated = True
-            break
-    if not updated:
-        lines.append(f"{env_key}={value}")
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ[env_key] = value
-
-
-def _save_provider_key(env_file: Path, env_key: str, api_key: str) -> None:
-    """Persist a provider API key and export it to the running environment."""
-    _update_env_file(env_file, env_key, api_key)
+    """Parse comma-separated 1-based indexes against the CLI provider list."""
+    return parse_provider_selection(raw, _PROVIDERS)
 
 
 def _prompt_provider_keys(env_file: Path, providers: list[_Provider]) -> bool:
@@ -272,8 +238,8 @@ def _launch_tui(
     if not _port_in_use(host, port) or not _is_north_server(host, port):
         _console.print("  [dim]server offline - starting…[/dim]")
         # Re-invoke `north start --no-chat` to start the server only, then TUI below.
+        from config.security import load_secret
         from config.settings import settings
-        from utils.security import load_secret
 
         settings.north_home.mkdir(parents=True, exist_ok=True)
         load_secret()
@@ -670,15 +636,11 @@ def _day_selection(days: str | None) -> list[str] | str | None:
         return None
     from tools.universal._schedules import parse_weekdays
 
-    selection: list[str] | str = (
-        [part.strip() for part in days.split(",") if part.strip()] if "," in days else days.strip()
-    )
     try:
-        parse_weekdays(selection)
+        return day_selection(days, parse_weekdays)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from None
-    return selection
 
 
 def _print_cron_entries(entries: list[dict]) -> None:
@@ -932,7 +894,6 @@ def create_agent(
     output_dir: Path | None = typer.Option(None, "--output-dir", help="Agent folder to create in (default: ./agents/)"),
 ) -> None:
     """Interactively scaffold a new domain-specialist agent."""
-    import re
 
     if name is None:
         name = typer.prompt("Agent name (slug, e.g. travel)")
@@ -1558,33 +1519,6 @@ _DICTATE_DEPENDENCIES = ("numpy", "sounddevice", "pynput")
 _TRANSCRIBE_TIMEOUT_SECONDS = 60.0
 
 
-def _parse_hotkey(hotkey: str) -> frozenset:
-    """The hotkey string ("right_alt+space") as the set of pynput keys it names."""
-    from pynput import keyboard as kb
-
-    def _key(part: str) -> object:
-        name = part.strip()
-        return getattr(kb.Key, name) if hasattr(kb.Key, name) else kb.KeyCode.from_char(name)
-
-    return frozenset(_key(part) for part in hotkey.split("+"))
-
-
-def _wav_bytes(captured: list, sample_rate: int) -> bytes:
-    """The captured frames as a 16-bit PCM WAV, in memory."""
-    import io
-    import wave
-
-    import numpy as np
-
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(sample_rate)
-        wf.writeframes(np.concatenate(captured, axis=0).tobytes())
-    return buf.getvalue()
-
-
 class _PushToTalk:
     """Hold-to-talk capture: records while the hotkey is held, sends on release."""
 
@@ -1948,29 +1882,6 @@ def _report_startup_failure(what: str) -> None:
     raise typer.Exit(1) from None
 
 
-def _last_error_lines(log: Path, limit: int = 3) -> list[str]:
-    """The exception the server died on, if the log ends in one.
-
-    Looks for the exception line rather than the "Traceback" header: the header
-    arrives wrapped in whatever prefix the logger added ("ERROR:    Traceback"),
-    while the final line of a traceback is the one that actually says what
-    broke. Structured log records are skipped - they are JSON, and none of them
-    is the crash.
-
-    Best-effort by design: this runs while reporting another failure, so it must
-    never raise one of its own.
-    """
-    try:
-        raw = log.read_text(errors="replace").splitlines()
-    except Exception:
-        return []
-    lines = [line.rstrip() for line in raw[-400:] if line.strip() and not line.lstrip().startswith("{")]
-    for index in range(len(lines) - 1, -1, -1):
-        if _EXCEPTION_LINE.match(lines[index]):
-            return lines[max(0, index - limit + 1) : index + 1]
-    return lines[-limit:]
-
-
 @dataclass(frozen=True)
 class _StartOptions:
     """How north should come up, as the start command's flags asked for it."""
@@ -2114,20 +2025,6 @@ def start(
         )
         raise typer.Exit(1) from None
     _start_with_docker(options, compose_file)
-
-
-def _web_build_is_stale(web_dir: Path) -> bool:
-    """Return whether the bundled web assets are missing or older than inputs."""
-    dist_index = web_dir / "dist" / "index.html"
-    if not dist_index.is_file():
-        return True
-    input_names = ("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts", "index.html")
-    inputs = [web_dir / name for name in input_names]
-    src_dir = web_dir / "src"
-    if src_dir.is_dir():
-        inputs.extend(path for path in src_dir.rglob("*") if path.is_file())
-    input_mtime = max((path.stat().st_mtime for path in inputs if path.is_file()), default=0)
-    return dist_index.stat().st_mtime < input_mtime
 
 
 def _ensure_web_build() -> None:
@@ -2433,14 +2330,6 @@ def _update_from_git(install_url: str, options: _UpdateOptions) -> None:
         typer.secho(f"✓ north updated and restarted (pid {proc.pid}).", fg=typer.colors.GREEN)
     else:
         typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
-
-
-def _pinned_git_spec(install_url: str) -> str:
-    """The install URL as a uv git spec, pinned to main when it names no ref."""
-    spec = f"git+{install_url}"
-    if spec.endswith("@main") or "@" in spec.split("/")[-1]:
-        return spec
-    return f"{spec}@main"
 
 
 @app.command("update")

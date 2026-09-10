@@ -1,7 +1,7 @@
 """BashTool - run shell commands inside the workspace.
 
 Every command is gated behind an explicit user approval card before the
-subprocess is spawned. The ApprovalStore + EventStreamManager are injected
+subprocess is spawned. The ApprovalStore + event emitter are injected
 at startup (see orchestrator/app.py), so this tool must be registered
 manually rather than auto-discovered.
 
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from approval.base import Notifier
     from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
-    from orchestrator.stream import EventStreamManager
+    from utils.events import EventEmitter
 
 _TIMEOUT = 30
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the
@@ -148,7 +148,7 @@ class BashTool(ApprovalGatedTool):
     def __init__(
         self,
         approval_store: ApprovalStore,
-        stream_manager: EventStreamManager | None = None,
+        stream_manager: EventEmitter | None = None,
         approval_timeout_seconds: float = 300.0,
         policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,

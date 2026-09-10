@@ -9,7 +9,7 @@ import httpx
 import typer
 
 from cli.constants import _BASE_URL, _TIMEOUT
-from utils.security import load_secret
+from config.security import load_secret
 
 
 def _headers() -> dict[str, str]:

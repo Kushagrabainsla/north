@@ -12,9 +12,9 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
-from orchestrator.plan_store import VALID_STATUSES, PlanStore
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from utils.plan import VALID_PLAN_STATUSES, PlanStorePort
 
 
 class UpdatePlanTool(Tool):
@@ -38,7 +38,7 @@ class UpdatePlanTool(Tool):
                         "content": {"type": "string", "description": "What the step does"},
                         "status": {
                             "type": "string",
-                            "enum": sorted(VALID_STATUSES),
+                            "enum": sorted(VALID_PLAN_STATUSES),
                             "description": "pending, in_progress, or done",
                         },
                     },
@@ -49,7 +49,7 @@ class UpdatePlanTool(Tool):
         "required": ["steps"],
     }
 
-    def __init__(self, plan_store: PlanStore, stream_manager: Any | None = None) -> None:
+    def __init__(self, plan_store: PlanStorePort, stream_manager: Any | None = None) -> None:
         self._store = plan_store
         self._stream = stream_manager
 

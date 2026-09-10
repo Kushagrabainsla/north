@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from inference.base import InferenceRouter
 from memory.base import ContextStore
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
+from utils.edit_scope import EditAuthorizer
 from utils.ids import generate_id
 
 if TYPE_CHECKING:
@@ -35,6 +36,8 @@ class StreamEmitter(Protocol):
 class AgentPayload(BaseModel):
     """Input handed to an agent's `run()`. The Orchestrator constructs this."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     task_id: str
     # One identity per actual invocation. Delegated agents and retries receive a
     # fresh id while remaining linked to the same top-level task.
@@ -56,6 +59,11 @@ class AgentPayload(BaseModel):
     # delegates a fix back to the coder - the orchestrator owns that fix loop, and a
     # second delegation path would duplicate work and bypass the bounded cap.
     allow_delegation: bool = True
+    # Server-owned edit scope for this run. When set, mutating file tools consult
+    # it (via ToolInput.edit_scope) before writing, so a task can be confined to
+    # its permitted modules/paths. None means unrestricted - the default, which
+    # preserves the behavior of every current caller that supplies no scope.
+    edit_scope: EditAuthorizer | None = Field(default=None, exclude=True)
 
 
 class AgentResult(BaseModel):

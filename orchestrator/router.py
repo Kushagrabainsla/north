@@ -123,7 +123,7 @@ _PLANNER_RETRY_DELAY_S: float = 2.0
 _PLANNER_ATTEMPT_TIMEOUT_S: float = 45.0
 
 if TYPE_CHECKING:
-    from tools.registry import ToolRegistry
+    from utils.tools import ToolRegistryPort
 
 
 # Keys a well-formed planner object can carry. Used to recognize a plan dict
@@ -183,7 +183,7 @@ class ExecutionPlanner:
         self,
         agent_registry: AgentRegistry,
         inference_router: InferenceRouter,
-        tool_registry: ToolRegistry | None = None,
+        tool_registry: ToolRegistryPort | None = None,
         workspace: str = "",
         north_settings: NorthSettings | None = None,
     ) -> None:

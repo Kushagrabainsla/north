@@ -34,6 +34,7 @@ from approval.unattended import UnattendedPolicy
 from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import run_bootstrap_if_needed
 from config.dependencies import build_production_dependencies
+from config.security import load_secret
 from config.settings import settings
 from gateways.telegram import TelegramGateway
 from jobs.models import Job
@@ -62,6 +63,7 @@ from skills import retirement as skill_retirement
 from skills.distiller import SkillDistiller
 from tools._path import prune_handoff_dirs
 from tools.confidence import RELIABLE_TOOLS
+from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from tools.semantic.search_code import SearchCodeTool
 from tools.specialized._sandbox import SandboxConfig
@@ -85,7 +87,6 @@ from tools.universal.update_plan import UpdatePlanTool
 from tools.universal.update_schedule import UpdateScheduleTool
 from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
-from utils.security import load_secret
 from utils.tasks import drain
 from utils.time import utcnow
 from utils.version import NORTH_VERSION
@@ -410,6 +411,7 @@ def _build_orchestrator(
         tracked_router=deps.cost_tracker,
         episodic_store=deps.episodic_store,
         tool_registry=tool_registry,
+        tool_input_factory=ToolInput,
         default_workspace=settings.north_workspace,
         extraction_pipeline=extraction_pipeline,
         worktree_isolation=settings.worktree_isolation_enabled,
@@ -473,7 +475,22 @@ def _configure_routers(
         decision_log=deps.decision_log,
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
+        codex_credentials_factory=_build_codex_credentials,
     )
+
+
+def _build_codex_credentials(*, authorization_callback=None):
+    """Server-owned factory for the web layer's OAuth credential provider.
+
+    The composition root owns credential construction so the HTTP layer never
+    builds it directly. ``authorization_callback`` is forwarded because browser
+    login needs the authorization URL surfaced to the dashboard; status and
+    logout leave it unset. The CLI keeps its own construction and stays usable
+    with the server offline.
+    """
+    from inference.codex_auth import CodexCredentialProvider
+
+    return CodexCredentialProvider(authorization_callback=authorization_callback)
 
 
 def _build_callback_server() -> uvicorn.Server:

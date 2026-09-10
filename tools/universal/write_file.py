@@ -9,7 +9,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from tools._path import resolve_path
+from tools._path import resolve_path, scope_refusal
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from utils.text import normalize_dashes, should_normalize_prose
@@ -55,6 +55,12 @@ class WriteFileTool(Tool):
         resolved = resolve_path(path_str, input.params.get("workspace"))
         if resolved is None:
             return ToolOutput(success=False, error="Path escapes workspace root.")
+
+        # Server-owned edit-scope check, before any bytes are written. The scope
+        # arrives on input.edit_scope (never params), so the model cannot widen
+        # its own permissions. A None scope preserves prior unrestricted behavior.
+        if (refusal := scope_refusal(input.edit_scope, resolved)) is not None:
+            return ToolOutput(success=False, error=refusal, failure_kind="refused")
 
         # Strip em/en dashes from prose north writes (reports, notes, briefings), but
         # never from code/data files, whose dashes may be literal, test-verified bytes.

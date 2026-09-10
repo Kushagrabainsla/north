@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import pytest
 
-from approval.mode import ApprovalMode
 from approval.policy import Action, ActionKind, ApprovalPolicy, Verdict
 from approval.unattended import UnattendedPolicy, forbidden_reason
 from approval.unattended_rules import UnattendedRuleStore, rule_id
+from config.approval_mode import ApprovalMode
 
 
 @pytest.fixture

@@ -1635,176 +1635,58 @@ Total effort from user: one voice sentence, one tap.
 
 ## 14. Repository Structure
 
-```
+The repository is currently a single Python distribution with a nested React/Vite
+client. The authoritative ownership, allowed dependency direction, protected
+surfaces, and required validation for every production path live in
+[`docs/MODULES.md`](MODULES.md) and [`architecture/modules.yaml`](../architecture/modules.yaml).
+
+```text
 north/
-  orchestrator/
-    app.py              <- FastAPI app, lifespan (DB init, background tasks), Uvicorn entry point
-    api_router.py       <- all REST endpoints (tasks, ledger, context, jobs, inference, agents)
-    orchestrator.py     <- core orchestration logic (classify → north star → route → execute)
-    constants.py        <- MAX_CONCURRENT_TASKS, NORTH_STAR_CONFIDENCE_THRESHOLD, POOL_REFRESH_COOLDOWN, STRATEGY_CMD_RE
-    orchestrator.py     <- Orchestrator: pipeline driver (plan -> north star -> route -> execute)
-    north_star.py       <- north star alignment check
-    router.py           <- ExecutionPlanner.plan_all(): classify + route in one call
-    synthesizer.py      <- merges multi-agent outputs into one response (LOW pool)
-    verification.py     <- post-execution verification helpers
-    task_context.py     <- Task Context Object management (shared tasks.db, task_id column)
-    failure_handler.py  <- classify_error() + failure classification and retry logic
-    stream.py           <- SSE event stream for CLI/TUI real-time updates
-    models.py           <- request/response Pydantic models
-    exceptions.py
-
-  agents/
-    base.py                 <- Agent (ABC)
-    llm_agent.py            <- LLM-backed agent base class
-    agentic_llm_agent.py    <- AgenticLLMAgent: ReAct loop with native function calling
-    registry.py             <- agent discovery and registration
-    constants.py            <- MAX_DELEGATION_DEPTH, ENGINEERING_AGENTS, MAX_TOOL_RESULT_CHARS
-    schemas.py              <- DELEGATE_TASK_SCHEMA, REQUEST_APPROVAL_SCHEMA (JSON Schema dicts)
-    context_compaction.py   <- compact_history(), compact_if_needed(), context_window_for()
-    models.py               <- AgentResult, AgentStatus, AgentDependencies
-    exceptions.py
-    health/
-      agent.py
-      config.yaml
-      tools.yaml
-      prompts/
-        system.md
-      README.md
-    university/
-    job/
-    finance/
-
-  memory/
-    __init__.py
-    base.py             <- ContextStore (ABC) + MemoryGateway (ABC)
-    models.py           <- ContextDocument, MemoryPrincipal, MemoryContext
-    gateway.py          <- LocalMemoryGateway: the single gated read path
-    exceptions.py       <- ContextError, ContextReadError, ContextWriteError
-    documents.py        <- FileContextStore (v1 concrete, optional EmbeddingIndex)
-    facts.py            <- FactStore: per-fact embeddings, category-tagged
-    embeddings.py       <- EmbeddingIndex: SQLite paragraph vectors + cosine search
-    episodic.py         <- EpisodicStore: per-task summaries + semantic retrieval
-    extraction.py       <- extraction pipeline (Ledger → context docs, background job)
-    consolidator.py     <- EpisodeConsolidator: Ledger → episodic memory (single writer)
-    injection.py        <- manual context injection handler (file, text, URL)
-
-  context/
-    __init__.py
-    repo_instructions.py <- loads AGENTS.md/CLAUDE.md/etc from the workspace
-    task_snapshot.py    <- per-task working-state snapshot
-
-  ledger/
-    __init__.py
-    base.py             <- LedgerWriter (ABC), LedgerFilters
-    models.py           <- LedgerEntry, LedgerSource, LedgerStatus
-    exceptions.py       <- LedgerError, LedgerWriteError, LedgerReadError
-    sqlite_writer.py    <- SQLiteLedgerWriter (concrete)
-
-  inference/
-    __init__.py
-    base.py             <- InferenceRouter (ABC): complete, complete_with_tools, embed, transcribe
-    dispatcher.py       <- ModelDispatcher: multi-provider router with per-model cooldowns and EMA
-    factory.py          <- build_router(): assembles ModelDispatcher from the provider registry
-    registry.py         <- provider setup, auth type, construction, and fallback order
-    auth.py             <- generic API-key/OAuth credential contracts
-    codex_auth.py       <- Codex PKCE login, refresh, and secure token persistence
-    capability.py       <- ModelCapability, ModelInfo, quality_from_cost
-    provider.py         <- Provider (Protocol): contract each inference provider must satisfy
-    cost_tracker.py     <- CostTracker: InferenceRouter decorator, accumulates cost per task_id
-    constants.py        <- base URLs, timeout, quality normalisation constants
-    models.py           <- PoolPriority, ModelPool, ToolCallRequest/Response, EmbedRequest/Response
-    exceptions.py       <- AllModelsRateLimitedError, ContextTooLargeError, PoolRefreshError, …
-    providers/
-      openai_compat.py  <- OpenAICompatibleProvider: shared HTTP base for OpenAI-format APIs
-      openrouter.py     <- OpenRouterRouter: dynamic catalogue, embeddings, transcription
-      groq.py           <- GroqRouter: free-tier completions and Whisper transcription
-      gemini.py         <- GeminiRouter: free-tier completions and embeddings
-      openai_codex.py   <- experimental Codex Responses transport
-
-  approval/
-    __init__.py
-    base.py             <- Notifier (ABC)
-    macos.py            <- MacOSNotifier (alerter subprocess, optional)
-    terminal.py         <- TerminalNotifier (default)
-    tui.py              <- TUIAwareNotifier (wraps a Notifier; silent while TUI attached)
-    interaction.py      <- UserInteraction: one path for approval/question/information cards
-    callback_server.py  <- local server on port 8001 receiving notification callbacks
-    models.py           <- Card, CardType, ApprovalDecision
-    store.py            <- ApprovalStore: asyncio.Event per card, wait_for_decision()
-    judgement_filter.py <- pre-screens cards against judgement_rules.md before notifying
-    exceptions.py       <- ApprovalError, NotificationError
-
-  jobs/
-    __init__.py
-    base.py             <- JobProcessor (ABC)
-    sqlite_processor.py <- SQLiteJobProcessor (polls jobs.db every N seconds)
-    scheduler.py        <- cron job definitions and scheduling logic
-    models.py           <- Job, JobStatus, JobType
-    exceptions.py
-
-  tools/
-    __init__.py
-    base.py             <- Tool, AuthenticatedTool, CacheableTool (ABCs)
-    registry.py         <- ToolRegistry: filesystem discovery + dynamic agent→tool graph
-    tool_index.py       <- tool metadata index
-    confidence.py       <- confidence score read/write against tools.db
-    models.py           <- ToolInput, ToolOutput, ConfidenceScore
-    exceptions.py
-    universal/          <- granted to every agent (read_file, write_file, glob, list_dir,
-                           search_files, web_search, fetch_url, schedule_task,
-                           list_schedules, update_schedule, cancel_schedule,
-                           create_tool, create_agent, query_metrics)
-    specialized/        <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
-    semantic/           <- code intelligence (search_symbols, find_references)
-    analysis/           <- static analysis (check_types)
-
-  cli/
-    main.py             <- CLI entry point (Typer), thin wrapper over Orchestrator REST API
-    tui.py              <- Textual TUI client (north chat)
-    _client.py          <- shared httpx client for the local server
-    _server.py          <- server lifecycle helpers (start/stop, secret handling)
-    formatting.py       <- shared output formatting (ledger/task reconstruction)
-
-  config/
-    settings.py         <- Settings (pydantic-settings), all NORTH_* env vars
-    dependencies.py     <- build_production_dependencies(), shared dependency wiring
-
-  utils/
-    db.py               <- SQLite connection helpers (WAL mode, row_factory)
-    ids.py              <- task/job/card ID generation
-    prompts.py          <- prompt template loading
-    security.py         <- secret key generation and header-based request auth
-    tasks.py            <- spawn(): supervised fire-and-forget background tasks
-    time.py             <- datetime helpers
-
-  prompts/
-    planner.md          <- system prompt for plan_all (classify + route)
-    north_star.md       <- system prompt for the north star check
-    synthesizer.md      <- system prompt for multi-agent output synthesis
-
-  tests/
-    integration/
-    unit/
-      context/
-      jobs/
-      ledger/
-      tools/
-      utils/
-
+  architecture/
+    modules.yaml          <- current-state module contracts and temporary exceptions
+  agents/                 <- agent runtime, configs, prompts, delegation
+  approval/               <- approval cards, consent, unattended policy
+  bootstrap/              <- onboarding and user-profile bootstrap workflow
+  cli/                    <- Typer commands and Textual TUI
+  config/                 <- settings and transitional dependency wiring
+  context/                <- workspace instructions, code index, LSP support
+  gateways/               <- Telegram integration
+  inference/              <- providers, routing, facts, rate limits, auth
+  jobs/                   <- queue, scheduling, cron persistence
+  ledger/                 <- audit models and SQLite writer
+  mcp/                    <- Model Context Protocol integration
+  memory/                 <- documents, facts, episodes, embeddings
+  orchestrator/           <- task lifecycle, API routes, execution pipeline
+  policies/               <- binding safety and code-quality policy
+  prompts/                <- shared model prompts
+  skills/                 <- skill registry, lifecycle, built-in skill content
+  tools/                  <- tool contracts, discovery, universal/specialized tools
+  utils/                  <- transitional shared helpers (to become dependency-light)
+  web/
+    api.py                <- cockpit HTTP adapter
+    conversations.py      <- cockpit conversation persistence
+    src/                  <- React/Vite frontend source
+    dist/                 <- shipped frontend build
   docs/
-    ARCHITECTURE.md
-    CODING_STYLE.md
-    TECHNICAL_FEATURES.md
-
-  exceptions.py         <- top-level NorthError base exception
-  pyproject.toml
-  uv.lock
-  Dockerfile
-  docker-compose.yml
-  .dockerignore
-  .env.example
-  README.md
+    adr/                  <- durable architecture decision records
+    refactor/             <- long-running refactor plan and status ledger
+    MODULES.md            <- developer-readable module catalog
+  tests/
+    unit/
+    integration/
+  .github/workflows/
+    ci.yml                <- lint, type, web, packaging, and test gates
+  pyproject.toml          <- Python distribution and tool configuration
+  MANIFEST.in             <- source-distribution exclusions
 ```
+
+### Migration direction
+
+Current root-level package paths remain stable while module boundaries are
+introduced and enforced. Only after dependency direction is clean will modules
+move incrementally beneath `src/north/`; the React client will then become a
+separate `frontend/` project. See ADR 0003 for the compatibility-first migration
+policy.
 
 ---
 

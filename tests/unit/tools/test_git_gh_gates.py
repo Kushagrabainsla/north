@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from approval.mode import ApprovalMode
+from config.approval_mode import ApprovalMode
 from tests.conftest import approval_policy
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import gh_tool as gh_module

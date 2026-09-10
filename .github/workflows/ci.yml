@@ -65,7 +65,7 @@ jobs:
         run: uv pip install --system -e . mypy
 
       - name: Type check
-        run: mypy --ignore-missing-imports --follow-imports=silent inference/
+        run: mypy --ignore-missing-imports --follow-imports=silent inference/ architecture/
 
   web:
     # The browser interface had no CI at all: a type error or a broken unit test
@@ -96,6 +96,64 @@ jobs:
       - name: Test
         run: npm test
         working-directory: web
+
+  architecture:
+    # The boundary rules are only real if they block a merge. These run in the
+    # main pytest job too, but as a dedicated gate they fail fast and name the
+    # reason: a new forbidden import, an unowned file, a widened edit scope, or a
+    # packaging change that would drop a shipped package.
+    name: Architecture (boundaries + packaging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv pip install --system -e . pytest pytest-asyncio
+
+      - name: Enforce module contracts, import direction, edit scopes and packaging
+        env:
+          NORTH_HOME: /tmp/north-ci-architecture
+          NORTH_ENV: test
+        run: python -m pytest tests/unit/architecture -q
+
+  package:
+    name: Package (source distribution)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Reject vendored frontend dependencies from the source distribution
+        run: |
+          sdist="$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          test -n "$sdist"
+          ! tar -tzf "$sdist" | grep -q '/web/node_modules/'
 
   test:
     name: Test (pytest)

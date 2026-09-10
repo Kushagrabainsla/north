@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from approval.mode import ApprovalMode, parse_approval_mode, resolve_approval_mode
+from config.approval_mode import ApprovalMode, parse_approval_mode, resolve_approval_mode
 
 
 def _settings(**kw) -> SimpleNamespace:

@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import logging
 
-from tools._path import PRUNED_DIRS
-from tools.models import ToolInput
+from utils.filesystem import PRUNED_DIRS
+from utils.tools import ToolInputFactory
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +57,15 @@ def changed_paths(status_short: str) -> list[str]:
 class WorkCommitter:
     """Runs the branch/stage/commit sequence through the approval-gated git tool."""
 
-    def __init__(self, git_tool) -> None:
+    def __init__(self, git_tool, tool_input_factory: ToolInputFactory) -> None:
         self._git = git_tool
+        # Composition-injected builder for the tool-call envelope. Keeps this
+        # application-layer module off a concrete ``integrations.tools`` import.
+        self._tool_input = tool_input_factory
 
     async def _git_action(self, action: str, args: str, workspace: str, task_id: str):
         return await self._git.run(
-            ToolInput(params={"action": action, "args": args, "workspace": workspace, "task_id": task_id})
+            self._tool_input(params={"action": action, "args": args, "workspace": workspace, "task_id": task_id})
         )
 
     async def commit(self, *, workspace: str, task_id: str, message: str) -> str | None:

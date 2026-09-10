@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from approval.mode import ApprovalMode
 from approval.policy import ApprovalPolicy
 from approval.terminal import TerminalNotifier
 from approval.unattended import UnattendedPolicy
+from config.approval_mode import ApprovalMode
 from inference.base import InferenceRouter
 from inference.models import (
     CompletionRequest,

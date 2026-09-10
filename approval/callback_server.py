@@ -15,8 +15,8 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from approval.models import ApprovalDecision
+from config.security import load_secret, verify_secret
 from config.settings import settings
-from utils.security import load_secret, verify_secret
 from utils.version import NORTH_VERSION
 
 logger = logging.getLogger(__name__)

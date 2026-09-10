@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from orchestrator.commit import WorkCommitter, changed_paths
-from tools.models import ToolOutput
+from tools.models import ToolInput, ToolOutput
 
 
 class TestReadingWhatChanged:
@@ -72,7 +72,9 @@ class _FakeGit:
 
 
 async def _commit(git, task_id: str = "task_1") -> str | None:
-    return await WorkCommitter(git).commit(workspace="/ws", task_id=task_id, message="implement: thing")
+    return await WorkCommitter(git, tool_input_factory=ToolInput).commit(
+        workspace="/ws", task_id=task_id, message="implement: thing"
+    )
 
 
 class TestCommittingTheWork:

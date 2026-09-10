@@ -21,8 +21,8 @@ from jobs.scheduler import (
     next_firing_epoch,
 )
 from orchestrator.api.deps import _get_cron_store, router
-from tools.universal._schedules import parse_weekdays
 from utils.time import format_local, local_timezone_name
+from utils.weekdays import parse_weekdays
 
 
 class CronEntryOut(BaseModel):

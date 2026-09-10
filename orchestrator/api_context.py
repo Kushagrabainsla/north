@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from orchestrator.agent_runs import AgentRunStore
     from orchestrator.orchestrator import Orchestrator
     from orchestrator.stream import EventStreamManager
-    from tools.confidence import ConfidenceTracker
+    from utils.tools import ConfidenceTrackerPort
 
 _STATE_ATTR = "north_services"
 
@@ -55,7 +55,7 @@ class ApiServices:
     context_injector: ContextInjector | None = None
     job_processor: JobProcessor | None = None
     inference_router: InferenceRouter | None = None
-    confidence_tracker: ConfidenceTracker | None = None
+    confidence_tracker: ConfidenceTrackerPort | None = None
     cron_store: UserCronStore | None = None
     north_settings: NorthSettings | None = None
     agent_run_store: AgentRunStore | None = None
@@ -81,6 +81,12 @@ class ApiServices:
     # Mutable per-app runtime state for the web layer (in-flight logins,
     # the bootstrap task). Held here so it is per-app like the wiring.
     web_runtime: Any | None = None
+    # Builds the OAuth credential provider the web layer uses for browser
+    # login/logout/status. Injected by the server so the HTTP layer never
+    # constructs it directly (CODING_STYLE §6.3: dependencies wired at the
+    # boundary). Called as ``factory(authorization_callback=...)`` where the
+    # callback is optional - browser login needs it, status/logout do not.
+    codex_credentials_factory: Any | None = None
 
     def require(self, name: str) -> Any:
         """Return a wired component, or raise naming the one that is missing."""

@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from config.security import verify_request_secret
 from config.settings import settings
-from utils.security import verify_request_secret
 
 _TEST_SECRET = "unit-test-master-secret"
 

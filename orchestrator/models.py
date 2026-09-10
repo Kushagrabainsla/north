@@ -8,9 +8,10 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ledger.models import LedgerSource
+from utils.edit_scope import EditAuthorizer
 
 
 class ExecutionPath(StrEnum):
@@ -32,6 +33,8 @@ class ExecutionMode(StrEnum):
 class TaskRequest(BaseModel):
     """Input payload to trigger a new task execution."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     prompt: str = Field(..., min_length=1, max_length=32_768)
     source: LedgerSource = LedgerSource.PROMPT
     workspace: str = ""  # optional root directory for filesystem/shell tools
@@ -43,6 +46,11 @@ class TaskRequest(BaseModel):
     # and the planner. Backs `north agent run <name>` so a manual agent trigger
     # invokes exactly that agent instead of being re-routed by the planner.
     forced_agent: str | None = None
+    # Server-owned edit scope for this task. When set, the orchestrator threads it
+    # onto every AgentPayload it creates, and mutating file tools enforce it before
+    # writing. None (the default) leaves edits unrestricted, preserving the behavior
+    # of all current public callers. This is never populated from model output.
+    edit_scope: EditAuthorizer | None = Field(default=None, exclude=True)
 
 
 class TaskResponse(BaseModel):
