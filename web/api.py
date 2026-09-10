@@ -7,9 +7,10 @@ import base64
 import contextlib
 import mimetypes
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -26,6 +27,24 @@ from tools.universal.browser import browser_availability
 from utils.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 
 from .conversations import ConversationStore, Turn
+
+if TYPE_CHECKING:
+    from inference.auth import AuthStatus
+
+# The shape the server-owned factory must satisfy. ``authorization_callback`` is
+# optional because status and logout do not drive a browser flow, only login
+# does. Kept as a type alias rather than a runtime Protocol so the web layer has
+# no import-time dependency on how the provider is built.
+CodexCredentialsFactory = Callable[..., "_CodexCredentialsLike"]
+
+
+class _CodexCredentialsLike:  # pragma: no cover - documentation-only structural type
+    """Structural description of what the web layer needs from a credentials provider."""
+
+    def status(self) -> AuthStatus: ...
+    async def login(self, *, open_browser: bool = True) -> AuthStatus: ...
+    async def logout(self) -> None: ...
+
 
 session_router = APIRouter(prefix="/web", tags=["web"], dependencies=[Depends(bind_request_services)])
 router = APIRouter(
@@ -80,11 +99,17 @@ def configure(
     unattended_rules=None,
     card_continuations=None,
     decision_log=None,
+    codex_credentials_factory: CodexCredentialsFactory | None = None,
 ) -> None:
     """Contribute the web layer's wiring to *app*.
 
     Merges rather than replaces: the orchestrator router configures the same app
     and each owns a different slice (CODING_STYLE §22 - no module-level state).
+
+    *codex_credentials_factory* builds the OAuth credential provider the browser
+    login/logout/status endpoints use. The server owns it so the HTTP layer never
+    constructs it directly; when omitted it falls back to the default provider so
+    existing callers keep working.
     """
     merge(
         app,
@@ -107,7 +132,29 @@ def configure(
         skill_registry=skill_registry,
         conversation_store=ConversationStore(north_home / "web.db"),
         web_runtime=WebRuntime(),
+        codex_credentials_factory=codex_credentials_factory or _default_codex_credentials_factory,
     )
+
+
+def _default_codex_credentials_factory(*, authorization_callback: Callable[[str], None] | None = None):
+    """Fallback provider factory used when the server does not inject one.
+
+    Indirects through the module-level ``CodexCredentialProvider`` name so tests
+    that monkeypatch it keep working, and so callers that never wired a factory
+    still get a working provider.
+    """
+    return CodexCredentialProvider(authorization_callback=authorization_callback)
+
+
+def _codex_credentials(*, authorization_callback: Callable[[str], None] | None = None):
+    """Build a credentials provider from the injected factory for this app.
+
+    Routes go through here rather than constructing ``CodexCredentialProvider``
+    so the server owns credential wiring. Falls back to the default factory when
+    a test or caller wired the rest of the services without one.
+    """
+    factory = current_services().codex_credentials_factory or _default_codex_credentials_factory
+    return factory(authorization_callback=authorization_callback)
 
 
 @session_router.post("/session")
@@ -697,7 +744,7 @@ async def _refresh_inference_runtime(app: FastAPI) -> None:
 
 
 def _provider_auth_payload(definition: ProviderDefinition) -> dict[str, Any]:
-    credentials = CodexCredentialProvider()
+    credentials = _codex_credentials()
     status = credentials.status()
     session = current_services().require("web_runtime").auth_sessions.get(definition.id)
     state = session.state if session else ("connected" if status.configured else "disconnected")
@@ -740,7 +787,7 @@ async def start_provider_auth(provider_id: str, request: Request) -> dict[str, A
         session.detail = "Complete the OpenAI login in the browser window."
         ready.set()
 
-    credentials = CodexCredentialProvider(authorization_callback=authorization_ready)
+    credentials = _codex_credentials(authorization_callback=authorization_ready)
     # Captured now: the background login outlives this request, so it cannot
     # read the app off a request that has already finished.
     app = request.app
@@ -791,7 +838,7 @@ async def logout_provider(provider_id: str, request: Request) -> dict[str, Any]:
         session.task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await session.task
-    await CodexCredentialProvider().logout()
+    await _codex_credentials().logout()
     await _refresh_inference_runtime(request.app)
     return _provider_auth_payload(definition)
 

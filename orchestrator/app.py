@@ -473,7 +473,22 @@ def _configure_routers(
         decision_log=deps.decision_log,
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
+        codex_credentials_factory=_build_codex_credentials,
     )
+
+
+def _build_codex_credentials(*, authorization_callback=None):
+    """Server-owned factory for the web layer's OAuth credential provider.
+
+    The composition root owns credential construction so the HTTP layer never
+    builds it directly. ``authorization_callback`` is forwarded because browser
+    login needs the authorization URL surfaced to the dashboard; status and
+    logout leave it unset. The CLI keeps its own construction and stays usable
+    with the server offline.
+    """
+    from inference.codex_auth import CodexCredentialProvider
+
+    return CodexCredentialProvider(authorization_callback=authorization_callback)
 
 
 def _build_callback_server() -> uvicorn.Server:

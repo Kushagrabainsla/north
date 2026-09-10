@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Web provider-auth uses composition-provided credentials**; browser OAuth endpoints receive a server-wired Codex credential-provider factory while CLI auth remains offline-capable.
 - **Inference-router construction is centralized** in `inference.runtime`; production startup, provider credential refresh, and configuration reload now share one tested builder without interfaces importing the composition root.
 - **The architecture repository map now reflects the current codebase** (`docs/ARCHITECTURE.md`). It names the actual API package, active agent directories, nested frontend, module catalog, ADRs, and packaging guard instead of obsolete paths.
 - Every page spaces its blocks alike: 28px under the header, 18px between blocks, matching the gap panels already had side by side.

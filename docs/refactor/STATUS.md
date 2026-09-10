@@ -44,6 +44,7 @@ This ledger is the durable execution record for [the approved refactor program](
 
 | Unit | Status | Commit | Validation evidence | Notes |
 |---|---|---|---|---|
+| Inject web Codex credential-provider factory | Ready to commit | Pending | Full pytest — 1,998 passed, 3 skipped; ruff format/check; architecture mypy; import-boundary regression | `orchestrator.app` now supplies the web OAuth factory; web routes no longer directly construct the provider, while CLI auth remains an offline local adapter. |
 | Centralize runtime inference-router construction | Complete | `98e1a7b` | Full pytest — 1,994 passed, 3 skipped; ruff format/check; architecture mypy; import-boundary regression | `inference.runtime` is the shared intelligence-layer factory; startup remains assembled in `config.dependencies.py`, while web/config reload paths no longer duplicate concrete router wiring. |
 
 ## Stages 1–8
