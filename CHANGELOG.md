@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Configuration-backed security now has a configuration owner** (`config/security.py`). Secret-file loading, shared-secret/API verification, and web-session authorization moved out of `utils`, preserving callers and behavior while removing its upward platform dependency.
 - **Reverse-dependency boundaries are narrower and enforced** (`utils/plan.py`, `utils/events.py`, `utils/sessions.py`, `utils/tools.py`, `utils/handoff.py`, `utils/weekdays.py`, `utils/filesystem.py`). Tools and orchestration now use dependency-light ports and platform utilities rather than concrete reverse imports; compatibility re-exports preserve existing public behavior.
 - **Runtime configuration no longer imports the composition container**, including for static typing (`config/runtime.py`); its live-runtime handle is deliberately opaque and composition wiring remains at approved roots.
 - **Update-plan now uses an injected plan-store port** (`utils/plan.py`), removing its direct integration-to-orchestration dependency while retaining the concrete `PlanStore` at composition.
