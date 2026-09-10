@@ -175,9 +175,3 @@ modules:
     protected: true
     public_contracts: [binding safety and security policy]
     validation: [tests/unit/agents/test_policy.py, tests/unit/tools/test_*safety.py]
-
-temporary_exemptions:
-  - from: platform.config
-    to: application.orchestration
-    reason: Existing type-only and dependency wiring references remain while composition wiring moves to the app layer.
-    removal_stage: 3

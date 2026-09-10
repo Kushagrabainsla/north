@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any
 
-if TYPE_CHECKING:
-    from config.dependencies import Dependencies
-
-_runtime: Dependencies | None = None
+_runtime: Any | None = None
 
 
-def set_runtime(deps: Dependencies) -> None:
+def set_runtime(deps: Any) -> None:
     """Store the live dependency container."""
     global _runtime
     _runtime = deps
 
 
-def get_runtime() -> Dependencies | None:
+def get_runtime() -> Any | None:
     """Return the live dependency container, or ``None`` before startup."""
     return _runtime
 

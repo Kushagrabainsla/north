@@ -24,5 +24,4 @@ interfaces.cli -> integrations.tools
 interfaces.web -> integrations.tools
 platform.common -> platform.config
 platform.config -> application.approval
-platform.config -> composition.app
 platform.ledger -> platform.common
