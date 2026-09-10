@@ -81,6 +81,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | Extract agent tool-result interpretation | Complete | `4c35ab2` | Focused pytest — 60 passed; full pytest — 2,076 passed, 3 skipped; ruff format/check; architecture mypy | `agents.tool_results` owns fail-safe success, refusal, unanswered-approval, and delegation-failure reading; `agents.agentic_llm_agent` keeps its existing private names as aliases. |
 | Extract fact deduplication normalization | Complete | `1d01293` | Focused pytest — 17 passed; full pytest — 2,079 passed, 3 skipped; ruff format/check; architecture mypy | `memory.dedup` owns filler-word canonicalization for duplicate fact detection; `memory.facts` retains its private helper name as an alias. |
 | Extract cockpit artifact path policy | Complete | `db26e31` | Focused pytest — 16 passed; full pytest — 2,083 passed, 3 skipped; ruff format/check; architecture mypy | `web.artifacts` owns permitted roots, state-file exclusion, task attribution, and identifier resolution; `web.api` keeps HTTP mapping. The ownership gate caught the new path and the manifest now declares it. |
+| Extract TUI text and slash-input parsing | Complete | `d850617` | Focused pytest — 28 passed; full pytest — 2,087 passed, 3 skipped; ruff format/check; architecture mypy | `cli.tui_text` owns turn rendering, token estimation, and slash-argument/context-document parsing; `cli.tui` retains its private names as aliases. |
 
 ## Stages 1–8
 

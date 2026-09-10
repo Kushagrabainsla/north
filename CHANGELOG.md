@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **TUI text and slash-input parsing have a focused owner** (`cli/tui_text.py`). Turn rendering, token estimation, and command-argument parsing are testable without starting the app.
 - **Artifact path policy has a focused web owner** (`web/artifacts.py`). Permitted roots, state-file exclusion, task attribution, and identifier resolution are testable without HTTP, and escape attempts are covered directly.
 - **Fact deduplication normalization has a focused memory owner** (`memory/dedup.py`). The filler-word vocabulary and text canonicalization used to spot restated facts are defined and tested in one place.
 - **Tool-result interpretation has a focused agent owner** (`agents/tool_results.py`). Success, refusal kind, unanswered approvals, and delegation failures are read in one place with their fail-safe behavior covered directly.
