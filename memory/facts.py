@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from inference.models import EmbedFn, GlossaryFn, SupersedeFn
+from memory.dedup import normalize_for_dedup as _normalize_for_dedup
 from utils.db import open_db_connection
 from utils.ids import generate_id
 from utils.math import cosine_similarity
@@ -40,69 +41,6 @@ _CC_RE = CC_RE
 def _contains_secret(text: str) -> bool:
     """Check if text contains secrets, API keys, passwords, credit cards, etc."""
     return bool(_SECRET_RE.search(text) or _CC_RE.search(text))
-
-
-def _normalize_for_dedup(text: str) -> str:
-    """Normalize text for deduplication comparison.
-
-    Lowercases, removes punctuation, normalizes whitespace, removes common filler words.
-    """
-    # Lowercase
-    text = text.lower()
-    # Remove punctuation
-    text = re.sub(r"[^\w\s]", " ", text)
-    # Normalize whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-    # Remove common filler words that don't affect meaning
-    filler_words = {
-        "the",
-        "a",
-        "an",
-        "is",
-        "was",
-        "were",
-        "am",
-        "are",
-        "be",
-        "been",
-        "being",
-        "has",
-        "have",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "could",
-        "should",
-        "my",
-        "your",
-        "his",
-        "her",
-        "their",
-        "our",
-        "its",
-        "this",
-        "that",
-        "these",
-        "those",
-        "in",
-        "on",
-        "at",
-        "to",
-        "for",
-        "of",
-        "with",
-        "by",
-        "from",
-        "as",
-        "or",
-        "and",
-        "but",
-    }
-    words = [w for w in text.split() if w not in filler_words]
-    return " ".join(words)
 
 
 _SCHEMA = """
