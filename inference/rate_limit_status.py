@@ -44,6 +44,8 @@ from rich.box import ROUNDED
 from rich.table import Table
 from rich.text import Text
 
+from inference.durations import parse_duration_seconds as _parse_duration_seconds
+
 logger = logging.getLogger(__name__)
 
 
@@ -175,21 +177,6 @@ def _parse_groq_reset(value: str) -> float | None:
         if value.endswith("s"):
             return max(0.0, float(value[:-1]))
         return max(0.0, float(value))  # bare seconds
-    except ValueError:
-        return None
-
-
-def _parse_duration_seconds(value: str) -> float | None:
-    """Parse a protobuf Duration string (e.g. ``"12s"``, ``"0.5s"``, ``"1500ms"``)."""
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        if value.endswith("ms"):
-            return max(0.0, float(value[:-2]) / 1000.0)
-        if value.endswith("s"):
-            return max(0.0, float(value[:-1]))
-        return max(0.0, float(value))
     except ValueError:
         return None
 

@@ -19,6 +19,7 @@ import httpx
 
 from inference.auth import ApiKeyCredentialProvider, CredentialProvider
 from inference.constants import DEFAULT_TIMEOUT_SECONDS, SSE_CHUNK_TIMEOUT_SECONDS
+from inference.durations import parse_duration_seconds
 from inference.exceptions import (
     InferenceError,
     ModelDegenerateError,
@@ -374,20 +375,6 @@ class OpenAICompatibleProvider:
         return max(0.0, reset - time.time())
 
     @staticmethod
-    def _parse_duration_seconds(value: str) -> float | None:
-        """Parse a protobuf Duration string (e.g. ``"12s"``, ``"0.5s"``, ``"1500ms"``)."""
-        value = (value or "").strip()
-        if not value:
-            return None
-        try:
-            if value.endswith("ms"):
-                return max(0.0, float(value[:-2]) / 1000.0)
-            if value.endswith("s"):
-                return max(0.0, float(value[:-1]))
-            return max(0.0, float(value))
-        except ValueError:
-            return None
-
     @staticmethod
     def _parse_gemini_retry_delay(body: dict | None) -> float | None:
         """Extract Google's precise retry signal from a 429 error body.
@@ -411,7 +398,7 @@ class OpenAICompatibleProvider:
             if detail.get("@type", "").endswith("RetryInfo"):
                 delay = detail.get("retryDelay")
                 if isinstance(delay, str):
-                    return OpenAICompatibleProvider._parse_duration_seconds(delay)
+                    return parse_duration_seconds(delay)
         return None
 
     @staticmethod

@@ -92,7 +92,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | 3. Composition root | Complete | Stage 2 complete | Startup, CLI, API compatibility checks |
 | 4. Remove reverse dependencies | Complete | Stage 3 complete | Integration modules no longer import orchestration internals; platform/common has no upward dependencies; forbidden compatibility edges decreased from 27 to 23. |
 | 5. Split oversized modules | Complete | Stage 4 complete | Every priority module in the plan now has at least one cohesive extraction with focused tests: orchestrator, cli/main, cli/tui, agentic agent, memory facts, web api. |
-| 6. Physical package migration | Not started | Stage 5 complete | Install, persistence, API, CLI, Docker, frontend checks |
+| 6. Physical package migration | Not executed (decided) | Stage 5 complete | [ADR 0004](../adr/0004-keep-top-level-packages.md): packages stay at the repository root. The verification this stage required is now permanent in `tests/unit/architecture/test_packaging.py`. |
 | 7. Duplication reduction | Not started | Stage 6 complete | Shared-behavior regression coverage |
 | 8. Fitness functions and completion audit | Not started | Stage 7 complete | Required CI architecture gates |
 
