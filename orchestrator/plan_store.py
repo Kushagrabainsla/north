@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-VALID_STATUSES: frozenset[str] = frozenset({"pending", "in_progress", "done"})
+from utils.plan import VALID_PLAN_STATUSES
+
+VALID_STATUSES = VALID_PLAN_STATUSES
 _STATUS_MARK: dict[str, str] = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
 
 
