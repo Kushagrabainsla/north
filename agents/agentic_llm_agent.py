@@ -47,6 +47,7 @@ from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
 from tools.output_spill import overflow_note, store_overflow
+from utils.edit_scope import EditAuthorizer
 from utils.execution_context import current_execution
 from utils.tasks import spawn
 from utils.text import normalize_dashes
@@ -671,7 +672,7 @@ class AgenticLLMAgent(LLMAgent):
             params["workspace"] = payload.workspace
         if payload.task_id and "task_id" not in params:
             params["task_id"] = payload.task_id
-        result_str, images = await self._call_tool(tool_map, call.name, params)
+        result_str, images = await self._call_tool(tool_map, call.name, params, payload.edit_scope)
         return call, result_str, _extract_success(result_str), images
 
     def _build_task_message(
@@ -824,6 +825,10 @@ class AgenticLLMAgent(LLMAgent):
             exclude_models=list(payload.exclude_models),
             delegation_depth=payload.delegation_depth + 1,
             delegation_chain=[*payload.delegation_chain, self.name],
+            # The task's edit scope is server-owned and must bind delegated
+            # sub-agents too, so a delegate cannot escape the caller's permitted
+            # modules/paths. None (unrestricted) propagates unchanged.
+            edit_scope=payload.edit_scope,
         )
         resolved_agent_name = str(getattr(agent, "name", agent_name))
         try:
@@ -999,11 +1004,12 @@ class AgenticLLMAgent(LLMAgent):
         tool_map: dict[str, Tool],
         tool_name: str,
         params: dict[str, Any],
+        edit_scope: EditAuthorizer | None = None,
     ) -> tuple[str, list[tuple[str, str]]]:
         if tool_name not in tool_map:
             return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}"), []
         try:
-            result = await tool_map[tool_name].run(ToolInput(params=params))
+            result = await tool_map[tool_name].run(ToolInput(params=params, edit_scope=edit_scope))
             images: list[tuple[str, str]] = []
             if result.success:
                 if result.data and "base64_image" in result.data and "mime_type" in result.data:

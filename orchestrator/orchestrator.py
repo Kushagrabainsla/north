@@ -77,6 +77,7 @@ from tools._path import ensure_handoff_dir, handoff_dir_for
 from tools.exceptions import ToolNotFoundError
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
+from utils.edit_scope import EditAuthorizer
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
 from utils.prompts import load_prompt
@@ -878,6 +879,7 @@ class Orchestrator:
             domain=classification.domain,
             context=request.context,
             confidence=classification.confidence,
+            edit_scope=request.edit_scope,
         )
 
     async def _reject_conflicting_task(self, task_id: str, task_start: float, error: Exception) -> None:
@@ -1040,6 +1042,7 @@ class Orchestrator:
             workspace,
             context=request.context,
             model_pool=model_pool,
+            edit_scope=request.edit_scope,
         )
         if failures:
             await self._report_execution_failures(task_id, failures)
@@ -1185,7 +1188,13 @@ class Orchestrator:
         )
 
     async def _run_deploy_flow(
-        self, task_id: str, prompt: str, workspace: str, context: str = "", model_pool: str = "reasoning"
+        self,
+        task_id: str,
+        prompt: str,
+        workspace: str,
+        context: str = "",
+        model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Ship already-completed work: a single git/gh-capable agent, human-gated.
 
@@ -1197,7 +1206,7 @@ class Orchestrator:
         coder = self._agent_registry.get("coder")
         deploy_prompt = f"{DEPLOY_PREAMBLE}\n\n{prompt}"
         return await self._execute_agent_group(
-            task_id, deploy_prompt, [coder], workspace, context=context, model_pool=model_pool
+            task_id, deploy_prompt, [coder], workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
         )
 
     def _human_available(self) -> bool:
@@ -1221,7 +1230,13 @@ class Orchestrator:
         )
 
     async def _run_design_phase(
-        self, task_id: str, prompt: str, workspace: str, context: str = "", model_pool: str = "reasoning"
+        self,
+        task_id: str,
+        prompt: str,
+        workspace: str,
+        context: str = "",
+        model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Interactive clarify + design: researcher gathers context (clarifying scope
         with the user if unclear), then the architect proposes and DISCUSSES a solution
@@ -1237,6 +1252,7 @@ class Orchestrator:
             workspace,
             context=context,
             model_pool=model_pool,
+            edit_scope=edit_scope,
         )
         if r_fail:
             return r_fail
@@ -1252,6 +1268,7 @@ class Orchestrator:
             workspace,
             context=design_ctx,
             model_pool=model_pool,
+            edit_scope=edit_scope,
         )
         if a_fail:
             return a_fail
@@ -1396,6 +1413,7 @@ class Orchestrator:
         coder_preamble: str,
         context: str = "",
         model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """The IMPLEMENT + VERIFY phase: one continuous coder (framed by
         ``coder_preamble``), then an independent different-model reviewer with a
@@ -1411,7 +1429,7 @@ class Orchestrator:
 
         coder_prompt = f"{coder_preamble}\n\n{prompt}"
         failures = await self._execute_agent_group(
-            task_id, coder_prompt, [coder], workspace, context=context, model_pool=model_pool
+            task_id, coder_prompt, [coder], workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
         )
         if failures:
             return failures  # coder failed - nothing to review
@@ -1431,6 +1449,7 @@ class Orchestrator:
                 context=context,
                 allow_delegation=False,
                 model_pool=model_pool,
+                edit_scope=edit_scope,
             )
             if review_failures:
                 if _is_model_scarcity(review_failures):
@@ -1481,7 +1500,7 @@ class Orchestrator:
             await self._stream_manager.emit(task_id, "conductor_fix_round", {"round": fix_round + 1})
             fix_prompt = f"{prompt}\n\n{CONDUCTOR_FIX_PREAMBLE.format(items=items[:_HANDOFF_ARTIFACT_MAX_CHARS])}"
             fix_failures = await self._execute_agent_group(
-                task_id, fix_prompt, [coder], workspace, context=context, model_pool=model_pool
+                task_id, fix_prompt, [coder], workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
             if fix_failures:
                 return fix_failures  # coder fix failed
@@ -1499,6 +1518,7 @@ class Orchestrator:
         workspace: str,
         context: str = "",
         model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Execute agents in hierarchical mode, passing results from earlier steps.
 
@@ -1529,7 +1549,13 @@ class Orchestrator:
                 f"{prompt}\n\n## Results from earlier steps\n{prior_context}" if prior_context else prompt
             )
             failed = await self._execute_agent_group(
-                task_id, effective_prompt, agents, workspace, context=context, model_pool=model_pool
+                task_id,
+                effective_prompt,
+                agents,
+                workspace,
+                context=context,
+                model_pool=model_pool,
+                edit_scope=edit_scope,
             )
             all_failures.extend(failed)
 
@@ -1596,13 +1622,14 @@ class Orchestrator:
         workspace: str,
         context: str = "",
         model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Execute agents in parallel groups."""
         all_failures: list[str] = []
         for group in plan.parallel_groups:
             agents = [self._agent_registry.get(name) for name in group]
             failed = await self._execute_agent_group(
-                task_id, prompt, agents, workspace, context=context, model_pool=model_pool
+                task_id, prompt, agents, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
             all_failures.extend(failed)
         return all_failures
@@ -1666,6 +1693,7 @@ class Orchestrator:
         domain: str = "general",
         context: str = "",
         confidence: float = 1.0,
+        edit_scope: EditAuthorizer | None = None,
     ) -> None:
         """Stage 4: execute the task, then optionally synthesize.
 
@@ -1700,14 +1728,14 @@ class Orchestrator:
         model_pool = self._resolve_task_model_pool(plan, domain, confidence)
         if use_deploy:
             all_failures = await self._run_deploy_flow(
-                task_id, prompt, workspace, context=context, model_pool=model_pool
+                task_id, prompt, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
         elif use_design:
             # Cockpit: clarify + agree the design with the user first, an independent
             # different-model critique stress-tests the spec, then the continuous coder
             # implements the AGREED spec (resolving the critique within its scope).
             design_failures = await self._run_design_phase(
-                task_id, prompt, workspace, context=context, model_pool=model_pool
+                task_id, prompt, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
             if design_failures:
                 all_failures = design_failures  # design blocked (incl. no usable spec) - don't implement
@@ -1723,6 +1751,7 @@ class Orchestrator:
                     self._coder_preamble_for_agreed_spec(task_id, spec_critique),
                     context=context,
                     model_pool=model_pool,
+                    edit_scope=edit_scope,
                 )
         elif use_conductor:
             all_failures = await self._run_engineering_conductor(
@@ -1732,14 +1761,15 @@ class Orchestrator:
                 self._coder_preamble_for_kind(plan.engineering_kind),
                 context=context,
                 model_pool=model_pool,
+                edit_scope=edit_scope,
             )
         elif plan.mode == ExecutionMode.HIERARCHICAL:
             all_failures = await self._execute_hierarchical_groups(
-                task_id, prompt, plan, workspace, context=context, model_pool=model_pool
+                task_id, prompt, plan, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
         else:
             all_failures = await self._execute_parallel_groups(
-                task_id, prompt, plan, workspace, context=context, model_pool=model_pool
+                task_id, prompt, plan, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
             )
 
         if all_failures:
@@ -1974,6 +2004,7 @@ class Orchestrator:
         context: str = "",
         allow_delegation: bool = True,
         model_pool: str = "reasoning",
+        edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Run a parallel group of agents concurrently; handle per-agent failures.
 
@@ -1981,6 +2012,10 @@ class Orchestrator:
         ``allow_delegation=False`` to run the agents in report-only mode (the
         conductor uses this for the reviewer so it never delegates a fix back to the
         coder - the orchestrator owns that fix loop).
+
+        ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`. When set
+        it is stamped onto every payload so mutating file tools enforce it; ``None``
+        (the default) leaves edits unrestricted, preserving prior behavior.
         """
         await self._heartbeat(task_id)
         # Per-agent payloads: an agent declaring `distinct_from` in its config (e.g.
@@ -1995,6 +2030,7 @@ class Orchestrator:
                 model_pool=model_pool,
                 exclude_models=await self._exclude_models_for(task_id, agent),
                 allow_delegation=allow_delegation,
+                edit_scope=edit_scope,
             )
             for agent in agents
         ]

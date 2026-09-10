@@ -25,6 +25,8 @@ import time
 from collections.abc import Container
 from pathlib import Path
 
+from utils.edit_scope import EditAuthorizer
+
 # Directories never worth walking for a coding task. Shared by the
 # file-walking tools (search_files, glob) so the exclusion list cannot drift.
 PRUNED_DIRS: frozenset[str] = frozenset(
@@ -318,6 +320,22 @@ def resolve_path(path_str: str, workspace: str | None) -> Path | None:
         return None
 
     return candidate
+
+
+def scope_refusal(scope: EditAuthorizer | None, path: Path) -> str | None:
+    """Return a refusal reason when *scope* forbids editing *path*, else ``None``.
+
+    The single enforcement point shared by every mutating file tool. A ``None``
+    scope means the server supplied no task edit-scope for this run, so the edit
+    proceeds exactly as before - preserving the behavior of current public
+    callers that never set one. When a scope *is* present it is consulted before
+    any bytes are written, and its verdict (permit or a human-readable reason) is
+    returned verbatim. The scope object is server-owned and reaches the tool via
+    ``ToolInput.edit_scope``, never through the model-controlled ``params``.
+    """
+    if scope is None:
+        return None
+    return scope.authorize(path)
 
 
 def find_project_root(path: Path, markers: tuple[str, ...] = _PROJECT_ROOT_MARKERS) -> Path:

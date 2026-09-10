@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from approval.policy import Action, ActionKind
-from tools._path import resolve_path
+from tools._path import resolve_path, scope_refusal
 from tools._read_tracker import record_read, was_read
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
@@ -122,6 +122,12 @@ class PatchFileTool(ApprovalGatedTool):
         resolved = resolve_path(path_str, input.params.get("workspace"))
         if resolved is None:
             return ToolOutput(success=False, error="Path escapes workspace root.")
+
+        # Server-owned edit-scope check, before the read-precondition and any
+        # mutation. The scope arrives on input.edit_scope (never params), so the
+        # model cannot forge it. A None scope preserves prior behavior.
+        if (refusal := scope_refusal(input.edit_scope, resolved)) is not None:
+            return ToolOutput(success=False, error=refusal, failure_kind="refused")
 
         # Editing from memory is where exact matching goes wrong: the model
         # reproduces a block it saw several turns and two edits ago, the

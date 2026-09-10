@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from utils.edit_scope import EditAuthorizer
 
 
 class ToolInput(BaseModel):
@@ -13,9 +15,20 @@ class ToolInput(BaseModel):
 
     Tools accept a structured input rather than positional args so the
     `Tool` ABC stays uniform across every concrete implementation.
+
+    `edit_scope` is a dedicated, server-owned field - deliberately *not* part of
+    `params`. `params` carries the model's tool arguments and is therefore
+    untrusted; a scope placed there could be forged by the model to widen its own
+    permissions. The agent copies the scope from its `AgentPayload` onto this
+    field just before dispatch, so mutation guards read authority from a channel
+    the model cannot reach. `None` means no scope was supplied and mutating tools
+    fall back to their prior, unrestricted behavior (preserving public callers).
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     params: dict[str, Any] = Field(default_factory=dict)
+    edit_scope: EditAuthorizer | None = Field(default=None, exclude=True)
 
 
 class ToolOutput(BaseModel):

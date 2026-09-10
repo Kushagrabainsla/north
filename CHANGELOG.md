@@ -4,6 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **Runtime task edit-scope enforcement**. Server-owned scopes now propagate from tasks through agents to `write_file` and `patch_file`; denied cross-module and unapproved protected-path writes fail before mutation.
 - **Fail-closed task edit-scope policy** (`architecture/scopes.py`). The reusable policy permits only declared modules/paths and requires explicit path authorization for protected modules.
 - **AST import-boundary compatibility gate** (`architecture/imports.py`, `architecture/import-baseline.txt`). New forbidden module-layer dependency pairs now fail regression tests; 27 pre-existing pairs are explicit debt to remove incrementally.
 - **Executable module-contract validation** (`architecture/contracts.py`, `tests/unit/architecture/test_contracts.py`). The catalog now loads through strict typed contracts and a regression test proves every current tracked production path has exactly one owner.

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
 
-from architecture.contracts import ModuleManifest, ModuleManifestError
+from architecture.contracts import ModuleManifest, ModuleManifestError, load_module_manifest
 
 
 @dataclass(frozen=True)
@@ -44,3 +44,44 @@ class TaskEditScope:
 
 def _matches(path: str, patterns: tuple[str, ...]) -> bool:
     return any(fnmatchcase(path, pattern) for pattern in patterns)
+
+
+@dataclass(frozen=True)
+class ScopeGuard:
+    """A :class:`TaskEditScope` bound to a workspace and the module manifest.
+
+    This is the object minted at the composition root and threaded, as an opaque
+    :class:`utils.edit_scope.EditAuthorizer`, through the request, the agent
+    payload, and finally :class:`tools.models.ToolInput`. It carries everything a
+    mutation guard needs so that the tool - which must not import ``architecture``
+    or know about manifests - can decide a single absolute path with one call.
+
+    Scope is *server-owned*: the guard is constructed from a trusted
+    :class:`TaskEditScope`, never from a tool's model-supplied parameters.
+    """
+
+    scope: TaskEditScope
+    workspace: Path
+    manifest: ModuleManifest
+
+    def authorize(self, path: Path) -> str | None:
+        """Return ``None`` when *path* may be edited, else a refusal reason."""
+        return self.scope.authorize(path, self.workspace, self.manifest)
+
+
+def build_guard(
+    scope: TaskEditScope,
+    workspace: Path | str,
+    manifest: ModuleManifest | None = None,
+) -> ScopeGuard:
+    """Bind a scope to a workspace and manifest, loading the shipped manifest by default.
+
+    Call this at the composition root (or wherever a task's permissions are
+    decided) to produce an :class:`EditAuthorizer` the runtime can carry without
+    depending on the ``architecture`` package.
+    """
+    return ScopeGuard(
+        scope=scope,
+        workspace=Path(workspace),
+        manifest=manifest if manifest is not None else load_module_manifest(),
+    )
