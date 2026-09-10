@@ -40,6 +40,12 @@ This ledger is the durable execution record for [the approved refactor program](
 | Define fail-closed task edit-scope policy | Complete | `37302e2` | Targeted pytest — 3 passed; full pytest — 1,965 passed, 3 skipped; ruff format/check; mypy — no issues in 4 files | `TaskEditScope` authorizes ordinary module/path edits and requires an explicit user-authorized path for protected modules. |
 | Enforce task edit scopes in source-mutating tools | Complete | `3c264d4` | Full pytest — 1,986 passed, 3 skipped; ruff format/check; architecture mypy — no issues in 4 files | Server-owned scopes now guard direct writers, direct-tool execution, and atomic multi-file semantic renames; denied edits fail before any mutation. |
 
+## Stage 3 — Composition root
+
+| Unit | Status | Commit | Validation evidence | Notes |
+|---|---|---|---|---|
+| Centralize runtime inference-router construction | Ready to commit | Pending | Full pytest — 1,994 passed, 3 skipped; ruff format/check; architecture mypy; import-boundary regression | `inference.runtime` is the shared intelligence-layer factory; startup remains assembled in `config.dependencies.py`, while web/config reload paths no longer duplicate concrete router wiring. |
+
 ## Stages 1–8
 
 | Stage | Status | Preconditions | Completion evidence |

@@ -683,23 +683,14 @@ async def _refresh_inference_runtime(app: FastAPI) -> None:
     (`merge`), alongside swapping it into the live dependency container.
     """
     from config.runtime import get_runtime
-    from config.settings import reload_settings, settings
-    from inference.factory import build_router
+    from config.settings import reload_settings
+    from inference.runtime import rebuild_runtime_router
 
     reload_settings()
     deps = get_runtime()
     if deps is None:
         return
-    new_router = build_router(
-        openrouter_api_key=settings.openrouter_api_key,
-        north_settings=deps.north_settings,
-        groq_api_key=settings.groq_api_key,
-        gemini_api_key=settings.gemini_api_key,
-        opencode_zen_api_key=settings.opencode_zen_api_key,
-        provider_settings=settings,
-        confidence_tracker=deps.confidence_tracker,
-        cooldowns_path=settings.north_home / "cooldowns.json",
-    )
+    new_router = rebuild_runtime_router(deps)
     deps.inference_router = new_router
     deps.cost_tracker.set_inner(new_router)
     merge(app, inference_router=new_router)

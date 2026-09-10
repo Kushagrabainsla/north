@@ -25,8 +25,8 @@ from config.settings import settings
 from config.strategy import NorthSettings
 from inference import InferenceRouter
 from inference.exceptions import EmbeddingCountMismatchError
-from inference.factory import build_router
 from inference.models import EmbedFn, GlossaryFn, SupersedeFn
+from inference.runtime import build_inference_router_from_settings
 from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
 from memory import ContextStore, SQLiteContextStore
@@ -293,15 +293,9 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     context_store = SQLiteContextStore(settings.north_home / "memory.db", legacy_path=settings.north_home / "context")
     ledger = SQLiteLedgerWriter(settings.north_home / "ledger.db")
     confidence_tracker = ConfidenceTracker(db_path=settings.north_home / "tools.db")
-    base_router = build_router(
-        openrouter_api_key=settings.openrouter_api_key,
+    base_router = build_inference_router_from_settings(
         north_settings=north_settings,
-        groq_api_key=settings.groq_api_key,
-        gemini_api_key=settings.gemini_api_key,
-        opencode_zen_api_key=settings.opencode_zen_api_key,
-        provider_settings=settings,
         confidence_tracker=confidence_tracker,
-        cooldowns_path=settings.north_home / "cooldowns.json",
         models_db_path=settings.north_home / "models.db",
     )
     cost_tracker = CostTracker(base_router)

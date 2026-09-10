@@ -152,25 +152,15 @@ class NorthConfigTool(Tool):
         """
         from config.runtime import get_runtime
         from config.settings import reload_settings
-        from inference.factory import build_router
+        from inference.runtime import rebuild_runtime_router
 
         reload_settings()
         if key in _INFERENCE_KEYS:
             deps = get_runtime()
             if deps is None:
                 return "\n⚠️ north not running as a server — change will apply on next restart."
-            from config.settings import settings
 
-            new_router = build_router(
-                openrouter_api_key=settings.openrouter_api_key,
-                north_settings=deps.north_settings,
-                groq_api_key=settings.groq_api_key,
-                gemini_api_key=settings.gemini_api_key,
-                opencode_zen_api_key=settings.opencode_zen_api_key,
-                provider_settings=settings,
-                confidence_tracker=deps.confidence_tracker,
-                cooldowns_path=settings.north_home / "cooldowns.json",
-            )
+            new_router = rebuild_runtime_router(deps)
             # Swap the wrapped router inside the live CostTracker in place.
             deps.cost_tracker.set_inner(new_router)
             providers = ", ".join(p.name for p in new_router._providers)  # type: ignore[attr-defined]
