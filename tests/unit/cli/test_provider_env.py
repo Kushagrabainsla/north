@@ -23,3 +23,10 @@ def test_update_env_file_replaces_then_appends_and_exports(tmp_path, monkeypatch
     assert env_file.read_text(encoding="utf-8") == "A=new\nB=two\n"
     assert __import__("os").environ["A"] == "new"
     assert __import__("os").environ["B"] == "two"
+
+
+def test_parse_provider_selection_keeps_valid_first_seen_indexes() -> None:
+    from cli.provider_env import parse_provider_selection
+
+    providers = ["first", "second", "third"]
+    assert parse_provider_selection(" 2,1,2,0,4,nope ", providers) == ["second", "first"]

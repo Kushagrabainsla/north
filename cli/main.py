@@ -79,6 +79,7 @@ from cli.dictation import parse_hotkey as _parse_hotkey
 from cli.dictation import wav_bytes as _wav_bytes
 from cli.formatting import _reconstruct_task_output
 from cli.provider_env import load_env_keys as _load_env_keys
+from cli.provider_env import parse_provider_selection
 from cli.provider_env import save_provider_key as _save_provider_key
 from cli.provider_env import update_env_file as _update_env_file
 from cli.tui import run as _tui_run
@@ -115,18 +116,8 @@ def _any_provider_configured(env_file: Path) -> bool:
 
 
 def _parse_provider_selection(raw: str) -> list[_Provider]:
-    """Parse a comma-separated string of 1-based indices into provider entries."""
-    seen: set[int] = set()
-    selected: list[_Provider] = []
-    for part in raw.replace(" ", "").split(","):
-        try:
-            idx = int(part) - 1
-        except ValueError:
-            continue
-        if 0 <= idx < len(_PROVIDERS) and idx not in seen:
-            selected.append(_PROVIDERS[idx])
-            seen.add(idx)
-    return selected
+    """Parse comma-separated 1-based indexes against the CLI provider list."""
+    return parse_provider_selection(raw, _PROVIDERS)
 
 
 def _prompt_provider_keys(env_file: Path, providers: list[_Provider]) -> bool:

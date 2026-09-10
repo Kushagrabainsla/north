@@ -35,3 +35,18 @@ def update_env_file(env_file: Path, env_key: str, value: str) -> None:
 def save_provider_key(env_file: Path, env_key: str, api_key: str) -> None:
     """Persist a provider key in the environment file and current process."""
     update_env_file(env_file, env_key, api_key)
+
+
+def parse_provider_selection[Provider](raw: str, providers: list[Provider]) -> list[Provider]:
+    """Parse comma-separated 1-based provider indexes in first-seen order."""
+    selected: list[Provider] = []
+    seen: set[int] = set()
+    for part in raw.replace(" ", "").split(","):
+        try:
+            index = int(part) - 1
+        except ValueError:
+            continue
+        if 0 <= index < len(providers) and index not in seen:
+            seen.add(index)
+            selected.append(providers[index])
+    return selected
