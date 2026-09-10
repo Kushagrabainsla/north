@@ -73,11 +73,11 @@ from orchestrator.stream import EventStreamManager
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from orchestrator.tiering import resolve_model_pool
-from tools._path import ensure_handoff_dir, handoff_dir_for
 from tools.exceptions import ToolNotFoundError
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from utils.edit_scope import EditAuthorizer
+from utils.handoff import ensure_handoff_dir, handoff_dir_for
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
 from utils.prompts import load_prompt
