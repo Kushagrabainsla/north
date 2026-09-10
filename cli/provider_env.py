@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -50,3 +51,21 @@ def parse_provider_selection[Provider](raw: str, providers: list[Provider]) -> l
             seen.add(index)
             selected.append(providers[index])
     return selected
+
+
+def provider_is_configured(
+    provider: dict[str, str],
+    env_keys: dict[str, str],
+    oauth_configured: Callable[[str], bool],
+) -> bool:
+    """Return whether a provider is available through OAuth, environment, or .env."""
+    if provider["auth_kind"] == "oauth_pkce":
+        return bool(oauth_configured(provider["id"]))
+    return bool(os.environ.get(provider["env_key"], "").strip() or env_keys.get(provider["env_key"], "").strip())
+
+
+def any_provider_configured(
+    providers: list[dict[str, str]], env_keys: dict[str, str], oauth_configured: Callable[[str], bool]
+) -> bool:
+    """Return whether any configured provider can be used."""
+    return any(provider_is_configured(provider, env_keys, oauth_configured) for provider in providers)

@@ -30,3 +30,17 @@ def test_parse_provider_selection_keeps_valid_first_seen_indexes() -> None:
 
     providers = ["first", "second", "third"]
     assert parse_provider_selection(" 2,1,2,0,4,nope ", providers) == ["second", "first"]
+
+
+def test_provider_configuration_detection_uses_oauth_environment_and_env_file(monkeypatch) -> None:
+    from cli.provider_env import any_provider_configured, provider_is_configured
+
+    api = {"id": "api", "auth_kind": "api_key", "env_key": "NORTH_TEST_KEY"}
+    oauth = {"id": "oauth", "auth_kind": "oauth_pkce", "env_key": ""}
+    monkeypatch.delenv("NORTH_TEST_KEY", raising=False)
+
+    assert provider_is_configured(api, {"NORTH_TEST_KEY": "from-file"}, lambda _: False)
+    monkeypatch.setenv("NORTH_TEST_KEY", "from-process")
+    assert provider_is_configured(api, {}, lambda _: False)
+    assert provider_is_configured(oauth, {}, lambda provider_id: provider_id == "oauth")
+    assert any_provider_configured([api, oauth], {}, lambda _: True)
