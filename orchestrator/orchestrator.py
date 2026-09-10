@@ -1717,7 +1717,7 @@ class Orchestrator:
         await self._heartbeat(task_id)
 
         if plan.mode == ExecutionMode.SINGLE_TOOL and plan.direct_tool:
-            await self._execute_single_tool(task_id, prompt, plan, workspace, context=context)
+            await self._execute_single_tool(task_id, prompt, plan, workspace, context=context, edit_scope=edit_scope)
             return
 
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
@@ -1817,9 +1817,22 @@ class Orchestrator:
         )
 
     async def _execute_single_tool(
-        self, task_id: str, prompt: str, plan: ExecutionPlan, workspace: str, context: str = ""
+        self,
+        task_id: str,
+        prompt: str,
+        plan: ExecutionPlan,
+        workspace: str,
+        context: str = "",
+        edit_scope: EditAuthorizer | None = None,
     ) -> None:
-        """Execute a single tool call directly, bypassing the agent layer."""
+        """Execute a single tool call directly, bypassing the agent layer.
+
+        ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`. It is
+        stamped onto ``ToolInput.edit_scope`` (never ``params``) so a mutating tool
+        dispatched directly - e.g. a routed ``rename_symbol`` or ``write_file`` -
+        enforces the same scope it would inside an agent. ``None`` (the default)
+        leaves edits unrestricted, preserving prior behavior.
+        """
         await self._stream_manager.emit(task_id, "executing", {"agents": []})
         await self._stream_manager.emit(
             task_id, "tool_called", {"tool": plan.direct_tool, "params": plan.direct_tool_params}
@@ -1836,7 +1849,7 @@ class Orchestrator:
                 params["workspace"] = workspace
             if task_id and "task_id" not in params:
                 params["task_id"] = task_id
-            result = await tool.run(ToolInput(params=params))
+            result = await tool.run(ToolInput(params=params, edit_scope=edit_scope))
             success = result.success
             output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
             # No image-interpretation branch here on purpose: every tool that returns
@@ -1852,7 +1865,7 @@ class Orchestrator:
             fallback = self._execution_planner.build_fallback_plan("general", task_id)
             await self._stream_manager.emit(task_id, "executing", {"agents": fallback.agents})
             fallback_failures = await self._execute_parallel_groups(
-                task_id, prompt, fallback, workspace, context=context
+                task_id, prompt, fallback, workspace, context=context, edit_scope=edit_scope
             )
             if fallback_failures:
                 await self._report_execution_failures(task_id, fallback_failures)

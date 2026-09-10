@@ -4,6 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Added
+- **Complete source-mutation scope coverage**. Semantic rename now authorizes every LSP workspace edit atomically, and direct-tool execution receives the same server-owned scope.
 - **Runtime task edit-scope enforcement**. Server-owned scopes now propagate from tasks through agents to `write_file` and `patch_file`; denied cross-module and unapproved protected-path writes fail before mutation.
 - **Fail-closed task edit-scope policy** (`architecture/scopes.py`). The reusable policy permits only declared modules/paths and requires explicit path authorization for protected modules.
 - **AST import-boundary compatibility gate** (`architecture/imports.py`, `architecture/import-baseline.txt`). New forbidden module-layer dependency pairs now fail regression tests; 27 pre-existing pairs are explicit debt to remove incrementally.

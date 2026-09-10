@@ -15,7 +15,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from context.lsp_client import LspError, LspUnavailable, server_command_for
+from context.lsp_client import LspError, LspUnavailable, RenameScopeRefused, server_command_for
 from context.lsp_client import rename_symbol as lsp_rename
 from tools._path import find_project_root, is_sensitive_path, resolve_path
 from tools.base import Tool
@@ -84,8 +84,18 @@ class RenameSymbolTool(Tool):
             )
 
         root = Path(workspace).resolve() if workspace else find_project_root(resolved)
+        # A rename is an LSP-driven *multi-file* mutation, so it cannot rely on the
+        # per-path guard the single-file tools use: the WorkspaceEdit may touch
+        # files the coder never named. The server-owned scope (on input.edit_scope,
+        # never params) is threaded into the apply step, which authorizes EVERY
+        # changed file before writing any of them and aborts atomically otherwise.
+        # A None scope means the server supplied none - unrestricted, as before.
+        scope = input.edit_scope
+        authorize = scope.authorize if scope is not None else None
         try:
-            files, edits, changed = await asyncio.to_thread(lsp_rename, root, resolved, symbol, new_name)
+            files, edits, changed = await asyncio.to_thread(lsp_rename, root, resolved, symbol, new_name, authorize)
+        except RenameScopeRefused as exc:
+            return ToolOutput(success=False, error=str(exc), failure_kind="refused")
         except LspUnavailable as exc:
             return ToolOutput(success=False, error=f"Language server unavailable: {exc}")
         except LspError as exc:
