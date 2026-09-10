@@ -78,6 +78,9 @@ from cli.constants import (
 from cli.dictation import parse_hotkey as _parse_hotkey
 from cli.dictation import wav_bytes as _wav_bytes
 from cli.formatting import _reconstruct_task_output
+from cli.provider_env import load_env_keys as _load_env_keys
+from cli.provider_env import save_provider_key as _save_provider_key
+from cli.provider_env import update_env_file as _update_env_file
 from cli.tui import run as _tui_run
 from config.security import load_secret
 from utils.time import local_timezone_name
@@ -94,18 +97,6 @@ _err_console = Console(stderr=True, force_terminal=sys.stderr.isatty())
 # The last line of a Python traceback: "TypeError: configure() got an ...".
 # That line is the answer; the frames above it are context.
 _EXCEPTION_LINE = re.compile(r"^\s*(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Exit|Interrupt)\b\s*:")
-
-
-def _load_env_keys(env_file: Path) -> dict[str, str]:
-    """Parse ``KEY=value`` lines from *env_file* once. Returns {} when absent."""
-    if not env_file.exists():
-        return {}
-    keys: dict[str, str] = {}
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        key, sep, value = line.partition("=")
-        if sep:
-            keys[key.strip()] = value.strip()
-    return keys
 
 
 def _provider_is_configured(provider: _Provider, env_keys: dict[str, str]) -> bool:
@@ -136,27 +127,6 @@ def _parse_provider_selection(raw: str) -> list[_Provider]:
             selected.append(_PROVIDERS[idx])
             seen.add(idx)
     return selected
-
-
-def _update_env_file(env_file: Path, env_key: str, value: str) -> None:
-    """Write or replace a key=value line in an .env file and export it to the process."""
-    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
-    prefix = f"{env_key}="
-    updated = False
-    for i, line in enumerate(lines):
-        if line.startswith(prefix):
-            lines[i] = f"{env_key}={value}"
-            updated = True
-            break
-    if not updated:
-        lines.append(f"{env_key}={value}")
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ[env_key] = value
-
-
-def _save_provider_key(env_file: Path, env_key: str, api_key: str) -> None:
-    """Persist a provider API key and export it to the running environment."""
-    _update_env_file(env_file, env_key, api_key)
 
 
 def _prompt_provider_keys(env_file: Path, providers: list[_Provider]) -> bool:
