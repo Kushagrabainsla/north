@@ -142,7 +142,7 @@ modules:
     validation: [tests/unit/cli]
 
   interfaces.web:
-    paths: [web/api.py, web/conversations.py, web/__init__.py, web/src/**, web/dist/**, web/index.html, web/package.json, web/package-lock.json, web/tsconfig*.json, web/vite.config.ts]
+    paths: [web/api.py, web/artifacts.py, web/conversations.py, web/__init__.py, web/src/**, web/dist/**, web/index.html, web/package.json, web/package-lock.json, web/tsconfig*.json, web/vite.config.ts]
     layer: interfaces
     owner: developer_experience
     editable_by: [coder]

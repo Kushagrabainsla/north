@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import mimetypes
 import os
@@ -23,8 +22,14 @@ from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinitio
 from ledger.base import LedgerFilters
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
-from tools._path import DB_SUFFIXES
 from tools.universal.browser import browser_availability
+from web.artifacts import (
+    allowed_output_roots,
+    artifact_task_id,
+    encode_artifact_id,
+    is_readable_artifact,
+    resolve_artifact,
+)
 
 from .conversations import ConversationStore, Turn
 
@@ -876,53 +881,27 @@ async def update_provider(provider_id: str, body: ProviderCredentialUpdate, requ
 
 
 def _allowed_output_roots() -> list[Path]:
-    """Every directory the artifact library may read from.
-
-    ``tasks/`` is where the engineering pipeline writes what it actually
-    concluded - research notes, specs, implementation notes, QA reports. It was
-    not readable from anywhere, which is why the researcher was told to copy its
-    findings into the user's repo as well: the real artifact had nowhere visible
-    to live. Listing it here is what makes that duplicate unnecessary.
-    """
-    home = current_services().require("north_home")
-    return [home / name for name in ("news", "notes", "wellness", "tasks")]
+    """Every directory the artifact library may read from."""
+    return allowed_output_roots(current_services().require("north_home"))
 
 
 def _is_readable_artifact(path: Path) -> bool:
-    """False for north's own state files, which share ~/.north/tasks with the
-    handoff directories. ``tasks.db`` and its WAL/SHM siblings sit right beside
-    them, and adding that root to the library would otherwise publish the
-    task-state database over HTTP. Same suffix list the tool sandbox blocks on.
-    """
-    return path.is_file() and not path.name.endswith(DB_SUFFIXES)
+    """False for north's own state files, which share ~/.north/tasks with handoffs."""
+    return is_readable_artifact(path)
 
 
 def _artifact_task_id(path: Path, home: Path) -> str:
     """The task a handoff artifact belongs to, or "" for a personal output."""
-    try:
-        parts = path.relative_to(home).parts
-    except ValueError:
-        return ""
-    return parts[1] if len(parts) > 2 and parts[0] == "tasks" else ""
+    return artifact_task_id(path, home)
 
 
 def _artifact_id(path: Path) -> str:
-    home = current_services().require("north_home")
-    relative = str(path.relative_to(home))
-    return base64.urlsafe_b64encode(relative.encode()).decode().rstrip("=")
+    return encode_artifact_id(path, current_services().require("north_home"))
 
 
 def _artifact_path(artifact_id: str) -> Path:
-    try:
-        padded = artifact_id + "=" * (-len(artifact_id) % 4)
-        relative = base64.urlsafe_b64decode(padded.encode()).decode()
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail="Artifact not found") from exc
-    home = current_services().require("north_home").resolve()
-    path = (home / relative).resolve()
-    if not any(path.is_relative_to(root.resolve()) for root in _allowed_output_roots()):
-        raise HTTPException(status_code=404, detail="Artifact not found")
-    if not _is_readable_artifact(path):
+    path = resolve_artifact(artifact_id, current_services().require("north_home"))
+    if path is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
     return path
 
