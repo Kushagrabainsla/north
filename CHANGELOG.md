@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Provider selection parsing has a reusable CLI owner** (`cli/provider_env.py`). The 1-based, deduplicating selector is now independent of CLI globals while `cli.main` preserves its provider-list wrapper.
 - **Provider environment-file operations have a focused CLI owner** (`cli/provider_env.py`). `.env` parsing and key persistence no longer live beside command registration, while `cli.main` preserves compatibility aliases.
 - **Optional CLI dictation helpers have a focused owner** (`cli/dictation.py`). Hotkey parsing and in-memory WAV encoding are separated from command registration while retaining `cli.main` compatibility names.
 - **Primary handoff-artifact resolution now shares its focused owner** (`orchestrator/handoff_artifacts.py`). The first declared stage output is resolved independently of pipeline control flow, preserving the existing Orchestrator seam.
