@@ -11,6 +11,7 @@ import yaml
 from agents.base import Agent
 from agents.exceptions import AgentConfigError, AgentNotFoundError
 from agents.models import AgentConfig, AgentDependencies
+from agents.packaging import agent_module_root
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ class AgentRegistry:
 
     def _load_agent_from_directory(self, agent_dir: Path) -> Agent:
         config = AgentConfig.from_yaml(agent_dir / "config.yaml")
-        module_path = f"agents.{config.agent}.agent"
+        module_path = f"{agent_module_root()}.{config.agent}.agent"
         try:
             module = importlib.import_module(module_path)
         except ImportError as e:
