@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Startup-failure log analysis has a focused CLI owner** (`cli/startup_report.py`). Exception-tail extraction is independent of console reporting, and the pattern it needs now lives beside it.
 - **Frontend asset staleness has a focused CLI owner** (`cli/web_build.py`). Freshness comparison is separated from npm execution and command output while `cli.main` keeps its existing helper name.
 - **CLI cron day selection has a focused scheduling owner** (`cli/scheduling.py`). Server-aligned validation and list normalization are separated from command presentation while `cli.main` preserves its local error behavior.
 - **Provider configuration detection has a focused CLI owner** (`cli/provider_env.py`). OAuth, process-environment, and `.env` availability checks are testable independently while CLI registry lookup stays lazy.
