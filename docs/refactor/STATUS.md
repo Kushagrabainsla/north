@@ -134,6 +134,41 @@ file. Paying one down means deleting its line in the same change.
 
 **Stage 8 status: Complete.**
 
+## Continuing debt paydown (post-Stage 8)
+
+The gate prevents new forbidden pairs; each existing one is paid down by deleting
+its line from `architecture/import-baseline.txt` in the change that removes it.
+
+| Unit | Status | Commit | Validation evidence | Notes |
+|---|---|---|---|---|
+| Invert `platform.config → application.approval` | Complete | `f83e0a9` | Focused pytest — 242 passed (config, approval, architecture); full pytest — 2,106 passed, 3 skipped; ruff format/check; mypy | The approval *mode* is a value the user sets, so it moved to `config/approval_mode.py`; the policy that interprets it stays in `approval/policy.py`. 25 import sites updated, no shim left behind. Platform no longer depends upward on anything outside its own layer. |
+
+### Remaining debt, categorized
+
+22 pairs remain. They are not equivalent problems:
+
+**Intra-layer sibling imports (12).** Flagged because each layer declares the
+layers it may import and none lists itself, so any sibling import registers.
+These are mostly benign (`platform.ledger → platform.common` is a store using
+shared primitives; `intelligence.skills → intelligence.memory` is a real
+dependency in the right direction). Paying them down means either declaring an
+intra-layer DAG in the manifest or accepting them - a policy decision, not a code
+change. Deliberately left for a decision rather than silently loosened, because
+the same strictness is what caught the `platform.common → platform.config` cycle.
+
+**Upward cross-layer imports (10).** These are the real architectural debt:
+
+- `integrations.tools → application.{agents,approval,jobs}` and the reverse
+  `application.{agents,approval} → integrations.tools` form the remaining
+  two-way coupling. The runtime dispatch half of this is already inverted through
+  `utils/tools.py` ports; what is left is approval gating and delegation.
+- `intelligence.{inference,workspace_context} → integrations.tools` and
+  `interfaces.{cli,web} → integrations.tools` are single-direction reads that a
+  narrow port would remove.
+
+Each is a Stage-4-shaped unit: define a platform port, inject the concrete type
+at the composition root, delete the baseline line.
+
 ## Stages 1–8
 
 | Stage | Status | Preconditions | Completion evidence |

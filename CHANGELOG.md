@@ -18,6 +18,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **The approval mode is configuration, and now lives there** (`config/approval_mode.py`). It is a value the user sets and everything else reads, so `config/strategy.py` can load and persist it without configuration depending upward on the approval machinery. The policy that decides whether an action may run without asking is unchanged, and still the only place that branches on the mode.
 - **One parser reads provider retry timing** (`inference/durations.py`). The rate-limit reader and the OpenAI-compatible provider each carried a byte-identical protobuf Duration parser; a test now asserts both call sites resolve to the same function, so the copy cannot come back.
 - **TUI text and slash-input parsing have a focused owner** (`cli/tui_text.py`). Turn rendering, token estimation, and command-argument parsing are testable without starting the app.
 - **Artifact path policy has a focused web owner** (`web/artifacts.py`). Permitted roots, state-file exclusion, task attribution, and identifier resolution are testable without HTTP, and escape attempts are covered directly.
