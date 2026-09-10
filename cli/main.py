@@ -85,6 +85,7 @@ from cli.provider_env import update_env_file as _update_env_file
 from cli.scheduling import day_selection
 from cli.startup_report import last_error_lines as _last_error_lines
 from cli.tui import run as _tui_run
+from cli.update_spec import pinned_git_spec as _pinned_git_spec
 from cli.web_build import web_build_is_stale as _web_build_is_stale
 from config.security import load_secret
 from utils.time import local_timezone_name
@@ -2329,14 +2330,6 @@ def _update_from_git(install_url: str, options: _UpdateOptions) -> None:
         typer.secho(f"✓ north updated and restarted (pid {proc.pid}).", fg=typer.colors.GREEN)
     else:
         typer.secho("✓ north updated. Run north start to restart.", fg=typer.colors.GREEN)
-
-
-def _pinned_git_spec(install_url: str) -> str:
-    """The install URL as a uv git spec, pinned to main when it names no ref."""
-    spec = f"git+{install_url}"
-    if spec.endswith("@main") or "@" in spec.split("/")[-1]:
-        return spec
-    return f"{spec}@main"
 
 
 @app.command("update")
