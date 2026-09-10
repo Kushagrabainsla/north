@@ -75,6 +75,7 @@ This ledger is the durable execution record for [the approved refactor program](
 | Extract generic provider selection parsing | Complete | `179574c` | Focused pytest — 10 passed; full pytest — 2,068 passed, 3 skipped; ruff format/check; architecture mypy | `cli.provider_env` owns deduplicating 1-based provider selection parsing while `cli.main` retains its provider-list-bound compatibility wrapper. |
 | Extract provider configuration detection | Complete | `729ee0c` | Focused pytest — 11 passed; full pytest — 2,069 passed, 3 skipped; ruff format/check; architecture mypy | `cli.provider_env` owns injected OAuth, process-environment, and `.env` provider availability detection; `cli.main` retains lazy registry lookup and compatibility wrappers. |
 | Extract CLI cron day selection | Complete | `f6ee24d` | Focused pytest — 35 passed; full pytest — 2,071 passed, 3 skipped; ruff format/check; architecture mypy | `cli.scheduling` owns validator-injected day normalization while `cli.main` retains local Typer error presentation and its compatibility helper. |
+| Extract frontend asset staleness detection | Complete | `cec6733` | Focused pytest — 9 passed; full pytest — 2,071 passed, 3 skipped; ruff format/check; architecture mypy | `cli.web_build` owns bundled-asset freshness comparison; npm invocation and CLI messaging stay in `cli.main`, which re-exports the existing helper name. |
 
 ## Stages 1–8
 

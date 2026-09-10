@@ -17,6 +17,7 @@ All notable changes to north are documented here.
 - **Questions are asked inside the app** (`web/src/dialog.tsx`), so a confirmation names its action - "Disable", "Forget", "Delete" - instead of "OK".
 
 ### Changed
+- **Frontend asset staleness has a focused CLI owner** (`cli/web_build.py`). Freshness comparison is separated from npm execution and command output while `cli.main` keeps its existing helper name.
 - **CLI cron day selection has a focused scheduling owner** (`cli/scheduling.py`). Server-aligned validation and list normalization are separated from command presentation while `cli.main` preserves its local error behavior.
 - **Provider configuration detection has a focused CLI owner** (`cli/provider_env.py`). OAuth, process-environment, and `.env` availability checks are testable independently while CLI registry lookup stays lazy.
 - **Provider selection parsing has a reusable CLI owner** (`cli/provider_env.py`). The 1-based, deduplicating selector is now independent of CLI globals while `cli.main` preserves its provider-list wrapper.
