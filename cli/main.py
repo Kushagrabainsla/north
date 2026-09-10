@@ -82,6 +82,7 @@ from cli.provider_env import any_provider_configured, parse_provider_selection, 
 from cli.provider_env import load_env_keys as _load_env_keys
 from cli.provider_env import save_provider_key as _save_provider_key
 from cli.provider_env import update_env_file as _update_env_file
+from cli.scheduling import day_selection
 from cli.tui import run as _tui_run
 from config.security import load_secret
 from utils.time import local_timezone_name
@@ -636,15 +637,11 @@ def _day_selection(days: str | None) -> list[str] | str | None:
         return None
     from tools.universal._schedules import parse_weekdays
 
-    selection: list[str] | str = (
-        [part.strip() for part in days.split(",") if part.strip()] if "," in days else days.strip()
-    )
     try:
-        parse_weekdays(selection)
+        return day_selection(days, parse_weekdays)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from None
-    return selection
 
 
 def _print_cron_entries(entries: list[dict]) -> None:
