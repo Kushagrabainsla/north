@@ -18,6 +18,7 @@ All notable changes to north are documented here.
 
 ### Changed
 - **Optional CLI dictation helpers have a focused owner** (`cli/dictation.py`). Hotkey parsing and in-memory WAV encoding are separated from command registration while retaining `cli.main` compatibility names.
+- **Optional CLI dictation helpers have a focused owner** (`cli/dictation.py`). Hotkey parsing and in-memory WAV encoding are separated from command registration while retaining `cli.main` compatibility names.
 - **Primary handoff-artifact resolution now shares its focused owner** (`orchestrator/handoff_artifacts.py`). The first declared stage output is resolved independently of pipeline control flow, preserving the existing Orchestrator seam.
 - **Handoff-artifact reading has a focused orchestration owner** (`orchestrator/handoff_artifacts.py`). Bounded, fail-open reads are isolated from orchestration flow and directly tested.
 - **Model-scarcity handling has a focused orchestration owner** (`orchestrator/model_scarcity.py`). Tagged agent failures and the honest pool-exhaustion message are isolated from pipeline flow while compatibility aliases preserve callers.
