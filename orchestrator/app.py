@@ -38,7 +38,7 @@ from config.security import load_secret
 from config.settings import settings
 from gateways.telegram import TelegramGateway
 from jobs.models import Job
-from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler
+from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory.consolidator import EpisodeConsolidator
 from memory.embeddings import EmbeddingIndex
@@ -862,6 +862,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     callback_server = _build_callback_server()
 
     _step("scheduling background tasks")
+    # Seed provisioned-default schedules (e.g. the daily news briefing) into the
+    # user's store once, before the scheduler starts, so they are data that
+    # survives update/reinstall rather than a code constant. Idempotent, and
+    # never resurrects a user-deleted one. See docs/design/schedule-provisioning.md.
+    await provision_default_schedules(deps.cron_store)
     skill_distiller = SkillDistiller(
         episodic_store=deps.episodic_store,
         inference_router=deps.cost_tracker,

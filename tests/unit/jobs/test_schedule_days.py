@@ -282,15 +282,15 @@ def test_an_override_that_was_renamed_keeps_its_own_name() -> None:
     from jobs.scheduler import V1_CRON_ENTRIES, merge_entries
 
     row = {
-        "name": "news_daily_briefing",
-        "agent": "news_briefing",
-        "task": "brief me",
-        "hour": 7,
+        "name": "task_context_cleanup",
+        "agent": "system",
+        "task": "task_context_cleanup",
+        "hour": 4,
         "minute": 0,
         "weekdays": None,
         "tz": "UTC",
         "enabled": True,
-        "label": "My morning news",
+        "label": "My nightly tidy",
     }
     merged = {e.name: e for e in merge_entries(list(V1_CRON_ENTRIES), [row])}
-    assert merged["news_daily_briefing"].title == "My morning news"
+    assert merged["task_context_cleanup"].title == "My nightly tidy"

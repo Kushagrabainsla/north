@@ -1431,20 +1431,41 @@ Job processor loop:
      -> on failure: classify failure, update retry_after or surface failure card
 ```
 
-### 11.3 Cron Jobs: Built-in + User-Defined
+### 11.3 Cron Jobs: System Built-in + Provisioned + User-Defined
 
-The `CronScheduler` runs as a single asyncio background task. It combines two sources of entries and re-evaluates them every 60 seconds so newly added schedules take effect within a minute.
+The `CronScheduler` runs as a single asyncio background task. It combines
+schedule sources and re-evaluates them every 60 seconds so newly added schedules
+take effect within a minute.
 
-**Built-in schedules** (`jobs/scheduler.py` - `V1_CRON_ENTRIES`):
+**System built-ins** (`jobs/scheduler.py` - `SYSTEM_CRON_ENTRIES`, exposed as
+`V1_CRON_ENTRIES`):
 ```
-news_daily_briefing            -> daily 8:00 AM
 task_context_cleanup           -> daily 3:00 AM
 ```
 
-The built-in list stays deliberately short: housekeeping north needs to run
-itself, plus the daily briefing. Anything tied to one person's routine - a meal
-plan, a workout, a budget review - is not shipped as an assumption; the user
-adds it as a user-defined schedule below, and it runs identically.
+These are the housekeeping schedules north runs on *itself*. They ship as code
+constants, are layered under any stored override by `merge_entries`, are
+read-only in the UI except for retime/pause, and deleting an override restores
+the shipped default.
+
+**Provisioned defaults** (`jobs/scheduler.py` - `PROVISIONED_CRON_ENTRIES`):
+```
+news_daily_briefing            -> daily 8:00 AM
+```
+
+These are schedules a *fresh install* should start with but which are the user's
+own the moment they exist. `provision_default_schedules()` seeds each one into
+`user_cron_entries` exactly once (guarded by the `schedule_provisioning` ledger),
+after which it behaves like any user-created schedule: fully editable, and
+deletable for good. A provisioned default the user deletes is never re-seeded, and
+shipping a new provisioned default later seeds only the new name. Because the
+schedule then lives in `~/.north/jobs.db` (outside the install), it survives
+update/reinstall - the code constant exists only to seed a first install. See
+docs/design/schedule-provisioning.md.
+
+Anything tied to one person's routine that north does not provision - a meal plan,
+a workout, a budget review - is not shipped as an assumption; the user adds it as a
+user-defined schedule below, and it runs identically.
 
 **User-defined schedules** - stored in the `user_cron_entries` table in `~/.north/jobs.db`,
 re-read by the scheduler every 60 s, so one added mid-conversation fires without a restart.
