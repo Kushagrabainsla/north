@@ -120,12 +120,9 @@ async def test_deleting_removes_it(store) -> None:
 
 @pytest.mark.asyncio
 async def test_a_builtin_schedule_can_be_retimed(store) -> None:
-    """The briefing was created by asking north, then written into the source.
-
-    From then on the person whose briefing it was could not move it.
-    """
+    """A system built-in ships in the source; retiming it writes an override row."""
     with bind_services(ApiServices(cron_store=store)):
-        edited = await update("news_daily_briefing", hour=7, minute=15)
+        edited = await update("task_context_cleanup", hour=7, minute=15)
 
     assert (edited.hour, edited.minute) == (7, 15)
     assert edited.source == "builtin"
@@ -136,16 +133,16 @@ async def test_a_builtin_schedule_can_be_retimed(store) -> None:
 async def test_editing_a_builtin_keeps_the_fields_it_did_not_name(store) -> None:
     """The override is seeded from the shipped values, not from blanks."""
     with bind_services(ApiServices(cron_store=store)):
-        edited = await update("news_daily_briefing", hour=7)
+        edited = await update("task_context_cleanup", hour=7)
 
-    assert edited.agent == "news_briefing"
-    assert "news briefing" in edited.task
+    assert edited.agent == "system"
+    assert edited.task == "task_context_cleanup"
 
 
 @pytest.mark.asyncio
 async def test_a_builtin_can_be_paused(store) -> None:
     with bind_services(ApiServices(cron_store=store)):
-        paused = await update("news_daily_briefing", enabled=False)
+        paused = await update("task_context_cleanup", enabled=False)
     assert paused.enabled is False
 
 
@@ -153,32 +150,32 @@ async def test_a_builtin_can_be_paused(store) -> None:
 async def test_an_edited_builtin_is_listed_once_not_twice(store) -> None:
     """Listing the shipped and the stored version would show two schedules where one runs."""
     with bind_services(ApiServices(cron_store=store)):
-        await update("news_daily_briefing", hour=7)
+        await update("task_context_cleanup", hour=7)
         listed = await api.list_cron_entries()
 
-    briefings = [e for e in listed if e.name == "news_daily_briefing"]
-    assert len(briefings) == 1
-    assert briefings[0].hour == 7
+    cleanups = [e for e in listed if e.name == "task_context_cleanup"]
+    assert len(cleanups) == 1
+    assert cleanups[0].hour == 7
 
 
 @pytest.mark.asyncio
 async def test_deleting_an_edited_builtin_restores_the_shipped_default(store) -> None:
     with bind_services(ApiServices(cron_store=store)):
-        await update("news_daily_briefing", hour=7, enabled=False)
-        await api.delete_cron_entry("news_daily_briefing")
+        await update("task_context_cleanup", hour=7, enabled=False)
+        await api.delete_cron_entry("task_context_cleanup")
         listed = await api.list_cron_entries()
 
-    (briefing,) = [e for e in listed if e.name == "news_daily_briefing"]
-    assert briefing.hour == 8
-    assert briefing.enabled is True
-    assert briefing.modified is False
+    (cleanup,) = [e for e in listed if e.name == "task_context_cleanup"]
+    assert cleanup.hour == 3
+    assert cleanup.enabled is True
+    assert cleanup.modified is False
 
 
 @pytest.mark.asyncio
 async def test_deleting_an_unedited_builtin_says_to_pause_it_instead(store) -> None:
     """It lives in the source, so there is nothing to remove - only to stop."""
     with bind_services(ApiServices(cron_store=store)), pytest.raises(HTTPException) as exc:
-        await api.delete_cron_entry("news_daily_briefing")
+        await api.delete_cron_entry("task_context_cleanup")
 
     assert exc.value.status_code == 409
     assert "Pause" in exc.value.detail
@@ -230,14 +227,34 @@ async def test_renaming_leaves_the_prompt_alone(store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_builtin_briefing_has_a_readable_name(store) -> None:
-    """The list showed a slug for one built-in and a 90-character sentence for the other."""
+async def test_the_builtin_has_a_readable_name(store) -> None:
+    """The list showed a slug for the built-in; it must show its title instead."""
     with bind_services(ApiServices(cron_store=store)):
         listed = await api.list_cron_entries()
 
     titles = {e.name: e.title for e in listed}
-    assert titles["news_daily_briefing"] == "Daily news briefing"
     assert titles["task_context_cleanup"] == "Nightly cleanup"
+
+
+@pytest.mark.asyncio
+async def test_a_provisioned_briefing_lists_as_the_users_own(store) -> None:
+    """Once provisioned, the daily briefing is a user schedule, not a built-in.
+
+    It can be retimed, paused, and deleted for good like anything the user made.
+    """
+    from jobs.scheduler import provision_default_schedules
+
+    await provision_default_schedules(store)
+    with bind_services(ApiServices(cron_store=store)):
+        listed = await api.list_cron_entries()
+        briefing = next(e for e in listed if e.name == "news_daily_briefing")
+        assert briefing.source == "user"
+        assert briefing.title == "Daily news briefing"
+        assert briefing.hour == 8
+        # Deletable for good - not the 409 a built-in gives.
+        await api.delete_cron_entry("news_daily_briefing")
+        after = await api.list_cron_entries()
+    assert not any(e.name == "news_daily_briefing" for e in after)
 
 
 @pytest.mark.asyncio

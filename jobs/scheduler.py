@@ -354,26 +354,29 @@ class CronScheduler:
             await self._execute_due_entry(due, now, entries)
 
 
-# V1 schedule - see docs/ARCHITECTURE.md Section 11.3.
+# See docs/ARCHITECTURE.md Section 11.3 and docs/design/schedule-provisioning.md.
 # weekday: 0=Mon … 6=Sun, None = daily. tz is unset, so the hours below are the
 # user's own local wall clock: a briefing at 08:00 means 08:00 where they live.
-# Only what north needs to run itself, plus the daily briefing, ships built in -
-# anything tied to one person's routine is theirs to add (`schedule_task`).
-V1_CRON_ENTRIES: list[CronEntry] = [
-    CronEntry(
-        name="news_daily_briefing",
-        label="Daily news briefing",
-        description=(
-            "Reads the morning's news across tech & AI, world events, science & health, and business, "
-            "and files one briefing you can read in Artifacts."
-        ),
-        agent="news_briefing",
-        task=(
-            "Compile the daily news briefing across Tech & AI, world events, science & health, and business & markets"
-        ),
-        hour=8,
-        minute=0,
-    ),
+#
+# There are two kinds of schedule north does not require the user to type out,
+# and they are NOT the same thing:
+#
+#   SYSTEM_CRON_ENTRIES  - self-maintenance north runs on *itself*. Part of the
+#       install, not the user's list. Shipped as constants, layered under any
+#       stored override by merge_entries, read-only-except-retime/pause, and a
+#       delete restores the shipped default rather than removing it.
+#
+#   PROVISIONED_CRON_ENTRIES - schedules a *fresh install* should start with, but
+#       which are the user's own the instant they exist (the news briefing). They
+#       are seeded into user_cron_entries once, by provision_default_schedules(),
+#       then behave exactly like a user-created schedule: fully editable, and
+#       deletable for good. They are data, not code - so the constant below can be
+#       deleted and a north update simply picks the stored row up.
+#
+# Anything tied to one person's routine that north does NOT seed is theirs to add
+# with `schedule_task`.
+
+SYSTEM_CRON_ENTRIES: list[CronEntry] = [
     CronEntry(
         name="task_context_cleanup",
         label="Nightly cleanup",
@@ -390,10 +393,42 @@ V1_CRON_ENTRIES: list[CronEntry] = [
     ),
 ]
 
+# Seeded into the user's own schedule store once (see provision_default_schedules).
+# The news briefing lives here rather than in SYSTEM_CRON_ENTRIES because it is a
+# person's routine, not north's own upkeep: once seeded it is a plain user row the
+# user can retime, pause, or delete for good. This list is the ONLY reason a fresh
+# install has a briefing - remove an entry and no new install seeds it, while every
+# install that already provisioned it keeps its stored row untouched.
+PROVISIONED_CRON_ENTRIES: list[CronEntry] = [
+    CronEntry(
+        name="news_daily_briefing",
+        label="Daily news briefing",
+        description=(
+            "Reads the morning's news across tech & AI, world events, science & health, and business, "
+            "and files one briefing you can read in Artifacts."
+        ),
+        agent="news_briefing",
+        task=(
+            "Compile the daily news briefing across Tech & AI, world events, science & health, and business & markets"
+        ),
+        hour=8,
+        minute=0,
+    ),
+]
 
-# The schedules north ships with, addressable by name so a stored row can stand
-# in for one.
-BUILTIN_BY_NAME: dict[str, CronEntry] = {entry.name: entry for entry in V1_CRON_ENTRIES}
+# The schedules that fire from code, layered under user overrides by the scheduler.
+# Only system upkeep runs this way now; provisioned defaults run as stored rows.
+V1_CRON_ENTRIES: list[CronEntry] = list(SYSTEM_CRON_ENTRIES)
+
+
+# The system built-ins, addressable by name so a stored override row can stand in
+# for one. Provisioned defaults are deliberately NOT here: once seeded they are
+# plain user rows, so merge_entries / apply_shipped_defaults must not treat them
+# as overridable constants (that would pin their description and refuse deletion).
+BUILTIN_BY_NAME: dict[str, CronEntry] = {entry.name: entry for entry in SYSTEM_CRON_ENTRIES}
+
+# Provisioned defaults, addressable by name for the one-time seed only.
+_PROVISIONED_BY_NAME: dict[str, CronEntry] = {entry.name: entry for entry in PROVISIONED_CRON_ENTRIES}
 
 
 def merge_entries(builtins: list[CronEntry], user_rows: list[Mapping[str, Any]]) -> list[CronEntry]:
@@ -439,5 +474,61 @@ def apply_shipped_defaults(entry: CronEntry) -> CronEntry:
 
 
 def builtin_default(name: str) -> CronEntry | None:
-    """The shipped form of *name*, for seeding an override or restoring one."""
+    """The shipped form of a system built-in *name*, for seeding or restoring an override.
+
+    Provisioned defaults are excluded on purpose: they are seeded once and then
+    owned by the user's data, so there is no shipped default to restore them to.
+    """
     return BUILTIN_BY_NAME.get(name)
+
+
+async def provision_default_schedules(cron_store: UserCronStore) -> list[str]:
+    """Seed provisioned-default schedules into the user's store, once per name, ever.
+
+    This is what lets the news briefing be *data* rather than a code constant: on a
+    fresh install each provisioned default is written into ``user_cron_entries`` as a
+    plain, fully-editable user row; on every start after that the provisioning ledger
+    says it is already done and nothing is re-seeded. See
+    docs/design/schedule-provisioning.md.
+
+    Rules, all idempotent and safe to run on every startup:
+
+    * A name already in the provisioning ledger is skipped - so a provisioned
+      schedule the user later deleted is never resurrected.
+    * A name that already has a ``user_cron_entries`` row (an upgrader who had
+      retimed or paused the old code built-in) is recorded as provisioned WITHOUT
+      overwriting the row - their edits are kept.
+    * Otherwise the shipped values are inserted and the name is recorded.
+
+    Returns the names newly seeded this run (for logging/tests); an empty list means
+    every provisioned default was already accounted for.
+    """
+    if not PROVISIONED_CRON_ENTRIES:
+        return []
+    already = await cron_store.provisioned_names()
+    existing_rows = {row["name"] for row in await cron_store.list()}
+    seeded: list[str] = []
+    for entry in PROVISIONED_CRON_ENTRIES:
+        if entry.name in already:
+            continue
+        if entry.name in existing_rows:
+            # Upgrader who already edited the old code built-in: adopt their row
+            # as-is, just record that provisioning has now happened for this name.
+            await cron_store.mark_provisioned(entry.name)
+            continue
+        await cron_store.add(
+            name=entry.name,
+            agent=entry.agent,
+            task=entry.task,
+            hour=entry.hour,
+            minute=entry.minute,
+            weekdays=entry.weekdays,
+            tz=entry.zone_name,
+            enabled=entry.enabled,
+            label=entry.label,
+        )
+        await cron_store.mark_provisioned(entry.name)
+        seeded.append(entry.name)
+    if seeded:
+        logger.info("Provisioned default schedules: %s", ", ".join(seeded))
+    return seeded

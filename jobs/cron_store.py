@@ -35,6 +35,18 @@ CREATE TABLE IF NOT EXISTS user_cron_entries (
 )
 """
 
+# The provisioning ledger: which provisioned-default schedules have already been
+# seeded into user_cron_entries, so seeding runs at most once per name, ever. A
+# name present here is never re-seeded - which is what stops a provisioned default
+# the user later deleted from being resurrected on the next start. See
+# docs/design/schedule-provisioning.md.
+_PROVISIONING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schedule_provisioning (
+    name              TEXT PRIMARY KEY,
+    provisioned_epoch REAL NOT NULL
+)
+"""
+
 # Columns added after v1; existing databases get them via ALTER (CODING_STYLE 11.4).
 # `weekdays` supersedes the single-day `weekday`, which is left in place because
 # SQLite cannot drop a column cheaply and a stale column costs nothing; it is
@@ -101,6 +113,7 @@ class UserCronStore:
     def _init_schema(self) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(_SCHEMA)
+            conn.execute(_PROVISIONING_SCHEMA)
             existing = {row[1] for row in conn.execute("PRAGMA table_info(user_cron_entries)")}
             for column, decl in _ADDED_COLUMNS.items():
                 if column not in existing:
@@ -227,6 +240,33 @@ class UserCronStore:
     def _list_sync(self) -> list[sqlite3.Row]:
         with open_db_connection(self._db_path) as conn:
             return list(conn.execute("SELECT * FROM user_cron_entries ORDER BY created_at").fetchall())
+
+    async def provisioned_names(self) -> set[str]:
+        """The names already seeded (or recorded as user-deleted) by provisioning.
+
+        A name in this set is never seeded again, so a provisioned default the
+        user removed is not resurrected on the next start.
+        """
+        return await asyncio.to_thread(self._provisioned_names_sync)
+
+    def _provisioned_names_sync(self) -> set[str]:
+        with open_db_connection(self._db_path) as conn:
+            return {row[0] for row in conn.execute("SELECT name FROM schedule_provisioning")}
+
+    async def mark_provisioned(self, name: str) -> None:
+        """Record that *name* has been provisioned once, so it never seeds again.
+
+        Idempotent: recording a name already present leaves its original epoch,
+        which is the truthful record of when the one-time seed happened.
+        """
+        await asyncio.to_thread(self._mark_provisioned_sync, name)
+
+    def _mark_provisioned_sync(self, name: str) -> None:
+        with open_db_connection(self._db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO schedule_provisioning (name, provisioned_epoch) VALUES (?, ?)",
+                (name, now_epoch()),
+            )
 
 
 def _row_to_entry(row: sqlite3.Row) -> dict:

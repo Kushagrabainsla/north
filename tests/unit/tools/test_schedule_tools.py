@@ -196,15 +196,15 @@ async def test_changing_the_time_leaves_the_days_alone(tool, store) -> None:
 
 @pytest.mark.asyncio
 async def test_a_builtin_schedule_can_be_retimed_by_asking(store) -> None:
-    """Asking north to move the briefing is the way it was created in the first place."""
+    """Asking north to move a built-in writes an override seeded from the shipped values."""
     updater = UpdateScheduleTool(cron_store=store)
-    result = await updater.run(ToolInput(params={"name": "news_daily_briefing", "hour": 7}))
+    result = await updater.run(ToolInput(params={"name": "task_context_cleanup", "hour": 7}))
 
     assert result.success, result.error
     assert result.data["hour"] == 7
     assert result.data["source"] == "builtin"
     # The fields the request did not name keep their shipped values.
-    assert result.data["agent"] == "news_briefing"
+    assert result.data["agent"] == "system"
 
 
 @pytest.mark.asyncio
@@ -212,13 +212,13 @@ async def test_cancelling_an_edited_builtin_restores_the_default(store) -> None:
     from tools.universal.cancel_schedule import CancelScheduleTool
 
     updater = UpdateScheduleTool(cron_store=store)
-    await updater.run(ToolInput(params={"name": "news_daily_briefing", "hour": 7}))
+    await updater.run(ToolInput(params={"name": "task_context_cleanup", "hour": 7}))
 
     canceller = CancelScheduleTool(job_processor=None, cron_store=store)
-    result = await canceller.run(ToolInput(params={"name": "news_daily_briefing"}))
+    result = await canceller.run(ToolInput(params={"name": "task_context_cleanup"}))
 
     assert result.success and result.data["type"] == "restored"
-    assert await store.get("news_daily_briefing") is None  # back to the shipped constant
+    assert await store.get("task_context_cleanup") is None  # back to the shipped constant
 
 
 @pytest.mark.asyncio
@@ -226,10 +226,42 @@ async def test_an_untouched_builtin_cannot_be_deleted_only_paused(store) -> None
     from tools.universal.cancel_schedule import CancelScheduleTool
 
     canceller = CancelScheduleTool(job_processor=None, cron_store=store)
-    result = await canceller.run(ToolInput(params={"name": "news_daily_briefing"}))
+    result = await canceller.run(ToolInput(params={"name": "task_context_cleanup"}))
 
     assert not result.success
     assert "Pause it" in result.error
+
+
+@pytest.mark.asyncio
+async def test_a_provisioned_briefing_is_a_deletable_user_schedule(store) -> None:
+    """After provisioning the briefing is the user's own: cancel deletes it for good."""
+    from tools.universal.cancel_schedule import CancelScheduleTool
+    from jobs.scheduler import provision_default_schedules
+
+    await provision_default_schedules(store)
+    assert await store.get("news_daily_briefing") is not None
+
+    canceller = CancelScheduleTool(job_processor=None, cron_store=store)
+    result = await canceller.run(ToolInput(params={"name": "news_daily_briefing"}))
+
+    assert result.success and result.data["type"] != "restored"
+    assert await store.get("news_daily_briefing") is None
+
+
+@pytest.mark.asyncio
+async def test_provisioning_does_not_resurrect_a_deleted_briefing(store) -> None:
+    """A provisioned default the user deleted stays gone across restarts."""
+    from tools.universal.cancel_schedule import CancelScheduleTool
+    from jobs.scheduler import provision_default_schedules
+
+    await provision_default_schedules(store)
+    canceller = CancelScheduleTool(job_processor=None, cron_store=store)
+    await canceller.run(ToolInput(params={"name": "news_daily_briefing"}))
+
+    # A later start runs provisioning again - it must not come back.
+    seeded = await provision_default_schedules(store)
+    assert seeded == []
+    assert await store.get("news_daily_briefing") is None
 
 
 @pytest.mark.asyncio
