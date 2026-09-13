@@ -1,10 +1,42 @@
 import type { ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useState } from "react";
 import { post } from "./api";
-import { useHealth } from "./hooks";
+import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
 import type { Conversation } from "./types";
 import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, CalendarClock, ShieldAlert, Brain, Bot, Sparkles, Cpu, Settings, type LucideIcon } from "lucide-react";
+
+let displayTimezone = "UTC";
+
+/** Keep every absolute date in the web UI aligned with North's saved zone. */
+export function configureDisplayTimezone(timezone: string) {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: timezone }).format();
+    displayTimezone = timezone;
+  } catch {
+    displayTimezone = "UTC";
+  }
+}
+
+export function formatDateTime(value: string | number | Date) {
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "–";
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: displayTimezone, dateStyle: "medium", timeStyle: "short",
+  }).format(date);
+}
+
+export function dateInNorthTimezone(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: displayTimezone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+export function weekdayInNorthTimezone(date = new Date()) {
+  const short = new Intl.DateTimeFormat("en-US", { timeZone: displayTimezone, weekday: "short" }).format(date);
+  return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(short);
+}
 
 // [path, label, icon, beta?]. A beta entry is one that will replace something
 // already in this list, running beside it until it is trusted.
@@ -18,7 +50,7 @@ const nav: [string, string, LucideIcon, boolean?][] = [
 
 export function Layout() {
   const navigate = useNavigate();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = usePersistentState(UI_PREFERENCE_KEYS.sidebarCollapsed, false, value => typeof value === "boolean");
   const newChat = async () => {
     const chat = await post<Conversation>("/web/api/conversations", { title: "New chat" });
     navigate(`/chat/${chat.id}`);
@@ -118,5 +150,6 @@ export function timeAgo(value?: string | number) {
   if (seconds < 60) return "now";
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { timeZone: displayTimezone, month: "short", day: "numeric" });
 }

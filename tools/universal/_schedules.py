@@ -16,7 +16,7 @@ from jobs.scheduler import (
     CronEntry,
     next_firing_epoch,
 )
-from utils.time import format_local, local_timezone_name, resolve_timezone
+from utils.time import format_local, is_known_timezone, local_timezone_name
 from utils.weekdays import parse_weekdays
 
 __all__ = [
@@ -49,11 +49,12 @@ def describe_weekdays(weekdays: frozenset[int] | None) -> str:
 
 
 def resolve_zone_name(tz: str | None) -> str:
-    """Return a stored zone name: the one given if real, else the machine's own."""
+    """Return a stored zone name, rejecting invalid IANA names."""
     if not tz:
         return local_timezone_name()
-    resolved = resolve_timezone(tz)
-    return tz if getattr(resolved, "key", None) == tz else local_timezone_name()
+    if not is_known_timezone(tz):
+        raise ValueError(f"Unknown timezone {tz!r}")
+    return tz
 
 
 def entry_view(row: dict[str, Any], source: str | None = None) -> dict[str, Any]:

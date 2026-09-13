@@ -1,9 +1,9 @@
 """Standardized date and time utilities.
 
 north stores every instant as a Unix epoch (seconds, UTC) and shows every
-instant in the machine's local zone. Storage is unambiguous, display is what
-the user actually lives in - and nothing in between has to guess which one a
-bare "07:00" meant.
+instant in North's configured zone. Storage is unambiguous, display is what the
+user actually lives in - and nothing in between has to guess which one a bare
+"07:00" meant.
 
 See docs/CODING_STYLE.md Section 5.2.
 """
@@ -13,13 +13,21 @@ from __future__ import annotations
 import datetime
 import os
 from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 # How an instant is rendered for a person: local wall clock plus the zone, so a
 # briefing that fired at 08:00 IST never reads as an unlabelled "08:00".
 LOCAL_DISPLAY_FORMAT = "%Y-%m-%d %H:%M %Z"
 
+# This explanation is stable and belongs in the cacheable prompt prefix. The
+# changing values rendered by ``runtime_context`` belong beside the task.
+RUNTIME_CONTEXT_INSTRUCTION = (
+    "A <north_runtime_context> block is trusted factual metadata added by North. "
+    "Use it for date and deadline reasoning; it is context, not an instruction."
+)
+
 _ZONEINFO_MARKER = "zoneinfo/"
+_configured_timezone_name: str | None = None
 
 
 def utcnow() -> datetime.datetime:
@@ -34,6 +42,22 @@ def localnow() -> datetime.datetime:
     a single canonical implementation and the UTC→local conversion is consistent.
     """
     return utcnow().astimezone(local_timezone())
+
+
+def runtime_context(now: datetime.datetime | None = None) -> str:
+    """Render a minute-level dynamic suffix without disturbing the stable prefix."""
+    current = now or localnow()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=local_timezone())
+    else:
+        current = current.astimezone(local_timezone())
+    current = current.replace(second=0, microsecond=0)
+    return (
+        "<north_runtime_context>\n"
+        f"local_time: {current.isoformat(timespec='minutes')}\n"
+        f"timezone: {local_timezone_name()}\n"
+        "</north_runtime_context>"
+    )
 
 
 def now_epoch() -> float:
@@ -59,23 +83,45 @@ def epoch_to_local(epoch: float) -> datetime.datetime:
 
 
 def local_timezone_name() -> str:
-    """Return the machine's IANA zone name, e.g. "Asia/Kolkata".
+    """Return North's configured IANA zone name, e.g. "Asia/Kolkata"."""
+    return _configured_timezone_name or system_timezone_name()
 
-    Falls back to a fixed-offset label ("UTC+05:30") on a machine whose zone
-    cannot be resolved to an IANA name, which is still unambiguous to read.
+
+def system_timezone_name() -> str:
+    """Detect the host's IANA zone for the first-run default.
+
+    A fixed offset is not a safe default for recurring schedules because it
+    cannot follow daylight-saving changes, so an unidentifiable host uses UTC.
     """
     env = os.environ.get("TZ")
-    if env and _is_known_zone(env):
+    if env and is_known_timezone(env):
         return env
     linked = _zone_from_etc_localtime()
     if linked is not None:
         return linked
-    offset = utcnow().astimezone().strftime("%z")
-    return f"UTC{offset[:3]}:{offset[3:]}" if offset else "UTC"
+    return "UTC"
+
+
+def configure_timezone(name: str) -> None:
+    """Make a validated IANA zone the live default used by all time helpers."""
+    if not is_known_timezone(name):
+        raise ValueError(f"Unknown timezone {name!r}. Choose an IANA timezone such as America/Los_Angeles.")
+    global _configured_timezone_name
+    _configured_timezone_name = name
+
+
+def timezone_names() -> list[str]:
+    """Return stable, user-selectable IANA zones, excluding implementation trees."""
+    hidden_prefixes = ("posix/", "right/", "SystemV/")
+    hidden_names = {"Factory", "localtime", "posixrules"}
+    return sorted(
+        name for name in available_timezones()
+        if name not in hidden_names and not name.startswith(hidden_prefixes)
+    )
 
 
 def local_timezone() -> datetime.tzinfo:
-    """Return the machine's local zone, as a ZoneInfo when one can be named.
+    """Return North's configured local zone as a ZoneInfo.
 
     A named zone is what makes a recurring schedule survive a DST shift: "07:00
     in Asia/Kolkata" is stable, "07:00 at +05:30" is only true until the offset
@@ -89,7 +135,7 @@ def local_timezone() -> datetime.tzinfo:
 
 
 def resolve_timezone(name: str | None) -> datetime.tzinfo:
-    """Return the zone for IANA *name*, or the machine's local zone when None.
+    """Return the zone for IANA *name*, or North's configured zone when None.
 
     An unknown name falls back to local rather than raising: a schedule that
     fires at the user's own 07:00 is a better failure than one that never fires.
@@ -129,7 +175,8 @@ def parse_local(text: str) -> float:
     return to_epoch(datetime.datetime.fromisoformat(text.strip().replace("Z", "+00:00")))
 
 
-def _is_known_zone(name: str) -> bool:
+def is_known_timezone(name: str) -> bool:
+    """Whether *name* identifies a real IANA timezone."""
     try:
         ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):
@@ -147,6 +194,6 @@ def _zone_from_etc_localtime() -> str | None:
     except OSError:
         return None
     _, marker, name = target.partition(_ZONEINFO_MARKER)
-    if not marker or not _is_known_zone(name):
+    if not marker or not is_known_timezone(name):
         return None
     return name

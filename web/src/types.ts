@@ -88,6 +88,8 @@ export interface Artifact {
   task?: string;
   media_type: string;
   size?: number;
+  /** Dashboard-only: whether this file was updated today in North's timezone. */
+  is_today?: boolean;
   updated_at?: number;
   content?: string;
 }

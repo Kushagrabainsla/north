@@ -21,7 +21,7 @@ from jobs.scheduler import (
     next_firing_epoch,
 )
 from orchestrator.api.deps import _get_cron_store, router
-from utils.time import format_local, local_timezone_name
+from utils.time import format_local, is_known_timezone, local_timezone_name
 from utils.weekdays import parse_weekdays
 
 
@@ -137,6 +137,14 @@ def _validate(hour: int | None, minute: int | None) -> None:
         raise HTTPException(status_code=422, detail="minute must be 0-59")
 
 
+def _timezone(value: str | None) -> str:
+    """Resolve an omitted zone to North's setting and reject misspellings."""
+    name = value or local_timezone_name()
+    if not is_known_timezone(name):
+        raise HTTPException(status_code=422, detail=f"Unknown timezone {name!r}")
+    return name
+
+
 def _days(value: Any) -> frozenset[int] | None:
     """Read a day selection, reporting a bad one as a 422 rather than a 500."""
     try:
@@ -199,7 +207,7 @@ async def list_cron_entries(builtin: bool = True) -> list[CronEntryOut]:
 
 @router.post("/cron", response_model=CronEntryOut, status_code=201)
 async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
-    """Add a new recurring schedule. Times are wall clock in `tz` (default: this machine's)."""
+    """Add a recurring schedule. Times are wall clock in `tz` (default: North's configured zone)."""
     _validate(body.hour, body.minute)
     store = _get_cron_store()
     # An unnamed schedule gets a name derived from its task, made unique - two
@@ -214,7 +222,7 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
         hour=body.hour,
         minute=body.minute,
         weekdays=_days(body.days),
-        tz=body.tz or local_timezone_name(),
+        tz=_timezone(body.tz),
         enabled=body.enabled,
         label=body.label,
     )
@@ -231,6 +239,8 @@ async def update_cron_entry(name: str, body: CronEntryUpdate) -> CronEntryOut:
     store = _get_cron_store()
     await _ensure_editable_row(store, name)
     changes: dict[str, Any] = body.model_dump(exclude_none=True, exclude={"days"})
+    if body.tz is not None:
+        changes["tz"] = _timezone(body.tz)
     # `days` is translated rather than passed through, and only when the caller
     # sent it: UNSET is how the store tells "leave the days alone" apart from
     # "clear them back to daily", which both look like None on the wire.

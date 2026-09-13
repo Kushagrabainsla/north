@@ -103,6 +103,28 @@ def test_the_wall_clock_survives_a_dst_change() -> None:
     assert fired.day == 9  # the Monday after the change
 
 
+def test_a_time_inside_the_spring_gap_advances_by_the_gap() -> None:
+    """02:30 does not exist on this date; North runs it at 03:30 PDT."""
+    fired = next_firing(
+        entry(hour=2, minute=30, tz="America/Los_Angeles"),
+        datetime(2026, 3, 8, 9, 0, tzinfo=UTC),
+    )
+
+    assert fired.isoformat() == "2026-03-08T03:30:00-07:00"
+    assert fired.astimezone(UTC) == datetime(2026, 3, 8, 10, 30, tzinfo=UTC)
+
+
+def test_a_time_inside_the_fall_overlap_uses_the_first_occurrence() -> None:
+    """01:30 happens twice on this date; North consistently chooses the first."""
+    fired = next_firing(
+        entry(hour=1, minute=30, tz="America/Los_Angeles"),
+        datetime(2026, 11, 1, 7, 0, tzinfo=UTC),
+    )
+
+    assert fired.isoformat() == "2026-11-01T01:30:00-07:00"
+    assert fired.fold == 0
+
+
 # ---- how it is said ----
 
 

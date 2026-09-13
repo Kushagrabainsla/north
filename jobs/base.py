@@ -57,6 +57,15 @@ class JobProcessor(ABC):
     async def list_jobs(self, status: JobStatus | None = None, limit: int = 100) -> list[Job]:
         """List jobs, optionally filtered by status, ordered by scheduled_at desc."""
 
+    async def list_upcoming(self, limit: int = 100) -> list[Job]:
+        """List pending jobs soonest first.
+
+        Concrete stores can provide a more efficient query. The fallback keeps
+        alternate processors compatible while giving callers the right order.
+        """
+        jobs = await self.list_jobs(status=JobStatus.PENDING, limit=max(limit, 10_000))
+        return sorted(jobs, key=lambda job: job.scheduled_at)[:limit]
+
     @abstractmethod
     async def has_active_job(self, agent: str, task: str) -> bool:
         """Return True if a pending or running job already exists for (agent, task).

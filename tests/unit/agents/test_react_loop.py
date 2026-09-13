@@ -875,10 +875,12 @@ class _CapturingRouter(MockInferenceRouter):
         super().__init__()
         self.tool_names: list[str] = []
         self.system_prompt: str = ""
+        self.user_prompt: str = ""
 
     async def complete_with_tools(self, request, token_callback=None):
         self.tool_names = [t.get("function", {}).get("name", "") for t in (request.tools or [])]
         self.system_prompt = next((m["content"] for m in request.messages if m.get("role") == "system"), "")
+        self.user_prompt = next((m["content"] for m in request.messages if m.get("role") == "user"), "")
         return ToolCallResponse(type="message", content="ok", calls=[], model_used="mock", tokens_in=1, tokens_out=1)
 
 
@@ -909,9 +911,8 @@ async def test_tool_order_on_the_wire_ignores_confidence(tmp_path: Path) -> None
     )
 
 
-async def test_system_prompt_carries_no_minute_resolution_clock(tmp_path: Path) -> None:
-    """A timestamp at the head of the system prompt gave two runs a minute apart
-    no shared prefix at all."""
+async def test_dynamic_clock_is_after_the_cached_prefix(tmp_path: Path) -> None:
+    """The system stays stable while fresh runtime metadata sits beside the task."""
     import re as _re
 
     router = await _capture(tmp_path, [])
@@ -919,4 +920,8 @@ async def test_system_prompt_carries_no_minute_resolution_clock(tmp_path: Path) 
     assert not _re.search(r"\d{2}:\d{2}", router.system_prompt), (
         f"system prompt still carries a clock: {router.system_prompt[:200]!r}"
     )
-    assert _re.search(r"Current date: \d{4}-\d{2}-\d{2}", router.system_prompt), "agents still need to know the date"
+    assert "local_time:" not in router.system_prompt
+    assert "trusted factual metadata" in router.system_prompt
+    assert "<north_runtime_context>" in router.user_prompt
+    assert _re.search(r"local_time: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}[+-]\d{2}:\d{2}", router.user_prompt)
+    assert router.user_prompt.index("<north_runtime_context>") < router.user_prompt.index("## Task\nhello")

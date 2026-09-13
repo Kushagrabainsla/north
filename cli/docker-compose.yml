@@ -18,6 +18,7 @@ services:
       - ${NORTH_NORTH_WORKSPACE:-./workspace}:/workspace
     environment:
       - NORTH_HOME=/data
+      - TZ=${TZ:-UTC}  # First-run default; the persisted Settings choice takes precedence
       - NORTH_NORTH_WORKSPACE=/workspace  # Workspace root inside the container scopes tool access
       - NORTH_SECRET=${NORTH_SECRET:-}
       - NORTH_OPENROUTER_API_KEY=${NORTH_OPENROUTER_API_KEY:-}

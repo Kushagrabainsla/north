@@ -200,6 +200,18 @@ async def test_list_jobs_respects_limit(processor: SQLiteJobProcessor) -> None:
     assert len(results) == 2
 
 
+async def test_list_upcoming_returns_only_pending_jobs_soonest_first(processor: SQLiteJobProcessor) -> None:
+    now = datetime.now(UTC)
+    await processor.enqueue(_job("later", scheduled_at=now + timedelta(hours=2)))
+    await processor.enqueue(_job("next", scheduled_at=now + timedelta(hours=1)))
+    await processor.enqueue(_job("cancelled", scheduled_at=now + timedelta(minutes=30)))
+    await processor.cancel("cancelled")
+
+    upcoming = await processor.list_upcoming(limit=2)
+
+    assert [job.job_id for job in upcoming] == ["next", "later"]
+
+
 # ---------------------------------------------------------------------------
 # reap_stale_running - recover jobs stranded in RUNNING by a dead worker
 # ---------------------------------------------------------------------------

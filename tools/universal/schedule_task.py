@@ -134,11 +134,11 @@ class ScheduleTaskTool(Tool):
     async def _recurring(self, task: str, agent: str, params: dict) -> ToolOutput:
         from jobs.scheduler import CronEntry
 
-        tz = resolve_zone_name(params.get("tz"))
         # `weekday` is the old single-day spelling; still read so a caller working
         # from a cached description of this tool is not simply refused.
         days = params.get("days", params.get("weekday"))
         try:
+            tz = resolve_zone_name(params.get("tz"))
             label = str(params.get("label", "")).strip()
             entry = CronEntry(
                 name=await self._cron_store.unique_name(label or task),

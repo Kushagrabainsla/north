@@ -18,7 +18,7 @@ from inference.models import (
 )
 from tools.base import Tool
 from utils.text import strip_code_fences
-from utils.time import localnow
+from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
 
 # Built-in policies (authoritative, always-on operating rules) loaded once at import.
 # Fails closed: a malformed/empty policy raises here rather than silently leaving
@@ -44,7 +44,12 @@ class LLMAgent(Agent):
         path = self._prompts_dir() / "system.md"
         if not path.exists():
             raise AgentConfigError(f"Missing system prompt at {path}. Every LLMAgent needs one.")
-        prompt = path.read_text(encoding="utf-8") + _TOOL_CREATION_POLICY + _DELIVERABLE_POLICY
+        prompt = (
+            path.read_text(encoding="utf-8")
+            + _TOOL_CREATION_POLICY
+            + _DELIVERABLE_POLICY
+            + f"\n\n{RUNTIME_CONTEXT_INSTRUCTION}"
+        )
         # Authoritative operating policies (safety for every agent; clean-code for
         # coder+reviewer) are appended to the system-prompt tier, activated by agent
         # name. See policies/ and agents/policy.py.
@@ -68,8 +73,7 @@ class LLMAgent(Agent):
         scored_tools: list[tuple[Tool, float]],
     ) -> str:
         tool_lines = "\n".join(f"- {t.name} (reliability {score:.0%}): {t.description}" for t, score in scored_tools)
-        now = localnow().strftime("%Y-%m-%d %H:%M %Z")
-        system_lines = [f"- current date/time: {now}"]
+        system_lines = []
         if payload.workspace:
             system_lines += [
                 f"- workspace: {payload.workspace}",
@@ -82,12 +86,13 @@ class LLMAgent(Agent):
                 " workspace inspection above. Never use generic placeholders like '/home/user',"
                 " unexpanded '~', or relative paths.",
             ]
-        system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n"
+        system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n" if system_lines else ""
         return (
             f"{system_context}"
-            f"## Task\n{payload.prompt}\n\n"
             f"## Context\n{context or '(none)'}\n\n"
             f"## Tools available\n{tool_lines or '(none)'}\n"
+            f"\n{runtime_context()}\n\n"
+            f"## Task\n{payload.prompt}\n"
         )
 
     def _resolve_priority(self, pool_or_payload: str | AgentPayload | None = None) -> PoolPriority:

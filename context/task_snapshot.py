@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from typing import Any
 
 from config.settings import settings
+from utils.time import utcnow
 
 
 @dataclass
@@ -49,7 +49,7 @@ class TaskContextSnapshotStore:
 
     async def write(self, snapshot: TaskContextSnapshot) -> None:
         """Write snapshot to disk (fire-and-forget)."""
-        snapshot.updated_at = datetime.utcnow().isoformat()
+        snapshot.updated_at = utcnow().isoformat()
         if not snapshot.created_at:
             snapshot.created_at = snapshot.updated_at
 

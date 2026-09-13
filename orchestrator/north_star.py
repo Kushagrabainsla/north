@@ -10,6 +10,7 @@ from memory import ContextDocument, MemoryGateway
 from orchestrator.exceptions import OrchestratorError
 from utils.prompts import load_prompt
 from utils.text import extract_json
+from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
 
 
 class NorthStarChecker:
@@ -45,7 +46,9 @@ class NorthStarChecker:
             raise OrchestratorError(f"Failed to load North Star prompt template: {e}") from e
 
         full_prompt = (
-            f"{system_prompt}\n\n=== Active Goals (north_stars.md) ===\n{goals}\n\n=== Task Request ===\n{prompt}"
+            f"{system_prompt}\n\n{RUNTIME_CONTEXT_INSTRUCTION}"
+            f"\n\n=== Active Goals (north_stars.md) ===\n{goals}"
+            f"\n\n{runtime_context()}\n\n=== Task Request ===\n{prompt}"
         )
 
         try:

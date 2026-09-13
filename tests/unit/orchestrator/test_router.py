@@ -56,6 +56,8 @@ async def test_execution_planner_workspace_context_in_prompt() -> None:
     assert "=== System Context ===" in call_arg.prompt
     assert "- workspace (default cwd for shell/file tools): /path/to/my/workspace" in call_arg.prompt
     assert "always prefer absolute paths" in call_arg.prompt
+    assert "<north_runtime_context>" in call_arg.prompt
+    assert call_arg.prompt.index("<north_runtime_context>") < call_arg.prompt.index("=== User Task ===")
 
 
 # ---------------------------------------------------------------------------

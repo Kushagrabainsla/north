@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
 from typing import Any
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from utils.time import utcnow
 
 # ── Data directory ─────────────────────────────────────────────────────────
 INTERVIEW_DIR = os.path.expanduser("~/.north/interview")
@@ -206,7 +206,7 @@ class InterviewPrepTool(Tool):
             {
                 "company": company,
                 "role": role,
-                "created_at": datetime.now().isoformat(),
+                "created_at": utcnow().isoformat(),
                 "status": "framework_generated",
             }
         )
@@ -220,7 +220,7 @@ class InterviewPrepTool(Tool):
         if not situation:
             return {"error": "situation is required"}
 
-        story_id = f"STORY-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        story_id = f"STORY-{utcnow().strftime('%Y%m%d%H%M%S')}"
         story = {
             "id": story_id,
             "situation": situation,
@@ -228,7 +228,7 @@ class InterviewPrepTool(Tool):
             "action": params.get("action_taken", ""),
             "result": params.get("result", ""),
             "lesson": params.get("lesson", ""),
-            "created_at": datetime.now().isoformat(),
+            "created_at": utcnow().isoformat(),
         }
 
         # Save story
@@ -330,7 +330,7 @@ class InterviewPrepTool(Tool):
             {
                 "company": company,
                 "role": role,
-                "drafted_at": datetime.now().isoformat(),
+                "drafted_at": utcnow().isoformat(),
             }
         )
         _save_json("followups.json", data)

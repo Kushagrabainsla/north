@@ -334,6 +334,10 @@ class SQLiteJobProcessor(JobProcessor):
         rows = await asyncio.to_thread(self._list_sync, status, limit)
         return [self._row_to_job(r) for r in rows]
 
+    async def list_upcoming(self, limit: int = 100) -> list[Job]:
+        rows = await asyncio.to_thread(self._list_upcoming_sync, limit)
+        return [self._row_to_job(r) for r in rows]
+
     async def reap_stale_running(self, lease_seconds: int) -> int:
         """Requeue jobs stuck in RUNNING past *lease_seconds* (0 = all RUNNING).
 
@@ -456,6 +460,11 @@ class SQLiteJobProcessor(JobProcessor):
                 return list(conn.execute(sql, (limit,)).fetchall())
             sql = "SELECT * FROM job_queue WHERE status = ? ORDER BY scheduled_epoch DESC LIMIT ?"
             return list(conn.execute(sql, (status.value, limit)).fetchall())
+
+    def _list_upcoming_sync(self, limit: int) -> list[sqlite3.Row]:
+        with open_db_connection(self._db_path) as conn:
+            sql = "SELECT * FROM job_queue WHERE status = ? ORDER BY scheduled_epoch ASC LIMIT ?"
+            return list(conn.execute(sql, (JobStatus.PENDING.value, limit)).fetchall())
 
     @staticmethod
     def _row_to_job(row: sqlite3.Row) -> Job:

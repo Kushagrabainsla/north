@@ -4,7 +4,7 @@ import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { api, patch, post } from "../api";
 import { Empty, ErrorNotice, Loading, Markdown, PageHeader, Status, timeAgo } from "../components";
-import { useResource } from "../hooks";
+import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
 
@@ -194,7 +194,8 @@ export function Chat() {
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
-  const [chatListWidth, setChatListWidth] = useState(() => Number(localStorage.getItem("north-chat-list-width")) || 250);
+  const [chatListWidth, setChatListWidth] = usePersistentState(UI_PREFERENCE_KEYS.chatListWidth, 250,
+    value => typeof value === "number" && Number.isFinite(value) && value >= 190 && value <= 520);
   const fileInput = useRef<HTMLInputElement>(null);
   const chatRoom = useRef<HTMLElement>(null);
   const openedAtBottom = useRef<string | null>(null);
@@ -212,7 +213,7 @@ export function Chat() {
     const move = (event: PointerEvent) => {
       const sidebar = document.querySelector(".sidebar")?.getBoundingClientRect().width || 0;
       const width = Math.max(190, Math.min(520, event.clientX - sidebar));
-      setChatListWidth(width); localStorage.setItem("north-chat-list-width", String(width));
+      setChatListWidth(width);
     };
     const stop = () => setResizing(false);
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop, { once: true });
@@ -310,7 +311,7 @@ export function Chat() {
     <aside className="chat-list"><div className="chat-list-head"><b>Conversations</b><button onClick={createChat}>+</button></div><input aria-label="Search conversations" placeholder="Search chats" value={search} onChange={e => setSearch(e.target.value)}/>
       <div className="chat-scroll">{visibleChats.map(chat => <NavLink to={`/chat/${chat.id}`} key={chat.id}><span className="chat-icon">◫</span><div><b>{chat.title}</b><small>{timeAgo(chat.updated_at)}</small></div>{chat.pinned && <em>•</em>}<button type="button" className="chat-delete" aria-label={`Delete ${chat.title}`} title="Delete conversation" onClick={event => { event.preventDefault(); event.stopPropagation(); void deleteChat(chat.id); }}>×</button></NavLink>)}</div>
     </aside>
-    <div className="chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation list" tabIndex={0} onPointerDown={() => setResizing(true)} onKeyDown={event => { if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return; event.preventDefault(); const width = Math.max(190, Math.min(520, chatListWidth + (event.key === "ArrowLeft" ? -16 : 16))); setChatListWidth(width); localStorage.setItem("north-chat-list-width", String(width)); }}/>
+    <div className="chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation list" tabIndex={0} onPointerDown={() => setResizing(true)} onKeyDown={event => { if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return; event.preventDefault(); const width = Math.max(190, Math.min(520, chatListWidth + (event.key === "ArrowLeft" ? -16 : 16))); setChatListWidth(width); }}/>
     <section className="chat-room" ref={chatRoom}>
       {!conversationId ? <div className="chat-welcome"><div className="north-symbol">N</div><h1>What are we working on?</h1><p>Start a new conversation or return to one of your previous rooms.</p><button className="primary-button" onClick={createChat}>New conversation</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Conversation unavailable"}/> : <>
         <PageHeader eyebrow="Conversation" title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<button className="ghost-button" onClick={rename}>Rename</button>}/>

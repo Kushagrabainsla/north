@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, del, patch, post } from "../api";
-import { Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo } from "../components";
-import { useResource } from "../hooks";
+import { configureDisplayTimezone, dateInNorthTimezone, Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo, weekdayInNorthTimezone } from "../components";
+import { isTypeScale, TYPE_SCALES, UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, Artifact, CardField, LedgerEntry, RoutingDecision, RoutingSkip } from "../types";
 
@@ -308,8 +308,7 @@ interface Draft {
   hour: number; minute: number; repeat: Repeat; days: number[]; date: string;
 }
 
-const todayISO = () => new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000)
-  .toISOString().slice(0, 10);
+const todayISO = () => dateInNorthTimezone();
 
 const emptyDraft = (): Draft => ({
   label: "", task: "", agent: "general", hour: 9, minute: 0,
@@ -361,7 +360,7 @@ function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, 
   // Switching to "weekly on selected days" with nothing selected leaves a rule
   // that matches no day, so it starts from today rather than from nothing.
   const setRepeat = (repeat: Repeat) =>
-    setDraft({ ...draft, repeat, days: repeat === "custom" && !draft.days.length ? [new Date().getDay() === 0 ? 6 : new Date().getDay() - 1] : draft.days });
+    setDraft({ ...draft, repeat, days: repeat === "custom" && !draft.days.length ? [weekdayInNorthTimezone()] : draft.days });
   const noDays = draft.repeat === "custom" && !draft.days.length;
   const options = allowOnce ? REPEAT_LABELS : REPEAT_LABELS.filter(([value]) => value !== "once");
 
@@ -878,8 +877,10 @@ function EpisodesPanel() {
 
 export function Memory() {
   const dialog = useDialog();
-  const [tab, setTab] = useState<MemoryTab>("documents");
-  const [doc, setDoc] = useState(docs[0]);
+  const [tab, setTab] = usePersistentState<MemoryTab>(UI_PREFERENCE_KEYS.memoryTab, "documents",
+    value => MEMORY_TABS.some(([name]) => name === value));
+  const [doc, setDoc] = usePersistentState(UI_PREFERENCE_KEYS.memoryDocument, docs[0],
+    value => typeof value === "string" && docs.includes(value));
   const resource = useResource<ContextDoc>(`/orchestrator/context/${doc}`);
   const facts = useResource<any[]>("/web/api/memory/facts", 10000);
   const [draft, setDraft] = useState<string | null>(null);
@@ -959,7 +960,10 @@ interface PartChain {
   eligible: number; models: ChainModel[];
 }
 
-interface SettingsData { power: string; autonomy: string; routing: string; model: string; }
+interface SettingsData {
+  power: string; autonomy: string; routing: string; model: string;
+  timezone: string; timezone_options: string[]; local_time: string;
+}
 interface ProviderModels { provider: string; models: string[]; }
 
 // Which model answers, when the user is choosing it rather than north. Provider
@@ -999,14 +1003,18 @@ function ModelPicker({ value, onPick, busy }: { value: string; onPick: (spec: st
 
 export function SettingsPage() {
   const resource = useResource<SettingsData>("/orchestrator/settings");
-  const [typeScale, setTypeScale] = useState(() => localStorage.getItem("north-type-scale") || "comfortable");
+  const [typeScale, setTypeScale] = usePersistentState(UI_PREFERENCE_KEYS.typeScale, "comfortable", isTypeScale);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { document.documentElement.dataset.typeScale = typeScale; localStorage.setItem("north-type-scale", typeScale); }, [typeScale]);
+  useEffect(() => { document.documentElement.dataset.typeScale = typeScale; }, [typeScale]);
   const update = async (body: Partial<SettingsData>) => {
     setBusy(true);
     setError("");
-    try { await post("/orchestrator/settings", body); await resource.reload(); }
+    try {
+      const saved = await post<SettingsData>("/orchestrator/settings", body);
+      configureDisplayTimezone(saved.timezone);
+      await resource.reload();
+    }
     catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
   };
@@ -1062,10 +1070,20 @@ export function SettingsPage() {
       </Panel>
       <Panel title="Text size" label="Personal preference">
         <div className="segmented text-scale-selector">
-          {[["compact","Compact"],["comfortable","Comfortable"],["large","Large"]].map(([value,label]) =>
-            <button className={typeScale === value ? "active" : ""} onClick={() => setTypeScale(value)} key={value}>{label}</button>)}
+          {TYPE_SCALES.map(value =>
+            <button className={typeScale === value ? "active" : ""} onClick={() => setTypeScale(value)} key={value}>{value[0].toUpperCase() + value.slice(1)}</button>)}
         </div>
         <p className="muted">Choose the reading scale used throughout the web interface.</p>
+      </Panel>
+      <Panel title="Time zone" label="Dates and schedules">
+        {resource.loading ? <Loading/> : <label className="timezone-picker">North uses
+          <select value={resource.data?.timezone || "UTC"} disabled={busy}
+            onChange={event => update({ timezone: event.target.value })}>
+            {(resource.data?.timezone_options || [resource.data?.timezone || "UTC"]).map(timezone =>
+              <option value={timezone} key={timezone}>{timezone.replaceAll("_", " ")}</option>)}
+          </select>
+        </label>}
+        <p className="muted">Current North time: {resource.data?.local_time || "–"}. New schedules and times without an explicit zone use this setting.</p>
       </Panel>
     </div>
   </div>;

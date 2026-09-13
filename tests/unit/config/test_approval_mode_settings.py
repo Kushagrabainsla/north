@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from config.approval_mode import ApprovalMode
 from config.strategy import NorthSettings, StrategyMode
 
@@ -48,3 +50,20 @@ def test_power_and_autonomy_coexist(tmp_path: Path):
     reloaded = NorthSettings(path)
     assert reloaded.power is StrategyMode.SPORT
     assert reloaded.autonomy is ApprovalMode.AUTO
+
+
+def test_timezone_is_named_and_persisted(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    settings = NorthSettings(path)
+
+    settings.set_timezone("America/Los_Angeles")
+
+    assert settings.timezone == "America/Los_Angeles"
+    assert NorthSettings(path).timezone == "America/Los_Angeles"
+
+
+def test_invalid_timezone_is_refused(tmp_path: Path):
+    settings = NorthSettings(tmp_path / "settings.json")
+
+    with pytest.raises(ValueError, match="Unknown timezone"):
+        settings.set_timezone("Mars/Olympus_Mons")

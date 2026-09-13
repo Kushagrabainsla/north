@@ -24,7 +24,7 @@ from memory.models import ContextDocument
 from utils.ids import generate_id
 from utils.prompts import load_prompt
 from utils.text import STOPWORDS, extract_json
-from utils.time import utcnow
+from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context, utcnow
 
 if TYPE_CHECKING:
     from memory.facts import FactStore
@@ -394,7 +394,12 @@ class ExtractionPipeline:
         except Exception:
             logger.warning("ExtractionPipeline: failed to archive %s before trim", doc.value)
 
-        prompt = load_prompt("prompts/context_trim.md").format(content=existing, doc_type=doc.value)
+        prompt = load_prompt("prompts/context_trim.md").format(
+            content=existing,
+            doc_type=doc.value,
+            runtime_context=runtime_context(),
+            runtime_instruction=RUNTIME_CONTEXT_INSTRUCTION,
+        )
         try:
             resp = await self._inference_router.complete(
                 CompletionRequest(

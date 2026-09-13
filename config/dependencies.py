@@ -31,6 +31,7 @@ from jobs import JobProcessor, SQLiteJobProcessor
 from ledger import LedgerWriter, SQLiteLedgerWriter
 from memory import ContextStore, SQLiteContextStore
 from utils.prompts import load_prompt
+from utils.time import configure_timezone, system_timezone_name
 
 if TYPE_CHECKING:
     from context.code_index import CodeIndex
@@ -269,6 +270,7 @@ def _default_north_settings() -> NorthSettings:
     return NorthSettings(
         settings.north_home / "settings.json",
         default_approval_mode=resolve_approval_mode(settings),
+        default_timezone=system_timezone_name(),
     )
 
 
@@ -288,6 +290,9 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
     from tools.confidence import ConfidenceTracker
 
     north_settings = north_settings or _default_north_settings()
+    # Activate the persisted user choice before stores migrate old schedules or
+    # any component renders a local time.
+    configure_timezone(north_settings.timezone)
     _migrate_legacy_public_document(settings.north_home / "context")
 
     context_store = SQLiteContextStore(settings.north_home / "memory.db", legacy_path=settings.north_home / "context")

@@ -22,6 +22,7 @@ from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPath, ExecutionPlan, IntentClassification
 from utils.prompts import load_prompt
 from utils.text import extract_json, extract_markdown_section
+from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
 
 _PLAN_CACHE_TTL_SECONDS: int = 3600  # 1 hour
 _PLAN_CACHE_MAX_SIZE: int = 256
@@ -247,11 +248,12 @@ class ExecutionPlanner:
         )
 
         full_prompt = (
-            f"{system_prompt}\n\n"
+            f"{system_prompt}\n\n{RUNTIME_CONTEXT_INSTRUCTION}\n\n"
             f"{system_context_block}"
             f"=== Available Agents ===\n{json.dumps(agents_info, indent=2)}\n\n"
             f"=== Available Tools ===\n{json.dumps(tools_info, indent=2)}\n\n"
             f"{conversation_block}"
+            f"{runtime_context()}\n\n"
             f"=== User Task ===\n{prompt}"
         )
 

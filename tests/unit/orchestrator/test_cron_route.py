@@ -68,6 +68,13 @@ async def test_an_impossible_hour_is_refused(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_timezone_is_refused(store) -> None:
+    with bind_services(ApiServices(cron_store=store)), pytest.raises(HTTPException) as exc:
+        await create(tz="Mars/Olympus_Mons")
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_two_routines_with_similar_text_both_survive(store) -> None:
     """The page does not send names, so the server has to keep them apart."""
     with bind_services(ApiServices(cron_store=store)):

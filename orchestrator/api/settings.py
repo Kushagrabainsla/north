@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config.approval_mode import parse_approval_mode
 from config.strategy import NorthSettings, RoutingMode, StrategyMode
 from orchestrator.api.deps import router
 from orchestrator.api_context import current_services
+from utils.time import configure_timezone, format_local, now_epoch, timezone_names
 
 
 class SettingsOut(BaseModel):
@@ -19,6 +20,9 @@ class SettingsOut(BaseModel):
     # switching back to manual does not make the user find their model again.
     routing: str = "auto"
     model: str = ""
+    timezone: str = "UTC"
+    timezone_options: list[str] = Field(default_factory=list)
+    local_time: str = ""
 
 
 class SettingsUpdate(BaseModel):
@@ -27,6 +31,7 @@ class SettingsUpdate(BaseModel):
     autonomy: str | None = None
     routing: str | None = None
     model: str | None = None
+    timezone: str | None = None
 
 
 def _settings_out(settings_obj: NorthSettings | None) -> SettingsOut:
@@ -36,6 +41,9 @@ def _settings_out(settings_obj: NorthSettings | None) -> SettingsOut:
         autonomy=settings_obj.autonomy.value if settings_obj else "interactive",
         routing=settings_obj.routing_mode.value if settings_obj else "auto",
         model=settings_obj.routing_model if settings_obj else "",
+        timezone=settings_obj.timezone if settings_obj else "UTC",
+        timezone_options=timezone_names(),
+        local_time=format_local(now_epoch()),
     )
 
 
@@ -49,6 +57,17 @@ async def get_settings() -> SettingsOut:
 async def update_settings(body: SettingsUpdate) -> SettingsOut:
     """Update user settings live (power and/or autonomy). No restart needed."""
     settings_obj = current_services().north_settings
+    # Validate first so a request that also changes another dial cannot be half
+    # applied before a bad zone is discovered.
+    if body.timezone is not None:
+        try:
+            if settings_obj is None:
+                configure_timezone(body.timezone)
+            else:
+                settings_obj.set_timezone(body.timezone)
+                configure_timezone(settings_obj.timezone)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
     if body.power is not None:
         try:
             mode = StrategyMode(body.power)

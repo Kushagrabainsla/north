@@ -70,6 +70,28 @@ async def test_switching_to_auto_keeps_the_model_for_next_time(settings) -> None
 
 
 @pytest.mark.asyncio
+async def test_timezone_is_reported_and_changed_live(settings, monkeypatch) -> None:
+    import utils.time as time_utils
+
+    monkeypatch.setattr(time_utils, "_configured_timezone_name", None)
+    with bind_services(ApiServices(north_settings=settings)):
+        out = await update(timezone="America/Los_Angeles")
+
+    assert out.timezone == "America/Los_Angeles"
+    assert "America/Los_Angeles" in out.timezone_options
+    assert out.local_time.endswith(("PDT", "PST"))
+    assert time_utils.local_timezone_name() == "America/Los_Angeles"
+
+
+@pytest.mark.asyncio
+async def test_unknown_timezone_is_a_422(settings) -> None:
+    with bind_services(ApiServices(north_settings=settings)), pytest.raises(HTTPException) as exc:
+        await update(timezone="Mars/Olympus_Mons")
+
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_the_catalog_is_grouped_by_provider(tmp_path) -> None:
     """What the manual picker offers: provider first, then that provider's models."""
     import orchestrator.api.inference as inference_api

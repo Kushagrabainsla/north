@@ -57,8 +57,8 @@ def normalise_weekdays(value: object) -> frozenset[int] | None:
 class CronEntry:
     """One scheduled job. `weekdays` is a set of 0=Mon..6=Sun, or None for daily.
 
-    `hour`/`minute` are wall-clock time in `tz` (an IANA name; None means the
-    machine's own zone), never UTC. A recurrence is a rule, not an instant, so
+    `hour`/`minute` are wall-clock time in `tz` (an IANA name; None means
+    North's configured zone), never UTC. A recurrence is a rule, not an instant, so
     it cannot be an epoch: "07:00 in Asia/Kolkata" stays 07:00 across a DST
     shift, where a fixed epoch interval would slide to 06:00 or 08:00. Every
     *instant* the rule produces - the next firing, the job it enqueues - is an
@@ -145,10 +145,21 @@ class CronEntry:
         return "every " + ", ".join(WEEKDAY_NAMES[day] for day in sorted(self.weekdays))
 
 
-def _wall_clock(entry: CronEntry, reference: datetime) -> datetime:
-    """Return `reference` moved to this entry's wall-clock hour:minute in its zone."""
-    local = reference.astimezone(resolve_timezone(entry.tz))
-    return local.replace(hour=entry.hour, minute=entry.minute, second=0, microsecond=0)
+def _wall_clock_on(entry: CronEntry, day) -> datetime:
+    """Materialise one local date, with an explicit daylight-saving policy.
+
+    A time skipped by the spring transition advances by the size of the gap
+    (02:30 becomes 03:30). A repeated time in autumn uses its first occurrence.
+    Round-tripping through UTC both detects and normalises the skipped case.
+    """
+    zone = resolve_timezone(entry.tz)
+    candidate = datetime(day.year, day.month, day.day, entry.hour, entry.minute, tzinfo=zone, fold=0)
+    return candidate.astimezone(UTC).astimezone(zone)
+
+
+def _instant(dt: datetime) -> datetime:
+    """Compare aware datetimes as instants even when both carry the same zone."""
+    return dt.astimezone(UTC)
 
 
 def next_firing(entry: CronEntry, after: datetime) -> datetime:
@@ -162,9 +173,12 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
     stays 07:00 through a DST shift rather than sliding by an hour. The returned
     datetime is aware, so callers comparing it to a UTC clock compare instants.
     """
-    candidate = _wall_clock(entry, after)
-    if candidate <= after:
-        candidate = candidate + timedelta(days=1)
+    zone = resolve_timezone(entry.tz)
+    day = after.astimezone(zone).date()
+    candidate = _wall_clock_on(entry, day)
+    if _instant(candidate) <= _instant(after):
+        day += timedelta(days=1)
+        candidate = _wall_clock_on(entry, day)
     if entry.weekdays is None:
         return candidate
     # Step a day at a time rather than computing an offset to one weekday: with a
@@ -174,7 +188,8 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
     for _ in range(7):
         if candidate.weekday() in entry.weekdays:
             return candidate
-        candidate = candidate + timedelta(days=1)
+        day += timedelta(days=1)
+        candidate = _wall_clock_on(entry, day)
     raise ValueError(f"{entry.name} has no runnable weekday")  # pragma: no cover - normalise_weekdays
 
 
@@ -184,15 +199,19 @@ def previous_firing(entry: CronEntry, at: datetime) -> datetime:
     The inverse of `next_firing`: used on startup to find the slot a cron should
     have run in, so a firing missed while north was down can be caught up.
     """
-    candidate = _wall_clock(entry, at)
-    if candidate > at:
-        candidate = candidate - timedelta(days=1)
+    zone = resolve_timezone(entry.tz)
+    day = at.astimezone(zone).date()
+    candidate = _wall_clock_on(entry, day)
+    if _instant(candidate) > _instant(at):
+        day -= timedelta(days=1)
+        candidate = _wall_clock_on(entry, day)
     if entry.weekdays is None:
         return candidate
     for _ in range(7):
         if candidate.weekday() in entry.weekdays:
             return candidate
-        candidate = candidate - timedelta(days=1)
+        day -= timedelta(days=1)
+        candidate = _wall_clock_on(entry, day)
     raise ValueError(f"{entry.name} has no runnable weekday")  # pragma: no cover - normalise_weekdays
 
 

@@ -7,6 +7,7 @@ import logging
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 if TYPE_CHECKING:
     from config.approval_mode import ApprovalMode
@@ -74,7 +75,12 @@ class NorthSettings:
     # made a choice. Remove once no install can still be carrying it.
     _SUPERSEDED_APPROVAL_TIMEOUT = 300.0
 
-    def __init__(self, path: Path, default_approval_mode: ApprovalMode | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        default_approval_mode: ApprovalMode | None = None,
+        default_timezone: str = "UTC",
+    ) -> None:
         from config.approval_mode import ApprovalMode
 
         self._path = path
@@ -91,6 +97,9 @@ class NorthSettings:
         # the user find their model again.
         self._routing_mode: RoutingMode = self._DEFAULT_ROUTING
         self._routing_model: str = ""
+        # A named zone is persisted rather than an offset so recurring wall
+        # clocks continue to mean the same thing through daylight-saving time.
+        self._timezone: str = default_timezone if _is_known_timezone(default_timezone) else "UTC"
         self._load()
 
     def _load(self) -> None:
@@ -127,6 +136,12 @@ class NorthSettings:
                 except ValueError:
                     logger.warning("Unknown routing mode %r in settings.json - using auto", routing.get("mode"))
                 self._routing_model = str(routing.get("model") or "")
+            raw_timezone = str(data.get("timezone") or "").strip()
+            if raw_timezone:
+                if _is_known_timezone(raw_timezone):
+                    self._timezone = raw_timezone
+                else:
+                    logger.warning("Unknown timezone %r in settings.json - using %s", raw_timezone, self._timezone)
         except Exception as exc:
             logger.warning(
                 "settings.json is unreadable - resetting to defaults (%s): %s",
@@ -171,6 +186,11 @@ class NorthSettings:
         """Raw per-part routing overrides; parsed by inference.routing.parts."""
         return self._routing_parts
 
+    @property
+    def timezone(self) -> str:
+        """The IANA zone North uses for local dates, times, and new schedules."""
+        return self._timezone
+
     def set_routing_parts(self, parts: dict[str, object]) -> None:
         self._routing_parts = parts if isinstance(parts, dict) else {}
         self._save()
@@ -195,6 +215,12 @@ class NorthSettings:
         self._autonomy = mode
         self._save()
 
+    def set_timezone(self, name: str) -> None:
+        if not _is_known_timezone(name):
+            raise ValueError(f"Unknown timezone {name!r}")
+        self._timezone = name
+        self._save()
+
     def _save(self) -> None:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,6 +228,7 @@ class NorthSettings:
                 "power": self._power.value,
                 "approval_timeout_seconds": self._approval_timeout_seconds,
                 "autonomy": self._autonomy.value,
+                "timezone": self._timezone,
             }
             routing: dict[str, object] = {"mode": self._routing_mode.value}
             if self._routing_model:
@@ -212,3 +239,12 @@ class NorthSettings:
             self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError as exc:
             logger.warning("Failed to persist settings to %s: %s", self._path, exc)
+
+
+def _is_known_timezone(name: str) -> bool:
+    """Validate a setting inside config without crossing platform module boundaries."""
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True

@@ -17,7 +17,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useResource } from "../hooks";
-import { Empty, ErrorNotice, Loading, PageHeader, Panel, Status, timeAgo } from "../components";
+import { Empty, ErrorNotice, formatDateTime, Loading, PageHeader, Panel, Status, timeAgo } from "../components";
 import type { AgentRun, Approval, Artifact, LedgerEntry, TaskDetail } from "../types";
 import { RoutingAttempts, stageIcon } from "./Verbose";
 
@@ -75,7 +75,7 @@ function EventRow({ entry, showTask = false }: { entry: LedgerEntry; showTask?: 
           // no run. Activity called that "system"; keeping the word means the
           // column never reads as a missing value.
           : "system"}</>}
-        {" · "}{new Date(entry.timestamp).toLocaleString()}
+        {" · "}{formatDateTime(entry.timestamp)}
         {entry.model_used && ` · ${entry.model_used}`}
         {entry.duration_ms ? ` · ${(entry.duration_ms / 1000).toFixed(1)}s` : ""}
       </small>

@@ -56,7 +56,7 @@ from utils.edit_scope import EditAuthorizer
 from utils.execution_context import current_execution
 from utils.tasks import spawn
 from utils.text import normalize_dashes
-from utils.time import localnow
+from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
 
 logger = logging.getLogger(__name__)
 
@@ -546,18 +546,10 @@ class AgenticLLMAgent(LLMAgent):
         The persona (soul.md) leads the system prompt so north's voice frames the
         agent's own instructions.
         """
-        # The clock goes last, not first. A prompt cache is a *prefix* match, and
-        # the system prompt is the head of that prefix for every provider - so a
-        # minute-resolution timestamp sitting in front of the agent's own
-        # instructions meant no two runs a minute apart could share anything.
-        # The precise time is what changes; the date is what agents actually
-        # reason about, and it is stable for a day. Anything needing the minute
-        # asks a tool for it.
         preamble = f"{persona}\n\n" if persona else ""
-        system_prompt = preamble + self._load_system_prompt()
+        system_prompt = f"{preamble}{self._load_system_prompt()}\n\n{RUNTIME_CONTEXT_INSTRUCTION}"
         if capabilities := build_platform_capabilities_summary(self._deps):
             system_prompt = f"{system_prompt}\n\n{capabilities}"
-        system_prompt = f"{system_prompt}\n\nCurrent date: {localnow().strftime('%Y-%m-%d')}"
         user_text = self._build_task_message(payload, context, scored_tools)
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
@@ -688,8 +680,7 @@ class AgenticLLMAgent(LLMAgent):
     ) -> str:
         """User message without the tool list (tools are passed as function defs)."""
         reliability_lines = "\n".join(f"- {t.name} reliability: {score:.0%}" for t, score in scored_tools)
-        now = localnow().strftime("%Y-%m-%d %H:%M %Z")
-        system_lines = [f"- current date/time: {now}"]
+        system_lines = []
         if payload.workspace:
             system_lines.append(f"- workspace: {payload.workspace}")
         if self._is_autonomous():
@@ -703,7 +694,7 @@ class AgenticLLMAgent(LLMAgent):
                 "- interaction: INTERACTIVE - when a requirement or a design decision is genuinely "
                 "ambiguous, use ask_user to confirm with the user rather than guessing."
             )
-        system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n"
+        system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n" if system_lines else ""
 
         # Split context: recent conversation goes before the task so the model
         # has conversational frame before it reads the current prompt. Personal
@@ -723,11 +714,12 @@ class AgenticLLMAgent(LLMAgent):
         return (
             f"{system_context}"
             f"{recent_conv}"
-            f"## Task\n{payload.prompt}\n\n"
             f"## Task ID\n{payload.task_id}\n\n"
             f"## Handoff Directory\n{handoff_dir_for(payload.task_id)}\n\n"
             f"## Context\n{background or '(none)'}\n\n"
             f"## Tool reliability hints\n{reliability_lines or '(none)'}\n"
+            f"\n{runtime_context()}\n\n"
+            f"## Task\n{payload.prompt}\n"
         )
 
     def _delegatable_agent_names(self) -> list[str]:

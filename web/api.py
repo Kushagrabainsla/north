@@ -23,6 +23,7 @@ from ledger.base import LedgerFilters
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
 from tools.universal.browser import browser_availability
+from utils.time import epoch_to_local, localnow
 from web.artifacts import (
     allowed_output_roots,
     artifact_task_id,
@@ -1007,15 +1008,24 @@ async def get_artifact(artifact_id: str) -> dict[str, Any]:
 async def dashboard() -> dict[str, Any]:
     active, jobs, cron, metrics, ledger_entries, conversations, artifacts = await asyncio.gather(
         current_services().require("orchestrator").list_active_tasks(),
-        current_services().require("job_processor").list_jobs(limit=8),
+        current_services().require("job_processor").list_upcoming(limit=8),
         current_services().require("cron_store").list(),
         current_services().require("ledger").get_metrics(days=7),
         current_services().require("ledger").query(LedgerFilters(limit=12)),
         current_services().require("conversation_store").list(limit=6),
-        list_artifacts(limit=6),
+        list_artifacts(limit=100),
     )
     agents = current_services().require("agent_registry").all()
     settings = current_services().require("north_settings")
+    today = localnow().date()
+    recent_artifacts = artifacts[:6]
+    latest_briefing = next((artifact for artifact in artifacts if artifact["kind"] == "news"), None)
+    if latest_briefing and latest_briefing not in recent_artifacts:
+        recent_artifacts.append(latest_briefing)
+    dashboard_artifacts = [
+        {**artifact, "is_today": epoch_to_local(artifact["updated_at"]).date() == today}
+        for artifact in recent_artifacts
+    ]
     return {
         "system": {"status": "online", "power": settings.power.value, "autonomy": settings.autonomy.value},
         "attention": [card.model_dump(mode="json") for card in current_services().require("approval_store").pending()],
@@ -1038,5 +1048,5 @@ async def dashboard() -> dict[str, Any]:
         "cron": cron,
         "metrics": metrics,
         "activity": [_entry_payload(entry) for entry in ledger_entries],
-        "artifacts": artifacts,
+        "artifacts": dashboard_artifacts,
     }

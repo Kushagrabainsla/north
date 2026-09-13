@@ -234,10 +234,17 @@ class NorthConfigTool(Tool):
             data={"action": "set", "key": key, "value": value, "note": self._apply_runtime(key)},
         )
 
-    async def _power(self, params: dict) -> ToolOutput:
-        from config.strategy import NorthSettings, StrategyMode
+    def _north_settings(self):
+        """Open the shared settings file with North's live zone as its fallback."""
+        from config.strategy import NorthSettings
+        from utils.time import local_timezone_name
 
-        north_settings = NorthSettings(self._settings_path())
+        return NorthSettings(self._settings_path(), default_timezone=local_timezone_name())
+
+    async def _power(self, params: dict) -> ToolOutput:
+        from config.strategy import StrategyMode
+
+        north_settings = self._north_settings()
         requested = (params.get("value") or "").strip().lower()
         if not requested:
             return _dial_output("power", north_settings.power.value, note=_SHOWED_CURRENT)
@@ -250,9 +257,8 @@ class NorthConfigTool(Tool):
 
     async def _autonomy(self, params: dict) -> ToolOutput:
         from config.approval_mode import parse_approval_mode
-        from config.strategy import NorthSettings
 
-        north_settings = NorthSettings(self._settings_path())
+        north_settings = self._north_settings()
         requested = (params.get("value") or "").strip().lower()
         if not requested:
             return _dial_output("autonomy", north_settings.autonomy.value, note=_SHOWED_CURRENT)
