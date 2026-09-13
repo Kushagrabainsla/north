@@ -1,22 +1,49 @@
+/* Self-hosted JetBrains Mono (variable). Local files so the cockpit never
+   depends on the network for its own type. Licensed under the SIL OFL 1.1. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("./fonts/jetbrains-mono-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: italic;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("./fonts/jetbrains-mono-italic.woff2") format("woff2");
+}
+/* Legacy "DM Mono" references throughout this stylesheet now resolve to
+   JetBrains Mono, so labels, metrics and status share the one typeface.
+   (Follow-up: rename the references and drop this alias.) */
+@font-face {
+  font-family: "DM Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("./fonts/jetbrains-mono-normal.woff2") format("woff2");
+}
 :root {
   color-scheme: dark;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
-  color: #e8e9ea;
-  background: #090b0d;
-  font-synthesis: none;
-  --bg: #090b0d;
-  --surface: #101317;
-  --surface-2: #15191e;
-  --line: #242a31;
-  --line-soft: #1c2127;
-  --text: #e8e9ea;
-  --muted: #8d969f;
-  --faint: #59636e;
-  --accent: #b5f36d;
-  --accent-soft: rgba(181, 243, 109, .12);
-  --blue: #76b9ff;
-  --amber: #ffc969;
-  --red: #ff7777;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color: #fafafa;
+  background: #09090b;
+  letter-spacing: -.011em;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --bg: #09090b;
+  --surface: #0e0e11;
+  --surface-2: #161619;
+  --line: #27272a;
+  --line-soft: #1c1c20;
+  --text: #fafafa;
+  --muted: #a1a1aa;
+  --faint: #71717a;
+  --accent: #a3e635;
+  --accent-soft: rgba(163, 230, 53, .12);
+  --blue: #60a5fa;
+  --amber: #fbbf24;
+  --red: #f87171;
 }
 
 * { box-sizing: border-box; }
@@ -35,7 +62,7 @@ a { color: inherit; text-decoration: none; }
 .sidebar-footer { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--line-soft); padding-top: 15px; }
 .sidebar-footer .server-state { margin-top: 0; border-top: 0; padding-top: 0; }
 .sidebar-toggle { align-self: center; width: 32px; height: 32px; margin: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--accent); cursor: pointer; font-size: 22px; line-height: 1; padding: 0; display: grid; place-items: center; }
-.sidebar-toggle:hover { border-color: var(--accent); box-shadow: 0 0 12px rgba(181,243,109,.2); }
+.sidebar-toggle:hover { border-color: var(--accent); }
 .brand > div, .new-chat, .health-indicator > div, .sidebar nav a > span:last-child { max-width: 190px; overflow: hidden; white-space: nowrap; transition: opacity .18s ease, max-width .24s ease, transform .24s ease; }
 .sidebar nav a { transition: background-color .18s ease, color .18s ease, gap .24s ease, padding .24s ease; }
 .sidebar-collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }/* `min-width: 0` is what makes `max-width: 0` bite. These are all flex items, and a flex item's default `min-width: auto` resolves to its content width, which beats max-width - so every label kept its full size, the nav link grew to 48px inside a 68px rail, and `overflow: hidden` hid the spill while the icon sat 6px left of centre. Animating max-width still works. */.sidebar-collapsed .brand > div, .sidebar-collapsed .new-chat, .sidebar-collapsed .health-indicator > div, .sidebar-collapsed .sidebar-footer .server-state, .sidebar-collapsed nav a > span:last-child { min-width: 0; max-width: 0; opacity: 0; transform: translateX(-8px); pointer-events: none; }.sidebar-collapsed .sidebar-footer { justify-content: center; flex-direction: column; }.sidebar-collapsed .health-indicator { min-height: 18px; }.sidebar-collapsed .sidebar-toggle { align-self: center; margin: 0; }/* `.sidebar .sidebar-collapsed` rather than `.sidebar-collapsed nav a`: that selector ties with `.sidebar nav a` on specificity, and the tie is broken by source order, which put the expanded rule last. So the collapsed rail kept the expanded 11px gap and 10px padding, leaving 8px for an 18px icon - the icon was shrunk to fit and pushed off centre. Being more specific means order cannot decide it. */.sidebar-collapsed .sidebar nav a { justify-content: center; gap: 0; padding-left: 8px; padding-right: 8px; }
@@ -45,8 +72,8 @@ a { color: inherit; text-decoration: none; }
 }
 [data-type-scale="compact"] { --type-scale: .94; }[data-type-scale="comfortable"] { --type-scale: 1; }[data-type-scale="large"] { --type-scale: 1.1; }
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 20px; }
-.brand-logo { width: 34px; height: 34px; display: block; object-fit: cover; border-radius: 10px; box-shadow: 0 0 28px rgba(181,243,109,.15); }
-.brand-mark, .north-symbol { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: var(--accent); color: #11170b; font-weight: 800; box-shadow: 0 0 28px rgba(181,243,109,.15); }
+.brand-logo { width: 34px; height: 34px; display: block; object-fit: cover; border-radius: 10px;  }
+.brand-mark, .north-symbol { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: var(--accent); color: #11170b; font-weight: 800;  }
 .brand b { display: block; font-size: 15px; letter-spacing: -.02em; }
 .brand small { color: var(--faint); display: block; font-size: 9px; margin-top: 2px; }
 .new-chat, .primary-button { border: 0; border-radius: 9px; background: var(--accent); color: #12170e; font-weight: 700; padding: 10px 12px; cursor: pointer; }
@@ -55,12 +82,13 @@ a { color: inherit; text-decoration: none; }
 .sidebar nav a { display: flex; align-items: center; gap: 11px; padding: 8px 10px; border-radius: 8px; color: #929aa3; font-size: 12px; font-weight: 600; }
 .sidebar nav a:hover { background: var(--surface-2); color: var(--text); }
 .sidebar nav a.active { background: var(--accent-soft); color: var(--accent); }
-.nav-icon { font-family: "DM Mono", monospace; width: 18px; text-align: center; font-size: 14px; }
+.nav-icon { width: 18px; height: 18px; display: grid; place-items: center; flex: 0 0 auto; }
+.nav-icon svg { width: 16px; height: 16px; stroke-width: 1.9; }
 .server-state { margin-top: auto; border-top: 1px solid var(--line-soft); padding: 15px 8px 0; display: flex; align-items: center; gap: 10px; }
 .server-state b, .server-state small { display: block; font-size: 10px; }
 .server-state small { color: var(--faint); margin-top: 3px; }
-.online-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-.workspace { min-width: 0; overflow: auto; background: radial-gradient(circle at 80% -20%, rgba(91,129,76,.11), transparent 33%), var(--bg); }
+.online-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.workspace { min-width: 0; overflow: auto; background: var(--bg); }
 /* One gap between a page's top-level blocks, set here rather than by each block guessing. `.panel` carries no margin, so a page that stacked panels directly - System, Schedule - had its cards touching at 0px while the same cards inside a `.two-column` sat 18px apart. The gap matches that 18px, so a stacked panel and a side-by-side panel are spaced alike. */.page { padding: 34px clamp(24px, 4vw, 64px) 70px; max-width: 1600px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
 /* 10 + the page's 18 = the 28px the header has always had under it. */.page-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 10px; }
 .page-header h1 { font-size: clamp(28px, 3vw, 42px); line-height: 1; letter-spacing: -.045em; margin: 5px 0 9px; }
@@ -69,8 +97,9 @@ a { color: inherit; text-decoration: none; }
 .header-actions { display: flex; gap: 8px; align-items: center; }
 .ghost-button, .header-actions button, .turn-actions button, .document-view header button { border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 8px 11px; font-size: 11px; cursor: pointer; }
 .ghost-button:hover, .header-actions button:hover { border-color: #46505b; }
-.cockpit-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.panel { background: linear-gradient(145deg, rgba(19,23,28,.96), rgba(14,17,21,.96)); border: 1px solid var(--line-soft); border-radius: 13px; min-width: 0; overflow: hidden; }
+.cockpit-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.cockpit-grid > .panel { border: 0; border-radius: 0; background: var(--bg); }
+.panel { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 9px; min-width: 0; overflow: hidden; }
 .panel > header { display: flex; align-items: flex-start; justify-content: space-between; padding: 16px 17px 12px; border-bottom: 1px solid var(--line-soft); }
 .panel > header h2 { margin: 4px 0 0; font-size: 14px; }
 .panel > header a { color: var(--muted); font-size: 10px; }
@@ -221,7 +250,7 @@ body { font-size: 13px; }
 .markdown h1 { font-size: 25px; }.markdown h2 { font-size: 20px; }.markdown h3 { font-size: 17px; }
 .row-main small, .list-row small, .artifact-card small { font-size: 10px; }
 .status { font-size: 9px; }
-.accent, .conversation-glyph, .panel > header a span { text-shadow: 0 0 12px rgba(181,243,109,.55); }
+.accent, .conversation-glyph, .panel > header a span { color: var(--accent); }
 
 /* Bootstrap rows use a fixed badge column so long paths stay readable. */
 .bootstrap-row { grid-template-columns: minmax(0, 1fr) max-content; gap: 16px; }
