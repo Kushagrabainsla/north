@@ -71,8 +71,8 @@ function EventRows({ entries }: { entries: LedgerEntry[] }) {
   </div>)}</div>;
 }
 
-function DetailSection({ title, count, children, open }: { title: string; count?: number; children: React.ReactNode; open?: boolean }) {
-  return <details className="detail-section" open={open}><summary><span>{title}</span>{count !== undefined && <em>{count}</em>}<i>⌄</i></summary><div>{children}</div></details>;
+function DetailSection({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
+  return <details className="detail-section"><summary><span>{title}</span>{count !== undefined && <em>{count}</em>}<i>⌄</i></summary><div>{children}</div></details>;
 }
 
 /** North's self-checks for one turn. Warnings show unprompted; clean results stay
@@ -91,7 +91,7 @@ function SignalStrip({ signals }: { signals: Signal[] }) {
   </div>;
 }
 
-function TurnBundle({ turn, streamed, signals = [], expandAll, reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; expandAll: boolean; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
+function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
   const detail = turn.detail;
   const status = pendingApprovals.length ? "waiting_for_approval" : (detail?.task.status || "pending");
   const entries = detail?.entries || [];
@@ -111,9 +111,9 @@ function TurnBundle({ turn, streamed, signals = [], expandAll, reload, pendingAp
     await reload();
   };
   return <article className="turn-bundle">
-    <div className="user-prompt"><div className="user-message"><div className="turn-meta">Prompt {turn.position} · {timeAgo(turn.created_at)}</div><p>{turn.prompt}</p></div><div className="avatar user-avatar">You</div></div>
+    <div className="user-prompt"><div className="user-message"><div className="turn-meta">You · {timeAgo(turn.created_at)}</div><p>{turn.prompt}</p></div><div className="avatar user-avatar">You</div></div>
     <div className="north-response"><div className="avatar north-avatar">N</div><div className="response-body">
-      <div className="response-heading"><div><b>North</b><Status value={status}/></div><div className="turn-actions">
+      <div className="response-heading"><div><b>North</b><small>{timeAgo(turn.created_at)}</small><Status value={status}/></div><div className="turn-actions">
         {status === "paused" && <button onClick={() => control("resume")}>Resume</button>}
         {["pending", "running", "queued"].includes(status) && <button onClick={() => control("pause")}>Pause</button>}
         {["pending", "running", "queued", "paused"].includes(status) && <button className="danger-link" onClick={() => control("cancel")}>Cancel</button>}
@@ -123,24 +123,23 @@ function TurnBundle({ turn, streamed, signals = [], expandAll, reload, pendingAp
       {(streamed || detail?.output) && <Markdown>{streamed || detail?.output || ""}</Markdown>}
       {!isActive && !(streamed || detail?.output) && <Empty>No response was recorded for this task.</Empty>}
       <SignalStrip signals={signals}/>
-      <div className="turn-summary"><span>{agents.length || "–"} agents</span><span>{tools.length} tool events</span><span>{runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0).toLocaleString()} tokens</span><span>${cost.toFixed(4)}</span></div>
-      <div className="execution-details">
-        <DetailSection title="Plan and routing" count={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || "")).length} open={expandAll}>
+      <details className="turn-detail-drawer"><summary><span>Details</span><small>{agents.length || "–"} agents · {tools.length} tool events</small><i>⌄</i></summary><div><div className="turn-summary"><span>{runs.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0).toLocaleString()} tokens</span><span>${cost.toFixed(4)}</span></div><div className="execution-details">
+        <DetailSection title="Plan and routing" count={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || "")).length}>
           <EventRows entries={entries.filter(e => /classif|rout|plan|north_star/.test(e.action || ""))}/>
         </DetailSection>
-        <DetailSection title="Agent runs" count={runs.length} open={expandAll}>
+        <DetailSection title="Agent runs" count={runs.length}>
           {runs.length ? runs.map(run => <div className="run-card" key={run.run_id}><div><b>{run.agent}</b><Status value={run.status}/></div><small>Attempt {run.attempt + 1} · {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "running"} · {run.providers_used?.join(", ") || "provider pending"} · {run.models_used.join(", ") || "model pending"}</small>{run.error && <p className="error-text">{run.error}</p>}</div>) : <Empty>No agent runs recorded yet.</Empty>}
         </DetailSection>
-        <DetailSection title="Tools and skills" count={tools.length + runs.flatMap(r => r.skills).length} open={expandAll}>
+        <DetailSection title="Tools and skills" count={tools.length + runs.flatMap(r => r.skills).length}>
           <EventRows entries={tools}/>{runs.flatMap(run => run.skills.map(skill => <div className="skill-chip" key={`${run.run_id}-${skill.name}`}>{skill.name} <small>v{skill.version}</small></div>))}
         </DetailSection>
-        <DetailSection title="Approvals and verification" count={approvals.length + verification.length} open={expandAll}>
+        <DetailSection title="Approvals and verification" count={approvals.length + verification.length}>
           <EventRows entries={[...approvals, ...verification]}/>
         </DetailSection>
-        <DetailSection title="Complete timeline" count={entries.length} open={expandAll}>
+        <DetailSection title="Complete timeline" count={entries.length}>
           <EventRows entries={entries}/>
         </DetailSection>
-      </div>
+      </div></div></details>
     </div></div>
   </article>;
 }
@@ -157,7 +156,6 @@ export function Chat() {
   const [search, setSearch] = useState("");
   const [prompt, setPrompt] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [expandAll, setExpandAll] = useState(false);
   const [recording, setRecording] = useState(false);
   const [notice, setNotice] = useState("");
   const [workspaceDraft, setWorkspaceDraft] = useState("");
@@ -283,10 +281,10 @@ export function Chat() {
     <div className="chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation list" tabIndex={0} onPointerDown={() => setResizing(true)} onKeyDown={event => { if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return; event.preventDefault(); const width = Math.max(190, Math.min(520, chatListWidth + (event.key === "ArrowLeft" ? -16 : 16))); setChatListWidth(width); localStorage.setItem("north-chat-list-width", String(width)); }}/>
     <section className="chat-room" ref={chatRoom}>
       {!conversationId ? <div className="chat-welcome"><div className="north-symbol">N</div><h1>What are we working on?</h1><p>Start a new conversation or return to one of your previous rooms.</p><button className="primary-button" onClick={createChat}>New conversation</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Conversation unavailable"}/> : <>
-        <PageHeader eyebrow="Conversation" title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<><div className="workspace-picker"><label htmlFor="chat-workspace">Workspace</label><input id="chat-workspace" list="chat-workspaces" value={workspaceDraft} placeholder="No workspace" title={workspaceDraft || "No workspace selected"} onChange={event => setWorkspaceDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void changeWorkspace(); } }}/><datalist id="chat-workspaces">{knownWorkspaces.map(workspace => <option value={workspace} key={workspace}/>)}</datalist><button className="ghost-button" disabled={savingWorkspace || workspaceDraft === room.data.workspace} onClick={changeWorkspace}>{savingWorkspace ? "Saving…" : "Apply"}</button></div><button className="ghost-button" onClick={() => setExpandAll(v => !v)}>{expandAll ? "Collapse all" : "Expand all"}</button><button className="ghost-button" onClick={rename}>Rename</button></>}/>
-        <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} expandAll={expandAll} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
+        <PageHeader eyebrow="Conversation" title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<button className="ghost-button" onClick={rename}>Rename</button>}/>
+        <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
-        <form className="composer" onSubmit={submit}><textarea value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={2} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div><small>Enter to send · Shift Enter for a new line · /help for commands</small><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
+        <form className="composer" onSubmit={submit}><textarea value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={2} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><div className="composer-context"><label htmlFor="chat-workspace">Workspace</label><input id="chat-workspace" list="chat-workspaces" value={workspaceDraft} placeholder="No workspace" title={workspaceDraft || "No workspace selected"} onChange={event => setWorkspaceDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void changeWorkspace(); } }}/><datalist id="chat-workspaces">{knownWorkspaces.map(workspace => <option value={workspace} key={workspace}/>)}</datalist>{workspaceDraft !== room.data.workspace && <button type="button" disabled={savingWorkspace} onClick={changeWorkspace}>{savingWorkspace ? "Saving…" : "Apply"}</button>}</div><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}
     </section>
   </div>;
