@@ -22,11 +22,11 @@ Per `docs/CODING_STYLE.md` Section 21.3:
 
 ### 1. Adding a new agent
 
-Follows `docs/CODING_STYLE.md` Section 15 and `docs/ARCHITECTURE.md` Section 7. Briefly: drop a folder into `/agents/<name>/` with `agent.py`, `config.yaml`, `tools.yaml`, and `prompts/system.md`. The Orchestrator discovers it at startup. `north agent create` scaffolds all of this for you. See `agents/coder/` for a worked example.
+Follows `docs/CODING_STYLE.md` Section 15 and `docs/ARCHITECTURE.md` Section 7. Briefly: drop a folder into `/agents/<name>/` with `agent.py`, `config.yaml`, and `prompts/system.md`. The Orchestrator discovers it at startup. `north agent create` scaffolds all of this for you. See `agents/coder/` for a worked example.
 
 ### 2. Adding a new tool
 
-Follows `docs/CODING_STYLE.md` Section 16 and `docs/ARCHITECTURE.md` Section 7.4. Briefly: implement the `Tool` ABC and drop the file in the right `tools/` subdir (`universal/` for all agents; `specialized/`, `semantic/`, or `analysis/` otherwise) - `ToolRegistry` discovers it automatically. For a specialized tool, list its name in the `tools.yaml` of each agent that should get it.
+Follows `docs/CODING_STYLE.md` Section 16 and `docs/ARCHITECTURE.md` Section 7.4. Briefly: implement the `Tool` ABC and drop the file in the appropriate organizational `tools/` subdirectory. `ToolRegistry` discovers it automatically and makes it eligible to every agent; task-time retrieval decides when its schema is shown.
 
 ### 3. Running the test suite
 

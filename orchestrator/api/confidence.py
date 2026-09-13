@@ -25,12 +25,12 @@ async def tool_confidence(agent: str | None = None) -> list[ToolConfidenceOut]:
     for agent_name in agents_list:
         try:
             agent_instance = registry.get(agent_name)
-            allowed_tools = agent_instance.deps.tool_registry.tools_for_agent(agent_name)
+            available_tools = agent_instance.deps.tool_registry.available_tools()
         except Exception:
             continue
 
         agent_results = []
-        for tool in allowed_tools:
+        for tool in available_tools:
             confidence_score = await tracker.get_score(agent_name, tool.name)
             agent_results.append(
                 ToolConfidenceOut(

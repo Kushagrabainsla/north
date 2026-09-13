@@ -100,7 +100,7 @@ def _make_registry(tmp_path: Path, router: ChainRouter) -> tuple[AgentRegistry, 
     deps = AgentDependencies(
         context_store=FileContextStore(tmp_path / "context"),
         inference_router=router,
-        tool_registry=ToolRegistry(graph={}, auto_register=False),
+        tool_registry=ToolRegistry(auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
         approval_store=ApprovalStore(),
         agent_max_iterations=10,  # keep tests fast

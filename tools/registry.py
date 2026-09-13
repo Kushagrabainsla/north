@@ -1,17 +1,12 @@
-"""Tool registry with auto-discovery from the tool package directories.
+"""Global tool registry with filesystem auto-discovery.
 
-Universal tools are given to every agent automatically. tools/universal/,
-tools/analysis/, and tools/semantic/ are all universal directories - the
-analysis/semantic helpers (check_types, search_symbols, find_references) are
-read-only and the coder/reviewer workflows depend on them, so they must always
-resolve in the registry.
-Specialized tools (tools/specialized/) are available to agents that declare
-them in tools.yaml.
+Every registered tool is eligible for every agent. Agents receive a lean,
+task-relevant subset selected at run time; directory placement is only an
+organization detail and never an agent allowlist.
 
 To add a new tool:
-  - Drop a .py file with a Tool subclass into tools/universal/, tools/analysis/,
-    or tools/semantic/ → all agents get it
-  - Drop a .py file with a Tool subclass into tools/specialized/ → agents opt in via tools.yaml
+  - Drop a .py file with a Tool subclass into any tool package directory
+    → it joins the global catalog
   - Tools that need constructor args (e.g. ScheduleTaskTool) are registered manually via
     tool_registry.register() after auto-discovery - they just need to be in specialized/.
 """
@@ -31,12 +26,13 @@ from tools.exceptions import ToolNotFoundError
 logger = logging.getLogger(__name__)
 
 _TOOLS_ROOT = Path(__file__).parent
-# Directories whose tools every agent receives. analysis/ and semantic/ hold
-# the read-only coding helpers the coder/reviewer prompts are built around.
-_UNIVERSAL_DIRS: tuple[tuple[str, str], ...] = (
+# Package names remain useful for organizing implementations, but they do not
+# constrain which agents can use a tool.
+_TOOL_DIRS: tuple[tuple[str, str], ...] = (
     ("universal", "tools.universal"),
     ("analysis", "tools.analysis"),
     ("semantic", "tools.semantic"),
+    ("specialized", "tools.specialized"),
 )
 # Hot-reload TTL: re-scan tool directories at most once per this many seconds.
 # Short enough that tools written by create_tool mid-task appear quickly;
@@ -114,25 +110,10 @@ def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
 
 
 class ToolRegistry:
-    """Registry of Tool instances split into universal and specialized.
+    """Global catalog of tools available for task-time selection."""
 
-    Universal tools are returned for every agent.
-    Specialized tools are returned only for agents that declare them in their
-    tool graph (built from tools.yaml).
-
-    New tool files dropped into tools/universal/ or tools/specialized/ at
-    runtime are picked up automatically the first time any agent tries to call
-    them - no restart required.
-    """
-
-    def __init__(
-        self,
-        graph: dict[str, list[str]] | None = None,
-        auto_register: bool = False,
-    ) -> None:
-        self._graph: dict[str, list[str]] = graph or {}
+    def __init__(self, auto_register: bool = False) -> None:
         self._tools: dict[str, Tool] = {}
-        self._universal: list[str] = []
         self._last_reload: float = 0.0  # monotonic timestamp of last filesystem scan
         self._dir_mtimes: dict[Path, float] = {}
 
@@ -140,23 +121,13 @@ class ToolRegistry:
             self._auto_discover()
 
     def _auto_discover(self) -> None:
-        self._universal = []
-        for directory, package in _UNIVERSAL_DIRS:
+        for directory, package in _TOOL_DIRS:
             dir_path = _TOOLS_ROOT / directory
             if dir_path.exists():
                 with contextlib.suppress(OSError):
                     self._dir_mtimes[dir_path] = _dir_fingerprint(dir_path)
             for tool in _discover(dir_path, package).values():
                 self._tools[tool.name] = tool
-                self._universal.append(tool.name)
-
-        spec_path = _TOOLS_ROOT / "specialized"
-        if spec_path.exists():
-            with contextlib.suppress(OSError):
-                self._dir_mtimes[spec_path] = _dir_fingerprint(spec_path)
-        specialized = _discover(spec_path, "tools.specialized")
-        for tool in specialized.values():
-            self._tools[tool.name] = tool
 
     def reload(self) -> None:
         """Re-scan tool directories for new or edited files.
@@ -165,23 +136,14 @@ class ToolRegistry:
         already registered - existing tools are not replaced so in-flight tasks
         are unaffected.
         """
-        for directory, package in _UNIVERSAL_DIRS:
+        for directory, package in _TOOL_DIRS:
             dir_path = _TOOLS_ROOT / directory
             if not self._directory_changed(dir_path):
                 continue
             for tool in _discover(dir_path, package).values():
                 if tool.name not in self._tools:
                     self._tools[tool.name] = tool
-                    if tool.name not in self._universal:
-                        self._universal.append(tool.name)
-                    logger.info("ToolRegistry.reload: picked up new universal tool %r", tool.name)
-
-        spec_path = _TOOLS_ROOT / "specialized"
-        if self._directory_changed(spec_path):
-            for tool in _discover(spec_path, "tools.specialized").values():
-                if tool.name not in self._tools:
-                    self._tools[tool.name] = tool
-                    logger.info("ToolRegistry.reload: picked up new specialized tool %r", tool.name)
+                    logger.info("ToolRegistry.reload: picked up new global tool %r", tool.name)
 
     def _directory_changed(self, dir_path: Path) -> bool:
         """True when *dir_path* has a new/removed/edited .py file since last scan.
@@ -201,31 +163,9 @@ class ToolRegistry:
         self._dir_mtimes[dir_path] = fingerprint
         return True
 
-    def update_graph(self, agent_name: str, tool_names: list[str]) -> None:
-        """Add or extend the specialized tool list for an agent.
-
-        Called when a new agent is discovered at runtime so its tools.yaml
-        bindings are honoured without a restart.
-        """
-        existing = self._graph.get(agent_name, [])
-        merged = list(existing)
-        for name in tool_names:
-            if name not in merged:
-                merged.append(name)
-        self._graph[agent_name] = merged
-
     def register(self, tool: Tool) -> None:
-        """Manually register a tool (e.g. one that needs constructor args)."""
+        """Add a tool to the global catalog."""
         self._tools[tool.name] = tool
-
-    def make_universal(self, name: str) -> None:
-        """Mark a manually registered tool as universal (given to all agents).
-
-        Use this for tools that live in tools/universal/ but require constructor
-        args and therefore can't be auto-instantiated during discovery.
-        """
-        if name not in self._universal:
-            self._universal.append(name)
 
     def get(self, name: str) -> Tool:
         if name not in self._tools:
@@ -233,47 +173,26 @@ class ToolRegistry:
         return self._tools[name]
 
     def all_tools(self) -> list[Tool]:
-        """Return every registered tool (universal + specialized)."""
+        """Return every tool in the global catalog."""
         return list(self._tools.values())
 
-    def tools_for_agent(self, agent: str, *, domain: str = "", auto_reload: bool = True) -> list[Tool]:
-        """Return universal tools + any specialized tools the agent declared.
+    def available_tools(self, *, auto_reload: bool = True) -> list[Tool]:
+        """Return every currently available tool in the global catalog.
 
         Rescans the filesystem at most once per _RELOAD_TTL_SECONDS so new tool
         files written by create_tool mid-task appear within the TTL window without
         scanning on every ReAct iteration.
         Pass auto_reload=False to skip the filesystem scan (useful in tests).
 
-        ``domain`` filters out universal tools that declared themselves irrelevant
-        to it (``Tool.excluded_domains``). Omitting it keeps every universal tool,
-        so callers that do not know the agent's domain are unaffected. Tools the
-        agent named in its tools.yaml are never filtered - an explicit request wins.
+        Relevance is decided from the task by :meth:`agents.base.Agent._load_tools`.
         """
         if auto_reload and (time.monotonic() - self._last_reload) > _RELOAD_TTL_SECONDS:
             self.reload()
             self._last_reload = time.monotonic()
-        result: list[Tool] = []
-        seen: set[str] = set()
-
-        for name in self._universal:
-            tool = self._tools.get(name)
-            if tool is not None and (not domain or domain not in tool.excluded_domains):
-                result.append(tool)
-                seen.add(name)
-
-        for name in self._graph.get(agent, []):
-            if name in self._tools and name not in seen:
-                result.append(self._tools[name])
-                seen.add(name)
-
-        return result
-
-    def agent_names(self) -> list[str]:
-        return list(self._graph.keys())
+        return self.all_tools()
 
     def all_tool_names(self) -> set[str]:
-        specialized = {name for names in self._graph.values() for name in names}
-        return set(self._universal) | set(self._tools.keys()) | specialized
+        return set(self._tools)
 
     async def aclose(self) -> None:
         """Call aclose() on every registered tool that defines it."""

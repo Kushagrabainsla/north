@@ -24,7 +24,7 @@ def _agent(tmp_path: Path, mode: ApprovalMode | None) -> AgenticLLMAgent:
     deps = AgentDependencies(
         context_store=FileContextStore(tmp_path / "context"),
         inference_router=MockInferenceRouter(),
-        tool_registry=ToolRegistry(graph={}, auto_register=False),
+        tool_registry=ToolRegistry(auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
         north_settings=SimpleNamespace(autonomy=mode) if mode is not None else None,
     )

@@ -4,9 +4,7 @@ This agent specializes in tracking calories, logging workouts, and providing die
 
 ## Tools Used
 
-No specialized tools (`tools.yaml` is empty). The agent uses the universal tool set granted
-to every agent - chiefly `web_search` and `fetch_url` for health guidance, plus `read_file` /
-`write_file` for any workspace files.
+Tools are selected per task from north's global catalog, like every other agent.
 
 ## How to Test
 

@@ -4,6 +4,33 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+FIND_TOOLS_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "find_tools",
+        "description": (
+            "Search north's global tool catalog and load the most relevant tools into the next turn. "
+            "Use this when the currently visible tools cannot perform the task; every agent may discover any tool."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Capability needed, or an exact tool name if known.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": "Maximum tools to load. Default: 5.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
 
 def delegate_task_schema(agent_names: Sequence[str] = ()) -> dict:
     """The `delegate_task` definition, naming only agents that exist.

@@ -15,15 +15,15 @@ from context.repo_map import build_repo_map
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
+from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 from utils.execution_context import ExecutionIdentity, bind_execution
 
 logger = logging.getLogger(__name__)
 
-# Tools an agent must never lose to semantic ranking - the read/search/edit/verify
-# core it needs to do real work. Force-included only when the agent actually has them.
-_CORE_TOOL_NAMES: frozenset[str] = frozenset(
-    {"read_file", "list_dir", "search_files", "glob", "write_file", "patch_file", "check_types", "bash"}
-)
+# Registry tools that support the agent loop itself. Internal tools such as
+# ask_user, delegate_task, request_approval, and find_tools are injected by the
+# loop and therefore do not appear here.
+_ESSENTIAL_TOOL_NAMES: frozenset[str] = frozenset({"update_plan", "use_skill"})
 
 # Cap on how many non-selected skill names are listed as "available via use_skill",
 # so the hint stays a light pointer and never becomes prompt-bloating noise.
@@ -91,7 +91,7 @@ class Agent(ABC):
                 selected_skills = await self._select_skills(payload.prompt)
                 context, scored_tools = await asyncio.gather(
                     self._load_context(payload, selected_skills),
-                    self._load_tools(selected_skills),
+                    self._load_tools(payload, selected_skills),
                 )
                 raw = await self._execute(payload, context, scored_tools)
                 result = self._format_result(raw).model_copy(
@@ -306,32 +306,83 @@ class Agent(ABC):
             except Exception:
                 logger.debug("skill_selected ledger write failed for task %s", payload.task_id, exc_info=True)
 
-    async def _load_tools(self, selected_skills: list[Any] | None = None) -> list[tuple[Tool, float]]:
-        """Return (tool, confidence_score) pairs for this agent, sorted by score descending.
+    async def _load_tools(
+        self,
+        payload: AgentPayload | None = None,
+        selected_skills: list[Any] | None = None,
+    ) -> list[tuple[Tool, float]]:
+        """Select a lean task-relevant subset from the global tool catalog.
 
-        All tools registered for the agent (universal + specialized) are available without
-        artificial capping or accidental filter dropouts. Tools named by the skills already
-        selected for this task (passed in by `run()`) are boosted in the ranking.
+        Every registered tool is eligible. Semantic retrieval limits prompt
+        size, while loop controls, skill-named tools, and explicitly named tools
+        cannot be dropped. If indexing is unavailable,
+        all tools are exposed so selection failure never removes a capability.
         """
-        registry_tools = self._deps.tool_registry.tools_for_agent(self.name, domain=self.domain)
+        registry_tools = self._deps.tool_registry.available_tools()
+        by_name = {tool.name: tool for tool in registry_tools}
+        all_names = set(by_name)
+        prompt = payload.prompt if payload is not None else ""
+
+        mandatory = set(_ESSENTIAL_TOOL_NAMES) & all_names
+        mandatory.update(_mentioned_tool_names(selected_skills or [], all_names))
+        mandatory.update(_tool_names_in_text(prompt, all_names))
+
+        selected_names = set(all_names)
+        index = self._deps.tool_index
+        if index is not None and len(registry_tools) > SEMANTIC_FILTER_MIN:
+            query = self._tool_selection_query(payload, selected_skills or [])
+            try:
+                # Keeps tools hot-loaded after startup in the same searchable
+                # catalog without making registration depend on the index.
+                await index.update_tools([(tool.name, tool.description) for tool in registry_tools])
+                semantic_names = await index.search_tools(query, top_k=SEMANTIC_TOP_K)
+            except Exception:
+                logger.debug("Tool selection failed for agent %s", self.name, exc_info=True)
+                semantic_names = []
+            semantic_matches = set(semantic_names) & all_names
+            if semantic_matches:
+                selected_names = semantic_matches | mandatory
+
         scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
 
-        # Word-boundary match: a bare substring test let a skill that merely
-        # mentions "bash" in prose boost the `bash` tool, and any skill naming
-        # `glob` boost it via "global".
-        mentioned = _mentioned_tool_names(selected_skills or [], {t.name for t in registry_tools})
-        skill_tools: set[str] = mentioned
-
         scored: list[tuple[Tool, float]] = []
-        for t in registry_tools:
+        for name in selected_names:
+            t = by_name[name]
             base_score = scores.get(t.name, 0.5)
-            if t.name in skill_tools:
+            if t.name in mandatory:
                 base_score = max(base_score, 0.9)
             scored.append((t, base_score))
 
-        scored.sort(key=lambda pair: pair[1], reverse=True)
+        scored.sort(key=lambda pair: (-pair[1], pair[0].name))
         return scored
+
+    def _tool_selection_query(self, payload: AgentPayload | None, selected_skills: list[Any]) -> str:
+        """Build retrieval text from dynamic task context, never static ownership."""
+        parts = [f"Agent role: {self.name}. Domain: {self.domain}."]
+        if payload is not None:
+            parts.append(f"Task: {payload.prompt}")
+            plan_store = getattr(self._deps, "plan_store", None)
+            if plan_store is not None and payload.task_id:
+                try:
+                    if plan := plan_store.render(payload.task_id):
+                        parts.append(f"Current plan: {plan}")
+                except Exception:
+                    logger.debug("Plan unavailable during tool selection for %s", payload.task_id, exc_info=True)
+        if selected_skills:
+            parts.append(
+                "Selected skills: "
+                + " ".join(f"{skill.name}: {skill.description}" for skill in selected_skills)
+            )
+        return "\n".join(parts)
 
     def _format_result(self, raw: dict[str, Any]) -> AgentResult:
         """Default: wrap the dict in an `AgentResult`. Override for custom shape."""
         return AgentResult(**raw)
+
+
+def _tool_names_in_text(text: str, tool_names: set[str]) -> set[str]:
+    """Return exact tool identifiers named in task text."""
+    if not text or not tool_names:
+        return set()
+    words = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", text))
+    return tool_names & words

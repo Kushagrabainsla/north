@@ -67,7 +67,7 @@ One reason to change per class. If you describe a class with "and," split it. no
 
 ### 2.2 OCP - Open/Closed
 
-Add behavior by adding a class, not by modifying an existing one. New tools subclass `Tool` and register in the tool graph. No existing file changes.
+Add behavior by adding a class, not by modifying an existing one. New tools subclass `Tool` and join the global catalog. No existing file changes.
 
 ```python
 class LinkedInSearchTool(Tool):
@@ -114,7 +114,7 @@ Use these where they fit. Do not invent new structural patterns without a strong
 | Pattern | Where it lives in north |
 |---------|-------------------------|
 | **Strategy** | Every swappable interface: `ContextStore`, `LedgerWriter`, `InferenceRouter`, `Notifier`, `Tool`. Concrete chosen at startup; callers never see which one. |
-| **Registry** | `AgentRegistry` and `ToolRegistry` discover members at runtime (filesystem walk, tool graph). Adding a member requires no registry code change. |
+| **Registry** | `AgentRegistry` and `ToolRegistry` discover members at runtime (filesystem walks and a global tool catalog). Adding a member requires no registry code change. |
 | **Template Method** | The `Agent` ABC fixes the `run()` skeleton (load context → load tools → `_execute()` → format result). Subclasses override `_execute()` only. |
 | **Repository** | `LedgerWriter`, `ContextStore`, `JobProcessor` expose domain methods; the storage engine (SQLite, files) is hidden behind them. |
 | **Factory** | `AgentFactory` builds agents from a folder path. `CardFactory` picks the right card type from an `AgentResult`'s classification flags. |
@@ -324,32 +324,17 @@ is adding a file:
 
 ```
 tools/
-  universal/    <- available to EVERY agent (read_file, write_file, glob, list_dir,
-                   search_files, web_search, fetch_url, schedule_task, list_schedules,
-                   update_schedule, cancel_schedule, create_tool, create_agent,
-                   query_metrics)
-  specialized/  <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
+  universal/    <- general-purpose tools (read_file, web_search, scheduling, etc.)
+  specialized/  <- integration and execution tools (bash, git, gh, kasa, etc.)
   semantic/     <- code intelligence (search_symbols, find_references)
   analysis/     <- static analysis (check_types)
 ```
 
-The agent→tool mapping is a **dynamic graph**, not a constant. Universal tools are granted
-to all agents; each agent additionally lists its specialized tools in its own `tools.yaml`:
-
-```yaml
-# agents/coder/tools.yaml
-tools:
-  - bash
-  - shell
-  - git
-  - gh
-  - patch_file
-```
-
-The registry exposes `tools_for_agent(agent)` (universal + that agent's specialized set,
-sorted by confidence) and `update_graph(agent, tool_names)` for runtime changes (e.g. a tool
-hot-loaded mid-task by `create_tool`). `make_universal(name)` promotes a tool to the
-all-agents set. No registry code changes when tools come or go.
+All four directories feed one global catalog. At task start, semantic retrieval selects a
+small relevant subset using the task, role, selected skills, and current plan; exact tool
+mentions and essential controls are retained. `find_tools` lets the running agent search and
+load a missed capability. Confidence affects ranking, not eligibility. No agent configuration
+or registry code changes when tools come or go.
 
 ---
 
@@ -530,10 +515,9 @@ agents/
   agentic_llm_agent.py <- AgenticLLMAgent (ReAct loop, native function calling)
   context_compaction.py <- token-aware history compaction
   workspace_lock.py    <- per-workspace mutation lock
-  coder/               <- one folder per domain agent: agent.py + config.yaml +
-    agent.py           <- CoderAgent              tools.yaml + prompts/
+  coder/               <- one folder per domain agent
+    agent.py           <- CoderAgent
     config.yaml
-    tools.yaml
     prompts/
   architect/  reviewer/  researcher/  general/  home/  news_briefing/
   health/  job/  finance/  university/
@@ -543,15 +527,12 @@ tools/
   base.py            <- Tool, AuthenticatedTool, CacheableTool
   models.py          <- ToolInput, ToolOutput, ConfidenceScore
   exceptions.py      <- ToolExecutionError, ToolAuthError
-  registry.py        <- ToolRegistry (filesystem discovery + dynamic agent→tool graph)
+  registry.py        <- ToolRegistry (filesystem discovery + global catalog)
   tool_index.py      <- tool metadata index
   confidence.py      <- ConfidenceTracker (EMA scoring)
   _path.py           <- shared path-safety helpers
-  universal/         <- granted to every agent (read_file, write_file, glob, list_dir,
-                        search_files, web_search, fetch_url, schedule_task,
-                        list_schedules, update_schedule, cancel_schedule,
-                        create_tool, create_agent, query_metrics)
-  specialized/       <- opt-in per agent (bash, shell, git, gh, patch_file, kasa)
+  universal/         <- general-purpose tool implementations
+  specialized/       <- integration and execution tool implementations
   semantic/          <- code intelligence (search_symbols, find_references)
   analysis/          <- static analysis (check_types)
 
@@ -1164,7 +1145,7 @@ class Agent(ABC):
         ...
 
     async def _load_tools(self) -> list[Tool]:
-        """Default: load tools by confidence score from the tool graph. Override if needed."""
+        """Default: select task-relevant tools from the global catalog. Override if needed."""
         ...
 
     def _format_result(self, raw: dict) -> AgentResult:
@@ -1271,8 +1252,8 @@ class ConfidenceTracker:
         new_score = await self._apply_delta(agent, tool, delta)
         spawn(self._log_to_ledger(agent, tool, new_score), name="confidence_ledger")
 
-    async def get_tools_for_agent(self, agent_name: str) -> list[tuple[Tool, float]]:
-        """Return tools for agent sorted by confidence score descending."""
+    async def scores_for_agent(self, agent_name: str) -> list[tuple[str, float]]:
+        """Return learned scores without constraining tool eligibility."""
         ...
 ```
 
@@ -1718,7 +1699,7 @@ NORTH_OPENROUTER_API_KEY=sk-or-your-key-here
 ### 21.3 CONTRIBUTING.md Covers the Three Key Flows
 
 1. How to add a new agent (folder structure, required files, config schema, how to test)
-2. How to add a new tool (implement `Tool`, drop it in the right `tools/` subdir for auto-discovery, list it in an agent's `tools.yaml` if specialized)
+2. How to add a new tool (implement `Tool` and drop it in the right organizational `tools/` subdirectory for global auto-discovery)
 3. How to run the full test suite and what passing looks like
 
 ### 21.4 No Exposed Secrets

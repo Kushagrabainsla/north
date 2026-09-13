@@ -193,23 +193,23 @@ class ConfidenceTracker:
                 ).fetchall()
             )
 
-    async def seed_defaults(self, graph: dict[str, list[str]], reliable_tools: frozenset[str]) -> None:
+    async def seed_defaults(self, catalog_by_agent: dict[str, list[str]], reliable_tools: frozenset[str]) -> None:
         """Insert default confidence scores for all (agent, tool) pairs, if not yet recorded.
 
         Rows already written by real usage are preserved via INSERT OR IGNORE, so seeds
         never overwrite earned data. Call once at startup before any tasks run.
 
         Args:
-            graph:          {agent_name: [tool_names]} - the full tool graph.
+            catalog_by_agent: Global tool names to seed for each known agent.
             reliable_tools: Tool names that get a high prior (0.80). Everything
                             else receives the neutral default (0.50).
         """
-        await asyncio.to_thread(self._seed_defaults_sync, graph, reliable_tools)
+        await asyncio.to_thread(self._seed_defaults_sync, catalog_by_agent, reliable_tools)
 
-    def _seed_defaults_sync(self, graph: dict[str, list[str]], reliable_tools: frozenset[str]) -> None:
+    def _seed_defaults_sync(self, catalog_by_agent: dict[str, list[str]], reliable_tools: frozenset[str]) -> None:
         now = datetime.now(UTC).isoformat()
         with open_db_connection(self._db_path) as conn:
-            for agent, tools in graph.items():
+            for agent, tools in catalog_by_agent.items():
                 for tool in tools:
                     score = RELIABLE_CONFIDENCE if tool in reliable_tools else DEFAULT_CONFIDENCE
                     conn.execute(

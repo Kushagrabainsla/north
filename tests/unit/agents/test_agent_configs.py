@@ -1,6 +1,6 @@
 """Validate static artifacts for the 4 engineering agents.
 
-Tests that config.yaml files, system prompts, and tools.yaml specs are
+Tests that config.yaml files and system prompts are
 structurally correct so regressions in these files are caught before any
 LLM call is made.  No network calls, no async.
 """
@@ -10,7 +10,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
 
 AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
 ENGINEERING_AGENTS = ["architect", "coder", "researcher", "reviewer"]
@@ -105,7 +104,7 @@ def test_agent_instantiates(name: str, tmp_path: Path) -> None:
     deps = AgentDependencies(
         context_store=FileContextStore(tmp_path / "context"),
         inference_router=MockInferenceRouter(),
-        tool_registry=ToolRegistry(graph={}, auto_register=False),
+        tool_registry=ToolRegistry(auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
     )
 
@@ -209,50 +208,11 @@ def test_reviewer_prompt_routes_spec_gaps_to_architect() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tools.yaml
+# Tool eligibility
 # ---------------------------------------------------------------------------
 
 
-def test_coder_has_bash_git_patch_file() -> None:
-    tools_path = AGENTS_DIR / "coder" / "tools.yaml"
-    assert tools_path.exists()
-    data = yaml.safe_load(tools_path.read_text(encoding="utf-8"))
-    names = data.get("tools", [])
-    assert "bash" in names
-    assert "git" in names
-    assert "patch_file" in names
-
-
-def test_reviewer_has_bash_and_gh_but_cannot_modify_code() -> None:
-    """Reviewer runs tests (bash) and inspects PR/CI status (gh, read-only actions),
-    but must NOT have git or patch_file - it reports, it never commits or edits code."""
-    tools_path = AGENTS_DIR / "reviewer" / "tools.yaml"
-    assert tools_path.exists()
-    data = yaml.safe_load(tools_path.read_text(encoding="utf-8"))
-    names = data.get("tools", [])
-    assert "bash" in names
-    assert "gh" in names, "Reviewer needs gh to read PR CI status (pr_checks / run_view)"
-    assert "patch_file" not in names, "Reviewer must not modify production code"
-    assert "git" not in names, "Reviewer must not commit code"
-
-
-def test_researcher_has_no_destructive_tools() -> None:
-    """Researcher is read-only - no bash, git, or patch_file."""
-    tools_path = AGENTS_DIR / "researcher" / "tools.yaml"
-    if not tools_path.exists():
-        return  # empty tools.yaml is acceptable
-    data = yaml.safe_load(tools_path.read_text(encoding="utf-8"))
-    names = data.get("tools", [])
-    for forbidden in ("bash", "git", "patch_file"):
-        assert forbidden not in names, f"Researcher must not have {forbidden}"
-
-
-def test_architect_has_no_implementation_tools() -> None:
-    """Architect makes design decisions - no bash, git, or patch_file."""
-    tools_path = AGENTS_DIR / "architect" / "tools.yaml"
-    if not tools_path.exists():
-        return  # empty is fine
-    data = yaml.safe_load(tools_path.read_text(encoding="utf-8"))
-    names = data.get("tools", [])
-    for forbidden in ("bash", "git", "patch_file"):
-        assert forbidden not in names, f"Architect must not have {forbidden}"
+@pytest.mark.parametrize("name", ENGINEERING_AGENTS)
+def test_agents_do_not_own_tool_allowlists(name: str) -> None:
+    """Tools are selected from one global catalog at task time."""
+    assert not (AGENTS_DIR / name / "tools.yaml").exists()

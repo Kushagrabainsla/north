@@ -93,7 +93,7 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
     task_ctx = TaskContextStore(db_path=tmp_path / "tasks.db")
 
     agents_dir = Path(__file__).parent.parent.parent / "agents"
-    tool_registry = ToolRegistry(graph={}, auto_register=False)
+    tool_registry = ToolRegistry(auto_register=False)
     confidence_tracker = ConfidenceTracker(db_path=tmp_path / "tools.db")
 
     agent_deps = AgentDependencies(
@@ -484,7 +484,7 @@ async def test_delegate_task_blocked_at_depth_limit(tmp_path):
     _AGENTS_DIR = Path(__file__).parent.parent.parent / "agents"
     context_store = FileContextStore(tmp_path / "context")
     inference = MockInferenceRouter()
-    tool_registry = ToolRegistry(graph={}, auto_register=False)
+    tool_registry = ToolRegistry(auto_register=False)
     confidence_tracker = ConfidenceTracker(db_path=tmp_path / "tools.db")
 
     agent_deps = AgentDependencies(

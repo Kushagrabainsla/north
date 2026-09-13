@@ -35,7 +35,7 @@ def _make_deps(tmp_path: Path, **overrides) -> AgentDependencies:
     base = AgentDependencies(
         context_store=FileContextStore(tmp_path / "context"),
         inference_router=MockInferenceRouter(),
-        tool_registry=ToolRegistry(graph={}, auto_register=False),
+        tool_registry=ToolRegistry(auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
     )
     for k, v in overrides.items():

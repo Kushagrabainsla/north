@@ -67,7 +67,7 @@ class ToolRegistryPort(Protocol):
     """
 
     def all_tool_names(self) -> set[str]:
-        """Return every registered tool name (universal and specialized)."""
+        """Return every name in the global tool catalog."""
         ...
 
     def get(self, name: str) -> ToolDescriptor:
@@ -89,8 +89,12 @@ class ConfidenceTrackerPort(Protocol):
         """Return the current confidence score for ``tool`` under ``agent``."""
         ...
 
-    async def seed_defaults(self, graph: dict[str, list[str]], reliable_tools: frozenset[str]) -> None:
-        """Prime scores for a freshly discovered tool graph (idempotent)."""
+    async def seed_defaults(
+        self,
+        catalog_by_agent: dict[str, list[str]],
+        reliable_tools: frozenset[str],
+    ) -> None:
+        """Prime per-agent scores for the global tool catalog (idempotent)."""
         ...
 
 

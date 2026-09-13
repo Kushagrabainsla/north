@@ -45,8 +45,8 @@ def test_coding_tools_are_universal() -> None:
     """The coder prompt's verify-after-every-edit loop depends on these resolving
     for the engineering agents."""
     registry = ToolRegistry(auto_register=True)
-    coder_tools = {t.name for t in registry.tools_for_agent("coder", auto_reload=False)}
-    assert {"check_types", "search_symbols", "find_references", "read_file", "list_dir"} <= coder_tools
+    available = {t.name for t in registry.available_tools(auto_reload=False)}
+    assert {"check_types", "search_symbols", "find_references", "read_file", "list_dir"} <= available
 
 
 @pytest.mark.parametrize(

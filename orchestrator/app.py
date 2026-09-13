@@ -149,10 +149,8 @@ def _attach_embedding_index(deps) -> None:
     deps.context_store.attach_embedding_index(embedding_index)
 
 
-def _build_tool_registry(
-    deps, tool_graph, policy: ApprovalPolicy | None = None
-) -> tuple[ToolRegistry, CreateAgentTool]:
-    tool_registry = ToolRegistry(graph=tool_graph, auto_register=True)
+def _build_tool_registry(deps, policy: ApprovalPolicy | None = None) -> tuple[ToolRegistry, CreateAgentTool]:
+    tool_registry = ToolRegistry(auto_register=True)
     # The four schedule verbs travel together: an agent that can create a
     # schedule must also be able to show, change and remove one, or the user can
     # only ever add.
@@ -160,8 +158,6 @@ def _build_tool_registry(
     tool_registry.register(ListSchedulesTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     tool_registry.register(UpdateScheduleTool(cron_store=deps.cron_store))
     tool_registry.register(CancelScheduleTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
-    for schedule_tool in ("schedule_task", "list_schedules", "update_schedule", "cancel_schedule"):
-        tool_registry.make_universal(schedule_tool)
     # create/update actions are gated behind a user approval card inside the
     # tool itself, so every entry point (agent loop, delegation, direct-tool
     # execution) sees the same gate.
@@ -177,19 +173,13 @@ def _build_tool_registry(
     )
     create_agent_tool = CreateAgentTool(cron_store=deps.cron_store)
     tool_registry.register(create_agent_tool)
-    tool_registry.make_universal("create_agent")
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
-    tool_registry.make_universal("query_metrics")
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))
-    tool_registry.make_universal("get_task_status")
     tool_registry.register(GetActiveSessionsTool(running_task_store=deps.running_task_store))
-    tool_registry.make_universal("get_active_sessions")
     tool_registry.register(UpdatePlanTool(plan_store=deps.plan_store, stream_manager=deps.stream_manager))
-    tool_registry.make_universal("update_plan")
     # Semantic code search (#2) - only when embeddings are available.
     if deps.code_index is not None:
         tool_registry.register(SearchCodeTool(code_index=deps.code_index))
-        tool_registry.make_universal("search_code")
     # BashTool and ShellTool gate every command behind user approval and cannot
     # be auto-discovered (they need the ApprovalStore injected at startup).
     tool_registry.register(
@@ -782,7 +772,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _attach_embedding_index(deps)
 
     _step("building tool registry")
-    tool_graph = AgentRegistry.build_tool_graph(_AGENTS_DIR)
     approval_memory = ApprovalMemory(settings.north_home / "approval_memory.db")
     # The safe-action list, in the same database as the learned decisions: both
     # answer "what may north do without asking me", and it saves a 16th SQLite
@@ -808,17 +797,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         llm_advisor=judgement_filter.advise,
     )
     deps.approval_policy = approval_policy
-    tool_registry, create_agent_tool = _build_tool_registry(deps, tool_graph, approval_policy)
+    tool_registry, create_agent_tool = _build_tool_registry(deps, approval_policy)
 
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)
     tool_registry.register(UseSkillTool(skill_registry))
-    tool_registry.make_universal("use_skill")
     tool_registry.register(CreateSkillTool(skill_registry))
-    tool_registry.make_universal("create_skill")
-
-    _step("seeding confidence defaults")
-    await deps.confidence_tracker.seed_defaults(tool_graph, RELIABLE_TOOLS)
 
     _step("refreshing inference pools")
     await deps.inference_router.refresh_pools()
@@ -837,6 +821,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     create_agent_tool._agent_registry = agent_registry  # late-wire after registry is built
     _step(f"registered agents: {agent_registry.names()}")
     _warn_unknown_cron_agents(agent_registry)
+
+    _step("seeding confidence defaults")
+    global_tools = sorted(tool_registry.all_tool_names())
+    await deps.confidence_tracker.seed_defaults(
+        dict.fromkeys(agent_registry.names(), global_tools),
+        RELIABLE_TOOLS,
+    )
 
     extraction_pipeline = _build_extraction_pipeline(deps)
     orchestrator = _build_orchestrator(

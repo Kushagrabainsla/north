@@ -42,7 +42,7 @@ def _make_deps(
     return AgentDependencies(
         context_store=FileContextStore(tmp_path / "context"),
         inference_router=router or MockInferenceRouter(),
-        tool_registry=ToolRegistry(graph={}, auto_register=False),
+        tool_registry=ToolRegistry(auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
         agent_max_iterations=max_iterations,
     )
@@ -449,11 +449,11 @@ async def test_record_side_effects_ignores_readonly_and_failed_mutations(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# Core tools always survive semantic selection (#8)
+# Explicit tool requests always survive semantic selection
 # ---------------------------------------------------------------------------
 
 
-async def test_core_tools_never_dropped_by_semantic_filter(tmp_path):
+async def test_explicit_tool_name_never_dropped_by_semantic_filter(tmp_path):
     from unittest.mock import AsyncMock, MagicMock
 
     agent = _load_agent("coder", tmp_path)
@@ -461,9 +461,10 @@ async def test_core_tools_never_dropped_by_semantic_filter(tmp_path):
     def _tool(name: str):
         t = MagicMock()
         t.name = name
+        t.description = f"Perform {name.replace('_', ' ')} operations"
         return t
 
-    # More than SEMANTIC_FILTER_MIN tools, mixing core and non-core.
+    # More than SEMANTIC_FILTER_MIN globally eligible tools.
     names = [
         "read_file",
         "patch_file",
@@ -479,20 +480,86 @@ async def test_core_tools_never_dropped_by_semantic_filter(tmp_path):
         "git",
     ]
     agent._deps.tool_registry = MagicMock()
-    agent._deps.tool_registry.tools_for_agent.return_value = [_tool(n) for n in names]
+    agent._deps.tool_registry.available_tools.return_value = [_tool(n) for n in names]
     agent._deps.confidence_tracker = MagicMock()
     agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=[])
-    # Semantic search returns only NON-core tools.
+    # Semantic search misses the explicitly requested tool.
     index = MagicMock()
+    index.update_tools = AsyncMock(return_value=0)
     index.search_tools = AsyncMock(return_value=["web_search", "kasa", "git"])
     agent._deps.tool_index = index
 
-    selected = {t.name for t, _ in await agent._load_tools()}
+    selected = {
+        t.name
+        for t, _ in await agent._load_tools(
+            AgentPayload(task_id="tools", prompt="Use read_file before implementing the change")
+        )
+    }
 
-    # Core read/search/edit/verify tools are forced in despite ranking...
-    assert {"read_file", "patch_file", "check_types", "bash"} <= selected
-    # ...and the semantic picks are still present.
+    assert "read_file" in selected
     assert "web_search" in selected
+
+
+async def test_task_selection_uses_global_catalog_not_agent_mapping(tmp_path: Path) -> None:
+    """Semantic relevance trims schemas without turning the result into an allowlist."""
+    agent = _load_agent("general", tmp_path)
+
+    def _tool(name: str):
+        t = MagicMock()
+        t.name = name
+        t.description = f"Perform {name.replace('_', ' ')} operations"
+        return t
+
+    names = [
+        "web_search",
+        "fetch_url",
+        "read_file",
+        "write_file",
+        "patch_file",
+        "bash",
+        "git",
+        "kasa",
+        "take_photo",
+        "schedule_task",
+        "update_plan",
+    ]
+    agent._deps.tool_registry = MagicMock()
+    agent._deps.tool_registry.available_tools.return_value = [_tool(name) for name in names]
+    agent._deps.confidence_tracker = MagicMock()
+    agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=[])
+    index = MagicMock()
+    index.update_tools = AsyncMock(return_value=0)
+    index.search_tools = AsyncMock(return_value=["web_search"])
+    agent._deps.tool_index = index
+
+    loaded = await agent._load_tools(
+        AgentPayload(task_id="global-tools", prompt="Use kasa to check the lights and research their model")
+    )
+    loaded_names = {tool.name for tool, _ in loaded}
+
+    assert loaded_names == {"web_search", "kasa", "update_plan"}
+    index.search_tools.assert_awaited_once()
+
+
+async def test_find_tools_loads_a_missed_global_tool(tmp_path: Path) -> None:
+    agent = _load_agent("general", tmp_path)
+    photo = _AbsentFileTool()
+    photo.name = "take_photo"
+    photo.description = "Capture a photograph with a connected camera"
+    agent._deps.tool_registry = ToolRegistry(auto_register=False)
+    agent._deps.tool_registry.register(photo)
+    agent._deps.tool_index = None
+    tool_map: dict[str, Tool] = {}
+
+    _, result_json, success, _ = await agent._execute_call(
+        ToolCall(name="find_tools", call_id="find-1", params={"query": "capture a photograph"}),
+        AgentPayload(task_id="find-tools", prompt="take a picture"),
+        tool_map,
+    )
+
+    assert success is True
+    assert "take_photo" in tool_map
+    assert "take_photo" in result_json
 
 
 async def test_multimodal_tool_image_context(tmp_path: Path) -> None:
@@ -652,7 +719,7 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
         "custom_tool",
     ]
     agent._deps.tool_registry = MagicMock()
-    agent._deps.tool_registry.tools_for_agent.return_value = [_tool(n) for n in names]
+    agent._deps.tool_registry.available_tools.return_value = [_tool(n) for n in names]
     agent._deps.confidence_tracker = MagicMock()
     agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=[])
 
@@ -676,7 +743,10 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
     agent._deps.tool_index = None
 
     # run() selects once and passes the result in; do the same here.
-    loaded = await agent._load_tools(await agent._select_skills("check my screen"))
+    loaded = await agent._load_tools(
+        AgentPayload(task_id="tools", prompt="check my screen"),
+        await agent._select_skills("check my screen"),
+    )
     loaded_names = {t.name for t, _ in loaded}
 
     # All 15 tools are available without a 10-tool cap
@@ -694,7 +764,6 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
 def _registering(agent, tool):
     """Put *tool* in the agent's registry, available to every agent."""
     agent._deps.tool_registry.register(tool)
-    agent._deps.tool_registry.make_universal(tool.name)
     return agent
 
 
@@ -891,7 +960,6 @@ async def _capture(tmp_path: Path, scores: list[tuple[str, float]]) -> _Capturin
         tool = _AbsentFileTool()
         tool.name = name
         agent._deps.tool_registry.register(tool)
-        agent._deps.tool_registry.make_universal(name)
     agent._deps.confidence_tracker = MagicMock()
     agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=scores)
     agent._deps.confidence_tracker.record_use = AsyncMock(return_value=0.5)

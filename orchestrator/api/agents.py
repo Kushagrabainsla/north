@@ -67,7 +67,6 @@ class AgentCreateRequest(BaseModel):
     domain: str
     description: str = ""
     model_pool: str = "fast_cheap"
-    tools: list[str] = []
     accepts: list[str] = []
 
 
@@ -88,7 +87,6 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
         domain=body.domain,
         description=body.description or "A domain specialist.",
         model_pool=body.model_pool,
-        tools=", ".join(body.tools) if body.tools else "none specified",
         accepts=", ".join(body.accepts) if body.accepts else "any",
     )
 

@@ -298,7 +298,7 @@ async def test_agent_execute_call_threads_scope_to_tool(tmp_path: Path) -> None:
     deps = AgentDependencies(
         context_store=FileContextStore(tmp_path / "context"),
         inference_router=MagicMock(),
-        tool_registry=ToolRegistry(graph={}, auto_register=False),
+        tool_registry=ToolRegistry(auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
     )
     from agents.models import AgentConfig

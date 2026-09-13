@@ -801,28 +801,13 @@ class _AgentScaffold:
     domain: str
     description: str
     model_pool: str
-    tools: list[str]
     accepts: list[str]
     agentic: bool
     system_prompt: str
 
 
-def _discover_universal_tool_names() -> set[str]:
-    """Names of universal tools (auto-included for every agent) from the installed package."""
-    try:
-        import importlib.util as ilu
-
-        spec = ilu.find_spec("tools.universal")
-        if spec and spec.submodule_search_locations:
-            udir = Path(list(spec.submodule_search_locations)[0])
-            return {p.stem for p in udir.glob("*.py") if not p.stem.startswith("_")}
-    except Exception:
-        pass
-    return set()
-
-
 def _write_agent_scaffold(agent_dir: Path, scaffold: _AgentScaffold) -> None:
-    """Write the agent.py / config.yaml / tools.yaml / prompts / README files to disk."""
+    """Write the agent.py, config.yaml, prompts, and README files to disk."""
     import yaml  # type: ignore[import-untyped]
 
     agent_dir.mkdir(parents=True)
@@ -860,21 +845,6 @@ def _write_agent_scaffold(agent_dir: Path, scaffold: _AgentScaffold) -> None:
         ),
         encoding="utf-8",
     )
-
-    universal = _discover_universal_tool_names()
-    universal_requested = [t for t in scaffold.tools if t in universal]
-    specialized_tools = [t for t in scaffold.tools if t not in universal]
-    if universal_requested:
-        typer.secho(
-            f"  Note: {', '.join(universal_requested)} are universal - auto-included, omitted from tools.yaml",
-            fg=typer.colors.BRIGHT_BLACK,
-        )
-    tools_comment = (
-        "# Specialized tools for this agent. Universal tools are\n"
-        "# automatically available to all agents and do not need to be listed here.\n"
-    )
-    tools_body = "tools:\n" + "".join(f"  - {t}\n" for t in specialized_tools) if specialized_tools else "tools: []\n"
-    (agent_dir / "tools.yaml").write_text(tools_comment + tools_body, encoding="utf-8")
 
     (agent_dir / "prompts" / "system.md").write_text(scaffold.system_prompt, encoding="utf-8")
     (agent_dir / "README.md").write_text(
@@ -914,14 +884,6 @@ def create_agent(
         default=True,
     )
 
-    raw_tools = typer.prompt(
-        "Specialized tools (comma-separated, or blank).\n"
-        "  Universal tools (web_search, fetch_url, read_file, write_file,\n"
-        "  list_dir, search_files, schedule_task) are auto-included - skip them",
-        default="",
-    )
-    tools = [t.strip() for t in raw_tools.split(",") if t.strip()]
-
     raw_accepts = typer.prompt("Accepts task keywords (comma-separated, or blank)", default=domain)
     accepts = [a.strip() for a in raw_accepts.split(",") if a.strip()]
 
@@ -949,7 +911,6 @@ def create_agent(
                 "domain": domain,
                 "description": description,
                 "model_pool": model_pool,
-                "tools": tools,
                 "accepts": accepts,
             },
         )
@@ -959,7 +920,7 @@ def create_agent(
             f"You are the {name.title()} Agent of north (Personal Life Operating System).\n"
             f"Your role is to specialise in {domain}-related tasks.\n\n"
             f"Description: {description}\n\n"
-            f"Available tools: {', '.join(tools) if tools else 'none'}.\n"
+            "Tools are selected automatically from north's global catalog for each task.\n"
         )
 
     _write_agent_scaffold(
@@ -969,7 +930,6 @@ def create_agent(
             domain=domain,
             description=description,
             model_pool=model_pool,
-            tools=tools,
             accepts=accepts,
             agentic=agentic,
             system_prompt=system_prompt,
@@ -986,7 +946,6 @@ def create_agent(
     typer.secho(f"\n✓ Agent scaffold created at {agent_dir}", fg=typer.colors.GREEN)
     typer.echo(f"  {agent_dir}/agent.py")
     typer.echo(f"  {agent_dir}/config.yaml")
-    typer.echo(f"  {agent_dir}/tools.yaml")
     typer.echo(f"  {agent_dir}/prompts/system.md")
     if planner_updated:
         typer.echo(f"  prompts/planner.md  ← domain '{domain}' added to routing table")

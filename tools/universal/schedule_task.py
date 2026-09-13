@@ -35,7 +35,6 @@ def _whole_number(params: dict, field: str, ceiling: int, default: int | None = 
 
 class ScheduleTaskTool(Tool):
     name = "schedule_task"
-    excluded_domains = frozenset({"engineering"})
     description = (
         "Schedule a task for north to run later in the background, even when the user is "
         "not chatting. Give the work as a natural-language prompt in 'task', and a short "

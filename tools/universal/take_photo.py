@@ -111,7 +111,6 @@ class TakePhotoTool(Tool):
     """Captures a photo from the user's webcam and saves it in the workspace."""
 
     name = "take_photo"
-    excluded_domains = frozenset({"engineering"})
     is_mutating = True
     description = (
         "Capture a photo from the user's webcam (built-in camera) and save it as an image "

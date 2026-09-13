@@ -1,7 +1,0 @@
-tools:
-  - bash
-  - shell
-  - git
-  - gh
-  - patch_file
-  - rename_symbol

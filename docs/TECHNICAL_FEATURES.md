@@ -131,7 +131,7 @@ async def _maybe_refresh_pools_background(self) -> None:
 
 ## 5. EMA Tool Confidence Scoring
 
-**What:** every tool edge in the tool graph carries a confidence score from 0.0 to 1.0 updated by an exponential moving average after every use.
+**What:** every agent learns a confidence score from 0.0 to 1.0 for each globally registered tool it uses, updated by an exponential moving average after every use.
 
 **Why:** the old fixed-delta approach (`+0.05 / -0.03`) took ~27 successful uses to recover a low-scoring tool. EMA with a base alpha of 0.10 recovers in ~10 successful uses, giving recent behaviour much more weight. On consecutive failures the alpha grows so repeated failures lower confidence faster.
 
@@ -419,4 +419,3 @@ The same approval flow is shared by every gated tool (`BashTool`, `ShellTool`, `
 **Why:** a bare `asyncio.create_task(...)` can be garbage-collected before it finishes, and any exception it raises vanishes silently. Several places had hand-rolled "create a task and attach a logging callback" code that did the same thing in slightly different ways.
 
 **How:** `spawn` keeps a strong reference to the task until it completes and attaches a done-callback that logs any exception under the given name. Cancellation is logged at debug, not as an error. Re-indexing, episode recording, ledger writes, confidence recording, and pool refresh all use it.
-

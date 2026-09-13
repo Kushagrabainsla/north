@@ -126,7 +126,7 @@ async def test_agent_threads_exclude_models_into_request(tmp_path):
         AgentDependencies(
             context_store=FileContextStore(tmp_path / "ctx"),
             inference_router=InspectingRouter(),
-            tool_registry=ToolRegistry(graph={}, auto_register=False),
+            tool_registry=ToolRegistry(auto_register=False),
             confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
         ),
     )

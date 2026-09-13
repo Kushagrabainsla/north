@@ -35,7 +35,7 @@ from agents.context_compaction import (
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.reasoning import ReasoningStreamSplitter, strip_reasoning
-from agents.schemas import ASK_USER_SCHEMA, REQUEST_APPROVAL_SCHEMA, delegate_task_schema
+from agents.schemas import ASK_USER_SCHEMA, FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA, delegate_task_schema
 from agents.tool_results import extract_success as _extract_success
 from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
@@ -69,7 +69,7 @@ _ASK_USER_NO_ANSWER = (
 )
 
 # Agent-loop built-ins, not registry tools - excluded from tool-reliability tracking.
-_INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user"})
+_INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user", "find_tools"})
 
 # How many approval cards may expire unanswered in one run before the agent
 # gives up. Nobody is watching: each card costs a full approval timeout, and an
@@ -105,7 +105,7 @@ def _tool_schemas(tool_map: dict[str, Tool], *, allow_delegation: bool, agent_na
     order, which would reorder the delegation schema between runs and cost the
     cached prefix that sorting the tools above exists to protect.
     """
-    internal = [REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
+    internal = [FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA, ASK_USER_SCHEMA]
     if allow_delegation:
         internal.insert(0, delegate_task_schema(sorted(agent_names)))
     return [tool_map[name].schema() for name in sorted(tool_map)] + internal
@@ -428,7 +428,7 @@ class AgenticLLMAgent(LLMAgent):
         unanswered_approvals: int = 0
 
         known_registry_tools = (
-            set(self._deps.tool_registry._tools.keys()) if getattr(self._deps, "tool_registry", None) else set()
+            set(self._deps.tool_registry.all_tool_names()) if getattr(self._deps, "tool_registry", None) else set()
         )
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
@@ -439,7 +439,7 @@ class AgenticLLMAgent(LLMAgent):
 
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
-            _sync_hot_loaded_tools(self._deps, self.name, tool_map, known_registry_tools)
+            _sync_hot_loaded_tools(self._deps, tool_map, known_registry_tools)
             tools = _tool_schemas(
                 tool_map,
                 allow_delegation=payload.allow_delegation,
@@ -661,6 +661,10 @@ class AgenticLLMAgent(LLMAgent):
             result_str = await self._ask_user(payload, params)
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
+        if call.name == "find_tools":
+            result_str = await self._find_tools(params, tool_map)
+            success = json.loads(result_str).get("success", False)
+            return call, result_str, success, []
         # create_tool gates its own create/update actions behind an approval
         # card (see CreateToolTool._request_approval) - no special case here.
         # Default the workspace but respect an explicit model-supplied value  -
@@ -671,6 +675,58 @@ class AgenticLLMAgent(LLMAgent):
             params["task_id"] = payload.task_id
         result_str, images = await self._call_tool(tool_map, call.name, params, payload.edit_scope)
         return call, result_str, _extract_success(result_str), images
+
+    async def _find_tools(self, params: dict[str, Any], tool_map: dict[str, Tool]) -> str:
+        """Search the global catalog and expose matches on the next model turn."""
+        query = str(params.get("query", "")).strip()
+        if not query:
+            return _failed_json("find_tools requires a non-empty 'query'.")
+        try:
+            limit = max(1, min(10, int(params.get("limit", 5))))
+        except (TypeError, ValueError):
+            limit = 5
+
+        registry = getattr(self._deps, "tool_registry", None)
+        if registry is None:
+            return _failed_json("Tool registry is unavailable.")
+        registry_tools = registry.available_tools()
+        catalog = {tool.name: tool for tool in registry_tools}
+
+        ranked: list[str] = []
+        index = getattr(self._deps, "tool_index", None)
+        if index is not None:
+            try:
+                await index.update_tools([(tool.name, tool.description) for tool in registry_tools])
+                ranked = await index.search_tools(query, top_k=limit)
+            except Exception:
+                logger.debug("find_tools semantic lookup failed", exc_info=True)
+
+        exact_name = query.lower().replace("-", "_").replace(" ", "_")
+        exact = [exact_name] if exact_name in catalog else []
+        lexical = _lexical_tool_matches(query, registry_tools)
+        names: list[str] = []
+        for name in [*exact, *ranked, *lexical]:
+            if name in catalog and name not in names:
+                names.append(name)
+            if len(names) >= limit:
+                break
+        if not names:
+            return _failed_json(f"No tools matched {query!r}.")
+
+        newly_loaded: list[str] = []
+        for name in names:
+            if name not in tool_map:
+                tool_map[name] = catalog[name]
+                newly_loaded.append(name)
+        matches = [{"name": name, "description": catalog[name].description} for name in names]
+        return json.dumps(
+            {
+                "success": True,
+                "matches": matches,
+                "loaded": newly_loaded,
+                "message": "Loaded tools will be callable on the next turn.",
+            }
+        )
 
     def _build_task_message(
         self,
@@ -1132,7 +1188,6 @@ def _is_rejection(decision: str) -> bool:
 
 def _sync_hot_loaded_tools(
     deps: Any,
-    agent_name: str,
     tool_map: dict[str, Tool],
     known_registry_tools: set[str],
 ) -> None:
@@ -1140,10 +1195,30 @@ def _sync_hot_loaded_tools(
     registry = getattr(deps, "tool_registry", None)
     if registry is None:
         return
-    for tool in registry.tools_for_agent(agent_name):
+    for tool in registry.available_tools():
         if tool.name not in known_registry_tools:
             known_registry_tools.add(tool.name)
             tool_map[tool.name] = tool
+
+
+def _lexical_tool_matches(query: str, tools: Sequence[Tool]) -> list[str]:
+    """Rank catalog tools without embeddings, favoring exact name matches."""
+    query_words = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", query.lower()))
+    normalized_query = query.lower().replace("-", "_").replace(" ", "_")
+    scored: list[tuple[int, str]] = []
+    for tool in tools:
+        name = tool.name.lower()
+        name_words = set(name.split("_"))
+        description_words = set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", tool.description.lower()))
+        score = 0
+        if name == normalized_query or name in query_words:
+            score += 100
+        score += 5 * len(query_words & name_words)
+        score += len(query_words & description_words)
+        if score:
+            scored.append((score, tool.name))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [name for _, name in scored]
 
 
 def _final_answer(

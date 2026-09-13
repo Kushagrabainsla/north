@@ -10,7 +10,6 @@ from tools.universal._schedules import entry_view, parse_weekdays, resolve_zone_
 
 class UpdateScheduleTool(Tool):
     name = "update_schedule"
-    excluded_domains = frozenset({"engineering"})
     description = (
         "Change any recurring schedule - the user's own or one north ships with: its "
         "time, its days, the task it runs, the agent that runs it, or whether it is "

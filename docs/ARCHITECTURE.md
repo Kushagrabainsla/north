@@ -715,7 +715,6 @@ Each agent is a self-contained folder dropped into `/agents`. The Orchestrator s
   /coder
     agent.py              <- core logic (usually a thin AgenticLLMAgent/LLMAgent subclass)
     config.yaml           <- declaration: agent, domain, model pool, accepted keywords
-    tools.yaml            <- the specialized tools this agent gets (universal tools are implicit)
     prompts/
       system.md           <- system prompt defining the agent's expertise
   /architect/  /reviewer/  /researcher/  /general/  /home/  /news_briefing/
@@ -735,17 +734,6 @@ accepts:                   # routing keywords matched against the prompt
 output_format: structured_json
 version: 1.0.0
 class_name: CoderAgent     # the Agent subclass in agent.py
-```
-
-**tools.yaml example** (a plain list of specialized tool names; universal tools are granted
-to every agent automatically and are not listed):
-```yaml
-tools:
-  - bash
-  - shell
-  - git
-  - gh
-  - patch_file
 ```
 
 ### 7.3 Agent Registration
@@ -774,7 +762,6 @@ Tasks it accepts: contract_review, compliance_check
 Created /agents/legal/
    agent.py        <- boilerplate logic ready to customize
    config.yaml     <- pre-filled from your answers
-   tools.yaml      <- specialized tools (universal tools are implicit)
    prompts/
      system.md     <- LLM-generated starter prompt for legal domain
    README.md       <- agent overview (domain, pool, accepted keywords)
@@ -785,37 +772,22 @@ route to it.
 
 The generator uses a reasoning pool call to produce a reasonable starting `system.md` based on the declared domain and tasks. The agent has a running start, not a blank page.
 
-### 7.4 Tool Graph
+### 7.4 Global Tool Catalog
 
-Tools are discovered from the filesystem, not assigned by a hand-written graph. `ToolRegistry`
-(`tools/registry.py`) walks the tool package directories and registers every `Tool` subclass it
-finds. The agent→tool mapping is then a two-tier graph:
+`ToolRegistry` (`tools/registry.py`) walks every tool package directory and registers each
+`Tool` subclass it finds. Directory names organize implementations; they do not create
+agent allowlists. Every registered tool is eligible for every agent.
 
-- **Universal tools** (`tools/universal/`) are granted to *every* agent: `read_file`,
-  `write_file`, `glob`, `list_dir`, `search_files`, `web_search`, `fetch_url`,
-  `schedule_task`, `list_schedules`, `update_schedule`, `cancel_schedule`, `create_tool`,
-  `create_agent`, `query_metrics`.
-- **Specialized tools** are opt-in per agent. Each agent lists the ones it wants in its
-  `tools.yaml`; the registry maps that into the graph at load time.
+At task start, the agent searches the tool-description embedding index using its task, role,
+selected skills, and current plan. The top relevant tools are injected as function schemas.
+Exact names in the task or selected skills and essential loop controls are force-included.
+If the index is unavailable, north exposes the full catalog rather than
+silently losing capabilities.
 
-```
-Specialized tool edges (from each agent's tools.yaml):
-
-coder ───> bash, shell, git, gh, patch_file, rename_symbol
-reviewer ─> bash, shell, gh
-home ────> kasa
-researcher ─> (universal only)
-
-Universal tools ── granted to every agent ──> read_file, write_file, glob, list_dir,
-                                              search_files, web_search, fetch_url, …
-```
-
-`tools_for_agent(agent)` returns the universal set plus that agent's specialized set, sorted
-by confidence score (§8). `update_graph(agent, names)` adjusts edges at runtime - e.g. when a
-tool is hot-loaded mid-task by `create_tool`. An agent loads only its own tools into context,
-so there is no token waste from irrelevant tool definitions.
-
-**Context loading order:** when a tool index is available, the agent injects the tools most semantically relevant to the task, then orders them by confidence score descending. Without an index it falls back to the agent's full tool set. Either way the context window stays lean.
+The built-in `find_tools` control searches the same global catalog and adds matches to the
+next loop iteration, so an agent can recover when its initial subset missed a capability.
+Tools created or discovered at runtime join the catalog immediately. Confidence remains
+per agent and affects ordering/reliability hints, never eligibility.
 
 ### 7.5 Confidence Scoring and Persistence
 
@@ -847,7 +819,7 @@ CREATE TABLE tool_confidence (
 
 On Orchestrator startup, all confidence scores are loaded from `tools.db` into memory. Every tool use updates the in-memory score and writes the update to `tools.db` in a single atomic transaction (`BEGIN IMMEDIATE`) so two concurrent updates for the same (agent, tool) cannot clobber each other. Every confidence update is also logged to the Ledger with `source: system`.
 
-**New agent inheritance:** when a new agent declares `similar_to: health` in `config.yaml`, the Orchestrator copies confidence rows from the `health` agent in `tools.db` as the new agent's starting prior. Tools not present in the source agent start at `initial_confidence` from `tools.yaml`.
+**New agent inheritance:** when a new agent declares `similar_to: health` in `config.yaml`, the Orchestrator copies confidence rows from the `health` agent in `tools.db` as the new agent's starting prior. Unseen tools use the global default confidence.
 
 ### 7.6 The AgenticLLMAgent ReAct Loop (Function Calling)
 
@@ -1480,8 +1452,8 @@ Full CRUD, in three interchangeable surfaces:
 
 "Remind me every Monday at 9am to review my goals" reaches `schedule_task` with `hour`,
 `minute` and `weekday`; "what have I got scheduled?" and "move it to 8" reach the read and
-update tools. The four verbs are universal, so every agent has all of them - an agent that
-can create a schedule can always show, change and remove one.
+update tools. All four verbs live in the global catalog, so any agent can retrieve the
+complete scheduling lifecycle when the task calls for it.
 
 Reads return the built-in schedules too, marked `source: "builtin"`, so "what is scheduled?"
 is answered completely; update and delete refuse them with a 409 (or a tool error naming the
@@ -1615,8 +1587,8 @@ Tracing a complete example. User says: "Help me prep for my first week at Linked
    Ledger write (async): source=system, action="routed", agents=["job","university"]
 
 5. Job agent spins up (reasoning pool, high priority):
-   Loads its tools (universal set + specialized) sorted by confidence: web_search [0.9], read_file [0.7], schedule_task [0.6]
-   Loads those tool definitions into context (sorted by confidence).
+   Selects relevant tools from the global catalog: web_search [0.9], read_file [0.7], schedule_task [0.6]
+   Loads those tool definitions into context (wire order is stable by name).
    Reads user.md: LinkedIn internship, distributed systems team, June 2nd start.
    Reads judgement_rules.md: prefers mornings for deep work.
    Produces first-week prep plan: onboarding checklist, team research, tool setup.
@@ -1681,7 +1653,7 @@ north/
   policies/               <- binding safety and code-quality policy
   prompts/                <- shared model prompts
   skills/                 <- skill registry, lifecycle, built-in skill content
-  tools/                  <- tool contracts, discovery, universal/specialized tools
+  tools/                  <- tool contracts, discovery, and the global tool catalog
   utils/                  <- transitional shared helpers (to become dependency-light)
   web/
     api.py                <- cockpit HTTP adapter
@@ -2072,7 +2044,7 @@ rich = ">=13.0.0"               # terminal formatting for ledger output, agent s
 textual = ">=0.80.0"            # interactive terminal UI (north chat)
 
 # Config
-pyyaml = ">=6.0"                # agent config.yaml / tools.yaml parsing
+pyyaml = ">=6.0"                # agent config.yaml and other declarative configuration
 
 # Document parsing
 pypdf = ">=4.0.0"

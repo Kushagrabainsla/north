@@ -6,7 +6,7 @@ text substitution - so it never touches a same-named symbol in an unrelated
 scope, a comment, or a string. This is the one refactor grep-and-replace cannot
 do safely. Python is supported when pyright is installed; for languages without
 an available server it fails with a clear message so the coder falls back to
-targeted edits. Coder-only (opt-in via tools.yaml) - the reviewer never edits code.
+targeted edits. The task-time selector surfaces it when a task needs symbol renaming.
 """
 
 from __future__ import annotations
