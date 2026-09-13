@@ -111,7 +111,7 @@ function TurnBundle({ turn, streamed, signals = [], expandAll, reload, pendingAp
     await reload();
   };
   return <article className="turn-bundle">
-    <div className="user-prompt"><div className="avatar user-avatar">You</div><div><div className="turn-meta">Prompt {turn.position} · {timeAgo(turn.created_at)}</div><p>{turn.prompt}</p></div></div>
+    <div className="user-prompt"><div className="user-message"><div className="turn-meta">Prompt {turn.position} · {timeAgo(turn.created_at)}</div><p>{turn.prompt}</p></div><div className="avatar user-avatar">You</div></div>
     <div className="north-response"><div className="avatar north-avatar">N</div><div className="response-body">
       <div className="response-heading"><div><b>North</b><Status value={status}/></div><div className="turn-actions">
         {status === "paused" && <button onClick={() => control("resume")}>Resume</button>}
@@ -160,6 +160,8 @@ export function Chat() {
   const [expandAll, setExpandAll] = useState(false);
   const [recording, setRecording] = useState(false);
   const [notice, setNotice] = useState("");
+  const [workspaceDraft, setWorkspaceDraft] = useState("");
+  const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
   const [chatListWidth, setChatListWidth] = useState(() => Number(localStorage.getItem("north-chat-list-width")) || 250);
@@ -167,8 +169,10 @@ export function Chat() {
   const chatRoom = useRef<HTMLElement>(null);
   const openedAtBottom = useRef<string | null>(null);
   const visibleChats = useMemo(() => (chats.data || []).filter(chat => chat.title.toLowerCase().includes(search.toLowerCase())), [chats.data, search]);
+  const knownWorkspaces = useMemo(() => [...new Set((chats.data || []).map(chat => chat.workspace).filter(Boolean))], [chats.data]);
   const { live, signals } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
+  useEffect(() => { setWorkspaceDraft(room.data?.workspace || ""); }, [room.data?.id, room.data?.workspace]);
   useEffect(() => {
     if (!conversationId) { openedAtBottom.current = null; return; }
     if (room.data?.id !== conversationId || openedAtBottom.current === conversationId) return;
@@ -255,6 +259,16 @@ export function Chat() {
       { title: "Rename conversation", confirmLabel: "Rename" });
     if (title) { await patch(`/web/api/conversations/${room.data.id}`, { title }); await Promise.all([room.reload(), chats.reload()]); }
   };
+  const changeWorkspace = async () => {
+    if (!room.data || workspaceDraft === room.data.workspace) return;
+    setSavingWorkspace(true);
+    try {
+      await patch(`/web/api/conversations/${room.data.id}`, { workspace: workspaceDraft });
+      setNotice("Workspace updated for this conversation.");
+      await Promise.all([room.reload(), chats.reload()]);
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setSavingWorkspace(false); }
+  };
   const deleteChat = async (id: string) => {
     if (!await dialog.confirm("This removes the conversation and every turn in it. It cannot be undone.",
       { title: "Delete this conversation?", confirmLabel: "Delete", danger: true })) return;
@@ -269,7 +283,7 @@ export function Chat() {
     <div className="chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation list" tabIndex={0} onPointerDown={() => setResizing(true)} onKeyDown={event => { if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return; event.preventDefault(); const width = Math.max(190, Math.min(520, chatListWidth + (event.key === "ArrowLeft" ? -16 : 16))); setChatListWidth(width); localStorage.setItem("north-chat-list-width", String(width)); }}/>
     <section className="chat-room" ref={chatRoom}>
       {!conversationId ? <div className="chat-welcome"><div className="north-symbol">N</div><h1>What are we working on?</h1><p>Start a new conversation or return to one of your previous rooms.</p><button className="primary-button" onClick={createChat}>New conversation</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Conversation unavailable"}/> : <>
-        <PageHeader eyebrow="Conversation" title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<><button className="ghost-button" onClick={() => setExpandAll(v => !v)}>{expandAll ? "Collapse all" : "Expand all"}</button><button className="ghost-button" onClick={rename}>Rename</button></>}/>
+        <PageHeader eyebrow="Conversation" title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<><div className="workspace-picker"><label htmlFor="chat-workspace">Workspace</label><input id="chat-workspace" list="chat-workspaces" value={workspaceDraft} placeholder="No workspace" title={workspaceDraft || "No workspace selected"} onChange={event => setWorkspaceDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void changeWorkspace(); } }}/><datalist id="chat-workspaces">{knownWorkspaces.map(workspace => <option value={workspace} key={workspace}/>)}</datalist><button className="ghost-button" disabled={savingWorkspace || workspaceDraft === room.data.workspace} onClick={changeWorkspace}>{savingWorkspace ? "Saving…" : "Apply"}</button></div><button className="ghost-button" onClick={() => setExpandAll(v => !v)}>{expandAll ? "Collapse all" : "Expand all"}</button><button className="ghost-button" onClick={rename}>Rename</button></>}/>
         <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} expandAll={expandAll} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
         <form className="composer" onSubmit={submit}><textarea value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={2} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div><small>Enter to send · Shift Enter for a new line · /help for commands</small><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>

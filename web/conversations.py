@@ -15,6 +15,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS web_conversations (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
+    workspace   TEXT NOT NULL DEFAULT '',
     pinned      INTEGER NOT NULL DEFAULT 0,
     archived    INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL,
@@ -42,6 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_web_turns_conversation
 class Conversation:
     id: str
     title: str
+    workspace: str
     pinned: bool
     archived: bool
     created_at: str
@@ -66,20 +68,24 @@ class ConversationStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(db_path) as conn:
             conn.executescript(_SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(web_conversations)")}
+            if "workspace" not in columns:
+                conn.execute("ALTER TABLE web_conversations ADD COLUMN workspace TEXT NOT NULL DEFAULT ''")
 
-    async def create(self, title: str = "New chat") -> Conversation:
-        return await asyncio.to_thread(self._create_sync, title)
+    async def create(self, title: str = "New chat", workspace: str = "") -> Conversation:
+        return await asyncio.to_thread(self._create_sync, title, workspace)
 
-    def _create_sync(self, title: str) -> Conversation:
+    def _create_sync(self, title: str, workspace: str) -> Conversation:
         conversation_id = generate_id()
         now = format_timestamp(utcnow())
         clean_title = title.strip()[:160] or "New chat"
         with open_db_connection(self._db_path) as conn:
             conn.execute(
-                "INSERT INTO web_conversations(id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (conversation_id, clean_title, now, now),
+                """INSERT INTO web_conversations(id, title, workspace, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (conversation_id, clean_title, workspace, now, now),
             )
-        return Conversation(conversation_id, clean_title, False, False, now, now)
+        return Conversation(conversation_id, clean_title, workspace, False, False, now, now)
 
     async def get(self, conversation_id: str) -> Conversation | None:
         row = await asyncio.to_thread(self._get_sync, conversation_id)
@@ -110,10 +116,11 @@ class ConversationStore:
         conversation_id: str,
         *,
         title: str | None = None,
+        workspace: str | None = None,
         pinned: bool | None = None,
         archived: bool | None = None,
     ) -> Conversation | None:
-        await asyncio.to_thread(self._update_sync, conversation_id, title, pinned, archived)
+        await asyncio.to_thread(self._update_sync, conversation_id, title, workspace, pinned, archived)
         return await self.get(conversation_id)
 
     async def delete(self, conversation_id: str) -> bool:
@@ -128,6 +135,7 @@ class ConversationStore:
         self,
         conversation_id: str,
         title: str | None,
+        workspace: str | None,
         pinned: bool | None,
         archived: bool | None,
     ) -> None:
@@ -136,6 +144,9 @@ class ConversationStore:
         if title is not None:
             assignments.append("title=?")
             params.append(title.strip()[:160] or "New chat")
+        if workspace is not None:
+            assignments.append("workspace=?")
+            params.append(workspace)
         if pinned is not None:
             assignments.append("pinned=?")
             params.append(int(pinned))
@@ -202,6 +213,7 @@ class ConversationStore:
         return Conversation(
             id=row["id"],
             title=row["title"],
+            workspace=row["workspace"],
             pinned=bool(row["pinned"]),
             archived=bool(row["archived"]),
             created_at=row["created_at"],

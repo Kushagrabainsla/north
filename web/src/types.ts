@@ -3,6 +3,7 @@ export type Status = "pending" | "running" | "completed" | "failed" | "cancelled
 export interface Conversation {
   id: string;
   title: string;
+  workspace: string;
   pinned: boolean;
   archived: boolean;
   created_at: string;

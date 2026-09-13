@@ -182,10 +182,12 @@ async def create_local_session(request: Request, response: Response) -> dict[str
 
 class ConversationCreate(BaseModel):
     title: str = Field(default="New chat", max_length=160)
+    workspace: str | None = Field(default=None, max_length=4096)
 
 
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=160)
+    workspace: str | None = Field(default=None, max_length=4096)
     pinned: bool | None = None
     archived: bool | None = None
 
@@ -196,6 +198,19 @@ class TurnCreate(BaseModel):
 
 def _conversation_payload(conversation) -> dict[str, Any]:
     return asdict(conversation)
+
+
+def _workspace_path(value: str) -> str:
+    """Return a stable absolute directory path suitable for a task workspace."""
+    if not value.strip():
+        return ""
+    try:
+        path = Path(value).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail="Workspace does not exist or cannot be accessed") from exc
+    if not path.is_dir():
+        raise HTTPException(status_code=422, detail="Workspace must be a directory")
+    return str(path)
 
 
 def _entry_payload(entry) -> dict[str, Any]:
@@ -257,7 +272,14 @@ async def list_conversations(q: str = "", archived: bool = False, limit: int = 1
 
 @router.post("/conversations", status_code=201)
 async def create_conversation(body: ConversationCreate) -> dict[str, Any]:
-    conversation = await current_services().require("conversation_store").create(body.title)
+    settings = current_services().north_settings
+    requested_workspace = body.workspace
+    if requested_workspace is None:
+        requested_workspace = getattr(settings, "north_workspace", "")
+    conversation = await current_services().require("conversation_store").create(
+        body.title,
+        _workspace_path(requested_workspace),
+    )
     return _conversation_payload(conversation)
 
 
@@ -269,6 +291,7 @@ async def update_conversation(conversation_id: str, body: ConversationUpdate) ->
         .update(
             conversation_id,
             title=body.title,
+            workspace=_workspace_path(body.workspace) if body.workspace is not None else None,
             pinned=body.pinned,
             archived=body.archived,
         )
@@ -305,6 +328,9 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from None
 
     previous = await store.turns(conversation_id)
+    conversation = await store.get(conversation_id)
+    if conversation is None:  # The conversation could only disappear between the two store calls.
+        raise HTTPException(status_code=404, detail="Conversation not found")
     context_parts: list[str] = []
     for item in previous[-6:-1]:
         detail = await _task_detail(item.task_id)
@@ -323,6 +349,7 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
         .submit_task(
             TaskRequest(
                 prompt=body.prompt,
+                workspace=conversation.workspace,
                 context=context,
                 idempotency_key=f"web:{conversation_id}:{turn.id}",
             )
