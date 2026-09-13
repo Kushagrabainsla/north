@@ -80,6 +80,22 @@ async def test_new_chat_inherits_the_server_workspace(tmp_path) -> None:
     assert payload["workspace"] == str(tmp_path.resolve())
 
 
+async def test_workspace_picker_lists_real_directories(tmp_path) -> None:
+    (tmp_path / "Project Alpha").mkdir()
+    (tmp_path / "project-beta").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "notes.txt").write_text("not a directory")
+
+    listing = web_api._workspace_listing(str(tmp_path))
+
+    assert listing["path"] == str(tmp_path.resolve())
+    assert listing["parent"] == str(tmp_path.parent.resolve())
+    assert listing["directories"] == [
+        {"name": "Project Alpha", "path": str((tmp_path / "Project Alpha").resolve())},
+        {"name": "project-beta", "path": str((tmp_path / "project-beta").resolve())},
+    ]
+
+
 async def test_first_prompt_titles_new_conversation_and_searches_safely(tmp_path) -> None:
     store = ConversationStore(tmp_path / "web.db")
     conversation = await store.create()

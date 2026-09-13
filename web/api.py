@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from approval.unattended_rules import KINDS as RULE_KINDS
@@ -213,6 +213,24 @@ def _workspace_path(value: str) -> str:
     return str(path)
 
 
+def _workspace_listing(path: str) -> dict[str, Any]:
+    """List visible child directories for the local workspace picker."""
+    current = Path(_workspace_path(path))
+    try:
+        directories = sorted(
+            (
+                {"name": child.name, "path": str(child.resolve())}
+                for child in current.iterdir()
+                if child.is_dir() and not child.name.startswith(".")
+            ),
+            key=lambda item: item["name"].casefold(),
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=403, detail="This directory cannot be opened") from exc
+    parent = "" if current == current.parent else str(current.parent)
+    return {"path": str(current), "parent": parent, "directories": directories[:500]}
+
+
 def _entry_payload(entry) -> dict[str, Any]:
     return entry.model_dump(mode="json", exclude={"agent_output"})
 
@@ -268,6 +286,13 @@ async def _turn_payload(turn: Turn) -> dict[str, Any]:
 async def list_conversations(q: str = "", archived: bool = False, limit: int = 100) -> list[dict[str, Any]]:
     conversations = await current_services().require("conversation_store").list(query=q, archived=archived, limit=limit)
     return [_conversation_payload(conversation) for conversation in conversations]
+
+
+@router.get("/workspaces")
+async def list_workspace_directories(path: str = Query(default="", max_length=4096)) -> dict[str, Any]:
+    settings = current_services().north_settings
+    start = path or getattr(settings, "north_workspace", "") or str(Path.home())
+    return await asyncio.to_thread(_workspace_listing, start)
 
 
 @router.post("/conversations", status_code=201)

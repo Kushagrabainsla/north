@@ -11,6 +11,12 @@ export interface Conversation {
   turns?: Turn[];
 }
 
+export interface WorkspaceListing {
+  path: string;
+  parent: string;
+  directories: { name: string; path: string }[];
+}
+
 export interface LedgerEntry {
   id: string;
   timestamp: string;

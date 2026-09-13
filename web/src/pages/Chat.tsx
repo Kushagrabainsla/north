@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { NavLink, useNavigate, useParams } from "react-router-dom";
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { api, patch, post } from "../api";
 import { Empty, ErrorNotice, Loading, Markdown, PageHeader, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn } from "../types";
+import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
 
 /** North's self-checks, rendered live rather than only reachable in the ledger.
  *  Each entry turns one SSE payload into a one-line verdict plus its details. */
@@ -91,6 +92,37 @@ function SignalStrip({ signals }: { signals: Signal[] }) {
   </div>;
 }
 
+function WorkspacePicker({ workspace, saving, onSelect }: { workspace: string; saving: boolean; onSelect: (workspace: string) => Promise<boolean> }) {
+  const [open, setOpen] = useState(false);
+  const [listing, setListing] = useState<WorkspaceListing | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const picker = useRef<HTMLDivElement>(null);
+  const browse = async (path = "") => {
+    setOpen(true); setLoading(true); setError("");
+    try { setListing(await api<WorkspaceListing>(`/web/api/workspaces${path ? `?path=${encodeURIComponent(path)}` : ""}`)); }
+    catch (browseError) { setError(browseError instanceof Error ? browseError.message : String(browseError)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { setOpen(false); setListing(null); setError(""); }, [workspace]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => { if (!picker.current?.contains(event.target as Node)) setOpen(false); };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [open]);
+  const choose = async () => { if (listing && await onSelect(listing.path)) setOpen(false); };
+  const name = workspace.split("/").filter(Boolean).pop() || "Choose folder";
+  return <div className="workspace-select" ref={picker}>
+    <button type="button" className="workspace-trigger" disabled={saving} aria-haspopup="dialog" aria-expanded={open} onClick={() => open ? setOpen(false) : void browse(workspace)} title={workspace || "Choose a workspace"}><Folder size={13}/><span><small>Workspace</small><b>{name}</b></span><ChevronDown size={13}/></button>
+    {open && <div className="workspace-menu" role="dialog" aria-label="Choose a workspace folder">
+      <header><FolderOpen size={14}/><div><small>Choose a folder</small><b title={listing?.path}>{listing?.path || "Directories on this machine"}</b></div></header>
+      <div className="workspace-folders">{loading ? <Loading/> : error ? <><ErrorNotice message={error}/><button type="button" onClick={() => void browse("/")}><Folder size={14}/><span>Browse from computer</span><ChevronRight size={13}/></button></> : <>{listing?.parent && <button type="button" onClick={() => void browse(listing.parent)}><Folder size={14}/><span>..</span><small>Parent folder</small><ChevronRight size={13}/></button>}{listing?.directories.map(directory => <button type="button" key={directory.path} onClick={() => void browse(directory.path)}><Folder size={14}/><span>{directory.name}</span><ChevronRight size={13}/></button>)}{listing && !listing.directories.length && <Empty>No folders inside this directory.</Empty>}</>}</div>
+      {listing && <footer><button type="button" onClick={() => setOpen(false)}>Cancel</button><button type="button" className="workspace-choose" disabled={saving} onClick={() => void choose()}>{saving ? "Saving…" : "Choose this folder"}</button></footer>}
+    </div>}
+  </div>;
+}
+
 function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
   const detail = turn.detail;
   const status = pendingApprovals.length ? "waiting_for_approval" : (detail?.task.status || "pending");
@@ -103,6 +135,7 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
   // were both missing from this section even though they are its whole point.
   const verification = entries.filter(entry => /verif|dod|review|repair|critic|handoff|auto_verify/.test(entry.action || ""));
   const cost = runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
+  const responseTimestamp = [...entries].reverse().find(entry => entry.action === "agent_completed" && entry.output)?.timestamp;
   const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued"].includes(status);
   const control = async (action: "pause" | "resume" | "cancel") => {
     if (!turn.task_id) return;
@@ -113,7 +146,7 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
   return <article className="turn-bundle">
     <div className="user-prompt"><div className="user-message"><div className="turn-meta">You · {timeAgo(turn.created_at)}</div><p>{turn.prompt}</p></div><div className="avatar user-avatar">You</div></div>
     <div className="north-response"><div className="avatar north-avatar">N</div><div className="response-body">
-      <div className="response-heading"><div><b>North</b><small>{timeAgo(turn.created_at)}</small><Status value={status}/></div><div className="turn-actions">
+      <div className="response-heading"><div><b>North</b>{responseTimestamp && <small>{timeAgo(responseTimestamp)}</small>}<Status value={status}/></div><div className="turn-actions">
         {status === "paused" && <button onClick={() => control("resume")}>Resume</button>}
         {["pending", "running", "queued"].includes(status) && <button onClick={() => control("pause")}>Pause</button>}
         {["pending", "running", "queued", "paused"].includes(status) && <button className="danger-link" onClick={() => control("cancel")}>Cancel</button>}
@@ -158,7 +191,6 @@ export function Chat() {
   const [submitting, setSubmitting] = useState(false);
   const [recording, setRecording] = useState(false);
   const [notice, setNotice] = useState("");
-  const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
@@ -167,10 +199,8 @@ export function Chat() {
   const chatRoom = useRef<HTMLElement>(null);
   const openedAtBottom = useRef<string | null>(null);
   const visibleChats = useMemo(() => (chats.data || []).filter(chat => chat.title.toLowerCase().includes(search.toLowerCase())), [chats.data, search]);
-  const knownWorkspaces = useMemo(() => [...new Set((chats.data || []).map(chat => chat.workspace).filter(Boolean))], [chats.data]);
   const { live, signals } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
-  useEffect(() => { setWorkspaceDraft(room.data?.workspace || ""); }, [room.data?.id, room.data?.workspace]);
   useEffect(() => {
     if (!conversationId) { openedAtBottom.current = null; return; }
     if (room.data?.id !== conversationId || openedAtBottom.current === conversationId) return;
@@ -257,14 +287,15 @@ export function Chat() {
       { title: "Rename conversation", confirmLabel: "Rename" });
     if (title) { await patch(`/web/api/conversations/${room.data.id}`, { title }); await Promise.all([room.reload(), chats.reload()]); }
   };
-  const changeWorkspace = async () => {
-    if (!room.data || workspaceDraft === room.data.workspace) return;
+  const changeWorkspace = async (workspace: string) => {
+    if (!room.data || workspace === room.data.workspace) return true;
     setSavingWorkspace(true);
     try {
-      await patch(`/web/api/conversations/${room.data.id}`, { workspace: workspaceDraft });
+      await patch(`/web/api/conversations/${room.data.id}`, { workspace });
       setNotice("Workspace updated for this conversation.");
       await Promise.all([room.reload(), chats.reload()]);
-    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+      return true;
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); return false; }
     finally { setSavingWorkspace(false); }
   };
   const deleteChat = async (id: string) => {
@@ -274,6 +305,7 @@ export function Chat() {
     await chats.reload();
     if (id === conversationId) navigate("/chat");
   };
+  const currentWorkspace = room.data?.workspace || "";
   return <div className={`chat-page ${dragging ? "dragging" : ""}`} style={{ "--chat-list-width": `${chatListWidth}px` } as CSSProperties} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
     <aside className="chat-list"><div className="chat-list-head"><b>Conversations</b><button onClick={createChat}>+</button></div><input aria-label="Search conversations" placeholder="Search chats" value={search} onChange={e => setSearch(e.target.value)}/>
       <div className="chat-scroll">{visibleChats.map(chat => <NavLink to={`/chat/${chat.id}`} key={chat.id}><span className="chat-icon">◫</span><div><b>{chat.title}</b><small>{timeAgo(chat.updated_at)}</small></div>{chat.pinned && <em>•</em>}<button type="button" className="chat-delete" aria-label={`Delete ${chat.title}`} title="Delete conversation" onClick={event => { event.preventDefault(); event.stopPropagation(); void deleteChat(chat.id); }}>×</button></NavLink>)}</div>
@@ -284,7 +316,7 @@ export function Chat() {
         <PageHeader eyebrow="Conversation" title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<button className="ghost-button" onClick={rename}>Rename</button>}/>
         <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
-        <form className="composer" onSubmit={submit}><textarea value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={2} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><div className="composer-context"><label htmlFor="chat-workspace">Workspace</label><input id="chat-workspace" list="chat-workspaces" value={workspaceDraft} placeholder="No workspace" title={workspaceDraft || "No workspace selected"} onChange={event => setWorkspaceDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void changeWorkspace(); } }}/><datalist id="chat-workspaces">{knownWorkspaces.map(workspace => <option value={workspace} key={workspace}/>)}</datalist>{workspaceDraft !== room.data.workspace && <button type="button" disabled={savingWorkspace} onClick={changeWorkspace}>{savingWorkspace ? "Saving…" : "Apply"}</button>}</div><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
+        <form className="composer" onSubmit={submit}><textarea value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={2} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}
     </section>
   </div>;
