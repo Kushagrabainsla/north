@@ -65,6 +65,7 @@ from tools._path import prune_handoff_dirs
 from tools.confidence import RELIABLE_TOOLS
 from tools.models import ToolInput
 from tools.registry import ToolRegistry
+from tools.retrieval import tool_index_documents
 from tools.semantic.search_code import SearchCodeTool
 from tools.specialized._sandbox import SandboxConfig
 from tools.specialized.bash import BashTool
@@ -313,11 +314,11 @@ async def _populate_tool_index(tool_index: ToolIndex, tool_registry: ToolRegistr
     One batched call, and it runs *after* the server starts accepting requests: a
     first boot would otherwise embed every tool before answering anything. Until it
     finishes, `search_tools` returns nothing and agents fall back to their full tool
-    set - correct, just not semantically ranked.
+    set - correct, just not ranked.
     """
-    indexed = await tool_index.update_tools([(tool.name, tool.description) for tool in tool_registry.all_tools()])
+    indexed = await tool_index.update_tools(tool_index_documents(tool_registry.all_tools()))
     if indexed:
-        logger.info("Tool index: embedded %d new or changed tool description(s)", indexed)
+        logger.info("Tool index: embedded %d new or changed retrieval profile(s)", indexed)
 
 
 def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:

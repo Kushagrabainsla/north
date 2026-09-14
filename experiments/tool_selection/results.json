@@ -1,0 +1,121 @@
+{
+  "recorded_at": "2026-09-13",
+  "catalog": {
+    "tools": 39,
+    "full_schema_characters": 44946,
+    "one_line_description_characters": 4130,
+    "name_only_characters": 493
+  },
+  "cases": {
+    "total": 49,
+    "single_tool": 39,
+    "multi_tool": 10,
+    "expected_tool_labels": 65
+  },
+  "retrieval": [
+    {
+      "strategy": "dense descriptions",
+      "top_k": 5,
+      "tool_recall": 0.707692,
+      "full_task_recall": 0.755102,
+      "single_tool_top1": 0.564103,
+      "schema_reduction": 0.872
+    },
+    {
+      "strategy": "dense enriched",
+      "top_k": 5,
+      "tool_recall": 0.8,
+      "full_task_recall": 0.77551,
+      "single_tool_top1": 0.538462,
+      "schema_reduction": 0.861
+    },
+    {
+      "strategy": "BM25 enriched",
+      "top_k": 5,
+      "tool_recall": 0.830769,
+      "full_task_recall": 0.836735,
+      "single_tool_top1": 0.666667,
+      "schema_reduction": 0.858
+    },
+    {
+      "strategy": "hybrid enriched",
+      "top_k": 8,
+      "tool_recall": 0.938462,
+      "full_task_recall": 0.938776,
+      "single_tool_top1": 0.692308,
+      "schema_reduction": 0.77
+    },
+    {
+      "strategy": "hybrid enriched",
+      "top_k": 10,
+      "tool_recall": 0.953846,
+      "full_task_recall": 0.959184,
+      "single_tool_top1": 0.692308,
+      "schema_reduction": 0.719
+    },
+    {
+      "strategy": "dense descriptions",
+      "top_k": 15,
+      "tool_recall": 0.861538,
+      "full_task_recall": 0.857143,
+      "single_tool_top1": 0.564103,
+      "schema_reduction": 0.606
+    }
+  ],
+  "awareness": [
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "catalog": "none",
+      "tool_recall": 0.015385,
+      "full_task_recall": 0.020408,
+      "tokens_in": 921,
+      "tokens_out": 1367
+    },
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "catalog": "names",
+      "tool_recall": 0.923077,
+      "full_task_recall": 0.897959,
+      "tokens_in": 1027,
+      "tokens_out": 2090
+    },
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "catalog": "descriptions",
+      "tool_recall": 0.953846,
+      "full_task_recall": 0.959184,
+      "tokens_in": 1819,
+      "tokens_out": 2088
+    },
+    {
+      "provider": "openai_codex",
+      "model": "gpt-5.6-terra",
+      "catalog": "none",
+      "tool_recall": 0.292308,
+      "full_task_recall": 0.204082,
+      "tokens_in": 832,
+      "tokens_out": 1623
+    },
+    {
+      "provider": "openai_codex",
+      "model": "gpt-5.6-terra",
+      "catalog": "names",
+      "tool_recall": 0.953846,
+      "full_task_recall": 0.938776,
+      "tokens_in": 938,
+      "tokens_out": 998
+    },
+    {
+      "provider": "openai_codex",
+      "model": "gpt-5.6-terra",
+      "catalog": "descriptions",
+      "tool_recall": 0.953846,
+      "full_task_recall": 0.959184,
+      "tokens_in": 1730,
+      "tokens_out": 854
+    }
+  ]
+}

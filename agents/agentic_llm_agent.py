@@ -52,6 +52,7 @@ from tools._path import handoff_dir_for
 from tools.base import Tool
 from tools.models import ToolInput
 from tools.output_spill import overflow_note, store_overflow
+from tools.retrieval import tool_index_documents
 from utils.edit_scope import EditAuthorizer
 from utils.execution_context import current_execution
 from utils.tasks import spawn
@@ -696,7 +697,7 @@ class AgenticLLMAgent(LLMAgent):
         index = getattr(self._deps, "tool_index", None)
         if index is not None:
             try:
-                await index.update_tools([(tool.name, tool.description) for tool in registry_tools])
+                await index.update_tools(tool_index_documents(registry_tools))
                 ranked = await index.search_tools(query, top_k=limit)
             except Exception:
                 logger.debug("find_tools semantic lookup failed", exc_info=True)

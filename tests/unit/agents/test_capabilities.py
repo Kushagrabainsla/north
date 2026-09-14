@@ -44,6 +44,8 @@ def test_build_platform_capabilities_summary_with_registries() -> None:
     assert "coder" in summary
     assert "gh" in summary
     assert "debug_workflow" in summary
-    assert "Run GitHub operations via the gh CLI" in summary
+    assert "Run GitHub operations via the gh CLI" not in summary
+    assert "Available Tool Names" in summary
+    assert "find_tools" in summary
     assert "create_tool" in summary
     assert "create_agent" in summary

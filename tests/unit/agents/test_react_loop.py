@@ -539,6 +539,8 @@ async def test_task_selection_uses_global_catalog_not_agent_mapping(tmp_path: Pa
 
     assert loaded_names == {"web_search", "kasa", "update_plan"}
     index.search_tools.assert_awaited_once()
+    indexed_profiles = dict(index.update_tools.await_args.args[0])
+    assert "Tool name: web search (web_search)." in indexed_profiles["web_search"]
 
 
 async def test_find_tools_loads_a_missed_global_tool(tmp_path: Path) -> None:

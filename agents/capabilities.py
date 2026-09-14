@@ -1,7 +1,7 @@
-"""Dynamic Platform Capabilities Synthesizer.
+"""Dynamic, cache-friendly platform capability manifest.
 
-Inspects runtime registries (AgentRegistry, ToolRegistry, SkillRegistry) to build
-an up-to-date summary of North's platform capabilities. Eliminates prompt hardcoding.
+Tool names provide lean global awareness; task-specific descriptions and schemas
+arrive through retrieval. Agent and skill metadata remains dynamic.
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ if TYPE_CHECKING:
 
 
 def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
-    """Build a dynamic summary of all tools, agents, and skills registered in North.
+    """Build a lean summary of tools, agents, and skills registered in North.
 
     Queries runtime registries so whenever a new tool, subagent, or skill is
-    added, North automatically knows what it can do without any prompt file edits.
+    added, North knows it exists without carrying every tool description.
     """
     lines: list[str] = [
         "## Platform Capabilities & Ecosystem Overview",
@@ -37,16 +37,19 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
         except Exception:
             pass
 
-    # 2. All Available Tools
+    # 2. Stable, lean awareness catalog. Full descriptions and parameter schemas
+    # are retrieved per task; names are enough for the model to know what exists.
     tool_registry = getattr(deps, "tool_registry", None)
     if tool_registry is not None:
         try:
             tools = tool_registry.all_tools()
             if tools:
-                lines.append("\n### Available Tools & Integrations")
-                for t in sorted(tools, key=lambda x: x.name):
-                    summary = t.description.split(". ")[0].strip()
-                    lines.append(f"- **{t.name}**: {summary}")
+                names = ", ".join(t.name for t in sorted(tools, key=lambda x: x.name))
+                lines.append("\n### Available Tool Names")
+                lines.append(names)
+                lines.append(
+                    "Use `find_tools` when the needed tool is not currently loaded."
+                )
         except Exception:
             pass
 

@@ -15,6 +15,7 @@ from context.repo_map import build_repo_map
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
+from tools.retrieval import tool_index_documents
 from tools.tool_index import SEMANTIC_FILTER_MIN, SEMANTIC_TOP_K
 from utils.execution_context import ExecutionIdentity, bind_execution
 
@@ -334,7 +335,7 @@ class Agent(ABC):
             try:
                 # Keeps tools hot-loaded after startup in the same searchable
                 # catalog without making registration depend on the index.
-                await index.update_tools([(tool.name, tool.description) for tool in registry_tools])
+                await index.update_tools(tool_index_documents(registry_tools))
                 semantic_names = await index.search_tools(query, top_k=SEMANTIC_TOP_K)
             except Exception:
                 logger.debug("Tool selection failed for agent %s", self.name, exc_info=True)
