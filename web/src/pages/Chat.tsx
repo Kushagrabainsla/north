@@ -32,7 +32,7 @@ const SIGNALS: Record<string, (data: any) => Omit<Signal, "event" | "timestamp">
 function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprovals: () => Promise<void>) {
   const [live, setLive] = useState<Record<string, string>>({});
   const [signals, setSignals] = useState<Record<string, Signal[]>>({});
-  const ids = turns.filter(t => t.task_id && !["completed", "failed", "cancelled"].includes(t.detail?.task.status || "")).map(t => t.task_id!);
+  const ids = turns.filter(t => t.task_id && !["completed", "failed", "cancelled", "needs_attention"].includes(t.detail?.task.status || "")).map(t => t.task_id!);
   useEffect(() => {
     const streams = ids.map(taskId => {
       const stream = new EventSource(`/orchestrator/stream/${taskId}`);
@@ -47,7 +47,7 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
           setSignals(current => ({ ...current, [taskId]: [...(current[taskId] || []), signal] }));
         });
       }
-      for (const eventName of ["task_completed", "task_failed", "task_cancelled", "task_skipped", "task_rejected"]) {
+      for (const eventName of ["task_completed", "task_failed", "task_cancelled", "task_skipped", "task_rejected", "task_needs_attention"]) {
         stream.addEventListener(eventName, () => { stream.close(); void reload(); });
       }
       for (const eventName of ["approval_required", "question_required", "approval_responded", "task_paused", "task_resumed"]) {
@@ -136,7 +136,7 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
   const verification = entries.filter(entry => /verif|dod|review|repair|critic|handoff|auto_verify/.test(entry.action || ""));
   const cost = runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
   const responseTimestamp = [...entries].reverse().find(entry => entry.action === "agent_completed" && entry.output)?.timestamp;
-  const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued"].includes(status);
+  const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued", "retrying"].includes(status);
   const control = async (action: "pause" | "resume" | "cancel") => {
     if (!turn.task_id) return;
     if (action === "cancel") await api(`/orchestrator/task/${turn.task_id}`, { method: "DELETE" });
@@ -148,8 +148,8 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
     <div className="north-response"><div className="avatar north-avatar">N</div><div className="response-body">
       <div className="response-heading"><div><b>North</b>{responseTimestamp && <small>{timeAgo(responseTimestamp)}</small>}<Status value={status}/></div><div className="turn-actions">
         {status === "paused" && <button onClick={() => control("resume")}>Resume</button>}
-        {["pending", "running", "queued"].includes(status) && <button onClick={() => control("pause")}>Pause</button>}
-        {["pending", "running", "queued", "paused"].includes(status) && <button className="danger-link" onClick={() => control("cancel")}>Cancel</button>}
+        {["pending", "running", "queued", "retrying"].includes(status) && <button onClick={() => control("pause")}>Pause</button>}
+        {["pending", "running", "queued", "retrying", "paused"].includes(status) && <button className="danger-link" onClick={() => control("cancel")}>Cancel</button>}
       </div></div>
       {pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} respond={respondApproval}/>)}
       {isActive && <div className={`thinking thinking-${status}`}><span className="pulse"/>{status === "waiting_for_approval" ? "North is waiting for you" : status === "paused" ? "Task paused" : "North is working on this prompt"}</div>}

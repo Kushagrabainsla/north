@@ -37,6 +37,7 @@ from config.dependencies import build_production_dependencies
 from config.security import load_secret
 from config.settings import settings
 from gateways.telegram import TelegramGateway
+from jobs.exceptions import JobCancelled, JobNeedsAttention
 from jobs.models import Job
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
@@ -546,7 +547,7 @@ _SCHEDULED_POLL_SECONDS = 15.0
 # Comfortably inside the job processor's one-hour stale lease, so a watched task
 # is given up on by this loop rather than reaped out from under it.
 _SCHEDULED_TIMEOUT_SECONDS = 2_700.0
-_TASK_STILL_GOING = frozenset({"pending", "running", "queued", "paused"})
+_TASK_STILL_GOING = frozenset({"pending", "running", "queued", "retrying", "paused"})
 
 
 class ScheduledTaskFailed(Exception):
@@ -569,14 +570,9 @@ async def _run_scheduled_task(
 ) -> None:
     """Start a scheduled task and wait to see whether it worked.
 
-    Returns on success, and on a cancellation - someone cancelling a task is a
-    decision, not a fault, and must not be retried over. Raises
-    :class:`ScheduledTaskFailed` when the task failed.
-
-    A task still running at the timeout is *not* treated as failed. north cannot
-    tell a slow task from a stuck one, and retrying a slow one would run a second
-    copy alongside the first; a firing that outlives the window is left alone and
-    logged.
+    Only a clean task completion returns success. Cancellation is propagated to
+    the job as cancellation; exhausted recovery and an overlong in-flight task
+    are parked for attention so neither can be mislabeled completed or duplicated.
     """
     response = await orchestrator.submit_task(TaskRequest(prompt=prompt, source=LedgerSource.CRON))
     deadline = time.monotonic() + timeout_seconds
@@ -585,13 +581,15 @@ async def _run_scheduled_task(
         task = await orchestrator.get_task(response.task_id)
         if task is None or task.status in _TASK_STILL_GOING:
             continue
-        if task.status == "failed":
-            raise ScheduledTaskFailed(f"scheduled task {response.task_id} failed")
-        return
-    logger.warning(
-        "Scheduled task %s still running after %.0fs - leaving it be rather than retrying",
-        response.task_id,
-        timeout_seconds,
+        if task.status == "completed":
+            return
+        if task.status == "cancelled":
+            raise JobCancelled(f"scheduled task {response.task_id} was cancelled")
+        if task.status == "needs_attention":
+            raise JobNeedsAttention(f"scheduled task {response.task_id} needs attention")
+        raise ScheduledTaskFailed(f"scheduled task {response.task_id} ended as {task.status}")
+    raise JobNeedsAttention(
+        f"scheduled task {response.task_id} is still in progress after {timeout_seconds:.0f}s"
     )
 
 

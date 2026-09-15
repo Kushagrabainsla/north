@@ -45,7 +45,7 @@ from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface
 from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardType
 from inference.cache_stats import CacheWasteTracker
-from inference.exceptions import ContextTooLargeError
+from inference.exceptions import ContextTooLargeError, is_model_unavailable_error
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from tools._path import handoff_dir_for
@@ -407,6 +407,8 @@ class AgenticLLMAgent(LLMAgent):
         try:
             return await self._execute_call(call, payload, tool_map)
         except Exception as exc:
+            if is_model_unavailable_error(exc):
+                raise
             logger.warning("Tool call '%s' raised: %s", call.name, exc, exc_info=True)
             return _failed_call(call, exc)
 
@@ -929,6 +931,11 @@ class AgenticLLMAgent(LLMAgent):
                     },
                 )
             logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
+            if is_model_unavailable_error(exc):
+                await self._record_delegation_failure(
+                    payload, agent_name, str(exc), error_type="model_unavailable"
+                )
+                raise
             return await self._delegation_failed(payload, agent_name, str(exc))
 
     async def _delegation_failed(self, payload: AgentPayload, agent_name: str, error: str) -> str:
@@ -943,7 +950,9 @@ class AgenticLLMAgent(LLMAgent):
         await self._record_delegation_failure(payload, agent_name, error)
         return json.dumps({"success": False, "error": error, "delegation_failed": True})
 
-    async def _record_delegation_failure(self, payload: AgentPayload, agent_name: str, error: str) -> None:
+    async def _record_delegation_failure(
+        self, payload: AgentPayload, agent_name: str, error: str, *, error_type: str = "DelegationError"
+    ) -> None:
         """Write a ledger entry so a failed delegation is never silently dropped."""
         ledger = self._deps.ledger
         if ledger is None:
@@ -957,7 +966,7 @@ class AgenticLLMAgent(LLMAgent):
                     action="delegation_failed",
                     status=LedgerStatus.FAILED,
                     output=f"Delegation from '{self.name}' to '{agent_name}' failed: {error}",
-                    error_type="DelegationError",
+                    error_type=error_type,
                 )
             )
         except Exception as exc:  # never let audit-trail writes break the agent loop

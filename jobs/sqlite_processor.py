@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from jobs.base import JobProcessor
-from jobs.exceptions import JobProcessingError
+from jobs.exceptions import JobCancelled, JobNeedsAttention, JobProcessingError
 from jobs.models import Job, JobPriority, JobStatus, JobType
 from utils.db import open_db_connection
 from utils.time import from_epoch, now_epoch, to_epoch
@@ -271,10 +271,10 @@ class SQLiteJobProcessor(JobProcessor):
                     (job_id,),
                 ).fetchone()
                 if row and row["retry_count"] >= row["max_retries"]:
-                    # Max retries exhausted - mark terminal instead of re-queuing.
+                    # Exhausted work is unfinished and must be visible to a person.
                     conn.execute(
                         "UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ?",
-                        (JobStatus.FAILED.value, now_epoch(), job_id),
+                        (JobStatus.NEEDS_ATTENTION.value, now_epoch(), job_id),
                     )
                     return
                 conn.execute(
@@ -298,7 +298,7 @@ class SQLiteJobProcessor(JobProcessor):
                 UPDATE job_queue
                 SET status = ?, completed_epoch = ?
                 WHERE job_id = ?
-                  AND status NOT IN (?, ?, ?)
+                  AND status NOT IN (?, ?, ?, ?)
                 """,
                 (
                     JobStatus.CANCELLED.value,
@@ -307,6 +307,7 @@ class SQLiteJobProcessor(JobProcessor):
                     JobStatus.COMPLETED.value,
                     JobStatus.FAILED.value,
                     JobStatus.CANCELLED.value,
+                    JobStatus.NEEDS_ATTENTION.value,
                 ),
             )
 
@@ -344,7 +345,7 @@ class SQLiteJobProcessor(JobProcessor):
         A RUNNING job whose worker died never reaches a terminal state and, via
         has_active_job(), blocks its cron entry from ever scheduling again. Each
         reaped job goes back to PENDING with an incremented retry_count (so a job
-        that keeps killing its worker is eventually FAILED, not requeued forever).
+        that keeps killing its worker eventually needs attention, not an endless retry).
         Returns the number of jobs reaped.
         """
         return await asyncio.to_thread(self._reap_stale_running_sync, lease_seconds)
@@ -353,7 +354,7 @@ class SQLiteJobProcessor(JobProcessor):
         now = now_epoch()
         cutoff = now - lease_seconds
         requeued = 0
-        failed = 0
+        needs_attention = 0
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
                 "SELECT job_id, retry_count, max_retries FROM job_queue "
@@ -364,9 +365,9 @@ class SQLiteJobProcessor(JobProcessor):
                 if row["retry_count"] >= row["max_retries"]:
                     conn.execute(
                         "UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ?",
-                        (JobStatus.FAILED.value, now, row["job_id"]),
+                        (JobStatus.NEEDS_ATTENTION.value, now, row["job_id"]),
                     )
-                    failed += 1
+                    needs_attention += 1
                 else:
                     conn.execute(
                         "UPDATE job_queue SET status = ?, started_epoch = NULL, "
@@ -374,14 +375,14 @@ class SQLiteJobProcessor(JobProcessor):
                         (JobStatus.PENDING.value, row["job_id"]),
                     )
                     requeued += 1
-        if requeued or failed:
+        if requeued or needs_attention:
             logger.warning(
-                "JobProcessor: reaped %d stale RUNNING job(s) - %d requeued, %d failed",
-                requeued + failed,
+                "JobProcessor: reaped %d stale RUNNING job(s) - %d requeued, %d need attention",
+                requeued + needs_attention,
                 requeued,
-                failed,
+                needs_attention,
             )
-        return requeued + failed
+        return requeued + needs_attention
 
     async def run(
         self,
@@ -435,6 +436,11 @@ class SQLiteJobProcessor(JobProcessor):
             await self.mark_completed(job.job_id)
         except asyncio.CancelledError:
             raise
+        except JobCancelled:
+            await self.cancel(job.job_id)
+        except JobNeedsAttention:
+            logger.warning("JobProcessor: job %s needs attention", job.job_id, exc_info=True)
+            await self.mark_needs_attention(job.job_id)
         except Exception:
             logger.exception("JobProcessor: job %s failed", job.job_id)
             if job.max_retries <= 0:

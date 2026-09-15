@@ -60,3 +60,10 @@ class Job(BaseModel):
     max_retries: int = 3
     retry_after: datetime | None = None
     created_at: datetime | None = None
+
+
+def display_job_status(job: Job) -> str:
+    """Translate queue internals into the lifecycle language shown to people."""
+    if job.status is JobStatus.PENDING:
+        return "retrying" if job.retry_count > 0 else "queued"
+    return job.status.value

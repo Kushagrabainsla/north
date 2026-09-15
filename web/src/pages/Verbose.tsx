@@ -268,7 +268,7 @@ interface Cron {
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // Statuses a job cannot come back from, and so the only ones that are history.
-const FINISHED = new Set(["completed", "failed", "cancelled"]);
+const FINISHED = new Set(["completed", "failed", "cancelled", "needs_attention"]);
 const hhmm = (hour: number, minute: number) => `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 
 // One way of saying when, used by everything on this page. The page previously
@@ -550,7 +550,7 @@ export function Schedule() {
   // up twice: once as cancellable work and once as the routine's next time.
   const allJobs = jobs.data || [];
   const running = allJobs.filter(job => job.status === "running");
-  const queued = allJobs.filter(job => job.status === "pending");
+  const queued = allJobs.filter(job => job.status === "queued" || job.status === "retrying");
   const oneOffs = queued.filter(job => !job.cron_entry);
   // A routine with work already claimed or queued is represented by that job,
   // not by a second row predicting the same moment.
@@ -568,7 +568,7 @@ export function Schedule() {
     })),
     ...queued.filter(job => job.cron_entry).map(job => ({
       key: job.job_id, task: titleOf(job), agent: job.agent, epoch: job.scheduled_epoch,
-      absolute: job.scheduled_local, kind: "queued" as const, job: undefined,
+      absolute: job.scheduled_local, kind: job.status, job: undefined,
     })),
     ...oneOffs.map(job => ({
       key: job.job_id, task: titleOf(job), agent: job.agent, epoch: job.scheduled_epoch,

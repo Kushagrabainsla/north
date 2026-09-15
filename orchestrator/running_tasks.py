@@ -63,7 +63,7 @@ class RunningTask:
     started_at: datetime
     heartbeat_at: datetime
     has_side_effects: bool = False
-    status: str = "running"  # "running" | "paused"
+    status: str = "running"  # "running" | "paused" | "queued" | "retrying"
     domain: str = "general"
     description: str = ""
 
@@ -141,13 +141,14 @@ class RunningTaskStore:
             conn.execute("UPDATE running_tasks SET has_side_effects = 1 WHERE task_id = ?", (task_id,))
 
     async def mark_paused(self, task_id: str) -> bool:
-        """Mark a task as paused. Returns True if the task existed and was running."""
+        """Pause an initial run or an active recovery attempt."""
         return await asyncio.to_thread(self._mark_paused_sync, task_id)
 
     def _mark_paused_sync(self, task_id: str) -> bool:
         with open_db_connection(self._db_path) as conn:
             cur = conn.execute(
-                "UPDATE running_tasks SET status = 'paused' WHERE task_id = ? AND status = 'running'",
+                "UPDATE running_tasks SET status = 'paused' "
+                "WHERE task_id = ? AND status IN ('running', 'retrying')",
                 (task_id,),
             )
             return cur.rowcount > 0
@@ -187,6 +188,20 @@ class RunningTaskStore:
         with open_db_connection(self._db_path) as conn:
             cur = conn.execute(
                 "UPDATE running_tasks SET status = 'running', heartbeat_at = ? WHERE task_id = ? AND status = 'queued'",
+                (now, task_id),
+            )
+            return cur.rowcount > 0
+
+    async def mark_retrying_from_queued(self, task_id: str) -> bool:
+        """Claim a queued task and expose that its recovery attempt is running."""
+        return await asyncio.to_thread(self._mark_retrying_from_queued_sync, task_id)
+
+    def _mark_retrying_from_queued_sync(self, task_id: str) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with open_db_connection(self._db_path) as conn:
+            cur = conn.execute(
+                "UPDATE running_tasks SET status = 'retrying', heartbeat_at = ? "
+                "WHERE task_id = ? AND status = 'queued'",
                 (now, task_id),
             )
             return cur.rowcount > 0

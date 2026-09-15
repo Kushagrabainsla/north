@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from inference.exceptions import AllModelsRateLimitedError, PaymentRequiredError, ProviderAuthError
+from inference.exceptions import is_model_unavailable_error
 from ledger import LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.exceptions import OrchestratorError
 from orchestrator.task_context import TaskContextStore
@@ -18,11 +18,6 @@ if TYPE_CHECKING:
     from orchestrator.stream import EventStreamManager
 
 logger = logging.getLogger(__name__)
-
-# Exceptions meaning "no model is available right now" (the whole pool is rate
-# limited or a provider quota is dead) - an availability condition, not a north
-# bug. The dispatcher already walked the pool before raising these.
-_MODEL_UNAVAILABLE_EXCEPTIONS = (AllModelsRateLimitedError, PaymentRequiredError, ProviderAuthError)
 
 # Error types where a retry cannot succeed: the failure is deterministic
 # (missing prompt file, bad pool name) or the model pool is exhausted, so
@@ -51,13 +46,8 @@ def classify_error(exc: Exception) -> str:
     # quota). Walk the cause/context chain so a wrapped scarcity error - one
     # re-raised inside OrchestratorError, NorthStarConflictError, etc. - is still
     # recognised rather than falling through to logic_error.
-    cur: BaseException | None = exc
-    seen: set[int] = set()
-    while cur is not None and id(cur) not in seen:
-        seen.add(id(cur))
-        if isinstance(cur, _MODEL_UNAVAILABLE_EXCEPTIONS):
-            return "model_unavailable"
-        cur = cur.__cause__ or cur.__context__
+    if is_model_unavailable_error(exc):
+        return "model_unavailable"
 
     msg = str(exc).lower()
     name = type(exc).__name__

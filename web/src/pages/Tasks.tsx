@@ -21,11 +21,28 @@ import { Empty, ErrorNotice, formatDateTime, Loading, PageHeader, Panel, Status,
 import type { AgentRun, Approval, Artifact, LedgerEntry, TaskDetail } from "../types";
 import { RoutingAttempts, stageIcon } from "./Verbose";
 
-/** Actions that end a task. Anything else leaves it running. */
-const TERMINAL = ["task_completed", "task_failed", "task_cancelled"];
+/** One source of truth for the lifecycle actions shown in the task list. */
+const TASK_ACTION_STATUS: Record<string, string> = {
+  task_completed: "completed",
+  task_completed_with_failures: "failed",
+  task_failed: "failed",
+  task_cancelled: "cancelled",
+  task_stuck: "failed",
+  task_skipped_model_unavailable: "failed",
+  task_needs_attention: "needs_attention",
+  task_queued: "queued",
+  task_retrying: "retrying",
+  task_paused: "paused",
+};
+const TERMINAL = new Set(["completed", "failed", "cancelled", "needs_attention"]);
 
 export const isTerminal = (entry: LedgerEntry) =>
-  Boolean(entry.action && (entry.action.startsWith("task_completed") || TERMINAL.includes(entry.action)));
+  Boolean(entry.action && TERMINAL.has(TASK_ACTION_STATUS[entry.action]));
+
+const taskStatus = (rows: LedgerEntry[]) => {
+  const lifecycle = rows.find(row => row.action && TASK_ACTION_STATUS[row.action]);
+  return lifecycle?.action ? TASK_ACTION_STATUS[lifecycle.action] : "running";
+};
 
 export interface TaskSummary {
   id: string;
@@ -48,7 +65,7 @@ export function summarise(entries: LedgerEntry[]): TaskSummary[] {
     // The ledger arrives newest first, so the prompt is at the far end.
     prompt: [...rows].reverse().find(row => row.action === "task_received")?.input || id,
     agents: [...new Set(rows.map(row => row.agent).filter(Boolean))] as string[],
-    status: rows.find(isTerminal)?.status || "running",
+    status: taskStatus(rows),
     latest: rows[0].timestamp,
     entries: rows,
   }));
@@ -119,7 +136,7 @@ function TaskActivity({ taskId }: { taskId: string }) {
   const entries = detail.data?.entries || [];
   const runs = detail.data?.runs || [];
   const prompt = entries.find(entry => entry.action === "task_received")?.input || taskId;
-  const status = detail.data?.task?.status || entries.find(isTerminal)?.status || "running";
+  const status = detail.data?.task?.status || taskStatus(entries);
   const mine = (artifacts.data || []).filter(file => file.task === taskId);
   const asked = (approvals.data || []).filter(card => card.task_id === taskId);
   const spend = runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
@@ -128,7 +145,7 @@ function TaskActivity({ taskId }: { taskId: string }) {
   // last entry carrying any output, which for a running task is whatever it
   // happened to log - a skill list, a classification - presented under a
   // heading that claims it is the answer.
-  const finished = ["completed", "failed", "cancelled"].includes(String(status));
+  const finished = ["completed", "failed", "cancelled", "needs_attention"].includes(String(status));
 
   return <div className="page task-detail">
     <PageHeader eyebrow="Task" title={prompt}

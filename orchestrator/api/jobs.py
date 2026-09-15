@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from jobs.models import Job, JobPriority, JobStatus, JobType
+from jobs.models import Job, JobPriority, JobStatus, JobType, display_job_status
 from orchestrator.api.deps import _get_job_processor, router
 from utils.ids import generate_id
 from utils.time import format_local, from_epoch, parse_local, to_epoch, utcnow
@@ -52,7 +52,7 @@ def _job_to_out(j: Job) -> JobOut:
         type=j.type.value,
         agent=j.agent,
         task=j.task,
-        status=j.status.value,
+        status=display_job_status(j),
         priority=int(j.priority),
         scheduled_at=j.scheduled_at.isoformat(),
         created_at=j.created_at.isoformat() if j.created_at else None,

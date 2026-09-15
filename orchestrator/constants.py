@@ -19,7 +19,7 @@ WORKTREE_ISOLATION_AGENTS: frozenset[str] = frozenset({"coder"})
 MAX_RESUME_ATTEMPTS = 3
 
 # How many times a task queued due to model scarcity is retried as models recover
-# before it is marked skipped.
+# before it is surfaced for human attention.
 MAX_QUEUE_ATTEMPTS = 5
 
 # Poll interval for draining queued tasks when waiting for model recovery.

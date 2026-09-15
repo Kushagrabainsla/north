@@ -249,3 +249,18 @@ class PoolRefreshError(InferenceError):
 
 class TranscriptionError(InferenceError):
     """Audio transcription failed."""
+
+
+_MODEL_UNAVAILABLE_EXCEPTIONS = (AllModelsRateLimitedError, PaymentRequiredError, ProviderAuthError)
+
+
+def is_model_unavailable_error(exc: BaseException) -> bool:
+    """Recognize exhausted model access through ordinary exception wrapping."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _MODEL_UNAVAILABLE_EXCEPTIONS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False

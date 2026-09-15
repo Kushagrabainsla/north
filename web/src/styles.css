@@ -133,8 +133,8 @@ a { color: inherit; text-decoration: none; }
 .list-row.compact { padding: 6px 0; }
 .status { display: inline-block; padding: 3px 7px; border-radius: 20px; font: 500 8px "DM Mono", monospace; text-transform: uppercase; color: var(--muted); background: #20252b; white-space: nowrap; }
 .status-completed, .status-approved, .status-answered { color: var(--accent); background: var(--accent-soft); }
-.status-pending, .status-running, .status-queued { color: var(--blue); background: rgba(118,185,255,.12); }
-.status-failed, .status-rejected, .status-cancelled { color: var(--red); background: rgba(255,119,119,.12); }
+.status-pending, .status-running, .status-queued, .status-retrying { color: var(--blue); background: rgba(118,185,255,.12); }
+.status-failed, .status-rejected, .status-cancelled, .status-needs_attention { color: var(--red); background: rgba(255,119,119,.12); }
 .status-paused { color: var(--amber); background: rgba(255,201,105,.12); }
 .conversation-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .conversation-card { padding: 12px; background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 9px; min-width: 0; }

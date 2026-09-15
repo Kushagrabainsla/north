@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from jobs import Job, JobPriority, JobStatus, JobType
+from jobs import Job, JobPriority, JobStatus, JobType, display_job_status
 
 
 def test_job_type_enum_matches_spec() -> None:
@@ -44,3 +44,15 @@ def test_job_accepts_minimal_fields_with_sane_defaults() -> None:
     assert job.max_retries == 3
     assert job.payload == {}
     assert job.retry_after is None
+
+
+def test_job_display_status_distinguishes_first_queue_from_retry() -> None:
+    job = Job(
+        job_id="j1",
+        type=JobType.CRON,
+        agent="general",
+        task="brief",
+        scheduled_at=datetime.now(UTC),
+    )
+    assert display_job_status(job) == "queued"
+    assert display_job_status(job.model_copy(update={"retry_count": 1})) == "retrying"

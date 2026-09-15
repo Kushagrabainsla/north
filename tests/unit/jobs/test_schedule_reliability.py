@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 import pytest
 
 from jobs.cron_store import UserCronStore
+from jobs.exceptions import JobCancelled, JobNeedsAttention
 from jobs.models import JobStatus
 from jobs.scheduler import CronEntry, CronScheduler
 from jobs.sqlite_processor import SQLiteJobProcessor
@@ -147,11 +148,20 @@ async def test_a_completed_scheduled_task_returns_quietly() -> None:
 async def test_a_cancelled_scheduled_task_is_not_retried() -> None:
     """Someone cancelling a task is a decision, not a fault to retry over."""
     orchestrator = _FakeOrchestrator(["cancelled"])
-    await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)
+    with pytest.raises(JobCancelled):
+        await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)
 
 
 @pytest.mark.asyncio
-async def test_a_task_still_running_at_the_timeout_is_left_alone() -> None:
+async def test_a_task_still_running_at_the_timeout_needs_attention() -> None:
     """north cannot tell slow from stuck, and retrying a slow one runs it twice."""
     orchestrator = _FakeOrchestrator(["running"] * 5)
-    await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0, timeout_seconds=0.05)
+    with pytest.raises(JobNeedsAttention):
+        await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0, timeout_seconds=0.05)
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_scheduled_task_needs_attention() -> None:
+    orchestrator = _FakeOrchestrator(["needs_attention"])
+    with pytest.raises(JobNeedsAttention):
+        await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)

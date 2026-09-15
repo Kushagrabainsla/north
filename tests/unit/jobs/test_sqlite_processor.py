@@ -10,6 +10,8 @@ import pytest
 
 from jobs import (
     Job,
+    JobCancelled,
+    JobNeedsAttention,
     JobPriority,
     JobProcessingError,
     JobStatus,
@@ -155,6 +157,34 @@ async def test_mark_failed_with_retry_after_keeps_job_pending(
     assert fetched.retry_after is not None
 
 
+async def test_retry_ceiling_surfaces_needs_attention(processor: SQLiteJobProcessor) -> None:
+    job = _job("j1").model_copy(update={"retry_count": 3, "max_retries": 3})
+    await processor.enqueue(job)
+    await processor.mark_failed("j1", retry_after=datetime.now(UTC) + timedelta(minutes=1))
+
+    assert (await processor.get("j1")).status is JobStatus.NEEDS_ATTENTION
+
+
+async def test_runner_maps_explicit_attention_and_cancellation(processor: SQLiteJobProcessor) -> None:
+    await processor.enqueue(_job("attention"))
+    attention = await processor.claim_next()
+
+    async def needs_attention(_job):
+        raise JobNeedsAttention("task recovery exhausted")
+
+    await processor._run_job(attention, needs_attention)
+    assert (await processor.get("attention")).status is JobStatus.NEEDS_ATTENTION
+
+    await processor.enqueue(_job("cancelled"))
+    cancelled = await processor.claim_next()
+
+    async def was_cancelled(_job):
+        raise JobCancelled("user cancelled task")
+
+    await processor._run_job(cancelled, was_cancelled)
+    assert (await processor.get("cancelled")).status is JobStatus.CANCELLED
+
+
 async def test_cancel_transitions_pending_job(processor: SQLiteJobProcessor) -> None:
     await processor.enqueue(_job("j1"))
     await processor.cancel("j1")
@@ -245,7 +275,7 @@ async def test_reap_respects_lease(processor: SQLiteJobProcessor) -> None:
     assert (await processor.get("j1")).status is JobStatus.PENDING
 
 
-async def test_reap_fails_job_at_retry_ceiling(processor: SQLiteJobProcessor) -> None:
+async def test_reap_surfaces_job_at_retry_ceiling(processor: SQLiteJobProcessor) -> None:
     exhausted = Job(
         job_id="j1",
         type=JobType.CRON,
@@ -263,7 +293,7 @@ async def test_reap_fails_job_at_retry_ceiling(processor: SQLiteJobProcessor) ->
     assert reaped == 1
     job = await processor.get("j1")
     assert job is not None
-    assert job.status is JobStatus.FAILED  # not requeued past the ceiling
+    assert job.status is JobStatus.NEEDS_ATTENTION  # not requeued or buried past the ceiling
 
 
 async def test_reap_ignores_pending_and_terminal_jobs(processor: SQLiteJobProcessor) -> None:

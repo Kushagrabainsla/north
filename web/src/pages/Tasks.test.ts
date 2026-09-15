@@ -45,6 +45,16 @@ describe("grouping the ledger back into tasks", () => {
     expect(summarise([entry({ task_id: "t1", action: "agent_started" })])[0].status).toBe("running");
   });
 
+  it("shows queued and retrying lifecycle states instead of generic running", () => {
+    expect(summarise([entry({ task_id: "t1", action: "task_queued", status: "pending" })])[0].status).toBe("queued");
+    expect(summarise([entry({ task_id: "t1", action: "task_retrying", status: "pending" })])[0].status).toBe("retrying");
+  });
+
+  it("shows exhausted recovery as needs attention", () => {
+    expect(summarise([entry({ task_id: "t1", action: "task_needs_attention", status: "failed" })])[0].status)
+      .toBe("needs_attention");
+  });
+
   it("keeps each task's events with that task", () => {
     const tasks = summarise([
       entry({ task_id: "t1", action: "task_received", input: "one" }),
@@ -75,7 +85,7 @@ describe("grouping the ledger back into tasks", () => {
 
 describe("what counts as the end of a task", () => {
   it("recognises every terminal action", () => {
-    for (const action of ["task_completed", "task_completed_with_failures", "task_failed", "task_cancelled"]) {
+    for (const action of ["task_completed", "task_completed_with_failures", "task_failed", "task_cancelled", "task_needs_attention"]) {
       expect(isTerminal(entry({ action }))).toBe(true);
     }
   });

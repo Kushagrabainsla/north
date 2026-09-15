@@ -23,3 +23,8 @@ class AgentFailure(str):
 def is_model_scarcity(failures: list[str]) -> bool:
     """Return true only when every supplied failure is model unavailability."""
     return bool(failures) and all(getattr(failure, "error_type", None) == "model_unavailable" for failure in failures)
+
+
+def has_model_scarcity(failures: list[str]) -> bool:
+    """Return true when any agent was blocked by temporary model availability."""
+    return any(getattr(failure, "error_type", None) == "model_unavailable" for failure in failures)

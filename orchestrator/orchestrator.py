@@ -66,6 +66,9 @@ from orchestrator.model_scarcity import (
     AgentFailure,
 )
 from orchestrator.model_scarcity import (
+    has_model_scarcity as _has_model_scarcity,
+)
+from orchestrator.model_scarcity import (
     is_model_scarcity as _is_model_scarcity,
 )
 from orchestrator.models import (
@@ -129,11 +132,12 @@ _BEST_OF_N_TEST_TIMEOUT: int = 300
 # and would otherwise make a still-running task look done.
 _TERMINAL_TASK_ACTIONS: dict[str, str] = {
     "task_completed": "completed",
-    "task_completed_with_failures": "completed",
+    "task_completed_with_failures": "failed",
     "task_failed": "failed",
     "task_cancelled": "cancelled",
     "task_stuck": "failed",
-    # Not a failure of north's reasoning: no model was available to do the work.
+    "task_needs_attention": "needs_attention",
+    # Legacy rows written before model outages entered the recovery queue.
     "task_skipped_model_unavailable": "skipped",
 }
 
@@ -291,7 +295,7 @@ class Orchestrator:
                 existing_id = self._idempotency.get(key)
                 if existing_id is not None:
                     existing = await self.get_task(existing_id)
-                    if existing is not None and existing.status in ("pending", "running", "queued"):
+                    if existing is not None and existing.status in ("pending", "running", "queued", "retrying"):
                         logger.info("submit_task: deduped duplicate submission to task %s", existing_id)
                         return existing
             if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
@@ -399,13 +403,13 @@ class Orchestrator:
                     async with self._submit_lock:
                         if rt.task_id in self._active_tasks:
                             continue
-                        claimed = await self._running_task_store.mark_running_from_queued(rt.task_id)
+                        claimed = await self._running_task_store.mark_retrying_from_queued(rt.task_id)
                         if not claimed:
                             continue
                         logger.info("Resuming queued task %s (attempt %d)", rt.task_id, rt.attempt)
                         await self._journal.record(
                             rt.task_id,
-                            "task_resumed",
+                            "task_retrying",
                             status=LedgerStatus.PENDING,
                             input=rt.request.prompt,
                             payload={"attempt": rt.attempt},
@@ -432,10 +436,10 @@ class Orchestrator:
         entries = await self._ledger.query_summaries(LedgerFilters(task_id=task_id, limit=100))
         if not entries:
             return None
-        # Check if currently queued or paused in running_task_store
+        # The durable registry is authoritative for non-terminal live states.
         if self._running_task_store is not None:
             stored_task = await self._running_task_store.get(task_id)
-            if stored_task is not None and stored_task.status in ("queued", "paused"):
+            if stored_task is not None and stored_task.status in ("queued", "retrying", "paused"):
                 return TaskResponse(
                     task_id=task_id,
                     status=stored_task.status,
@@ -448,6 +452,8 @@ class Orchestrator:
                 return TaskResponse(task_id=task_id, status=terminal, created_at=format_timestamp(entry.timestamp))
             if entry.action == "task_queued":
                 return TaskResponse(task_id=task_id, status="queued", created_at=format_timestamp(entry.timestamp))
+            if entry.action == "task_retrying":
+                return TaskResponse(task_id=task_id, status="retrying", created_at=format_timestamp(entry.timestamp))
             if entry.action == "task_paused":
                 return TaskResponse(task_id=task_id, status="paused", created_at=format_timestamp(entry.timestamp))
         # No terminal entry yet - the task is still running.
@@ -859,8 +865,8 @@ class Orchestrator:
 
     async def _report_task_failure(self, task_id: str, task_start: float, error: Exception) -> None:
         error_type = classify_error(error)
-        await self._mark_task_failed(task_id)
         if error_type != "model_unavailable":
+            await self._mark_task_failed(task_id)
             logger.error("Task %s failed: %s", task_id, error, exc_info=True)
             await self._stream_manager.emit(task_id, "task_failed", {"error": str(error), "error_type": error_type})
             await self._record_task_failure(task_id, task_start, str(error), LedgerStatus.FAILED, error_type)
@@ -870,15 +876,13 @@ class Orchestrator:
         if await self._queue_for_model_recovery(task_id, error):
             return
 
-        # Not a north failure: the whole model pool was unavailable, so the work
-        # could not proceed. Skip honestly (autonomous mode just moves on) rather
-        # than reporting a failure the user would read as a bug.
-        logger.warning("Task %s skipped - %s: %s", task_id, _MODEL_SCARCITY_MESSAGE, error)
-        await self._stream_manager.emit(
-            task_id, "task_skipped", {"reason": _MODEL_SCARCITY_MESSAGE, "error_type": error_type}
+        logger.error("Task %s needs attention after recovery attempts: %s", task_id, error)
+        await self._record_task_needs_attention(
+            task_id,
+            f"{_MODEL_SCARCITY_MESSAGE}; recovery attempts exhausted",
+            error_type=error_type,
+            duration_ms=int((time.monotonic() - task_start) * 1000),
         )
-        await self._record_task_skipped_model_unavailable(task_id, task_start)
-        await self._stream_manager.emit_done(task_id)
 
     async def _mark_task_failed(self, task_id: str) -> None:
         with contextlib.suppress(Exception):
@@ -886,6 +890,8 @@ class Orchestrator:
 
     async def _queue_for_model_recovery(self, task_id: str, error: Exception) -> bool:
         """Queue the task to retry when models return. False once attempts run out."""
+        if self._running_task_store is None:
+            return False
         attempt = await self._attempts_so_far(task_id) + 1
         if attempt > MAX_QUEUE_ATTEMPTS:
             return False
@@ -895,8 +901,8 @@ class Orchestrator:
             attempt,
             error,
         )
-        if self._running_task_store is not None:
-            await self._running_task_store.mark_queued(task_id, attempt=attempt)
+        if not await self._running_task_store.mark_queued(task_id, attempt=attempt):
+            return False
         await self._journal.record(
             task_id,
             "task_queued",
@@ -907,7 +913,6 @@ class Orchestrator:
                 "attempt": attempt,
             },
         )
-        self._queue_wake_event.set()
         return True
 
     async def _attempts_so_far(self, task_id: str) -> int:
@@ -918,6 +923,13 @@ class Orchestrator:
 
     async def _release_finished_task(self, task_id: str) -> None:
         """Drop everything a task holds once it can no longer act, whatever ended it."""
+        stored_task = None
+        if self._running_task_store is not None:
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                stored_task = await asyncio.shield(self._running_task_store.get(task_id))
+        is_resumable = stored_task is not None and stored_task.status in {"queued", "paused"}
+        if is_resumable:
+            return
         # Reap this task's tracked cost exactly once, regardless of exit path.
         # The success/failure/conflict/cancel paths already pop it to record
         # the cost in the ledger; popping again here is a no-op (pop_task_cost
@@ -937,14 +949,10 @@ class Orchestrator:
             self._plan_store.clear(task_id)
         if self._failure_handler is not None and hasattr(self._failure_handler, "clear_all"):
             self._failure_handler.clear_all(task_id)
-        # The task has reached a terminal state (success/failure/cancel/skip), so it
-        # is no longer in-flight: drop it from the crash-recovery registry unless queued.
+        # The task has reached a terminal state, so it is no longer in-flight.
         if self._running_task_store is not None:
             with contextlib.suppress(Exception, asyncio.CancelledError):
-                stored_task = await asyncio.shield(self._running_task_store.get(task_id))
-                is_resumable = stored_task is not None and stored_task.status in {"queued", "paused"}
-                if not is_resumable:
-                    await asyncio.shield(self._running_task_store.clear(task_id))
+                await asyncio.shield(self._running_task_store.clear(task_id))
 
     async def _stage_plan(
         self, task_id: str, prompt: str, context: str = ""
@@ -1423,27 +1431,13 @@ class Orchestrator:
             )
             if review_failures:
                 if _is_model_scarcity(review_failures):
-                    # The coder's work stands; only the *independent* review could
-                    # not get a model. Don't sink a task whose real work is done -
-                    # skip the review honestly and let the deterministic DoD gate
-                    # (which flags a missing verdict) mark the reduced rigor. north
-                    # keeps its bar; it just reports the review was skipped for
-                    # model scarcity, so the task ends completed-with-failures.
+                    # A missing independent review means the whole task has not met
+                    # its completion contract. Hand the same task to the recovery
+                    # queue instead of accepting partially verified work.
                     await self._stream_manager.emit(
-                        task_id, "conductor_review_skipped_model_unavailable", {"reason": _MODEL_SCARCITY_MESSAGE}
+                        task_id, "waiting_for_model", {"agent": "reviewer", "reason": _MODEL_SCARCITY_MESSAGE}
                     )
-                    await self._journal.write(
-                        LedgerEntry.new(
-                            source=LedgerSource.SYSTEM,
-                            task_id=task_id,
-                            agent="reviewer",
-                            action="review_skipped_model_unavailable",
-                            output=f"Independent review skipped: {_MODEL_SCARCITY_MESSAGE}",
-                            status=LedgerStatus.COMPLETED,
-                            error_type="model_unavailable",
-                        )
-                    )
-                    return []
+                    return review_failures
                 return review_failures  # a genuine reviewer failure - unchanged
 
             review = read_review_result(task_id)
@@ -1621,29 +1615,36 @@ class Orchestrator:
             )
         )
 
-    async def _record_task_skipped_model_unavailable(self, task_id: str, task_start: float) -> None:
-        """Terminal ledger entry for a task skipped because no model was available.
-
-        Stored with LedgerStatus.FAILED so retention, memory consolidation, and
-        extraction treat it like any other non-success (nothing to learn from a
-        task that never ran) - but with a distinct action that ``get_task`` maps
-        to the reported status ``"skipped"``, so the user can tell "ran out of
-        model access" apart from "north got it wrong".
-        """
-        duration_ms = int((time.monotonic() - task_start) * 1000)
+    async def _record_task_needs_attention(
+        self,
+        task_id: str,
+        reason: str,
+        *,
+        error_type: str,
+        duration_ms: int | None = None,
+    ) -> None:
+        """Park exhausted work visibly instead of burying it as a completed skip."""
+        with contextlib.suppress(Exception):
+            await self._task_context_store.update_task_status(task_id, "needs_attention")
         task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
         await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
                 task_id=task_id,
-                action="task_skipped_model_unavailable",
-                output=_MODEL_SCARCITY_MESSAGE,
+                action="task_needs_attention",
+                output=reason,
                 status=LedgerStatus.FAILED,
-                error_type="model_unavailable",
+                error_type=error_type,
                 duration_ms=duration_ms,
                 cost_usd=task_cost_usd,
             )
         )
+        await self._stream_manager.emit(
+            task_id,
+            "task_needs_attention",
+            {"reason": reason, "error_type": error_type, "cost_usd": task_cost_usd},
+        )
+        await self._stream_manager.emit_done(task_id)
 
     async def _report_execution_failures(self, task_id: str, failures: list[str]) -> None:
         """Format and emit a message showing which agents failed to complete."""
@@ -1869,21 +1870,33 @@ class Orchestrator:
     ) -> None:
         """Write the terminal ledger entry and emit done events.
 
-        When every agent failed the task finishes as FAILED; partial failures - or an
-        unmet Definition of Done (dod_unmet_reasons) - finish as COMPLETED but with a
-        distinct action so the history shows the task did not fully succeed.
+        Model scarcity queues the entire task. Otherwise every-agent failure ends
+        FAILED; partial failures or an unmet Definition of Done use a distinct
+        terminal action so the history never presents them as clean success.
         """
         failures = failures or []
-        scarcity = _is_model_scarcity(failures)
+        scarcity = _has_model_scarcity(failures)
+        if scarcity:
+            blocked_agents = ", ".join(
+                str(failure)
+                for failure in failures
+                if getattr(failure, "error_type", None) == "model_unavailable"
+            )
+            unavailable = RuntimeError(
+                f"{_MODEL_SCARCITY_MESSAGE}; blocked agents: {blocked_agents}"
+            )
+            if await self._queue_for_model_recovery(task_id, unavailable):
+                return
+            await self._record_task_needs_attention(
+                task_id,
+                f"{unavailable}; recovery attempts exhausted",
+                error_type="model_unavailable",
+            )
+            return
         all_failed = total_agents > 0 and len(failures) >= total_agents
         dod_failed = bool(dod_unmet_reasons)
         task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
-        if scarcity:
-            # No model was available to do the work - a graceful, honest skip, not
-            # a north failure. Checked first so a scarcity blockage is never
-            # reported as task_failed or masked by a downstream DoD symptom.
-            action, status, err = "task_skipped_model_unavailable", LedgerStatus.FAILED, "model_unavailable"
-        elif all_failed:
+        if all_failed:
             action, status, err = "task_failed", LedgerStatus.FAILED, "agent_failure"
         elif failures or dod_failed:
             action, status, err = (
@@ -1894,8 +1907,6 @@ class Orchestrator:
         else:
             action, status, err = "task_completed", LedgerStatus.COMPLETED, None
         output_parts: list[str] = []
-        if scarcity:
-            output_parts.append(f"Skipped: {_MODEL_SCARCITY_MESSAGE}")
         if failures:
             output_parts.append(f"Failed agents: {', '.join(failures)}")
         if dod_failed:
@@ -1911,17 +1922,7 @@ class Orchestrator:
                 cost_usd=task_cost_usd,
             )
         )
-        if scarcity:
-            await self._stream_manager.emit(
-                task_id,
-                "task_skipped",
-                {
-                    "reason": _MODEL_SCARCITY_MESSAGE,
-                    "skipped_agents": [str(f) for f in failures],
-                    "cost_usd": task_cost_usd,
-                },
-            )
-        elif all_failed:
+        if all_failed:
             await self._stream_manager.emit(
                 task_id,
                 "task_failed",

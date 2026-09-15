@@ -43,14 +43,40 @@ logger = logging.getLogger(__name__)
 # The item fields north keeps as a descriptor of one output item.
 _ITEM_DESCRIPTOR_KEYS = ("id", "type", "status", "name", "call_id")
 _FAILURE_DETAIL_CHARS = 300
+_NON_PROGRESS_EVENT_TYPES = frozenset({"response.created", "response.in_progress", "ping", "keepalive"})
+
+
+def _is_meaningful_model_activity(event: dict) -> bool:
+    """Return whether an SSE event proves the model is still making progress.
+
+    Connection keepalives and repeated response lifecycle notices only prove the
+    socket is alive. Output/reasoning/tool deltas, items, and terminal events prove
+    the actual response advanced and therefore reset the watchdog.
+    """
+    event_type = str(event.get("type") or "")
+    if not event_type or event_type in _NON_PROGRESS_EVENT_TYPES:
+        return False
+    if event_type.endswith(".delta"):
+        return any(event.get(key) not in (None, "", [], {}) for key in ("delta", "text", "arguments"))
+    return True
 
 
 async def _aiter_response_events(response: httpx.Response) -> AsyncIterator[dict]:
-    """Yield each decoded event of a Responses SSE stream, skipping unparsable lines."""
+    """Yield Responses events and time out when model progress stops.
+
+    The deadline is intentionally not reset by comments, blank lines, malformed
+    JSON, or lifecycle keepalives. Those used to keep a dead generation alive for
+    minutes even though no model output was arriving.
+    """
     events = response.aiter_lines().__aiter__()
+    loop = asyncio.get_running_loop()
+    progress_deadline = loop.time() + SSE_CHUNK_TIMEOUT_SECONDS
     while True:
         try:
-            line = await asyncio.wait_for(events.__anext__(), timeout=SSE_CHUNK_TIMEOUT_SECONDS)
+            remaining = progress_deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            line = await asyncio.wait_for(events.__anext__(), timeout=remaining)
         except StopAsyncIteration:
             return
         except TimeoutError as exc:
@@ -64,6 +90,8 @@ async def _aiter_response_events(response: httpx.Response) -> AsyncIterator[dict
             event = json.loads(raw)
         except json.JSONDecodeError:
             continue
+        if _is_meaningful_model_activity(event):
+            progress_deadline = loop.time() + SSE_CHUNK_TIMEOUT_SECONDS
         yield event
 
 

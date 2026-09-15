@@ -19,6 +19,7 @@ from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_
 from config.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
+from jobs.models import display_job_status
 from ledger.base import LedgerFilters
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
@@ -1008,7 +1009,7 @@ async def get_artifact(artifact_id: str) -> dict[str, Any]:
 async def dashboard() -> dict[str, Any]:
     active, jobs, cron, metrics, ledger_entries, conversations, artifacts = await asyncio.gather(
         current_services().require("orchestrator").list_active_tasks(),
-        current_services().require("job_processor").list_upcoming(limit=8),
+        current_services().require("job_processor").list_jobs(limit=8),
         current_services().require("cron_store").list(),
         current_services().require("ledger").get_metrics(days=7),
         current_services().require("ledger").query(LedgerFilters(limit=12)),
@@ -1040,7 +1041,7 @@ async def dashboard() -> dict[str, Any]:
                 "job_id": job.job_id,
                 "agent": job.agent,
                 "task": job.task,
-                "status": job.status.value,
+                "status": display_job_status(job),
                 "scheduled_at": job.scheduled_at.isoformat(),
             }
             for job in jobs

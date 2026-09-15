@@ -18,6 +18,7 @@ from agents.agentic_llm_agent import AgenticLLMAgent
 from agents.constants import MAX_DELEGATION_DEPTH as _MAX_DELEGATION_DEPTH
 from agents.general.agent import GeneralAgent
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
+from inference.exceptions import AllModelsRateLimitedError
 from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
 from tools.confidence import ConfidenceTracker
@@ -302,6 +303,36 @@ async def test_delegation_success_returns_sub_agent_output(tmp_path: Path) -> No
     assert result["success"] is True
     assert result["output"] == "Spec written to spec.md."
     assert result["summary"] == "Spec done"
+
+
+async def test_delegated_model_scarcity_propagates_to_the_parent_task(tmp_path: Path) -> None:
+    """A parent must not paraphrase a blocked child into a successful task."""
+
+    class UnavailableRegistry:
+        def get(self, name: str):
+            class UnavailableAgent:
+                name = "researcher"
+
+                async def run(self, payload: AgentPayload) -> AgentResult:
+                    raise AllModelsRateLimitedError("manual model is cooling down")
+
+            return UnavailableAgent()
+
+    class Ledger:
+        def __init__(self) -> None:
+            self.entries = []
+
+        async def write(self, entry) -> None:
+            self.entries.append(entry)
+
+    ledger = Ledger()
+    agent = _make_agent(tmp_path, agent_registry=UnavailableRegistry(), ledger=ledger)
+
+    with pytest.raises(AllModelsRateLimitedError):
+        await agent._delegate_task(_payload(), {"agent": "researcher", "task": "research it"})
+
+    assert ledger.entries[-1].action == "delegation_failed"
+    assert ledger.entries[-1].error_type == "model_unavailable"
 
 
 # ---------------------------------------------------------------------------

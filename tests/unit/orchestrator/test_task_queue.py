@@ -121,11 +121,32 @@ async def test_model_scarcity_queues_task(running_task_store: RunningTaskStore) 
     assert writes[-1].action == "task_queued"
     assert writes[-1].status == LedgerStatus.PENDING
     assert "task_queued" in _emitted_events(orch)
-    assert orch._queue_wake_event.is_set()
+    # Enqueueing does not bypass backoff; only an actual pool-recovery signal does.
+    assert not orch._queue_wake_event.is_set()
 
 
 @pytest.mark.asyncio
-async def test_task_exceeds_max_queue_attempts_is_skipped(running_task_store: RunningTaskStore) -> None:
+async def test_agent_level_model_scarcity_queues_the_whole_task(running_task_store: RunningTaskStore) -> None:
+    orch = _orch(running_task_store)
+    writes = _record_writes(orch)
+    req = TaskRequest(prompt="delegate research", source=LedgerSource.PROMPT)
+    await running_task_store.mark_running("t1", req)
+
+    from orchestrator.model_scarcity import AgentFailure
+
+    await orch._finish_task(
+        "t1",
+        failures=[AgentFailure("researcher", "model_unavailable")],
+        total_agents=2,
+    )
+
+    assert (await running_task_store.get("t1")).status == "queued"
+    assert writes[-1].action == "task_queued"
+    assert all(entry.action != "task_completed" for entry in writes)
+
+
+@pytest.mark.asyncio
+async def test_task_exceeds_max_queue_attempts_needs_attention(running_task_store: RunningTaskStore) -> None:
     orch = _orch(running_task_store)
     writes = _record_writes(orch)
 
@@ -137,12 +158,12 @@ async def test_task_exceeds_max_queue_attempts_is_skipped(running_task_store: Ru
 
     await orch._process_task("t1", req)
 
-    # Should be cleared from running_task_store and marked skipped
+    # Should be cleared from running_task_store and surfaced for a person.
     queued = await running_task_store.list_queued()
     assert len(queued) == 0
 
-    assert writes[-1].action == "task_skipped_model_unavailable"
-    assert "task_skipped" in _emitted_events(orch)
+    assert writes[-1].action == "task_needs_attention"
+    assert "task_needs_attention" in _emitted_events(orch)
 
 
 @pytest.mark.asyncio
@@ -186,6 +207,27 @@ async def test_get_task_reports_queued_status(running_task_store: RunningTaskSto
 
 
 @pytest.mark.asyncio
+async def test_get_task_reports_retrying_status(running_task_store: RunningTaskStore) -> None:
+    orch = _orch(running_task_store)
+    req = TaskRequest(prompt="write code", source=LedgerSource.PROMPT)
+    await running_task_store.mark_running("t1", req)
+    await running_task_store.mark_queued("t1", attempt=1)
+    await running_task_store.mark_retrying_from_queued("t1")
+    entry = LedgerEntry.new(
+        source=LedgerSource.SYSTEM,
+        task_id="t1",
+        action="task_retrying",
+        status=LedgerStatus.PENDING,
+    )
+    orch._ledger.query_summaries = AsyncMock(return_value=[entry])
+
+    resp = await orch.get_task("t1")
+
+    assert resp is not None
+    assert resp.status == "retrying"
+
+
+@pytest.mark.asyncio
 async def test_drain_queued_tasks_loop_resumes_task(running_task_store: RunningTaskStore) -> None:
     orch = _orch(running_task_store)
     writes = _record_writes(orch)
@@ -213,4 +255,4 @@ async def test_drain_queued_tasks_loop_resumes_task(running_task_store: RunningT
     assert "t1" in processed_tasks
     queued = await running_task_store.list_queued()
     assert len(queued) == 0
-    assert writes[-1].action == "task_resumed"
+    assert writes[-1].action == "task_retrying"

@@ -15,3 +15,11 @@ class JobNotFoundError(JobError):
 
 class JobProcessingError(JobError):
     """Raised when a job cannot be inserted, claimed, or transitioned."""
+
+
+class JobNeedsAttention(JobError):
+    """Raised when retrying a job automatically would be unsafe or exhausted."""
+
+
+class JobCancelled(JobError):
+    """Raised when the work behind a running job was deliberately cancelled."""

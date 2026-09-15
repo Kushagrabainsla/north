@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import stat
@@ -11,10 +12,10 @@ import pytest
 
 from inference.auth import ApiKeyCredentialProvider
 from inference.codex_auth import CodexCredentialProvider, CodexToken, CodexTokenStore
-from inference.exceptions import ProviderAuthError
+from inference.exceptions import InferenceError, ProviderAuthError
 from inference.factory import build_router
 from inference.models import CompletionRequest, PoolPriority, ToolCallRequest
-from inference.providers.openai_codex import OpenAICodexProvider, _message_items
+from inference.providers.openai_codex import OpenAICodexProvider, _aiter_response_events, _message_items
 from inference.registry import AuthKind, get_provider_definition
 
 
@@ -31,6 +32,45 @@ def _jwt(account_id: str) -> str:
 
 def _sse(*events: dict) -> bytes:
     return "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+class _LineResponse:
+    def __init__(self, lines):
+        self._lines = lines
+
+    async def aiter_lines(self):
+        for delay, line in self._lines:
+            await asyncio.sleep(delay)
+            yield line
+
+
+@pytest.mark.asyncio
+async def test_codex_stream_keepalives_do_not_reset_progress_watchdog(monkeypatch) -> None:
+    monkeypatch.setattr("inference.providers.openai_codex.SSE_CHUNK_TIMEOUT_SECONDS", 0.1)
+    response = _LineResponse([
+        (0, 'data: {"type":"response.in_progress"}'),
+        (0.04, ': keepalive'),
+        (0.08, 'data: {"type":"response.in_progress"}'),
+    ])
+
+    with pytest.raises(InferenceError, match="stream stalled"):
+        _ = [event async for event in _aiter_response_events(response)]
+
+
+@pytest.mark.asyncio
+async def test_codex_stream_model_output_resets_progress_watchdog(monkeypatch) -> None:
+    monkeypatch.setattr("inference.providers.openai_codex.SSE_CHUNK_TIMEOUT_SECONDS", 0.1)
+    response = _LineResponse([
+        (0, 'data: {"type":"response.created"}'),
+        (0.04, 'data: {"type":"response.output_text.delta","delta":"hi"}'),
+        (0.04, 'data: {"type":"response.completed"}'),
+    ])
+
+    events = [event async for event in _aiter_response_events(response)]
+
+    assert [event["type"] for event in events] == [
+        "response.created", "response.output_text.delta", "response.completed"
+    ]
 
 
 def test_token_store_round_trip_is_private(tmp_path) -> None:
