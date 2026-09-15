@@ -9,7 +9,7 @@ import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -185,6 +185,7 @@ async def create_local_session(request: Request, response: Response) -> dict[str
 class ConversationCreate(BaseModel):
     title: str = Field(default="New chat", max_length=160)
     workspace: str | None = Field(default=None, max_length=4096)
+    source: Literal["web", "cli"] = "web"
 
 
 class ConversationUpdate(BaseModel):
@@ -306,6 +307,7 @@ async def create_conversation(body: ConversationCreate) -> dict[str, Any]:
     conversation = await current_services().require("conversation_store").create(
         body.title,
         _workspace_path(requested_workspace),
+        body.source,
     )
     return _conversation_payload(conversation)
 
@@ -378,7 +380,7 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
                 prompt=body.prompt,
                 workspace=conversation.workspace,
                 context=context,
-                idempotency_key=f"web:{conversation_id}:{turn.id}",
+                idempotency_key=f"conversation:{conversation_id}:{turn.id}",
             )
         )
     )

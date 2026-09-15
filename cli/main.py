@@ -306,11 +306,23 @@ def list_tasks() -> None:
 # ── shared task runner ────────────────────────────────────────────────────────
 
 
-def _submit_task(prompt: str, workspace: str | None) -> str:
-    body: dict = {"prompt": prompt}
+def _create_cli_conversation(workspace: str | None = None) -> str:
+    body: dict = {"title": "New chat", "source": "cli"}
     if workspace:
         body["workspace"] = workspace
-    return _api("POST", "/orchestrator/task", json=body).json()["task_id"]
+    return _api("POST", "/web/api/conversations", json=body).json()["id"]
+
+
+def _submit_conversation_turn(conversation_id: str, prompt: str) -> str:
+    return _api(
+        "POST",
+        f"/web/api/conversations/{conversation_id}/turns",
+        json={"prompt": prompt},
+    ).json()["task_id"]
+
+
+def _submit_task(prompt: str, workspace: str | None) -> str:
+    return _submit_conversation_turn(_create_cli_conversation(workspace), prompt)
 
 
 def _answer_from_ledger(task_id: str) -> str:
@@ -1487,6 +1499,7 @@ class _PushToTalk:
         self._held: set = set()
         self._frames: list = []
         self._recording = False
+        self._conversation_id = ""
 
     def listen(self) -> None:
         """Capture and submit until the user interrupts."""
@@ -1539,8 +1552,10 @@ class _PushToTalk:
             return
         typer.secho(f"  ✎ {text}", fg=typer.colors.CYAN)
         try:
-            response = _api("POST", "/orchestrator/task", json={"prompt": text})
-            typer.secho(f"  ✓ Task submitted: {response.json().get('task_id', '?')}", fg=typer.colors.GREEN)
+            if not self._conversation_id:
+                self._conversation_id = _create_cli_conversation()
+            task_id = _submit_conversation_turn(self._conversation_id, text)
+            typer.secho(f"  ✓ Task submitted: {task_id}", fg=typer.colors.GREEN)
         except Exception as exc:
             typer.secho(f"  ERROR submitting task: {exc}", fg=typer.colors.RED, err=True)
 

@@ -42,6 +42,8 @@ class _CapturingClient:
 
     async def post(self, url, **kw):
         self.sink.append({"url": url, "json": kw.get("json")})
+        if url.endswith("/web/api/conversations"):
+            return _FakeResp({"id": "conversation_test"})
         return _FakeResp({"task_id": "task_test"})
 
     async def get(self, url, **kw):
@@ -68,7 +70,6 @@ async def test_full_sse_lifecycle_renders_without_crashing():
         await pilot.pause()
         tid = "task_test"
         app._user_task_ids.add(tid)
-        app._pending_user_messages[tid] = "hi"
         events = [
             ("classifying", {}),
             ("classified", {"domain": "general", "is_consequential": True}),
@@ -122,6 +123,30 @@ async def test_untouched_paste_placeholder_still_sends_the_paste():
         await app.on_input_submitted(SimpleNamespace(value=prompt.value, input=prompt))
         await pilot.pause()
         assert sink and sink[-1]["json"]["prompt"].strip() == big.strip()
+
+
+async def test_tui_reuses_one_shared_conversation_for_all_prompts():
+    app = NorthApp(base_url="http://north.test", headers=_HEADERS, workspace="/tmp/project")
+    app._set_status = lambda value: None
+    sink = _install_capturing_http(app)
+
+    assert await app._post_task("first") == "task_test"
+    assert await app._post_task("second") == "task_test"
+
+    assert sink == [
+        {
+            "url": "http://north.test/web/api/conversations",
+            "json": {"title": "New chat", "source": "cli", "workspace": "/tmp/project"},
+        },
+        {
+            "url": "http://north.test/web/api/conversations/conversation_test/turns",
+            "json": {"prompt": "first"},
+        },
+        {
+            "url": "http://north.test/web/api/conversations/conversation_test/turns",
+            "json": {"prompt": "second"},
+        },
+    ]
 
 
 async def test_read_only_panes_are_not_focusable():

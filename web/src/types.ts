@@ -4,6 +4,7 @@ export interface Conversation {
   id: string;
   title: string;
   workspace: string;
+  source: "web" | "cli";
   pinned: boolean;
   archived: boolean;
   created_at: string;

@@ -14,6 +14,7 @@ async def test_conversation_lifecycle_and_turn_order(tmp_path) -> None:
     conversation = await store.create(workspace=str(tmp_path))
     assert conversation.title == "New chat"
     assert conversation.workspace == str(tmp_path)
+    assert conversation.source == "web"
 
     first = await store.add_turn(conversation.id, "Design the cockpit")
     second = await store.add_turn(conversation.id, "Now build the chat room")
@@ -32,7 +33,7 @@ async def test_conversation_lifecycle_and_turn_order(tmp_path) -> None:
     assert renamed.workspace == str(other_workspace)
 
 
-async def test_existing_database_is_migrated_with_workspace(tmp_path) -> None:
+async def test_existing_database_is_migrated_with_workspace_and_source(tmp_path) -> None:
     db_path = tmp_path / "web.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -45,6 +46,7 @@ async def test_existing_database_is_migrated_with_workspace(tmp_path) -> None:
     store = ConversationStore(db_path)
     conversation = await store.create()
     assert conversation.workspace == ""
+    assert conversation.source == "web"
 
 
 async def test_chat_turn_uses_its_conversation_workspace(tmp_path) -> None:
@@ -78,6 +80,20 @@ async def test_new_chat_inherits_the_server_workspace(tmp_path) -> None:
         payload = await web_api.create_conversation(web_api.ConversationCreate())
 
     assert payload["workspace"] == str(tmp_path.resolve())
+
+
+async def test_cli_conversation_is_visible_in_shared_list(tmp_path) -> None:
+    store = ConversationStore(tmp_path / "web.db")
+
+    class Settings:
+        north_workspace = str(tmp_path)
+
+    with bind_services(ApiServices(conversation_store=store, north_settings=Settings())):
+        payload = await web_api.create_conversation(web_api.ConversationCreate(source="cli"))
+        listed = await web_api.list_conversations()
+
+    assert payload["source"] == "cli"
+    assert [(item["id"], item["source"]) for item in listed] == [(payload["id"], "cli")]
 
 
 async def test_workspace_picker_lists_real_directories(tmp_path) -> None:

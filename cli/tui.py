@@ -56,7 +56,6 @@ from cli.formatting import (
     _strip_markup,
     summarize_diff,
 )
-from cli.tui_text import describe_turn as _describe_turn
 from cli.tui_text import estimated_tokens as _estimated_tokens
 from cli.tui_text import requested_context_document as _requested_context_document
 from cli.tui_text import slash_argument as _slash_argument
@@ -686,9 +685,7 @@ class NorthApp(App[None]):
         self._pending_card_id: str | None = None
         self._user_task_ids: set[str] = set()
         self._last_submitted_prompt: str = ""
-        self._conversation_history: deque[dict] = deque(maxlen=5)
-        self._pending_user_messages: dict[str, str] = {}
-        self._task_tool_activity: dict[str, list[dict]] = {}
+        self._conversation_id: str = ""
         self._last_logged_markup: str = ""
 
         self._input_history: list[str] = []
@@ -1252,14 +1249,10 @@ class NorthApp(App[None]):
             "duration": None,
         }
         self._tool_history.append(entry)
-        if task_id:
-            self._task_tool_activity.setdefault(task_id, []).append(
-                {"tool": tool, "params": params_str, "result": None}
-            )
-            if task_id in self._current_turn_activity:
-                self._current_turn_activity[task_id]["tools"].append(entry)
-                self._current_turn_activity[task_id]["phase"] = tool
-                self._render_active_turns()
+        if task_id and task_id in self._current_turn_activity:
+            self._current_turn_activity[task_id]["tools"].append(entry)
+            self._current_turn_activity[task_id]["phase"] = tool
+            self._render_active_turns()
 
     async def _on_tool_result(self, task_id: str, data: dict) -> None:
         tool = data.get("tool", "")
@@ -1287,11 +1280,6 @@ class NorthApp(App[None]):
             st = history_entry.get("start_time")
             if st:
                 history_entry["duration"] = max(0.01, time.monotonic() - st)
-
-        if task_id and task_id in self._task_tool_activity:
-            tools = self._task_tool_activity[task_id]
-            if tools:
-                tools[-1]["result"] = result
 
         if task_id and task_id in self._current_turn_activity:
             turn_tools = self._current_turn_activity[task_id].get("tools", [])
@@ -1414,11 +1402,6 @@ class NorthApp(App[None]):
         self._refresh_hint()
         self._set_status("")
         self._user_task_ids.discard(task_id)
-        user_msg = self._pending_user_messages.pop(task_id, "")
-        tools_used = self._task_tool_activity.pop(task_id, [])
-        if user_msg and output:
-            short = output[:600] + ("…" if len(output) > 600 else "")
-            self._conversation_history.append({"user": user_msg, "tools": tools_used, "north": short})
         self._render_status_bar()
 
     async def _fetch_ledger_output(self, task_id: str) -> str:
@@ -1448,7 +1431,6 @@ class NorthApp(App[None]):
         self._reasoning_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
-        self._task_tool_activity.pop(task_id, None)
         error = data.get("error", "Task failed.")
         turn = self._current_turn_activity.pop(task_id, None)
         if turn is not None:
@@ -1474,7 +1456,6 @@ class NorthApp(App[None]):
         self._reasoning_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
-        self._task_tool_activity.pop(task_id, None)
         turn = self._current_turn_activity.pop(task_id, None)
         if turn is not None:
             turn["status"] = "cancelled"
@@ -1499,7 +1480,6 @@ class NorthApp(App[None]):
         self._reasoning_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
-        self._task_tool_activity.pop(task_id, None)
         reason = data.get("reason", "Task skipped.")
         turn = self._current_turn_activity.pop(task_id, None)
         if turn is not None:
@@ -1522,7 +1502,6 @@ class NorthApp(App[None]):
         self._stream_start_times.pop(task_id, None)
         self._stream_token_counts.pop(task_id, None)
         self._streaming_tok_per_sec = 0.0
-        self._task_tool_activity.pop(task_id, None)
         reason = data.get("reason", "Task rejected.")
         turn = self._current_turn_activity.pop(task_id, None)
         if turn is not None:
@@ -2044,14 +2023,10 @@ class NorthApp(App[None]):
         except Exception:
             pass
 
-    def _task_request_body(self, text: str) -> dict:
-        body: dict = {"prompt": text}
+    def _conversation_request_body(self) -> dict:
+        body: dict = {"title": "New chat", "source": "cli"}
         if self.workspace:
             body["workspace"] = self.workspace
-        if self._conversation_history:
-            body["context"] = "## Recent conversation\n" + "\n\n".join(
-                _describe_turn(turn) for turn in self._conversation_history
-            )
         return body
 
     async def _post_task(self, text: str) -> str:
@@ -2059,10 +2034,19 @@ class NorthApp(App[None]):
         self._set_status("…")
         try:
             async with self._http() as c:
+                if not self._conversation_id:
+                    conversation = await c.post(
+                        f"{self.base_url}/web/api/conversations",
+                        headers=self.headers,
+                        json=self._conversation_request_body(),
+                        timeout=30.0,
+                    )
+                    conversation.raise_for_status()
+                    self._conversation_id = str(conversation.json().get("id", ""))
                 resp = await c.post(
-                    f"{self.base_url}/orchestrator/task",
+                    f"{self.base_url}/web/api/conversations/{self._conversation_id}/turns",
                     headers=self.headers,
-                    json=self._task_request_body(text),
+                    json={"prompt": text},
                     timeout=30.0,
                 )
                 resp.raise_for_status()
@@ -2108,7 +2092,6 @@ class NorthApp(App[None]):
             return
         self._user_task_ids.add(task_id)
         self._turn_start_times[task_id] = time.monotonic()
-        self._pending_user_messages[task_id] = text
         self._current_turn_activity[task_id] = self._new_turn_activity(task_id, text)
         self._session_tokens += _estimated_tokens(text)
         self._render_active_turns()
@@ -2648,7 +2631,6 @@ class NorthApp(App[None]):
         if not task_id:
             return
         self._user_task_ids.add(task_id)
-        self._pending_user_messages[task_id] = text
         self._session_tokens += _estimated_tokens(text)
         self._render_status_bar()
 

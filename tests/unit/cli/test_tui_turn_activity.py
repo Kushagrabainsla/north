@@ -78,7 +78,6 @@ async def test_turn_activity_lifecycle_and_details_toggle():
         # Submit task & start tracking
         tid = "task-turn-1"
         app._user_task_ids.add(tid)
-        app._pending_user_messages[tid] = "check files"
         app._current_turn_activity[tid] = {
             "task_id": tid,
             "prompt": "check files",
@@ -141,7 +140,6 @@ async def test_toggle_activity_details_mid_flight():
 
         tid = "task-inflight-1"
         app._user_task_ids.add(tid)
-        app._pending_user_messages[tid] = "in flight task prompt"
         app._current_turn_activity[tid] = {
             "task_id": tid,
             "prompt": "in flight task prompt",

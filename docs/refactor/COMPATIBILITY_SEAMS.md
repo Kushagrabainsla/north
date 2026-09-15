@@ -30,7 +30,7 @@ tests did not have to change in a mechanical-move commit.
 | `cli.main._web_build_is_stale` | `cli.web_build` | Used by `north web`; also imported by its existing test |
 | `cli.main._last_error_lines` | `cli.startup_report` | Used by startup failure reporting |
 | `cli.main._pinned_git_spec` | `cli.update_spec` | Used by `north update` |
-| `cli.tui._describe_turn`, `_estimated_tokens`, `_slash_argument`, `_requested_context_document` | `cli.tui_text` | Used throughout the app class |
+| `cli.tui._estimated_tokens`, `_slash_argument`, `_requested_context_document` | `cli.tui_text` | Used throughout the app class |
 | `tools._path` re-exports of handoff and pruning helpers | `utils.handoff`, `utils.filesystem` | Plugin-facing: tools import from `tools._path` |
 | `tools.universal._schedules.parse_weekdays` | `utils.weekdays` | Keeps the CLI and API validating against one parser |
 

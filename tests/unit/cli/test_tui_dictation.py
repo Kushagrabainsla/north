@@ -40,11 +40,12 @@ async def test_toggle_dictation_starts_stops_transcribes() -> None:
 
     # Mock settings and endpoints
     mock_resp_transcribe = _FakeResp({"text": "Hello North, find the bug"})
+    mock_resp_conversation = _FakeResp({"id": "conversation_12345"})
     mock_resp_task = _FakeResp({"task_id": "task_12345"})
 
     # Mock HTTP client
     mock_client = AsyncMock()
-    mock_client.post.side_effect = [mock_resp_transcribe, mock_resp_task]
+    mock_client.post.side_effect = [mock_resp_transcribe, mock_resp_conversation, mock_resp_task]
     app._client = mock_client
 
     async with app.run_test(size=(100, 30)) as pilot:
@@ -79,13 +80,17 @@ async def test_toggle_dictation_starts_stops_transcribes() -> None:
                 timeout=60.0,
             )
 
-            # Assert the transcribed text was submitted as a task
             mock_client.post.assert_any_call(
-                "http://127.0.0.1:8000/orchestrator/task",
+                "http://127.0.0.1:8000/web/api/conversations",
                 headers={"X-North-Secret": "test-secret"},
-                json={
-                    "prompt": "Hello North, find the bug",
-                    "workspace": "/tmp/fake-workspace",
-                },
+                json={"title": "New chat", "source": "cli", "workspace": "/tmp/fake-workspace"},
+                timeout=30.0,
+            )
+
+            # Assert the transcribed text was submitted into the same shared conversation.
+            mock_client.post.assert_any_call(
+                "http://127.0.0.1:8000/web/api/conversations/conversation_12345/turns",
+                headers={"X-North-Secret": "test-secret"},
+                json={"prompt": "Hello North, find the bug"},
                 timeout=30.0,
             )
