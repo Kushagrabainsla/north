@@ -88,6 +88,10 @@ _INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user", "f
 # run means nobody is there, whatever happened in between.
 MAX_UNANSWERED_APPROVALS = 2
 
+# Soft limits guide the model toward synthesis; they never terminate a run.
+# The global ``agent_max_iterations`` setting remains the hard safety ceiling.
+_SOFT_BUDGETS: dict[str, tuple[int, int]] = {"quick_readonly": (3, 6)}
+
 
 # How much of a final answer is kept as its one-line summary.
 _SUMMARY_CHARS = 120
@@ -127,6 +131,7 @@ class _RunTally:
     tools_used: list[str] = field(default_factory=list)
     successful_tools: list[str] = field(default_factory=list)
     models_used: list[str] = field(default_factory=list)
+    tool_call_count: int = 0
 
     def add(self, response: ToolCallResponse) -> None:
         self.cost_usd += response.cost_usd
@@ -144,6 +149,7 @@ class _RunTally:
             _append_once(self.models_used, response.model_used)
 
     def note_call(self, tool_name: str) -> None:
+        self.tool_call_count += 1
         _append_once(self.tools_used, tool_name)
 
     def note_success(self, tool_name: str) -> None:
@@ -439,6 +445,7 @@ class AgenticLLMAgent(LLMAgent):
         tally = _RunTally()
         emitted_model: str = ""
         unanswered_approvals: int = 0
+        soft_budget_noted = False
 
         known_registry_tools = (
             set(self._deps.tool_registry.all_tool_names()) if getattr(self._deps, "tool_registry", None) else set()
@@ -446,6 +453,13 @@ class AgenticLLMAgent(LLMAgent):
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
         for iteration in range(self._deps.agent_max_iterations):
+            if not soft_budget_noted:
+                soft_budget_noted = await self._note_soft_budget_if_needed(
+                    payload,
+                    messages,
+                    completed_turns=iteration,
+                    tool_calls=tally.tool_call_count,
+                )
             await self._compact_for_next_call(
                 messages, tally.last_tokens_in, tally.last_model_used, compact_tokens, payload.task_id
             )
@@ -515,6 +529,49 @@ class AgenticLLMAgent(LLMAgent):
             "Reached the maximum number of reasoning steps without a final answer.",
             "Iteration limit reached",
         )
+
+    async def _note_soft_budget_if_needed(
+        self,
+        payload: AgentPayload,
+        messages: list[dict],
+        *,
+        completed_turns: int,
+        tool_calls: int,
+    ) -> bool:
+        """Ask an over-budget quick run to synthesize, without forcing it to stop."""
+        budget = _SOFT_BUDGETS.get(payload.execution_profile)
+        if budget is None:
+            return False
+        turn_budget, tool_budget = budget
+        if completed_turns < turn_budget and tool_calls < tool_budget:
+            return False
+
+        reason = "model_turns" if completed_turns >= turn_budget else "tool_calls"
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Soft efficiency budget reached. If the requested result is supported by the evidence already "
+                    "collected, synthesize the final answer now. If material evidence is still missing, continue; "
+                    "do not guess or stop solely because of this budget. Limit further work to the specific missing "
+                    "evidence."
+                ),
+            }
+        )
+        if self._deps.stream_manager is not None and payload.task_id:
+            await self._deps.stream_manager.emit(
+                payload.task_id,
+                "budget_soft_limit",
+                {
+                    "profile": payload.execution_profile,
+                    "reason": reason,
+                    "completed_turns": completed_turns,
+                    "tool_calls": tool_calls,
+                    "turn_budget": turn_budget,
+                    "tool_budget": tool_budget,
+                },
+            )
+        return True
 
     async def _complete_or_shrink(
         self,

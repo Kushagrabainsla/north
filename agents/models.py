@@ -53,6 +53,10 @@ class AgentPayload(BaseModel):
     context_sections: dict[str, str] = Field(default_factory=dict, exclude=True)
     workspace: str = ""  # root directory for filesystem/shell tools
     model_pool: str = "reasoning"  # task-scoped model pool (reasoning, speed, fast_cheap, vision)
+    # Server-selected execution shape. ``quick_readonly`` gets an efficiency
+    # reminder after a small number of turns/tools, but that reminder is soft:
+    # the agent may continue when evidence is still missing.
+    execution_profile: str = "standard"
     delegation_depth: int = 0  # incremented on each delegate_task call; capped at MAX_DELEGATION_DEPTH
     delegation_chain: list[str] = Field(default_factory=list)  # ordered agent names in this call chain
     # Model ids this run must avoid, so the agent is forced onto a different model

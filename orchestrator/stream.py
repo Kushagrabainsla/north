@@ -47,6 +47,7 @@ _DURABLE_EVENTS = frozenset(
         "model",
         "model_response",
         "prompt_profile",
+        "budget_soft_limit",
         "compaction",
         "stream_reset",
     }

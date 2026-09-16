@@ -177,6 +177,65 @@ async def test_each_model_turn_emits_prompt_section_attribution(tmp_path: Path) 
     assert profiles[0]["estimated_input_tokens"] == sum(profiles[0]["sections"].values())
 
 
+async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path: Path) -> None:
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit(self, task_id: str, event: str, data: dict) -> None:
+            self.events.append((event, data))
+
+    class SlowEvidenceRouter(MockInferenceRouter):
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def complete_with_tools(self, request, token_callback=None):
+            self.requests.append(request)
+            if len(self.requests) <= 3:
+                return ToolCallResponse(
+                    type="tool_calls",
+                    calls=[ToolCall(name="missing_tool", call_id=f"c{len(self.requests)}", params={})],
+                    model_used="mock",
+                    tokens_in=10,
+                    tokens_out=2,
+                )
+            return ToolCallResponse(
+                type="message",
+                content="finished with enough evidence",
+                calls=[],
+                model_used="mock",
+                tokens_in=10,
+                tokens_out=5,
+            )
+
+    stream = RecordingStream()
+    router = SlowEvidenceRouter()
+    agent = _load_agent("researcher", tmp_path, router)
+    agent.deps.stream_manager = stream
+
+    result = await agent.run(
+        AgentPayload(task_id="quick-task", prompt="inspect", execution_profile="quick_readonly")
+    )
+
+    assert result.output == "finished with enough evidence"
+    assert len(router.requests) == 4
+    notices = [data for event, data in stream.events if event == "budget_soft_limit"]
+    assert notices == [
+        {
+            "profile": "quick_readonly",
+            "reason": "model_turns",
+            "completed_turns": 3,
+            "tool_calls": 3,
+            "turn_budget": 3,
+            "tool_budget": 6,
+        }
+    ]
+    assert any(
+        "Soft efficiency budget reached" in (message.get("content") or "")
+        for message in router.requests[-1].messages
+    )
+
+
 async def test_tool_result_injected_into_next_request(tmp_path: Path) -> None:
     """After a tool call, the tool result must appear as a 'tool' role message in the next request."""
     received_messages_on_second_call: list[dict] = []
