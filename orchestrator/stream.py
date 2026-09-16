@@ -46,6 +46,7 @@ _DURABLE_EVENTS = frozenset(
         "skill_selected",
         "model",
         "model_response",
+        "prompt_profile",
         "compaction",
         "stream_reset",
     }

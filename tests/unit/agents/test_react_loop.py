@@ -140,6 +140,43 @@ async def test_tool_call_then_final_answer_takes_two_iterations(tmp_path: Path) 
     assert result.output == "Done after tool."
 
 
+async def test_each_model_turn_emits_prompt_section_attribution(tmp_path: Path) -> None:
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit(self, task_id: str, event: str, data: dict) -> None:
+            self.events.append((event, data))
+
+    class UsageRouter(MockInferenceRouter):
+        async def complete_with_tools(self, request, token_callback=None):
+            return ToolCallResponse(
+                type="message",
+                content="done",
+                calls=[],
+                model_used="mock",
+                tokens_in=123,
+                tokens_out=7,
+                cached_tokens=40,
+            )
+
+    stream = RecordingStream()
+    agent = _load_agent("researcher", tmp_path, UsageRouter())
+    agent.deps.stream_manager = stream
+    payload = AgentPayload(task_id="profile-task", prompt="inspect", context="earlier turn")
+
+    await agent.run(payload)
+
+    profiles = [data for event, data in stream.events if event == "prompt_profile"]
+    assert len(profiles) == 1
+    assert profiles[0]["actual_input_tokens"] == 123
+    assert profiles[0]["cached_tokens"] == 40
+    assert profiles[0]["sections"]["caller_context"] > 0
+    assert profiles[0]["sections"]["system_instructions"] > 0
+    assert profiles[0]["sections"]["tool_schemas"] > 0
+    assert profiles[0]["estimated_input_tokens"] == sum(profiles[0]["sections"].values())
+
+
 async def test_tool_result_injected_into_next_request(tmp_path: Path) -> None:
     """After a tool call, the tool result must appear as a 'tool' role message in the next request."""
     received_messages_on_second_call: list[dict] = []
@@ -375,6 +412,15 @@ async def test_empty_context_store_produces_empty_context(tmp_path: Path) -> Non
     payload = AgentPayload(task_id="t1", prompt="x")
     loaded = await agent._load_context(payload)
     assert isinstance(loaded, str)
+
+
+async def test_context_loading_records_content_free_section_boundaries(tmp_path: Path) -> None:
+    agent = _load_agent("researcher", tmp_path)
+    payload = AgentPayload(task_id="t1", prompt="x", context="previous conversation")
+
+    await agent._load_context(payload, selected_skills=[])
+
+    assert payload.context_sections == {"caller_context": "previous conversation"}
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,15 @@ export interface AgentRun {
   tokens_out: number;
   cost_usd: number;
   skills: { name: string; version: string }[];
+  prompt_profiles?: {
+    turn: number;
+    estimated_input_tokens: number;
+    actual_input_tokens: number;
+    output_tokens: number;
+    cached_tokens: number;
+    cache_write_tokens: number;
+    sections: Record<string, number>;
+  }[];
 }
 
 export interface TaskDetail {

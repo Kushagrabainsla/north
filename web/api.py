@@ -248,6 +248,13 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
         ledger.query(LedgerFilters(task_id=task_id, limit=300, order_asc=True)),
         current_services().require("agent_run_store").list_for_task(task_id),
     )
+    run_events = await asyncio.gather(
+        *(current_services().require("agent_run_store").list_events(run.run_id) for run in runs)
+    )
+    prompt_profiles = {
+        run.run_id: [event["data"] for event in events if event["event"] == "prompt_profile"]
+        for run, events in zip(runs, run_events, strict=True)
+    }
     provider_by_model: dict[str, str] = {}
     if current_services().inference_router is not None:
         for pool in current_services().inference_router.current_pools().values():
@@ -275,6 +282,7 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
                 "models_used": list(run.models_used),
                 "providers_used": sorted({provider_by_model.get(model, "unknown") for model in run.models_used}),
                 "skills": list(run.skills),
+                "prompt_profiles": prompt_profiles[run.run_id],
             }
             for run in runs
         ],

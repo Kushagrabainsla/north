@@ -29,6 +29,11 @@ async def test_run_store_preserves_hierarchy_skills_outcome_and_events(tmp_path)
     stream = EventStreamManager(run_store=store)
     with bind_execution(ExecutionIdentity(payload.run_id, payload.parent_run_id, payload.attempt)):
         await stream.emit(payload.task_id, "tool_called", {"tool": "read_file", "params": {"path": "a.py"}})
+        await stream.emit(
+            payload.task_id,
+            "prompt_profile",
+            {"turn": 1, "sections": {"system_instructions": 20, "task": 3}},
+        )
 
     await store.merge_provider_state(
         payload.run_id,
@@ -62,8 +67,9 @@ async def test_run_store_preserves_hierarchy_skills_outcome_and_events(tmp_path)
     await drain()
 
     events = await store.list_events(payload.run_id)
-    assert events[0]["event"] == "tool_called"
-    assert events[0]["data"]["parent_run_id"] == "parent-run"
+    by_name = {event["event"]: event for event in events}
+    assert by_name["tool_called"]["data"]["parent_run_id"] == "parent-run"
+    assert by_name["prompt_profile"]["data"]["sections"]["task"] == 3
 
     with sqlite3.connect(tmp_path / "tasks.db") as conn:
         usage = conn.execute(

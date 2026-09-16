@@ -46,6 +46,11 @@ class AgentPayload(BaseModel):
     attempt: int = 0
     prompt: str
     context: str = ""  # optional pre-loaded context summary
+    # Runtime-only attribution for the material merged into ``context``. Agents
+    # populate it while loading context so prompt telemetry can say where the
+    # input budget went without persisting private content or changing the
+    # model-visible prompt.
+    context_sections: dict[str, str] = Field(default_factory=dict, exclude=True)
     workspace: str = ""  # root directory for filesystem/shell tools
     model_pool: str = "reasoning"  # task-scoped model pool (reasoning, speed, fast_cheap, vision)
     delegation_depth: int = 0  # incremented on each delegate_task call; capped at MAX_DELEGATION_DEPTH

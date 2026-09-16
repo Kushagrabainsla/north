@@ -31,6 +31,7 @@ from agents.context_compaction import (
     HEAVY_OUTPUT_TOOLS,
     compact_history,
     compact_if_needed,
+    estimate_messages_tokens,
 )
 from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
@@ -168,6 +169,15 @@ def _append_once(seen: list[str], value: str) -> None:
     """Keep first-seen order without a parallel set to go stale."""
     if value not in seen:
         seen.append(value)
+
+
+def _estimate_value_tokens(value: Any) -> int:
+    """Estimate serialized prompt tokens without retaining the underlying text."""
+    if value in (None, "", [], {}):
+        return 0
+    if not isinstance(value, str):
+        value = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return max(1, (len(value) + 3) // 4)
 
 
 class AgenticLLMAgent(LLMAgent):
@@ -435,7 +445,7 @@ class AgenticLLMAgent(LLMAgent):
         )
 
         # Iteration cap is set from settings.agent_max_iterations via AgentDependencies.
-        for _ in range(self._deps.agent_max_iterations):
+        for iteration in range(self._deps.agent_max_iterations):
             await self._compact_for_next_call(
                 messages, tally.last_tokens_in, tally.last_model_used, compact_tokens, payload.task_id
             )
@@ -463,6 +473,7 @@ class AgenticLLMAgent(LLMAgent):
             if token_cb is not None:
                 await token_cb.flush()
             tally.add(response)
+            await self._emit_prompt_profile(payload, iteration + 1, messages, tools, response)
             emitted_model = await self._maybe_emit_model(response, emitted_model, payload.task_id)
             await self._record_provider_metadata(payload, response)
 
@@ -604,6 +615,53 @@ class AgenticLLMAgent(LLMAgent):
             await self._deps.stream_manager.emit(task_id, "model", {"model": response.model_used})
             return response.model_used
         return emitted_model
+
+    async def _emit_prompt_profile(
+        self,
+        payload: AgentPayload,
+        turn: int,
+        messages: list[dict],
+        tools: list[dict],
+        response: ToolCallResponse,
+    ) -> None:
+        """Persist content-free token estimates for each prompt component."""
+        stream = self._deps.stream_manager
+        if stream is None or not payload.task_id:
+            return
+
+        system_tokens = estimate_messages_tokens(messages[:1])
+        task_tokens = _estimate_value_tokens(payload.prompt)
+        context_sections = {
+            name: _estimate_value_tokens(value) for name, value in payload.context_sections.items() if value
+        }
+        initial_user_tokens = estimate_messages_tokens(messages[1:2]) if len(messages) > 1 else 0
+        user_scaffolding = max(0, initial_user_tokens - task_tokens - sum(context_sections.values()))
+        react_history = estimate_messages_tokens(messages[2:]) if len(messages) > 2 else 0
+        tool_schema_tokens = _estimate_value_tokens(tools)
+        sections = {
+            "system_instructions": system_tokens,
+            "task": task_tokens,
+            **context_sections,
+            "user_scaffolding": user_scaffolding,
+            "react_history": react_history,
+            "tool_schemas": tool_schema_tokens,
+        }
+        try:
+            await stream.emit(
+                payload.task_id,
+                "prompt_profile",
+                {
+                    "turn": turn,
+                    "estimated_input_tokens": sum(sections.values()),
+                    "actual_input_tokens": response.tokens_in,
+                    "output_tokens": response.tokens_out,
+                    "cached_tokens": response.cached_tokens,
+                    "cache_write_tokens": response.cache_write_tokens,
+                    "sections": sections,
+                },
+            )
+        except Exception:
+            logger.debug("prompt_profile emit failed for task %s", payload.task_id, exc_info=True)
 
     async def _record_provider_metadata(self, payload: AgentPayload, response: Any) -> None:
         """Persist structured provider protocol state for this exact run."""

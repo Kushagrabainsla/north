@@ -116,6 +116,7 @@ function RunRow({ run }: { run: AgentRun }) {
         {run.cost_usd ? ` · $${run.cost_usd.toFixed(4)}` : ""}
         {run.skills?.length ? ` · skills: ${run.skills.map(s => s.name).join(", ")}` : ""}
       </small>
+      {run.prompt_profiles?.length ? <small>{run.prompt_profiles.length} model turns · latest prompt: {Object.entries(run.prompt_profiles.at(-1)?.sections || {}).filter(([, tokens]) => tokens > 0).map(([name, tokens]) => `${name.replaceAll("_", " ")} ${tokens.toLocaleString()}`).join(" · ")}</small> : null}
       {run.error && <p className="run-error">{run.error}</p>}
     </div>
     <Status value={run.status}/>

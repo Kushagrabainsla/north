@@ -174,15 +174,22 @@ class Agent(ABC):
         list means selection ran and chose nothing.
         """
         parts: list[str] = []
+        sections: dict[str, str] = {}
+
+        def add_section(name: str, value: str) -> None:
+            if not value:
+                return
+            parts.append(value)
+            sections[name] = value
 
         if payload.context:
-            parts.append(payload.context)
+            add_section("caller_context", payload.context)
 
         if payload.workspace:
             try:
                 repo_conventions = await load_repo_instructions(payload.workspace)
                 if repo_conventions:
-                    parts.append(repo_conventions)
+                    add_section("repository_instructions", repo_conventions)
             except Exception as exc:
                 logger.warning("Repo instruction load failed for task %s: %s", payload.task_id, exc)
 
@@ -192,7 +199,7 @@ class Agent(ABC):
             try:
                 repo_map = await asyncio.to_thread(build_repo_map, payload.workspace)
                 if repo_map:
-                    parts.append(f"## Repository map (key files and their symbols)\n{repo_map}")
+                    add_section("repository_map", f"## Repository map (key files and their symbols)\n{repo_map}")
             except Exception as exc:
                 logger.warning("Repo map build failed for task %s: %s", payload.task_id, exc)
 
@@ -201,7 +208,7 @@ class Agent(ABC):
         recalled = await memory.recall(principal, payload.prompt)
         rendered = recalled.render()
         if rendered:
-            parts.append(rendered)
+            add_section("memory", rendered)
 
         # Surface the live task plan (#9) so a continued/resumed task re-enters with
         # its checklist intact. During the loop the update_plan tool output keeps it
@@ -211,7 +218,7 @@ class Agent(ABC):
             try:
                 plan = plan_store.render(payload.task_id)
                 if plan:
-                    parts.append(f"## Current task plan (update it with update_plan)\n{plan}")
+                    add_section("task_plan", f"## Current task plan (update it with update_plan)\n{plan}")
             except Exception as exc:
                 logger.debug("Plan injection failed for task %s: %s", payload.task_id, exc)
 
@@ -225,7 +232,8 @@ class Agent(ABC):
                 selected_skills = await self._select_skills(payload.prompt)
             skills_block = await self._load_skills_block(payload, selected_skills)
             if skills_block:
-                parts.append(skills_block)
+                add_section("skills", skills_block)
+        payload.context_sections = sections
         return "\n\n".join(p for p in parts if p)
 
     async def _load_skills_block(self, payload: AgentPayload, selected: list[Any]) -> str:
