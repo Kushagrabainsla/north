@@ -178,6 +178,14 @@ async def test_each_model_turn_emits_prompt_section_attribution(tmp_path: Path) 
 
 
 async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path: Path) -> None:
+    class EvidenceTool(Tool):
+        name = "gather_evidence"
+        description = "Gather another piece of read-only evidence."
+        parameters_schema = {"type": "object", "properties": {}}
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            return ToolOutput(success=True, data={"evidence": "ok"})
+
     class RecordingStream:
         def __init__(self) -> None:
             self.events: list[tuple[str, dict]] = []
@@ -194,7 +202,7 @@ async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path
             if len(self.requests) <= 3:
                 return ToolCallResponse(
                     type="tool_calls",
-                    calls=[ToolCall(name="missing_tool", call_id=f"c{len(self.requests)}", params={})],
+                    calls=[ToolCall(name="gather_evidence", call_id=f"c{len(self.requests)}", params={})],
                     model_used="mock",
                     tokens_in=10,
                     tokens_out=2,
@@ -212,6 +220,7 @@ async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path
     router = SlowEvidenceRouter()
     agent = _load_agent("researcher", tmp_path, router)
     agent.deps.stream_manager = stream
+    agent.deps.tool_registry.register(EvidenceTool())
 
     result = await agent.run(
         AgentPayload(task_id="quick-task", prompt="inspect", execution_profile="quick_readonly")
@@ -234,6 +243,41 @@ async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path
         "Soft efficiency budget reached" in (message.get("content") or "")
         for message in router.requests[-1].messages
     )
+
+
+async def test_quick_profile_escalates_after_tool_failure(tmp_path: Path) -> None:
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit(self, task_id: str, event: str, data: dict) -> None:
+            self.events.append((event, data))
+
+    class FailureThenAnswerRouter(MockInferenceRouter):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete_with_tools(self, request, token_callback=None):
+            self.calls += 1
+            if self.calls == 1:
+                return ToolCallResponse(
+                    type="tool_calls",
+                    calls=[ToolCall(name="missing_tool", call_id="missing", params={})],
+                    model_used="mock",
+                )
+            return ToolCallResponse(type="message", content="recovered", calls=[], model_used="mock")
+
+    stream = RecordingStream()
+    agent = _load_agent("researcher", tmp_path, FailureThenAnswerRouter())
+    agent.deps.stream_manager = stream
+    payload = AgentPayload(task_id="quick-failure", prompt="inspect", execution_profile="quick_readonly")
+
+    result = await agent.run(payload)
+
+    assert result.output == "recovered"
+    assert payload.execution_profile == "standard"
+    escalations = [data for event, data in stream.events if event == "execution_profile_escalated"]
+    assert escalations == [{"from": "quick_readonly", "to": "standard", "reason": "tool_failure"}]
 
 
 async def test_tool_result_injected_into_next_request(tmp_path: Path) -> None:

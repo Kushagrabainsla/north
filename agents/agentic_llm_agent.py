@@ -509,6 +509,11 @@ class AgenticLLMAgent(LLMAgent):
             for call in response.calls:
                 tally.note_call(call.name)
             evidence, unanswered = await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
+            if payload.execution_profile == "quick_readonly":
+                if any(self._is_mutating_call(call, tool_map) for call in response.calls):
+                    await self._escalate_execution_profile(payload, "mutating_or_delegated_tool")
+                elif any(not success for _, success in evidence):
+                    await self._escalate_execution_profile(payload, "tool_failure")
             for name, success in evidence:
                 if success:
                     tally.note_success(name)
@@ -571,7 +576,20 @@ class AgenticLLMAgent(LLMAgent):
                     "tool_budget": tool_budget,
                 },
             )
+        await self._escalate_execution_profile(payload, "soft_budget_exceeded")
         return True
+
+    async def _escalate_execution_profile(self, payload: AgentPayload, reason: str) -> None:
+        """Remove quick-path constraints when the task proves more involved."""
+        if payload.execution_profile != "quick_readonly":
+            return
+        payload.execution_profile = "standard"
+        if self._deps.stream_manager is not None and payload.task_id:
+            await self._deps.stream_manager.emit(
+                payload.task_id,
+                "execution_profile_escalated",
+                {"from": "quick_readonly", "to": "standard", "reason": reason},
+            )
 
     async def _complete_or_shrink(
         self,
@@ -993,6 +1011,7 @@ class AgenticLLMAgent(LLMAgent):
             # defaults and lost the conversation it was delegated within.
             context=payload.context,
             model_pool=payload.model_pool,
+            execution_profile=payload.execution_profile,
             exclude_models=list(payload.exclude_models),
             delegation_depth=payload.delegation_depth + 1,
             delegation_chain=[*payload.delegation_chain, self.name],

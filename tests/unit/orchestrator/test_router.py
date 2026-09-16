@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from inference import CompletionResponse
-from orchestrator.router import ExecutionPlanner
+from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
+from orchestrator.router import ExecutionPlanner, _execution_profile
 
 
 @pytest.mark.asyncio
@@ -144,6 +145,78 @@ def test_question_is_single_researcher() -> None:
     plan = _engineering_planner()._build_engineering_plan("question", 0.9, "t1")
     assert plan.agents == ["researcher"]
     assert plan.mode is ExecutionMode.SINGLE_AGENT
+
+
+def test_repository_overview_uses_quick_readonly_profile() -> None:
+    classification = IntentClassification(
+        is_consequential=False,
+        domain="engineering",
+        reasoning="repository overview",
+        confidence=0.92,
+    )
+    plan = ExecutionPlan(
+        task_id="t1",
+        agents=["researcher"],
+        parallel_groups=[["researcher"]],
+        dependencies={},
+        mode=ExecutionMode.SINGLE_AGENT,
+        engineering_kind="question",
+    )
+
+    assert (
+        _execution_profile(
+            "Check North's repo and provide context about what this project is.",
+            classification,
+            plan,
+        )
+        == "quick_readonly"
+    )
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Audit this repository for security issues.",
+        "Give me an overview of this repo and then implement the missing feature.",
+        "Investigate this project's performance regression.",
+    ],
+)
+def test_deep_or_mutating_repository_requests_keep_standard_profile(prompt: str) -> None:
+    classification = IntentClassification(
+        is_consequential=False,
+        domain="engineering",
+        reasoning="engineering task",
+        confidence=0.95,
+    )
+    plan = ExecutionPlan(
+        task_id="t1",
+        agents=["researcher"],
+        parallel_groups=[["researcher"]],
+        dependencies={},
+        mode=ExecutionMode.SINGLE_AGENT,
+        engineering_kind="research",
+    )
+
+    assert _execution_profile(prompt, classification, plan) == "standard"
+
+
+def test_low_confidence_or_multi_agent_overview_keeps_standard_profile() -> None:
+    low_confidence = IntentClassification(
+        is_consequential=False,
+        domain="engineering",
+        reasoning="uncertain",
+        confidence=0.6,
+    )
+    multi_agent = ExecutionPlan(
+        task_id="t1",
+        agents=["researcher", "architect"],
+        parallel_groups=[["researcher"], ["architect"]],
+        dependencies={"architect": ["researcher"]},
+        mode=ExecutionMode.HIERARCHICAL,
+        engineering_kind="design",
+    )
+
+    assert _execution_profile("Give me an overview of this repository.", low_confidence, multi_agent) == "standard"
 
 
 def test_low_confidence_forces_full_chain() -> None:

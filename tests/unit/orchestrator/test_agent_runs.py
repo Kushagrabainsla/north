@@ -35,6 +35,11 @@ async def test_run_store_preserves_hierarchy_skills_outcome_and_events(tmp_path)
             {"turn": 1, "sections": {"system_instructions": 20, "task": 3}},
         )
         await stream.emit(payload.task_id, "budget_soft_limit", {"profile": "quick_readonly"})
+        await stream.emit(
+            payload.task_id,
+            "execution_profile_escalated",
+            {"from": "quick_readonly", "to": "standard", "reason": "tool_failure"},
+        )
 
     await store.merge_provider_state(
         payload.run_id,
@@ -72,6 +77,7 @@ async def test_run_store_preserves_hierarchy_skills_outcome_and_events(tmp_path)
     assert by_name["tool_called"]["data"]["parent_run_id"] == "parent-run"
     assert by_name["prompt_profile"]["data"]["sections"]["task"] == 3
     assert by_name["budget_soft_limit"]["data"]["profile"] == "quick_readonly"
+    assert by_name["execution_profile_escalated"]["data"]["reason"] == "tool_failure"
 
     with sqlite3.connect(tmp_path / "tasks.db") as conn:
         usage = conn.execute(

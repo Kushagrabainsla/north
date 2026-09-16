@@ -90,6 +90,9 @@ class ExecutionPlan(BaseModel):
     # feature). Empty for non-engineering plans. Lets the DoD gate apply kind-specific
     # evidence checks (e.g. a bugfix should carry reproduction + regression evidence).
     engineering_kind: str = ""
+    # Server-owned runtime shape. Quick read-only work receives a soft budget;
+    # everything else uses the unrestricted standard profile.
+    execution_profile: str = "standard"
 
     def with_task_id(self, new_task_id: str) -> ExecutionPlan:
         """Return a copy of this plan with task_id replaced."""

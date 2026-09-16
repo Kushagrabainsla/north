@@ -1519,6 +1519,7 @@ class Orchestrator:
                 workspace,
                 context=context,
                 model_pool=model_pool,
+                execution_profile=plan.execution_profile,
                 edit_scope=edit_scope,
             )
             all_failures.extend(failed)
@@ -1590,7 +1591,14 @@ class Orchestrator:
         for group in plan.parallel_groups:
             agents = [self._agent_registry.get(name) for name in group]
             failed = await self._execute_agent_group(
-                task_id, prompt, agents, workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
+                task_id,
+                prompt,
+                agents,
+                workspace,
+                context=context,
+                model_pool=model_pool,
+                execution_profile=plan.execution_profile,
+                edit_scope=edit_scope,
             )
             all_failures.extend(failed)
         return all_failures
@@ -1987,6 +1995,7 @@ class Orchestrator:
         context: str = "",
         allow_delegation: bool = True,
         model_pool: str = "reasoning",
+        execution_profile: str = "standard",
         edit_scope: EditAuthorizer | None = None,
     ) -> list[str]:
         """Run a parallel group of agents concurrently; handle per-agent failures.
@@ -2011,6 +2020,7 @@ class Orchestrator:
                 workspace=workspace,
                 context=context,
                 model_pool=model_pool,
+                execution_profile=execution_profile,
                 exclude_models=await self._exclude_models_for(task_id, agent),
                 allow_delegation=allow_delegation,
                 edit_scope=edit_scope,

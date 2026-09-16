@@ -31,6 +31,12 @@ _NORMALIZE_RE = re.compile(r"[^a-z0-9 ]")
 # prompt and the routing cache key stay bounded on long conversations.
 _PLANNER_CONVERSATION_TAIL_CHARS: int = 2000
 
+_QUICK_REPOSITORY_TERMS = re.compile(r"\b(repo|repository|codebase|project)\b")
+_QUICK_OVERVIEW_TERMS = re.compile(r"\b(overview|summary|summarize|describe|explain|context|what is|what does)\b")
+_DEEP_WORK_TERMS = re.compile(
+    r"\b(audit|benchmark|compare|debug|design|fix|implement|investigate|modify|performance|research|security|test|trace|verify)\b"
+)
+
 
 def _normalize(text: str) -> str:
     return " ".join(_NORMALIZE_RE.sub("", text.lower().strip()).split())
@@ -112,6 +118,22 @@ def _recent_conversation(context: str) -> str:
     if section:
         return section[-_PLANNER_CONVERSATION_TAIL_CHARS:]
     return ""
+
+
+def _execution_profile(prompt: str, classification: IntentClassification, plan: ExecutionPlan) -> str:
+    """Choose the narrow quick path only for an unambiguous repository overview."""
+    text = _normalize(prompt)
+    safe_plan = (
+        classification.domain == "engineering"
+        and not classification.is_consequential
+        and classification.confidence >= 0.75
+        and plan.mode == ExecutionMode.SINGLE_AGENT
+        and plan.agents == ["researcher"]
+        and plan.engineering_kind in _NO_CODE_KINDS
+    )
+    overview = bool(_QUICK_REPOSITORY_TERMS.search(text) and _QUICK_OVERVIEW_TERMS.search(text))
+    asks_for_deep_work = bool(_DEEP_WORK_TERMS.search(text))
+    return "quick_readonly" if safe_plan and overview and not asks_for_deep_work else "standard"
 
 
 logger = logging.getLogger(__name__)
@@ -284,7 +306,12 @@ class ExecutionPlanner:
             else ExecutionPath.FAST
         )
         classification = classification.model_copy(update={"execution_path": path})
-        plan = plan.model_copy(update={"execution_path": path})
+        plan = plan.model_copy(
+            update={
+                "execution_path": path,
+                "execution_profile": _execution_profile(prompt, classification, plan),
+            }
+        )
 
         # Evict oldest entries when cache is full, then store.
         if len(self._plan_cache) >= _PLAN_CACHE_MAX_SIZE:

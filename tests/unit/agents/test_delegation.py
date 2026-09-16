@@ -251,6 +251,31 @@ async def test_delegation_propagates_workspace(tmp_path: Path) -> None:
     assert captured[0].workspace == workspace
 
 
+async def test_delegation_propagates_execution_profile(tmp_path: Path) -> None:
+    captured: list[AgentPayload] = []
+
+    class CapturingRegistry:
+        def get(self, name: str):
+            class CapAgent:
+                async def run(self, payload: AgentPayload) -> AgentResult:
+                    captured.append(payload)
+                    return AgentResult(output="ok", summary="ok")
+
+            return CapAgent()
+
+    deps = _make_deps(tmp_path)
+    deps.agent_registry = CapturingRegistry()
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
+    agent = GeneralAgent(config, deps)
+
+    await agent._delegate_task(
+        AgentPayload(task_id="t1", prompt="x", execution_profile="quick_readonly"),
+        {"agent": "researcher", "task": "inspect"},
+    )
+
+    assert captured[0].execution_profile == "quick_readonly"
+
+
 async def test_delegation_propagates_task_id(tmp_path: Path) -> None:
     """The sub-payload must carry the same task_id as the parent payload."""
     captured: list[AgentPayload] = []
