@@ -28,7 +28,7 @@ from agents.models import AgentPayload, AgentResult
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
 from orchestrator.journal import TaskJournal
-from orchestrator.verification import verify_claims
+from orchestrator.verification import evidence_sufficiency_violations, verify_claims
 from utils.ids import generate_id
 from utils.prompts import load_prompt
 from utils.text import extract_json
@@ -83,6 +83,15 @@ class ResultAuditor:
         # verify_claims stats claimed paths on disk - off-thread so the check
         # never blocks the event loop (CODING_STYLE §10.3).
         violations = await asyncio.to_thread(verify_claims, result.output, result.successful_tools, workspace)
+        if payload is not None:
+            violations.extend(
+                evidence_sufficiency_violations(
+                    payload.prompt,
+                    result.successful_tools,
+                    _evidence_counts(result),
+                    repository_context=bool(payload.workspace and agent.domain == "engineering"),
+                )
+            )
         violations = self._with_evidence_gate_violations(agent, result, violations)
         if not violations:
             return
@@ -166,6 +175,15 @@ class ResultAuditor:
         remaining = await asyncio.to_thread(
             verify_claims, repaired.output, repaired.successful_tools, payload.workspace
         )
+        remaining.extend(
+            evidence_sufficiency_violations(
+                payload.prompt,
+                repaired.successful_tools,
+                _evidence_counts(repaired),
+                repository_context=bool(payload.workspace and agent.domain == "engineering"),
+            )
+        )
+        remaining = self._with_evidence_gate_violations(agent, repaired, remaining)
         if len(remaining) >= len(violations):
             return violations  # no improvement - keep the original answer
 
@@ -243,3 +261,11 @@ def _adopt_repaired_answer(result: AgentResult, repaired: AgentResult) -> None:
     result.cost_usd += repaired.cost_usd
     result.tokens_in += repaired.tokens_in
     result.tokens_out += repaired.tokens_out
+
+
+def _evidence_counts(result: AgentResult) -> dict[str, int]:
+    """Read per-tool success counts, tolerating results from older agents."""
+    raw = result.data.get("evidence_counts") if isinstance(result.data, dict) else None
+    if not isinstance(raw, dict):
+        return dict.fromkeys(result.successful_tools or [], 1)
+    return {str(name): max(0, int(count)) for name, count in raw.items() if isinstance(count, int | float)}

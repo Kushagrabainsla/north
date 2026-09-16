@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from orchestrator.verification import verify_claims
+from orchestrator.verification import evidence_sufficiency_violations, verify_claims
 
 
 def test_empty_output_has_no_violations() -> None:
@@ -78,6 +78,41 @@ def test_multiple_independent_violations() -> None:
 
 def test_no_actionable_claims_no_violations() -> None:
     assert verify_claims("Here is a summary of the options you could consider.", []) == []
+
+
+def test_repository_overview_requires_structure_and_source_evidence() -> None:
+    task = "Give me an overview of this repository and explain how it works."
+
+    assert evidence_sufficiency_violations(task, ["list_dir"], {"list_dir": 1})
+    assert evidence_sufficiency_violations(task, ["read_file"], {"read_file": 2})
+    assert evidence_sufficiency_violations(task, ["list_dir", "read_file"], {"list_dir": 1, "read_file": 1}) == []
+
+
+def test_terse_overview_is_treated_as_repository_work_in_engineering_context() -> None:
+    assert evidence_sufficiency_violations(
+        "Give me an overview of what it is.",
+        ["list_dir"],
+        repository_context=True,
+    )
+    assert (
+        evidence_sufficiency_violations(
+            "Give me an overview of what it is.",
+            ["list_dir", "read_file"],
+            repository_context=True,
+        )
+        == []
+    )
+
+
+def test_current_external_research_requires_web_evidence() -> None:
+    task = "Research the latest official docs and compare the current options."
+
+    assert evidence_sufficiency_violations(task, ["read_file"])
+    assert evidence_sufficiency_violations(task, ["web_search"]) == []
+
+
+def test_ordinary_task_does_not_invent_evidence_requirements() -> None:
+    assert evidence_sufficiency_violations("Explain this error message", []) == []
 
 
 # ---------------------------------------------------------------------------

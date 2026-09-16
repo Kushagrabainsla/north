@@ -149,6 +149,7 @@ class _RunTally:
     last_model_used: str = ""
     tools_used: list[str] = field(default_factory=list)
     successful_tools: list[str] = field(default_factory=list)
+    successful_tool_calls: dict[str, int] = field(default_factory=dict)
     models_used: list[str] = field(default_factory=list)
     tool_call_count: int = 0
 
@@ -173,6 +174,7 @@ class _RunTally:
 
     def note_success(self, tool_name: str) -> None:
         _append_once(self.successful_tools, tool_name)
+        self.successful_tool_calls[tool_name] = self.successful_tool_calls.get(tool_name, 0) + 1
 
     def answer(self, output: str, summary: str) -> dict[str, Any]:
         return _final_answer(
@@ -187,6 +189,7 @@ class _RunTally:
             cached_tokens=self.cached_tokens,
             cache_missed_tokens=self.cache_waste.totals.missed_tokens,
             cache_miss_count=self.cache_waste.totals.miss_count,
+            evidence_counts=self.successful_tool_calls,
         )
 
 
@@ -1457,11 +1460,12 @@ def _final_answer(
     cached_tokens: int = 0,
     cache_missed_tokens: int = 0,
     cache_miss_count: int = 0,
+    evidence_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     return {
         "output": output,
         "summary": summary,
-        "data": {},
+        "data": {"evidence_counts": evidence_counts or {}},
         "requires_approval": False,
         "has_question": False,
         "question": None,

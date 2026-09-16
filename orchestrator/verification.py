@@ -34,6 +34,22 @@ _NON_COMPLETION_RE = re.compile(
 # How far back to look for a non-completion marker governing a claim verb.
 _GOVERNING_WINDOW_CHARS = 40
 
+_REPOSITORY_OVERVIEW_RE = re.compile(
+    r"\b(?:overview|explain|map|structure|architecture|how)\b[^\n]{0,80}\b(?:repo(?:sitory)?|codebase|project)\b"
+    r"|\b(?:repo(?:sitory)?|codebase|project)\b[^\n]{0,80}\b(?:overview|work(?:s|ing)?|structure|architecture)\b",
+    re.IGNORECASE,
+)
+_EXTERNAL_RESEARCH_RE = re.compile(
+    r"\b(?:research|investigate|look\s*up|search|compare)\b[^\n]{0,100}"
+    r"\b(?:web|online|internet|external|latest|current|recent|official\s+docs?)\b"
+    r"|\b(?:latest|current|recent|official\s+docs?)\b[^\n]{0,100}"
+    r"\b(?:research|investigate|look\s*up|search|compare)\b",
+    re.IGNORECASE,
+)
+_REPO_STRUCTURE_TOOLS = frozenset({"list_dir", "glob"})
+_REPO_CONTENT_TOOLS = frozenset({"read_file", "search_files", "search_code"})
+_WEB_EVIDENCE_TOOLS = frozenset({"web_search", "fetch_url"})
+
 # Deterministic physical check: regex matching explicit file path claims like "saved to /path/to/file.md"
 _EXPLICIT_PATH_CLAIM_RE = re.compile(
     r"\b(?:saved|written|created|stored|compiled|exported|generated)\s+(?:to\s+|at\s+|in\s+)?[`'\"]?([~/\.\w\-\_]+/[~\w\.\-\_]+\.[a-zA-Z0-9]+)[`'\"]?",
@@ -155,5 +171,43 @@ def verify_claims(
             msg = f"output describes {label} but no successful {tool_list} call was recorded"
             if msg not in violations:
                 violations.append(msg)
+
+    return violations
+
+
+def evidence_sufficiency_violations(
+    task: str,
+    successful_tools: Iterable[str],
+    evidence_counts: dict[str, int] | None = None,
+    *,
+    repository_context: bool = False,
+) -> list[str]:
+    """Return task-level gaps where successful calls are not relevant enough.
+
+    This complements claim verification: the latter catches fabricated actions
+    in an answer, while this catches an answer built from evidence too shallow or
+    of the wrong kind for the request itself.
+    """
+    succeeded = set(successful_tools)
+    counts = evidence_counts or dict.fromkeys(succeeded, 1)
+    violations: list[str] = []
+
+    asks_for_overview = bool(_REPOSITORY_OVERVIEW_RE.search(task)) or (
+        repository_context and bool(re.search(r"\boverview\b", task, re.IGNORECASE))
+    )
+    if asks_for_overview:
+        if not (succeeded & _REPO_STRUCTURE_TOOLS):
+            violations.append("repository overview used no successful structure inspection (`list_dir` or `glob`)")
+        if not (succeeded & _REPO_CONTENT_TOOLS):
+            violations.append(
+                "repository overview used no successful source inspection "
+                "(`read_file`, `search_files`, or `search_code`)"
+            )
+        relevant_calls = sum(counts.get(tool, 0) for tool in _REPO_STRUCTURE_TOOLS | _REPO_CONTENT_TOOLS)
+        if relevant_calls < 2:
+            violations.append("repository overview was based on fewer than two concrete repository inspections")
+
+    if _EXTERNAL_RESEARCH_RE.search(task) and not (succeeded & _WEB_EVIDENCE_TOOLS):
+        violations.append("external/current research used no successful `web_search` or `fetch_url` evidence")
 
     return violations

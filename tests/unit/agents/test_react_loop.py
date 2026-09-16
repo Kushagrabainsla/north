@@ -227,6 +227,7 @@ async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path
     )
 
     assert result.output == "finished with enough evidence"
+    assert result.data["evidence_counts"] == {"gather_evidence": 3}
     assert len(router.requests) == 4
     notices = [data for event, data in stream.events if event == "budget_soft_limit"]
     assert notices == [
