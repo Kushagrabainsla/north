@@ -28,7 +28,7 @@ from inference.exceptions import EmbeddingCountMismatchError
 from inference.models import EmbedFn, GlossaryFn, SupersedeFn
 from inference.runtime import build_inference_router_from_settings
 from jobs import JobProcessor, SQLiteJobProcessor
-from ledger import LedgerWriter, SQLiteLedgerWriter
+from ledger import LedgerEntry, LedgerSource, LedgerStatus, LedgerWriter, SQLiteLedgerWriter
 from memory import ContextStore, SQLiteContextStore
 from utils.prompts import load_prompt
 from utils.time import configure_timezone, system_timezone_name
@@ -330,6 +330,30 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
 
     tasks_db = settings.north_home / "tasks" / "tasks.db"
     agent_run_store = AgentRunStore(tasks_db)
+    stream_manager = EventStreamManager(run_store=agent_run_store)
+
+    async def record_inference_call(task_id: str | None, data: dict[str, Any]) -> None:
+        identity = {"run_id": data["run_id"]} if data.get("run_id") else {}
+        await ledger.write(
+            LedgerEntry.new(
+                source=LedgerSource.INFERENCE_ROUTER,
+                task_id=task_id,
+                **identity,
+                agent=str(data["category"]),
+                action="inference_call",
+                output=str(data["component"]),
+                model_used=str(data["model"]),
+                tokens_in=int(data["tokens_in"]),
+                tokens_out=int(data["tokens_out"]),
+                cached_tokens=int(data["cached_tokens"]),
+                cost_usd=float(data["cost_usd"]),
+                status=LedgerStatus.COMPLETED,
+            )
+        )
+        if task_id:
+            await stream_manager.emit(task_id, "inference_call", data)
+
+    cost_tracker.set_call_sink(record_inference_call)
     # What runs after a card is decided. Empty until something registers
     # against a card source, so a guard-rail card is unaffected.
     card_continuations = CardContinuations()
@@ -341,7 +365,7 @@ def build_production_dependencies(north_settings: NorthSettings | None = None) -
         notifier=TerminalNotifier(),
         job_processor=SQLiteJobProcessor(settings.north_home / "jobs.db"),
         cost_tracker=cost_tracker,
-        stream_manager=EventStreamManager(run_store=agent_run_store),
+        stream_manager=stream_manager,
         approval_store=ApprovalStore(settings.north_home / "approvals.db", continuations=card_continuations),
         card_continuations=card_continuations,
         cron_store=UserCronStore(settings.north_home / "jobs.db"),

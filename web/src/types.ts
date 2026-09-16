@@ -80,6 +80,18 @@ export interface TaskDetail {
   output?: string;
   entries?: LedgerEntry[];
   runs?: AgentRun[];
+  inference_categories?: InferenceCategory[];
+}
+
+export interface InferenceCategory {
+  category: string;
+  calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  cached_tokens: number;
+  cost_usd: number;
+  components: string[];
+  models: string[];
 }
 
 /** One of North's self-checks, captured live from the task stream. */

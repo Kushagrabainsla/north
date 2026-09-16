@@ -16,8 +16,10 @@ See docs/CODING_STYLE.md Sections 2.2, 3, 6.4.
 
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from inference.base import InferenceRouter
 from inference.models import (
@@ -33,6 +35,38 @@ from inference.models import (
 )
 
 _MAX_TRACKED_TASKS: int = 2000
+logger = logging.getLogger(__name__)
+
+InferenceCallSink = Callable[[str | None, dict[str, Any]], Awaitable[None]]
+
+_PLANNING_COMPONENTS = frozenset({"planner", "router", "north_star_checker"})
+_REVIEW_COMPONENTS = frozenset({"critic", "spec_critique", "judgement_filter"})
+_SYNTHESIS_COMPONENTS = frozenset({"synthesizer"})
+_MEMORY_COMPONENTS = frozenset(
+    {"embed", "extraction_pipeline", "episode_consolidator", "context_injector", "fact_supersede", "fact_glossary"}
+)
+
+
+def inference_call_category(component: str, request_kind: str) -> str:
+    """Map detailed components to a small, stable cockpit category."""
+    root = component.split(":", 1)[0]
+    if component.endswith((":compact", ":tool-summary")):
+        return "context"
+    if request_kind == "tool_completion":
+        return "agent"
+    if root in _PLANNING_COMPONENTS:
+        return "planning"
+    if root in _REVIEW_COMPONENTS:
+        return "review"
+    if root in _SYNTHESIS_COMPONENTS:
+        return "synthesis"
+    if root in _MEMORY_COMPONENTS or root.startswith("skill_"):
+        return "memory"
+    if request_kind == "embedding":
+        return "memory"
+    if request_kind == "transcription":
+        return "perception"
+    return "background"
 
 
 class CostTracker(InferenceRouter):
@@ -44,9 +78,14 @@ class CostTracker(InferenceRouter):
     so the Orchestrator can emit it in task_completed.
     """
 
-    def __init__(self, inner: InferenceRouter) -> None:
+    def __init__(self, inner: InferenceRouter, call_sink: InferenceCallSink | None = None) -> None:
         self._inner = inner
         self._task_costs: OrderedDict[str, float] = OrderedDict()
+        self._call_sink = call_sink
+
+    def set_call_sink(self, sink: InferenceCallSink | None) -> None:
+        """Attach durable call telemetry after the ledger/stream have been built."""
+        self._call_sink = sink
 
     def get_inner(self) -> InferenceRouter:
         """Return the wrapped router (e.g. for live reload hooks)."""
@@ -66,9 +105,30 @@ class CostTracker(InferenceRouter):
             while len(self._task_costs) > _MAX_TRACKED_TASKS:
                 self._task_costs.popitem(last=False)
 
+    async def _record_call(self, request: Any, response: Any, request_kind: str) -> None:
+        if self._call_sink is None:
+            return
+        component = str(getattr(request, "component", "unknown") or "unknown")
+        data = {
+            "category": inference_call_category(component, request_kind),
+            "component": component,
+            "request_kind": request_kind,
+            "model": str(getattr(response, "model_used", "") or ""),
+            "tokens_in": int(getattr(response, "tokens_in", 0) or 0),
+            "tokens_out": int(getattr(response, "tokens_out", 0) or 0),
+            "cached_tokens": int(getattr(response, "cached_tokens", 0) or 0),
+            "cost_usd": float(getattr(response, "cost_usd", 0.0) or 0.0),
+            "run_id": getattr(request, "run_id", None),
+        }
+        try:
+            await self._call_sink(getattr(request, "task_id", None), data)
+        except Exception:
+            logger.warning("Could not record inference call telemetry for %s", component, exc_info=True)
+
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
         response = await self._inner.complete(request)
         self._add_cost(request.task_id, response.cost_usd)
+        await self._record_call(request, response, "completion")
         return response
 
     async def complete_with_tools(
@@ -78,16 +138,19 @@ class CostTracker(InferenceRouter):
     ) -> ToolCallResponse:
         response = await self._inner.complete_with_tools(request, token_callback)
         self._add_cost(request.task_id, response.cost_usd)
+        await self._record_call(request, response, "tool_completion")
         return response
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         response = await self._inner.embed(request)
         self._add_cost(request.task_id, response.cost_usd)
+        await self._record_call(request, response, "embedding")
         return response
 
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         response = await self._inner.transcribe(request)
         self._add_cost(request.task_id, response.cost_usd)
+        await self._record_call(request, response, "transcription")
         return response
 
     async def refresh_pools(self) -> None:

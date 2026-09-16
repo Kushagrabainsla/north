@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { api, patch, post } from "../api";
-import { Empty, ErrorNotice, Loading, Markdown, PageHeader, PromptTelemetry, Status, timeAgo } from "../components";
+import { Empty, ErrorNotice, InferenceCategories, Loading, Markdown, PageHeader, PromptTelemetry, Status, timeAgo } from "../components";
 import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
@@ -128,13 +128,16 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
   const status = pendingApprovals.length ? "waiting_for_approval" : (detail?.task.status || "pending");
   const entries = detail?.entries || [];
   const runs = detail?.runs || [];
+  const inferenceCategories = detail?.inference_categories || [];
   const agents = [...new Set(runs.map(run => run.agent))];
   const tools = entries.filter(entry => entry.action?.includes("tool") || (entry.tools_used?.length || 0) > 0);
   const approvals = entries.filter(entry => entry.source === "approval" || entry.action?.includes("approval"));
   // "unverified" does not contain "verify", so claims_unverified and critic_flagged
   // were both missing from this section even though they are its whole point.
   const verification = entries.filter(entry => /verif|dod|review|repair|critic|handoff|auto_verify/.test(entry.action || ""));
-  const cost = runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
+  const cost = inferenceCategories.length
+    ? inferenceCategories.reduce((total, item) => total + item.cost_usd, 0)
+    : runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
   const responseTimestamp = [...entries].reverse().find(entry => entry.action === "agent_completed" && entry.output)?.timestamp;
   const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued", "retrying"].includes(status);
   const control = async (action: "pause" | "resume" | "cancel") => {
@@ -162,6 +165,9 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
         </DetailSection>
         <DetailSection title="Agent runs" count={runs.length}>
           {runs.length ? runs.map(run => <div className="run-card" key={run.run_id}><div><b>{run.agent}</b><Status value={run.status}/></div><small>Attempt {run.attempt + 1} · {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "running"} · {run.providers_used?.join(", ") || "provider pending"} · {run.models_used.join(", ") || "model pending"}</small><PromptTelemetry run={run}/>{run.error && <p className="error-text">{run.error}</p>}</div>) : <Empty>No agent runs recorded yet.</Empty>}
+        </DetailSection>
+        <DetailSection title="Model calls" count={inferenceCategories.reduce((total, item) => total + item.calls, 0)}>
+          <InferenceCategories categories={inferenceCategories}/>
         </DetailSection>
         <DetailSection title="Tools and skills" count={tools.length + runs.flatMap(r => r.skills).length}>
           <EventRows entries={tools}/>{runs.flatMap(run => run.skills.map(skill => <div className="skill-chip" key={`${run.run_id}-${skill.name}`}>{skill.name} <small>v{skill.version}</small></div>))}

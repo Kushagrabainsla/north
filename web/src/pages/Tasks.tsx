@@ -17,7 +17,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useResource } from "../hooks";
-import { Empty, ErrorNotice, formatDateTime, Loading, PageHeader, Panel, PromptTelemetry, Status, timeAgo } from "../components";
+import { Empty, ErrorNotice, formatDateTime, InferenceCategories, Loading, PageHeader, Panel, PromptTelemetry, Status, timeAgo } from "../components";
 import type { AgentRun, Approval, Artifact, LedgerEntry, TaskDetail } from "../types";
 import { RoutingAttempts, stageIcon } from "./Verbose";
 
@@ -136,11 +136,14 @@ function TaskActivity({ taskId }: { taskId: string }) {
 
   const entries = detail.data?.entries || [];
   const runs = detail.data?.runs || [];
+  const inferenceCategories = detail.data?.inference_categories || [];
   const prompt = entries.find(entry => entry.action === "task_received")?.input || taskId;
   const status = detail.data?.task?.status || taskStatus(entries);
   const mine = (artifacts.data || []).filter(file => file.task === taskId);
   const asked = (approvals.data || []).filter(card => card.task_id === taskId);
-  const spend = runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
+  const spend = inferenceCategories.length
+    ? inferenceCategories.reduce((total, item) => total + item.cost_usd, 0)
+    : runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
 
   // A task that has not finished has no result yet. The API falls back to the
   // last entry carrying any output, which for a running task is whatever it
@@ -166,6 +169,10 @@ function TaskActivity({ taskId }: { taskId: string }) {
 
     {!!runs.length && <Panel title="Agent runs" label={`${runs.length} in this task`}>
       {runs.map(run => <RunRow key={run.run_id} run={run}/>)}
+    </Panel>}
+
+    {!!inferenceCategories.length && <Panel title="Model calls" label="Separated by purpose">
+      <InferenceCategories categories={inferenceCategories}/>
     </Panel>}
 
     {!!asked.length && <Panel title="What it stopped to ask" label={`${asked.length}`}>

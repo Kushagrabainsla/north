@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
-import type { AgentRun, Conversation } from "./types";
+import type { AgentRun, Conversation, InferenceCategory } from "./types";
 import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, CalendarClock, ShieldAlert, Brain, Bot, Sparkles, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
@@ -107,6 +107,16 @@ export function PromptTelemetry({ run }: { run: AgentRun }) {
     <small>{profiles.length} model turns · latest prompt: {sections}</small>
     <small>{cacheText}</small>
   </>;
+}
+
+export function InferenceCategories({ categories }: { categories: InferenceCategory[] }) {
+  if (!categories.length) return <Empty>No model calls were attributed yet.</Empty>;
+  return <div className="inference-categories">{categories.map(category =>
+    <div className="list-row" key={category.category}>
+      <div><b>{category.category}</b><small>{category.components.join(", ")}</small></div>
+      <span>{category.calls} call{category.calls === 1 ? "" : "s"} · {(category.tokens_in + category.tokens_out).toLocaleString()} tokens{category.cost_usd ? ` · $${category.cost_usd.toFixed(4)}` : ""}</span>
+    </div>
+  )}</div>;
 }
 
 // What each health state says to the reader. "starting" is North warming up -

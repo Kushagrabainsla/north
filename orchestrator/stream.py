@@ -51,6 +51,7 @@ _DURABLE_EVENTS = frozenset(
         "execution_profile_escalated",
         "evidence_manifest",
         "memory_recalled",
+        "inference_call",
         "compaction",
         "stream_reset",
     }

@@ -21,6 +21,7 @@ from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
 from jobs.models import display_job_status
 from ledger.base import LedgerFilters
+from ledger.models import LedgerSource
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
 from tools.universal.browser import browser_availability
@@ -260,6 +261,61 @@ def _cache_summary(profiles: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _inference_categories(entries: list[Any]) -> list[dict[str, Any]]:
+    """Aggregate task model calls by purpose, not by implementation component."""
+    grouped: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        source = getattr(entry, "source", "")
+        if str(source) != LedgerSource.INFERENCE_ROUTER.value or getattr(entry, "action", None) != "inference_call":
+            continue
+        category = str(getattr(entry, "agent", None) or "background")
+        row = grouped.setdefault(
+            category,
+            {
+                "category": category,
+                "calls": 0,
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "cached_tokens": 0,
+                "cost_usd": 0.0,
+                "components": set(),
+                "models": set(),
+            },
+        )
+        row["calls"] += 1
+        row["tokens_in"] += int(getattr(entry, "tokens_in", None) or 0)
+        row["tokens_out"] += int(getattr(entry, "tokens_out", None) or 0)
+        row["cached_tokens"] += int(getattr(entry, "cached_tokens", None) or 0)
+        row["cost_usd"] += float(getattr(entry, "cost_usd", None) or 0.0)
+        if component := getattr(entry, "output", None):
+            row["components"].add(component)
+        if model := getattr(entry, "model_used", None):
+            row["models"].add(model)
+
+    category_order = (
+        "planning",
+        "agent",
+        "context",
+        "review",
+        "synthesis",
+        "memory",
+        "perception",
+        "background",
+    )
+    order = {name: index for index, name in enumerate(category_order)}
+    result = []
+    for row in grouped.values():
+        result.append(
+            {
+                **row,
+                "cost_usd": round(row["cost_usd"], 8),
+                "components": sorted(row["components"]),
+                "models": sorted(row["models"]),
+            }
+        )
+    return sorted(result, key=lambda row: (order.get(row["category"], len(order)), row["category"]))
+
+
 async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
     if not task_id:
         return None
@@ -296,6 +352,7 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
         "task": task.model_dump(mode="json") if task else {"task_id": task_id, "status": "unknown"},
         "output": output,
         "entries": [_entry_payload(entry) for entry in entries],
+        "inference_categories": _inference_categories(entries),
         "runs": [
             {
                 **run.__dict__,
