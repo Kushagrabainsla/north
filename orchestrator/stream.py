@@ -49,6 +49,7 @@ _DURABLE_EVENTS = frozenset(
         "prompt_profile",
         "budget_soft_limit",
         "execution_profile_escalated",
+        "evidence_manifest",
         "compaction",
         "stream_reset",
     }

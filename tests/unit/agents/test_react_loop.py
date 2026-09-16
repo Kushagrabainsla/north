@@ -243,6 +243,73 @@ async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path
         "Soft efficiency budget reached" in (message.get("content") or "")
         for message in router.requests[-1].messages
     )
+    assert "Do not create handoff artifacts" in router.requests[0].messages[0]["content"]
+    manifests = [data for event, data in stream.events if event == "evidence_manifest"]
+    assert manifests == [
+        {"profile": "quick_readonly", "references": [{"tool": "gather_evidence"}]},
+        {"profile": "quick_readonly", "references": [{"tool": "gather_evidence"}]},
+        {"profile": "quick_readonly", "references": [{"tool": "gather_evidence"}]},
+    ]
+
+
+async def test_quick_evidence_manifest_keeps_locators_not_tool_content(tmp_path: Path) -> None:
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit(self, task_id: str, event: str, data: dict) -> None:
+            self.events.append((event, data))
+
+    stream = RecordingStream()
+    agent = _load_agent("researcher", tmp_path)
+    agent.deps.stream_manager = stream
+    payload = AgentPayload(task_id="quick-evidence", prompt="inspect", execution_profile="quick_readonly")
+    call = ToolCall(
+        name="read_file",
+        call_id="read-1",
+        params={
+            "path": "src/router.py",
+            "content": "private fetched content",
+            "url": "https://example.com/docs?token=secret",
+        },
+    )
+
+    await agent._record_quick_evidence(payload, [(call, "private tool output", True, [])], _tool_map())
+
+    manifest = [data for event, data in stream.events if event == "evidence_manifest"][0]
+    assert manifest["references"] == [
+        {"tool": "read_file", "path": "src/router.py", "url": "https://example.com/docs"}
+    ]
+    assert "private" not in str(manifest)
+    assert "secret" not in str(manifest)
+
+
+async def test_quick_profile_refuses_mutation_before_it_happens(tmp_path: Path) -> None:
+    class MutatingTool(Tool):
+        name = "write_artifact"
+        description = "Write a bulky artifact."
+        is_mutating = True
+
+        def __init__(self) -> None:
+            self.called = False
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            self.called = True
+            return ToolOutput(success=True)
+
+    agent = _load_agent("researcher", tmp_path)
+    tool = MutatingTool()
+    payload = AgentPayload(task_id="quick-mutation", prompt="inspect", execution_profile="quick_readonly")
+
+    _call, result, success, _images = await agent._safe_execute_call(
+        ToolCall(name=tool.name, call_id="write-1", params={}),
+        payload,
+        {tool.name: tool},
+    )
+
+    assert success is False
+    assert "unavailable in the quick read-only profile" in result
+    assert tool.called is False
 
 
 async def test_quick_profile_escalates_after_tool_failure(tmp_path: Path) -> None:

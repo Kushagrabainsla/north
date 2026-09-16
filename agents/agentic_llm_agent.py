@@ -93,6 +93,24 @@ MAX_UNANSWERED_APPROVALS = 2
 # The global ``agent_max_iterations`` setting remains the hard safety ceiling.
 _SOFT_BUDGETS: dict[str, tuple[int, int]] = {"quick_readonly": (3, 6)}
 
+_QUICK_READONLY_POLICY = """## Quick read-only execution
+This run is a bounded direct-answer inspection. Do not create handoff artifacts,
+write files, delegate, or mutate external state. Put the useful findings in the
+final answer. North records a compact manifest of successful evidence lookups
+automatically, so do not duplicate tool output into an audit file.
+"""
+
+_EVIDENCE_LOCATOR_KEYS: tuple[str, ...] = (
+    "path",
+    "query",
+    "pattern",
+    "symbol",
+    "url",
+    "line",
+    "start_line",
+    "end_line",
+)
+
 
 # How much of a final answer is kept as its one-line summary.
 _SUMMARY_CHARS = 120
@@ -307,6 +325,9 @@ class AgenticLLMAgent(LLMAgent):
 
         results = await self._execute_calls_ordered(calls, payload, tool_map)
 
+        if payload.execution_profile == "quick_readonly":
+            await self._record_quick_evidence(payload, results, tool_map)
+
         for call, result_str, success, _ in results:
             if self._deps.stream_manager and payload.task_id:
                 event_data: dict[str, Any] = {"tool": call.name, "success": success}
@@ -324,6 +345,41 @@ class AgenticLLMAgent(LLMAgent):
         self._append_tool_call_exchange(messages, results)
         unanswered = sum(1 for item in results if _is_unanswered_approval(item[1]))
         return [(call.name, success) for call, _, success, _ in results], unanswered
+
+    async def _record_quick_evidence(
+        self,
+        payload: AgentPayload,
+        results: list[tuple[ToolCall, str, bool, list[tuple[str, str]]]],
+        tool_map: dict[str, Tool],
+    ) -> None:
+        """Persist small evidence pointers for quick tasks, never fetched content."""
+        references = []
+        for call, _result, success, _images in results:
+            if not success or self._is_mutating_call(call, tool_map):
+                continue
+            reference: dict[str, Any] = {"tool": call.name}
+            for key in _EVIDENCE_LOCATOR_KEYS:
+                value = call.params.get(key)
+                if isinstance(value, str) and value:
+                    if key == "url":
+                        value = value.split("?", 1)[0].split("#", 1)[0]
+                    reference[key] = value[:240]
+                elif isinstance(value, int):
+                    reference[key] = value
+            references.append(reference)
+        if not references:
+            return
+
+        data = {"profile": "quick_readonly", "references": references}
+        if self._deps.stream_manager is not None:
+            await self._deps.stream_manager.emit(payload.task_id, "evidence_manifest", data)
+        elif self._deps.agent_run_store is not None:
+            await self._deps.agent_run_store.record_event(
+                payload.run_id,
+                payload.task_id,
+                "evidence_manifest",
+                data,
+            )
 
     async def _execute_calls_ordered(
         self,
@@ -421,6 +477,11 @@ class AgenticLLMAgent(LLMAgent):
         tool_map: dict[str, Tool],
     ) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
         """Execute one call, turning any unexpected exception into a failed result."""
+        if payload.execution_profile == "quick_readonly" and self._is_mutating_call(call, tool_map):
+            return _failed_call(
+                call,
+                RuntimeError("Mutating and delegated tools are unavailable in the quick read-only profile."),
+            )
         try:
             return await self._execute_call(call, payload, tool_map)
         except Exception as exc:
@@ -473,9 +534,14 @@ class AgenticLLMAgent(LLMAgent):
             # Refresh tool_map each iteration so tools hot-loaded mid-task
             # (e.g. by create_tool) are immediately available to the LLM.
             _sync_hot_loaded_tools(self._deps, tool_map, known_registry_tools)
+            visible_tools = (
+                {name: tool for name, tool in tool_map.items() if not tool.is_mutating}
+                if payload.execution_profile == "quick_readonly"
+                else tool_map
+            )
             tools = _tool_schemas(
-                tool_map,
-                allow_delegation=payload.allow_delegation,
+                visible_tools,
+                allow_delegation=payload.allow_delegation and payload.execution_profile != "quick_readonly",
                 agent_names=self._delegatable_agent_names(),
             )
             token_cb = self._make_token_callback(payload.task_id)
@@ -643,6 +709,8 @@ class AgenticLLMAgent(LLMAgent):
         """
         preamble = f"{persona}\n\n" if persona else ""
         system_prompt = f"{preamble}{self._load_system_prompt()}\n\n{RUNTIME_CONTEXT_INSTRUCTION}"
+        if payload.execution_profile == "quick_readonly":
+            system_prompt = f"{system_prompt}\n\n{_QUICK_READONLY_POLICY}"
         if capabilities := build_platform_capabilities_summary(self._deps):
             system_prompt = f"{system_prompt}\n\n{capabilities}"
         user_text = self._build_task_message(payload, context, scored_tools)
