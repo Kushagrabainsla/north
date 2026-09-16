@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
-import type { Conversation } from "./types";
+import type { AgentRun, Conversation } from "./types";
 import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, CalendarClock, ShieldAlert, Brain, Bot, Sparkles, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
@@ -90,6 +90,24 @@ export function Empty({ children = "Nothing here yet." }: { children?: ReactNode
 
 export function Loading() { return <div className="loading"><span className="pulse"/>Loading</div>; }
 export function ErrorNotice({ message }: { message: string }) { return <div className="error-notice">{message}</div>; }
+
+export function PromptTelemetry({ run }: { run: AgentRun }) {
+  const profiles = run.prompt_profiles || [];
+  if (!profiles.length) return null;
+  const latest = profiles.at(-1);
+  const sections = Object.entries(latest?.sections || {})
+    .filter(([, tokens]) => tokens > 0)
+    .map(([name, tokens]) => `${name.replaceAll("_", " ")} ${tokens.toLocaleString()}`)
+    .join(" · ");
+  const cache = run.cache_summary;
+  const cacheText = !cache || cache.telemetry === "unreported"
+    ? "cache telemetry not reported"
+    : `${cache.warm_turns} warm · ${cache.cold_turns} cold · ${(cache.input_cache_ratio * 100).toFixed(0)}% input cached`;
+  return <>
+    <small>{profiles.length} model turns · latest prompt: {sections}</small>
+    <small>{cacheText}</small>
+  </>;
+}
 
 // What each health state says to the reader. "starting" is North warming up -
 // the provider catalogues load after the API is serving - so it must read as

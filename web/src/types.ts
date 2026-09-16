@@ -61,6 +61,18 @@ export interface AgentRun {
     cache_write_tokens: number;
     sections: Record<string, number>;
   }[];
+  cache_summary?: {
+    telemetry: "reported" | "unreported";
+    turns: number;
+    warm_turns: number;
+    cold_turns: number;
+    unknown_turns: number;
+    input_tokens: number;
+    cached_tokens: number;
+    uncached_input_tokens: number;
+    cache_write_tokens: number;
+    input_cache_ratio: number;
+  };
 }
 
 export interface TaskDetail {

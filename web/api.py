@@ -238,6 +238,28 @@ def _entry_payload(entry) -> dict[str, Any]:
     return entry.model_dump(mode="json", exclude={"agent_output"})
 
 
+def _cache_summary(profiles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarise provider-reported cache use without treating silence as a miss."""
+    turns = len(profiles)
+    total_input = sum(max(0, int(profile.get("actual_input_tokens") or 0)) for profile in profiles)
+    cached = sum(max(0, int(profile.get("cached_tokens") or 0)) for profile in profiles)
+    writes = sum(max(0, int(profile.get("cache_write_tokens") or 0)) for profile in profiles)
+    reported = cached > 0 or writes > 0
+    warm_turns = sum(1 for profile in profiles if int(profile.get("cached_tokens") or 0) > 0)
+    return {
+        "telemetry": "reported" if reported else "unreported",
+        "turns": turns,
+        "warm_turns": warm_turns,
+        "cold_turns": turns - warm_turns if reported else 0,
+        "unknown_turns": 0 if reported else turns,
+        "input_tokens": total_input,
+        "cached_tokens": cached,
+        "uncached_input_tokens": max(0, total_input - cached),
+        "cache_write_tokens": writes,
+        "input_cache_ratio": cached / total_input if total_input else 0.0,
+    }
+
+
 async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
     if not task_id:
         return None
@@ -283,6 +305,7 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
                 "providers_used": sorted({provider_by_model.get(model, "unknown") for model in run.models_used}),
                 "skills": list(run.skills),
                 "prompt_profiles": prompt_profiles[run.run_id],
+                "cache_summary": _cache_summary(prompt_profiles[run.run_id]),
             }
             for run in runs
         ],
