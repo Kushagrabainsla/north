@@ -518,13 +518,20 @@ async def compact_if_needed(
     task_id: str | None = None,
     keep_recent: int = 4,
     max_summary_tokens: int = COMPACT_TOKENS_DEFAULT,
+    deterministic_only: bool = False,
 ) -> None:
     """LLM-summarise old exchanges when token usage exceeds the compaction threshold.
 
     Keeps [0] system, [1] user-task, and the last `keep_recent` tool exchanges
     verbatim. Everything in between is replaced with a single summarised block.
-    Falls back to truncation-only if the summarisation call fails.
+    Falls back to deterministic reduction if the summarisation call fails. When
+    `deterministic_only` is set, no summarisation request is made; this is the
+    cheaper policy for bounded quick tasks.
     """
+    if deterministic_only:
+        compact_history(messages, keep_recent=keep_recent)
+        return
+
     context_window = context_window_for(model_used, router=inference_router)
     estimated_tokens = estimate_messages_tokens(messages)
     effective_tokens = max(tokens_in, estimated_tokens)

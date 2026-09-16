@@ -462,7 +462,12 @@ class AgenticLLMAgent(LLMAgent):
                     tool_calls=tally.tool_call_count,
                 )
             await self._compact_for_next_call(
-                messages, tally.last_tokens_in, tally.last_model_used, compact_tokens, payload.task_id
+                messages,
+                tally.last_tokens_in,
+                tally.last_model_used,
+                compact_tokens,
+                payload.task_id,
+                deterministic_only=payload.execution_profile == "quick_readonly",
             )
 
             # Refresh tool_map each iteration so tools hot-loaded mid-task
@@ -658,6 +663,8 @@ class AgenticLLMAgent(LLMAgent):
         last_model_used: str,
         compact_tokens: int,
         task_id: str,
+        *,
+        deterministic_only: bool = False,
     ) -> None:
         """Compact conversation history before the next API call.
 
@@ -675,6 +682,7 @@ class AgenticLLMAgent(LLMAgent):
             task_id=task_id,
             keep_recent=self._deps.agent_history_keep_recent,
             max_summary_tokens=compact_tokens,
+            deterministic_only=deterministic_only,
         )
 
         # Notify the UI when history was actually compacted (message count dropped)

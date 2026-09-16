@@ -177,6 +177,39 @@ async def test_compact_if_needed_skips_when_under_threshold() -> None:
     assert len(messages) == 4
 
 
+@pytest.mark.asyncio
+async def test_quick_task_uses_deterministic_reduction_without_model_call() -> None:
+    router = DummyRouter(windows={"small-model": 1_000})
+    messages = [
+        {"role": "system", "content": "System prompt"},
+        {"role": "user", "content": "Task description"},
+    ]
+    for i in range(5):
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": f"call_{i}", "function": {"name": "read_file", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": f"call_{i}", "content": "noise\n" * 300},
+            ]
+        )
+
+    await compact_if_needed(
+        messages,
+        model_used="small-model",
+        inference_router=router,
+        keep_recent=2,
+        deterministic_only=True,
+    )
+
+    assert router.complete_calls == []
+    assert "read_tool_output" in messages[3]["content"]
+
+
 def test_file_context_for_summary_tracks_read_and_modified_paths() -> None:
     messages = [
         {
