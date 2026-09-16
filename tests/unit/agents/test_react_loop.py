@@ -593,6 +593,21 @@ async def test_context_loading_records_content_free_section_boundaries(tmp_path:
     assert payload.context_sections == {"caller_context": "previous conversation"}
 
 
+async def test_engineering_context_includes_repository_evidence_identity(tmp_path: Path, monkeypatch) -> None:
+    class Identity:
+        def render(self) -> str:
+            return "## Repository evidence identity\n- Git commit: `abc123`"
+
+    monkeypatch.setattr("agents.base.repository_identity", lambda workspace: Identity())
+    agent = _load_agent("researcher", tmp_path)
+    payload = AgentPayload(task_id="repo-revision", prompt="inspect", workspace=str(tmp_path))
+
+    loaded = await agent._load_context(payload, selected_skills=[])
+
+    assert "Git commit: `abc123`" in loaded
+    assert payload.context_sections["repository_revision"] in loaded
+
+
 async def test_context_loading_emits_content_free_memory_telemetry(tmp_path: Path) -> None:
     from memory import MemoryContext, MemoryPrincipal
 

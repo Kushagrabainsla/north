@@ -12,6 +12,7 @@ from typing import Any
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
 from context.repo_instructions import load_repo_instructions
 from context.repo_map import build_repo_map
+from context.repo_revision import repository_identity
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import LocalMemoryGateway, MemoryGateway
 from tools.base import Tool
@@ -197,6 +198,9 @@ class Agent(ABC):
         # reason from the real codebase instead of rediscovering it via tools (#2).
         if payload.workspace and self.domain == "engineering":
             try:
+                identity = await asyncio.to_thread(repository_identity, payload.workspace)
+                if identity is not None:
+                    add_section("repository_revision", identity.render())
                 repo_map = await asyncio.to_thread(build_repo_map, payload.workspace)
                 if repo_map:
                     add_section("repository_map", f"## Repository map (key files and their symbols)\n{repo_map}")
