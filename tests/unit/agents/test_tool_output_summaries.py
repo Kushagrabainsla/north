@@ -150,6 +150,17 @@ async def test_no_router_falls_back_to_cutting() -> None:
 
 
 @pytest.mark.asyncio
+async def test_no_router_keeps_middle_error_and_source_location() -> None:
+    """The deterministic fallback must retain evidence, not only orientation."""
+    body = "begin\n" + "noise\n" * 2_000 + "src/auth.py:417: ERROR invalid token\n" + "tail\n" * 2_000
+    messages = _history(body)
+
+    await compact_history_with_summaries(messages, keep_recent=2, inference_router=None)
+
+    assert "src/auth.py:417: ERROR invalid token" in messages[3]["content"]
+
+
+@pytest.mark.asyncio
 async def test_a_failed_summary_falls_back_to_cutting_that_result() -> None:
     """One model failure must not leave a full-size result in the window."""
     body = "q" * 20_000

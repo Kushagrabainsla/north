@@ -2,7 +2,7 @@
 
 Responsible for keeping the conversation history within the model's context
 window by summarising old tool-call exchanges via the LLM or falling back to
-simple truncation when summarisation is unavailable.
+deterministic signal-preserving reduction when summarisation is unavailable.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import logging
 from typing import Any
 
+from agents.tool_output_reduction import salient_excerpt
 from inference.models import CompletionRequest, PoolPriority
 from tools.output_spill import carries_handle, overflow_note, store_overflow, summary_note
 from utils.prompts import load_prompt
@@ -279,13 +280,8 @@ def _replace_with_summary(msg: dict, handle: str, original: str, summary: str) -
     msg["content"] = f"{summary}\n\n[{note}]"
 
 
-def _replace_with_head(msg: dict, handle: str, original: str) -> None:
-    """Keep the first few hundred characters and a pointer to the rest.
-
-    The fallback, used when no model is available to summarise. It is the weakest
-    thing north does with an oversized result and the reason `read_tool_output`
-    exists - it says nothing about the part it drops.
-    """
+def _replace_with_salient_excerpt(msg: dict, handle: str, original: str) -> None:
+    """Keep high-signal evidence plus a pointer to the complete output."""
     try:
         data = json.loads(original)
     except Exception:
@@ -296,11 +292,12 @@ def _replace_with_head(msg: dict, handle: str, original: str) -> None:
             minimal["success"] = data["success"]
         if "error" in data:
             minimal["error"] = data["error"]
+        minimal["excerpt"] = salient_excerpt(original, _COMPACT_TRUNCATE_KEEP)
         minimal["_handle"] = handle
         minimal["_note"] = overflow_note(handle, 0, len(original))
         msg["content"] = json.dumps(minimal)
         return
-    kept = original[:_COMPACT_TRUNCATE_KEEP]
+    kept = salient_excerpt(original, _COMPACT_TRUNCATE_KEEP)
     msg["content"] = f"{kept}... [{overflow_note(handle, len(kept), len(original))}]"
 
 
@@ -335,7 +332,7 @@ def _shrink_paired_assistant_args(messages: list[dict], indices: list[int]) -> N
 
 
 def _truncate_tool_messages(messages: list[dict], indices_to_compact: list[int]) -> None:
-    """Shrink retired results by keeping a head. Used when no model is available.
+    """Shrink retired results to salient excerpts when no model is available.
 
     Keeps the full text in the overflow store first, so retiring an old result
     is reversible. The agent has already read these, but "already read" is not
@@ -343,7 +340,7 @@ def _truncate_tool_messages(messages: list[dict], indices_to_compact: list[int])
     """
     for idx in _shrinkable_indices(messages, indices_to_compact):
         content = messages[idx]["content"]
-        _replace_with_head(messages[idx], store_overflow("history", content), content)
+        _replace_with_salient_excerpt(messages[idx], store_overflow("history", content), content)
     _shrink_paired_assistant_args(messages, indices_to_compact)
 
 
@@ -455,11 +452,11 @@ async def summarise_tool_messages(
                 _replace_with_summary(messages[idx], handle, original, summary)
                 summarised += 1
             else:
-                _replace_with_head(messages[idx], handle, original)
+                _replace_with_salient_excerpt(messages[idx], handle, original)
     else:
         for idx in targets:
             original = messages[idx]["content"]
-            _replace_with_head(messages[idx], store_overflow("history", original), original)
+            _replace_with_salient_excerpt(messages[idx], store_overflow("history", original), original)
 
     _shrink_paired_assistant_args(messages, indices_to_compact)
     return summarised

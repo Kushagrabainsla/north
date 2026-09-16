@@ -37,6 +37,7 @@ from agents.llm_agent import LLMAgent
 from agents.models import AgentPayload
 from agents.reasoning import ReasoningStreamSplitter, strip_reasoning
 from agents.schemas import ASK_USER_SCHEMA, FIND_TOOLS_SCHEMA, REQUEST_APPROVAL_SCHEMA, delegate_task_schema
+from agents.tool_output_reduction import salient_excerpt
 from agents.tool_results import extract_success as _extract_success
 from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
@@ -1257,7 +1258,7 @@ def _cap_tool_result(data: dict[str, Any], tool_name: str = "") -> str:
             (MAX_TOOL_RESULT_CHARS - _TOOL_RESULT_MIN_FIELD_CHARS) // max(len(inner), 1),
         )
         data["data"] = {
-            k: (v[:per_field] + "…[truncated]" if isinstance(v, str) and len(v) > per_field else v)
+            k: (salient_excerpt(v, per_field) if isinstance(v, str) and len(v) > per_field else v)
             for k, v in inner.items()
         }
     data["_handle"] = handle
@@ -1269,12 +1270,15 @@ def _cap_tool_result(data: dict[str, Any], tool_name: str = "") -> str:
         # front overshoots and the "bounded" result is not bounded.
         summary = json.dumps(data["data"])
         while True:
-            data["data"] = {"_truncated": summary + "…"}
+            data["data"] = {"_reduced": salient_excerpt(summary, len(summary))}
             raw = json.dumps(data)
             overshoot = len(raw) - MAX_TOOL_RESULT_CHARS
             if overshoot <= 0 or len(summary) <= _TOOL_RESULT_MIN_FIELD_CHARS:
                 break
-            summary = summary[: max(_TOOL_RESULT_MIN_FIELD_CHARS, len(summary) - overshoot)]
+            summary = salient_excerpt(
+                summary,
+                max(_TOOL_RESULT_MIN_FIELD_CHARS, len(summary) - overshoot),
+            )
     return raw
 
 
