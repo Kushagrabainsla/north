@@ -179,19 +179,15 @@ async def test_engineering_agent_still_gets_engineering_skills(tmp_path):
     assert "Use when adding a database migration" in ctx
 
 
-async def test_three_skills_are_offered_not_two(tmp_path):
-    """Descriptions are cheap enough to offer a real choice.
-
-    A third candidate costs ~50 tokens where a third body would have cost ~800,
-    so the model gets an alternative when the top match is not quite right.
-    """
+async def test_at_most_two_distinct_skills_are_offered(tmp_path):
+    """A primary plus a distinct secondary stays focused for compound tasks."""
     for name in ("db-migration", "db-schema", "db-index", "unrelated-topic"):
         _write_skill(tmp_path, name, f"Use when working on {name.replace('-', ' ')}")
     registry = SkillRegistry(builtin_dir=tmp_path)
     selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.0)
 
     selected = await selector.select("db migration schema index")
-    assert len(selected) == 3
+    assert len(selected) <= 2
 
 
 async def test_no_skill_body_ever_reaches_the_prompt(tmp_path):

@@ -61,3 +61,21 @@ async def test_respects_top_k(tmp_path):
     selector = SkillSelector(_registry(tmp_path), embed_fn=_fake_embed, top_k=1, min_similarity=0.4)
     picked = await selector.select("add a migration tool")  # matches both skills
     assert len(picked) == 1
+
+
+async def test_adds_a_distinct_secondary_capability(tmp_path):
+    selector = SkillSelector(_registry(tmp_path), embed_fn=_fake_embed, min_similarity=0.4)
+
+    picked = await selector.select("add a migration tool")
+
+    assert {s.name for s in picked} == {"db-migration", "add-tool"}
+
+
+async def test_skips_a_secondary_that_duplicates_the_primary_capability(tmp_path):
+    _write_skill(tmp_path, "migration-plan", "Use when planning a database migration")
+    _write_skill(tmp_path, "migration-runbook", "Use when executing a database migration")
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=_fake_embed, min_similarity=0.5)
+
+    picked = await selector.select("plan a database migration")
+
+    assert len(picked) == 1

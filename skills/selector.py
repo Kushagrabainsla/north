@@ -2,9 +2,10 @@
 
 The point of the whole subsystem: put the right procedural knowledge in front of
 the model *before* it acts, rather than hoping a weak model goes looking for it.
-Selection stays conservative - a handful of skills, only above a similarity
-threshold - because an irrelevant suggestion is worse than none. When embeddings
-are unavailable it selects nothing, and ``use_skill`` remains the fallback.
+Selection stays conservative - one primary skill and, at most, one meaningfully
+different secondary skill, only above a similarity threshold - because an
+irrelevant suggestion is worse than none. When embeddings are unavailable it
+selects nothing, and ``use_skill`` remains the fallback.
 """
 
 from __future__ import annotations
@@ -18,11 +19,14 @@ from utils.math import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
-# Offer at most this many skills. Their one-line descriptions are what reaches the
-# prompt, so a third candidate costs ~50 tokens rather than a whole playbook - cheap
-# enough to give the model a real choice when the top match is not quite right.
-DEFAULT_TOP_K = 3
+# One primary procedure is normally enough. A second can cover another capability
+# in a compound task; more alternatives dilute the instruction rather than help.
+DEFAULT_TOP_K = 2
 DEFAULT_MIN_SIMILARITY = 0.35  # below this, no skill is relevant enough to be worth injecting
+# Skill descriptions above this cosine similarity are treated as variants of the
+# same capability. This is deliberately only a diversity filter; task-to-skill
+# intent matching remains the selector's separate retrieval concern.
+MAX_SECONDARY_SIMILARITY = 0.82
 
 
 class SkillSelector:
@@ -42,7 +46,7 @@ class SkillSelector:
         self._embeddings: dict[str, list[float]] | None = None  # name -> vector, built lazily
 
     async def select(self, task_text: str, candidates: list[Skill] | None = None) -> list[Skill]:
-        """Return up to ``top_k`` skills most similar to ``task_text``, above threshold.
+        """Return a primary skill and optionally one distinct secondary skill.
 
         ``candidates`` restricts scoring to a caller-provided subset (e.g. only the
         skills eligible for the caller's domain); it defaults to every registered
@@ -70,7 +74,22 @@ class SkillSelector:
             if skill.name in embeddings
         ]
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [skill for score, skill in scored[: self._top_k] if score >= self._min_similarity]
+        eligible = [(score, skill) for score, skill in scored if score >= self._min_similarity]
+        if not eligible or self._top_k <= 0:
+            return []
+
+        primary = eligible[0][1]
+        selected = [primary]
+        if self._top_k == 1:
+            return selected
+
+        primary_vec = embeddings[primary.name]
+        for _score, candidate in eligible[1:]:
+            capability_similarity = cosine_similarity(primary_vec, embeddings[candidate.name])
+            if capability_similarity <= MAX_SECONDARY_SIMILARITY:
+                selected.append(candidate)
+                break
+        return selected
 
     def invalidate(self) -> None:
         """Drop cached embeddings so the next select re-embeds (after the set changes)."""
