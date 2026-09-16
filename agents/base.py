@@ -206,6 +206,7 @@ class Agent(ABC):
         memory = self._memory()
         principal = await memory.principal_for(self.name, self.domain)
         recalled = await memory.recall(principal, payload.prompt)
+        await self._emit_memory_recall(payload, principal, recalled)
         rendered = recalled.render()
         if rendered:
             add_section("memory", rendered)
@@ -235,6 +236,34 @@ class Agent(ABC):
                 add_section("skills", skills_block)
         payload.context_sections = sections
         return "\n\n".join(p for p in parts if p)
+
+    async def _emit_memory_recall(self, payload: AgentPayload, principal: Any, recalled: Any) -> None:
+        """Record retrieval shape without persisting any recalled text."""
+        telemetry_fn = getattr(recalled, "telemetry", None)
+        stats = telemetry_fn() if callable(telemetry_fn) else {
+            "source_categories": [],
+            "source_counts": {"facts": 0, "episodes": 0, "documents": 0},
+            "source_characters": {"facts": 0, "episodes": 0, "documents": 0},
+            "total_items": 0,
+            "total_characters": 0,
+            "estimated_tokens": 0,
+        }
+        fact_topics = getattr(principal, "allowed_fact_topics", None)
+        episode_domains = getattr(principal, "allowed_domains", frozenset())
+        data = {
+            **stats,
+            "fact_scope": ["*"] if fact_topics is None else sorted(fact_topics),
+            "episode_scope": sorted(episode_domains),
+        }
+        if self._deps.stream_manager is not None and payload.task_id:
+            await self._deps.stream_manager.emit(payload.task_id, "memory_recalled", data)
+        elif self._deps.agent_run_store is not None:
+            await self._deps.agent_run_store.record_event(
+                payload.run_id,
+                payload.task_id,
+                "memory_recalled",
+                data,
+            )
 
     async def _load_skills_block(self, payload: AgentPayload, selected: list[Any]) -> str:
         """Offer the most relevant procedural skills for this task, by description.

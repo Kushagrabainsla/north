@@ -593,6 +593,42 @@ async def test_context_loading_records_content_free_section_boundaries(tmp_path:
     assert payload.context_sections == {"caller_context": "previous conversation"}
 
 
+async def test_context_loading_emits_content_free_memory_telemetry(tmp_path: Path) -> None:
+    from memory import MemoryContext, MemoryPrincipal
+
+    class Memory:
+        async def principal_for(self, name, domain):
+            return MemoryPrincipal(
+                name=name,
+                domain=domain,
+                allowed_domains=frozenset({"engineering", "general"}),
+                allowed_fact_topics=frozenset({"preferences", "user"}),
+            )
+
+        async def recall(self, principal, prompt):
+            return MemoryContext(facts=["the user has a private preference"], episodes=["a private prior task"])
+
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit(self, task_id: str, event: str, data: dict) -> None:
+            self.events.append((event, data))
+
+    agent = _load_agent("researcher", tmp_path)
+    stream = RecordingStream()
+    agent.deps.memory = Memory()
+    agent.deps.stream_manager = stream
+
+    await agent._load_context(AgentPayload(task_id="memory-profile", prompt="inspect"), selected_skills=[])
+
+    telemetry = [data for event, data in stream.events if event == "memory_recalled"][0]
+    assert telemetry["source_counts"] == {"facts": 1, "episodes": 1, "documents": 0}
+    assert telemetry["fact_scope"] == ["preferences", "user"]
+    assert telemetry["episode_scope"] == ["engineering", "general"]
+    assert "private" not in str(telemetry)
+
+
 # ---------------------------------------------------------------------------
 # Task message structure
 # ---------------------------------------------------------------------------

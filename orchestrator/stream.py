@@ -50,6 +50,7 @@ _DURABLE_EVENTS = frozenset(
         "budget_soft_limit",
         "execution_profile_escalated",
         "evidence_manifest",
+        "memory_recalled",
         "compaction",
         "stream_reset",
     }

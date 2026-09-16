@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from memory import ContextDocument, FileContextStore, LocalMemoryGateway
+from memory import ContextDocument, FileContextStore, LocalMemoryGateway, MemoryContext
 
 
 @pytest.fixture
@@ -40,3 +40,18 @@ async def test_principal_episode_domains_are_own_plus_shared(store: FileContextS
 async def test_principal_without_domain_reads_no_episodes(store: FileContextStore) -> None:
     principal = await LocalMemoryGateway(store).principal_for("system", None)
     assert principal.allowed_domains == frozenset()
+
+
+def test_memory_context_telemetry_contains_aggregates_not_content() -> None:
+    context = MemoryContext(
+        facts=["private fact"],
+        episodes=["private prior task"],
+        documents=["private profile"],
+    )
+
+    telemetry = context.telemetry()
+
+    assert telemetry["source_counts"] == {"facts": 1, "episodes": 1, "documents": 1}
+    assert telemetry["source_categories"] == ["facts", "episodes", "documents"]
+    assert telemetry["total_characters"] == 45
+    assert "private" not in str(telemetry)

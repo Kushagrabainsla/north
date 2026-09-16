@@ -54,6 +54,25 @@ class MemoryContext:
     episodes: list[str] = field(default_factory=list)
     documents: list[str] = field(default_factory=list)
 
+    def telemetry(self) -> dict[str, object]:
+        """Content-free retrieval measurements safe for logs and dashboards."""
+        groups = {
+            "facts": self.facts,
+            "episodes": self.episodes,
+            "documents": self.documents,
+        }
+        counts = {name: len(items) for name, items in groups.items()}
+        characters = {name: sum(len(item) for item in items) for name, items in groups.items()}
+        total_characters = sum(characters.values())
+        return {
+            "source_categories": [name for name, count in counts.items() if count],
+            "source_counts": counts,
+            "source_characters": characters,
+            "total_items": sum(counts.values()),
+            "total_characters": total_characters,
+            "estimated_tokens": (total_characters + 3) // 4,
+        }
+
     def render(self) -> str:
         """Format the retrieved memory into one prompt block.
 
