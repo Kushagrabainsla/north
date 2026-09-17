@@ -55,6 +55,21 @@ async def test_the_page_can_tell_the_two_kinds_apart(wiring) -> None:
     assert by_title["Run migration?"]["blocking"] is True
 
 
+async def test_legacy_information_cards_are_not_actionable(wiring) -> None:
+    """Old persisted completion notices must stay out of the decision cockpit."""
+    _, store = wiring
+    notification = Card.new(
+        type=CardType.INFORMATION,
+        agent="research",
+        title="Research - Done",
+        message="Ready.",
+    )
+    # Simulate an old database restored before the store enforced the boundary.
+    store._cards[notification.id] = notification  # noqa: SLF001
+
+    assert await web_api.approvals() == []
+
+
 async def test_a_card_says_what_approving_will_cause(wiring) -> None:
     """ "Submits the application" and "saves a draft" must not be identical buttons."""
     continuations, store = wiring

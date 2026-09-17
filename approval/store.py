@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from approval.continuation import CardContinuations, CardOutcome
-from approval.models import ApprovalDecision, Card
+from approval.models import ApprovalDecision, Card, CardType
 from utils.db import open_db_connection
 
 logger = logging.getLogger(__name__)
@@ -123,6 +123,11 @@ class ApprovalStore:
                 card = Card.model_validate(json.loads(row["payload"]))
             except Exception:
                 continue
+            # Completion notices used to be persisted as approvals. They have
+            # no decision to restore and must not crowd real work out of the
+            # bounded approval history after an upgrade.
+            if card.type is CardType.INFORMATION:
+                continue
             # A blocking card's waiter died with the process. Answering it would
             # wake nobody, so it is retired rather than left asking.
             if card.status == _PENDING and card.blocking:
@@ -144,6 +149,8 @@ class ApprovalStore:
     # ── Registry ──────────────────────────────────────────────────────────────
 
     def add(self, card: Card) -> None:
+        if card.type is CardType.INFORMATION:
+            raise ValueError("information notifications do not belong in the approval store")
         # Scrubbed on the way in, not on the way to disk. The queue is read by
         # the web UI and the notifiers as well as written to SQLite, so a card
         # redacted only at `_write` would still hand a credential to Telegram.

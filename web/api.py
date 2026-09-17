@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
+from approval.models import CardType
 from approval.unattended_rules import KINDS as RULE_KINDS
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
 from config.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
@@ -494,7 +495,13 @@ async def approvals(limit: int = 100) -> list[dict[str, Any]]:
     buttons - and the review page exists so you can judge before deciding.
     """
     continuations = current_services().card_continuations
-    cards = current_services().require("approval_store").all(limit)
+    # Old databases may contain completion notices from before notifications
+    # were separated from decisions. They must not reappear as actionable work.
+    cards = [
+        card
+        for card in current_services().require("approval_store").all(limit)
+        if card.type is not CardType.INFORMATION
+    ]
     payload = []
     for card in cards:
         item = card.model_dump(mode="json")

@@ -2224,11 +2224,9 @@ class Orchestrator:
             )
             await self._interaction.notify(card)
         else:
-            card = Card.new(
-                type=CardType.INFORMATION,
+            await self._interaction.inform(
                 task_id=task_id,
                 agent=agent.name,
                 title=f"{agent.name.capitalize()} - Done",
                 message=result.summary,
             )
-            await self._interaction.notify(card)

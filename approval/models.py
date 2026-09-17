@@ -136,7 +136,10 @@ class Card(BaseModel):
             options=list(options),
             fields=list(fields),
             context=context,
-            blocking=blocking,
+            # Information is a one-way notification, not a decision. Keep that
+            # invariant at construction so every notifier sees the truth even
+            # when a caller does not go through UserInteraction.inform().
+            blocking=False if type is CardType.INFORMATION else blocking,
             source=source,
         )
 

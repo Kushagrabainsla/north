@@ -1,9 +1,9 @@
 """Single mediator for every user-facing card interaction.
 
-`UserInteraction` is the one place north turns a `Card` into a user prompt: it
-applies the learned `JudgementFilter`, registers the card in the `ApprovalStore`,
-surfaces it (SSE stream + TUI-aware `Notifier`), and - for decisions - blocks
-until the user responds or the timeout elapses.
+`UserInteraction` is the one place north turns a `Card` into a user interaction:
+decision cards are registered in the `ApprovalStore`, while information cards
+go only to notification channels. For decisions it can then block until the
+user responds or the timeout elapses.
 
 Tools, agents, and the Orchestrator all go through this class, so the
 surface -> await -> resolve sequence exists exactly once (DRY / SRP). Each caller
@@ -258,12 +258,23 @@ class UserInteraction:
         return settings.approval_reachable_timeout_seconds
 
     async def notify(self, card: Card, *, event: CardEvent | None = None) -> Card:
-        """Register and surface *card* without blocking; return it.
+        """Surface *card* without blocking; register only decision cards.
 
         The returned card is already resolved if a learned rule fired. Surfacing
         skips whichever channel is absent: SSE only when an *event* and a stream
         manager are present; a system alert only when a Notifier is wired.
+
+        INFORMATION is deliberately a separate path: it has no response, waiter,
+        or approval history. Treating a completion notice as a pending approval
+        made finished tasks appear to be waiting for the user and then cancelled
+        those notices when the task ended.
         """
+        if card.type is CardType.INFORMATION:
+            notification = card.model_copy(update={"blocking": False}).scrubbed()
+            if self._notifier is not None:
+                await self._notifier.notify(notification)
+            return notification
+
         auto = await self._auto_resolve(card)
         if auto is not None:
             return auto
