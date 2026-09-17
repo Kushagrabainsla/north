@@ -223,7 +223,7 @@ what keeps it fixed across a DST shift.
 
 ### 5.3 Prompts Are Files, Not Strings
 
-Every LLM prompt is a markdown file under `prompts/`, loaded via `utils.prompts.load_prompt()`. No prompt string is hardcoded in Python. Shared base prompts are loaded and extended; never duplicated.
+Every LLM prompt is a markdown file under `resources/prompts/`, loaded via `utils.prompts.load_prompt()`. No prompt string is hardcoded in Python. Shared base prompts are loaded and extended; never duplicated.
 
 ### 5.4 Models Are Defined Once
 
@@ -1687,10 +1687,10 @@ Every environment variable must be in `.env.example` with a comment explaining w
 NORTH_OPENROUTER_API_KEY=sk-or-your-key-here
 
 # Optional: directory where north stores all data (default: ~/.north)
-# NORTH_NORTH_HOME=~/.north
+# NORTH_HOME=~/.north
 
 # Optional: development or production (default: development)
-# NORTH_NORTH_ENV=development
+# NORTH_ENV=development
 
 # Optional: how often the job processor polls for new jobs in seconds (default: 5)
 # NORTH_JOB_POLL_INTERVAL_SECONDS=5

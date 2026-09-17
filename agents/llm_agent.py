@@ -17,13 +17,14 @@ from inference.models import (
     PoolPriority,
 )
 from tools.base import Tool
+from utils.runtime_resources import policies_dir
 from utils.text import strip_code_fences
 from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
 
 # Built-in policies (authoritative, always-on operating rules) loaded once at import.
 # Fails closed: a malformed/empty policy raises here rather than silently leaving
 # agents without their safety guardrails. See agents/policy.py.
-_POLICIES = load_policies(Path(__file__).resolve().parent.parent / "policies")
+_POLICIES = load_policies(policies_dir())
 
 
 class LLMAgent(Agent):

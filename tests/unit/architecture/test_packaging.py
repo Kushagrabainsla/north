@@ -22,7 +22,6 @@ ROOT = Path(__file__).parents[3]
 REQUIRED_PACKAGES = (
     "agents",
     "approval",
-    "architecture",
     "bootstrap",
     "cli",
     "config",
@@ -34,6 +33,7 @@ REQUIRED_PACKAGES = (
     "mcp",
     "memory",
     "orchestrator",
+    "resources",
     "skills",
     "tools",
     "utils",
@@ -84,9 +84,40 @@ def test_namespace_discovery_stays_enabled(pyproject: dict) -> None:
 
 
 def test_tests_are_never_shipped(pyproject: dict) -> None:
-    assert "tests*" in set(pyproject["tool"]["setuptools"]["packages"]["find"]["exclude"])
+    excluded = set(pyproject["tool"]["setuptools"]["packages"]["find"]["exclude"])
+    assert {"tests*", "docs*", "architecture*", "evals*", "experiments*", "scripts*"} <= excluded
+
+
+def test_runtime_package_data_is_explicit(pyproject: dict) -> None:
+    package_data = pyproject["tool"]["setuptools"]["package-data"]
+
+    assert "*" not in package_data
+    assert "architecture" not in package_data
+    assert package_data["resources"] == [
+        "prompts/*.md",
+        "policies/*.md",
+        "builtin-skills/**/*.md",
+    ]
+    assert package_data["agents"] == ["**/*.yaml", "**/prompts/*.md"]
+    assert all("README" not in pattern for pattern in package_data["agents"])
 
 
 def test_vendored_frontend_dependencies_stay_out_of_the_sdist() -> None:
-    """The wheel already excluded them; the sdist shipped 717 entries anyway."""
-    assert "prune web/node_modules" in (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+    """Development-only trees stay out of source distributions."""
+    manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+    for directory in (
+        "web/node_modules",
+        ".github",
+        "architecture",
+        "build",
+        "docs",
+        "evals",
+        "experiments",
+        "scripts",
+        "tests",
+        "web/src",
+    ):
+        assert f"prune {directory}" in manifest
+    assert "exclude agents/**/README.md" in manifest
+    assert "exclude web/index.html" in manifest
+    assert "exclude web/vite.config.js" in manifest

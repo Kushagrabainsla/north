@@ -109,10 +109,10 @@ north extends itself through exactly four primitives. Choosing the right one is 
 |---|---|---|---|---|---|
 | **Tool** | Deterministic code the model calls (`read_file`, `git`, `web_search`) | n/a (it just runs) | The model decides to call it | one function call | the work is deterministic - never make a model do what code can do reliably |
 | **Skill** | Advisory procedural *knowledge* (a `SKILL.md`) | advisory - never overrides instructions | semantically selected per task, injected low (in the user-message `## Context`) | no extra model call | there's a known-good *procedure* for a *some* tasks ("how to debug a flaky test") |
-| **Policy** | An authoritative *rule* (a `policies/*.md`) | binding - overrides task/skill/user on conflict | deterministic, by agent name (`applies_to`), injected high (system prompt), always on | no extra model call | a cross-cutting rule must *always* hold (safety guardrails, clean-code) |
+| **Policy** | An authoritative *rule* (a `resources/policies/*.md`) | binding - overrides task/skill/user on conflict | deterministic, by agent name (`applies_to`), injected high (system prompt), always on | no extra model call | a cross-cutting rule must *always* hold (safety guardrails, clean-code) |
 | **Agent** | A separate model call with its own persona/tools | its own instructions | chosen by the planner | a full model call + handoff | the work needs a *different model*, *context isolation*, *unique tools*, or is a distinct autonomous *mission* - not merely a different persona (that's a skill/policy) |
 
-Skills teach; policies bind. A policy is only as strong as the model that reads it, so the critical ones are also backed by deterministic enforcement (approval-gated mutating tools, the Definition-of-Done gate) - see `policies/` and `agents/policy.py`. Some authoritative rules still live as per-agent prose or Python constants (e.g. tool-creation and deliverable policies); those may migrate into `policies/` over time.
+Skills teach; policies bind. A policy is only as strong as the model that reads it, so the critical ones are also backed by deterministic enforcement (approval-gated mutating tools, the Definition-of-Done gate) - see `resources/policies/` and `agents/policy.py`. Some authoritative rules still live as per-agent prose or Python constants (e.g. tool-creation and deliverable policies); those may migrate into `resources/policies/` over time.
 
 ---
 
@@ -1889,7 +1889,7 @@ NORTH_GEMINI_API_KEY=AIza...                # optional - Gemini free-tier comple
 # System
 NORTH_HOME=~/.north                         # optional, override data directory (e.g. /data in Docker)
 NORTH_SECRET=your-secret                    # optional, override secret.key file (preferred in Docker)
-NORTH_NORTH_ENV=development                 # development | production | test
+NORTH_ENV=development                       # development | production | test
 
 # Tuning (all optional, defaults shown)
 NORTH_JOB_POLL_INTERVAL_SECONDS=5          # how often the job processor wakes
@@ -1902,7 +1902,7 @@ NORTH_EXTRACTION_POLL_INTERVAL_SECONDS=120 # extraction pipeline check frequency
 NORTH_EXTRACTION_MAX_DAILY_COST_USD=0.10   # daily spend cap for the extraction pipeline
 ```
 
-`NORTH_HOME` and `NORTH_SECRET` are read directly from the environment (no doubled `NORTH_` prefix). All other tuning variables follow pydantic-settings' `NORTH_` prefix convention.
+`NORTH_HOME`, `NORTH_SECRET`, and `NORTH_ENV` are read directly from the environment (no doubled `NORTH_` prefix). All other tuning variables follow pydantic-settings' `NORTH_` prefix convention. The historical `NORTH_NORTH_ENV` spelling remains accepted for compatibility.
 
 **`~/.north/secret.key`** is generated automatically on first `north start` if it does not exist. It is never committed to the repository. When `NORTH_SECRET` is set, the file is not consulted.
 

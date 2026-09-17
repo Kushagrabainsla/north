@@ -35,7 +35,17 @@ from web.artifacts import (
     resolve_artifact,
 )
 
+from . import extensions as _extensions
 from .conversations import ConversationStore, Turn
+
+# Compatibility exports for callers that historically imported skill routes
+# and their request model from web.api.
+SkillUpdate = _extensions.SkillUpdate
+delete_skill = _extensions.delete_skill
+get_skill = _extensions.get_skill
+list_skills = _extensions.list_skills
+update_skill = _extensions.update_skill
+extensions_router = _extensions.router
 
 if TYPE_CHECKING:
     from inference.auth import AuthStatus
@@ -62,6 +72,7 @@ router = APIRouter(
     # Bound first so routes can reach this app's wiring via current_services().
     dependencies=[Depends(bind_request_services), Depends(verify_api_access)],
 )
+router.include_router(extensions_router)
 
 
 @dataclass
@@ -758,60 +769,6 @@ class FactCreate(BaseModel):
     category: str = Field(default="user", max_length=80)
 
 
-class SkillUpdate(BaseModel):
-    content: str = Field(min_length=1, max_length=100_000)
-
-
-@router.get("/skills")
-async def list_skills() -> list[dict[str, Any]]:
-    registry = current_services().require("skill_registry")
-    return [
-        {
-            "name": skill.name,
-            "description": skill.description,
-            "source": skill.source.value,
-            "version": skill.version,
-            "status": skill.status,
-            "domains": sorted(skill.domains),
-        }
-        for skill in sorted(registry.all(), key=lambda item: item.name)
-    ]
-
-
-@router.get("/skills/{name}")
-async def get_skill(name: str) -> dict[str, Any]:
-    registry = current_services().require("skill_registry")
-    try:
-        skill = registry.get(name)
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
-    content = await asyncio.to_thread((skill.directory / "SKILL.md").read_text, encoding="utf-8")
-    return {"name": skill.name, "content": content, "source": skill.source.value}
-
-
-@router.put("/skills/{name}")
-async def update_skill(name: str, body: SkillUpdate) -> dict[str, Any]:
-    from skills.exceptions import SkillParseError
-    from skills.parser import parse_skill_document
-    from skills.registry import rejection_reason
-
-    registry = current_services().require("skill_registry")
-    try:
-        skill = registry.get(name)
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
-    try:
-        frontmatter, content_body = parse_skill_document(body.content)
-    except SkillParseError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    parsed_name = str(frontmatter.get("name") or "").strip()
-    description = str(frontmatter.get("description") or "").strip()
-    reason = rejection_reason(parsed_name, description, content_body, source=skill.source)
-    if parsed_name != name or reason:
-        raise HTTPException(status_code=422, detail=reason or "Skill name cannot be changed")
-    await asyncio.to_thread((skill.directory / "SKILL.md").write_text, body.content, encoding="utf-8")
-    registry.reload()
-    return await get_skill(name)
 
 
 @router.post("/memory/facts", status_code=201)

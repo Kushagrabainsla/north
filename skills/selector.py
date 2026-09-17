@@ -43,7 +43,10 @@ class SkillSelector:
         self._embed_fn = embed_fn
         self._top_k = top_k
         self._min_similarity = min_similarity
-        self._embeddings: dict[str, list[float]] | None = None  # name -> vector, built lazily
+        # name -> (retrieval text, vector), built lazily. Keeping the text with
+        # the vector makes cache correctness independent of which write path
+        # changed a skill and whether that caller remembered to invalidate us.
+        self._embeddings: dict[str, tuple[str, list[float]]] | None = None
 
     async def select(self, task_text: str, candidates: list[Skill] | None = None) -> list[Skill]:
         """Return a primary skill and optionally one distinct secondary skill.
@@ -99,12 +102,21 @@ class SkillSelector:
         """Embed each skill's retrieval key once, incrementally caching embeddings."""
         if self._embeddings is None:
             self._embeddings = {}
-        missing = [skill for skill in skills if skill.name not in self._embeddings]
+        keys = {skill.name: _retrieval_key(skill) for skill in skills}
+        missing = [
+            skill
+            for skill in skills
+            if skill.name not in self._embeddings or self._embeddings[skill.name][0] != keys[skill.name]
+        ]
         if missing:
-            vectors = await self._embed_fn([_retrieval_key(skill) for skill in missing])
+            vectors = await self._embed_fn([keys[skill.name] for skill in missing])
             for skill, vec in zip(missing, vectors, strict=False):
-                self._embeddings[skill.name] = vec
-        return self._embeddings
+                self._embeddings[skill.name] = (keys[skill.name], vec)
+        return {
+            name: self._embeddings[name][1]
+            for name in keys
+            if name in self._embeddings and self._embeddings[name][0] == keys[name]
+        }
 
 
 def _retrieval_key(skill: Skill) -> str:

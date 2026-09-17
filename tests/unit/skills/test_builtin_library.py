@@ -1,6 +1,6 @@
 """Integrity + quality checks for the shipped built-in skill library.
 
-Guards the actual skills under skills/builtin/ so a malformed, generic, or
+Guards the actual built-in skills under resources/builtin-skills/ so a malformed, generic, or
 overlapping skill cannot ship: every skill must have a trigger-oriented
 description and a procedural body, descriptions must be distinct (top-2 semantic
 selection collides otherwise), and the deliberate cut/merge decisions stay made.
@@ -8,11 +8,10 @@ selection collides otherwise), and the deliberate cut/merge decisions stay made.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from skills.registry import SkillRegistry
+from utils.runtime_resources import builtin_skills_dir
 
-BUILTIN_DIR = Path(__file__).resolve().parents[3] / "skills" / "builtin"
+BUILTIN_DIR = builtin_skills_dir()
 _REGISTRY = SkillRegistry(builtin_dir=BUILTIN_DIR)
 _SKILLS = _REGISTRY.all()
 

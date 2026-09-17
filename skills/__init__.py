@@ -3,7 +3,7 @@
 A skill is a folder with a ``SKILL.md`` (YAML frontmatter + markdown body). The
 right skill for a task is selected semantically and injected into the agent's
 context *before* it acts, so the same model makes fewer avoidable mistakes.
-Built-in skills ship in the repo; learned skills are distilled from north's own
+Built-in skills ship as immutable package resources; learned skills are distilled from north's own
 successful task history at runtime.
 """
 

@@ -225,6 +225,21 @@ class UserCronStore:
         with open_db_connection(self._db_path) as conn:
             return conn.execute("DELETE FROM user_cron_entries WHERE name = ?", (name,)).rowcount > 0
 
+    async def remove_for_agent(self, agent: str) -> list[str]:
+        """Delete every stored schedule assigned to *agent* and return its names.
+
+        The select and delete share one transaction so callers never observe a
+        partial cascade. Completed job history is stored separately and remains
+        untouched.
+        """
+        return await asyncio.to_thread(self._remove_for_agent_sync, agent)
+
+    def _remove_for_agent_sync(self, agent: str) -> list[str]:
+        with open_db_connection(self._db_path) as conn:
+            names = [row[0] for row in conn.execute("SELECT name FROM user_cron_entries WHERE agent = ?", (agent,))]
+            conn.execute("DELETE FROM user_cron_entries WHERE agent = ?", (agent,))
+            return names
+
     async def get(self, name: str) -> dict | None:
         row = await asyncio.to_thread(self._get_sync, name)
         return _row_to_entry(row) if row is not None else None

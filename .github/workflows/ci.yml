@@ -149,11 +149,67 @@ jobs:
       - name: Build distributions
         run: uv build
 
-      - name: Reject vendored frontend dependencies from the source distribution
+      - name: Reject development content from the source distribution
         run: |
           sdist="$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
           test -n "$sdist"
-          ! tar -tzf "$sdist" | grep -q '/web/node_modules/'
+          python - "$sdist" <<'PY'
+          import sys
+          import tarfile
+          from pathlib import PurePosixPath
+
+          forbidden_roots = {"architecture", "docs", "evals", "experiments", "scripts", "tests"}
+          with tarfile.open(sys.argv[1]) as archive:
+              for name in archive.getnames():
+                  parts = PurePosixPath(name).parts[1:]  # strip the sdist's generated root
+                  assert not parts or parts[0] not in forbidden_roots, name
+                  assert parts[:2] != ("web", "src"), name
+                  assert parts not in {("web", "index.html"), ("web", "vite.config.js")}, name
+          PY
+
+      - name: Reject development content from the wheel
+        run: |
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          python - "$wheel" <<'PY'
+          import sys
+          import zipfile
+          from pathlib import PurePosixPath
+
+          forbidden_roots = {"architecture", "docs", "evals", "experiments", "scripts", "tests"}
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              for name in archive.namelist():
+                  parts = PurePosixPath(name).parts
+                  assert not parts or parts[0] not in forbidden_roots, name
+                  assert parts[:2] != ("web", "src"), name
+                  assert parts != ("README.md",), name
+          PY
+
+      - name: Install wheel and smoke-test runtime resources
+        run: |
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          uv pip install --system "$wheel"
+          repo_root="$(pwd)"
+          smoke_dir="$(mktemp -d)"
+          cd "$smoke_dir"
+          NORTH_REPO_ROOT="$repo_root" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          import cli
+          from cli.main import app
+          from orchestrator.app import app as server_app
+          from utils.prompts import load_prompt
+          from utils.runtime_resources import builtin_skills_dir, policies_dir, web_dist_dir
+
+          repo_root = Path(os.environ["NORTH_REPO_ROOT"]).resolve()
+          assert not Path(cli.__file__).resolve().is_relative_to(repo_root)
+          assert app is not None and server_app is not None
+          assert "planner" in load_prompt("prompts/planner.md").lower()
+          assert builtin_skills_dir().is_dir()
+          assert policies_dir().is_dir()
+          assert web_dist_dir().is_dir()
+          PY
 
   test:
     name: Test (pytest)

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-09
+- Amended: 2026-09-16 (personal agents moved to `NORTH_HOME/agents/`)
 - Supersedes the layout migration proposed as Stage 6 of
   [the clean-architecture plan](../refactor/CLEAN_ARCHITECTURE_PLAN.md)
 
@@ -42,13 +43,11 @@ extension directories. None of those is an importable Python path, so the usual
 `src/` layout benefit - protecting a distributed library's import surface - does
 not apply here.
 
-Against that, relocating the packages moves the directory that `north agent
-create` writes into and that agent discovery scans. That path is user-visible in
-a source checkout or editable install, where authored agents live in the working
-tree. (For git-based installs the situation is already worse and unrelated to
-layout: `north update` runs `uv tool install --force`, which replaces the tool
-environment, so agents scaffolded inside the package tree do not survive an
-update today. That is a separate design problem, recorded below.)
+At the time of this decision, relocating the packages also moved the directory
+that `north agent create` wrote into and that agent discovery scanned. That path
+was user-visible in a source checkout or editable install. The later packaging
+refactor removed this concern by storing personal agents under
+`NORTH_HOME/agents/`, outside the replaceable package tree.
 
 The migration would also rewrite ~420 files, the module manifest's path
 patterns, the import baseline's module names, the console-script entry point, the
@@ -67,6 +66,6 @@ require installation and persistent data to stay compatible.
 - Agent module resolution no longer hardcodes a top-level prefix
   (`agents/packaging.py`), so this decision is reversible without touching
   discovery logic.
-- Known, separate issue: agents scaffolded into the package tree are lost on a
-  git-install update. Fixing that means writing user-authored agents under
-  `~/.north` instead, which is a behavior change and out of scope here.
+- Personal agents are now stored under `NORTH_HOME/agents/` and discovered after
+  packaged agents, so a git-install update no longer deletes them and they cannot
+  shadow a built-in agent with the same name.

@@ -2,7 +2,8 @@
 
 The conductor, the design phase and the deploy flow each steer an agent with a
 short preamble. These are fragments composed into a task payload, not prompts of
-their own: the standalone prompts this pipeline sends live in `prompts/`
+their own: the standalone prompts this pipeline sends live in the packaged
+`resources/prompts/` directory and are loaded through `utils.prompts`
 (spec_critique.md, answer_critic.md) as CODING_STYLE 5.3 requires. Keeping the
 fragments here means the orchestrator reads as control flow, and the wording sits
 next to the kinds it is chosen by.

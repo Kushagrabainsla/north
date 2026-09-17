@@ -12,7 +12,7 @@ import stat as _stat
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, PrivateAttr
+from pydantic import AliasChoices, Field, PrivateAttr
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
@@ -75,8 +75,19 @@ class Settings(BaseSettings):
     # Base URL for the main orchestrator server - override in Docker/multi-host deployments.
     north_orchestrator_url: str = "http://127.0.0.1:8000"
 
-    # Runtime environment
-    north_env: Literal["development", "production", "test"] = "development"
+    # Runtime environment. NORTH_ENV is the canonical spelling used by Docker
+    # and operators; accept the historical doubled form for existing installs.
+    north_env: Literal["development", "production", "test"] = Field(
+        default="development",
+        validation_alias=AliasChoices("NORTH_ENV", "NORTH_NORTH_ENV"),
+    )
+
+    # Test mode is inert by default: API/storage wiring is available, but the
+    # process does not resume work, fire schedules, contact gateways, or scan
+    # personal files. Either capability can still be enabled explicitly for an
+    # end-to-end test that needs it. None means "enabled outside test mode".
+    autonomous_background_tasks_enabled: bool | None = None
+    onboarding_enabled: bool | None = None
 
     # Tuning parameters
     job_poll_interval_seconds: int = Field(default=5, ge=1)
@@ -265,6 +276,16 @@ class Settings(BaseSettings):
     def is_test(self) -> bool:
         return self.north_env == "test"
 
+    @property
+    def autonomous_background_tasks_active(self) -> bool:
+        configured = self.autonomous_background_tasks_enabled
+        return not self.is_test if configured is None else configured
+
+    @property
+    def onboarding_active(self) -> bool:
+        configured = self.onboarding_enabled
+        return not self.is_test if configured is None else configured
+
     # Only ~/.north/.env is a trusted config source. A .env in the CWD is
     # attacker-influenced in any cloned repo and must never override config
     # (e.g. NORTH_SECRET), so it is deliberately not loaded.
@@ -272,6 +293,7 @@ class Settings(BaseSettings):
         "env_file": str(Path.home() / ".north" / ".env"),
         "env_prefix": "NORTH_",
         "extra": "ignore",
+        "populate_by_name": True,
     }
 
 

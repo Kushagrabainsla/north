@@ -19,7 +19,7 @@ The `description` is the retrieval key — write it as a trigger ("Use when …"
 
 ## How it works
 
-- **Built-in** skills live in `skills/builtin/`; **learned** skills live in `~/.north/skills/`.
+- **Built-in** skills ship under `resources/builtin-skills/`; **learned** skills live in `~/.north/skills/`.
 - For an engineering or research task, north embeds the prompt and offers the **top ~3** most
   similar skills (above a threshold) as one-line descriptions. The agent calls `use_skill` to
   pull the full procedure when one matches. If none fit, it offers nothing.
@@ -41,7 +41,7 @@ idempotent (a cluster that already produced a skill is skipped) and capped.
 
 ## Adding a built-in skill
 
-Create `skills/builtin/<name>/SKILL.md` with a trigger `description` and a short,
+Create `resources/builtin-skills/<name>/SKILL.md` with a trigger `description` and a short,
 **procedural** body (steps, not principles). Keep it distinct from other skills so
 selection stays crisp. Don't restate what the agent prompts already say. Add a
 `domains: [general]` frontmatter line if the skill serves the general assistant

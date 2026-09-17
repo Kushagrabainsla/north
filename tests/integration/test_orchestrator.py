@@ -902,13 +902,15 @@ class _ClaimThenCorrectAgent:
 
 
 class _ClaimThenDoItAgent:
-    """Claims a file was created; on the correction pass, actually uses write_file."""
+    """Claims a file was created; correction writes it and runs a real check."""
 
     name = "coder"
 
     async def run(self, payload: AgentPayload) -> AgentResult:
         if "[correction required]" in payload.prompt:
-            return AgentResult(output="I created the file foo.py.", summary="done", successful_tools=["write_file"])
+            return AgentResult(
+                output="I created the file foo.py.", summary="done", successful_tools=["write_file", "bash"]
+            )
         return AgentResult(output="I created the file foo.py.", summary="done", successful_tools=[])
 
 
@@ -952,7 +954,7 @@ async def test_self_repair_by_doing_the_work_substantiates_claim(tmp_path):
     await auditor.verify_claims("t1", _ClaimThenDoItAgent(), result, AgentPayload(task_id="t1", prompt="write foo"))
 
     assert "Unverified claims" not in result.output
-    assert result.successful_tools == ["write_file"]  # evidence now present
+    assert result.successful_tools == ["write_file", "bash"]  # mutation and verification evidence now present
 
 
 @pytest.mark.asyncio

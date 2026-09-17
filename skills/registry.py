@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 from pathlib import Path
 
 from skills.exceptions import SkillNotFoundError, SkillParseError
@@ -142,3 +143,16 @@ class SkillRegistry:
 
     def names(self) -> list[str]:
         return list(self._skills.keys())
+
+    def remove_learned(self, name: str) -> bool:
+        """Remove a learned skill directory; bundled skills are immutable."""
+        skill = self._skills.get(name)
+        if skill is None or skill.source is not SkillSource.LEARNED:
+            return False
+        learned_roots = [directory.resolve() for directory, source in self._sources if source is SkillSource.LEARNED]
+        skill_dir = skill.directory.resolve()
+        if not any(skill_dir.parent == root for root in learned_roots):
+            return False
+        shutil.rmtree(skill_dir)
+        self.reload()
+        return True

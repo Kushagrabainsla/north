@@ -65,12 +65,29 @@ exclude = [
     "tests*",
     ".venv*",
     "build*",
+    "docs*",
+    "architecture*",
+    "evals*",
+    "experiments*",
+    "scripts*",
     "web.node_modules*",
     "web.src*",
 ]
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml", "*.yml", "*.md", "*.html", "*.css", "*.js", "*.sh"]
+agents = ["**/*.yaml", "**/prompts/*.md"]
+cli = ["*.yml"]
+resources = [
+    "prompts/*.md",
+    "policies/*.md",
+    "builtin-skills/**/*.md",
+]
+web = [
+    "dist/*.html",
+    "dist/**/*.css",
+    "dist/**/*.js",
+    "dist/**/*.woff2",
+]
 
 [tool.setuptools.exclude-package-data]
 "web" = [

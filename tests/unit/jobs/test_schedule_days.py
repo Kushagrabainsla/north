@@ -229,6 +229,19 @@ async def test_two_schedules_whose_text_slugs_alike_do_not_overwrite(tmp_path) -
     assert len(await store.list()) == 2
 
 
+@pytest.mark.asyncio
+async def test_removing_an_agent_cascades_only_its_schedules(tmp_path) -> None:
+    store = UserCronStore(tmp_path / "jobs.db")
+    await store.add("user_one", "personal", "first", 9, 0, None)
+    await store.add("user_two", "personal", "second", 10, 0, None)
+    await store.add("user_keep", "general", "keep", 11, 0, None)
+
+    removed = await store.remove_for_agent("personal")
+
+    assert set(removed) == {"user_one", "user_two"}
+    assert [row["name"] for row in await store.list()] == ["user_keep"]
+
+
 # ---- name, prompt, and key are three different things ----
 
 

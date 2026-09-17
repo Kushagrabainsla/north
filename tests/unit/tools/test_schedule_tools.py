@@ -235,8 +235,8 @@ async def test_an_untouched_builtin_cannot_be_deleted_only_paused(store) -> None
 @pytest.mark.asyncio
 async def test_a_provisioned_briefing_is_a_deletable_user_schedule(store) -> None:
     """After provisioning the briefing is the user's own: cancel deletes it for good."""
-    from tools.universal.cancel_schedule import CancelScheduleTool
     from jobs.scheduler import provision_default_schedules
+    from tools.universal.cancel_schedule import CancelScheduleTool
 
     await provision_default_schedules(store)
     assert await store.get("news_daily_briefing") is not None
@@ -251,8 +251,8 @@ async def test_a_provisioned_briefing_is_a_deletable_user_schedule(store) -> Non
 @pytest.mark.asyncio
 async def test_provisioning_does_not_resurrect_a_deleted_briefing(store) -> None:
     """A provisioned default the user deleted stays gone across restarts."""
-    from tools.universal.cancel_schedule import CancelScheduleTool
     from jobs.scheduler import provision_default_schedules
+    from tools.universal.cancel_schedule import CancelScheduleTool
 
     await provision_default_schedules(store)
     canceller = CancelScheduleTool(job_processor=None, cron_store=store)

@@ -923,12 +923,27 @@ export function Memory() {
   </div>;
 }
 
-interface Agent { name: string; domain: string; model_pool: string; accepts: string[]; }
+interface Agent { name: string; domain: string; model_pool: string; accepts: string[]; source: string; deletable: boolean; }
 interface Confidence { agent: string; tool: string; confidence: number; }
+export function agentDeletionPrompt(agentName: string, scheduleTitles: string[], pendingJobCount: number): string {
+  const scheduleList = scheduleTitles.length
+    ? `\n\nSchedules also deleted:\n${scheduleTitles.map(title => `• ${title}`).join("\n")}`
+    : "";
+  const jobNotice = pendingJobCount
+    ? `\n\n${pendingJobCount} pending job${pendingJobCount === 1 ? "" : "s"} will also be cancelled.`
+    : "";
+  return `Delete personal agent '${agentName}'?${scheduleList}${jobNotice}`;
+}
+
 export function Agents() {
   const agents = useResource<Agent[]>("/orchestrator/agents");
   const confidence = useResource<Confidence[]>("/orchestrator/tools/confidence");
-  return <div className="page"><PageHeader eyebrow="Capabilities" title="Agents" subtitle="North's specialist team and the tools they trust."/><div className="agent-grid">{agents.data?.map(agent => <article key={agent.name}><div className="agent-avatar">{agent.name.slice(0,1).toUpperCase()}</div><h2>{agent.name}</h2><p>{agent.domain} · {agent.model_pool}</p><div className="tag-list">{agent.accepts.slice(0,5).map(item => <span key={item}>{item}</span>)}</div><h3>Tool confidence</h3>{confidence.data?.filter(item => item.agent === agent.name).slice(0,4).map(item => <div className="confidence" key={item.tool}><span>{item.tool}</span><i><b style={{width: `${item.confidence * 100}%`}}/></i></div>)}</article>)}</div></div>;
+  const schedules = useResource<Cron[]>("/orchestrator/cron");
+  const pendingJobs = useResource<Job[]>("/orchestrator/jobs?status=pending&limit=1000");
+  const [message, setMessage] = useState("");
+  const cascadeReady = !schedules.loading && !pendingJobs.loading && !schedules.error && !pendingJobs.error;
+  const remove = async (agent: Agent) => { const linkedSchedules = (schedules.data || []).filter(item => item.agent === agent.name); const linkedJobs = (pendingJobs.data || []).filter(item => item.agent === agent.name); if (!agent.deletable || !cascadeReady || !window.confirm(agentDeletionPrompt(agent.name, linkedSchedules.map(item => item.title), linkedJobs.length))) return; try { await del(`/orchestrator/agents/${encodeURIComponent(agent.name)}`); setMessage(`Deleted personal agent '${agent.name}' and its future work.`); await Promise.all([agents.reload(), schedules.reload(), pendingJobs.reload()]); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  return <div className="page"><PageHeader eyebrow="Capabilities" title="Agents" subtitle="North's specialist team and the tools they trust."/>{agents.error && <ErrorNotice message={agents.error}/>} {schedules.error && <ErrorNotice message={schedules.error}/>} {pendingJobs.error && <ErrorNotice message={pendingJobs.error}/>} {message && <div className="notice">{message}</div>}<div className="agent-grid">{agents.data?.map(agent => <article key={agent.name}><div className="agent-avatar">{agent.name.slice(0,1).toUpperCase()}</div><h2>{agent.name}</h2><p>{agent.domain} · {agent.model_pool} · {agent.source}</p><div className="tag-list">{agent.accepts.slice(0,5).map(item => <span key={item}>{item}</span>)}</div><h3>Tool confidence</h3>{confidence.data?.filter(item => item.agent === agent.name).slice(0,4).map(item => <div className="confidence" key={item.tool}><span>{item.tool}</span><i><b style={{width: `${item.confidence * 100}%`}}/></i></div>)}{agent.deletable && <button className="danger-button" disabled={!cascadeReady} onClick={() => void remove(agent)}>Delete personal agent</button>}</article>)}</div></div>;
 }
 
 interface SkillSummary { name: string; description: string; source: string; version: string; status: string; domains: string[]; }
@@ -939,8 +954,10 @@ export function Skills() {
   const [content, setContent] = useState("");
   const [message, setMessage] = useState("");
   const open = async (name: string) => { try { const detail = await api<SkillDetail>(`/web/api/skills/${name}`); setSelected(name); setContent(detail.content); setMessage(""); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
-  const save = async () => { if (!selected) return; try { await api(`/web/api/skills/${selected}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Skill saved and reloaded."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
-  return <div className="page"><PageHeader eyebrow="Procedures" title="Skills" subtitle="Inspect and edit the playbooks North injects into specialist work." actions={<button className="primary-button" disabled={!selected} onClick={save}>Save skill</button>}/>{skills.error && <ErrorNotice message={skills.error}/>} {message && <div className="notice">{message}</div>}<div className="skills-layout"><div className="skill-library">{skills.loading ? <Loading/> : (skills.data || []).map(skill => <button className={selected === skill.name ? "active" : ""} key={skill.name} onClick={() => open(skill.name)}><b>{skill.name}</b><small>{skill.source} · v{skill.version} · {skill.domains.join(", ")}</small><p>{skill.description}</p></button>)}</div><section className="skill-editor">{selected ? <><div className="editor-label">{selected}/SKILL.md</div><textarea value={content} onChange={event => setContent(event.target.value)}/></> : <Empty>Select a skill to inspect or edit it.</Empty>}</section></div></div>;
+  const selectedSkill = skills.data?.find(skill => skill.name === selected);
+  const save = async () => { if (!selected || selectedSkill?.source === "builtin") return; try { await api(`/web/api/skills/${selected}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Skill saved and reloaded."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const remove = async () => { if (!selected || selectedSkill?.source !== "learned" || !window.confirm(`Delete learned skill '${selected}'?`)) return; try { await del(`/web/api/skills/${encodeURIComponent(selected)}`); setSelected(null); setContent(""); setMessage("Learned skill deleted."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  return <div className="page"><PageHeader eyebrow="Procedures" title="Skills" subtitle="Inspect and edit the playbooks North injects into specialist work." actions={<><button className="primary-button" disabled={!selected || selectedSkill?.source === "builtin"} onClick={save}>Save skill</button>{selectedSkill?.source === "learned" && <button className="danger-button" onClick={() => void remove()}>Delete skill</button>}</>}/>{skills.error && <ErrorNotice message={skills.error}/>} {message && <div className="notice">{message}</div>}<div className="skills-layout"><div className="skill-library">{skills.loading ? <Loading/> : (skills.data || []).map(skill => <button className={selected === skill.name ? "active" : ""} key={skill.name} onClick={() => open(skill.name)}><b>{skill.name}</b><small>{skill.source} · v{skill.version} · {skill.domains.join(", ")}</small><p>{skill.description}</p></button>)}</div><section className="skill-editor">{selected ? <><div className="editor-label">{selected}/SKILL.md</div><textarea readOnly={selectedSkill?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></> : <Empty>Select a skill to inspect or edit it.</Empty>}</section></div></div>;
 }
 
 export function Insights() {

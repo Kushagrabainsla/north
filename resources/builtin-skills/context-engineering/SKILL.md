@@ -80,7 +80,7 @@ User Task → Orchestrator → Agent Selection → Skill Loading → Context Bui
 ```
 
 - **Agent prompts** (`agents/*/prompts/system.md`) define the agent's role and constraints
-- **Skills** (`skills/builtin/*/SKILL.md`) are loaded on-demand based on task relevance
+- **Skills** (`resources/builtin-skills/*/SKILL.md`) are loaded on-demand based on task relevance
 - **Rules** (`pyproject.toml`, `.env`) define project-wide configuration
 - **The ledger** tracks state across agents and sessions
 

@@ -17,8 +17,9 @@ from agents.policy import (
     load_policies,
     render_policies,
 )
+from utils.runtime_resources import policies_dir
 
-_REAL_POLICIES_DIR = Path(__file__).parent.parent.parent.parent / "policies"
+_REAL_POLICIES_DIR = policies_dir()
 
 
 def _write(dir_: Path, name: str, text: str) -> None:

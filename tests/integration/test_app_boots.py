@@ -46,6 +46,14 @@ async def booted_app(monkeypatch):
     the app, so they can share it.
     """
     monkeypatch.setenv("NORTH_ENV", "test")
+    from config.settings import settings
+
+    # The settings singleton may have been imported during collection, before
+    # this fixture set the environment. Make the intended test policy explicit
+    # and ignore any opt-ins from the developer's trusted ~/.north/.env.
+    monkeypatch.setattr(settings, "north_env", "test")
+    monkeypatch.setattr(settings, "autonomous_background_tasks_enabled", None)
+    monkeypatch.setattr(settings, "onboarding_enabled", None)
     from orchestrator.app import app
 
     async with app.router.lifespan_context(app):
@@ -76,3 +84,30 @@ async def test_a_read_through_the_wiring_answers(booted_app) -> None:
     with bind_services(services_of(booted_app)):
         assert await web_api.approvals() == []
         assert (await web_api.unattended_rules())["rules"], "the shipped safe-action rules must be seeded"
+
+
+@pytest.mark.asyncio
+async def test_test_mode_does_not_launch_autonomous_workers(booted_app) -> None:
+    """A server wiring test must never execute schedules or scan personal files."""
+    import asyncio
+
+    from config.settings import settings
+
+    active_names = {task.get_name() for task in asyncio.all_tasks() if not task.done()}
+    assert not active_names.intersection(
+        {
+            "bootstrap",
+            "callback_server",
+            "cron_scheduler",
+            "episode_consolidator",
+            "fact_maintenance",
+            "job_processor",
+            "pool_refresh",
+            "skill_distiller",
+            "stuck_task_watchdog",
+            "task_queue_drainer",
+            "telegram_gateway",
+            "tool_index",
+        }
+    )
+    assert not (settings.north_home / ".bootstrapped").exists()

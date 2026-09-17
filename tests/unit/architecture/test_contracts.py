@@ -21,6 +21,7 @@ PRODUCTION_ROOTS = (
     "mcp",
     "memory",
     "orchestrator",
+    "resources",
     "skills",
     "tools",
     "utils",
@@ -54,7 +55,12 @@ def test_module_for_rejects_unowned_paths() -> None:
 
 
 def _production_paths() -> set[str]:
-    paths: set[str] = {"exceptions.py", "policies/safety.md", "policies/clean-code.md", "SECURITY.md"}
+    paths: set[str] = {
+        "exceptions.py",
+        "resources/policies/safety.md",
+        "resources/policies/clean-code.md",
+        "SECURITY.md",
+    }
     for directory in PRODUCTION_ROOTS:
         for path in (ROOT / directory).rglob("*"):
             if not path.is_file() or "__pycache__" in path.parts or "node_modules" in path.parts:

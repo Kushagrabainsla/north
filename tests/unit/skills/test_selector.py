@@ -79,3 +79,21 @@ async def test_skips_a_secondary_that_duplicates_the_primary_capability(tmp_path
     picked = await selector.select("plan a database migration")
 
     assert len(picked) == 1
+
+
+async def test_reembeds_a_skill_when_its_description_changes(tmp_path):
+    _write_skill(tmp_path, "changing-skill", "Use for a migration")
+    registry = SkillRegistry(builtin_dir=tmp_path)
+    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.5)
+
+    assert [skill.name for skill in await selector.select("migration")] == ["changing-skill"]
+
+    skill_file = tmp_path / "changing-skill" / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: changing-skill\ndescription: Use for a tool\n---\nbody",
+        encoding="utf-8",
+    )
+    registry.reload()
+
+    assert await selector.select("migration") == []
+    assert [skill.name for skill in await selector.select("tool")] == ["changing-skill"]

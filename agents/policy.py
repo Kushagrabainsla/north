@@ -11,7 +11,7 @@ tools, skills, and agents:
                injected HIGH (in the system prompt), binding by design.
 - **agent**  - a separate execution boundary (its own model call / persona / tools).
 
-Policies live in the repo's ``policies/`` directory as markdown files with a YAML
+Policies live in the packaged ``resources/policies/`` directory as markdown files with a YAML
 frontmatter declaring which agents they bind::
 
     ---

@@ -89,6 +89,7 @@ from tools.universal.update_plan import UpdatePlanTool
 from tools.universal.update_schedule import UpdateScheduleTool
 from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
+from utils.runtime_resources import builtin_skills_dir, web_dist_dir
 from utils.tasks import drain
 from utils.time import utcnow
 from utils.version import NORTH_VERSION
@@ -99,9 +100,8 @@ from web.api import session_router as web_session_router
 logger = logging.getLogger(__name__)
 
 _AGENTS_DIR = Path(__file__).parent.parent / "agents"
-# Built-in skills ship as content under the skills package; learned skills are
-# distilled at runtime into the user's north_home (kept out of the repo).
-_BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills" / "builtin"
+# Learned skills are distilled at runtime into the user's north_home. Bundled
+# skills are immutable package resources and are resolved centrally.
 
 # ---------------------------------------------------------------------------
 # Startup helpers
@@ -173,7 +173,10 @@ def _build_tool_registry(deps, policy: ApprovalPolicy | None = None) -> tuple[To
             notifier=deps.notifier,
         )
     )
-    create_agent_tool = CreateAgentTool(cron_store=deps.cron_store)
+    create_agent_tool = CreateAgentTool(
+        cron_store=deps.cron_store,
+        agents_dir=settings.north_home / "agents",
+    )
     tool_registry.register(create_agent_tool)
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))
@@ -240,7 +243,7 @@ def _build_skills(deps) -> tuple[SkillRegistry, SkillSelector]:
     NORTH_BUILTIN_SKILLS_DIR overrides the built-in location; it exists only so the
     eval harness can A/B skills-on vs skills-off by pointing at an empty directory.
     """
-    builtin_dir = Path(os.environ.get("NORTH_BUILTIN_SKILLS_DIR") or _BUILTIN_SKILLS_DIR)
+    builtin_dir = Path(os.environ.get("NORTH_BUILTIN_SKILLS_DIR") or builtin_skills_dir())
     registry = SkillRegistry(
         builtin_dir=builtin_dir,
         learned_dir=settings.north_home / "skills",
@@ -346,7 +349,11 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
 
 
 def _build_agent_registry(agent_deps: AgentDependencies) -> AgentRegistry:
-    registry = AgentRegistry(agents_dir=_AGENTS_DIR, deps=agent_deps)
+    registry = AgentRegistry(
+        agents_dir=_AGENTS_DIR,
+        user_agents_dir=settings.north_home / "agents",
+        deps=agent_deps,
+    )
     # Break the circular dependency: agents need the registry to delegate sub-tasks,
     # but the registry needs agent_deps to instantiate agents.
     agent_deps.agent_registry = registry
@@ -588,9 +595,7 @@ async def _run_scheduled_task(
         if task.status == "needs_attention":
             raise JobNeedsAttention(f"scheduled task {response.task_id} needs attention")
         raise ScheduledTaskFailed(f"scheduled task {response.task_id} ended as {task.status}")
-    raise JobNeedsAttention(
-        f"scheduled task {response.task_id} is still in progress after {timeout_seconds:.0f}s"
-    )
+    raise JobNeedsAttention(f"scheduled task {response.task_id} is still in progress after {timeout_seconds:.0f}s")
 
 
 def _launch_background_tasks(
@@ -695,23 +700,6 @@ def _launch_background_tasks(
                 name="telegram_gateway",
             )
         )
-
-    # Async first-run bootstrap — scans user files and seeds fact store.
-    # Runs in the background so it never delays the user's first prompt.
-    tasks.append(
-        asyncio.create_task(
-            _guarded(
-                run_bootstrap_if_needed(
-                    fact_store=deps.fact_store,
-                    inference_router=deps.inference_router,
-                    north_home=settings.north_home,
-                    context_store=deps.context_store,
-                ),
-                "bootstrap",
-            ),
-            name="bootstrap",
-        )
-    )
 
     return tasks
 
@@ -837,13 +825,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     agent_deps.judgement_filter = orchestrator._judgement_filter
     context_injector = _build_context_injector(deps)
 
-    _step("running startup recovery sweep")
-    await recover_interrupted_tasks(
-        deps,
-        orchestrator,
-        max_age_seconds=settings.stuck_task_max_age_seconds,
-        resume_side_effecting=settings.resume_side_effecting_tasks,
-    )
+    if settings.autonomous_background_tasks_active:
+        _step("running startup recovery sweep")
+        await recover_interrupted_tasks(
+            deps,
+            orchestrator,
+            max_age_seconds=settings.stuck_task_max_age_seconds,
+            resume_side_effecting=settings.resume_side_effecting_tasks,
+        )
+    else:
+        _step("skipping startup recovery in test mode")
 
     _step("configuring API router")
     _configure_routers(app, orchestrator, deps, agent_registry, context_injector, skill_registry, approval_memory)
@@ -852,41 +843,64 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     callback_server = _build_callback_server()
 
     _step("scheduling background tasks")
-    # Seed provisioned-default schedules (e.g. the daily news briefing) into the
-    # user's store once, before the scheduler starts, so they are data that
-    # survives update/reinstall rather than a code constant. Idempotent, and
-    # never resurrects a user-deleted one. See docs/design/schedule-provisioning.md.
-    await provision_default_schedules(deps.cron_store)
-    skill_distiller = SkillDistiller(
-        episodic_store=deps.episodic_store,
-        inference_router=deps.cost_tracker,
-        skill_registry=skill_registry,
-        skill_selector=skill_selector,
-        learned_dir=settings.north_home / "skills",
-    )
-    telegram_gateway = TelegramGateway()
-    background_tasks = _launch_background_tasks(
-        deps,
-        orchestrator,
-        extraction_pipeline,
-        skill_distiller,
-        callback_server,
-        telegram_gateway=telegram_gateway,
-    )
-    if tool_index is not None:
+    background_tasks: list[asyncio.Task] = []
+    if settings.autonomous_background_tasks_active:
+        # Seed provisioned-default schedules (e.g. the daily news briefing) into
+        # the user's store before the scheduler starts. Test mode deliberately
+        # leaves the store untouched unless autonomous workers are opted into.
+        await provision_default_schedules(deps.cron_store)
+        skill_distiller = SkillDistiller(
+            episodic_store=deps.episodic_store,
+            inference_router=deps.cost_tracker,
+            skill_registry=skill_registry,
+            skill_selector=skill_selector,
+            learned_dir=settings.north_home / "skills",
+        )
+        telegram_gateway = TelegramGateway()
+        background_tasks = _launch_background_tasks(
+            deps,
+            orchestrator,
+            extraction_pipeline,
+            skill_distiller,
+            callback_server,
+            telegram_gateway=telegram_gateway,
+        )
+        if tool_index is not None:
+            background_tasks.append(
+                asyncio.create_task(
+                    _guarded(_populate_tool_index(tool_index, tool_registry), "tool_index"),
+                    name="tool_index",
+                )
+            )
+        if deps.fact_store is not None:
+            background_tasks.append(
+                asyncio.create_task(
+                    _guarded(_refresh_fact_store(deps.fact_store, deps.context_store), "fact_maintenance"),
+                    name="fact_maintenance",
+                )
+            )
+    else:
+        _step("autonomous background tasks disabled")
+
+    # Onboarding is independently controllable because it reads personal files.
+    # It defaults off in test mode even if another background worker is enabled.
+    if settings.onboarding_active:
         background_tasks.append(
             asyncio.create_task(
-                _guarded(_populate_tool_index(tool_index, tool_registry), "tool_index"),
-                name="tool_index",
+                _guarded(
+                    run_bootstrap_if_needed(
+                        fact_store=deps.fact_store,
+                        inference_router=deps.inference_router,
+                        north_home=settings.north_home,
+                        context_store=deps.context_store,
+                    ),
+                    "bootstrap",
+                ),
+                name="bootstrap",
             )
         )
-    if deps.fact_store is not None:
-        background_tasks.append(
-            asyncio.create_task(
-                _guarded(_refresh_fact_store(deps.fact_store, deps.context_store), "fact_maintenance"),
-                name="fact_maintenance",
-            )
-        )
+    else:
+        _step("personal-file onboarding disabled")
 
     _step("startup complete - yielding to server")
     try:
@@ -918,6 +932,9 @@ app.include_router(webhook_router)
 app.include_router(web_session_router)
 app.include_router(web_api_router)
 
-_WEB_DIST = Path(__file__).parent.parent / "web" / "dist"
-if _WEB_DIST.exists():
+try:
+    _WEB_DIST = web_dist_dir()
+except FileNotFoundError:
+    _WEB_DIST = None
+if _WEB_DIST is not None and _WEB_DIST.exists():
     app.mount("/app", StaticFiles(directory=_WEB_DIST, html=True), name="north-web")

@@ -1,2 +1,19 @@
 # Local frontend dependencies are reproducibly restored by npm ci; never ship them.
 prune web/node_modules
+
+# Development-only material is kept in the repository and CI checkout, not in
+# production source distributions.
+prune .github
+prune architecture
+prune build
+prune docs
+prune evals
+prune experiments
+prune scripts
+prune tests
+prune web/src
+exclude web/index.html
+exclude web/vite.config.js
+exclude skills/README.md
+exclude policies/README.md
+exclude agents/**/README.md

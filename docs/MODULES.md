@@ -19,6 +19,7 @@ Architecture, safety-policy, approval, tool-mutation, and composition-root chang
 | `platform.config` | `config/` | Platform | `NORTH_*`, settings | Standard |
 | `platform.ledger` | `ledger/` | Platform | audit/event persistence | Standard |
 | `platform.common` | `utils/`, `exceptions.py` | Platform | dependency-light utilities | Standard |
+| `platform.runtime_resources` | `resources/` | Platform | bundled prompts and built-in skills | Standard |
 | `intelligence.inference` | `inference/` | Intelligence | inference/providers/routing | Standard |
 | `intelligence.memory` | `memory/` | Intelligence | user context and facts | Standard |
 | `intelligence.workspace_context` | `context/` | Intelligence | repo instructions, code intelligence | Standard |
@@ -33,7 +34,7 @@ Architecture, safety-policy, approval, tool-mutation, and composition-root chang
 | `interfaces.web` | `web/` | Interface | cockpit API and browser UI | Standard |
 | `composition.app` | `orchestrator/app.py`, `config/dependencies.py` | Composition | lifecycle and concrete wiring | Protected |
 | `architecture` | `architecture/`, ADRs/refactor docs | Composition | boundaries and decisions | Protected |
-| `safety_policy` | safety/clean-code policy and security docs | Composition | binding safety rules | Protected |
+| `safety_policy` | `resources/policies/`, `SECURITY.md` | Composition | binding safety rules | Protected |
 
 ## Dependency direction
 

@@ -21,9 +21,11 @@ from pathlib import Path
 
 import yaml
 
+from utils.runtime_resources import prompts_dir
+
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 AGENTS_DIR = REPO_ROOT / "agents"
-PLANNER_PROMPT = REPO_ROOT / "prompts" / "planner.md"
+PLANNER_PROMPT = prompts_dir() / "planner.md"
 
 
 def _registered_agent_names() -> set[str]:
