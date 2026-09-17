@@ -9,3 +9,6 @@ same primitives, but it must not import recorded results.
 
 - [`tool_selection/`](tool_selection/) — capability-catalog size and runtime
   tool-retrieval strategy.
+- [`system_quality/`](system_quality/) — quick-path routing, task-specific
+  evidence gates, and tool-output signal retention across prompt/repository
+  shapes.

@@ -1,0 +1,249 @@
+{
+  "routing": [
+    {
+      "id": "python-direct-overview",
+      "repository_type": "small_python_service",
+      "prompt": "Give me an overview of this repository.",
+      "expected_profile": "quick_readonly",
+      "confidence": 0.93,
+      "engineering_kind": "question"
+    },
+    {
+      "id": "python-architecture-overview",
+      "repository_type": "small_python_service",
+      "prompt": "Explain this project's architecture.",
+      "expected_profile": "quick_readonly",
+      "confidence": 0.91,
+      "engineering_kind": "question"
+    },
+    {
+      "id": "python-security-audit",
+      "repository_type": "small_python_service",
+      "prompt": "Audit this repository for security issues.",
+      "expected_profile": "standard",
+      "confidence": 0.94,
+      "engineering_kind": "research"
+    },
+    {
+      "id": "monorepo-colloquial-overview",
+      "repository_type": "typescript_monorepo",
+      "prompt": "What does this codebase do?",
+      "expected_profile": "quick_readonly",
+      "confidence": 0.92,
+      "engineering_kind": "question"
+    },
+    {
+      "id": "monorepo-walkthrough",
+      "repository_type": "typescript_monorepo",
+      "prompt": "Walk me through the repository architecture.",
+      "expected_profile": "quick_readonly",
+      "confidence": 0.9,
+      "engineering_kind": "research"
+    },
+    {
+      "id": "monorepo-how-it-works",
+      "repository_type": "typescript_monorepo",
+      "prompt": "How does this repository work?",
+      "expected_profile": "quick_readonly",
+      "confidence": 0.9,
+      "engineering_kind": "question"
+    },
+    {
+      "id": "monorepo-clone-instruction",
+      "repository_type": "typescript_monorepo",
+      "prompt": "How do I clone this repository?",
+      "expected_profile": "standard",
+      "confidence": 0.94,
+      "engineering_kind": "question"
+    },
+    {
+      "id": "monorepo-implementation",
+      "repository_type": "typescript_monorepo",
+      "prompt": "Give me an overview of this repo and implement the missing cache.",
+      "expected_profile": "standard",
+      "confidence": 0.95,
+      "engineering_kind": "feature"
+    },
+    {
+      "id": "infra-structure-summary",
+      "repository_type": "mixed_infrastructure",
+      "prompt": "Summarize the project structure.",
+      "expected_profile": "quick_readonly",
+      "confidence": 0.89,
+      "engineering_kind": "research"
+    },
+    {
+      "id": "infra-deployment-investigation",
+      "repository_type": "mixed_infrastructure",
+      "prompt": "Investigate this project's deployment failure.",
+      "expected_profile": "standard",
+      "confidence": 0.9,
+      "engineering_kind": "research"
+    },
+    {
+      "id": "infra-performance-research",
+      "repository_type": "mixed_infrastructure",
+      "prompt": "Research this repository's performance bottlenecks.",
+      "expected_profile": "standard",
+      "confidence": 0.92,
+      "engineering_kind": "research"
+    },
+    {
+      "id": "docs-purpose-overview",
+      "repository_type": "documentation_only",
+      "prompt": "What is this project for?",
+      "expected_profile": "quick_readonly",
+      "confidence": 0.88,
+      "engineering_kind": "question"
+    },
+    {
+      "id": "docs-current-verification",
+      "repository_type": "documentation_only",
+      "prompt": "Verify this repository documentation against the latest official docs.",
+      "expected_profile": "standard",
+      "confidence": 0.91,
+      "engineering_kind": "research"
+    },
+    {
+      "id": "docs-low-confidence-overview",
+      "repository_type": "documentation_only",
+      "prompt": "Describe this project.",
+      "expected_profile": "standard",
+      "confidence": 0.61,
+      "engineering_kind": "question"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "python-balanced-inspection",
+      "repository_type": "small_python_service",
+      "prompt": "Give me an overview of this repository.",
+      "successful_tools": ["list_dir", "read_file"],
+      "evidence_counts": {"list_dir": 1, "read_file": 2},
+      "expected_pass": true
+    },
+    {
+      "id": "python-structure-only",
+      "repository_type": "small_python_service",
+      "prompt": "Give me an overview of this repository.",
+      "successful_tools": ["list_dir"],
+      "evidence_counts": {"list_dir": 1},
+      "expected_pass": false
+    },
+    {
+      "id": "monorepo-search-inspection",
+      "repository_type": "typescript_monorepo",
+      "prompt": "What does this codebase do?",
+      "successful_tools": ["glob", "search_code"],
+      "evidence_counts": {"glob": 2, "search_code": 2},
+      "expected_pass": true
+    },
+    {
+      "id": "monorepo-content-only",
+      "repository_type": "typescript_monorepo",
+      "prompt": "What does this codebase do?",
+      "successful_tools": ["search_code"],
+      "evidence_counts": {"search_code": 3},
+      "expected_pass": false
+    },
+    {
+      "id": "infra-balanced-inspection",
+      "repository_type": "mixed_infrastructure",
+      "prompt": "Summarize the project structure.",
+      "successful_tools": ["glob", "search_files"],
+      "evidence_counts": {"glob": 1, "search_files": 2},
+      "expected_pass": true
+    },
+    {
+      "id": "infra-one-concrete-call",
+      "repository_type": "mixed_infrastructure",
+      "prompt": "Summarize the project structure.",
+      "successful_tools": ["glob", "read_file"],
+      "evidence_counts": {"glob": 1, "read_file": 0},
+      "expected_pass": false
+    },
+    {
+      "id": "docs-balanced-inspection",
+      "repository_type": "documentation_only",
+      "prompt": "What is this project for?",
+      "successful_tools": ["list_dir", "read_file"],
+      "evidence_counts": {"list_dir": 1, "read_file": 1},
+      "expected_pass": true
+    },
+    {
+      "id": "external-research-local-only",
+      "repository_type": "small_python_service",
+      "prompt": "Research the latest official docs and compare the current options.",
+      "successful_tools": ["read_file"],
+      "evidence_counts": {"read_file": 2},
+      "expected_pass": false
+    },
+    {
+      "id": "external-research-web-grounded",
+      "repository_type": "small_python_service",
+      "prompt": "Research the latest official docs and compare the current options.",
+      "successful_tools": ["web_search", "fetch_url"],
+      "evidence_counts": {"web_search": 1, "fetch_url": 2},
+      "expected_pass": true
+    },
+    {
+      "id": "ordinary-explanation-no-invented-gate",
+      "repository_type": "none",
+      "prompt": "Explain this error message.",
+      "successful_tools": [],
+      "evidence_counts": {},
+      "expected_pass": true
+    },
+    {
+      "id": "walkthrough-balanced-inspection",
+      "repository_type": "typescript_monorepo",
+      "prompt": "Walk me through the repository architecture.",
+      "successful_tools": ["glob", "search_code"],
+      "evidence_counts": {"glob": 1, "search_code": 1},
+      "expected_pass": true
+    },
+    {
+      "id": "terse-contextual-overview",
+      "repository_type": "small_python_service",
+      "prompt": "Give me context on what this is.",
+      "repository_context": true,
+      "successful_tools": ["list_dir", "read_file"],
+      "evidence_counts": {"list_dir": 1, "read_file": 1},
+      "expected_pass": true
+    }
+  ],
+  "reduction": [
+    {
+      "id": "error-in-medium-output",
+      "repository_type": "small_python_service",
+      "characters": 8000,
+      "position": 0.5,
+      "signal": "ERROR sentinel-python: database connection failed",
+      "limit": 800
+    },
+    {
+      "id": "source-location-in-large-output",
+      "repository_type": "typescript_monorepo",
+      "characters": 24000,
+      "position": 0.55,
+      "signal": "packages/api/src/router.ts:417:23 sentinel-monorepo",
+      "limit": 800
+    },
+    {
+      "id": "declaration-in-large-output",
+      "repository_type": "mixed_infrastructure",
+      "characters": 48000,
+      "position": 0.7,
+      "signal": "def sentinel_infrastructure_handler(config):",
+      "limit": 800
+    },
+    {
+      "id": "diff-anchor-in-very-large-output",
+      "repository_type": "documentation_only",
+      "characters": 64000,
+      "position": 0.4,
+      "signal": "@@ -120,6 +120,8 @@ sentinel-docs-change",
+      "limit": 800
+    }
+  ]
+}

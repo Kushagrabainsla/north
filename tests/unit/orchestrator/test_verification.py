@@ -104,6 +104,17 @@ def test_terse_overview_is_treated_as_repository_work_in_engineering_context() -
     )
 
 
+def test_repository_overview_prompt_variants_share_the_same_evidence_gate() -> None:
+    for task in (
+        "What does this codebase do?",
+        "What is this project for?",
+        "Walk me through the repository architecture.",
+        "How does this repository work?",
+    ):
+        assert evidence_sufficiency_violations(task, ["list_dir"]), task
+        assert evidence_sufficiency_violations(task, ["list_dir", "read_file"]) == [], task
+
+
 def test_current_external_research_requires_web_evidence() -> None:
     task = "Research the latest official docs and compare the current options."
 

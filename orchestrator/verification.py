@@ -17,6 +17,8 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
+from orchestrator.task_intent import is_repository_overview
+
 # Words that frame a claim verb as an intention, plan, or hypothetical rather
 # than a completed action: "I should create the file", "let's write a test",
 # "we need to generate the spec", "the files I created earlier were too brief".
@@ -34,11 +36,6 @@ _NON_COMPLETION_RE = re.compile(
 # How far back to look for a non-completion marker governing a claim verb.
 _GOVERNING_WINDOW_CHARS = 40
 
-_REPOSITORY_OVERVIEW_RE = re.compile(
-    r"\b(?:overview|explain|map|structure|architecture|how)\b[^\n]{0,80}\b(?:repo(?:sitory)?|codebase|project)\b"
-    r"|\b(?:repo(?:sitory)?|codebase|project)\b[^\n]{0,80}\b(?:overview|work(?:s|ing)?|structure|architecture)\b",
-    re.IGNORECASE,
-)
 _EXTERNAL_RESEARCH_RE = re.compile(
     r"\b(?:research|investigate|look\s*up|search|compare)\b[^\n]{0,100}"
     r"\b(?:web|online|internet|external|latest|current|recent|official\s+docs?)\b"
@@ -192,9 +189,7 @@ def evidence_sufficiency_violations(
     counts = evidence_counts or dict.fromkeys(succeeded, 1)
     violations: list[str] = []
 
-    asks_for_overview = bool(_REPOSITORY_OVERVIEW_RE.search(task)) or (
-        repository_context and bool(re.search(r"\boverview\b", task, re.IGNORECASE))
-    )
+    asks_for_overview = is_repository_overview(task, repository_context=repository_context)
     if asks_for_overview:
         if not (succeeded & _REPO_STRUCTURE_TOOLS):
             violations.append("repository overview used no successful structure inspection (`list_dir` or `glob`)")

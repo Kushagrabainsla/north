@@ -20,6 +20,7 @@ from agents import AgentRegistry
 from inference import CompletionRequest, InferenceRouter, PoolPriority
 from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPath, ExecutionPlan, IntentClassification
+from orchestrator.task_intent import is_repository_overview
 from utils.prompts import load_prompt
 from utils.text import extract_json, extract_markdown_section
 from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
@@ -31,8 +32,6 @@ _NORMALIZE_RE = re.compile(r"[^a-z0-9 ]")
 # prompt and the routing cache key stay bounded on long conversations.
 _PLANNER_CONVERSATION_TAIL_CHARS: int = 2000
 
-_QUICK_REPOSITORY_TERMS = re.compile(r"\b(repo|repository|codebase|project)\b")
-_QUICK_OVERVIEW_TERMS = re.compile(r"\b(overview|summary|summarize|describe|explain|context|what is|what does)\b")
 _DEEP_WORK_TERMS = re.compile(
     r"\b(audit|benchmark|compare|debug|design|fix|implement|investigate|modify|performance|research|security|test|trace|verify)\b"
 )
@@ -131,7 +130,10 @@ def _execution_profile(prompt: str, classification: IntentClassification, plan: 
         and plan.agents == ["researcher"]
         and plan.engineering_kind in _NO_CODE_KINDS
     )
-    overview = bool(_QUICK_REPOSITORY_TERMS.search(text) and _QUICK_OVERVIEW_TERMS.search(text))
+    # Inspect the original text: punctuation-stripping turns possessives such
+    # as "project's architecture" into "projects architecture", which no
+    # longer has a repository-term word boundary.
+    overview = is_repository_overview(prompt)
     asks_for_deep_work = bool(_DEEP_WORK_TERMS.search(text))
     return "quick_readonly" if safe_plan and overview and not asks_for_deep_work else "standard"
 

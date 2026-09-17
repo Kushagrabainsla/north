@@ -176,6 +176,53 @@ def test_repository_overview_uses_quick_readonly_profile() -> None:
 @pytest.mark.parametrize(
     "prompt",
     [
+        "What does this codebase do?",
+        "What is this project for?",
+        "Walk me through the repository architecture.",
+        "How does this repository work?",
+    ],
+)
+def test_repository_overview_prompt_variants_use_quick_profile(prompt: str) -> None:
+    classification = IntentClassification(
+        is_consequential=False,
+        domain="engineering",
+        reasoning="repository overview",
+        confidence=0.92,
+    )
+    plan = ExecutionPlan(
+        task_id="t1",
+        agents=["researcher"],
+        parallel_groups=[["researcher"]],
+        dependencies={},
+        mode=ExecutionMode.SINGLE_AGENT,
+        engineering_kind="question",
+    )
+
+    assert _execution_profile(prompt, classification, plan) == "quick_readonly"
+
+
+def test_repository_action_question_does_not_look_like_an_overview() -> None:
+    classification = IntentClassification(
+        is_consequential=False,
+        domain="engineering",
+        reasoning="repository operation",
+        confidence=0.92,
+    )
+    plan = ExecutionPlan(
+        task_id="t1",
+        agents=["researcher"],
+        parallel_groups=[["researcher"]],
+        dependencies={},
+        mode=ExecutionMode.SINGLE_AGENT,
+        engineering_kind="question",
+    )
+
+    assert _execution_profile("How do I clone this repository?", classification, plan) == "standard"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
         "Audit this repository for security issues.",
         "Give me an overview of this repo and then implement the missing feature.",
         "Investigate this project's performance regression.",

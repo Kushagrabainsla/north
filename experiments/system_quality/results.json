@@ -1,0 +1,26 @@
+{
+  "recorded_at": "2026-09-16",
+  "kind": "offline_production_primitives",
+  "repository_types": [
+    "documentation_only",
+    "mixed_infrastructure",
+    "small_python_service",
+    "typescript_monorepo"
+  ],
+  "cases": {
+    "routing": 14,
+    "evidence": 12,
+    "output_reduction": 4,
+    "total": 30
+  },
+  "metrics": {
+    "routing_profile_accuracy": 1.0,
+    "evidence_gate_accuracy": 1.0,
+    "tool_signal_retention": 1.0,
+    "overall_accuracy": 1.0
+  },
+  "discoveries": [
+    "Colloquial repository prompts selected the quick profile without activating the evidence gate.",
+    "Punctuation normalization broke repository detection for possessives such as project's architecture."
+  ]
+}
