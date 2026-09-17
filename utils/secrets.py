@@ -57,6 +57,46 @@ TOKEN_RE = re.compile(
     """
 )
 
+# Shapes that commonly enter logs through HTTP client exceptions. These need
+# dedicated handling because the credential is embedded in transport syntax,
+# not introduced by a human-readable ``api_key =`` label.
+_TELEGRAM_BOT_URL_RE = re.compile(r"(?i)(https?://api\.telegram\.org/bot)[^/\s?\"']+")
+_URL_CREDENTIAL_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://[^\s/:@]+:)[^\s/@]+(@)")
+_BEARER_RE = re.compile(r"(?i)\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=-]{6,}")
+_AUTH_HEADER_RE = re.compile(
+    r"(?ix)(\b(?:authorization|proxy[-_]?authorization)\b[\"']?\s*[:=]\s*)"
+    r"(?:(?:bearer|basic)\s+)?(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}\]]+)"
+)
+_SENSITIVE_QUERY_RE = re.compile(
+    r"(?ix)([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|pwd|secret|client[_-]?secret)=)[^&#\s]+"
+)
+_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"""(?ix)
+    (?P<prefix>
+        \b(?:authorization|proxy[-_]?authorization|api[-_]?key|apikey|secret[-_]?key|
+        access[-_]?token|auth[-_]?token|bearer[-_]?token|password|passwd|pwd|
+        private[-_]?key|client[-_]?secret|github[-_]?token|telegram[-_]?bot[-_]?token|
+        cookie|set[-_]?cookie|credential)
+        \b["']?\s*[:=]\s*
+    )
+    (?:(?P<quote>["'])(?P<quoted>[^"'\r\n]*)(?P=quote)|(?P<plain>[^\s,;}\]]+))
+    """
+)
+_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?-----END [^-\r\n]*PRIVATE KEY-----",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Structured log fields are safer to classify from their key than from their
+# value. Keep this narrower than ``is_secret_field_name``: metrics such as
+# ``tokens_in`` and benign fields such as ``pinned_model`` must remain useful.
+_LOG_SECRET_KEY_RE = re.compile(
+    r"(?ix)^(?:authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|credential|"
+    r"api[-_]?key|apikey|password|passwd|pwd|private[-_]?key|secret|secret[-_]?key|"
+    r"client[-_]?secret|token|access[-_]?token|auth[-_]?token|bearer[-_]?token|"
+    r"github[-_]?token|telegram[-_]?bot[-_]?token)$"
+)
+
 REDACTED = "[redacted]"
 
 # Field names whose value is a secret whatever it looks like. A password of
@@ -83,4 +123,40 @@ def redact(text: str) -> str:
     "the [redacted]", which still tells a person what the sentence was about
     while leaving nothing to steal.
     """
+    def assignment_replacement(match: re.Match[str]) -> str:
+        if REDACTED in match.group(0).lower():
+            return match.group(0)
+        quote = match.group("quote") or ""
+        return f'{match.group("prefix")}{quote}{REDACTED}{quote}'
+
+    text = _PRIVATE_KEY_RE.sub(REDACTED, text)
+    text = _TELEGRAM_BOT_URL_RE.sub(r"\1[redacted]", text)
+    text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]\2", text)
+    text = _SENSITIVE_QUERY_RE.sub(r"\1[redacted]", text)
+    text = _AUTH_HEADER_RE.sub(r"\1[redacted]", text)
+    text = _BEARER_RE.sub(r"\1\2[redacted]", text)
+    text = _SENSITIVE_ASSIGNMENT_RE.sub(assignment_replacement, text)
     return CC_RE.sub(REDACTED, TOKEN_RE.sub(REDACTED, SECRET_RE.sub(REDACTED, text)))
+
+
+def redact_for_logging(value: object, *, key: str = "") -> object:
+    """Return a recursively redacted, JSON-serialisable view of log data.
+
+    Logging accepts arbitrary values through ``extra``. Sanitising only the
+    rendered message misses dictionaries and lists, while stringifying first
+    loses the field name that most reliably identifies a secret. This helper
+    preserves ordinary diagnostic structure and replaces only secret values.
+    """
+    if key and _LOG_SECRET_KEY_RE.fullmatch(key):
+        return REDACTED
+    if isinstance(value, dict):
+        return {str(item_key): redact_for_logging(item, key=str(item_key)) for item_key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_for_logging(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_for_logging(item) for item in value)
+    if isinstance(value, set):
+        return sorted((redact_for_logging(item) for item in value), key=str)
+    if isinstance(value, str):
+        return redact(value)
+    return value

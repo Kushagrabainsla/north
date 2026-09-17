@@ -11,6 +11,7 @@ import sys
 
 from approval.base import Notifier
 from approval.models import Card, CardType
+from utils.secrets import redact
 
 
 class TerminalNotifier(Notifier):
@@ -50,6 +51,7 @@ class TerminalNotifier(Notifier):
     @staticmethod
     def _write(output: str) -> None:
         """Append to NORTH_LOG_FILE when set, else write to stdout."""
+        output = redact(output)
         log_file = os.environ.get("NORTH_LOG_FILE", "").strip()
         if log_file:
             with open(log_file, "a", encoding="utf-8") as f:

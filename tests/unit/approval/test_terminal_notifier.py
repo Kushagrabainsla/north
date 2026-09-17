@@ -44,3 +44,15 @@ async def test_notify_appends_to_log_file(tmp_path: Path, monkeypatch: pytest.Mo
     await TerminalNotifier().notify(_card(title="Approve deploy"))
 
     assert "Approve deploy" in log_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_notify_redacts_secrets_from_direct_log_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log_file = tmp_path / "north.log"
+    monkeypatch.setenv("NORTH_LOG_FILE", str(log_file))
+
+    await TerminalNotifier().notify(_card(message="Authorization: Bearer never-log-this"))
+
+    output = log_file.read_text(encoding="utf-8")
+    assert "never-log-this" not in output
+    assert "[redacted]" in output

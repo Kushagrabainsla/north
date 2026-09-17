@@ -28,6 +28,8 @@ import sys
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
+from utils.secrets import redact, redact_for_logging
+
 # ---------------------------------------------------------------------------
 # Context variable - holds the active task_id for the current async context.
 # ---------------------------------------------------------------------------
@@ -58,7 +60,7 @@ class _JSONFormatter(logging.Formatter):
             "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "msg": record.getMessage(),
+            "msg": redact(record.getMessage()),
         }
 
         task_id = _task_id_var.get()
@@ -91,12 +93,47 @@ class _JSONFormatter(logging.Formatter):
         }
         for key, val in record.__dict__.items():
             if key not in _SKIP:
-                payload[key] = val
+                payload[key] = redact_for_logging(val, key=key)
 
         if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
+            payload["exc"] = redact(self.formatException(record.exc_info))
 
-        return json.dumps(payload, default=str)
+        # One last pass catches credentials embedded by an object's __str__.
+        return redact(json.dumps(payload, default=str))
+
+
+class _RedactingFormatter(logging.Formatter):
+    """Sanitise output produced by a third-party formatter.
+
+    Uvicorn installs handlers before FastAPI enters its lifespan. Wrapping those
+    existing formatters closes the gap without replacing their presentation.
+    """
+
+    def __init__(self, wrapped: logging.Formatter) -> None:
+        super().__init__()
+        self._wrapped = wrapped
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(self._wrapped.format(record))
+
+
+def _redact_existing_handlers() -> None:
+    """Wrap handlers already installed by servers or libraries."""
+    loggers = [logging.getLogger()]
+    loggers.extend(
+        logger
+        for logger in logging.root.manager.loggerDict.values()
+        if isinstance(logger, logging.Logger)
+    )
+    seen: set[int] = set()
+    for logger in loggers:
+        for handler in logger.handlers:
+            if id(handler) in seen:
+                continue
+            seen.add(id(handler))
+            formatter = handler.formatter or logging.Formatter()
+            if not isinstance(formatter, _RedactingFormatter):
+                handler.setFormatter(_RedactingFormatter(formatter))
 
 
 # ---------------------------------------------------------------------------
@@ -122,5 +159,6 @@ def configure_structured_logging(level: int = logging.INFO) -> None:
         root.removeHandler(h)
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(_JSONFormatter())
+    handler.setFormatter(_RedactingFormatter(_JSONFormatter()))
     root.addHandler(handler)
+    _redact_existing_handlers()
