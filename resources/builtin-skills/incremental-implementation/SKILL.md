@@ -1,6 +1,7 @@
 ---
 name: incremental-implementation
 description: "Use when implementing any feature or change that touches more than one file, or when a task feels too big to land in one step. Delivers changes as thin vertical slices: implement, test, verify, commit, repeat."
+intents: [implement]
 ---
 # Incremental Implementation
 

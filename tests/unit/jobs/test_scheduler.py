@@ -137,6 +137,15 @@ def test_build_job_constructs_pending_cron_job(tmp_path) -> None:
     assert job.job_id != ""
 
 
+def test_build_job_carries_the_skill_reference(tmp_path) -> None:
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    entry = CronEntry(
+        name="job_search", agent="general", task="find roles", hour=9, minute=0, tz="UTC", skill="job-search"
+    )
+    job = CronScheduler(processor, []).build_job(entry, datetime(2026, 5, 22, 9, 0, tzinfo=UTC))
+    assert job.payload == {"cron_entry": "job_search", "skill": "job-search"}
+
+
 # CronScheduler.run - composition of pieces already tested above.
 # The loop body is exactly: next_due_entry → asyncio.sleep → processor.enqueue.
 # Each piece has its own test. The only run() behavior worth verifying

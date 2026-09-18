@@ -1,6 +1,7 @@
 ---
 name: adding-a-north-tool
 description: "Use when adding a new tool/capability to north, or when an agent needs an action no existing tool provides."
+intents: [create-tool]
 ---
 # Adding a tool to north
 

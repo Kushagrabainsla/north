@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS episodes (
     summary    TEXT    NOT NULL,
     embedding  TEXT,
     timestamp  TEXT    NOT NULL,
-    updated_at TEXT
+    updated_at TEXT,
+    project_id TEXT NOT NULL DEFAULT '',
+    workspace_id TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -62,6 +64,8 @@ _SCHEMA_TASK_INDEX = "CREATE INDEX IF NOT EXISTS idx_episodes_task ON episodes (
 _ADDED_COLUMNS: dict[str, str] = {
     "outcome": "TEXT NOT NULL DEFAULT 'success'",
     "updated_at": "TEXT",
+    "project_id": "TEXT NOT NULL DEFAULT ''",
+    "workspace_id": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -114,7 +118,15 @@ class EpisodicStore:
             if column not in existing:
                 conn.execute(f"ALTER TABLE episodes ADD COLUMN {column} {decl}")
 
-    async def record(self, task_id: str, domain: str, summary: str, outcome: str = "success") -> None:
+    async def record(
+        self,
+        task_id: str,
+        domain: str,
+        summary: str,
+        outcome: str = "success",
+        project_id: str = "",
+        workspace_id: str = "",
+    ) -> None:
         """Upsert one episode per task (success, failed, or cancelled) and prune old rows.
 
         Re-recording the same `task_id` replaces the prior row, so a task that
@@ -141,6 +153,8 @@ class EpisodicStore:
             summary,
             emb_json,
             now,
+            project_id,
+            workspace_id,
         )
 
     async def search(
@@ -148,6 +162,8 @@ class EpisodicStore:
         query: str,
         max_results: int = 3,
         allowed_domains: frozenset[str] | None = None,
+        project_id: str = "",
+        workspace_id: str = "",
     ) -> list[str]:
         """Return the most relevant past episode summaries for *query*.
 
@@ -160,36 +176,41 @@ class EpisodicStore:
             try:
                 vecs = await self._embed_fn([query])
                 if vecs and vecs[0]:
-                    results = await asyncio.to_thread(self._search_vector_sync, vecs[0], max_results, allowed_domains)
+                    results = await asyncio.to_thread(
+                        self._search_vector_sync,
+                        vecs[0],
+                        max_results,
+                        allowed_domains,
+                        project_id,
+                        workspace_id,
+                    )
                     if results:
                         return results
             except Exception:
                 pass
 
-        rows = await asyncio.to_thread(self._load_all_sync, allowed_domains)
+        rows = await asyncio.to_thread(self._load_all_sync, allowed_domains, project_id, workspace_id)
         if not rows:
             return []
 
         # Keyword fallback
         query_words = frozenset(w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in STOPWORDS)
-        kw_scored = sorted(
-            rows,
-            key=lambda r: _keyword_score(r[1], query_words),
-            reverse=True,
-        )
-        return [_label(summary, outcome) for _, summary, _, outcome, _ in kw_scored[:max_results] if summary]
+        kw_scored = sorted(rows, key=lambda r: (_keyword_score(r[1], query_words), r[5]), reverse=True)
+        return [_label(summary, outcome) for _, summary, _, outcome, _, _ in kw_scored[:max_results] if summary]
 
     def _search_vector_sync(
         self,
         qvec: list[float],
         max_results: int = 3,
         allowed_domains: frozenset[str] | None = None,
+        project_id: str = "",
+        workspace_id: str = "",
     ) -> list[str] | None:
         """Native sqlite-vec vector search in SQLite; returns None if sqlite-vec is unavailable."""
         try:
             qvec_json = json.dumps(qvec)
             sql = (
-                "SELECT summary, outcome, (1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
+                "SELECT summary, outcome, workspace_id, (1.0 - vec_distance_cosine(embedding, ?)) AS similarity "
                 "FROM episodes WHERE embedding IS NOT NULL AND embedding != '' AND embedding != '[]'"
             )
             params: list[object] = [qvec_json]
@@ -199,14 +220,26 @@ class EpisodicStore:
                 placeholders = ",".join("?" for _ in allowed_domains)
                 sql += f" AND domain IN ({placeholders})"
                 params.extend(allowed_domains)
+            if project_id:
+                sql += " AND project_id = ?"
+                params.append(project_id)
             sql += " AND (1.0 - vec_distance_cosine(embedding, ?)) > 0.3 "
             params.append(qvec_json)
+            # Fetch a small surplus so current-workspace preference can be applied
+            # after semantic scoring without excluding a better local match.
             sql += " ORDER BY similarity DESC LIMIT ?"
-            params.append(max_results)
+            params.append(max_results * 5)
 
             with open_db_connection(self._db_path) as conn:
                 rows = conn.execute(sql, params).fetchall()
-            return [_label(r["summary"], r["outcome"] or "success") for r in rows if r["summary"]]
+            rows.sort(
+                key=lambda r: (
+                    1 if workspace_id and r["workspace_id"] == workspace_id else 0,
+                    r["similarity"],
+                ),
+                reverse=True,
+            )
+            return [_label(r["summary"], r["outcome"] or "success") for r in rows[:max_results] if r["summary"]]
         except Exception:
             return None
 
@@ -252,6 +285,8 @@ class EpisodicStore:
         summary: str,
         emb_json: str | None,
         now: str,
+        project_id: str,
+        workspace_id: str,
     ) -> None:
         """Replace any existing episode for this task, insert the new one, prune old rows.
 
@@ -264,9 +299,10 @@ class EpisodicStore:
             if task_id:
                 conn.execute("DELETE FROM episodes WHERE task_id = ?", (task_id,))
             conn.execute(
-                "INSERT INTO episodes (id, task_id, domain, outcome, summary, embedding, timestamp, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (ep_id, task_id, domain, outcome, summary, emb_json, now, now),
+                "INSERT INTO episodes "
+                "(id, task_id, domain, outcome, summary, embedding, timestamp, updated_at, project_id, workspace_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (ep_id, task_id, domain, outcome, summary, emb_json, now, now, project_id, workspace_id),
             )
             cutoff = (datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)).isoformat()
             conn.execute("DELETE FROM episodes WHERE timestamp < ?", (cutoff,))
@@ -288,19 +324,38 @@ class EpisodicStore:
         return [dict(row) for row in rows]
 
     def _load_all_sync(
-        self, allowed_domains: frozenset[str] | None = None
-    ) -> list[tuple[str, str, str | None, str, str]]:
-        sql = "SELECT id, summary, embedding, outcome, domain FROM episodes"
-        params: tuple[str, ...] = ()
+        self,
+        allowed_domains: frozenset[str] | None = None,
+        project_id: str = "",
+        workspace_id: str = "",
+    ) -> list[tuple[str, str, str | None, str, str, int]]:
+        sql = "SELECT id, summary, embedding, outcome, domain, workspace_id FROM episodes"
+        clauses: list[str] = []
+        params: list[str] = []
         if allowed_domains is not None:
             if not allowed_domains:
                 return []
             # Only "?" placeholders are interpolated here; the domain values are
             # bound as parameters below, so this is not a SQL-injection vector.
             placeholders = ",".join("?" for _ in allowed_domains)
-            sql += f" WHERE domain IN ({placeholders})"
-            params = tuple(allowed_domains)
+            clauses.append(f"domain IN ({placeholders})")
+            params.extend(allowed_domains)
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY timestamp DESC"
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [(r["id"], r["summary"], r["embedding"], r["outcome"] or "success", r["domain"]) for r in rows]
+        return [
+            (
+                r["id"],
+                r["summary"],
+                r["embedding"],
+                r["outcome"] or "success",
+                r["domain"],
+                1 if workspace_id and r["workspace_id"] == workspace_id else 0,
+            )
+            for r in rows
+        ]

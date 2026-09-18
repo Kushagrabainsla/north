@@ -22,11 +22,12 @@ async def _fake_embed(texts: list[str]) -> list[list[float]]:
     return vectors
 
 
-def _write_skill(base: Path, name: str, description: str) -> None:
+def _write_skill(base: Path, name: str, description: str, intents: list[str] | None = None) -> None:
     directory = base / name
     directory.mkdir(parents=True)
+    intent_line = f"intents: {intents}\n" if intents else ""
     (directory / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: {description}\n---\nbody for {name}", encoding="utf-8"
+        f"---\nname: {name}\ndescription: {description}\n{intent_line}---\nbody for {name}", encoding="utf-8"
     )
 
 
@@ -97,3 +98,26 @@ async def test_reembeds_a_skill_when_its_description_changes(tmp_path):
 
     assert await selector.select("migration") == []
     assert [skill.name for skill in await selector.select("tool")] == ["changing-skill"]
+
+
+async def test_intent_filter_rejects_semantically_similar_wrong_procedure(tmp_path):
+    _write_skill(tmp_path, "repository-overview", "Use when mapping a tool repository", ["explore"])
+    _write_skill(tmp_path, "add-tool", "Use when adding a tool", ["create-tool"])
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=_fake_embed, min_similarity=0.0)
+
+    picked = await selector.select("Give me an overview of the tool repository")
+
+    assert [skill.name for skill in picked] == ["repository-overview"]
+
+
+async def test_intent_filter_preserves_multiple_intents(tmp_path):
+    _write_skill(tmp_path, "explore", "Explore the repository", ["explore"])
+    _write_skill(tmp_path, "implement", "Implement the requested change", ["implement"])
+
+    async def embed(texts: list[str]) -> list[list[float]]:
+        return [[float("explore" in text.lower()), float("implement" in text.lower())] for text in texts]
+
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=embed, min_similarity=0.0)
+    picked = await selector.select("Explore the repository and implement the requested change")
+
+    assert {skill.name for skill in picked} == {"explore", "implement"}

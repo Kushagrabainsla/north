@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 import time
@@ -208,7 +209,13 @@ class Agent(ABC):
                 logger.warning("Repo map build failed for task %s: %s", payload.task_id, exc)
 
         memory = self._memory()
-        principal = await memory.principal_for(self.name, self.domain)
+        principal_for = memory.principal_for
+        # Keep compatibility with lightweight memory gateways supplied by callers
+        # and older integrations that predate workspace-aware principals.
+        if "workspace" in inspect.signature(principal_for).parameters:
+            principal = await principal_for(self.name, self.domain, workspace=payload.workspace)
+        else:
+            principal = await principal_for(self.name, self.domain)
         recalled = await memory.recall(principal, payload.prompt)
         await self._emit_memory_recall(payload, principal, recalled)
         rendered = recalled.render()

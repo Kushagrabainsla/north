@@ -315,6 +315,7 @@ class Orchestrator:
                     task_id=task_id,
                     input=request.prompt,
                     action="task_received",
+                    agent_output={"workspace": request.workspace},
                     status=LedgerStatus.PENDING,
                 )
             )
@@ -360,6 +361,7 @@ class Orchestrator:
                     task_id=task_id,
                     input=request.prompt,
                     action="task_resumed",
+                    agent_output={"workspace": request.workspace},
                     status=LedgerStatus.PENDING,
                 )
             )
@@ -637,6 +639,14 @@ class Orchestrator:
                 "decision": decision,
                 "chosen_option": chosen_option,
                 "edited_fields": edited,
+            },
+            agent_output={
+                "card_id": card_id,
+                "decision": decision,
+                "chosen_option": chosen_option,
+                "edited_fields": edited,
+                "reason": reason,
+                "source": card.source,
             },
         )
 

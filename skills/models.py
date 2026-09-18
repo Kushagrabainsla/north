@@ -17,6 +17,17 @@ class SkillSource(StrEnum):
     LEARNED = "learned"  # distilled at runtime from north's successful episodes
 
 
+class SkillIntent(StrEnum):
+    """The kind of work a skill helps perform."""
+
+    EXPLORE = "explore"
+    IMPLEMENT = "implement"
+    DEBUG = "debug"
+    CREATE_TOOL = "create-tool"
+    REVIEW = "review"
+    RESEARCH = "research"
+
+
 @dataclass(frozen=True)
 class Skill:
     """One reusable procedure an engineering agent can be given.
@@ -40,6 +51,7 @@ class Skill:
     # nearly all skills belong); a skill for another domain (e.g. the literature-review
     # skill, which serves the general assistant) declares the domains it serves.
     domains: frozenset[str] = frozenset({"engineering"})
+    intents: frozenset[str] = frozenset()
 
     def metadata_line(self) -> str:
         """One-line ``name: description`` used in the compact fallback listing."""

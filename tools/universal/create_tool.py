@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from approval.policy import Action, ActionKind
+from policies.self_edit import SelfEditPolicy
 from tools.base import ApprovalGatedTool, Tool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized._approval import gate_action
@@ -127,9 +128,13 @@ class CreateToolTool(ApprovalGatedTool):
         approval_timeout_seconds: float = 300.0,
         policy: ApprovalPolicy | None = None,
         notifier: Notifier | None = None,
+        self_edit_policy: SelfEditPolicy | None = None,
+        tools_dir: Path | None = None,
     ) -> None:
         super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
         self._registry = tool_registry
+        self._self_edit_policy = self_edit_policy
+        self._tools_dir = tools_dir or _TOOLS_ROOT
 
     def format_output(self, data: dict[str, Any]) -> str:
         action = data.get("action")
@@ -165,9 +170,9 @@ class CreateToolTool(ApprovalGatedTool):
         action = (input.params.get("action") or "create").strip()
 
         if action == "list":
-            return _list_tools()
+            return _list_tools(self._tools_dir)
         if action == "read":
-            return _read_tool(input.params.get("name") or "")
+            return _read_tool(input.params.get("name") or "", self._tools_dir)
         if action in ("create", "update"):
             # Fail closed: model-authored code may be hot-loaded into the live
             # process, so it must never land without a human looking at it.
@@ -226,16 +231,15 @@ class CreateToolTool(ApprovalGatedTool):
         if tool_type not in ("universal", "specialized"):
             return ToolOutput(success=False, error="tool_type must be 'universal' or 'specialized'.")
 
-        target_dir = _TOOLS_ROOT / tool_type
-        if not target_dir.exists():
-            return ToolOutput(success=False, error=f"Directory does not exist: {target_dir}")
+        target_dir = self._tools_dir / tool_type
+        target_dir.mkdir(parents=True, exist_ok=True)
 
         file_path = target_dir / f"{tool_name}.py"
         if file_path.exists():
             return ToolOutput(
                 success=False,
                 error=(
-                    f"Tool '{tool_name}' already exists at {file_path.relative_to(_TOOLS_ROOT.parent)}. "
+                    f"Tool '{tool_name}' already exists at {file_path}. "
                     "Use action='read' to inspect it, then action='update' to extend it."
                 ),
             )
@@ -256,7 +260,15 @@ class CreateToolTool(ApprovalGatedTool):
                 error=f"Tool code rejected by static safety check: {reason}. Remove the flagged pattern and try again.",
             )
 
+        mutation = None
+        if self._self_edit_policy is not None:
+            try:
+                mutation = self._self_edit_policy.begin(file_path, "create")
+            except PermissionError as exc:
+                return ToolOutput(success=False, error=str(exc))
         file_path.write_text(content, encoding="utf-8")
+        if mutation is not None:
+            self._self_edit_policy.commit(mutation)
 
         hot_loaded = self._hot_load(file_path, tool_type)
 
@@ -264,7 +276,7 @@ class CreateToolTool(ApprovalGatedTool):
             success=True,
             data={
                 "action": "create",
-                "path": str(file_path.relative_to(_TOOLS_ROOT.parent)),
+                "path": str(file_path),
                 "hot_loaded": hot_loaded,
             },
         )
@@ -281,7 +293,7 @@ class CreateToolTool(ApprovalGatedTool):
                 error="Parameter 'content' (full updated Python source) is required for action=update.",
             )
 
-        path = _find_tool_path(tool_name)
+        path = _find_tool_path(tool_name, self._tools_dir)
         if path is None:
             return ToolOutput(
                 success=False,
@@ -302,7 +314,15 @@ class CreateToolTool(ApprovalGatedTool):
             )
 
         tool_type = "universal" if (path.parent.name == "universal") else "specialized"
+        mutation = None
+        if self._self_edit_policy is not None:
+            try:
+                mutation = self._self_edit_policy.begin(path, "update")
+            except PermissionError as exc:
+                return ToolOutput(success=False, error=str(exc))
         path.write_text(content, encoding="utf-8")
+        if mutation is not None:
+            self._self_edit_policy.commit(mutation)
 
         hot_loaded = self._hot_load(path, tool_type)
 
@@ -310,7 +330,7 @@ class CreateToolTool(ApprovalGatedTool):
             success=True,
             data={
                 "action": "update",
-                "path": str(path.relative_to(_TOOLS_ROOT.parent)),
+                "path": str(path),
                 "hot_loaded": hot_loaded,
             },
         )
@@ -350,119 +370,54 @@ class CreateToolTool(ApprovalGatedTool):
 
 # ── Code safety ──────────────────────────────────────────────────────────────
 
-_FORBIDDEN_IMPORTS: frozenset[str] = frozenset(
-    {
-        "subprocess",
-        "ctypes",
-        "socket",
-        "os",
-        "pty",
-        "multiprocessing",
-        "signal",
-        "threading",
-        # Dynamic import / interpreter escape hatches that defeat this check.
-        "importlib",
-        "builtins",
-        "runpy",
-        "code",
-        "codeop",
-        "pickle",
-        "marshal",
-        "shutil",
-        "sys",
-    }
-)
-_FORBIDDEN_CALLS: frozenset[str] = frozenset(
-    {
-        "exec",
-        "eval",
-        "compile",
-        "__import__",
-        # Filesystem and reflection escapes: open() reads any file; getattr &
-        # friends reconstruct any of the above from strings.
-        "open",
-        "getattr",
-        "setattr",
-        "delattr",
-        "globals",
-        "locals",
-        "vars",
-        "breakpoint",
-    }
-)
-_FORBIDDEN_ATTRIBUTES: frozenset[str] = frozenset({"__builtins__", "__globals__", "__subclasses__", "__import__"})
-
-
 def _check_code_safety(code: str) -> tuple[bool, str]:
-    """Parse `code` with the AST and reject dangerous patterns.
+    """Validate syntax before a trusted, approval-gated learned tool is loaded.
 
-    Returns (safe, reason). `reason` is empty when safe.
-    Denies dynamic-import/reflection escapes (importlib, builtins, getattr,
-    open, dunder access) in addition to direct process/network primitives.
-    Does NOT sandbox execution - the hot-load only happens after the user has
-    approved the exact code, and that approval gate is the real boundary; this
-    check exists to stop obviously dangerous code from even reaching the card.
+    Learned tools are trusted extensions and intentionally retain normal Python
+    capabilities, including filesystem, process, network, and reflection APIs.
+    The approval card and self-edit path policy are the control points; this
+    helper only prevents malformed source from reaching them.
     """
     try:
-        tree = ast.parse(code)
+        ast.parse(code)
     except SyntaxError as exc:
         return False, f"Syntax error: {exc}"
-
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            names = (
-                [alias.name for alias in node.names]
-                if isinstance(node, ast.Import)
-                else ([node.module] if node.module else [])
-            )
-            for name in names:
-                if name in _FORBIDDEN_IMPORTS or any(name.startswith(f"{m}.") for m in _FORBIDDEN_IMPORTS):
-                    return False, f"Forbidden import: '{name}'"
-        if isinstance(node, ast.Call):
-            func = node.func
-            func_name = (
-                func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
-            )
-            if func_name in _FORBIDDEN_CALLS:
-                return False, f"Forbidden call: '{func_name}'"
-        if isinstance(node, ast.Attribute) and node.attr in _FORBIDDEN_ATTRIBUTES:
-            return False, f"Forbidden attribute access: '{node.attr}'"
-        if isinstance(node, ast.Name) and node.id in _FORBIDDEN_ATTRIBUTES:
-            return False, f"Forbidden name: '{node.id}'"
-
     return True, ""
 
 
 # ── Standalone helpers ────────────────────────────────────────────────────────
 
 
-def _list_tools() -> ToolOutput:
+def _list_tools(learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
     rows = []
-    for kind in ("universal", "specialized"):
-        directory = _TOOLS_ROOT / kind
-        if not directory.exists():
-            continue
-        for path in sorted(directory.glob("*.py")):
-            if path.name.startswith("_"):
+    roots = ((_TOOLS_ROOT, "builtin"), (learned_root, "learned"))
+    for root, source in roots:
+        for kind in ("universal", "specialized"):
+            directory = root / kind
+            if not directory.exists():
                 continue
-            source = path.read_text(encoding="utf-8")
-            name_m = _NAME_RE.search(source)
-            desc_m = _DESC_RE.search(source)
-            rows.append(
-                {
-                    "name": name_m.group(1) if name_m else path.stem,
-                    "type": kind,
-                    "description": desc_m.group(1) if desc_m else "(no description)",
-                    "path": str(path.relative_to(_TOOLS_ROOT.parent)),
-                }
-            )
+            for path in sorted(directory.glob("*.py")):
+                if path.name.startswith("_"):
+                    continue
+                source_text = path.read_text(encoding="utf-8")
+                name_m = _NAME_RE.search(source_text)
+                desc_m = _DESC_RE.search(source_text)
+                rows.append(
+                    {
+                        "name": name_m.group(1) if name_m else path.stem,
+                        "type": kind,
+                        "source": source,
+                        "description": desc_m.group(1) if desc_m else "(no description)",
+                        "path": str(path),
+                    }
+                )
     return ToolOutput(success=True, data={"action": "list", "tools": rows})
 
 
-def _read_tool(tool_name: str) -> ToolOutput:
+def _read_tool(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
     if not tool_name.strip():
         return ToolOutput(success=False, error="Parameter 'name' is required for action=read.")
-    path = _find_tool_path(tool_name.strip())
+    path = _find_tool_path(tool_name.strip(), learned_root)
     if path is None:
         return ToolOutput(success=False, error=f"Tool '{tool_name}' not found.")
     return ToolOutput(
@@ -470,16 +425,17 @@ def _read_tool(tool_name: str) -> ToolOutput:
         data={
             "action": "read",
             "name": tool_name,
-            "path": str(path.relative_to(_TOOLS_ROOT.parent)),
+            "path": str(path),
             "content": path.read_text(encoding="utf-8"),
         },
     )
 
-def _find_tool_path(tool_name: str) -> Path | None:
-    for kind in ("universal", "specialized"):
-        p = _TOOLS_ROOT / kind / f"{tool_name}.py"
-        if p.exists():
-            return p
+def _find_tool_path(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> Path | None:
+    for root in (learned_root, _TOOLS_ROOT):
+        for kind in ("universal", "specialized"):
+            p = root / kind / f"{tool_name}.py"
+            if p.exists():
+                return p
     return None
 
 

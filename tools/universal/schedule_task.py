@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from jobs.models import Job, JobPriority, JobType
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal._schedules import entry_view, parse_weekdays, resolve_zone_name
 from utils.ids import generate_id
 from utils.time import format_local, from_epoch, parse_local
+
+if TYPE_CHECKING:
+    from skills.registry import SkillRegistry
 
 
 def _whole_number(params: dict, field: str, ceiling: int, default: int | None = None) -> int:
@@ -66,6 +71,10 @@ class ScheduleTaskTool(Tool):
                 "description": "Agent to run it (default 'general')",
                 "default": "general",
             },
+            "skill": {
+                "type": "string",
+                "description": "Optional reusable skill/playbook to apply when the task runs",
+            },
             "run_at": {"type": "string", "description": "Local ISO 8601 datetime for a one-shot run"},
             "hour": {"type": "integer", "description": "Hour (0-23), local, for a recurring schedule"},
             "minute": {"type": "integer", "description": "Minute (0-59, default 0)"},
@@ -80,9 +89,10 @@ class ScheduleTaskTool(Tool):
         "required": ["task"],
     }
 
-    def __init__(self, job_processor, cron_store) -> None:
+    def __init__(self, job_processor, cron_store, skill_registry: SkillRegistry | None = None) -> None:
         self._job_processor = job_processor
         self._cron_store = cron_store
+        self._skill_registry = skill_registry
 
     async def run(self, input: ToolInput) -> ToolOutput:
         task = str(input.params.get("task", "")).strip()
@@ -90,19 +100,27 @@ class ScheduleTaskTool(Tool):
             return ToolOutput(success=False, error="Parameter 'task' is required.")
 
         agent = str(input.params.get("agent", "general"))
+        skill = str(input.params.get("skill", "")).strip()
+        if skill and self._skill_registry is not None:
+            from skills.exceptions import SkillNotFoundError
+
+            try:
+                self._skill_registry.get(skill)
+            except SkillNotFoundError:
+                return ToolOutput(success=False, error=f"Unknown skill '{skill}'.")
         run_at = input.params.get("run_at")
         hour = input.params.get("hour")
 
         if run_at is not None:
-            return await self._one_shot(task, agent, str(run_at))
+            return await self._one_shot(task, agent, str(run_at), skill)
         if hour is not None:
-            return await self._recurring(task, agent, input.params)
+            return await self._recurring(task, agent, input.params, skill)
         return ToolOutput(
             success=False,
             error="Provide 'run_at' for a one-shot task or 'hour' for a recurring schedule.",
         )
 
-    async def _one_shot(self, task: str, agent: str, run_at: str) -> ToolOutput:
+    async def _one_shot(self, task: str, agent: str, run_at: str, skill: str = "") -> ToolOutput:
         try:
             epoch = parse_local(run_at)
         except ValueError as exc:
@@ -113,7 +131,7 @@ class ScheduleTaskTool(Tool):
             type=JobType.ASYNC,
             agent=agent,
             task=task,
-            payload={"scheduled_by": "schedule_task"},
+            payload={"scheduled_by": "schedule_task", **({"skill": skill} if skill else {})},
             priority=JobPriority.MEDIUM,
             scheduled_at=from_epoch(epoch),
         )
@@ -130,7 +148,7 @@ class ScheduleTaskTool(Tool):
             },
         )
 
-    async def _recurring(self, task: str, agent: str, params: dict) -> ToolOutput:
+    async def _recurring(self, task: str, agent: str, params: dict, skill: str = "") -> ToolOutput:
         from jobs.scheduler import CronEntry
 
         # `weekday` is the old single-day spelling; still read so a caller working
@@ -148,6 +166,7 @@ class ScheduleTaskTool(Tool):
                 minute=_whole_number(params, "minute", 59, default=0),
                 weekdays=parse_weekdays(days),
                 tz=tz,
+                skill=skill,
             )
         except ValueError as exc:
             return ToolOutput(success=False, error=str(exc))
@@ -161,6 +180,7 @@ class ScheduleTaskTool(Tool):
             weekdays=entry.weekdays,
             tz=entry.tz,
             label=entry.label,
+            skill=entry.skill,
         )
         row = await self._cron_store.get(entry.name)
         return ToolOutput(success=True, data={"type": "recurring", **entry_view(row)})

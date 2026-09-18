@@ -59,6 +59,7 @@ from orchestrator.reconcile import recover_interrupted_tasks
 from orchestrator.router import ExecutionPlanner
 from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.watchdog import watch_stuck_tasks
+from policies.self_edit import SelfEditPolicy
 from skills import SkillRegistry, SkillSelector
 from skills import retirement as skill_retirement
 from skills.distiller import SkillDistiller
@@ -151,12 +152,27 @@ def _attach_embedding_index(deps) -> None:
     deps.context_store.attach_embedding_index(embedding_index)
 
 
-def _build_tool_registry(deps, policy: ApprovalPolicy | None = None) -> tuple[ToolRegistry, CreateAgentTool]:
-    tool_registry = ToolRegistry(auto_register=True)
+def _build_tool_registry(
+    deps,
+    policy: ApprovalPolicy | None = None,
+    skill_registry: SkillRegistry | None = None,
+) -> tuple[ToolRegistry, CreateAgentTool]:
+    learned_tools_dir = settings.north_home / "learned" / "tools"
+    learned_tools_dir.mkdir(parents=True, exist_ok=True)
+    tool_registry = ToolRegistry(auto_register=True, learned_dir=learned_tools_dir)
+    mutation_root = settings.north_home / "mutations"
+    source_edit_policy = SelfEditPolicy(learned_tools_dir, mutation_root)
+    agent_edit_policy = SelfEditPolicy(settings.north_home / "agents", mutation_root)
     # The four schedule verbs travel together: an agent that can create a
     # schedule must also be able to show, change and remove one, or the user can
     # only ever add.
-    tool_registry.register(ScheduleTaskTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
+    tool_registry.register(
+        ScheduleTaskTool(
+            job_processor=deps.job_processor,
+            cron_store=deps.cron_store,
+            skill_registry=skill_registry,
+        )
+    )
     tool_registry.register(ListSchedulesTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     tool_registry.register(UpdateScheduleTool(cron_store=deps.cron_store))
     tool_registry.register(CancelScheduleTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
@@ -171,11 +187,14 @@ def _build_tool_registry(deps, policy: ApprovalPolicy | None = None) -> tuple[To
             approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
             policy=policy,
             notifier=deps.notifier,
+            self_edit_policy=source_edit_policy,
+            tools_dir=learned_tools_dir,
         )
     )
     create_agent_tool = CreateAgentTool(
         cron_store=deps.cron_store,
         agents_dir=settings.north_home / "agents",
+        self_edit_policy=agent_edit_policy,
     )
     tool_registry.register(create_agent_tool)
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
@@ -644,7 +663,9 @@ def _launch_background_tasks(
                 )
             )
             return
-        await _run_scheduled_task(orchestrator, f"[scheduled] {job.task}")
+        skill = str((job.payload or {}).get("skill") or "").strip()
+        skill_hint = f" Use the '{skill}' skill before acting." if skill else ""
+        await _run_scheduled_task(orchestrator, f"[scheduled]{skill_hint}\n{job.task}")
 
     cron_scheduler = CronScheduler(
         processor=deps.job_processor,
@@ -783,13 +804,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         approval_memory=approval_memory,
         llm_advisor=judgement_filter.advise,
     )
-    deps.approval_policy = approval_policy
-    tool_registry, create_agent_tool = _build_tool_registry(deps, approval_policy)
-
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)
+    deps.approval_policy = approval_policy
+    tool_registry, create_agent_tool = _build_tool_registry(deps, approval_policy, skill_registry)
+
     tool_registry.register(UseSkillTool(skill_registry))
-    tool_registry.register(CreateSkillTool(skill_registry))
+    tool_registry.register(
+        CreateSkillTool(
+            skill_registry,
+            learned_dir=settings.north_home / "learned_skills",
+            self_edit_policy=SelfEditPolicy(settings.north_home / "learned_skills", settings.north_home / "mutations"),
+        )
+    )
 
     _step("refreshing inference pools")
     await deps.inference_router.refresh_pools()

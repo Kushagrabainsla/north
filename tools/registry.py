@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import importlib.util
 import inspect
 import logging
 import time
@@ -87,6 +88,36 @@ def _discover(directory: Path, package: str) -> dict[str, Tool]:
     return tools
 
 
+def _discover_external(directory: Path) -> dict[str, Tool]:
+    """Discover user-owned tools without treating their directory as a package."""
+    tools: dict[str, Tool] = {}
+    if not directory.exists():
+        return tools
+    for path in sorted(directory.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        module_name = f"north_learned_tool_{path.stem}_{abs(hash(path.resolve()))}"
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            logger.warning("learned tool discovery: failed to import %s: %s", path, exc)
+            continue
+        for obj in vars(module).values():
+            if isinstance(obj, type) and issubclass(obj, Tool) and obj is not Tool and not inspect.isabstract(obj):
+                if _needs_constructor_args(obj):
+                    continue
+                try:
+                    instance = obj()
+                    tools[instance.name] = instance
+                except Exception as exc:
+                    logger.warning("learned tool discovery: failed to construct %s: %s", path, exc)
+    return tools
+
+
 def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
     """True when *tool_cls* cannot be built with no arguments.
 
@@ -112,8 +143,9 @@ def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
 class ToolRegistry:
     """Global catalog of tools available for task-time selection."""
 
-    def __init__(self, auto_register: bool = False) -> None:
+    def __init__(self, auto_register: bool = False, learned_dir: Path | None = None) -> None:
         self._tools: dict[str, Tool] = {}
+        self._learned_dir = learned_dir
         self._last_reload: float = 0.0  # monotonic timestamp of last filesystem scan
         self._dir_mtimes: dict[Path, float] = {}
 
@@ -127,6 +159,12 @@ class ToolRegistry:
                 with contextlib.suppress(OSError):
                     self._dir_mtimes[dir_path] = _dir_fingerprint(dir_path)
             for tool in _discover(dir_path, package).values():
+                self._tools[tool.name] = tool
+        for directory in self._learned_directories():
+            if directory.exists():
+                with contextlib.suppress(OSError):
+                    self._dir_mtimes[directory] = _dir_fingerprint(directory)
+            for tool in _discover_external(directory).values():
                 self._tools[tool.name] = tool
 
     def reload(self) -> None:
@@ -144,6 +182,18 @@ class ToolRegistry:
                 if tool.name not in self._tools:
                     self._tools[tool.name] = tool
                     logger.info("ToolRegistry.reload: picked up new global tool %r", tool.name)
+        for directory in self._learned_directories():
+            if not self._directory_changed(directory):
+                continue
+            for tool in _discover_external(directory).values():
+                if tool.name not in self._tools:
+                    self._tools[tool.name] = tool
+                    logger.info("ToolRegistry.reload: picked up learned tool %r", tool.name)
+
+    def _learned_directories(self) -> tuple[Path, ...]:
+        if self._learned_dir is None:
+            return ()
+        return tuple(self._learned_dir / kind for kind in ("universal", "specialized"))
 
     def _directory_changed(self, dir_path: Path) -> bool:
         """True when *dir_path* has a new/removed/edited .py file since last scan.

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 from inference.models import EmbedFn
-from skills.models import Skill
+from skills.models import Skill, SkillIntent
 from skills.registry import SkillRegistry
 from utils.math import cosine_similarity
 
@@ -61,6 +61,7 @@ class SkillSelector:
         skills = self._registry.all() if candidates is None else candidates
         if not skills:
             return []
+        skills = _intent_compatible(task_text, skills)
         try:
             embeddings = await self._skill_embeddings(skills)
             query = await self._embed_fn([task_text])
@@ -122,3 +123,43 @@ class SkillSelector:
 def _retrieval_key(skill: Skill) -> str:
     """The text a skill is matched on: its name plus its trigger-oriented description."""
     return f"{skill.name}: {skill.description}"
+
+
+def _intent_compatible(task_text: str, skills: list[Skill]) -> list[Skill]:
+    """Prefer explicitly compatible skills, preserving semantic fallback."""
+    intents = _task_intents(task_text)
+    if not intents:
+        return skills
+    compatible = [skill for skill in skills if skill.intents & intents]
+    return compatible or skills
+
+
+def _task_intents(task_text: str) -> frozenset[str]:
+    text = task_text.lower()
+    detected: set[str] = set()
+    if any(phrase in text for phrase in ("debug", "diagnos", "failing test", "test failure", "error", "bug")):
+        detected.add(SkillIntent.DEBUG.value)
+    if any(
+        phrase in text
+        for phrase in ("add a tool", "add new tool", "create a tool", "new capability", "create-tool")
+    ):
+        detected.add(SkillIntent.CREATE_TOOL.value)
+    if ("overview" in text and ("repository" in text or "codebase" in text)) or any(
+        phrase in text
+        for phrase in (
+            "repository overview",
+            "codebase overview",
+            "explore",
+            "map the repo",
+            "understand the modules",
+            "understand this repository",
+        )
+    ):
+        detected.add(SkillIntent.EXPLORE.value)
+    if any(phrase in text for phrase in ("implement", "build", "modify", "change the code", "make this change")):
+        detected.add(SkillIntent.IMPLEMENT.value)
+    if any(phrase in text for phrase in ("review", "review the diff", "code review")):
+        detected.add(SkillIntent.REVIEW.value)
+    if any(phrase in text for phrase in ("research", "literature review", "survey the literature")):
+        detected.add(SkillIntent.RESEARCH.value)
+    return frozenset(detected)

@@ -61,7 +61,9 @@ class MemoryGateway(ABC):
     """Single entry point for every read of north's memory."""
 
     @abstractmethod
-    async def principal_for(self, name: str, domain: str | None = None) -> MemoryPrincipal:
+    async def principal_for(
+        self, name: str, domain: str | None = None, workspace: str = ""
+    ) -> MemoryPrincipal:
         """Build the principal for a caller (the episode domains it may read)."""
         ...
 

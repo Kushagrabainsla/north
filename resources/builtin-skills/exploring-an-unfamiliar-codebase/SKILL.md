@@ -1,6 +1,7 @@
 ---
 name: exploring-an-unfamiliar-codebase
 description: "Use when you must modify a repository or module you do not yet understand, before editing unfamiliar code."
+intents: [explore]
 ---
 # Exploring an Unfamiliar Codebase
 

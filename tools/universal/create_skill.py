@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from policies.self_edit import SelfEditPolicy
 from skills.models import SKILL_FILENAME, SkillSource
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
@@ -67,9 +68,15 @@ class CreateSkillTool(Tool):
         "required": ["name", "description", "instructions"],
     }
 
-    def __init__(self, registry: SkillRegistry, learned_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        registry: SkillRegistry,
+        learned_dir: Path | None = None,
+        self_edit_policy: SelfEditPolicy | None = None,
+    ) -> None:
         self._registry = registry
         self._learned_dir = learned_dir or (Path.home() / ".north" / "learned_skills")
+        self._self_edit_policy = self_edit_policy
 
     async def run(self, input: ToolInput) -> ToolOutput:
         raw_name = str(input.params.get("name") or "").strip()
@@ -99,8 +106,13 @@ class CreateSkillTool(Tool):
         document = f"---\n{frontmatter}---\n\n{instructions}\n"
 
         try:
+            mutation = None
+            if self._self_edit_policy is not None:
+                mutation = self._self_edit_policy.begin(skill_file, "create")
             # mkdir + write off-thread so the agent loop is never blocked on disk.
             await asyncio.to_thread(_write_skill_file, skill_dir, skill_file, document)
+            if mutation is not None:
+                self._self_edit_policy.commit(mutation)
             if hasattr(self._registry, "reload"):
                 self._registry.reload()
             return ToolOutput(

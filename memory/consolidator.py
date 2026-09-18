@@ -20,10 +20,11 @@ from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource
+from utils.prompts import load_prompt
+from utils.repository import repository_identity
 
 if TYPE_CHECKING:
     from memory.episodic import EpisodicStore
-from utils.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ _TERMINAL_OUTCOME: dict[str, str] = {
     "task_failed": "failed",
     "task_cancelled": "cancelled",
 }
+_APPROVAL_ACTION_PREFIX = "approval_responded:"
 
 # Ledger sources whose `input` is the user's original task prompt.
 _PROMPT_SOURCES = frozenset(
@@ -103,6 +105,28 @@ class EpisodeConsolidator:
                         entry.task_id,
                     )
                     break
+            elif (
+                entry.source == LedgerSource.APPROVAL
+                and entry.action
+                and entry.action.startswith(_APPROVAL_ACTION_PREFIX)
+                and entry.task_id
+                and self._is_learnable_approval(entry)
+            ):
+                # Prepared work can outlive its task. If its decision arrives
+                # after the terminal episode was projected, rebuild that same
+                # episode so the feedback remains part of task history.
+                rows = await self._ledger.query(LedgerFilters(task_id=entry.task_id, limit=_PER_TASK_ROW_LIMIT))
+                outcome = self._extract_terminal_outcome(rows)
+                if outcome:
+                    try:
+                        if await self._consolidate_task(entry.task_id, outcome):
+                            recorded += 1
+                    except Exception:
+                        logger.exception(
+                            "EpisodeConsolidator: failed to add approval feedback for task %s",
+                            entry.task_id,
+                        )
+                        break
             self._save_watermark(entry.timestamp)
         return recorded
 
@@ -117,7 +141,16 @@ class EpisodeConsolidator:
         domain = self._extract_domain(rows)
         result = self._extract_result(rows, outcome)
         summary = await self._summarize(prompt, result, outcome)
-        await self._episodic_store.record(task_id=task_id, domain=domain, summary=summary, outcome=outcome)
+        workspace = self._extract_workspace(rows)
+        identity = repository_identity(workspace) if workspace else None
+        await self._episodic_store.record(
+            task_id=task_id,
+            domain=domain,
+            summary=summary,
+            outcome=outcome,
+            project_id=identity.project_id if identity else "",
+            workspace_id=identity.workspace_id if identity else "",
+        )
         return True
 
     @staticmethod
@@ -140,6 +173,16 @@ class EpisodeConsolidator:
         return "general"
 
     @staticmethod
+    def _extract_workspace(rows: list[LedgerEntry]) -> str:
+        """Read the workspace stamped on task submission/resumption metadata."""
+        for entry in rows:
+            if entry.action in {"task_received", "task_resumed"} and entry.agent_output:
+                workspace = entry.agent_output.get("workspace")
+                if isinstance(workspace, str) and workspace:
+                    return workspace
+        return ""
+
+    @staticmethod
     def _extract_result(rows: list[LedgerEntry], outcome: str) -> str:
         if outcome == "cancelled":
             return "Task was cancelled before completion."
@@ -155,8 +198,42 @@ class EpisodeConsolidator:
                 "",
             )
             outputs.append(f"Failure: {terminal}".strip() if terminal else "The task failed.")
+        feedback = EpisodeConsolidator._extract_approval_feedback(rows)
+        if feedback:
+            outputs.append("Approval feedback:\n" + "\n".join(feedback))
         combined = "\n".join(o for o in outputs if o).strip()
         return combined or "No output was produced."
+
+    @staticmethod
+    def _extract_terminal_outcome(rows: list[LedgerEntry]) -> str | None:
+        for entry in rows:
+            if entry.source == LedgerSource.SYSTEM and entry.action in _TERMINAL_OUTCOME:
+                return _TERMINAL_OUTCOME[entry.action]
+        return None
+
+    @staticmethod
+    def _is_learnable_approval(entry: LedgerEntry) -> bool:
+        data = entry.agent_output or {}
+        return bool(data.get("source")) and data.get("decision") in {"approved", "rejected"}
+
+    @staticmethod
+    def _extract_approval_feedback(rows: list[LedgerEntry]) -> list[str]:
+        feedback: list[str] = []
+        for entry in reversed(rows):
+            if entry.source != LedgerSource.APPROVAL or not entry.action or not entry.action.startswith(
+                _APPROVAL_ACTION_PREFIX
+            ):
+                continue
+            if not EpisodeConsolidator._is_learnable_approval(entry):
+                continue
+            data = entry.agent_output or {}
+            decision = str(data["decision"])
+            source = str(data["source"])
+            reason = str(data.get("reason") or "No reason provided.")
+            edited = data.get("edited_fields") or []
+            edit_note = f" Edited fields: {', '.join(str(field) for field in edited)}." if edited else ""
+            feedback.append(f"Source {source}: user {decision} the proposal. Reason: {reason}.{edit_note}")
+        return feedback
 
     async def _summarize(self, prompt: str, result: str, outcome: str) -> str:
         """LLM summary for retrieval, with a plain truncated fallback (tests/offline)."""

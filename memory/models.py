@@ -44,6 +44,8 @@ class MemoryPrincipal:
     allowed_domains: frozenset[str]
     # Fact topics this principal may read. None means no restriction.
     allowed_fact_topics: frozenset[str] | None = None
+    project_id: str = ""
+    workspace_id: str = ""
 
 
 @dataclass(frozen=True)

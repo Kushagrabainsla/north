@@ -106,6 +106,36 @@ async def test_omitting_days_schedules_every_day(tool) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_recurring_task_can_reference_a_reusable_skill(tool, store) -> None:
+    result = await run(tool, task="find and summarize new roles", skill="job-search", hour=9)
+    assert result.success, result.error
+    (row,) = await store.list()
+    assert row["skill"] == "job-search"
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_task_carries_its_skill_reference(tool) -> None:
+    result = await run(tool, task="prepare the morning digest", skill="daily-digest", run_at="2030-01-01T09:00")
+    assert result.success, result.error
+    assert result.data["type"] == "one-shot"
+    assert tool._job_processor.jobs[-1].payload["skill"] == "daily-digest"
+
+
+@pytest.mark.asyncio
+async def test_unknown_skill_is_rejected_when_a_registry_is_configured(tool, tmp_path) -> None:
+    from skills.registry import SkillRegistry
+
+    checked_tool = ScheduleTaskTool(
+        job_processor=tool._job_processor,
+        cron_store=tool._cron_store,
+        skill_registry=SkillRegistry(tmp_path / "builtin"),
+    )
+    result = await run(checked_tool, task="do work", skill="does-not-exist", hour=9)
+    assert not result.success
+    assert "Unknown skill" in result.error
+
+
+@pytest.mark.asyncio
 async def test_the_old_weekday_spelling_still_works(tool) -> None:
     """A caller working from a cached tool description is not simply refused."""
     result = await run(tool, task="review", hour=9, weekday=2)

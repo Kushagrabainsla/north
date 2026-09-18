@@ -39,6 +39,7 @@ class UpdateScheduleTool(Tool):
             },
             "enabled": {"type": "boolean", "description": "false pauses the schedule, true resumes it"},
             "tz": {"type": "string", "description": "New IANA zone"},
+            "skill": {"type": "string", "description": "Reusable skill/playbook to apply when it runs"},
         },
         "required": ["name"],
     }
@@ -83,6 +84,7 @@ class UpdateScheduleTool(Tool):
             tz=default.zone_name,
             enabled=default.enabled,
             label=default.label,
+            skill=default.skill,
         )
         return True
 
@@ -95,7 +97,7 @@ class UpdateScheduleTool(Tool):
         requests, and collapsing both to None made the second one impossible.
         """
         changes: dict[str, object] = {}
-        for field in ("task", "agent", "label"):
+        for field in ("task", "agent", "label", "skill"):
             if params.get(field) is not None:
                 changes[field] = str(params[field])
         for field, ceiling in (("hour", 23), ("minute", 59)):

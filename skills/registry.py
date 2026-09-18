@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 
 from skills.exceptions import SkillNotFoundError, SkillParseError
-from skills.models import SKILL_FILENAME, Skill, SkillSource
+from skills.models import SKILL_FILENAME, Skill, SkillIntent, SkillSource
 from skills.parser import parse_skill_document
 
 logger = logging.getLogger(__name__)
@@ -117,6 +117,16 @@ class SkillRegistry:
             if isinstance(raw_domains, list) and raw_domains
             else frozenset({"engineering"})
         )
+        raw_intents = frontmatter.get("intents")
+        intents = (
+            frozenset(str(intent).strip().lower() for intent in raw_intents if str(intent).strip())
+            if isinstance(raw_intents, list)
+            else frozenset()
+        )
+        unknown_intents = intents - {intent.value for intent in SkillIntent}
+        if unknown_intents:
+            logger.warning("SkillRegistry: skipping skill %r - unknown intents %s", name, sorted(unknown_intents))
+            return None
         return Skill(
             name=name,
             description=description,
@@ -127,6 +137,7 @@ class SkillRegistry:
             status=status,
             provenance=provenance,
             domains=domains,
+            intents=intents,
         )
 
     def reload(self) -> None:

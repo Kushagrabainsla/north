@@ -84,6 +84,8 @@ class CronEntry:
     # what it did. Empty on rows written before labels existed - `title` falls
     # back to the prompt for those.
     label: str = ""
+    # Optional named skill/playbook to apply when this schedule fires.
+    skill: str = ""
     # What this schedule is for, in a sentence. Only the built-ins carry one:
     # a routine the user wrote explains itself through its prompt, but a
     # built-in whose prompt is an internal slug does not. "task_context_cleanup"
@@ -113,6 +115,7 @@ class CronEntry:
             tz=row.get("tz"),
             enabled=bool(row.get("enabled", True)),
             label=row.get("label") or "",
+            skill=row.get("skill") or "",
         )
 
     @property
@@ -271,7 +274,7 @@ class CronScheduler:
             type=JobType.CRON,
             agent=entry.agent,
             task=entry.task,
-            payload={"cron_entry": entry.name},
+            payload={"cron_entry": entry.name, **({"skill": entry.skill} if entry.skill else {})},
             priority=JobPriority.MEDIUM,
             scheduled_at=scheduled_at,
         )

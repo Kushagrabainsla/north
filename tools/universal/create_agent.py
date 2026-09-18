@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from policies.self_edit import SelfEditPolicy
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
@@ -119,9 +120,11 @@ class CreateAgentTool(Tool):
         agent_registry: AgentRegistry | None = None,
         cron_store: UserCronStore | None = None,
         agents_dir: Path | None = None,
+        self_edit_policy: SelfEditPolicy | None = None,
     ) -> None:
         self._agent_registry = agent_registry  # wired after registry is built (see app.py)
         self._cron_store = cron_store
+        self._self_edit_policy = self_edit_policy
         # Runtime-created agents belong to the user's north home. The fallback
         # preserves the old library behavior for standalone callers and tests.
         self._agents_dir = agents_dir or _BUILTIN_AGENTS_ROOT
@@ -220,6 +223,18 @@ class CreateAgentTool(Tool):
             )
 
         class_name = _to_class_name(name)
+        mutation_paths = [
+            agent_dir / "__init__.py",
+            agent_dir / "config.yaml",
+            agent_dir / "agent.py",
+            agent_dir / "prompts" / "system.md",
+        ]
+        mutations = []
+        if self._self_edit_policy is not None:
+            try:
+                mutations = [self._self_edit_policy.begin(path, "create") for path in mutation_paths]
+            except PermissionError as exc:
+                return ToolOutput(success=False, error=str(exc))
 
         try:
             agent_dir.mkdir(parents=True, exist_ok=False)
@@ -253,6 +268,9 @@ class CreateAgentTool(Tool):
             prompts_dir = agent_dir / "prompts"
             prompts_dir.mkdir()
             (prompts_dir / "system.md").write_text(system_prompt, encoding="utf-8")
+            if self._self_edit_policy is not None:
+                for mutation in mutations:
+                    self._self_edit_policy.commit(mutation)
 
         except OSError as exc:
             return ToolOutput(success=False, error=f"Failed to write agent files: {exc}")

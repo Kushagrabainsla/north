@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from memory.base import ContextStore, MemoryGateway
 from memory.models import ContextDocument, MemoryContext, MemoryPrincipal
 from utils.prompts import load_prompt
+from utils.repository import repository_identity
 
 if TYPE_CHECKING:
     from memory.episodic import EpisodicStore
@@ -82,12 +83,15 @@ class LocalMemoryGateway(MemoryGateway):
         self._fact_store = fact_store
         self._episodic_store = episodic_store
 
-    async def principal_for(self, name: str, domain: str | None = None) -> MemoryPrincipal:
+    async def principal_for(self, name: str, domain: str | None = None, workspace: str = "") -> MemoryPrincipal:
+        identity = await asyncio.to_thread(repository_identity, workspace) if workspace else None
         return MemoryPrincipal(
             name=name,
             domain=domain,
             allowed_domains=self._allowed_episode_domains(domain),
             allowed_fact_topics=self._allowed_fact_topics(domain),
+            project_id=identity.project_id if identity else "",
+            workspace_id=identity.workspace_id if identity else "",
         )
 
     async def recall(
@@ -148,7 +152,11 @@ class LocalMemoryGateway(MemoryGateway):
             return []
         try:
             return await self._episodic_store.search(
-                query, max_results=limit, allowed_domains=principal.allowed_domains
+                query,
+                max_results=limit,
+                allowed_domains=principal.allowed_domains,
+                project_id=principal.project_id,
+                workspace_id=principal.workspace_id,
             )
         except Exception:
             logger.warning("MemoryGateway: episodic search failed", exc_info=True)

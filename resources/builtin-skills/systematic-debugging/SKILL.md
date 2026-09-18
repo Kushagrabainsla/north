@@ -1,6 +1,7 @@
 ---
 name: systematic-debugging
 description: "Use when a reproducible bug, error, or test failure has an unknown cause and you are about to fix it. Find the root cause before changing any code."
+intents: [debug]
 ---
 # Systematic Debugging
 

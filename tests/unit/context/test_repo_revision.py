@@ -32,6 +32,8 @@ def test_repository_identity_reports_commit_and_dirty_worktree(tmp_path: Path) -
     assert clean is not None
     assert clean.commit == _git(tmp_path, "rev-parse", "HEAD")
     assert clean.dirty is False
+    assert clean.project_id.startswith("local:")
+    assert clean.workspace_id.startswith("workspace:")
     assert f"{clean.commit}:path/to/file:symbol-or-line" in clean.render()
 
     source.write_text("def run():\n    return 2\n", encoding="utf-8")
