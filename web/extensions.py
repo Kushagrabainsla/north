@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from flows.exceptions import FlowNotFoundError, FlowParseError
 from flows.models import FLOW_FILENAME, FlowSource
@@ -28,11 +28,54 @@ class SkillUpdate(BaseModel):
 
 
 class FlowUpdate(BaseModel):
-    content: str = Field(min_length=1, max_length=100_000)
+    content: str | None = Field(default=None, max_length=100_000)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=2_000)
+    version: str = "1.0.0"
+    domains: list[str] = Field(default_factory=lambda: ["general"])
+    status: str = "active"
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def has_content_or_definition(self):
+        if not self.content and (not self.name or not self.description or not self.steps):
+            raise ValueError("Provide content or a complete flow definition.")
+        return self
 
 
 class FlowCreate(BaseModel):
-    content: str = Field(min_length=1, max_length=100_000)
+    content: str | None = Field(default=None, max_length=100_000)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=2_000)
+    version: str = "1.0.0"
+    domains: list[str] = Field(default_factory=lambda: ["general"])
+    status: str = "active"
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def has_content_or_definition(self):
+        if not self.content and (not self.name or not self.description or not self.steps):
+            raise ValueError("Provide content or a complete flow definition.")
+        return self
+
+
+def _flow_document(body: FlowCreate | FlowUpdate, *, fallback_name: str = "") -> str:
+    if body.content:
+        return body.content
+    import yaml
+
+    return yaml.safe_dump(
+        {
+            "name": body.name or fallback_name,
+            "description": body.description or "",
+            "version": body.version,
+            "domains": body.domains,
+            "status": body.status,
+            "steps": body.steps,
+        },
+        sort_keys=False,
+        allow_unicode=True,
+    )
 
 
 @router.get("/skills")
@@ -132,6 +175,7 @@ async def get_flow(name: str) -> dict[str, Any]:
             {
                 "name": step.name,
                 "tool": step.tool,
+                "params": step.params,
                 "skill": step.skill,
                 "approval": step.approval,
                 "description": step.description,
@@ -146,7 +190,7 @@ async def create_flow(body: FlowCreate) -> dict[str, Any]:
     registry = current_services().require("flow_registry")
     learned_dir = Path(current_services().require("north_home")) / "flows"
     try:
-        parsed = parse_flow_document(body.content, learned_dir / "new-flow", FlowSource.LEARNED)
+        parsed = parse_flow_document(_flow_document(body), learned_dir / "new-flow", FlowSource.LEARNED)
     except FlowParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     target = learned_dir / parsed.name
@@ -168,12 +212,16 @@ async def update_flow(name: str, body: FlowUpdate) -> dict[str, Any]:
     if flow.source is FlowSource.BUILTIN:
         raise HTTPException(status_code=403, detail="Built-in flows cannot be edited")
     try:
-        parsed = parse_flow_document(body.content, flow.directory, FlowSource.LEARNED)
+        parsed = parse_flow_document(_flow_document(body, fallback_name=name), flow.directory, FlowSource.LEARNED)
     except FlowParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     if parsed.name != name:
         raise HTTPException(status_code=422, detail="Flow name cannot be changed")
-    await asyncio.to_thread((flow.directory / FLOW_FILENAME).write_text, body.content, encoding="utf-8")
+    await asyncio.to_thread(
+        (flow.directory / FLOW_FILENAME).write_text,
+        _flow_document(body, fallback_name=name),
+        encoding="utf-8",
+    )
     registry.reload()
     return await get_flow(name)
 
