@@ -380,16 +380,27 @@ daily workflow:
 North should feel like a calm operating surface rather than a generic admin
 template.
 
-- Dense enough for serious work, with generous space around reading content.
-- Neutral base colors with one restrained accent color.
+The selected product system is **Operational Ledger**. It treats North as a
+live, inspectable record of work: compact navigation, explicit column headers,
+sharp low-radius surfaces, dense rows, and status that remains readable without
+depending on color alone. The same system applies to every route; subsystem
+pages do not introduce their own card, radius, or accent language.
+
+- Desktop controls and rows are compact enough for serious work, while reading
+  surfaces retain comfortable line length and spacing.
+- Neutral near-black surfaces use lime as the single interaction accent.
 - Semantic colors are reserved for running, success, warning, failure, and
   approval states.
-- Typography distinguishes prose, structured metadata, and code without using
-  excessive card borders.
+- JetBrains Mono distinguishes prose, structured metadata, and code through
+  scale, weight, and contrast rather than through mixed font families.
+- Borders and one-pixel separators express hierarchy. Shadows, gradients, and
+  floating cards are exceptional rather than the default.
 - Motion is limited to state transitions, streaming, and connection feedback.
 - Light and dark themes share the same semantic design tokens.
-- Keyboard navigation and visible focus states are required from the first
-  release.
+- Keyboard navigation and visible focus states are required. Touch targets are
+  at least 44 by 44 pixels on coarse-pointer devices.
+- Desktop uses a grouped left rail. Narrow screens use a sticky horizontal rail
+  that automatically keeps the active destination visible.
 
 ## 7. Frontend architecture
 

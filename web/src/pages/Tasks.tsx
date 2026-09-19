@@ -16,9 +16,10 @@
 
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { post } from "../api";
 import { useResource } from "../hooks";
 import { Empty, ErrorNotice, formatDateTime, InferenceCategories, Loading, PageHeader, Panel, PromptTelemetry, Status, timeAgo } from "../components";
-import type { AgentRun, Approval, Artifact, LedgerEntry, TaskDetail } from "../types";
+import type { AgentRun, Approval, Artifact, Conversation, LedgerEntry, TaskDetail } from "../types";
 import { RoutingAttempts, stageIcon } from "./Verbose";
 
 /** One source of truth for the lifecycle actions shown in the task list. */
@@ -226,12 +227,16 @@ export function Tasks() {
   const navigate = useNavigate();
   const resource = useResource<LedgerEntry[]>("/orchestrator/ledger?limit=500", 7000);
   const [query, setQuery] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [busy, setBusy] = useState<"refresh" | "create" | "">("");
   // The tab is in the URL so the old /activity path can land on the stream
   // rather than dropping someone on the task list and making them find it.
   const [params, setParams] = useSearchParams();
-  const tab = params.get("view") === "everything" ? "everything" : "tasks";
-  const showTab = (next: "tasks" | "everything") =>
-    setParams(next === "everything" ? { view: "everything" } : {}, { replace: true });
+  type TaskView = "all" | "active" | "approvals" | "completed" | "everything";
+  const requested = params.get("view");
+  const tab: TaskView = ["active", "approvals", "completed", "everything"].includes(requested || "")
+    ? requested as TaskView : "all";
+  const showTab = (next: TaskView) => setParams(next === "all" ? {} : { view: next }, { replace: true });
 
   if (taskId) return <TaskActivity taskId={taskId}/>;
   if (resource.loading) return <Loading/>;
@@ -239,37 +244,80 @@ export function Tasks() {
   const entries = resource.data || [];
   const tasks = summarise(entries);
   const matches = query.toLowerCase();
-  const shown = tasks.filter(task =>
+  const visibleByView = tasks.filter(task => {
+    if (tab === "active") return ["running", "retrying", "paused"].includes(task.status);
+    if (tab === "approvals") return task.status === "needs_attention";
+    if (tab === "completed") return task.status === "completed";
+    return true;
+  });
+  const shown = visibleByView.filter(task =>
     !matches || task.prompt.toLowerCase().includes(matches) || task.id.toLowerCase().includes(matches)
+    || task.status.toLowerCase().includes(matches)
     || task.agents.some(agent => agent.toLowerCase().includes(matches)));
+  const active = tasks.filter(task => ["running", "retrying", "paused"].includes(task.status)).length;
+  const approvalsCount = tasks.filter(task => task.status === "needs_attention").length;
+  const queued = tasks.filter(task => task.status === "queued").length;
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const completedThisWeek = tasks.filter(task => task.status === "completed" && new Date(task.latest).getTime() >= weekAgo).length;
+  const refresh = async () => {
+    setBusy("refresh"); setActionError("");
+    try { await resource.reload(); }
+    catch (error) { setActionError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(""); }
+  };
+  const createTask = async () => {
+    setBusy("create"); setActionError("");
+    try {
+      const chat = await post<Conversation>("/web/api/conversations", { title: "New task" });
+      navigate(`/chat/${chat.id}`);
+    } catch (error) { setActionError(error instanceof Error ? error.message : String(error)); setBusy(""); }
+  };
 
-  return <div className="page">
+  return <div className="page tasks-ledger-page">
     <PageHeader eyebrow="Work" title="Tasks"
-      subtitle="Every task, from prompt to final outcome - open one to see everything it did."
-      actions={<input className="header-search" placeholder={tab === "tasks" ? "Filter tasks" : "Filter events"}
-        value={query} onChange={event => setQuery(event.target.value)}/>}/>
+      subtitle="Everything North is doing, waiting on, or has completed."
+      actions={<><button disabled={Boolean(busy)} onClick={() => void refresh()}>{busy === "refresh" ? "Refreshing…" : "Refresh"}</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void createTask()}>{busy === "create" ? "Creating…" : "+ New task"}</button></>}/>
     {resource.error && <ErrorNotice message={resource.error}/>}
+    {actionError && <ErrorNotice message={actionError}/>}
+
+    <section className="task-ledger-stats" aria-label="Task summary">
+      <div><small>Active</small><strong>{active}</strong><span>in progress</span></div>
+      <div><small>Needs approval</small><strong>{approvalsCount}</strong><span>waiting on you</span></div>
+      <div><small>Queued</small><strong>{queued}</strong><span>ready to start</span></div>
+      <div><small>Completed this week</small><strong>{completedThisWeek}</strong><span>finished work</span></div>
+    </section>
 
     {/* Most of the time you want the runs. The raw stream is still here because
         startup, cron ticks and recovery sweeps have no task to belong to. */}
-    <div className="segmented task-tabs">
-      <button className={tab === "tasks" ? "active" : ""} onClick={() => showTab("tasks")}>Tasks</button>
-      <button className={tab === "everything" ? "active" : ""} onClick={() => showTab("everything")}>Everything</button>
+    <div className="task-ledger-toolbar">
+      <div className="task-ledger-tabs" role="tablist" aria-label="Task views">
+        <button role="tab" aria-selected={tab === "all"} className={tab === "all" ? "active" : ""} onClick={() => showTab("all")}>All work</button>
+        <button role="tab" aria-selected={tab === "active"} className={tab === "active" ? "active" : ""} onClick={() => showTab("active")}>Active</button>
+        <button role="tab" aria-selected={tab === "approvals"} className={tab === "approvals" ? "active" : ""} onClick={() => showTab("approvals")}>Approvals</button>
+        <button role="tab" aria-selected={tab === "completed"} className={tab === "completed" ? "active" : ""} onClick={() => showTab("completed")}>Completed</button>
+        <button role="tab" aria-selected={tab === "everything"} className={tab === "everything" ? "active" : ""} onClick={() => showTab("everything")}>Everything</button>
+      </div>
+      <input className="task-ledger-search" aria-label={tab === "everything" ? "Filter events" : "Filter tasks"}
+        placeholder={tab === "everything" ? "Filter events" : "Filter tasks"}
+        value={query} onChange={event => setQuery(event.target.value)}/>
     </div>
 
-    {tab === "tasks"
+    {tab !== "everything"
       ? <>
-          <div className="table-list">
-            {shown.map(task => <div className="table-row task-row" key={task.id} onClick={() => navigate(`/tasks/${task.id}`)}>
-              <div className="row-main">
-                <b>{task.prompt}</b>
-                <small>{task.id} · {timeAgo(task.latest)} · {task.entries.length} events</small>
-              </div>
-              <span>{task.agents.join(", ") || "orchestrator"}</span>
-              <Status value={task.status}/>
-            </div>)}
+          <div className="task-ledger-table-wrap">
+            <table className="task-ledger-table">
+              <thead><tr><th>Task</th><th>Agent</th><th>Updated</th><th>Events</th><th>State</th><th><span className="sr-only">Action</span></th></tr></thead>
+              <tbody>{shown.map(task => <tr key={task.id}>
+                <td><Link className="task-ledger-primary" to={`/tasks/${task.id}`}><b>{task.prompt}</b><small>{task.id}</small></Link></td>
+                <td data-label="Agent">{task.agents.join(", ") || "orchestrator"}</td>
+                <td data-label="Updated">{timeAgo(task.latest)}</td>
+                <td data-label="Events">{task.entries.length}</td>
+                <td data-label="State"><Status value={task.status}/></td>
+                <td><Link className="task-ledger-open" to={`/tasks/${task.id}`} aria-label={`Open task: ${task.prompt}`}>Open</Link></td>
+              </tr>)}</tbody>
+            </table>
           </div>
-          {!shown.length && <Empty>{tasks.length ? "No tasks match." : "No task history yet."}</Empty>}
+          {!shown.length && <Empty>{tasks.length ? "No tasks match this view." : "No task history yet."}</Empty>}
         </>
       : <AllEvents entries={entries} query={query}/>}
   </div>;

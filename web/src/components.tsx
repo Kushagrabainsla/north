@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, type ReactNode } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
 import type { AgentRun, Conversation, InferenceCategory } from "./types";
@@ -40,17 +40,35 @@ export function weekdayInNorthTimezone(date = new Date()) {
 
 // [path, label, icon, beta?]. Capabilities stay grouped while each resource
 // keeps its own screen and editor.
-const nav: [string, string, LucideIcon, boolean?][] = [
+const primaryNav: [string, string, LucideIcon, boolean?][] = [
   ["/", "Dashboard", LayoutDashboard], ["/chat", "Chat", MessagesSquare], ["/tasks", "Tasks", CheckSquare],
   ["/artifacts", "Artifacts", FileText],
   ["/schedule", "Schedule", CalendarClock], ["/approvals", "Approvals", ShieldAlert],
   ["/memory", "Memory", Brain], ["/agents", "Agents", Bot],
+];
+
+const systemNav: [string, string, LucideIcon][] = [
   ["/system", "System", Cpu], ["/settings", "Settings", Settings]
 ];
 
+function NavigationLink({ to, label, Icon, beta = false }: { to: string; label: string; Icon: LucideIcon; beta?: boolean }) {
+  return <NavLink to={to} end={to === "/"} title={label}>
+    <span className="nav-icon"><Icon size={16}/></span>
+    <span>{label}{beta && <em className="nav-beta">beta</em>}</span>
+  </NavLink>;
+}
+
 export function Layout() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [collapsed, setCollapsed] = usePersistentState(UI_PREFERENCE_KEYS.sidebarCollapsed, false, value => typeof value === "boolean");
+  // The mobile rail is intentionally horizontal. Keep the current destination
+  // visible when a deep link opens or navigation moves into a later group.
+  useEffect(() => {
+    if (!window.matchMedia("(max-width: 820px)").matches) return;
+    document.querySelector<HTMLElement>(".sidebar nav a.active")
+      ?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [location.pathname]);
   const newChat = async () => {
     const chat = await post<Conversation>("/web/api/conversations", { title: "New chat" });
     navigate(`/chat/${chat.id}`);
@@ -59,9 +77,11 @@ export function Layout() {
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src="https://repository-images.githubusercontent.com/1221207908/a9516630-e5f6-475f-ab80-44b2dd6dc9c8" alt="North logo"/><div><b>north</b><small>personal operating system</small></div></div>
       <button className="new-chat" onClick={newChat}>+ New conversation</button>
-      <nav>{nav.map(([to, label, Icon, beta]) => <NavLink key={to} to={to} end={to === "/"}>
-        <span className="nav-icon"><Icon size={16}/></span><span>{label}{beta && <em className="nav-beta">beta</em>}</span>
-      </NavLink>)}<div className="nav-group"><span className="nav-group-label"><Sparkles size={14}/> Capabilities</span><NavLink to="/skills"><span className="nav-icon"><Sparkles size={15}/></span><span>Skills</span></NavLink><NavLink to="/flows"><span className="nav-icon"><GitBranch size={15}/></span><span>Flows</span></NavLink><NavLink to="/tools"><span className="nav-icon"><Wrench size={15}/></span><span>Tools</span></NavLink></div></nav>
+      <nav aria-label="North navigation">
+        <div className="nav-section">{primaryNav.map(([to, label, Icon, beta]) => <NavigationLink key={to} to={to} label={label} Icon={Icon} beta={beta}/>)}</div>
+        <div className="nav-group"><span className="nav-group-label"><Sparkles size={14}/> Capabilities</span><NavigationLink to="/skills" label="Skills" Icon={Sparkles}/><NavigationLink to="/flows" label="Flows" Icon={GitBranch}/><NavigationLink to="/tools" label="Tools" Icon={Wrench}/></div>
+        <div className="nav-group nav-system"><span className="nav-group-label"><Cpu size={14}/> Manage</span>{systemNav.map(([to, label, Icon]) => <NavigationLink key={to} to={to} label={label} Icon={Icon}/>)}</div>
+      </nav>
       <div className="sidebar-footer"><HealthIndicator/><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>
     </aside>
     <main className="workspace"><Outlet /></main>

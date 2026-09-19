@@ -51,6 +51,23 @@ async def test_skill_api_lists_reads_updates_and_reloads(skill_registry: SkillRe
     assert skill_registry.get("test-skill").description == "Updated description"
 
 
+async def test_skill_api_creates_a_structured_learned_skill(tmp_path) -> None:
+    registry = SkillRegistry(tmp_path / "builtin", tmp_path / "skills")
+    with bind_services(ApiServices(skill_registry=registry, north_home=tmp_path)):
+        result = await web_api.create_skill(web_api.SkillCreate(
+            name="review-job-match",
+            description="Use when reviewing whether a job matches the user.",
+            instructions="Compare the role to the resume and explain the strongest evidence.",
+            domains=["jobs", "review"],
+        ))
+
+    assert result["name"] == "review-job-match"
+    assert result["source"] == "learned"
+    created = tmp_path / "skills" / "review-job-match" / "SKILL.md"
+    assert created.exists()
+    assert "domains:" in created.read_text(encoding="utf-8")
+
+
 async def test_skill_api_rejects_rename(skill_registry: SkillRegistry) -> None:
     renamed = _document().replace("name: test-skill", "name: renamed")
 
