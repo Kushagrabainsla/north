@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
@@ -14,8 +16,10 @@ from flows.models import FLOW_FILENAME, FlowSource
 from flows.registry import parse_flow_document
 from orchestrator.api_context import current_services
 from skills.exceptions import SkillNotFoundError, SkillParseError
+from skills.models import SKILL_FILENAME
 from skills.parser import parse_skill_document
 from skills.registry import rejection_reason
+from tools.universal.create_tool import _render_stub
 
 # This router is composed into ``web.api.router``, which owns the public
 # ``/web/api`` prefix and request-level dependencies. Repeating either here
@@ -25,6 +29,19 @@ router = APIRouter(tags=["web"])
 
 class SkillUpdate(BaseModel):
     content: str = Field(min_length=1, max_length=100_000)
+
+
+class SkillCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=2_000)
+    instructions: str = Field(min_length=1, max_length=8_000)
+    domains: list[str] = Field(default_factory=lambda: ["general"])
+
+
+class ToolCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=2_000)
+    tool_type: str = Field(default="specialized", pattern="^(universal|specialized)$")
 
 
 class FlowUpdate(BaseModel):
@@ -94,6 +111,32 @@ async def list_skills() -> list[dict[str, Any]]:
     ]
 
 
+@router.post("/skills", status_code=201)
+async def create_skill(body: SkillCreate) -> dict[str, Any]:
+    registry = current_services().require("skill_registry")
+    name = body.name.strip()
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+        raise HTTPException(status_code=422, detail="Skill name must use lowercase letters, digits, and hyphens")
+    if name in registry.names():
+        raise HTTPException(status_code=409, detail=f"Skill {name!r} already exists")
+    learned_dir = Path(current_services().require("north_home")) / "skills"
+    document = "---\n" + yaml.safe_dump(
+        {
+            "name": name,
+            "description": body.description.strip(),
+            "version": "1.0.0",
+            "status": "active",
+            "domains": body.domains,
+        },
+        sort_keys=False,
+    ) + "---\n\n" + body.instructions.strip() + "\n"
+    target = learned_dir / name
+    await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread((target / SKILL_FILENAME).write_text, document, encoding="utf-8")
+    registry.reload()
+    return await get_skill(name)
+
+
 @router.get("/skills/{name}")
 async def get_skill(name: str) -> dict[str, Any]:
     registry = current_services().require("skill_registry")
@@ -140,6 +183,50 @@ async def delete_skill(name: str) -> None:
         if skill is not None and skill.source.value == "builtin":
             raise HTTPException(status_code=403, detail="Built-in skills cannot be deleted")
         raise HTTPException(status_code=404, detail=f"Learned skill {name!r} was not found")
+
+
+@router.get("/tools")
+async def list_tools() -> list[dict[str, Any]]:
+    registry = current_services().require("tool_registry")
+    return [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "source": "learned" if str(getattr(tool, "__module__", "")).startswith("north_learned_tool_") else "built-in",
+            "status": "active",
+            "mutating": tool.is_mutating,
+        }
+        for tool in sorted(registry.available_tools(), key=lambda item: item.name)
+    ]
+
+
+@router.post("/tools", status_code=201)
+async def create_tool(body: ToolCreate) -> dict[str, Any]:
+    registry = current_services().require("tool_registry")
+    name = body.name.strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+        raise HTTPException(status_code=422, detail="Tool name must use snake_case")
+    if name in registry.all_tool_names():
+        raise HTTPException(status_code=409, detail=f"Tool {name!r} already exists")
+    learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
+    target = learned_dir / body.tool_type / f"{name}.py"
+    await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+    content = _render_stub(
+        name,
+        "".join(word.title() for word in name.split("_")) + "Tool",
+        body.description.strip(),
+        [],
+        "Created from the North dashboard.",
+    )
+    await asyncio.to_thread(target.write_text, content, encoding="utf-8")
+    registry.reload()
+    return {
+        "name": name,
+        "description": body.description.strip(),
+        "source": "learned",
+        "status": "active",
+        "mutating": False,
+    }
 
 
 @router.get("/flow-definitions")

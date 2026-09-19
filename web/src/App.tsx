@@ -2,7 +2,7 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Layout } from "./components";
 import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
-import { Agents, Approvals, Artifacts, Flows, Insights, Memory, Schedule, SettingsPage, Skills, SystemPage } from "./pages/Verbose";
+import { Agents, Approvals, Artifacts, Capabilities, Flows, Insights, Memory, Schedule, SettingsPage, Skills, SystemPage } from "./pages/Verbose";
 import { Tasks } from "./pages/Tasks";
 import { DialogProvider } from "./dialog";
 
@@ -23,6 +23,7 @@ export function App() {
     <Route path="/approvals" element={<Approvals/>}/>
     <Route path="/memory" element={<Memory/>}/>
     <Route path="/agents" element={<Agents/>}/>
+    <Route path="/capabilities" element={<Capabilities/>}/>
     <Route path="/skills" element={<Skills/>}/>
     <Route path="/flows" element={<Flows/>}/>
     {/* Tasks and Activity were one thing described in two places. Merged, with

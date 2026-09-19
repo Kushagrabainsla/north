@@ -78,6 +78,7 @@ class ApiServices:
     decision_log: Any | None = None
     skill_registry: Any | None = None
     flow_registry: Any | None = None
+    tool_registry: Any | None = None
     north_home: Any | None = None
     # Mutable per-app runtime state for the web layer (in-flight logins,
     # the bootstrap task). Held here so it is per-app like the wiring.

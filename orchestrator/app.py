@@ -472,7 +472,8 @@ def _build_context_injector(deps) -> ContextInjector:
 
 
 def _configure_routers(
-    app, orchestrator, deps, agent_registry, context_injector, skill_registry, flow_registry, approval_memory=None
+    app, orchestrator, deps, agent_registry, context_injector, skill_registry, flow_registry, tool_registry,
+    approval_memory=None
 ) -> None:
     configure_api(
         app,
@@ -509,6 +510,7 @@ def _configure_routers(
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
         flow_registry=flow_registry,
+        tool_registry=tool_registry,
         codex_credentials_factory=_build_codex_credentials,
     )
 
@@ -919,7 +921,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _step("configuring API router")
     _configure_routers(
-        app, orchestrator, deps, agent_registry, context_injector, skill_registry, flow_registry, approval_memory
+        app, orchestrator, deps, agent_registry, context_injector, skill_registry, flow_registry, tool_registry,
+        approval_memory
     )
 
     _step("configuring callback server")

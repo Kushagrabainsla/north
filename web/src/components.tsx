@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
 import type { AgentRun, Conversation, InferenceCategory } from "./types";
-import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, CalendarClock, ShieldAlert, Brain, Bot, Sparkles, GitBranch, Cpu, Settings, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, CalendarClock, ShieldAlert, Brain, Bot, Sparkles, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
 
@@ -44,7 +44,7 @@ const nav: [string, string, LucideIcon, boolean?][] = [
   ["/", "Dashboard", LayoutDashboard], ["/chat", "Chat", MessagesSquare], ["/tasks", "Tasks", CheckSquare],
   ["/artifacts", "Artifacts", FileText],
   ["/schedule", "Schedule", CalendarClock], ["/approvals", "Approvals", ShieldAlert],
-  ["/memory", "Memory", Brain], ["/agents", "Agents", Bot], ["/skills", "Skills", Sparkles], ["/flows", "Flows", GitBranch],
+  ["/memory", "Memory", Brain], ["/agents", "Agents", Bot], ["/capabilities", "Capabilities", Sparkles],
   ["/system", "System", Cpu], ["/settings", "Settings", Settings]
 ];
 
