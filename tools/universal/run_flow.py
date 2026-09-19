@@ -1,0 +1,63 @@
+"""RunFlowTool - start or resume a declarative flow."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from tools.base import Tool
+from tools.models import ToolInput, ToolOutput
+from tools.universal.flow_runner import FlowRunner
+
+
+class RunFlowTool(Tool):
+    name = "run_flow"
+    is_mutating = True
+    description = (
+        "Start or resume a named declarative flow. The flow runs sequentially, persists checkpoints, "
+        "and pauses before steps that require approval."
+    )
+    parameters_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Flow name."},
+            "run_id": {"type": "string", "description": "Existing run ID to resume, if any."},
+            "task_id": {"type": "string", "description": "Optional North task ID for approval events."},
+            "inputs": {"type": "object", "description": "Initial values available as ${inputs.key}."},
+        },
+        "required": ["name"],
+    }
+
+    def __init__(self, runner: FlowRunner) -> None:
+        self._runner = runner
+
+    async def run(self, input: ToolInput) -> ToolOutput:
+        name = str(input.params.get("name") or "").strip()
+        if not name:
+            return ToolOutput(success=False, error="Parameter 'name' is required.")
+        try:
+            run = await self._runner.run(
+                name,
+                run_id=str(input.params.get("run_id") or "").strip() or None,
+                task_id=str(input.params.get("task_id") or "").strip(),
+                inputs=input.params.get("inputs") if isinstance(input.params.get("inputs"), dict) else None,
+            )
+            return ToolOutput(success=run.status not in {"failed", "needs_approval", "rejected"}, data=_view(run))
+        except Exception as exc:
+            return ToolOutput(success=False, error=str(exc))
+
+    def format_output(self, data: dict[str, Any]) -> str:
+        return (
+            f"Flow {data.get('run_id')} is {data.get('status')} "
+            f"at step {data.get('current_step')}; {len(data.get('outputs') or [])} step(s) completed."
+        )
+
+
+def _view(run) -> dict[str, Any]:
+    return {
+        "run_id": run.run_id,
+        "flow_name": run.flow_name,
+        "status": run.status,
+        "current_step": run.current_step,
+        "outputs": run.outputs,
+        "error": run.error,
+    }

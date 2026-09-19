@@ -41,10 +41,17 @@ from .conversations import ConversationStore, Turn
 # Compatibility exports for callers that historically imported skill routes
 # and their request model from web.api.
 SkillUpdate = _extensions.SkillUpdate
+FlowCreate = _extensions.FlowCreate
+FlowUpdate = _extensions.FlowUpdate
 delete_skill = _extensions.delete_skill
 get_skill = _extensions.get_skill
 list_skills = _extensions.list_skills
 update_skill = _extensions.update_skill
+create_flow = _extensions.create_flow
+delete_flow = _extensions.delete_flow
+get_flow = _extensions.get_flow
+list_flows = _extensions.list_flows
+update_flow = _extensions.update_flow
 extensions_router = _extensions.router
 
 if TYPE_CHECKING:
@@ -114,6 +121,7 @@ def configure(
     fact_store=None,
     inference_router=None,
     skill_registry=None,
+    flow_registry=None,
     episodic_store=None,
     approval_memory=None,
     unattended_rules=None,
@@ -150,6 +158,7 @@ def configure(
         decision_log=decision_log,
         inference_router=inference_router,
         skill_registry=skill_registry,
+        flow_registry=flow_registry,
         conversation_store=ConversationStore(north_home / "web.db"),
         web_runtime=WebRuntime(),
         codex_credentials_factory=codex_credentials_factory or _default_codex_credentials_factory,

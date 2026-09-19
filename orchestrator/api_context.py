@@ -77,6 +77,7 @@ class ApiServices:
     # Approve/reject history per card source, and what it filtered.
     decision_log: Any | None = None
     skill_registry: Any | None = None
+    flow_registry: Any | None = None
     north_home: Any | None = None
     # Mutable per-app runtime state for the web layer (in-flight logins,
     # the bootstrap task). Held here so it is per-app like the wiring.

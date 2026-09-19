@@ -101,6 +101,7 @@ def _import_targets(source_files: dict[Path, ModuleContract]) -> dict[str, Modul
                 "cli",
                 "config",
                 "context",
+                "flows",
                 "gateways",
                 "inference",
                 "jobs",

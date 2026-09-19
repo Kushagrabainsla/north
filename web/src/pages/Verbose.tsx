@@ -960,6 +960,35 @@ export function Skills() {
   return <div className="page"><PageHeader eyebrow="Procedures" title="Skills" subtitle="Inspect and edit the playbooks North injects into specialist work." actions={<><button className="primary-button" disabled={!selected || selectedSkill?.source === "builtin"} onClick={save}>Save skill</button>{selectedSkill?.source === "learned" && <button className="danger-button" onClick={() => void remove()}>Delete skill</button>}</>}/>{skills.error && <ErrorNotice message={skills.error}/>} {message && <div className="notice">{message}</div>}<div className="skills-layout"><div className="skill-library">{skills.loading ? <Loading/> : (skills.data || []).map(skill => <button className={selected === skill.name ? "active" : ""} key={skill.name} onClick={() => open(skill.name)}><b>{skill.name}</b><small>{skill.source} · v{skill.version} · {skill.domains.join(", ")}</small><p>{skill.description}</p></button>)}</div><section className="skill-editor">{selected ? <><div className="editor-label">{selected}/SKILL.md</div><textarea readOnly={selectedSkill?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></> : <Empty>Select a skill to inspect or edit it.</Empty>}</section></div></div>;
 }
 
+interface FlowSummary { name: string; description: string; source: string; version: string; status: string; domains: string[]; steps: number; }
+interface FlowDetail { name: string; content: string; source: string; steps: { name: string; tool: string; skill: string; approval: string; description: string }[]; }
+
+const newFlowDocument = `name: new-flow
+description: Describe what this flow accomplishes
+version: 1.0.0
+domains: [general]
+status: active
+steps:
+  - name: first-step
+    tool: browser
+    approval: always
+    description: Describe what this step does
+`;
+
+export function Flows() {
+  const flows = useResource<FlowSummary[]>("/web/api/flows", 10000);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [content, setContent] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [message, setMessage] = useState("");
+  const open = async (name: string) => { try { const detail = await api<FlowDetail>(`/web/api/flow-definitions/${encodeURIComponent(name)}`); setSelected(name); setCreating(false); setContent(detail.content); setMessage(""); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const create = async () => { try { const detail = await api<FlowDetail>("/web/api/flow-definitions", { method: "POST", body: JSON.stringify({ content }) }); setSelected(detail.name); setCreating(false); setMessage("Flow created and loaded."); await flows.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const save = async () => { if (!selected || flows.data?.find(flow => flow.name === selected)?.source === "builtin") return; try { await api(`/web/api/flow-definitions/${encodeURIComponent(selected)}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Flow saved and reloaded."); await flows.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const remove = async () => { if (!selected || flows.data?.find(flow => flow.name === selected)?.source !== "learned" || !window.confirm(`Delete learned flow '${selected}'?`)) return; try { await del(`/web/api/flow-definitions/${encodeURIComponent(selected)}`); setSelected(null); setContent(""); setMessage("Learned flow deleted."); await flows.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const selectedFlow = flows.data?.find(flow => flow.name === selected);
+  return <div className="page"><PageHeader eyebrow="Automation" title="Flows" subtitle="Design the ordered, approval-aware processes North can run." actions={<><button className="ghost-button" onClick={() => { setCreating(true); setSelected(null); setContent(newFlowDocument); setMessage(""); }}>New flow</button><button className="primary-button" disabled={!content || (!creating && (!selected || selectedFlow?.source === "builtin"))} onClick={() => void (creating ? create() : save())}>{creating ? "Create flow" : "Save flow"}</button>{selectedFlow?.source === "learned" && <button className="danger-button" onClick={() => void remove()}>Delete flow</button>}</>}/>{flows.error && <ErrorNotice message={flows.error}/>} {message && <div className="notice">{message}</div>}<div className="skills-layout"><div className="skill-library">{flows.loading ? <Loading/> : (flows.data || []).map(flow => <button className={selected === flow.name ? "active" : ""} key={flow.name} onClick={() => void open(flow.name)}><b>{flow.name}</b><small>{flow.source} · v{flow.version} · {flow.steps} steps</small><p>{flow.description}</p></button>)}{!flows.loading && !flows.data?.length && <Empty>No flows have been created yet.</Empty>}</div><section className="skill-editor">{selected || creating ? <><div className="editor-label">{creating ? "new-flow/FLOW.yaml" : `${selected}/FLOW.yaml`}</div><textarea readOnly={!creating && selectedFlow?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></> : <Empty>Select a flow to inspect or edit it.</Empty>}</section></div></div>;
+}
+
 export function Insights() {
   const metrics = useResource<Record<string, any>>("/orchestrator/metrics?days=30", 15000);
   const costs = useResource<Record<string, any>>("/orchestrator/inference/costs?period=month", 15000);

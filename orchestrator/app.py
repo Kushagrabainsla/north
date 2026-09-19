@@ -26,6 +26,7 @@ from approval.approval_memory import ApprovalMemory
 from approval.batching import BatchingNotifier
 from approval.callback_server import app as callback_app
 from approval.decisions import DecisionLog
+from approval.interaction import UserInteraction
 from approval.judgement_filter import JudgementFilter
 from approval.policy import ApprovalPolicy
 from approval.telegram import TelegramNotifier
@@ -36,6 +37,7 @@ from bootstrap.onboarding import run_bootstrap_if_needed
 from config.dependencies import build_production_dependencies
 from config.security import load_secret
 from config.settings import settings
+from flows import FlowRegistry, FlowRunStore
 from gateways.telegram import TelegramGateway
 from jobs.exceptions import JobCancelled, JobNeedsAttention
 from jobs.models import Job
@@ -79,15 +81,19 @@ from tools.specialized.shell_tool import ShellTool
 from tools.tool_index import ToolIndex
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_agent import CreateAgentTool
+from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
+from tools.universal.flow_runner import FlowRunner
 from tools.universal.get_active_sessions import GetActiveSessionsTool
 from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.list_schedules import ListSchedulesTool
 from tools.universal.query_metrics import QueryMetricsTool
+from tools.universal.run_flow import RunFlowTool
 from tools.universal.schedule_task import ScheduleTaskTool
 from tools.universal.update_plan import UpdatePlanTool
 from tools.universal.update_schedule import UpdateScheduleTool
+from tools.universal.use_flow import UseFlowTool
 from tools.universal.use_skill import UseSkillTool
 from utils.logging import configure_structured_logging
 from utils.runtime_resources import builtin_skills_dir, web_dist_dir
@@ -269,6 +275,15 @@ def _build_skills(deps) -> tuple[SkillRegistry, SkillSelector]:
     )
     selector = SkillSelector(registry, embed_fn=deps.embed_fn)
     return registry, selector
+
+
+def _build_flows() -> FlowRegistry:
+    """Load built-in and user-created declarative flows."""
+    builtin_dir = Path(__file__).parent.parent / "resources" / "builtin-flows"
+    return FlowRegistry(
+        builtin_dir=builtin_dir,
+        learned_dir=settings.north_home / "flows",
+    )
 
 
 def _build_tool_index(deps) -> ToolIndex | None:
@@ -457,7 +472,7 @@ def _build_context_injector(deps) -> ContextInjector:
 
 
 def _configure_routers(
-    app, orchestrator, deps, agent_registry, context_injector, skill_registry, approval_memory=None
+    app, orchestrator, deps, agent_registry, context_injector, skill_registry, flow_registry, approval_memory=None
 ) -> None:
     configure_api(
         app,
@@ -493,6 +508,7 @@ def _configure_routers(
         decision_log=deps.decision_log,
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
+        flow_registry=flow_registry,
         codex_credentials_factory=_build_codex_credentials,
     )
 
@@ -620,6 +636,7 @@ async def _run_scheduled_task(
 def _launch_background_tasks(
     deps,
     orchestrator: Orchestrator,
+    tool_registry: ToolRegistry,
     extraction_pipeline: ExtractionPipeline,
     skill_distiller: SkillDistiller,
     callback_server: uvicorn.Server,
@@ -662,6 +679,14 @@ def _launch_background_tasks(
                     status=LedgerStatus.COMPLETED,
                 )
             )
+            return
+        flow = str((job.payload or {}).get("flow") or "").strip()
+        if flow:
+            result = await tool_registry.get("run_flow").run(
+                ToolInput(params={"name": flow, "task_id": job.job_id})
+            )
+            if not result.success:
+                raise JobNeedsAttention(result.error or f"scheduled flow '{flow}' failed")
             return
         skill = str((job.payload or {}).get("skill") or "").strip()
         skill_hint = f" Use the '{skill}' skill before acting." if skill else ""
@@ -806,8 +831,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)
+    _step("loading flows")
+    flow_registry = _build_flows()
     deps.approval_policy = approval_policy
     tool_registry, create_agent_tool = _build_tool_registry(deps, approval_policy, skill_registry)
+    # Rebind the schedule tool after flows are loaded so scheduled flow names
+    # are validated at creation time just like named skills.
+    tool_registry.register(
+        ScheduleTaskTool(
+            job_processor=deps.job_processor,
+            cron_store=deps.cron_store,
+            skill_registry=skill_registry,
+            flow_registry=flow_registry,
+        )
+    )
 
     tool_registry.register(UseSkillTool(skill_registry))
     tool_registry.register(
@@ -817,6 +854,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             self_edit_policy=SelfEditPolicy(settings.north_home / "learned_skills", settings.north_home / "mutations"),
         )
     )
+    tool_registry.register(UseFlowTool(flow_registry))
+    tool_registry.register(
+        CreateFlowTool(
+            flow_registry,
+            learned_dir=settings.north_home / "flows",
+            self_edit_policy=SelfEditPolicy(settings.north_home / "flows", settings.north_home / "mutations"),
+        )
+    )
+    flow_store = FlowRunStore(settings.north_home / "flow_runs.db")
+    flow_interaction = UserInteraction(
+        deps.approval_store,
+        notifier=deps.notifier,
+        judgement_filter=judgement_filter,
+        stream_manager=deps.stream_manager,
+        default_timeout=deps.north_settings.approval_timeout_seconds,
+    )
+    tool_registry.register(RunFlowTool(FlowRunner(flow_registry, tool_registry, flow_store, flow_interaction)))
 
     _step("refreshing inference pools")
     await deps.inference_router.refresh_pools()
@@ -864,7 +918,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _step("skipping startup recovery in test mode")
 
     _step("configuring API router")
-    _configure_routers(app, orchestrator, deps, agent_registry, context_injector, skill_registry, approval_memory)
+    _configure_routers(
+        app, orchestrator, deps, agent_registry, context_injector, skill_registry, flow_registry, approval_memory
+    )
 
     _step("configuring callback server")
     callback_server = _build_callback_server()
@@ -887,6 +943,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         background_tasks = _launch_background_tasks(
             deps,
             orchestrator,
+            tool_registry,
             extraction_pipeline,
             skill_distiller,
             callback_server,

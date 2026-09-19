@@ -2,7 +2,7 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Layout } from "./components";
 import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
-import { Agents, Approvals, Artifacts, Insights, Memory, Schedule, SettingsPage, Skills, SystemPage } from "./pages/Verbose";
+import { Agents, Approvals, Artifacts, Flows, Insights, Memory, Schedule, SettingsPage, Skills, SystemPage } from "./pages/Verbose";
 import { Tasks } from "./pages/Tasks";
 import { DialogProvider } from "./dialog";
 
@@ -24,6 +24,7 @@ export function App() {
     <Route path="/memory" element={<Memory/>}/>
     <Route path="/agents" element={<Agents/>}/>
     <Route path="/skills" element={<Skills/>}/>
+    <Route path="/flows" element={<Flows/>}/>
     {/* Tasks and Activity were one thing described in two places. Merged, with
         the event stream a tab inside the task list rather than a page beside
         it. The old paths redirect: they are in muscle memory and in bookmarks,

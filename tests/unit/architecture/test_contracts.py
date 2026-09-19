@@ -14,6 +14,7 @@ PRODUCTION_ROOTS = (
     "cli",
     "config",
     "context",
+    "flows",
     "gateways",
     "inference",
     "jobs",

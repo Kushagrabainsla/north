@@ -61,6 +61,8 @@ _ADDED_COLUMNS = {
     "label": "TEXT",
     # Optional reusable procedure to apply when the task fires.
     "skill": "TEXT",
+    # Optional declarative flow to execute when the schedule fires.
+    "flow": "TEXT",
 }
 
 # User-created entries carry this prefix so a listing can tell them apart from
@@ -70,7 +72,7 @@ _SLUG_MAX_LENGTH = 40
 
 # Fields a caller may change on an existing entry. `name` is the key, so
 # renaming is a remove + add, not an update.
-_UPDATABLE = ("agent", "task", "hour", "minute", "weekdays", "tz", "enabled", "label", "skill")
+_UPDATABLE = ("agent", "task", "hour", "minute", "weekdays", "tz", "enabled", "label", "skill", "flow")
 
 # Distinguishes "the caller did not mention this field" from "the caller set it
 # to nothing". Both arrive as None otherwise, which made it impossible to move a
@@ -145,8 +147,11 @@ class UserCronStore:
         enabled: bool = True,
         label: str = "",
         skill: str = "",
+        flow: str = "",
     ) -> None:
-        await asyncio.to_thread(self._add_sync, name, agent, task, hour, minute, weekdays, tz, enabled, label, skill)
+        await asyncio.to_thread(
+            self._add_sync, name, agent, task, hour, minute, weekdays, tz, enabled, label, skill, flow
+        )
 
     def _add_sync(
         self,
@@ -160,13 +165,14 @@ class UserCronStore:
         enabled: bool,
         label: str = "",
         skill: str = "",
+        flow: str = "",
     ) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO user_cron_entries
-                    (name, agent, task, hour, minute, weekdays, tz, enabled, label, skill, created_epoch)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (name, agent, task, hour, minute, weekdays, tz, enabled, label, skill, flow, created_epoch)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -179,6 +185,7 @@ class UserCronStore:
                     int(enabled),
                     label,
                     skill,
+                    flow,
                     now_epoch(),
                 ),
             )
@@ -301,5 +308,6 @@ def _row_to_entry(row: sqlite3.Row) -> dict:
         "enabled": bool(row["enabled"]),
         "label": row["label"] or "",
         "skill": row["skill"] or "",
+        "flow": row["flow"] or "",
         "created_epoch": row["created_epoch"],
     }

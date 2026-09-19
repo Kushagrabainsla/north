@@ -86,6 +86,8 @@ class CronEntry:
     label: str = ""
     # Optional named skill/playbook to apply when this schedule fires.
     skill: str = ""
+    # Optional named declarative flow to execute when this schedule fires.
+    flow: str = ""
     # What this schedule is for, in a sentence. Only the built-ins carry one:
     # a routine the user wrote explains itself through its prompt, but a
     # built-in whose prompt is an internal slug does not. "task_context_cleanup"
@@ -116,6 +118,7 @@ class CronEntry:
             enabled=bool(row.get("enabled", True)),
             label=row.get("label") or "",
             skill=row.get("skill") or "",
+            flow=row.get("flow") or "",
         )
 
     @property
@@ -274,7 +277,11 @@ class CronScheduler:
             type=JobType.CRON,
             agent=entry.agent,
             task=entry.task,
-            payload={"cron_entry": entry.name, **({"skill": entry.skill} if entry.skill else {})},
+            payload={
+                "cron_entry": entry.name,
+                **({"skill": entry.skill} if entry.skill else {}),
+                **({"flow": entry.flow} if entry.flow else {}),
+            },
             priority=JobPriority.MEDIUM,
             scheduled_at=scheduled_at,
         )

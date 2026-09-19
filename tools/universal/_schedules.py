@@ -90,6 +90,7 @@ def _view(entry: CronEntry, source: str) -> dict[str, Any]:
         "weekdays": sorted(entry.weekdays) if entry.weekdays else [],
         "tz": entry.zone_name,
         "skill": entry.skill,
+        "flow": entry.flow,
         "enabled": entry.enabled,
         # A paused entry has no next run; reporting the time it would have fired
         # reads as a promise north is not making.

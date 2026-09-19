@@ -91,6 +91,14 @@ modules:
     public_contracts: [SkillRegistry, skill file format]
     validation: [tests/unit/skills]
 
+  intelligence.flows:
+    paths: [flows/**]
+    layer: intelligence
+    owner: intelligence
+    editable_by: [coder]
+    public_contracts: [FlowRegistry, declarative flow file format]
+    validation: [tests/unit/flows]
+
   application.orchestration:
     paths: [orchestrator/**]
     excludes: [orchestrator/app.py]
