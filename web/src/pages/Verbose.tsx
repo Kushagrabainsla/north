@@ -976,7 +976,7 @@ steps:
 `;
 
 export function Flows() {
-  const flows = useResource<FlowSummary[]>("/web/api/flows", 10000);
+  const flows = useResource<FlowSummary[]>("/web/api/flow-definitions", 10000);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [creating, setCreating] = useState(false);
