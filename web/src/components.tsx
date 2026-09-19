@@ -75,7 +75,12 @@ export function Layout() {
   };
   return <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
     <aside className="sidebar">
-      <div className="brand"><img className="brand-logo" src="https://repository-images.githubusercontent.com/1221207908/a9516630-e5f6-475f-ab80-44b2dd6dc9c8" alt="North logo"/><div><b>north</b><small>personal operating system</small></div></div>
+      <div className="brand">
+        <NavLink className="brand-wordmark" to="/" aria-label="North home">
+          <span className="brand-full">north<span aria-hidden="true">.</span></span>
+          <span className="brand-compact" aria-hidden="true">n<span>.</span></span>
+        </NavLink>
+      </div>
       <button className="new-chat" onClick={newChat}>+ New conversation</button>
       <nav aria-label="North navigation">
         <div className="nav-section">{primaryNav.map(([to, label, Icon, beta]) => <NavigationLink key={to} to={to} label={label} Icon={Icon} beta={beta}/>)}</div>
