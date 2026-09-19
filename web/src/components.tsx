@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
 import type { AgentRun, Conversation, InferenceCategory } from "./types";
-import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, CalendarClock, ShieldAlert, Brain, Bot, Sparkles, Cpu, Settings, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, CalendarClock, ShieldAlert, Brain, Bot, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
 
@@ -38,13 +38,13 @@ export function weekdayInNorthTimezone(date = new Date()) {
   return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(short);
 }
 
-// [path, label, icon, beta?]. A beta entry is one that will replace something
-// already in this list, running beside it until it is trusted.
+// [path, label, icon, beta?]. Capabilities stay grouped while each resource
+// keeps its own screen and editor.
 const nav: [string, string, LucideIcon, boolean?][] = [
   ["/", "Dashboard", LayoutDashboard], ["/chat", "Chat", MessagesSquare], ["/tasks", "Tasks", CheckSquare],
   ["/artifacts", "Artifacts", FileText],
   ["/schedule", "Schedule", CalendarClock], ["/approvals", "Approvals", ShieldAlert],
-  ["/memory", "Memory", Brain], ["/agents", "Agents", Bot], ["/capabilities", "Capabilities", Sparkles],
+  ["/memory", "Memory", Brain], ["/agents", "Agents", Bot],
   ["/system", "System", Cpu], ["/settings", "Settings", Settings]
 ];
 
@@ -61,7 +61,7 @@ export function Layout() {
       <button className="new-chat" onClick={newChat}>+ New conversation</button>
       <nav>{nav.map(([to, label, Icon, beta]) => <NavLink key={to} to={to} end={to === "/"}>
         <span className="nav-icon"><Icon size={16}/></span><span>{label}{beta && <em className="nav-beta">beta</em>}</span>
-      </NavLink>)}</nav>
+      </NavLink>)}<div className="nav-group"><span className="nav-group-label"><Sparkles size={14}/> Capabilities</span><NavLink to="/skills"><span className="nav-icon"><Sparkles size={15}/></span><span>Skills</span></NavLink><NavLink to="/flows"><span className="nav-icon"><GitBranch size={15}/></span><span>Flows</span></NavLink><NavLink to="/tools"><span className="nav-icon"><Wrench size={15}/></span><span>Tools</span></NavLink></div></nav>
       <div className="sidebar-footer"><HealthIndicator/><button className="sidebar-toggle" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "›" : "‹"}</button></div>
     </aside>
     <main className="workspace"><Outlet /></main>

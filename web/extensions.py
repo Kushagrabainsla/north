@@ -19,7 +19,7 @@ from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME
 from skills.parser import parse_skill_document
 from skills.registry import rejection_reason
-from tools.universal.create_tool import _render_stub
+from tools.universal.create_tool import _check_code_safety, _find_tool_path, _render_stub
 
 # This router is composed into ``web.api.router``, which owns the public
 # ``/web/api`` prefix and request-level dependencies. Repeating either here
@@ -42,6 +42,10 @@ class ToolCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=2_000)
     tool_type: str = Field(default="specialized", pattern="^(universal|specialized)$")
+
+
+class ToolUpdate(BaseModel):
+    content: str = Field(min_length=1, max_length=100_000)
 
 
 class FlowUpdate(BaseModel):
@@ -192,7 +196,11 @@ async def list_tools() -> list[dict[str, Any]]:
         {
             "name": tool.name,
             "description": tool.description,
-            "source": "learned" if str(getattr(tool, "__module__", "")).startswith("north_learned_tool_") else "built-in",
+            "source": (
+                "learned"
+                if str(getattr(tool, "__module__", "")).startswith("north_learned_tool_")
+                else "built-in"
+            ),
             "status": "active",
             "mutating": tool.is_mutating,
         }
@@ -227,6 +235,52 @@ async def create_tool(body: ToolCreate) -> dict[str, Any]:
         "status": "active",
         "mutating": False,
     }
+
+
+@router.get("/tools/{name}")
+async def get_tool(name: str) -> dict[str, Any]:
+    registry = current_services().require("tool_registry")
+    try:
+        tool = registry.get(name)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Tool {name!r} was not found") from exc
+    learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
+    path = _find_tool_path(name, learned_dir)
+    content = await asyncio.to_thread(path.read_text, encoding="utf-8") if path else ""
+    source = "learned" if path and path.is_relative_to(learned_dir) else "built-in"
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "source": source,
+        "content": content,
+        "mutating": tool.is_mutating,
+    }
+
+
+@router.put("/tools/{name}")
+async def update_tool(name: str, body: ToolUpdate) -> dict[str, Any]:
+    registry = current_services().require("tool_registry")
+    learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
+    path = _find_tool_path(name, learned_dir)
+    if path is None or not path.is_relative_to(learned_dir):
+        raise HTTPException(status_code=403, detail="Built-in tools cannot be edited")
+    safe, reason = _check_code_safety(body.content)
+    if not safe:
+        raise HTTPException(status_code=422, detail=f"Tool code rejected by safety check: {reason}")
+    await asyncio.to_thread(path.write_text, body.content, encoding="utf-8")
+    registry.reload()
+    return await get_tool(name)
+
+
+@router.delete("/tools/{name}", status_code=204)
+async def delete_tool(name: str) -> None:
+    registry = current_services().require("tool_registry")
+    learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
+    path = _find_tool_path(name, learned_dir)
+    if path is None or not path.is_relative_to(learned_dir):
+        raise HTTPException(status_code=403, detail="Built-in tools cannot be deleted")
+    await asyncio.to_thread(path.unlink)
+    registry.reload()
 
 
 @router.get("/flow-definitions")

@@ -84,6 +84,12 @@ a { color: inherit; text-decoration: none; }
 .sidebar nav a.active { background: var(--accent-soft); color: var(--accent); }
 .nav-icon { width: 18px; height: 18px; display: grid; place-items: center; flex: 0 0 auto; }
 .nav-icon svg { width: 16px; height: 16px; stroke-width: 1.9; }
+.nav-group { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+.nav-group-label { display: flex; align-items: center; gap: 8px; padding: 0 10px 6px; color: var(--faint); font: 9px "DM Mono", monospace; letter-spacing: .1em; text-transform: uppercase; }
+.nav-group-label svg { color: var(--accent); }
+.nav-group a { padding-left: 18px; }
+.sidebar-collapsed .nav-group-label { justify-content: center; padding-left: 0; padding-right: 0; font-size: 0; }
+.sidebar-collapsed .nav-group a { padding-left: 8px; }
 .server-state { margin-top: auto; border-top: 1px solid var(--line-soft); padding: 15px 8px 0; display: flex; align-items: center; gap: 10px; }
 .server-state b, .server-state small { display: block; font-size: 10px; }
 .server-state small { color: var(--faint); margin-top: 3px; }
@@ -464,6 +470,7 @@ html[data-type-scale="compact"] body { zoom: .94; }html[data-type-scale="comfort
    use the fourth one?" is answered by seeing the three above it skipped. */
 .chain-skipped b, .chain-skipped .chain-meta { opacity: .45; }
 .chain-why { grid-column: 2 / -1; color: var(--amber); font: 9px "DM Mono", monospace; font-style: normal; }
+.tool-create { margin: 16px 0; padding: 18px; }.tool-create > header { margin-bottom: 15px; }.tool-create h2 { margin: 4px 0 0; font-size: 16px; }.tool-create-grid { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(0, 2fr); gap: 10px; }.tool-create label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font: 9px "DM Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }.tool-create input { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); color: var(--text); font: 11px inherit; letter-spacing: normal; text-transform: none; }.tool-create input:focus { outline: 0; border-color: var(--accent); }.tool-create-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 15px; }.tool-create-footer small, .editor-lock { color: var(--faint); font-size: 10px; }.editor-lock { float: right; text-transform: uppercase; }
 .capability-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0 10px; color: var(--muted); font: 10px "DM Mono", monospace; }
 .capability-toolbar .segmented { width: min(420px, 100%); }
 .capability-table { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
