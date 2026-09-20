@@ -219,10 +219,17 @@ export function Chat() {
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const composerInput = useRef<HTMLTextAreaElement>(null);
   const chatRoom = useRef<HTMLElement>(null);
   const openedAtBottom = useRef<string | null>(null);
   const { live, signals } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
+  useEffect(() => {
+    const element = composerInput.current;
+    if (!element) return;
+    element.style.height = "0px";
+    element.style.height = `${element.scrollHeight}px`;
+  }, [prompt]);
   useEffect(() => {
     if (!conversationId) { openedAtBottom.current = null; return; }
     if (room.data?.id !== conversationId || openedAtBottom.current === conversationId) return;
@@ -323,7 +330,7 @@ export function Chat() {
         <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<button className="ghost-button" onClick={rename}>Rename</button>}/>
         <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
-        <form className="composer" onSubmit={submit}><textarea value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={2} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
+        <form className="composer" onSubmit={submit}><textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>
       </>}
     </section>
   </div>;
