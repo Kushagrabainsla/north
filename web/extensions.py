@@ -310,8 +310,12 @@ async def get_flow(name: str) -> dict[str, Any]:
     content = await asyncio.to_thread((flow.directory / FLOW_FILENAME).read_text, encoding="utf-8")
     return {
         "name": flow.name,
+        "description": flow.description,
         "content": content,
         "source": flow.source.value,
+        "version": flow.version,
+        "status": flow.status,
+        "domains": sorted(flow.domains),
         "steps": [
             {
                 "name": step.name,
@@ -338,7 +342,8 @@ async def create_flow(body: FlowCreate) -> dict[str, Any]:
     if target.exists() and parsed.name in registry.names():
         raise HTTPException(status_code=409, detail=f"Flow {parsed.name!r} already exists")
     await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread((target / FLOW_FILENAME).write_text, body.content, encoding="utf-8")
+    document = _flow_document(body, fallback_name=parsed.name)
+    await asyncio.to_thread((target / FLOW_FILENAME).write_text, document, encoding="utf-8")
     registry.reload()
     return await get_flow(parsed.name)
 
