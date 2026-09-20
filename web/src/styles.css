@@ -1239,3 +1239,213 @@ button:not(:disabled):active { transform: translateY(1px); }
   .app-shell, .brand-wordmark, .sidebar nav a, button { transition: none; }
   button:not(:disabled):active { transform: none; }
 }
+
+/* Full-height capability registries with focused modal inspectors. */
+.capability-page {
+  display: flex;
+  min-height: 100dvh;
+  flex-direction: column;
+}
+.capability-registry {
+  display: flex;
+  height: max(520px, calc(100dvh - 188px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.capability-registry-head,
+.capability-registry-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(240px, 1.8fr) minmax(140px, .8fr) max-content 44px;
+  gap: 16px;
+  align-items: center;
+}
+.capability-registry-head {
+  flex: 0 0 auto;
+  min-height: 39px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--faint);
+  font-size: 8px;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+}
+.capability-registry-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.capability-registry-row {
+  width: 100%;
+  min-height: 70px;
+  padding: 11px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.capability-registry-row:last-child { border-bottom: 0; }
+.capability-registry-row:hover,
+.capability-registry-row:focus-visible { background: rgba(184,239,114,.045); }
+.capability-registry-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.capability-registry-name,
+.capability-registry-name b,
+.capability-registry-name small { display: block; min-width: 0; }
+.capability-registry-name b,
+.capability-registry-description,
+.capability-registry-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.capability-registry-name b { font-size: 12px; }
+.capability-registry-name small {
+  margin-top: 5px;
+  color: var(--accent);
+  font-size: 8px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.capability-registry-description { color: var(--muted); font-size: 10px; }
+.capability-registry-meta { color: var(--faint); font-size: 9px; }
+.capability-registry-open { color: var(--muted); font-size: 9px; text-align: right; }
+.capability-registry-row:hover .capability-registry-open { color: var(--accent); }
+.capability-registry-list > .loading,
+.capability-registry-list > .empty { height: 100%; }
+
+.capability-create-panel {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.capability-create-panel > header {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface-2);
+}
+.capability-create-panel > header > div:last-child { display: flex; flex-wrap: wrap; gap: 7px; }
+.capability-create-panel > header span {
+  color: var(--accent);
+  font-size: 8px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.capability-create-panel > header h2 { margin: 4px 0 0; font-size: 17px; }
+.capability-create-panel > header p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
+.capability-create-panel .tool-create { padding: 16px; }
+.capability-create-panel .flow-builder { padding: 18px; }
+.flow-create-panel > .flow-builder { background: #0b0e0c; }
+
+.capability-modal {
+  width: min(960px, calc(100vw - 40px));
+  max-width: none;
+  height: min(88dvh, 940px);
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 28px 90px rgba(0,0,0,.62);
+}
+.capability-modal.flow-modal { width: min(1120px, calc(100vw - 40px)); }
+.capability-modal::backdrop {
+  background: rgba(3,5,4,.82);
+  backdrop-filter: blur(5px);
+}
+.capability-modal-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.capability-modal-header {
+  display: flex;
+  min-height: 72px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface-2);
+}
+.capability-modal-header span {
+  color: var(--accent);
+  font-size: 8px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.capability-modal-header h2 { margin: 4px 0 0; font-size: 18px; }
+.capability-modal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.capability-modal-content { min-height: 0; flex: 1; overflow: auto; background: #0b0e0c; }
+.capability-modal-content > .loading { min-height: 100%; justify-content: center; }
+.capability-modal .tool-create { padding: 20px; }
+.capability-modal .modal-editor { display: flex; min-height: 100%; flex-direction: column; }
+.capability-modal .modal-editor .editor-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.capability-modal .modal-editor .editor-label span:last-child { color: var(--muted); }
+.capability-modal .modal-editor textarea {
+  min-height: 0;
+  flex: 1;
+  resize: none;
+}
+.capability-modal .flow-builder { min-height: 100%; overflow: visible; }
+
+@media (max-width: 1100px) {
+  .capability-registry-head,
+  .capability-registry-row {
+    grid-template-columns: minmax(145px, 1fr) minmax(180px, 1.6fr) max-content 44px;
+  }
+  .capability-registry-head span:nth-child(3),
+  .capability-registry-row .capability-registry-meta { display: none; }
+}
+
+@media (max-width: 680px) {
+  .capability-registry { height: max(500px, calc(100dvh - 176px)); }
+  .capability-registry-head { display: none; }
+  .capability-registry-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px 12px;
+    min-height: 112px;
+    padding: 13px;
+  }
+  .capability-registry-name { grid-column: 1; grid-row: 1; }
+  .capability-registry-row > .status { grid-column: 2; grid-row: 1; }
+  .capability-registry-description { grid-column: 1 / -1; grid-row: 2; white-space: normal; line-height: 1.45; }
+  .capability-registry-row .capability-registry-meta { display: block; grid-column: 1; grid-row: 3; }
+  .capability-registry-open { grid-column: 2; grid-row: 3; }
+  .capability-modal,
+  .capability-modal.flow-modal {
+    width: calc(100vw - 20px);
+    height: calc(100dvh - 20px);
+    border-radius: 10px;
+  }
+  .capability-modal-header { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .capability-modal-actions { width: 100%; justify-content: flex-start; }
+  .capability-modal-actions button { flex: 1 1 auto; }
+  .capability-modal .tool-create { padding: 15px; }
+  .capability-create-panel > header { align-items: flex-start; flex-direction: column; }
+  .capability-create-panel > header > div:last-child { width: 100%; }
+  .capability-create-panel > header > div:last-child button { flex: 1; }
+  .capability-modal .modal-editor .editor-label { align-items: flex-start; flex-direction: column; gap: 4px; }
+}
