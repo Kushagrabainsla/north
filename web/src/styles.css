@@ -759,6 +759,8 @@ button:not(:disabled):active { transform: translateY(1px); }
 }
 
 @media (max-width: 680px) {
+  .session-toolbar { align-items: stretch; flex-direction: column; gap: 8px; }
+  .session-toolbar label { width: 100%; }
   .task-ledger-table-wrap { overflow: visible; border: 0; background: transparent; }
   .task-ledger-table, .task-ledger-table tbody { display: block; }
   .task-ledger-table thead { display: none; }
@@ -1319,6 +1321,42 @@ button:not(:disabled):active { transform: translateY(1px); }
 .capability-registry-list > .loading,
 .capability-registry-list > .empty { height: 100%; }
 
+.session-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 10px;
+}
+.session-toolbar label {
+  display: grid;
+  gap: 5px;
+  width: min(320px, 100%);
+  color: var(--faint);
+  font: 9px var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.session-toolbar input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.session-toolbar input:focus { border-color: var(--accent); outline: 0; }
+.session-toolbar > span { color: var(--muted); font: 10px var(--mono); }
+.session-registry { flex: 1; height: auto; min-height: 0; }
+.session-registry .capability-registry-head,
+.session-registry .capability-registry-row { grid-template-columns: minmax(190px, 1.15fr) minmax(150px, 1fr) minmax(120px, .8fr) 70px 86px 54px; }
+.session-registry-row { text-align: left; }
+.session-registry-row .capability-registry-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .capability-create-panel {
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -1392,6 +1430,8 @@ button:not(:disabled):active { transform: translateY(1px); }
 .capability-modal-header h2 { margin: 4px 0 0; font-size: 18px; }
 .capability-modal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .capability-modal-content { min-height: 0; flex: 1; overflow: auto; background: #0b0e0c; }
+.capability-modal-content:has(> .skill-preview-layout),
+.capability-modal-content:has(> .tool-preview-layout) { display: flex; flex-direction: column; overflow: hidden; }
 .capability-modal-content > .loading { min-height: 100%; justify-content: center; }
 .capability-modal .tool-create { padding: 20px; }
 .capability-modal .modal-editor { display: flex; min-height: 100%; flex-direction: column; }
@@ -1410,6 +1450,8 @@ button:not(:disabled):active { transform: translateY(1px); }
 .skill-preview-layout,
 .tool-preview-layout {
   display: grid;
+  height: 100%;
+  flex: 1 1 auto;
   min-height: 100%;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
@@ -1438,13 +1480,16 @@ button:not(:disabled):active { transform: translateY(1px); }
 .skill-preview-pane,
 .tool-preview-pane { border-left: 1px solid var(--line-strong); }
 .skill-preview-content {
-  min-height: calc(100% - 36px);
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
   padding: 22px;
   background: var(--surface);
 }
 .skill-preview-content .markdown { max-width: 72ch; font-size: 12px; }
 .tool-preview-pane pre {
-  height: calc(100% - 36px);
+  height: auto;
+  flex: 1;
   min-height: 0;
   margin: 0;
   overflow: auto;
@@ -1456,6 +1501,8 @@ button:not(:disabled):active { transform: translateY(1px); }
   font: 12px/1.7 var(--mono);
 }
 .tool-preview-pane code { color: inherit; }
+.skill-preview-pane,
+.tool-preview-pane { display: flex; min-height: 0; flex-direction: column; }
 .capability-modal .flow-builder { min-height: 100%; overflow: visible; }
 
 @media (max-width: 1180px) and (min-height: 1200px) {

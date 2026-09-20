@@ -41,7 +41,7 @@ export function weekdayInNorthTimezone(date = new Date()) {
 // [path, label, icon, beta?]. Capabilities stay grouped while each resource
 // keeps its own screen and editor.
 const primaryNav: [string, string, LucideIcon, boolean?][] = [
-  ["/", "Dashboard", LayoutDashboard], ["/chat", "Chat", MessagesSquare], ["/tasks", "Tasks", CheckSquare],
+  ["/", "Dashboard", LayoutDashboard], ["/sessions", "Sessions", MessagesSquare], ["/tasks", "Tasks", CheckSquare],
   ["/artifacts", "Artifacts", FileText],
   ["/schedule", "Schedule", CalendarClock], ["/approvals", "Approvals", ShieldAlert],
   ["/memory", "Memory", Brain], ["/agents", "Agents", Bot],
@@ -69,9 +69,9 @@ export function Layout() {
     document.querySelector<HTMLElement>(".sidebar nav a.active")
       ?.scrollIntoView({ block: "nearest", inline: "center" });
   }, [location.pathname]);
-  const newChat = async () => {
-    const chat = await post<Conversation>("/web/api/conversations", { title: "New chat" });
-    navigate(`/chat/${chat.id}`);
+  const newSession = async () => {
+    const session = await post<Conversation>("/web/api/conversations", { title: "New session" });
+    navigate(`/sessions/${session.id}`);
   };
   return <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
     <aside className="sidebar">
@@ -81,7 +81,7 @@ export function Layout() {
           <span className="brand-compact" aria-hidden="true">n<span>.</span></span>
         </NavLink>
       </div>
-      <button className="new-chat" onClick={newChat}>+ New conversation</button>
+      <button className="new-chat" onClick={newSession}>+ New session</button>
       <nav aria-label="North navigation">
         <div className="nav-section">{primaryNav.map(([to, label, Icon, beta]) => <NavigationLink key={to} to={to} label={label} Icon={Icon} beta={beta}/>)}</div>
         <div className="nav-group"><span className="nav-group-label"><Sparkles size={14}/> Capabilities</span><NavigationLink to="/skills" label="Skills" Icon={Sparkles}/><NavigationLink to="/flows" label="Flows" Icon={GitBranch}/><NavigationLink to="/tools" label="Tools" Icon={Wrench}/></div>

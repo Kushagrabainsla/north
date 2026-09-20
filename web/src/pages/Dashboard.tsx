@@ -24,8 +24,8 @@ export function Dashboard() {
       <Panel title="Active now" label={`${data.active_tasks.length} tasks`} to="/tasks">
         {data.active_tasks.length ? data.active_tasks.map(task => <div className="list-row" key={task.task_id}><div><b>{task.task_id.slice(0, 12)}</b><small>{timeAgo(task.created_at)}</small></div><Status value={task.status}/></div>) : <Empty>North is ready.</Empty>}
       </Panel>
-      <Panel title="Conversations" label="Recent" to="/chat" className="wide-panel">
-        {data.conversations.length ? <div className="conversation-strip">{data.conversations.map(chat => <NavLink to={`/chat/${chat.id}`} className="conversation-card" key={chat.id}><span className="conversation-glyph"><MessageSquare size={16}/></span><b>{chat.title}</b><small>{chat.source === "cli" ? "CLI · " : ""}{timeAgo(chat.updated_at)}</small></NavLink>)}</div> : <Empty>Start your first conversation.</Empty>}
+      <Panel title="Sessions" label="Recent" to="/sessions" className="wide-panel">
+        {data.conversations.length ? <div className="conversation-strip">{data.conversations.map(session => <NavLink to={`/sessions/${session.id}`} className="conversation-card" key={session.id}><span className="conversation-glyph"><MessageSquare size={16}/></span><b>{session.title}</b><small>{session.source === "cli" ? "CLI · " : ""}{timeAgo(session.updated_at)}</small></NavLink>)}</div> : <Empty>Start your first session.</Empty>}
       </Panel>
       <Panel title="Agents" label={`${data.agents.length} available`} to="/agents">
         <div className="agent-cloud">{data.agents.slice(0, 8).map(agent => <span key={agent.name}><i/>{agent.name}</span>)}</div>

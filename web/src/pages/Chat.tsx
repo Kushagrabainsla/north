@@ -183,6 +183,27 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
   </article>;
 }
 
+export function Sessions() {
+  const navigate = useNavigate();
+  const sessions = useResource<Conversation[]>("/web/api/conversations", 5000);
+  const [search, setSearch] = useState("");
+  const visibleSessions = useMemo(() => (sessions.data || []).filter(session => session.title.toLowerCase().includes(search.toLowerCase())), [sessions.data, search]);
+  const createSession = async () => {
+    const session = await post<Conversation>("/web/api/conversations", { title: "New session" });
+    await sessions.reload();
+    navigate(`/sessions/${session.id}`);
+  };
+  return <div className="page capability-page session-page">
+    <PageHeader eyebrow="Workspace" title="Sessions" subtitle="Open a session to continue work with North." actions={<button className="primary-button" onClick={createSession}>+ New session</button>} />
+    {sessions.error && <ErrorNotice message={sessions.error}/>}
+    <section className="session-toolbar"><label>Find a session<input aria-label="Search sessions" placeholder="Search sessions" value={search} onChange={event => setSearch(event.target.value)}/></label><span>{visibleSessions.length} session{visibleSessions.length === 1 ? "" : "s"}</span></section>
+    <section className="capability-registry session-registry">
+      <div className="capability-registry-head"><span>Session</span><span>Workspace</span><span>Activity</span><span>Turns</span><span>Status</span><span/></div>
+      <div className="capability-registry-list">{sessions.loading ? <Loading/> : visibleSessions.map(session => <button className="capability-registry-row session-registry-row" key={session.id} aria-label={`Open session ${session.title}`} onClick={() => navigate(`/sessions/${session.id}`)}><span className="capability-registry-name"><b>{session.title}</b><small>{session.source === "cli" ? "CLI session" : "North session"}</small></span><span className="capability-registry-description">{session.workspace || "No workspace selected"}</span><span className="capability-registry-meta">{timeAgo(session.updated_at)}</span><span className="capability-registry-meta">{session.turns?.length || 0}</span><Status value={session.archived ? "archived" : "active"}/><span className="capability-registry-open">Open</span></button>)}{!sessions.loading && !visibleSessions.length && <Empty>{search ? "No sessions match this search." : "No sessions have been created yet."}</Empty>}</div>
+    </section>
+  </div>;
+}
+
 export function Chat() {
   // Namespaced rather than destructured: `prompt` is already the composer's
   // text here, and `confirm`/`alert` would shadow the globals they replace.
@@ -227,9 +248,9 @@ export function Chat() {
   }, [resizing]);
   const updatePrompt = (value: string) => { setPrompt(value); if (conversationId) { if (value) localStorage.setItem(`north-chat-draft:${conversationId}`, value); else localStorage.removeItem(`north-chat-draft:${conversationId}`); } };
   const scrollLatestTurnToTop = () => window.requestAnimationFrame(() => chatRoom.current?.querySelector(".turn-bundle:last-child")?.scrollIntoView({ block: "start", behavior: "smooth" }));
-  const createChat = async () => {
-    const chat = await post<Conversation>("/web/api/conversations", { title: "New chat" });
-    await chats.reload(); navigate(`/chat/${chat.id}`);
+  const createSession = async () => {
+    const session = await post<Conversation>("/web/api/conversations", { title: "New session" });
+    await chats.reload(); navigate(`/sessions/${session.id}`);
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -242,7 +263,7 @@ export function Chat() {
   };
   const handleSlash = async (command: string) => {
     const [name] = command.toLowerCase().split(/\s+/, 1);
-    if (name === "/new") { updatePrompt(""); await createChat(); return true; }
+    if (name === "/new") { updatePrompt(""); await createSession(); return true; }
     if (name === "/schedule") { updatePrompt(""); navigate("/schedule"); return true; }
     if (name === "/approvals") { updatePrompt(""); navigate("/approvals"); return true; }
     if (name === "/clear") { updatePrompt(""); setNotice("Draft cleared."); return true; }
@@ -250,7 +271,7 @@ export function Chat() {
     if (name === "/status") { await Promise.all([room.reload(), approvalResource.reload()]); setNotice("Task status refreshed."); updatePrompt(""); return true; }
     if (["/pause", "/resume", "/cancel"].includes(name)) {
       const turn = [...(room.data?.turns || [])].reverse().find(item => item.task_id && !["completed", "failed", "cancelled"].includes(item.detail?.task.status || ""));
-      if (!turn?.task_id) { setNotice("No active task in this conversation."); return true; }
+    if (!turn?.task_id) { setNotice("No active task in this session."); return true; }
       const action = name.slice(1);
       if (action === "cancel") await api(`/orchestrator/task/${turn.task_id}`, { method: "DELETE" });
       else await api(`/orchestrator/task/${turn.task_id}/${action}`, { method: "POST" });
@@ -281,7 +302,7 @@ export function Chat() {
       if (value.length >= 30_000) break;
     }
     updatePrompt(value);
-    if (truncated) setNotice("Attachment text was shortened to fit the chat message limit.");
+    if (truncated) setNotice("Attachment text was shortened to fit the session message limit.");
   };
   const attachFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     await appendFiles(Array.from(event.target.files || []));
@@ -290,8 +311,8 @@ export function Chat() {
   const respondApproval = async (card: Approval, decision: string, answer = "") => { try { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option: answer }); setNotice("Response received. North is continuing the task."); await Promise.all([approvalResource.reload(), room.reload()]); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
   const rename = async () => {
     if (!room.data) return;
-    const title = await dialog.prompt("What should this conversation be called?", room.data.title,
-      { title: "Rename conversation", confirmLabel: "Rename" });
+    const title = await dialog.prompt("What should this session be called?", room.data.title,
+      { title: "Rename session", confirmLabel: "Rename" });
     if (title) { await patch(`/web/api/conversations/${room.data.id}`, { title }); await Promise.all([room.reload(), chats.reload()]); }
   };
   const changeWorkspace = async (workspace: string) => {
@@ -299,28 +320,28 @@ export function Chat() {
     setSavingWorkspace(true);
     try {
       await patch(`/web/api/conversations/${room.data.id}`, { workspace });
-      setNotice("Workspace updated for this conversation.");
+      setNotice("Workspace updated for this session.");
       await Promise.all([room.reload(), chats.reload()]);
       return true;
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); return false; }
     finally { setSavingWorkspace(false); }
   };
   const deleteChat = async (id: string) => {
-    if (!await dialog.confirm("This removes the conversation and every turn in it. It cannot be undone.",
-      { title: "Delete this conversation?", confirmLabel: "Delete", danger: true })) return;
+    if (!await dialog.confirm("This removes the session and every turn in it. It cannot be undone.",
+      { title: "Delete this session?", confirmLabel: "Delete", danger: true })) return;
     await api(`/web/api/conversations/${id}`, { method: "DELETE" });
     await chats.reload();
-    if (id === conversationId) navigate("/chat");
+    if (id === conversationId) navigate("/sessions");
   };
   const currentWorkspace = room.data?.workspace || "";
   return <div className={`chat-page ${dragging ? "dragging" : ""}`} style={{ "--chat-list-width": `${chatListWidth}px` } as CSSProperties} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
-    <aside className="chat-list"><div className="chat-list-head"><b>Conversations</b><button onClick={createChat}>+</button></div><input aria-label="Search conversations" placeholder="Search chats" value={search} onChange={e => setSearch(e.target.value)}/>
-      <div className="chat-scroll">{visibleChats.map(chat => <NavLink to={`/chat/${chat.id}`} key={chat.id}><span className="chat-icon">◫</span><div><b>{chat.title}</b><small>{chat.source === "cli" ? "CLI · " : ""}{timeAgo(chat.updated_at)}</small></div>{chat.pinned && <em>•</em>}<button type="button" className="chat-delete" aria-label={`Delete ${chat.title}`} title="Delete conversation" onClick={event => { event.preventDefault(); event.stopPropagation(); void deleteChat(chat.id); }}>×</button></NavLink>)}</div>
+    <aside className="chat-list"><div className="chat-list-head"><b>Sessions</b><button onClick={createSession}>+</button></div><input aria-label="Search sessions" placeholder="Search sessions" value={search} onChange={e => setSearch(e.target.value)}/>
+      <div className="chat-scroll">{visibleChats.map(chat => <NavLink to={`/sessions/${chat.id}`} key={chat.id}><span className="chat-icon">◫</span><div><b>{chat.title}</b><small>{chat.source === "cli" ? "CLI · " : ""}{timeAgo(chat.updated_at)}</small></div>{chat.pinned && <em>•</em>}<button type="button" className="chat-delete" aria-label={`Delete ${chat.title}`} title="Delete session" onClick={event => { event.preventDefault(); event.stopPropagation(); void deleteChat(chat.id); }}>×</button></NavLink>)}</div>
     </aside>
-    <div className="chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize conversation list" tabIndex={0} onPointerDown={() => setResizing(true)} onKeyDown={event => { if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return; event.preventDefault(); const width = Math.max(190, Math.min(520, chatListWidth + (event.key === "ArrowLeft" ? -16 : 16))); setChatListWidth(width); }}/>
+    <div className="chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize session list" tabIndex={0} onPointerDown={() => setResizing(true)} onKeyDown={event => { if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return; event.preventDefault(); const width = Math.max(190, Math.min(520, chatListWidth + (event.key === "ArrowLeft" ? -16 : 16))); setChatListWidth(width); }}/>
     <section className="chat-room" ref={chatRoom}>
-      {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new conversation or return to one of your previous rooms.</p><button className="primary-button" onClick={createChat}>New conversation</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Conversation unavailable"}/> : <>
-        <PageHeader eyebrow={room.data.source === "cli" ? "CLI conversation" : "Conversation"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<button className="ghost-button" onClick={rename}>Rename</button>}/>
+      {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><button className="primary-button" onClick={createSession}>New session</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Session unavailable"}/> : <>
+        <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<button className="ghost-button" onClick={rename}>Rename</button>}/>
         <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
         <form className="composer" onSubmit={submit}><textarea value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={2} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>

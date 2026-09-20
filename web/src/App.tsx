@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Layout } from "./components";
-import { Chat } from "./pages/Chat";
+import { Chat, Sessions } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
 import { Agents, Approvals, Artifacts, Flows, Insights, Memory, Schedule, SettingsPage, Skills, SystemPage, Tools } from "./pages/Verbose";
 import { Tasks } from "./pages/Tasks";
@@ -12,11 +12,18 @@ function WorkRedirect() {
   return <Navigate to={`/tasks/${taskId}`} replace/>;
 }
 
+function SessionRedirect() {
+  const { conversationId } = useParams();
+  return <Navigate to={conversationId ? `/sessions/${conversationId}` : "/sessions"} replace/>;
+}
+
 export function App() {
   return <DialogProvider><Routes><Route element={<Layout/>}>
     <Route path="/" element={<Dashboard/>}/>
-    <Route path="/chat" element={<Chat/>}/>
-    <Route path="/chat/:conversationId" element={<Chat/>}/>
+    <Route path="/sessions" element={<Sessions/>}/>
+    <Route path="/sessions/:conversationId" element={<Chat/>}/>
+    <Route path="/chat" element={<Navigate to="/sessions" replace/>}/>
+    <Route path="/chat/:conversationId" element={<SessionRedirect/>}/>
     <Route path="/briefings" element={<Navigate to="/artifacts" replace/>}/>
     <Route path="/artifacts" element={<Artifacts/>}/>
     <Route path="/schedule" element={<Schedule/>}/>
