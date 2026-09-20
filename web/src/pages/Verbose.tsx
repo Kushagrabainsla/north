@@ -1,4 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, TextareaHTMLAttributes } from "react";
 import { api, del, patch, post } from "../api";
 import { configureDisplayTimezone, dateInNorthTimezone, Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo, weekdayInNorthTimezone } from "../components";
 import { isTypeScale, TYPE_SCALES, UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
@@ -1025,9 +1026,21 @@ export function Skills() {
     </section>
     <CapabilityModal open={Boolean(selected)} onClose={closeEditor} title={selected || "Skill"} eyebrow={selectedSkill?.source || "Procedure"}
       actions={selected ? <><button className="primary-button" disabled={detailLoading || selectedSkill?.source === "builtin"} onClick={() => void save()}>Save skill</button>{selectedSkill?.source === "learned" && <button className="danger-button" onClick={() => void remove()}>Delete skill</button>}</> : undefined}>
-      {detailLoading ? <Loading/> : <section className="skill-preview-layout"><div className="skill-editor-pane"><div className="editor-label"><span>{selected}/SKILL.md</span><span>Markdown instructions {selectedSkill?.source === "builtin" && "· read-only"}</span></div><textarea aria-label={`${selected} Markdown skill instructions`} readOnly={selectedSkill?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></div><aside className="skill-preview-pane"><div className="editor-label">Rendered Markdown</div><div className="skill-preview-content"><Markdown>{content || "Nothing written yet."}</Markdown></div></aside></section>}
+      {detailLoading ? <Loading/> : <section className="skill-preview-layout"><div className="skill-editor-pane"><div className="editor-label"><span>{selected}/SKILL.md</span><span>Markdown instructions {selectedSkill?.source === "builtin" && "· read-only"}</span></div><ContentTextarea aria-label={`${selected} Markdown skill instructions`} readOnly={selectedSkill?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></div><aside className="skill-preview-pane"><div className="editor-label">Rendered Markdown</div><div className="skill-preview-content"><Markdown>{content || "Nothing written yet."}</Markdown></div></aside></section>}
     </CapabilityModal>
   </div>;
+}
+
+function ContentTextarea({ value, onChange, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string; onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const resize = () => {
+    const element = ref.current;
+    if (!element) return;
+    element.style.height = "0px";
+    element.style.height = `${element.scrollHeight}px`;
+  };
+  useEffect(() => { resize(); }, [value]);
+  return <textarea {...props} ref={ref} value={value} onChange={event => { onChange(event); requestAnimationFrame(resize); }}/>;
 }
 
 interface FlowSummary { name: string; description: string; source: string; status: string; domains: string[]; steps: number; }
@@ -1113,7 +1126,7 @@ export function Tools() {
     </section>
     <CapabilityModal open={Boolean(selected)} onClose={closeEditor} title={selected || "Tool"} eyebrow={selectedTool?.source || "Capability"}
       actions={selected ? <><button className="primary-button" disabled={detailLoading || selectedTool?.source !== "learned"} onClick={() => void save()}>Save tool</button>{selectedTool?.source === "learned" && <button className="danger-button" onClick={() => void remove()}>Delete tool</button>}</> : undefined}>
-      {detailLoading ? <Loading/> : <section className="tool-preview-layout"><div className="skill-editor-pane tool-editor"><div className="editor-label"><span>{selected}.py</span><span>{selectedTool?.source === "builtin" ? "read-only" : "editable"}</span></div><textarea aria-label={`${selected} Python implementation`} readOnly={selectedTool?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></div><aside className="tool-preview-pane"><div className="editor-label">Python preview</div><pre><code>{content || "# Nothing implemented yet."}</code></pre></aside></section>}
+      {detailLoading ? <Loading/> : <section className="tool-preview-layout"><div className="skill-editor-pane tool-editor"><div className="editor-label"><span>{selected}.py</span><span>{selectedTool?.source === "builtin" ? "read-only" : "editable"}</span></div><ContentTextarea aria-label={`${selected} Python implementation`} readOnly={selectedTool?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></div><aside className="tool-preview-pane"><div className="editor-label">Python preview</div><pre><code>{content || "# Nothing implemented yet."}</code></pre></aside></section>}
     </CapabilityModal>
   </div>;
 }

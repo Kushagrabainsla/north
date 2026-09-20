@@ -1400,6 +1400,10 @@ button:not(:disabled):active { transform: translateY(1px); }
   box-shadow: 0 28px 90px rgba(0,0,0,.62);
 }
 .capability-modal.flow-modal { width: min(1120px, calc(100vw - 40px)); }
+.capability-modal:has(.skill-preview-layout),
+.capability-modal:has(.tool-preview-layout) { height: auto; max-height: 88dvh; }
+.capability-modal:has(.skill-preview-layout) .capability-modal-shell,
+.capability-modal:has(.tool-preview-layout) .capability-modal-shell { height: auto; }
 .capability-modal::backdrop {
   background: rgba(3,5,4,.82);
   backdrop-filter: blur(5px);
@@ -1431,7 +1435,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 .capability-modal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .capability-modal-content { min-height: 0; flex: 1; overflow: auto; background: #0b0e0c; }
 .capability-modal-content:has(> .skill-preview-layout),
-.capability-modal-content:has(> .tool-preview-layout) { display: flex; flex-direction: column; overflow: hidden; }
+.capability-modal-content:has(> .tool-preview-layout) { display: flex; max-height: calc(88dvh - 72px); flex: 0 1 auto; flex-direction: column; overflow: auto; }
 .capability-modal-content > .loading { min-height: 100%; justify-content: center; }
 .capability-modal .tool-create { padding: 20px; }
 .capability-modal .modal-editor { display: flex; min-height: 100%; flex-direction: column; }
@@ -1450,9 +1454,9 @@ button:not(:disabled):active { transform: translateY(1px); }
 .skill-preview-layout,
 .tool-preview-layout {
   display: grid;
-  height: 100%;
-  flex: 1 1 auto;
-  min-height: 100%;
+  height: auto;
+  flex: 0 0 auto;
+  min-height: 0;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 .skill-editor-pane,
@@ -1473,26 +1477,27 @@ button:not(:disabled):active { transform: translateY(1px); }
 }
 .skill-editor-pane textarea,
 .tool-editor textarea {
+  display: block;
   min-height: 0;
-  flex: 1;
+  height: auto;
+  flex: 0 0 auto;
+  overflow: hidden;
   resize: none;
 }
 .skill-preview-pane,
 .tool-preview-pane { border-left: 1px solid var(--line-strong); }
 .skill-preview-content {
   min-height: 0;
-  overflow: auto;
-  flex: 1;
+  flex: 0 0 auto;
   padding: 22px;
   background: var(--surface);
 }
 .skill-preview-content .markdown { max-width: 72ch; font-size: 12px; }
 .tool-preview-pane pre {
   height: auto;
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
   margin: 0;
-  overflow: auto;
   padding: 22px;
   background: #080b09;
   color: #dfead9;
@@ -1510,10 +1515,6 @@ button:not(:disabled):active { transform: translateY(1px); }
   .tool-preview-layout { display: flex; height: auto; flex: 0 0 auto; flex-direction: column; }
   .capability-modal-content:has(> .skill-preview-layout),
   .capability-modal-content:has(> .tool-preview-layout) { overflow-y: auto; }
-  .skill-editor-pane,
-  .skill-preview-pane,
-  .tool-editor,
-  .tool-preview-pane { min-height: calc(88dvh - 72px); }
   .skill-preview-pane,
   .tool-preview-pane { border-top: 1px solid var(--line-strong); border-left: 0; }
 }
@@ -1555,10 +1556,6 @@ button:not(:disabled):active { transform: translateY(1px); }
   .tool-preview-layout { display: flex; height: auto; flex: 0 0 auto; flex-direction: column; }
   .capability-modal-content:has(> .skill-preview-layout),
   .capability-modal-content:has(> .tool-preview-layout) { overflow-y: auto; }
-  .skill-editor-pane,
-  .skill-preview-pane,
-  .tool-editor,
-  .tool-preview-pane { min-height: calc(100dvh - 100px); }
   .skill-preview-pane,
   .tool-preview-pane { border-top: 1px solid var(--line-strong); border-left: 0; }
   .capability-create-panel > header { align-items: flex-start; flex-direction: column; }
