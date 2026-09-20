@@ -1507,11 +1507,15 @@ button:not(:disabled):active { transform: translateY(1px); }
 
 @media (max-width: 1180px) and (min-height: 1200px) {
   .skill-preview-layout,
-  .tool-preview-layout { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .tool-preview-layout { display: flex; height: auto; flex: 0 0 auto; flex-direction: column; }
+  .capability-modal-content:has(> .skill-preview-layout),
+  .capability-modal-content:has(> .tool-preview-layout) { overflow-y: auto; }
+  .skill-editor-pane,
+  .skill-preview-pane,
+  .tool-editor,
+  .tool-preview-pane { min-height: calc(88dvh - 72px); }
   .skill-preview-pane,
   .tool-preview-pane { border-top: 1px solid var(--line-strong); border-left: 0; }
-  .skill-preview-content { min-height: 340px; }
-  .tool-preview-pane pre { min-height: 340px; }
 }
 
 @media (max-width: 1100px) {
@@ -1548,11 +1552,15 @@ button:not(:disabled):active { transform: translateY(1px); }
   .capability-modal-actions button { flex: 1 1 auto; }
   .capability-modal .tool-create { padding: 15px; }
   .skill-preview-layout,
-  .tool-preview-layout { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .tool-preview-layout { display: flex; height: auto; flex: 0 0 auto; flex-direction: column; }
+  .capability-modal-content:has(> .skill-preview-layout),
+  .capability-modal-content:has(> .tool-preview-layout) { overflow-y: auto; }
+  .skill-editor-pane,
+  .skill-preview-pane,
+  .tool-editor,
+  .tool-preview-pane { min-height: calc(100dvh - 100px); }
   .skill-preview-pane,
   .tool-preview-pane { border-top: 1px solid var(--line-strong); border-left: 0; }
-  .skill-preview-content { min-height: 340px; }
-  .tool-preview-pane pre { min-height: 340px; }
   .capability-create-panel > header { align-items: flex-start; flex-direction: column; }
   .capability-create-panel > header > div:last-child { width: 100%; }
   .capability-create-panel > header > div:last-child button { flex: 1; }
