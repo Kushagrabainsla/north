@@ -61,8 +61,9 @@ def rejection_reason(name: str, description: str, body: str, *, source: SkillSou
 class SkillRegistry:
     """Loads skills from a built-in directory and an optional learned directory.
 
-    Built-in skills are loaded first, so a learned skill can never shadow a
-    hand-authored one of the same name.
+    Built-in skills are loaded first, then user-owned skills override a built-in
+    of the same name. This lets the dashboard persist a local customization
+    without changing the shipped baseline.
     """
 
     def __init__(self, builtin_dir: Path, learned_dir: Path | None = None) -> None:
@@ -87,8 +88,6 @@ class SkillRegistry:
             skill = self._load_skill(entry, skill_file, source)
             if skill is None:
                 continue
-            if skill.name in self._skills and source is SkillSource.LEARNED:
-                continue  # a learned skill never overrides a built-in of the same name
             self._skills[skill.name] = skill
 
     def _load_skill(self, directory: Path, skill_file: Path, source: SkillSource) -> Skill | None:

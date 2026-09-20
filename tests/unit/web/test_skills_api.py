@@ -106,16 +106,18 @@ async def test_skill_api_does_not_persist_a_status_the_registry_would_reject(
     assert skill_registry.get("test-skill").directory.joinpath("SKILL.md").read_text() == original
 
 
-async def test_skill_api_rejects_editing_builtin_skill(tmp_path) -> None:
+async def test_skill_api_creates_user_override_for_builtin_skill(tmp_path) -> None:
     directory = tmp_path / "builtin" / "test-skill"
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(_document(), encoding="utf-8")
-    registry = SkillRegistry(tmp_path / "builtin")
+    registry = SkillRegistry(tmp_path / "builtin", tmp_path / "skills")
 
-    with bind_services(ApiServices(skill_registry=registry)), pytest.raises(HTTPException) as exc:
-        await web_api.update_skill("test-skill", web_api.SkillUpdate(content=_document("Changed")))
+    with bind_services(ApiServices(skill_registry=registry, north_home=tmp_path)):
+        result = await web_api.update_skill("test-skill", web_api.SkillUpdate(content=_document("Changed")))
 
-    assert exc.value.status_code == 403
+    assert result["source"] == "learned"
+    assert registry.get("test-skill").description == "Changed"
+    assert registry.get("test-skill").source is SkillSource.LEARNED
 
 
 async def test_skill_api_deletes_learned_skill_but_not_builtin(tmp_path) -> None:

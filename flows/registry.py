@@ -99,7 +99,7 @@ def parse_flow_document(text: str, directory: Path, source: FlowSource) -> Flow:
 
 
 class FlowRegistry:
-    """Load built-in flows first, then user-owned learned flows."""
+    """Load built-ins first, then let user-owned flows override by name."""
 
     def __init__(self, builtin_dir: Path, learned_dir: Path | None = None) -> None:
         self._sources: list[tuple[Path, FlowSource]] = [(builtin_dir, FlowSource.BUILTIN)]
@@ -121,8 +121,6 @@ class FlowRegistry:
                     flow = parse_flow_document(flow_file.read_text(encoding="utf-8"), entry, source)
                 except (FlowParseError, OSError) as exc:
                     logger.warning("FlowRegistry: skipping %s - %s", entry.name, exc)
-                    continue
-                if flow.name in self._flows and source is FlowSource.LEARNED:
                     continue
                 self._flows[flow.name] = flow
 

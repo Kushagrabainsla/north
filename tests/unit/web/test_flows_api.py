@@ -63,12 +63,14 @@ async def test_flow_api_creates_and_deletes_learned_flow(tmp_path) -> None:
             registry.get("new-flow")
 
 
-async def test_flow_api_rejects_builtin_edits(tmp_path) -> None:
+async def test_flow_api_creates_user_override_for_builtin_edits(tmp_path) -> None:
     builtin = tmp_path / "builtin" / "system-flow"
     builtin.mkdir(parents=True)
     (builtin / "FLOW.yaml").write_text(_document("system-flow"), encoding="utf-8")
-    registry = FlowRegistry(tmp_path / "builtin", tmp_path / "learned")
+    registry = FlowRegistry(tmp_path / "builtin", tmp_path / "flows")
     with bind_services(ApiServices(flow_registry=registry, north_home=tmp_path)):
-        with pytest.raises(HTTPException) as exc:
-            await web_api.update_flow("system-flow", web_api.FlowUpdate(content=_document("system-flow", "changed")))
-        assert exc.value.status_code == 403
+        result = await web_api.update_flow("system-flow", web_api.FlowUpdate(content=_document("system-flow", "changed")))
+
+    assert result["source"] == "learned"
+    assert registry.get("system-flow").description == "changed"
+    assert registry.get("system-flow").source is FlowSource.LEARNED

@@ -76,13 +76,13 @@ steps:
     assert FlowRegistry(tmp_path).names() == []
 
 
-def test_learned_flow_does_not_override_builtin(tmp_path):
+def test_learned_flow_override_takes_precedence_over_builtin(tmp_path):
     builtin, learned = tmp_path / "builtin", tmp_path / "learned"
     _write_flow(builtin, "review", "name: review\ndescription: Built in\nsteps:\n  - name: one\n    tool: browser\n")
     _write_flow(learned, "review", "name: review\ndescription: Learned\nsteps:\n  - name: one\n    tool: browser\n")
     registry = FlowRegistry(builtin, learned)
-    assert registry.get("review").description == "Built in"
-    assert registry.get("review").source is FlowSource.BUILTIN
+    assert registry.get("review").description == "Learned"
+    assert registry.get("review").source is FlowSource.LEARNED
 
 
 def test_get_unknown_flow_raises(tmp_path):

@@ -16,7 +16,7 @@ from flows.models import FLOW_FILENAME, FlowSource
 from flows.registry import parse_flow_document
 from orchestrator.api_context import current_services
 from skills.exceptions import SkillNotFoundError, SkillParseError
-from skills.models import SKILL_FILENAME
+from skills.models import SKILL_FILENAME, SkillSource
 from skills.parser import parse_skill_document
 from skills.registry import rejection_reason
 from tools.universal.create_tool import _check_code_safety, _find_tool_path, _render_stub
@@ -186,28 +186,30 @@ async def update_skill(name: str, body: SkillUpdate) -> dict[str, Any]:
         skill = registry.get(name)
     except SkillNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
-    if skill.source.value == "builtin":
-        raise HTTPException(status_code=403, detail="Built-in skills cannot be edited")
     try:
         frontmatter, content_body = parse_skill_document(body.content)
     except SkillParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     parsed_name = str(frontmatter.get("name") or "").strip()
     description = str(frontmatter.get("description") or "").strip()
-    reason = rejection_reason(parsed_name, description, content_body, source=skill.source)
+    reason = rejection_reason(parsed_name, description, content_body, source=SkillSource.LEARNED)
     if parsed_name != name or reason:
         raise HTTPException(status_code=422, detail=reason or "Skill name cannot be changed")
     status = str(frontmatter.get("status") or "active").strip().lower()
     if status not in {"candidate", "active", "retired"}:
         raise HTTPException(status_code=422, detail=f"Invalid skill status: {status!r}")
-    await asyncio.to_thread((skill.directory / "SKILL.md").write_text, body.content, encoding="utf-8")
+    target = skill.directory
+    if skill.source is SkillSource.BUILTIN:
+        target = Path(current_services().require("north_home")) / "skills" / name
+        await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread((target / SKILL_FILENAME).write_text, body.content, encoding="utf-8")
     registry.reload()
     return await get_skill(name)
 
 
 @router.delete("/skills/{name}", status_code=204)
 async def delete_skill(name: str) -> None:
-    """Delete a learned skill; bundled skills are immutable."""
+    """Delete a user-owned skill or override and reveal the built-in fallback."""
     registry = current_services().require("skill_registry")
     if not registry.remove_learned(name):
         skill = next((item for item in registry.all() if item.name == name), None)
@@ -289,12 +291,17 @@ async def update_tool(name: str, body: ToolUpdate) -> dict[str, Any]:
     registry = current_services().require("tool_registry")
     learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
     path = _find_tool_path(name, learned_dir)
-    if path is None or not path.is_relative_to(learned_dir):
-        raise HTTPException(status_code=403, detail="Built-in tools cannot be edited")
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Tool {name!r} was not found")
+    target = path
+    if not path.is_relative_to(learned_dir):
+        kind = path.parent.name if path.parent.name in {"universal", "specialized"} else "specialized"
+        target = learned_dir / kind / f"{name}.py"
     safe, reason = _check_code_safety(body.content)
     if not safe:
         raise HTTPException(status_code=422, detail=f"Tool code rejected by safety check: {reason}")
-    await asyncio.to_thread(path.write_text, body.content, encoding="utf-8")
+    await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(target.write_text, body.content, encoding="utf-8")
     registry.reload()
     return await get_tool(name)
 
@@ -382,16 +389,22 @@ async def update_flow(name: str, body: FlowUpdate) -> dict[str, Any]:
         flow = registry.get(name)
     except FlowNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
+    target = flow.directory
     if flow.source is FlowSource.BUILTIN:
-        raise HTTPException(status_code=403, detail="Built-in flows cannot be edited")
+        target = Path(current_services().require("north_home")) / "flows" / name
     try:
-        parsed = parse_flow_document(_flow_document(body, fallback_name=name), flow.directory, FlowSource.LEARNED)
+        parsed = parse_flow_document(_flow_document(body, fallback_name=name), target, FlowSource.LEARNED)
     except FlowParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     if parsed.name != name:
         raise HTTPException(status_code=422, detail="Flow name cannot be changed")
     await asyncio.to_thread(
-        (flow.directory / FLOW_FILENAME).write_text,
+        target.mkdir,
+        parents=True,
+        exist_ok=True,
+    )
+    await asyncio.to_thread(
+        (target / FLOW_FILENAME).write_text,
         _flow_document(body, fallback_name=name),
         encoding="utf-8",
     )

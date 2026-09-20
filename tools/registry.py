@@ -170,9 +170,9 @@ class ToolRegistry:
     def reload(self) -> None:
         """Re-scan tool directories for new or edited files.
 
-        Fast-paths when nothing in a directory has changed. Only adds tools not
-        already registered - existing tools are not replaced so in-flight tasks
-        are unaffected.
+        Fast-paths when nothing in a directory has changed. Built-in tools are
+        kept as the fallback, while user-owned tools replace same-name entries
+        so dashboard overrides take effect on reload.
         """
         for directory, package in _TOOL_DIRS:
             dir_path = _TOOLS_ROOT / directory
@@ -186,9 +186,8 @@ class ToolRegistry:
             if not self._directory_changed(directory):
                 continue
             for tool in _discover_external(directory).values():
-                if tool.name not in self._tools:
-                    self._tools[tool.name] = tool
-                    logger.info("ToolRegistry.reload: picked up learned tool %r", tool.name)
+                self._tools[tool.name] = tool
+                logger.info("ToolRegistry.reload: picked up learned tool %r", tool.name)
 
     def _learned_directories(self) -> tuple[Path, ...]:
         if self._learned_dir is None:

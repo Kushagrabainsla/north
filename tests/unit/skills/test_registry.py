@@ -54,13 +54,13 @@ def test_malformed_skill_is_skipped_not_fatal(tmp_path):
     assert SkillRegistry(builtin_dir=tmp_path).names() == ["good"]
 
 
-def test_learned_does_not_override_builtin(tmp_path):
+def test_learned_override_takes_precedence_over_builtin(tmp_path):
     builtin, learned = tmp_path / "builtin", tmp_path / "learned"
     _write_skill(builtin, "dup", "---\nname: dup\ndescription: the built-in one\n---\nB")
     _write_skill(learned, "dup", "---\nname: dup\ndescription: the learned one\n---\nL")
     registry = SkillRegistry(builtin_dir=builtin, learned_dir=learned)
-    assert registry.get("dup").description == "the built-in one"
-    assert registry.get("dup").source is SkillSource.BUILTIN
+    assert registry.get("dup").description == "the learned one"
+    assert registry.get("dup").source is SkillSource.LEARNED
 
 
 def test_learned_skill_loads_with_provenance(tmp_path):
