@@ -68,6 +68,21 @@ async def test_skill_api_creates_a_structured_learned_skill(tmp_path) -> None:
     assert "domains:" in created.read_text(encoding="utf-8")
 
 
+async def test_skill_api_duplicates_builtin_as_editable_skill(tmp_path) -> None:
+    builtin = tmp_path / "builtin" / "test-skill"
+    builtin.mkdir(parents=True)
+    (builtin / "SKILL.md").write_text(_document(), encoding="utf-8")
+    registry = SkillRegistry(tmp_path / "builtin", tmp_path / "skills")
+
+    with bind_services(ApiServices(skill_registry=registry, north_home=tmp_path)):
+        result = await web_api.duplicate_skill("test-skill", web_api.SkillDuplicate(name="test-skill-custom"))
+
+    assert result["name"] == "test-skill-custom"
+    assert result["source"] == "learned"
+    assert (tmp_path / "skills" / "test-skill-custom" / "SKILL.md").exists()
+    assert registry.get("test-skill-custom").source is SkillSource.LEARNED
+
+
 async def test_skill_api_rejects_rename(skill_registry: SkillRegistry) -> None:
     renamed = _document().replace("name: test-skill", "name: renamed")
 

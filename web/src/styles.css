@@ -181,6 +181,12 @@ a { color: inherit; text-decoration: none; }
 
 /* Chat */
 .chat-page { --chat-list-width: 250px; display: grid; grid-template-columns: var(--chat-list-width) 5px minmax(0, 1fr); height: 100vh; }
+.session-room { grid-template-columns: minmax(0, 1fr); }
+.session-room .chat-room { grid-column: 1; }
+.session-room .composer {
+  left: calc(var(--sidebar-width) + max(24px, (100vw - var(--sidebar-width) - 1050px) / 2));
+  right: max(24px, (100vw - var(--sidebar-width) - 1050px) / 2);
+}
 .chat-list { padding: 22px 13px; min-height: 0; background: rgba(12,15,18,.8); }
 .chat-resizer { cursor: col-resize; background: var(--line-soft); transition: background .15s; touch-action: none; }.chat-resizer:hover, .chat-resizer:active { background: var(--accent); }
 .chat-list-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 13px; }
@@ -697,6 +703,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 
 /* Chat keeps the conversational model while using ledger materials. */
 .chat-page { --chat-list-width: 224px; }
+.session-room { --chat-list-width: 0px; }
 .chat-list { padding: 15px 9px; background: #0b0e10; }
 .chat-list-head { padding: 0 3px 10px; }
 .chat-list-head b { font-size: 11px; }
@@ -756,6 +763,7 @@ button:not(:disabled):active { transform: translateY(1px); }
   .chat-list { padding: 8px; }
   .chat-scroll { margin-top: 5px; }
   .composer { bottom: 8px; }
+  .session-room .composer { left: 16px; right: 16px; }
 }
 
 @media (max-width: 680px) {
@@ -1153,6 +1161,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 
 /* Chat uses the same calm materials without losing its conversational shape. */
 .chat-page { --chat-list-width: 238px; }
+.session-room { --chat-list-width: 0px; }
 .chat-list { padding: 17px 11px; background: #0d100e; }
 .chat-list-head { padding: 0 3px 11px; }
 .chat-list-head b { font-size: 12px; }
@@ -1478,10 +1487,18 @@ button:not(:disabled):active { transform: translateY(1px); }
 .skill-editor-pane textarea,
 .tool-editor textarea {
   display: block;
+  width: 100%;
+  box-sizing: border-box;
   min-height: 0;
   height: auto;
   flex: 0 0 auto;
   overflow: hidden;
+  border: 0;
+  outline: 0;
+  background: #0d1013;
+  color: #e0e3e5;
+  padding: 22px;
+  font: 12px/1.7 var(--mono);
   resize: none;
 }
 .skill-preview-pane,

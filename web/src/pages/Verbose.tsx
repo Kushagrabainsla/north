@@ -1016,6 +1016,18 @@ export function Skills() {
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   };
   const save = async () => { if (!selected || selectedSkill?.source === "builtin") return; try { await api(`/web/api/skills/${selected}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Skill saved and reloaded."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const duplicate = async () => {
+    if (!selected || selectedSkill?.source !== "builtin") return;
+    const name = await dialog.prompt("Name for the editable copy", `${selected}-custom`, { title: "Duplicate skill", confirmLabel: "Create copy" });
+    if (!name?.trim()) return;
+    try {
+      const created = await post<SkillDetail>(`/web/api/skills/${encodeURIComponent(selected)}/duplicate`, { name: name.trim() });
+      await skills.reload();
+      setSelected(created.name);
+      setContent(created.content);
+      setMessage("Editable copy created and loaded.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+  };
   const remove = async () => { if (!selected || selectedSkill?.source !== "learned" || !await dialog.confirm(`Delete learned skill '${selected}'? This cannot be undone.`, { title: "Delete skill?", confirmLabel: "Delete skill", danger: true })) return; try { await del(`/web/api/skills/${encodeURIComponent(selected)}`); setSelected(null); setContent(""); setMessage("Learned skill deleted."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
   const canCreate = draft.name.trim() && draft.description.trim() && draft.instructions.trim();
   return <div className="page capability-page"><PageHeader eyebrow="Procedures" title="Skills" subtitle="Inspect and edit the playbooks North injects into specialist work." actions={<button className="primary-button" onClick={startCreating}>+ New skill</button>}/>{skills.error && <ErrorNotice message={skills.error}/>} {message && <div className="notice">{message}</div>}
@@ -1025,8 +1037,8 @@ export function Skills() {
       <div className="capability-registry-list">{skills.loading ? <Loading/> : (skills.data || []).map(skill => <button className="capability-registry-row" key={skill.name} aria-haspopup="dialog" onClick={() => void open(skill.name)}><span className="capability-registry-name"><b>{skill.name}</b><small>{skill.source}</small></span><span className="capability-registry-description">{skill.description}</span><span className="capability-registry-meta">v{skill.version} · {skill.domains.join(", ")}</span><Status value={skill.status}/><span className="capability-registry-open">Open</span></button>)}{!skills.loading && !skills.data?.length && <Empty>No skills have been created yet.</Empty>}</div>
     </section>
     <CapabilityModal open={Boolean(selected)} onClose={closeEditor} title={selected || "Skill"} eyebrow={selectedSkill?.source || "Procedure"}
-      actions={selected ? <><button className="primary-button" disabled={detailLoading || selectedSkill?.source === "builtin"} onClick={() => void save()}>Save skill</button>{selectedSkill?.source === "learned" && <button className="danger-button" onClick={() => void remove()}>Delete skill</button>}</> : undefined}>
-      {detailLoading ? <Loading/> : <section className="skill-preview-layout"><div className="skill-editor-pane"><div className="editor-label"><span>{selected}/SKILL.md</span><span>Markdown instructions {selectedSkill?.source === "builtin" && "· read-only"}</span></div><ContentTextarea aria-label={`${selected} Markdown skill instructions`} readOnly={selectedSkill?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></div><aside className="skill-preview-pane"><div className="editor-label">Rendered Markdown</div><div className="skill-preview-content"><Markdown>{content || "Nothing written yet."}</Markdown></div></aside></section>}
+      actions={selected ? <>{selectedSkill?.source === "builtin" ? <button className="ghost-button" onClick={() => void duplicate()}>Duplicate to edit</button> : <button className="primary-button" disabled={detailLoading} onClick={() => void save()}>Save skill</button>}{selectedSkill?.source === "learned" && <button className="danger-button" onClick={() => void remove()}>Delete skill</button>}</> : undefined}>
+      {detailLoading ? <Loading/> : <section className="skill-preview-layout"><div className="skill-editor-pane"><div className="editor-label"><span>{selected}/SKILL.md</span><span>{selectedSkill?.source === "builtin" ? "Built-in · read-only" : "Markdown instructions · editable"}</span></div><ContentTextarea aria-label={`${selected} Markdown skill instructions`} readOnly={selectedSkill?.source === "builtin"} value={content} onChange={event => setContent(event.target.value)}/></div><aside className="skill-preview-pane"><div className="editor-label">Rendered Markdown</div><div className="skill-preview-content"><Markdown>{content || "Nothing written yet."}</Markdown></div></aside></section>}
     </CapabilityModal>
   </div>;
 }

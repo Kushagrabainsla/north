@@ -38,6 +38,10 @@ class SkillCreate(BaseModel):
     domains: list[str] = Field(default_factory=lambda: ["general"])
 
 
+class SkillDuplicate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
 class ToolCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=2_000)
@@ -139,6 +143,29 @@ async def create_skill(body: SkillCreate) -> dict[str, Any]:
     await asyncio.to_thread((target / SKILL_FILENAME).write_text, document, encoding="utf-8")
     registry.reload()
     return await get_skill(name)
+
+
+@router.post("/skills/{name}/duplicate", status_code=201)
+async def duplicate_skill(name: str, body: SkillDuplicate) -> dict[str, Any]:
+    registry = current_services().require("skill_registry")
+    try:
+        skill = registry.get(name)
+    except SkillNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    new_name = body.name.strip()
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", new_name):
+        raise HTTPException(status_code=422, detail="Skill name must use lowercase letters, digits, and hyphens")
+    if new_name in registry.names():
+        raise HTTPException(status_code=409, detail=f"Skill {new_name!r} already exists")
+    frontmatter, content_body = parse_skill_document(await asyncio.to_thread((skill.directory / SKILL_FILENAME).read_text, encoding="utf-8"))
+    frontmatter["name"] = new_name
+    learned_dir = Path(current_services().require("north_home")) / "skills"
+    target = learned_dir / new_name
+    document = "---\n" + yaml.safe_dump(frontmatter, sort_keys=False) + "---\n\n" + content_body.strip() + "\n"
+    await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread((target / SKILL_FILENAME).write_text, document, encoding="utf-8")
+    registry.reload()
+    return await get_skill(new_name)
 
 
 @router.get("/skills/{name}")

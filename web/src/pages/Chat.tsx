@@ -1,10 +1,9 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
-import { NavLink, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { api, patch, post } from "../api";
 import { Empty, ErrorNotice, InferenceCategories, Loading, Markdown, PageHeader, PromptTelemetry, Status, timeAgo } from "../components";
-import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
+import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
 
@@ -213,20 +212,15 @@ export function Chat() {
   const chats = useResource<Conversation[]>("/web/api/conversations", 5000);
   const room = useResource<Conversation>(conversationId ? `/web/api/conversations/${conversationId}` : null, 5000);
   const approvalResource = useResource<Approval[]>("/web/api/approvals", 2000);
-  const [search, setSearch] = useState("");
   const [prompt, setPrompt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [recording, setRecording] = useState(false);
   const [notice, setNotice] = useState("");
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [resizing, setResizing] = useState(false);
-  const [chatListWidth, setChatListWidth] = usePersistentState(UI_PREFERENCE_KEYS.chatListWidth, 250,
-    value => typeof value === "number" && Number.isFinite(value) && value >= 190 && value <= 520);
   const fileInput = useRef<HTMLInputElement>(null);
   const chatRoom = useRef<HTMLElement>(null);
   const openedAtBottom = useRef<string | null>(null);
-  const visibleChats = useMemo(() => (chats.data || []).filter(chat => chat.title.toLowerCase().includes(search.toLowerCase())), [chats.data, search]);
   const { live, signals } = useTaskStreams(room.data?.turns || [], room.reload, approvalResource.reload);
   useEffect(() => { setPrompt(conversationId ? localStorage.getItem(`north-chat-draft:${conversationId}`) || "" : ""); }, [conversationId]);
   useEffect(() => {
@@ -235,17 +229,6 @@ export function Chat() {
     openedAtBottom.current = conversationId;
     window.requestAnimationFrame(() => chatRoom.current?.scrollTo({ top: chatRoom.current.scrollHeight }));
   }, [conversationId, room.data?.id]);
-  useEffect(() => {
-    if (!resizing) return;
-    const move = (event: PointerEvent) => {
-      const sidebar = document.querySelector(".sidebar")?.getBoundingClientRect().width || 0;
-      const width = Math.max(190, Math.min(520, event.clientX - sidebar));
-      setChatListWidth(width);
-    };
-    const stop = () => setResizing(false);
-    window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop, { once: true });
-    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); };
-  }, [resizing]);
   const updatePrompt = (value: string) => { setPrompt(value); if (conversationId) { if (value) localStorage.setItem(`north-chat-draft:${conversationId}`, value); else localStorage.removeItem(`north-chat-draft:${conversationId}`); } };
   const scrollLatestTurnToTop = () => window.requestAnimationFrame(() => chatRoom.current?.querySelector(".turn-bundle:last-child")?.scrollIntoView({ block: "start", behavior: "smooth" }));
   const createSession = async () => {
@@ -334,11 +317,7 @@ export function Chat() {
     if (id === conversationId) navigate("/sessions");
   };
   const currentWorkspace = room.data?.workspace || "";
-  return <div className={`chat-page ${dragging ? "dragging" : ""}`} style={{ "--chat-list-width": `${chatListWidth}px` } as CSSProperties} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
-    <aside className="chat-list"><div className="chat-list-head"><b>Sessions</b><button onClick={createSession}>+</button></div><input aria-label="Search sessions" placeholder="Search sessions" value={search} onChange={e => setSearch(e.target.value)}/>
-      <div className="chat-scroll">{visibleChats.map(chat => <NavLink to={`/sessions/${chat.id}`} key={chat.id}><span className="chat-icon">◫</span><div><b>{chat.title}</b><small>{chat.source === "cli" ? "CLI · " : ""}{timeAgo(chat.updated_at)}</small></div>{chat.pinned && <em>•</em>}<button type="button" className="chat-delete" aria-label={`Delete ${chat.title}`} title="Delete session" onClick={event => { event.preventDefault(); event.stopPropagation(); void deleteChat(chat.id); }}>×</button></NavLink>)}</div>
-    </aside>
-    <div className="chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize session list" tabIndex={0} onPointerDown={() => setResizing(true)} onKeyDown={event => { if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return; event.preventDefault(); const width = Math.max(190, Math.min(520, chatListWidth + (event.key === "ArrowLeft" ? -16 : 16))); setChatListWidth(width); }}/>
+  return <div className={`chat-page session-room ${dragging ? "dragging" : ""}`} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
     <section className="chat-room" ref={chatRoom}>
       {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><button className="primary-button" onClick={createSession}>New session</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Session unavailable"}/> : <>
         <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<button className="ghost-button" onClick={rename}>Rename</button>}/>

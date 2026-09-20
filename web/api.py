@@ -42,9 +42,11 @@ from .conversations import ConversationStore, Turn
 # and their request model from web.api.
 SkillUpdate = _extensions.SkillUpdate
 SkillCreate = _extensions.SkillCreate
+SkillDuplicate = _extensions.SkillDuplicate
 FlowCreate = _extensions.FlowCreate
 FlowUpdate = _extensions.FlowUpdate
 create_skill = _extensions.create_skill
+duplicate_skill = _extensions.duplicate_skill
 delete_skill = _extensions.delete_skill
 get_skill = _extensions.get_skill
 list_skills = _extensions.list_skills
