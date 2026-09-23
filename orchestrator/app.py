@@ -665,6 +665,10 @@ def _launch_background_tasks(
             completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)
             failed_before = now - datetime.timedelta(days=settings.task_cleanup_failed_days)
             pruned = await deps.ledger.prune(completed_before, failed_before)
+            pruned_runs = await deps.agent_run_store.prune(
+                min(completed_before, failed_before),
+                keep_task_ids=orchestrator.active_task_ids,
+            )
             # Routing decisions age out with the tasks they explain.
             decisions = _prune_routing_decisions(deps, settings.task_cleanup_completed_days)
             # Handoff artifacts are what the cockpit lists, so they need a window
@@ -687,7 +691,8 @@ def _launch_background_tasks(
                     source=LedgerSource.SYSTEM,
                     action=(
                         f"task_context_cleanup: removed {n} stale rows, pruned {pruned} ledger entries"
-                        f", {decisions} routing decisions, {handoffs} handoff directories"
+                        f", {pruned_runs} agent runs, {decisions} routing decisions"
+                        f", {handoffs} handoff directories"
                         f"{f', retired {len(retired)} learned skill(s)' if retired else ''}"
                     ),
                     status=LedgerStatus.COMPLETED,

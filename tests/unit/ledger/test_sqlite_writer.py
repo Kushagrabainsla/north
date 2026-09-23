@@ -248,6 +248,72 @@ async def test_write_is_idempotent_failure_on_duplicate_id(
         await writer.write(_entry("dup"))
 
 
+async def test_prune_keeps_only_latest_final_response_from_expired_task(
+    writer: SQLiteLedgerWriter,
+) -> None:
+    now = datetime.now(UTC)
+    expired = now - timedelta(days=366)
+    recent = now - timedelta(days=10)
+    await writer.write(
+        _entry(
+            "received",
+            task_id="old-task",
+            action="task_received",
+            status=LedgerStatus.PENDING,
+            timestamp=expired,
+        )
+    )
+    await writer.write(
+        _entry(
+            "draft-response",
+            source=LedgerSource.AGENT,
+            task_id="old-task",
+            action="agent_completed",
+            output="draft",
+            status=LedgerStatus.COMPLETED,
+            timestamp=expired + timedelta(seconds=1),
+        )
+    )
+    await writer.write(
+        _entry(
+            "final-response",
+            source=LedgerSource.AGENT,
+            task_id="old-task",
+            action="agent_completed",
+            output="final",
+            status=LedgerStatus.COMPLETED,
+            timestamp=expired + timedelta(seconds=2),
+        )
+    )
+    await writer.write(
+        _entry(
+            "terminal-status",
+            task_id="old-task",
+            action="task_completed",
+            status=LedgerStatus.COMPLETED,
+            timestamp=expired + timedelta(seconds=3),
+        )
+    )
+    await writer.write(
+        _entry(
+            "recent-detail",
+            task_id="recent-task",
+            action="task_completed",
+            status=LedgerStatus.COMPLETED,
+            timestamp=recent,
+        )
+    )
+
+    removed = await writer.prune(now - timedelta(days=365), now - timedelta(days=365))
+
+    assert removed == 2
+    assert [entry.id for entry in await writer.query(LedgerFilters(order_asc=True))] == [
+        "final-response",
+        "terminal-status",
+        "recent-detail",
+    ]
+
+
 async def test_search_fts5_empty_or_punctuation_returns_empty(
     writer: SQLiteLedgerWriter,
 ) -> None:

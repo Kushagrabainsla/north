@@ -278,6 +278,27 @@ class AgentRunStore:
             ).fetchall()
         return [{"event": row["event"], "data": json.loads(row["data"]), "timestamp": row["timestamp"]} for row in rows]
 
+    async def prune(self, before: datetime, *, keep_task_ids: frozenset[str] = frozenset()) -> int:
+        """Remove expired execution internals while leaving ledger responses intact."""
+        return await asyncio.to_thread(self._prune_sync, before, keep_task_ids)
+
+    def _prune_sync(self, before: datetime, keep_task_ids: frozenset[str]) -> int:
+        params: list[object] = [before.isoformat()]
+        sql = "SELECT run_id FROM agent_runs WHERE COALESCE(completed_at, started_at) < ?"
+        if keep_task_ids:
+            placeholders = ",".join("?" for _ in keep_task_ids)
+            sql += f" AND task_id NOT IN ({placeholders})"
+            params.extend(sorted(keep_task_ids))
+        with open_db_connection(self._db_path) as conn:
+            run_ids = [row["run_id"] for row in conn.execute(sql, params)]
+            if not run_ids:
+                return 0
+            rows = [(run_id,) for run_id in run_ids]
+            conn.executemany("DELETE FROM agent_run_events WHERE run_id=?", rows)
+            conn.executemany("DELETE FROM skill_usage WHERE run_id=?", rows)
+            conn.executemany("DELETE FROM agent_runs WHERE run_id=?", rows)
+        return len(run_ids)
+
     @staticmethod
     def _to_run(row: sqlite3.Row) -> AgentRun:
         return AgentRun(

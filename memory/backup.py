@@ -34,6 +34,7 @@ _BACKED_UP: tuple[str, ...] = (
     "episodic.db",  # task history summaries; a projection of the ledger, but a costly one
     "memory.db",  # context documents, including the user profile
     "ledger.db",  # the audit log everything else is derived from
+    "web.db",  # session prompts and the task ids that connect them to ledger responses
 )
 
 # Enough to survive a bad write going unnoticed over a long weekend.

@@ -20,6 +20,19 @@ from utils.db import open_db_connection
 # which are the large ones (a full agent answer each).
 _SUMMARY_COLUMNS = "id, timestamp, source, task_id, run_id, agent, action, tools_used, model_used, status, error_type"
 
+# Minimal task state retained with the final response after detailed history
+# expires. This mirrors the orchestrator's terminal actions without importing
+# the orchestrator into the storage layer.
+_TERMINAL_TASK_ACTIONS = (
+    "task_completed",
+    "task_completed_with_failures",
+    "task_failed",
+    "task_cancelled",
+    "task_stuck",
+    "task_needs_attention",
+    "task_skipped_model_unavailable",
+)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ledger (
     id              TEXT PRIMARY KEY,
@@ -484,14 +497,42 @@ class SQLiteLedgerWriter(LedgerWriter):
             raise LedgerWriteError(f"Failed to prune ledger: {e}") from e
 
     def _prune_sync(self, completed_before: datetime, failed_before: datetime) -> int:
-        # PENDING, CANCELLED and unstatused rows share the completed retention window:
-        # every task leaves an initial PENDING entry behind, so without this
-        # they would accumulate forever.
+        # PENDING, CANCELLED and unstatused rows share the completed retention
+        # window: every task leaves an initial PENDING entry behind, so without
+        # this they would accumulate forever.
+        #
+        # A session stores its prompt and task id, while the ledger is the source
+        # of truth for North's answer. Preserve the newest non-empty
+        # agent_completed entry and terminal task marker for every task so old
+        # sessions retain their final response and accurate status after the
+        # surrounding execution trace expires.
+        terminal_placeholders = ",".join("?" for _ in _TERMINAL_TASK_ACTIONS)
         with open_db_connection(self._db_path) as conn:
             cur = conn.execute(
                 "DELETE FROM ledger WHERE "
-                "((status IN (?, ?, ?) OR status IS NULL) AND timestamp < ?) "
-                "OR (status = ? AND timestamp < ?)",
+                "(((status IN (?, ?, ?) OR status IS NULL) AND timestamp < ?) "
+                "OR (status = ? AND timestamp < ?)) "
+                "AND NOT ("
+                "action = 'agent_completed' "
+                "AND COALESCE(output, '') <> '' "
+                "AND task_id IS NOT NULL "
+                "AND id = ("
+                "SELECT preserved.id FROM ledger AS preserved "
+                "WHERE preserved.task_id = ledger.task_id "
+                "AND preserved.action = 'agent_completed' "
+                "AND COALESCE(preserved.output, '') <> '' "
+                "ORDER BY preserved.timestamp DESC, preserved.rowid DESC LIMIT 1"
+                ")"
+                "OR ("
+                f"action IN ({terminal_placeholders}) "
+                "AND task_id IS NOT NULL "
+                "AND id = ("
+                "SELECT terminal.id FROM ledger AS terminal "
+                "WHERE terminal.task_id = ledger.task_id "
+                f"AND terminal.action IN ({terminal_placeholders}) "
+                "ORDER BY terminal.timestamp DESC, terminal.rowid DESC LIMIT 1"
+                ")"
+                "))",
                 (
                     LedgerStatus.COMPLETED.value,
                     LedgerStatus.PENDING.value,
@@ -499,6 +540,8 @@ class SQLiteLedgerWriter(LedgerWriter):
                     completed_before.isoformat(),
                     LedgerStatus.FAILED.value,
                     failed_before.isoformat(),
+                    *_TERMINAL_TASK_ACTIONS,
+                    *_TERMINAL_TASK_ACTIONS,
                 ),
             )
             return cur.rowcount

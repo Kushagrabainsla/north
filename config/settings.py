@@ -92,14 +92,16 @@ class Settings(BaseSettings):
     # Tuning parameters
     job_poll_interval_seconds: int = Field(default=5, ge=1)
     agent_read_timeout_seconds: int = Field(default=30, ge=1)
-    task_cleanup_completed_days: int = Field(default=7, ge=0)
-    task_cleanup_failed_days: int = Field(default=30, ge=0)
+    # Keep the complete execution record long enough for a solo operator to
+    # inspect old work. Cleanup preserves each task's final response forever;
+    # these windows govern only the detailed execution history around it.
+    task_cleanup_completed_days: int = Field(default=365, ge=1)
+    task_cleanup_failed_days: int = Field(default=365, ge=1)
     # How long a task's handoff artifacts (research notes, specs, QA reports)
-    # stay readable in the cockpit. Longer than the ledger window: these are what
-    # you read when you want to know what an agent actually concluded, and a
-    # pipeline you need to understand is usually one you looked at days later.
+    # stay readable in the cockpit. This matches the detailed ledger window so
+    # the evidence behind a session does not disappear before its execution trace.
     # 0 keeps them forever.
-    handoff_retention_days: int = Field(default=30, ge=0)
+    handoff_retention_days: int = Field(default=365, ge=0)
     # Root log level. DEBUG carries the diagnostics that answer questions the
     # normal logs cannot - which prompt tokens a provider served from cache, for
     # one - and those were unreachable while this was hardcoded to INFO.

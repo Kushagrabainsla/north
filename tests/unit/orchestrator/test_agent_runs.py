@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 from agents.models import AgentPayload, AgentResult
 from orchestrator.agent_runs import AgentRunStore
@@ -101,3 +102,28 @@ async def test_failed_run_marks_skill_usage_failed(tmp_path) -> None:
     with sqlite3.connect(tmp_path / "tasks.db") as conn:
         outcome = conn.execute("SELECT outcome FROM skill_usage WHERE run_id=?", (payload.run_id,)).fetchone()
     assert outcome == ("failed",)
+
+
+async def test_prune_removes_expired_run_internals_but_keeps_active_tasks(tmp_path) -> None:
+    db_path = tmp_path / "tasks.db"
+    store = AgentRunStore(db_path)
+    for task_id, run_id in (("expired-task", "expired-run"), ("active-task", "active-run")):
+        payload = AgentPayload(task_id=task_id, run_id=run_id, prompt="inspect")
+        await store.start(payload, "researcher")
+        await store.set_skills(run_id, [{"name": "research", "version": "1", "source": "builtin"}])
+        await store.record_event(run_id, task_id, "tool_called", {"tool": "read_file"})
+    old = (datetime.now(UTC) - timedelta(days=366)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE agent_runs SET started_at=?, completed_at=?", (old, old))
+
+    removed = await store.prune(
+        datetime.now(UTC) - timedelta(days=365),
+        keep_task_ids=frozenset({"active-task"}),
+    )
+
+    assert removed == 1
+    assert await store.get("expired-run") is None
+    assert await store.list_events("expired-run") == []
+    assert await store.get("active-run") is not None
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT count(*) FROM skill_usage WHERE run_id='expired-run'").fetchone()[0] == 0

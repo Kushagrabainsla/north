@@ -701,7 +701,7 @@ Every meaningful string or number is a named constant or enum. Defined once, imp
 # config/settings.py or the relevant module's models.py
 DEFAULT_AGENT_READ_TIMEOUT_SECONDS: int = 30
 CONFIDENCE_AUTO_APPROVE_THRESHOLD: float = 0.8
-TASK_CLEANUP_COMPLETED_DAYS: int = 7
+TASK_CLEANUP_COMPLETED_DAYS: int = 365
 
 # wrong: magic values inline
 await asyncio.wait_for(coro, timeout=30)
@@ -1316,8 +1316,8 @@ class Settings(BaseSettings):
     # tuning
     job_poll_interval_seconds: int = 5
     agent_read_timeout_seconds: int = 30
-    task_cleanup_completed_days: int = 7
-    task_cleanup_failed_days: int = 30
+    task_cleanup_completed_days: int = 365
+    task_cleanup_failed_days: int = 365
     confidence_increase_per_helpful_use: float = 0.05
     confidence_decrease_per_unhelpful_use: float = 0.03
     confidence_auto_approve_threshold: float = 0.8

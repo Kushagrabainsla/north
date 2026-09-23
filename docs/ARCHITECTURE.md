@@ -553,9 +553,9 @@ Every write is logged to the Ledger with `source: system`.
 **Task Context Object cleanup policy:**
 
 Task SQLite files are cleaned up by a daily cron job (`task_context_cleanup`, runs at 3:00 AM) to prevent unbounded accumulation:
-- `completed` or `cancelled`: deleted after 7 days
-- `failed`: retained for 30 days (may be needed for debugging or retry)
-- `pending` or `running` with no update in more than 24 hours: treated as stale, marked `failed`, retained for 30 days
+- completed, cancelled, and failed task internals: deleted after 365 days
+- pending or running tasks with no update in more than 24 hours: treated as stale, marked failed, then retained for 365 days
+- agent-run rows, events, and per-run skill usage follow the same 365-day window
 
 **Handoff artifact cleanup policy:**
 
@@ -566,14 +566,19 @@ is created per task and only losing best-of-N candidates were cleaned up, so an
 install accumulated one directory for every task it had ever run.
 
 - empty directories: deleted regardless of age (they hold nothing to read)
-- directories with content: deleted after `handoff.retention_days` (default 30)
+- directories with content: deleted after `handoff.retention_days` (default 365)
 - directories for tasks still running: never touched
 
 Age is taken from the newest artifact in the directory, not the directory
 itself, so a long task that writes its QA report late is not aged out on when it
 started. Setting `handoff.retention_days` to 0 keeps everything that has content.
 
-Ledger entries for all tasks are retained permanently regardless of Task Context Object cleanup.
+The complete ledger trace follows the same 365-day window. Cleanup permanently
+keeps the newest non-empty `agent_completed` entry and newest terminal task
+marker for every task, so sessions continue to show North's final response and
+accurate status after routing, tool, cost, model, and verification details
+expire. Daily online backups include both `ledger.db` and `web.db`, preserving
+the response and the session-to-task link together.
 
 ### 6.7 Failure Handling
 
@@ -1896,8 +1901,9 @@ NORTH_ENV=development                       # development | production | test
 # Tuning (all optional, defaults shown)
 NORTH_JOB_POLL_INTERVAL_SECONDS=5          # how often the job processor wakes
 NORTH_AGENT_READ_TIMEOUT_SECONDS=30        # timeout waiting for a key in Task Context Object
-NORTH_TASK_CLEANUP_COMPLETED_DAYS=7        # retain completed task DBs for N days
-NORTH_TASK_CLEANUP_FAILED_DAYS=30          # retain failed task DBs for N days
+NORTH_TASK_CLEANUP_COMPLETED_DAYS=365      # retain completed task internals for N days
+NORTH_TASK_CLEANUP_FAILED_DAYS=365         # retain failed task internals for N days
+NORTH_HANDOFF_RETENTION_DAYS=365           # retain generated task artifacts for N days
 NORTH_INFERENCE_POOL_REFRESH_INTERVAL_HOURS=6  # how often the model registry is refreshed
 NORTH_AGENT_MAX_ITERATIONS=40              # ReAct loop iteration cap per agent
 NORTH_EXTRACTION_POLL_INTERVAL_SECONDS=120 # extraction pipeline check frequency
