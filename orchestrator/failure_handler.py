@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from inference.exceptions import is_model_unavailable_error
 from ledger import LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
-from orchestrator.exceptions import OrchestratorError
+from orchestrator.exceptions import DeclaredArtifactMissingError, OrchestratorError
 from orchestrator.task_context import TaskContextStore
 
 if TYPE_CHECKING:
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Error types where a retry cannot succeed: the failure is deterministic
 # (missing prompt file, bad pool name) or the model pool is exhausted, so
 # retrying just burns time and cost.
-_NON_RETRYABLE_ERROR_TYPES = frozenset({"config_error", "model_unavailable"})
+_NON_RETRYABLE_ERROR_TYPES = frozenset({"artifact_missing", "config_error", "model_unavailable"})
 
 
 def classify_error(exc: Exception) -> str:
@@ -48,6 +48,9 @@ def classify_error(exc: Exception) -> str:
     # recognised rather than falling through to logic_error.
     if is_model_unavailable_error(exc):
         return "model_unavailable"
+
+    if isinstance(exc, DeclaredArtifactMissingError):
+        return "artifact_missing"
 
     msg = str(exc).lower()
     name = type(exc).__name__

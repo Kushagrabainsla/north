@@ -614,16 +614,23 @@ async def _run_scheduled_task(
     orchestrator: Orchestrator,
     prompt: str,
     *,
+    forced_agent: str | None = None,
     poll_seconds: float = _SCHEDULED_POLL_SECONDS,
     timeout_seconds: float = _SCHEDULED_TIMEOUT_SECONDS,
 ) -> None:
     """Start a scheduled task and wait to see whether it worked.
 
+    ``forced_agent`` preserves the agent stored on the schedule; routing the
+    prompt again can silently replace a file-producing specialist with a chat
+    agent that returns text but writes nothing.
+
     Only a clean task completion returns success. Cancellation is propagated to
     the job as cancellation; exhausted recovery and an overlong in-flight task
     are parked for attention so neither can be mislabeled completed or duplicated.
     """
-    response = await orchestrator.submit_task(TaskRequest(prompt=prompt, source=LedgerSource.CRON))
+    response = await orchestrator.submit_task(
+        TaskRequest(prompt=prompt, source=LedgerSource.CRON, forced_agent=forced_agent)
+    )
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         await asyncio.sleep(poll_seconds)
@@ -697,7 +704,11 @@ def _launch_background_tasks(
             return
         skill = str((job.payload or {}).get("skill") or "").strip()
         skill_hint = f" Use the '{skill}' skill before acting." if skill else ""
-        await _run_scheduled_task(orchestrator, f"[scheduled]{skill_hint}\n{job.task}")
+        await _run_scheduled_task(
+            orchestrator,
+            f"[scheduled]{skill_hint}\n{job.task}",
+            forced_agent=job.agent,
+        )
 
     cron_scheduler = CronScheduler(
         processor=deps.job_processor,

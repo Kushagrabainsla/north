@@ -22,3 +22,7 @@ class TaskCapacityError(OrchestratorError):
 
 class RoutingError(OrchestratorError):
     """Raised when intent routing or execution plan construction fails."""
+
+
+class DeclaredArtifactMissingError(OrchestratorError):
+    """Raised when an agent finishes without writing an output it declares."""

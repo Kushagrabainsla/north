@@ -51,6 +51,10 @@ class AgentPayload(BaseModel):
     # Exact server-owned tool allowlist for an executable skill. None keeps the
     # normal task-time catalog behavior; an empty list means no external tools.
     allowed_tools: list[str] | None = None
+    # Durable outputs a scheduled agent must write before its result can be
+    # accepted. Resolved by the orchestrator from AgentConfig.produces; never
+    # supplied by model output.
+    required_artifacts: list[str] = Field(default_factory=list, exclude=True)
     # Server-owned guard applied immediately before every mutating tool call.
     mutation_policy: Literal["allow", "require_approval", "deny"] = "allow"
     context: str = ""  # optional pre-loaded context summary

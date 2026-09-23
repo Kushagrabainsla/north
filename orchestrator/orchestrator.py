@@ -51,7 +51,12 @@ from orchestrator.engineering_prompts import (
     clean_issues,
     parse_spec_tasks,
 )
-from orchestrator.exceptions import NorthStarConflictError, OrchestratorError, TaskCapacityError
+from orchestrator.exceptions import (
+    DeclaredArtifactMissingError,
+    NorthStarConflictError,
+    OrchestratorError,
+    TaskCapacityError,
+)
 from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.handoff_artifacts import primary_artifact_path
 from orchestrator.handoff_artifacts import read_artifact as _read_artifact
@@ -95,7 +100,7 @@ from utils.logging import bind_task_id
 from utils.prompts import load_prompt
 from utils.tasks import spawn
 from utils.text import extract_json
-from utils.time import format_timestamp, utcnow
+from utils.time import format_timestamp, localnow, utcnow
 from utils.tools import (
     ToolDispatchRegistryPort,
     ToolInputFactory,
@@ -107,6 +112,34 @@ logger = logging.getLogger(__name__)
 
 # Max characters of a handoff artifact injected into a downstream agent's context.
 _HANDOFF_ARTIFACT_MAX_CHARS: int = 6000
+
+
+def _declared_artifact_paths(agent: Agent, task_id: str, date: str) -> list[str]:
+    """Resolve an agent's declared output templates to concrete paths.
+
+    Agent configs use two server-owned placeholders: ``{handoff_dir}`` for
+    task-scoped pipeline output and ``{date}`` for personal daily artifacts.
+    Resolving both here lets scheduled work prove it produced the durable thing
+    the dashboard reads instead of treating a model answer as equivalent.
+    """
+    return [
+        str(Path(declared.replace("{handoff_dir}", handoff_dir_for(task_id)).replace("{date}", date)).expanduser())
+        for declared in agent.config.produces
+    ]
+
+
+def _missing_artifact_paths(paths: list[str]) -> list[str]:
+    """Return required artifact paths that are absent or empty."""
+    missing: list[str] = []
+    for value in paths:
+        path = Path(value)
+        try:
+            valid = path.is_file() and path.stat().st_size > 0
+        except OSError:
+            valid = False
+        if not valid:
+            missing.append(str(path))
+    return missing
 
 # Engineering conductor (2e): coder→reviewer fix rounds allowed after the first
 # review before the bounded loop stops and the DoD gate takes over.
@@ -1020,6 +1053,11 @@ class Orchestrator:
         agent = self._agent_registry.get(request.forced_agent)
         workspace = request.workspace or self._default_workspace
         model_pool = self._resolve_task_model_pool(domain=agent.domain)
+        required_artifacts = (
+            _declared_artifact_paths(agent, task_id, localnow().date().isoformat())
+            if request.source is LedgerSource.CRON
+            else []
+        )
         await self._task_context_store.initialize_task(task_id, [agent.name])
         await self._stream_manager.emit(task_id, "executing", {"agents": [agent.name]})
         failures = await self._execute_agent_group(
@@ -1030,6 +1068,7 @@ class Orchestrator:
             context=request.context,
             model_pool=model_pool,
             edit_scope=request.edit_scope,
+            required_artifacts={agent.name: required_artifacts},
         )
         if failures:
             await self._report_execution_failures(task_id, failures)
@@ -2008,6 +2047,7 @@ class Orchestrator:
         model_pool: str = "reasoning",
         execution_profile: str = "standard",
         edit_scope: EditAuthorizer | None = None,
+        required_artifacts: dict[str, list[str]] | None = None,
     ) -> list[str]:
         """Run a parallel group of agents concurrently; handle per-agent failures.
 
@@ -2019,6 +2059,10 @@ class Orchestrator:
         ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`. When set
         it is stamped onto every payload so mutating file tools enforce it; ``None``
         (the default) leaves edits unrestricted, preserving prior behavior.
+
+        ``required_artifacts`` is also server-owned. Scheduled forced-agent work
+        uses it to validate declared files before any successful completion event
+        or user notification is emitted.
         """
         await self._heartbeat(task_id)
         # Per-agent payloads: an agent declaring `distinct_from` in its config (e.g.
@@ -2035,6 +2079,7 @@ class Orchestrator:
                 exclude_models=await self._exclude_models_for(task_id, agent),
                 allow_delegation=allow_delegation,
                 edit_scope=edit_scope,
+                required_artifacts=(required_artifacts or {}).get(agent.name, []),
             )
             for agent in agents
         ]
@@ -2126,6 +2171,23 @@ class Orchestrator:
             t0 = time.monotonic()
             try:
                 result = await agent.run(payload)
+                missing_artifacts = await asyncio.to_thread(
+                    _missing_artifact_paths,
+                    payload.required_artifacts,
+                )
+                if missing_artifacts:
+                    message = f"{agent.name} completed without writing: {', '.join(missing_artifacts)}"
+                    await self._journal.record(
+                        task_id,
+                        "declared_artifact_missing",
+                        source=LedgerSource.AGENT,
+                        agent=agent.name,
+                        status=LedgerStatus.FAILED,
+                        output=message,
+                        error_type="artifact_missing",
+                        payload={"agent": agent.name, "artifacts": missing_artifacts},
+                    )
+                    raise DeclaredArtifactMissingError(message)
                 result.duration_ms = int((time.monotonic() - t0) * 1000)
                 self._failure_handler.clear_retry_count(task_id, agent.name)
                 await self._task_context_store.update_agent_status(task_id, agent.name, "completed")

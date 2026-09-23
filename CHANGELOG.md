@@ -55,6 +55,7 @@ All notable changes to north are documented here.
 - Every page spaces its blocks alike: 28px under the header, 18px between blocks, matching the gap panels already had side by side.
 
 ### Fixed
+- **Scheduled agents now run as configured and must produce their declared artifacts.** The job dispatcher previously discarded `job.agent`, allowing the planner to replace `news_briefing` with `general`; Telegram then received a generated answer while no `~/.north/news/{date}.md` file existed for the dashboard. Scheduled tasks now force the stored agent, validate every declared output before recording agent completion or sending the success notification, and fail into the existing job retry path when an artifact is absent or empty.
 - **Runtime-authored skills now land in the directory the live registry actually scans** (`~/.north/skills`), so a successful `create_skill` call is visible on the next selection pass.
 - **Deleting an active learned tool now updates the live registry** and restores the built-in implementation when the learned tool was an override, instead of leaving deleted code callable until restart.
 - **Fresh sessions can discover reusable flows** in their dynamic capability summary, including each flow's status and step count, so North can improve an existing process instead of creating a duplicate.

@@ -18,6 +18,7 @@ from jobs.exceptions import JobCancelled, JobNeedsAttention
 from jobs.models import JobStatus
 from jobs.scheduler import CronEntry, CronScheduler
 from jobs.sqlite_processor import SQLiteJobProcessor
+from ledger.models import LedgerSource
 from orchestrator.app import ScheduledTaskFailed, _run_scheduled_task
 
 MORNING = datetime(2026, 5, 22, 10, 0, tzinfo=UTC)  # the 08:00 slot was missed 2h ago
@@ -119,8 +120,10 @@ class _FakeOrchestrator:
     def __init__(self, statuses: list[str]) -> None:
         self._statuses = list(statuses)
         self.submitted: list[str] = []
+        self.requests = []
 
     async def submit_task(self, request):
+        self.requests.append(request)
         self.submitted.append(request.prompt)
         return type("Response", (), {"task_id": "task_1"})()
 
@@ -142,6 +145,19 @@ async def test_a_completed_scheduled_task_returns_quietly() -> None:
     orchestrator = _FakeOrchestrator(["queued", "running", "completed"])
     await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0)
     assert orchestrator.submitted == ["[scheduled] brief"]
+
+
+@pytest.mark.asyncio
+async def test_a_scheduled_task_runs_its_configured_agent() -> None:
+    orchestrator = _FakeOrchestrator(["completed"])
+    await _run_scheduled_task(
+        orchestrator,
+        "[scheduled] brief",
+        forced_agent="news_briefing",
+        poll_seconds=0,
+    )
+    assert orchestrator.requests[0].forced_agent == "news_briefing"
+    assert orchestrator.requests[0].source is LedgerSource.CRON
 
 
 @pytest.mark.asyncio

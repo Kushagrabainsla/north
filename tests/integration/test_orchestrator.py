@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -182,6 +183,68 @@ async def test_forced_agent_runs_that_agent_and_skips_planner(tmp_path):
     # Exactly the requested agent ran.
     ran = {e.agent for e in entries if e.action == "agent_completed"}
     assert ran == {"general"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("artifact_contents", [None, ""])
+async def test_scheduled_agent_missing_declared_artifact_fails_before_notification(
+    tmp_path, monkeypatch, artifact_contents
+):
+    """A Telegram-sized answer is not a substitute for the file the dashboard reads."""
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+    agent = orch._agent_registry.get("news_briefing")
+    artifact = tmp_path / "news" / "missing.md"
+    if artifact_contents is not None:
+        artifact.parent.mkdir()
+        artifact.write_text(artifact_contents, encoding="utf-8")
+    monkeypatch.setattr(agent.config, "produces", [str(artifact)])
+    run_agent = AsyncMock(return_value=AgentResult(output="Here is the news.", summary="Briefing complete."))
+    monkeypatch.setattr(agent, "run", run_agent)
+    inform = AsyncMock()
+    monkeypatch.setattr(orch._interaction, "inform", inform)
+
+    await orch._run_forced_agent(
+        "task_missing_artifact",
+        TaskRequest(prompt="brief me", source=LedgerSource.CRON, forced_agent="news_briefing"),
+    )
+
+    entries = await ledger.query(LedgerFilters(task_id="task_missing_artifact"))
+    actions = {entry.action for entry in entries}
+    assert "declared_artifact_missing" in actions
+    assert "agent_execution_failed" in actions
+    assert "task_failed" in actions
+    assert "agent_completed" not in actions
+    run_agent.assert_awaited_once()
+    inform.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_agent_with_declared_artifact_completes_and_notifies(tmp_path, monkeypatch):
+    orch, ledger, _ = _make_orchestrator(tmp_path)
+    agent = orch._agent_registry.get("news_briefing")
+    artifact = tmp_path / "news" / "briefing.md"
+    artifact.parent.mkdir()
+    artifact.write_text("# Daily briefing\n", encoding="utf-8")
+    monkeypatch.setattr(agent.config, "produces", [str(artifact)])
+    monkeypatch.setattr(
+        agent,
+        "run",
+        AsyncMock(return_value=AgentResult(output="Saved the briefing.", summary="Briefing complete.")),
+    )
+    inform = AsyncMock()
+    monkeypatch.setattr(orch._interaction, "inform", inform)
+
+    await orch._run_forced_agent(
+        "task_with_artifact",
+        TaskRequest(prompt="brief me", source=LedgerSource.CRON, forced_agent="news_briefing"),
+    )
+
+    entries = await ledger.query(LedgerFilters(task_id="task_with_artifact"))
+    actions = {entry.action for entry in entries}
+    assert "agent_completed" in actions
+    assert "task_completed" in actions
+    assert "declared_artifact_missing" not in actions
+    inform.assert_awaited_once()
 
 
 @pytest.mark.asyncio
