@@ -263,6 +263,7 @@ interface Job {
 interface Cron {
   name: string; label: string; title: string; description: string;
   agent: string; task: string; hour: number; minute: number;
+  interval_minutes?: number | null; anchor_epoch?: number | null;
   weekdays: number[]; cadence: string; enabled: boolean; tz: string;
   schedule: string; next_run_local: string; next_run_epoch: number; source: string; modified: boolean;
 }
@@ -294,10 +295,11 @@ function whenFromNow(epoch: number): string {
 // How often, as a person chooses it - one named rule rather than a set of day
 // toggles they have to translate. "Every weekday" was expressible only by
 // picking five buttons and knowing that meant weekdays.
-type Repeat = "once" | "daily" | "weekdays" | "weekends" | "custom";
+type Repeat = "once" | "interval" | "daily" | "weekdays" | "weekends" | "custom";
 
 const REPEAT_LABELS: [Repeat, string][] = [
   ["once", "Does not repeat"],
+  ["interval", "Every few minutes"],
   ["daily", "Every day"],
   ["weekdays", "Every weekday (Mon to Fri)"],
   ["weekends", "Every weekend (Sat and Sun)"],
@@ -306,19 +308,21 @@ const REPEAT_LABELS: [Repeat, string][] = [
 
 interface Draft {
   label: string; task: string; agent: string;
-  hour: number; minute: number; repeat: Repeat; days: number[]; date: string;
+  hour: number; minute: number; intervalMinutes: number; repeat: Repeat; days: number[]; date: string;
 }
 
 const todayISO = () => dateInNorthTimezone();
 
 const emptyDraft = (): Draft => ({
   label: "", task: "", agent: "general", hour: 9, minute: 0,
-  repeat: "once", days: [], date: todayISO(),
+  intervalMinutes: 5, repeat: "once", days: [], date: todayISO(),
 });
 
 // Which named rule an existing routine is already following, so opening the
 // editor shows the rule rather than making the reader infer it from checkboxes.
-function repeatOf(weekdays: number[]): Repeat {
+function repeatOf(entry: Cron): Repeat {
+  if (entry.interval_minutes) return "interval";
+  const weekdays = entry.weekdays;
   const set = [...weekdays].sort().join(",");
   if (!set) return "daily";
   if (set === "0,1,2,3,4") return "weekdays";
@@ -329,7 +333,8 @@ function repeatOf(weekdays: number[]): Repeat {
 const draftOf = (entry: Cron): Draft => ({
   label: entry.label, task: entry.task, agent: entry.agent,
   hour: entry.hour, minute: entry.minute,
-  repeat: repeatOf(entry.weekdays), days: [...entry.weekdays], date: todayISO(),
+  intervalMinutes: entry.interval_minutes || 5,
+  repeat: repeatOf(entry), days: [...entry.weekdays], date: todayISO(),
 });
 
 // The rule as the API takes it. Only "custom" needs the day list.
@@ -385,14 +390,18 @@ function ScheduleForm({ draft, setDraft, onSubmit, onCancel, submitLabel, busy, 
       <DayPicker days={draft.days} onChange={days => setDraft({ ...draft, days })}/>
     </label>}
     <div className="schedule-form-row">
-      {/* A one-off happens on a date; a routine happens at a time, every time. */}
+      {/* A one-off happens on a date; a wall-clock routine happens at a time;
+          a fixed interval carries its own period instead. */}
       {draft.repeat === "once" && <label>Date
         <input type="date" value={draft.date} min={todayISO()}
           onChange={e => e.target.value && setDraft({ ...draft, date: e.target.value })}/>
       </label>}
-      <label>Time
+      {draft.repeat === "interval" ? <label>Every (minutes)
+        <input type="number" min={1} step={1} value={draft.intervalMinutes}
+          onChange={e => setDraft({ ...draft, intervalMinutes: Math.max(1, Number(e.target.value) || 1) })}/>
+      </label> : <label>Time
         <input type="time" value={hhmm(draft.hour, draft.minute)} onChange={e => setTime(e.target.value)}/>
-      </label>
+      </label>}
       <label>Agent
         <select value={draft.agent} onChange={e => setDraft({ ...draft, agent: e.target.value })}>
           {(agents.includes(draft.agent) ? agents : [draft.agent, ...agents]).map(name =>
@@ -437,7 +446,7 @@ function BuiltinRow({ entry, restore, confirm }: { entry: Cron; restore?: ReactN
   const facts: [string, string][] = [
     ["Runs", entry.task],
     ["Agent", entry.agent],
-    ["Repeats", `${entry.cadence} at ${hhmm(entry.hour, entry.minute)}`],
+    ["Repeats", entry.interval_minutes ? entry.cadence : `${entry.cadence} at ${hhmm(entry.hour, entry.minute)}`],
     ["Time zone", entry.tz],
     ["Next run", entry.enabled ? `${entry.next_run_local} (${whenFromNow(entry.next_run_epoch)})` : "paused"],
     ["Settings", entry.modified ? "changed from the ones north ships with" : "as north ships them"],
@@ -449,7 +458,7 @@ function BuiltinRow({ entry, restore, confirm }: { entry: Cron; restore?: ReactN
           through its prompt, which for the nightly cleanup is a bare slug. */}
       {entry.description && <small className="schedule-description">{entry.description}</small>}
       <small>
-        {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
+        {entry.interval_minutes ? entry.cadence : `${entry.cadence} at ${hhmm(entry.hour, entry.minute)}`} · {entry.agent}
         {entry.enabled ? ` · next ${entry.next_run_local}` : " · paused"}
         {entry.modified && " · edited"}
       </small>
@@ -508,10 +517,12 @@ export function Schedule() {
   };
 
   const agents = (agentList.data || []).map(a => a.name).sort();
-  const body = () => ({
-    label: draft.label, task: draft.task, agent: draft.agent,
-    hour: draft.hour, minute: draft.minute, days: daysField(draft),
-  });
+  const body = () => draft.repeat === "interval"
+    ? { label: draft.label, task: draft.task, agent: draft.agent, interval_minutes: draft.intervalMinutes }
+    : {
+        label: draft.label, task: draft.task, agent: draft.agent,
+        hour: draft.hour, minute: draft.minute, days: daysField(draft),
+      };
   // One form, two destinations. "Does not repeat" is an event on a date, which
   // is a job; anything else is a rule, which is a routine. Creating a one-off
   // needed the chat before this - the page could only make things that repeat.
@@ -619,7 +630,7 @@ export function Schedule() {
           <div className="schedule-main">
             <b>{entry.title}</b>
             <small>
-              {entry.cadence} at {hhmm(entry.hour, entry.minute)} · {entry.agent}
+              {entry.interval_minutes ? entry.cadence : `${entry.cadence} at ${hhmm(entry.hour, entry.minute)}`} · {entry.agent}
               {entry.enabled ? ` · next ${entry.next_run_local}` : " · paused"}
             </small>
             {/* Once the title is a name, what actually runs is no longer on
@@ -964,6 +975,7 @@ function CapabilityModal({ open, title, eyebrow, actions, className = "", onClos
     if (open && !element.open) element.showModal();
     if (!open && element.open) element.close();
   }, [open]);
+  if (!open) return null;
   return <dialog className={`capability-modal ${className}`} ref={ref}
     aria-label={`${title} ${eyebrow}`}
     onCancel={event => { event.preventDefault(); onClose(); }}
@@ -981,15 +993,19 @@ function CapabilityModal({ open, title, eyebrow, actions, className = "", onClos
   </dialog>;
 }
 
-interface SkillSummary { name: string; description: string; source: string; version: string; status: string; domains: string[]; }
-interface SkillDetail { name: string; content: string; source: string; }
-interface SkillCreateDraft { name: string; description: string; domains: string; instructions: string; }
+interface SkillExecution { agent: string; tools: string[]; approval: "never" | "on_mutation" | "always"; inputs: { properties?: Record<string, { type?: string; enum?: unknown[] }>; required?: string[] }; outputs: { properties?: Record<string, { type?: string; enum?: unknown[] }>; required?: string[] }; success_criteria: string[]; }
+interface SkillSummary { name: string; description: string; source: string; version: string; status: string; domains: string[]; execution: SkillExecution | null; }
+interface SkillDetail { name: string; content: string; source: string; execution: SkillExecution | null; }
+interface SkillCreateDraft { name: string; description: string; domains: string; instructions: string; executor: string; tools: string[]; approval: "never" | "on_mutation" | "always"; inputs: string; outputs: string; successCriteria: string; }
 
-const emptySkill = (): SkillCreateDraft => ({ name: "", description: "", domains: "general", instructions: "" });
+const emptySkill = (): SkillCreateDraft => ({ name: "", description: "", domains: "general", instructions: "", executor: "general", tools: [], approval: "never", inputs: "", outputs: "result", successCriteria: "The requested procedure completed and returned verifiable evidence." });
+const fieldSchema = (value: string) => { const names = value.split(",").map(item => item.trim()).filter(Boolean); return { type: "object", properties: Object.fromEntries(names.map(name => [name, { type: "string" }])), required: names, additionalProperties: true }; };
 
 export function Skills() {
   const dialog = useDialog();
   const skills = useResource<SkillSummary[]>("/web/api/skills", 10000);
+  const tools = useResource<ToolSummary[]>("/web/api/tools", 10000);
+  const agents = useResource<Agent[]>("/orchestrator/agents", 10000);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [creating, setCreating] = useState(false);
@@ -1008,21 +1024,27 @@ export function Skills() {
         description: draft.description.trim(),
         instructions: draft.instructions.trim(),
         domains: draft.domains.split(",").map(domain => domain.trim()).filter(Boolean),
+        executor: draft.executor,
+        tools: draft.tools,
+        approval: draft.approval,
+        inputs: fieldSchema(draft.inputs),
+        outputs: fieldSchema(draft.outputs),
+        success_criteria: draft.successCriteria.split("\n").map(item => item.trim()).filter(Boolean),
       });
       setDraft(emptySkill());
       await skills.reload();
       await open(created.name);
-      setMessage("Skill created and loaded.");
+      setMessage("Skill candidate created. Validate its selection before activation.");
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   };
-  const save = async () => { if (!selected || selectedSkill?.source === "builtin") return; try { await api(`/web/api/skills/${selected}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Skill saved and reloaded."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const save = async () => { if (!selected) return; try { await api(`/web/api/skills/${selected}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Skill saved as a candidate. Validate it before activation."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
   const remove = async () => { if (!selected || selectedSkill?.source !== "learned" || !await dialog.confirm(`Delete learned skill '${selected}'? This cannot be undone.`, { title: "Delete skill?", confirmLabel: "Delete skill", danger: true })) return; try { await del(`/web/api/skills/${encodeURIComponent(selected)}`); setSelected(null); setContent(""); setMessage("Learned skill deleted."); await skills.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
-  const canCreate = draft.name.trim() && draft.description.trim() && draft.instructions.trim();
+  const canCreate = draft.name.trim() && draft.description.trim() && draft.instructions.trim() && draft.executor && draft.successCriteria.trim();
   return <div className="page capability-page"><PageHeader eyebrow="Procedures" title="Skills" subtitle="Inspect and edit the playbooks North injects into specialist work." actions={<button className="primary-button" onClick={startCreating}>+ New skill</button>}/>{skills.error && <ErrorNotice message={skills.error}/>} {message && <div className="notice">{message}</div>}
-    {creating && <section className="capability-create-panel"><header><div><span>New procedure</span><h2>Create skill</h2><p>A skill is a Markdown instruction document, not executable Python.</p></div><button className="ghost-button" onClick={() => setCreating(false)}>Cancel</button></header><div className="tool-create skill-create"><div className="skill-create-grid"><label>Name<input autoFocus value={draft.name} placeholder="review-job-match" onChange={event => setDraft({ ...draft, name: event.target.value })}/></label><label>Domains<input value={draft.domains} placeholder="jobs, research" onChange={event => setDraft({ ...draft, domains: event.target.value })}/></label><label className="skill-create-wide">Description<input value={draft.description} placeholder="When should North use this skill?" onChange={event => setDraft({ ...draft, description: event.target.value })}/></label><label className="skill-create-wide">Markdown instructions<textarea rows={10} value={draft.instructions} placeholder="Write the ordered procedure North should follow." onChange={event => setDraft({ ...draft, instructions: event.target.value })}/></label></div><div className="tool-create-footer"><small>Use a lowercase, hyphenated name. Domains are comma-separated.</small><button className="primary-button" disabled={!canCreate} onClick={() => void create()}>Create skill</button></div></div></section>}
+    {creating && <section className="capability-create-panel"><header><div><span>New procedure</span><h2>Create skill</h2><p>Define the procedure and its executable contract once. Flows will depend only on this skill.</p></div><button className="ghost-button" onClick={() => setCreating(false)}>Cancel</button></header><div className="tool-create skill-create"><div className="skill-create-grid"><label>Name<input autoFocus value={draft.name} placeholder="review-job-match" onChange={event => setDraft({ ...draft, name: event.target.value })}/></label><label>Domains<input value={draft.domains} placeholder="general, research" onChange={event => setDraft({ ...draft, domains: event.target.value })}/></label><label className="skill-create-wide">Description<input value={draft.description} placeholder="Use when North should review a job match." onChange={event => setDraft({ ...draft, description: event.target.value })}/></label><label>Executor<select value={draft.executor} onChange={event => setDraft({ ...draft, executor: event.target.value })}>{(agents.data || []).map(agent => <option key={agent.name} value={agent.name}>{agent.name} · {agent.domain}</option>)}</select><small>The agent this skill always uses.</small></label><label>Minimum approval<select value={draft.approval} onChange={event => setDraft({ ...draft, approval: event.target.value as SkillCreateDraft["approval"] })}><option value="never">No mutations</option><option value="on_mutation">Ask before each mutation</option><option value="always">Approve the whole step first</option></select></label><label className="skill-create-wide">Allowed tools<select value="" onChange={event => { const name = event.target.value; if (name && !draft.tools.includes(name)) setDraft({ ...draft, tools: [...draft.tools, name] }); }}><option value="">Add an atomic tool</option>{(tools.data || []).filter(tool => tool.status === "active" && !draft.tools.includes(tool.name)).map(tool => <option key={tool.name} value={tool.name}>{tool.name}{tool.mutating ? " · mutating" : ""}</option>)}</select><div className="contract-chips">{draft.tools.length ? draft.tools.map(name => <button type="button" key={name} onClick={() => setDraft({ ...draft, tools: draft.tools.filter(item => item !== name) })}>{name} ×</button>) : <small>No tools. This skill can reason only.</small>}</div></label><label>Required input fields<input value={draft.inputs} placeholder="resume, job_url" onChange={event => setDraft({ ...draft, inputs: event.target.value })}/><small>Comma-separated names.</small></label><label>Required output fields<input value={draft.outputs} placeholder="result, evidence" onChange={event => setDraft({ ...draft, outputs: event.target.value })}/><small>Comma-separated names.</small></label><label className="skill-create-wide">Success criteria<textarea rows={3} value={draft.successCriteria} placeholder="One verifiable condition per line." onChange={event => setDraft({ ...draft, successCriteria: event.target.value })}/></label><label className="skill-create-wide">Markdown instructions<textarea rows={10} value={draft.instructions} placeholder="Write the ordered procedure North should follow." onChange={event => setDraft({ ...draft, instructions: event.target.value })}/></label></div><div className="tool-create-footer"><small>Use a lowercase, hyphenated name. Descriptions start with “Use when”.</small><button className="primary-button" disabled={!canCreate} onClick={() => void create()}>Create skill</button></div></div></section>}
     <section className="capability-registry">
       <div className="capability-registry-head"><span>Skill</span><span>Description</span><span>Definition</span><span>Status</span><span/></div>
-      <div className="capability-registry-list">{skills.loading ? <Loading/> : (skills.data || []).map(skill => <button className="capability-registry-row" key={skill.name} aria-haspopup="dialog" onClick={() => void open(skill.name)}><span className="capability-registry-name"><b>{skill.name}</b><small>{skill.source}</small></span><span className="capability-registry-description">{skill.description}</span><span className="capability-registry-meta">v{skill.version} · {skill.domains.join(", ")}</span><Status value={skill.status}/><span className="capability-registry-open">Open</span></button>)}{!skills.loading && !skills.data?.length && <Empty>No skills have been created yet.</Empty>}</div>
+      <div className="capability-registry-list">{skills.loading ? <Loading/> : (skills.data || []).map(skill => <button className="capability-registry-row" key={skill.name} aria-haspopup="dialog" onClick={() => void open(skill.name)}><span className="capability-registry-name"><b>{skill.name}</b><small>{skill.source}</small></span><span className="capability-registry-description">{skill.description}</span><span className="capability-registry-meta">{skill.execution ? `${skill.execution.agent} · ${skill.execution.tools.length} tools` : "advisory only"}</span><Status value={skill.status}/><span className="capability-registry-open">Open</span></button>)}{!skills.loading && !skills.data?.length && <Empty>No skills have been created yet.</Empty>}</div>
     </section>
     <CapabilityModal open={Boolean(selected)} onClose={closeEditor} title={selected || "Skill"} eyebrow={selectedSkill?.source || "Procedure"}
       actions={selected ? <><button className="primary-button" disabled={detailLoading} onClick={() => void save()}>Save skill</button>{selectedSkill?.source === "learned" && <button className="danger-button" onClick={() => void remove()}>Delete skill</button>}</> : undefined}>
@@ -1044,33 +1066,41 @@ function ContentTextarea({ value, onChange, ...props }: TextareaHTMLAttributes<H
 }
 
 interface FlowSummary { name: string; description: string; source: string; status: string; domains: string[]; steps: number; }
-interface FlowStepDraft { name: string; tool: string; skill: string; approval: "never" | "on_mutation" | "always"; description: string; params: Record<string, unknown>; }
+interface FlowStepDraft { name: string; skill: string; approval: "never" | "on_mutation" | "always"; instructions: string; inputs: Record<string, unknown>; }
 interface FlowDetail { name: string; description: string; status: string; domains: string[]; source: string; steps: FlowStepDraft[]; }
 interface FlowDraft { name: string; description: string; status: string; domains: string[]; steps: FlowStepDraft[]; }
 
-const emptyStep = (): FlowStepDraft => ({ name: "", tool: "", skill: "", approval: "on_mutation", description: "", params: {} });
-const emptyFlow = (): FlowDraft => ({ name: "", description: "", status: "active", domains: ["general"], steps: [emptyStep()] });
-const draftFromDetail = (detail: FlowDetail): FlowDraft => ({ name: detail.name, description: detail.description, status: detail.status, domains: detail.domains, steps: detail.steps.map(step => ({ ...emptyStep(), ...step, params: step.params || {} })) });
+const emptyStep = (): FlowStepDraft => ({ name: "", skill: "", approval: "on_mutation", instructions: "", inputs: {} });
+const emptyFlow = (): FlowDraft => ({ name: "", description: "", status: "candidate", domains: ["general"], steps: [emptyStep()] });
+const draftFromDetail = (detail: FlowDetail): FlowDraft => ({ name: detail.name, description: detail.description, status: detail.status, domains: detail.domains, steps: detail.steps.map(step => ({ ...emptyStep(), ...step, inputs: step.inputs || {} })) });
 
-function FlowStepCard({ step, index, onChange, onRemove, canRemove, editable, tools, skills }: { step: FlowStepDraft; index: number; onChange: (step: FlowStepDraft) => void; onRemove: () => void; canRemove: boolean; editable: boolean; tools: ToolSummary[]; skills: SkillSummary[] }) {
-  const params = Object.entries(step.params || {});
+function FlowStepCard({ step, index, onChange, onRemove, canRemove, editable, skills }: { step: FlowStepDraft; index: number; onChange: (step: FlowStepDraft) => void; onRemove: () => void; canRemove: boolean; editable: boolean; skills: SkillSummary[] }) {
+  const inputs = Object.entries(step.inputs || {});
   const set = (patch: Partial<FlowStepDraft>) => onChange({ ...step, ...patch });
-  const setParam = (oldKey: string, key: string, value: string) => {
-    const next = { ...step.params };
+  const setInput = (oldKey: string, key: string, value: unknown) => {
+    const next = { ...step.inputs };
     if (oldKey !== key) delete next[oldKey];
     next[key] = value;
-    set({ params: next });
+    set({ inputs: next });
   };
-  const toolNames = new Set(tools.map(tool => tool.name));
-  const skillNames = new Set(skills.map(skill => skill.name));
-  return <article className="flow-step-card"><header><div><span className="eyebrow">Step {index + 1}</span><h3>{step.name || "Untitled step"}</h3></div><button type="button" className="ghost-button danger-link" disabled={!canRemove} onClick={onRemove}>Remove</button></header><div className="flow-step-grid"><label>Step name<input disabled={!editable} value={step.name} placeholder="Find matching jobs" onChange={event => set({ name: event.target.value })}/></label><label>North tool<select aria-label="North tool" disabled={!editable} value={step.tool} onChange={event => set({ tool: event.target.value })}><option value="">Select a tool</option>{step.tool && !toolNames.has(step.tool) && <option value={step.tool}>{step.tool} (unavailable)</option>}{tools.map(tool => <option key={tool.name} value={tool.name}>{tool.name}</option>)}</select></label><label>Approval<select aria-label="Approval" disabled={!editable} value={step.approval} onChange={event => set({ approval: event.target.value as FlowStepDraft["approval"] })}><option value="never">Run automatically</option><option value="on_mutation">Ask before mutations</option><option value="always">Always ask first</option></select></label><label>Skill to use<select aria-label="Skill to use" disabled={!editable} value={step.skill} onChange={event => set({ skill: event.target.value })}><option value="">Select a skill</option>{step.skill && !skillNames.has(step.skill) && <option value={step.skill}>{step.skill} (unavailable)</option>}{skills.map(skill => <option key={skill.name} value={skill.name}>{skill.name}</option>)}</select></label></div><label className="flow-wide-field">Step description<textarea aria-label="Step description" disabled={!editable} value={step.description} rows={2} placeholder="Explain the intended action and expected result" onChange={event => set({ description: event.target.value })}/></label><div className="flow-params"><div className="flow-params-heading"><div><b>Tool inputs</b><small>Optional values passed to the tool</small></div><button type="button" className="ghost-button" disabled={!editable} onClick={() => set({ params: { ...step.params, "": "" } })}>+ Add input</button></div>{params.length ? params.map(([key, value], paramIndex) => <div className="flow-param-row" key={`${key}-${paramIndex}`}><input disabled={!editable} aria-label="Input name" placeholder="input name" value={key} onChange={event => setParam(key, event.target.value, String(value))}/><input disabled={!editable} aria-label="Input value" placeholder="value" value={String(value ?? "")} onChange={event => setParam(key, key, event.target.value)}/><button type="button" className="ghost-button danger-link" disabled={!editable} aria-label="Remove input" onClick={() => { const next = { ...step.params }; delete next[key]; set({ params: next }); }}>×</button></div>) : <small className="flow-empty-inputs">No tool inputs yet. Add one only when this step needs fixed values.</small>}</div></article>;
+  const activeSkills = skills.filter(skill => skill.status === "active" && skill.execution);
+  const selectedSkill = skills.find(skill => skill.name === step.skill);
+  const execution = selectedSkill?.execution;
+  const selectSkill = (name: string) => {
+    const contract = skills.find(skill => skill.name === name)?.execution;
+    const required = contract?.inputs.required || [];
+    const properties = contract?.inputs.properties || {};
+    const nextInputs = Object.fromEntries(required.map(key => [key, properties[key]?.type === "boolean" ? false : ""]));
+    set({ skill: name, approval: contract?.approval || "on_mutation", inputs: nextInputs });
+  };
+  const approvalRank = { never: 0, on_mutation: 1, always: 2 };
+  return <article className="flow-step-card"><header><div><span className="eyebrow">Step {index + 1}</span><h3>{step.name || "Untitled step"}</h3></div><button type="button" className="ghost-button danger-link" disabled={!canRemove} onClick={onRemove}>Remove</button></header><div className="flow-step-grid"><label>Step name<input disabled={!editable} value={step.name} placeholder="Review matching jobs" onChange={event => set({ name: event.target.value })}/></label><label>Skill<select aria-label="Skill" disabled={!editable} value={step.skill} onChange={event => selectSkill(event.target.value)}><option value="">Select an executable skill</option>{step.skill && !activeSkills.some(skill => skill.name === step.skill) && <option value={step.skill}>{step.skill} (unavailable)</option>}{activeSkills.map(skill => <option key={skill.name} value={skill.name}>{skill.name}</option>)}</select><small>The reusable procedure this step executes.</small></label><label>Approval<select aria-label="Approval" disabled={!editable} value={step.approval} onChange={event => set({ approval: event.target.value as FlowStepDraft["approval"] })}><option value="never" disabled={Boolean(execution && approvalRank.never < approvalRank[execution.approval])}>Read-only · block mutations</option><option value="on_mutation" disabled={Boolean(execution && approvalRank.on_mutation < approvalRank[execution.approval])}>Ask before each mutation</option><option value="always">Approve the whole step first</option></select><small>{execution ? `Minimum set by skill: ${execution.approval}` : "Choose a skill to load its minimum."}</small></label></div>{execution && <div className="flow-contract"><span><b>Executor</b>{execution.agent}</span><span><b>Allowed tools</b>{execution.tools.length ? execution.tools.join(", ") : "None"}</span><span><b>Success checks</b>{execution.success_criteria.length}</span></div>}<label className="flow-wide-field">Instructions<textarea aria-label="Step instructions" disabled={!editable} value={step.instructions} rows={3} placeholder="Tell the selected skill what this step must accomplish." onChange={event => set({ instructions: event.target.value })}/><small>These instructions specialize the reusable skill for this flow.</small></label><div className="flow-params"><div className="flow-params-heading"><div><b>Skill inputs</b><small>Required fields are loaded from the skill contract. Bind prior results with {"${steps.review.output}"}.</small></div><button type="button" className="ghost-button" disabled={!editable} onClick={() => set({ inputs: { ...step.inputs, "": "" } })}>+ Add input</button></div>{inputs.length ? inputs.map(([key, value], inputIndex) => { const property = execution?.inputs.properties?.[key]; return <div className="flow-param-row" key={`${key}-${inputIndex}`}><input disabled={!editable} aria-label="Input name" placeholder="input name" value={key} onChange={event => setInput(key, event.target.value, value)}/>{property?.enum ? <select disabled={!editable} aria-label={`${key} value`} value={String(value ?? "")} onChange={event => setInput(key, key, event.target.value)}><option value="">Select value</option>{property.enum.map(option => <option key={String(option)} value={String(option)}>{String(option)}</option>)}</select> : property?.type === "boolean" ? <select disabled={!editable} aria-label={`${key} value`} value={String(value)} onChange={event => setInput(key, key, event.target.value === "true")}><option value="false">No</option><option value="true">Yes</option></select> : <input disabled={!editable} aria-label="Input value" placeholder="value or reference" value={String(value ?? "")} onChange={event => setInput(key, key, event.target.value)}/>}<button type="button" className="ghost-button danger-link" disabled={!editable} aria-label="Remove input" onClick={() => { const next = { ...step.inputs }; delete next[key]; set({ inputs: next }); }}>×</button></div>; }) : <small className="flow-empty-inputs">No skill inputs needed.</small>}</div></article>;
 }
 
 export function Flows() {
   const dialog = useDialog();
   const flows = useResource<FlowSummary[]>("/web/api/flow-definitions", 10000);
   const skills = useResource<SkillSummary[]>("/web/api/skills", 10000);
-  const tools = useResource<ToolSummary[]>("/web/api/tools", 10000);
   const [selected, setSelected] = useState<string | null>(null);
   const [draft, setDraft] = useState<FlowDraft | null>(null);
   const [creating, setCreating] = useState(false);
@@ -1078,15 +1108,16 @@ export function Flows() {
   const startCreating = () => { setCreating(true); setSelected(null); setDraft(emptyFlow()); setMessage(""); };
   const closeEditor = () => { setSelected(null); setDraft(null); };
   const open = async (name: string) => { setSelected(name); setCreating(false); setDraft(null); setMessage(""); try { const detail = await api<FlowDetail>(`/web/api/flow-definitions/${encodeURIComponent(name)}`); setDraft(draftFromDetail(detail)); } catch (error) { setSelected(null); setMessage(error instanceof Error ? error.message : String(error)); } };
-  const create = async () => { if (!draft) return; try { const detail = await api<FlowDetail>("/web/api/flow-definitions", { method: "POST", body: JSON.stringify(draft) }); setSelected(detail.name); setCreating(false); setDraft(draftFromDetail(detail)); setMessage("Flow created and loaded."); await flows.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
-  const save = async () => { if (!selected || !draft || flows.data?.find(flow => flow.name === selected)?.source === "builtin") return; try { const detail = await api<FlowDetail>(`/web/api/flow-definitions/${encodeURIComponent(selected)}`, { method: "PUT", body: JSON.stringify(draft) }); setDraft(draftFromDetail(detail)); setMessage("Flow saved and reloaded."); await flows.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const create = async () => { if (!draft) return; try { const detail = await api<FlowDetail>("/web/api/flow-definitions", { method: "POST", body: JSON.stringify(draft) }); setSelected(detail.name); setCreating(false); setDraft(draftFromDetail(detail)); setMessage("Flow candidate created. Test it before activation."); await flows.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const save = async () => { if (!selected || !draft) return; try { const detail = await api<FlowDetail>(`/web/api/flow-definitions/${encodeURIComponent(selected)}`, { method: "PUT", body: JSON.stringify(draft) }); setDraft(draftFromDetail(detail)); setMessage("Flow saved as a candidate. Test it before activation."); await flows.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
   const remove = async () => { if (!selected || flows.data?.find(flow => flow.name === selected)?.source !== "learned" || !await dialog.confirm(`Delete learned flow '${selected}'? This cannot be undone.`, { title: "Delete flow?", confirmLabel: "Delete flow", danger: true })) return; try { await del(`/web/api/flow-definitions/${encodeURIComponent(selected)}`); setSelected(null); setDraft(null); setMessage("Learned flow deleted."); await flows.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
   const selectedFlow = flows.data?.find(flow => flow.name === selected);
   const editable = creating || Boolean(selectedFlow);
-  const canSave = Boolean(draft?.name.trim() && draft?.description.trim() && draft?.steps.length && editable);
-  const flowEditor = draft ? <section className="flow-builder"><div className="flow-builder-intro"><div><div className="editor-label">Flow details</div><p>Define the purpose, then arrange the steps North should take. Approval checkpoints protect external or consequential actions.</p></div><span className="flow-source-badge">{creating ? "new flow" : selectedFlow?.source}</span></div><div className="flow-meta-grid"><label>Flow name<input disabled={!creating} value={draft.name} placeholder="job-application-review" onChange={event => setDraft({ ...draft, name: event.target.value })}/></label><label>Status<select aria-label="Status" value={draft.status} disabled={!editable} onChange={event => setDraft({ ...draft, status: event.target.value })}><option value="active">Active</option><option value="candidate">Draft / candidate</option><option value="retired">Retired</option></select></label></div><label className="flow-wide-field">Purpose<textarea aria-label="Purpose" disabled={!editable} rows={2} value={draft.description} placeholder="What should this flow accomplish?" onChange={event => setDraft({ ...draft, description: event.target.value })}/></label><div className="flow-steps-heading"><div><h2>Steps</h2><p>North runs these in order from top to bottom.</p></div><button className="ghost-button" disabled={!editable} onClick={() => setDraft({ ...draft, steps: [...draft.steps, emptyStep()] })}>+ Add step</button></div>{draft.steps.map((step, index) => <FlowStepCard key={`${index}-${step.name}`} step={step} index={index} editable={editable} tools={tools.data || []} skills={skills.data || []} canRemove={editable && draft.steps.length > 1} onRemove={() => setDraft({ ...draft, steps: draft.steps.filter((_, stepIndex) => stepIndex !== index) })} onChange={next => setDraft({ ...draft, steps: draft.steps.map((current, stepIndex) => stepIndex === index ? next : current) })}/>)}</section> : <Loading/>;
+  const completeSteps = Boolean(draft?.steps.every(step => step.name.trim() && step.skill && step.instructions.trim()));
+  const canSave = Boolean(draft?.name.trim() && draft?.description.trim() && draft?.steps.length && completeSteps && editable);
+  const flowEditor = draft ? <section className="flow-builder"><div className="flow-builder-intro"><div><div className="editor-label">Flow details</div><p>Define the purpose, then arrange reusable skills in order. Each skill owns its executor, tools, contract, and completion checks.</p></div><span className="flow-source-badge">{creating ? "new flow" : selectedFlow?.source}</span></div><div className="flow-meta-grid"><label>Flow name<input disabled={!creating} value={draft.name} placeholder="job-application-review" onChange={event => setDraft({ ...draft, name: event.target.value })}/></label><label>Status<select aria-label="Status" value={draft.status} disabled={!editable} onChange={event => setDraft({ ...draft, status: event.target.value })}><option value="active" disabled>Active (tested)</option><option value="candidate">Draft / candidate</option><option value="retired">Retired</option></select><small>Saving an executable change returns this flow to candidate.</small></label></div><label className="flow-wide-field">Purpose<textarea aria-label="Purpose" disabled={!editable} rows={2} value={draft.description} placeholder="What should this flow accomplish?" onChange={event => setDraft({ ...draft, description: event.target.value })}/></label><div className="flow-steps-heading"><div><h2>Skill steps</h2><p>North executes one reusable procedure per step, from top to bottom.</p></div><button className="ghost-button" disabled={!editable} onClick={() => setDraft({ ...draft, steps: [...draft.steps, emptyStep()] })}>+ Add skill step</button></div>{draft.steps.map((step, index) => <FlowStepCard key={`${index}-${step.name}`} step={step} index={index} editable={editable} skills={skills.data || []} canRemove={editable && draft.steps.length > 1} onRemove={() => setDraft({ ...draft, steps: draft.steps.filter((_, stepIndex) => stepIndex !== index) })} onChange={next => setDraft({ ...draft, steps: draft.steps.map((current, stepIndex) => stepIndex === index ? next : current) })}/>)}</section> : <Loading/>;
   return <div className="page capability-page"><PageHeader eyebrow="Automation" title="Flows" subtitle="Design the ordered, approval-aware processes North can run." actions={<button className="primary-button" onClick={startCreating}>+ New flow</button>}/>{flows.error && <ErrorNotice message={flows.error}/>} {message && <div className="notice">{message}</div>}
-    {creating && <section className="capability-create-panel flow-create-panel"><header><div><span>New automation</span><h2>Create flow</h2><p>Define the purpose and the ordered steps before adding it to the registry.</p></div><div><button className="ghost-button" onClick={() => { setCreating(false); setDraft(null); }}>Cancel</button><button className="primary-button" disabled={!canSave} onClick={() => void create()}>Create flow</button></div></header>{flowEditor}</section>}
+    {creating && <section className="capability-create-panel flow-create-panel"><header><div><span>New automation</span><h2>Create flow</h2><p>Compose active skills into an ordered, approval-aware process.</p></div><div><button className="ghost-button" onClick={() => { setCreating(false); setDraft(null); }}>Cancel</button><button className="primary-button" disabled={!canSave} onClick={() => void create()}>Create flow</button></div></header>{flowEditor}</section>}
     <section className="capability-registry">
       <div className="capability-registry-head"><span>Flow</span><span>Purpose</span><span>Sequence</span><span>Status</span><span/></div>
       <div className="capability-registry-list">{flows.loading ? <Loading/> : (flows.data || []).map(flow => <button className="capability-registry-row" key={flow.name} aria-haspopup="dialog" onClick={() => void open(flow.name)}><span className="capability-registry-name"><b>{flow.name}</b><small>{flow.source}</small></span><span className="capability-registry-description">{flow.description}</span><span className="capability-registry-meta">{flow.steps} step{flow.steps === 1 ? "" : "s"}</span><Status value={flow.status}/><span className="capability-registry-open">Open</span></button>)}{!flows.loading && !flows.data?.length && <Empty>No flows have been created yet.</Empty>}</div>
@@ -1115,11 +1146,11 @@ export function Tools() {
   const closeEditor = () => { setSelected(null); setDetailLoading(false); };
   const startCreating = () => { setSelected(null); setName(""); setDescription(""); setMessage(""); setCreating(true); };
   const open = async (toolName: string) => { setSelected(toolName); setCreating(false); setDetailLoading(true); setContent(""); setMessage(""); try { const detail = await api<ToolDetail>(`/web/api/tools/${encodeURIComponent(toolName)}`); setContent(detail.content); } catch (error) { setSelected(null); setMessage(error instanceof Error ? error.message : String(error)); } finally { setDetailLoading(false); } };
-  const create = async () => { if (!name.trim() || !description.trim()) return; try { const created = await post<ToolSummary>("/web/api/tools", { name: name.trim(), description: description.trim() }); setName(""); setDescription(""); await tools.reload(); await open(created.name); setMessage("Tool created and loaded."); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
-  const save = async () => { if (!selected) return; try { await api(`/web/api/tools/${encodeURIComponent(selected)}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Tool saved and reloaded."); await tools.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const create = async () => { if (!name.trim() || !description.trim()) return; try { const created = await post<ToolSummary>("/web/api/tools", { name: name.trim(), description: description.trim() }); setName(""); setDescription(""); await tools.reload(); await open(created.name); setMessage("Tool candidate created. Implement and test it before activation."); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
+  const save = async () => { if (!selected) return; try { await api(`/web/api/tools/${encodeURIComponent(selected)}`, { method: "PUT", body: JSON.stringify({ content }) }); setMessage("Tool saved as a candidate. Validate and test it before activation."); await tools.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
   const remove = async () => { if (!selected || selectedTool?.source !== "learned" || !await dialog.confirm(`Delete learned tool '${selected}'? This cannot be undone.`, { title: "Delete tool?", confirmLabel: "Delete tool", danger: true })) return; try { await del(`/web/api/tools/${encodeURIComponent(selected)}`); setSelected(null); setContent(""); setMessage("Learned tool deleted."); await tools.reload(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
-  return <div className="page capability-page"><PageHeader eyebrow="Capabilities" title="Tools" subtitle="Inspect the atomic operations North can call, and manage your learned tools." actions={<button className="primary-button" onClick={startCreating}>+ New tool</button>}/>{tools.error && <ErrorNotice message={tools.error}/>} {message && <div className="notice">{message}</div>}
-    {creating && <section className="capability-create-panel"><header><div><span>New capability</span><h2>Create tool</h2><p>Tools are executable Python operations that skills and flows can call.</p></div><button className="ghost-button" onClick={() => setCreating(false)}>Cancel</button></header><div className="tool-create"><div className="tool-create-grid"><label>Name<input autoFocus value={name} placeholder="search_jobs" onChange={event => setName(event.target.value)}/></label><label>Description<input value={description} placeholder="What should this operation do?" onChange={event => setDescription(event.target.value)}/></label></div><div className="tool-create-footer"><small>North creates a safe implementation stub. You can implement it after creation.</small><button className="primary-button" disabled={!name.trim() || !description.trim()} onClick={() => void create()}>Create tool</button></div></div></section>}
+  return <div className="page capability-page"><PageHeader eyebrow="Capabilities" title="Tools" subtitle="Inspect the atomic operations North's skills can call, and manage your learned tools." actions={<button className="primary-button" onClick={startCreating}>+ New tool</button>}/>{tools.error && <ErrorNotice message={tools.error}/>} {message && <div className="notice">{message}</div>}
+    {creating && <section className="capability-create-panel"><header><div><span>New capability</span><h2>Create tool</h2><p>Tools are atomic Python operations called by skills.</p></div><button className="ghost-button" onClick={() => setCreating(false)}>Cancel</button></header><div className="tool-create"><div className="tool-create-grid"><label>Name<input autoFocus value={name} placeholder="search_jobs" onChange={event => setName(event.target.value)}/></label><label>Description<input value={description} placeholder="What should this operation do?" onChange={event => setDescription(event.target.value)}/></label></div><div className="tool-create-footer"><small>North creates a non-runnable candidate stub. Activation requires a successful test.</small><button className="primary-button" disabled={!name.trim() || !description.trim()} onClick={() => void create()}>Create tool</button></div></div></section>}
     <section className="capability-registry">
       <div className="capability-registry-head"><span>Tool</span><span>Description</span><span>Operation</span><span>Status</span><span/></div>
       <div className="capability-registry-list">{tools.loading ? <Loading/> : (tools.data || []).map(tool => <button className="capability-registry-row" key={tool.name} aria-haspopup="dialog" onClick={() => void open(tool.name)}><span className="capability-registry-name"><b>{tool.name}</b><small>{tool.source}</small></span><span className="capability-registry-description">{tool.description}</span><span className="capability-registry-meta">{tool.mutating ? "Mutating" : "Read-only"}</span><Status value={tool.status}/><span className="capability-registry-open">Open</span></button>)}{!tools.loading && !tools.data?.length && <Empty>No tools are registered yet.</Empty>}</div>

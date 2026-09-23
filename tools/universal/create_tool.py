@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import ast
-import importlib
+import hashlib
+import importlib.util
 import inspect
 import re
-import sys
 import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -39,27 +39,24 @@ class CreateToolTool(ApprovalGatedTool):
     name = "create_tool"
     is_mutating = True
     description = (
-        "Last-resort tool manager - only use this when no existing tool can perform the required action. "
-        "Always call action='list' first to check what tools exist before creating anything. "
-        "action='list': show all tools with descriptions. "
-        "action='read': return full source of a tool by name. "
-        "action='update': extend an existing tool with new behaviour "
-        "(preferred over creating a new one when a similar tool exists). "
-        "action='create': write a brand-new tool - "
-        "provide full working Python in 'content' so it is immediately usable. "
-        "Hot-loads into the running server so the new tool is available in the very next step."
+        "Create, update, inspect, validate, test, and activate atomic executable capabilities. "
+        "Use the adding-a-north-tool skill first and call action='list' before creating anything. "
+        "New and edited tools are non-runnable candidates. They enter the live catalog only after "
+        "structural validation, a successful explicit test call, and user-confirmed activation."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "update", "read", "list"],
+                "enum": ["create", "update", "read", "list", "validate", "test", "activate"],
                 "description": (
                     "list = show all tools with location and description; "
                     "read = return full source of an existing tool by name; "
                     "create = write a new tool file (provide 'content' for a full implementation); "
-                    "update = overwrite an existing tool with improved code, keeping existing behaviour"
+                    "update = stage improved code without replacing the active tool; "
+                    "validate = import and inspect the candidate; test = call it with test_params; "
+                    "activate = publish the tested candidate after explicit user confirmation"
                 ),
             },
             "name": {
@@ -116,6 +113,14 @@ class CreateToolTool(ApprovalGatedTool):
                 "type": "string",
                 "description": "Hints about implementation. Used when generating a stub.",
             },
+            "test_params": {
+                "type": "object",
+                "description": "Small, safe representative input passed to the candidate during action=test.",
+            },
+            "user_confirmed": {
+                "type": "boolean",
+                "description": "True only after the user explicitly approves activation.",
+            },
         },
         "required": ["action"],
     }
@@ -135,6 +140,11 @@ class CreateToolTool(ApprovalGatedTool):
         self._registry = tool_registry
         self._self_edit_policy = self_edit_policy
         self._tools_dir = tools_dir or _TOOLS_ROOT
+        self._validated: dict[str, str] = {}
+        self._tested: dict[str, str] = {}
+
+    def mutates(self, params: dict[str, Any] | None = None) -> bool:
+        return str((params or {}).get("action") or "create").strip().lower() not in {"list", "read"}
 
     def format_output(self, data: dict[str, Any]) -> str:
         action = data.get("action")
@@ -143,26 +153,34 @@ class CreateToolTool(ApprovalGatedTool):
             rows = data.get("tools", [])
             if not rows:
                 return "No tools found."
-            return "\n".join(f"[{r['type']}] {r['name']} - {r['description']}" for r in rows)
+            return "\n".join(
+                f"[{r['type']} · {r.get('status', 'active')}] {r['name']} - {r['description']}"
+                for r in rows
+            )
 
         if action == "read":
             return data.get("content", "(empty)")
 
         if action == "create":
-            lines = [f"Tool created: {data['path']}"]
-            if data.get("hot_loaded"):
-                lines.append("Hot-loaded into the global catalog - every agent can discover it immediately.")
-            else:
-                lines.append("Restart north to activate (hot-load failed - check implementation).")
-            return "\n".join(lines)
+            return (
+                f"Tool candidate created: {data['path']}\n"
+                "It is not live until validation and a representative test pass, then the user confirms activation."
+            )
 
         if action == "update":
-            lines = [f"Tool updated: {data['path']}"]
-            if data.get("hot_loaded"):
-                lines.append("Hot-loaded - changes active immediately via delegate_task or next message.")
-            else:
-                lines.append("Restart north to apply changes (hot-load failed - check implementation).")
-            return "\n".join(lines)
+            return (
+                f"Tool update candidate staged: {data['path']}\n"
+                "The currently active implementation is unchanged until this candidate is tested and activated."
+            )
+
+        if action == "validate":
+            return f"Tool candidate '{data['name']}' passed structural validation."
+
+        if action == "test":
+            return f"Tool candidate '{data['name']}' passed its representative test call."
+
+        if action == "activate":
+            return f"Tool '{data['name']}' is active in the live catalog."
 
         return str(data)
 
@@ -173,21 +191,37 @@ class CreateToolTool(ApprovalGatedTool):
             return _list_tools(self._tools_dir)
         if action == "read":
             return _read_tool(input.params.get("name") or "", self._tools_dir)
-        if action in ("create", "update"):
-            # Fail closed: model-authored code may be hot-loaded into the live
-            # process, so it must never land without a human looking at it.
+        if action in {"create", "update", "validate", "test", "activate"}:
+            # Fail closed: model-authored code may be imported or hot-loaded,
+            # so every lifecycle transition that executes or publishes it is
+            # visible to the user approval system.
             refused = await self._gate(input.params, action)
             if refused is not None:
                 return refused
-            return self._create(input.params) if action == "create" else self._update(input.params)
+            if action == "create":
+                return self._create(input.params)
+            if action == "update":
+                return self._update(input.params)
+            if action == "validate":
+                return self._validate(input.params)
+            if action == "test":
+                return await self._test(input.params)
+            return self._activate(input.params)
 
-        return ToolOutput(success=False, error=f"Unknown action '{action}'. Use: list, read, create, update.")
+        return ToolOutput(
+            success=False,
+            error=f"Unknown action '{action}'. Use: list, read, create, update, validate, test, activate.",
+        )
 
     async def _gate(self, params: dict, action: str) -> ToolOutput | None:
         """Show the proposed code and wait. ``None`` when it may be written."""
         name = params.get("name", "unknown")
         tool_type = params.get("tool_type", "specialized")
         content = (params.get("content") or "").strip()
+        if not content and name:
+            candidate = _find_candidate_path(str(name), self._tools_dir)
+            if candidate is not None:
+                content = candidate.read_text(encoding="utf-8")
         preview = (content[:_PREVIEW_CHARS] + "\n…") if len(content) > _PREVIEW_CHARS else content
         message = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
             f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)"
@@ -209,7 +243,7 @@ class CreateToolTool(ApprovalGatedTool):
             stream_manager=self._stream_manager,
             notifier=self._notifier,
             timeout=self._approval_timeout_seconds,
-            declined="Tool creation cancelled by user.",
+            declined=f"Tool {action} cancelled by user.",
         )
 
     # ── Action handlers ───────────────────────────────────────────────────────
@@ -231,15 +265,16 @@ class CreateToolTool(ApprovalGatedTool):
         if tool_type not in ("universal", "specialized"):
             return ToolOutput(success=False, error="tool_type must be 'universal' or 'specialized'.")
 
-        target_dir = self._tools_dir / tool_type
+        target_dir = _candidate_root(self._tools_dir) / tool_type
         target_dir.mkdir(parents=True, exist_ok=True)
 
         file_path = target_dir / f"{tool_name}.py"
-        if file_path.exists():
+        registered = bool(self._registry is not None and tool_name in self._registry.all_tool_names())
+        if file_path.exists() or _find_active_tool_path(tool_name, self._tools_dir) is not None or registered:
             return ToolOutput(
                 success=False,
                 error=(
-                    f"Tool '{tool_name}' already exists at {file_path}. "
+                    f"Tool '{tool_name}' already exists. "
                     "Use action='read' to inspect it, then action='update' to extend it."
                 ),
             )
@@ -270,14 +305,15 @@ class CreateToolTool(ApprovalGatedTool):
         if mutation is not None:
             self._self_edit_policy.commit(mutation)
 
-        hot_loaded = self._hot_load(file_path, tool_type)
+        self._validated.pop(tool_name, None)
+        self._tested.pop(tool_name, None)
 
         return ToolOutput(
             success=True,
             data={
                 "action": "create",
                 "path": str(file_path),
-                "hot_loaded": hot_loaded,
+                "status": "candidate",
             },
         )
 
@@ -293,8 +329,8 @@ class CreateToolTool(ApprovalGatedTool):
                 error="Parameter 'content' (full updated Python source) is required for action=update.",
             )
 
-        path = _find_tool_path(tool_name, self._tools_dir)
-        if path is None:
+        source_path = _find_tool_path(tool_name, self._tools_dir)
+        if source_path is None:
             return ToolOutput(
                 success=False,
                 error=f"Tool '{tool_name}' not found. Use action='create' to create a new tool.",
@@ -313,59 +349,127 @@ class CreateToolTool(ApprovalGatedTool):
                 error=f"Tool code rejected by static safety check: {reason}. Remove the flagged pattern and try again.",
             )
 
-        tool_type = "universal" if (path.parent.name == "universal") else "specialized"
+        tool_type = "universal" if source_path.parent.name == "universal" else "specialized"
+        path = _candidate_root(self._tools_dir) / tool_type / f"{tool_name}.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
         mutation = None
         if self._self_edit_policy is not None:
             try:
-                mutation = self._self_edit_policy.begin(path, "update")
+                mutation = self._self_edit_policy.begin(path, "update" if path.exists() else "create")
             except PermissionError as exc:
                 return ToolOutput(success=False, error=str(exc))
         path.write_text(content, encoding="utf-8")
         if mutation is not None:
             self._self_edit_policy.commit(mutation)
 
-        hot_loaded = self._hot_load(path, tool_type)
+        self._validated.pop(tool_name, None)
+        self._tested.pop(tool_name, None)
 
         return ToolOutput(
             success=True,
             data={
                 "action": "update",
                 "path": str(path),
-                "hot_loaded": hot_loaded,
+                "status": "candidate",
             },
         )
 
-    # ── Hot-loading ───────────────────────────────────────────────────────────
-
-    def _hot_load(self, path: Path, tool_type: str) -> bool:
-        """Dynamically import the tool and register it in the running registry.
-
-        Returns True if the tool was successfully loaded and registered.
-        """
-        if self._registry is None:
-            return False
-
-        package = f"tools.{tool_type}"
-        module_name = f"{package}.{path.stem}"
-
-        # Evict stale module so importlib picks up the fresh file.
-        sys.modules.pop(module_name, None)
-
+    def _validate(self, params: dict) -> ToolOutput:
+        name = str(params.get("name") or "").strip()
+        if not name:
+            return ToolOutput(success=False, error="Parameter 'name' is required for action=validate.")
+        path = _find_candidate_path(name, self._tools_dir)
+        if path is None:
+            return ToolOutput(success=False, error=f"No candidate exists for tool '{name}'.")
         try:
-            module = importlib.import_module(module_name)
-        except Exception:
-            return False
+            instance = _load_tool_file(path, expected_name=name)
+            _validate_tool_contract(instance)
+        except Exception as exc:
+            return ToolOutput(success=False, error=f"Tool candidate validation failed: {exc}")
+        fingerprint = _tool_fingerprint(path)
+        self._validated[name] = fingerprint
+        self._tested.pop(name, None)
+        return ToolOutput(
+            success=True,
+            data={"action": "validate", "name": name, "status": "candidate", "valid": True},
+        )
 
-        for obj in vars(module).values():
-            if isinstance(obj, type) and issubclass(obj, Tool) and obj is not Tool and not inspect.isabstract(obj):
-                try:
-                    instance = obj()
-                    self._registry.register(instance)
-                    return True
-                except Exception:
-                    continue
+    async def _test(self, params: dict) -> ToolOutput:
+        name = str(params.get("name") or "").strip()
+        test_params = params.get("test_params")
+        if not name:
+            return ToolOutput(success=False, error="Parameter 'name' is required for action=test.")
+        if not isinstance(test_params, dict):
+            return ToolOutput(success=False, error="Parameter 'test_params' must be an object for action=test.")
+        path = _find_candidate_path(name, self._tools_dir)
+        if path is None:
+            return ToolOutput(success=False, error=f"No candidate exists for tool '{name}'.")
+        fingerprint = _tool_fingerprint(path)
+        if self._validated.get(name) != fingerprint:
+            return ToolOutput(success=False, error="Validate the current tool candidate before testing it.")
+        try:
+            instance = _load_tool_file(path, expected_name=name)
+            _validate_tool_contract(instance)
+            result = await instance.run(ToolInput(params=test_params))
+        except Exception as exc:
+            return ToolOutput(success=False, error=f"Tool candidate test raised an exception: {exc}")
+        if not isinstance(result, ToolOutput):
+            return ToolOutput(success=False, error="Tool candidate test did not return ToolOutput.")
+        if not result.success:
+            return ToolOutput(
+                success=False,
+                error=result.error or "Tool candidate returned an unsuccessful test result.",
+                data={"candidate_output": result.data},
+            )
+        self._tested[name] = fingerprint
+        return ToolOutput(
+            success=True,
+            data={
+                "action": "test",
+                "name": name,
+                "status": "candidate",
+                "candidate_output": result.data,
+            },
+        )
 
-        return False
+    def _activate(self, params: dict) -> ToolOutput:
+        name = str(params.get("name") or "").strip()
+        if not name:
+            return ToolOutput(success=False, error="Parameter 'name' is required for action=activate.")
+        if params.get("user_confirmed") is not True:
+            return ToolOutput(success=False, error="Activation requires explicit user confirmation.")
+        if self._registry is None:
+            return ToolOutput(success=False, error="The live tool registry is unavailable.")
+        candidate = _find_candidate_path(name, self._tools_dir)
+        if candidate is None:
+            return ToolOutput(success=False, error=f"No candidate exists for tool '{name}'.")
+        fingerprint = _tool_fingerprint(candidate)
+        if self._tested.get(name) != fingerprint:
+            return ToolOutput(success=False, error="Test the current tool candidate successfully before activation.")
+        try:
+            instance = _load_tool_file(candidate, expected_name=name)
+            _validate_tool_contract(instance)
+            tool_type = candidate.parent.name
+            target = self._tools_dir / tool_type / f"{name}.py"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            mutation = (
+                self._self_edit_policy.begin(target, "update" if target.exists() else "create")
+                if self._self_edit_policy is not None
+                else None
+            )
+            target.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
+            if mutation is not None:
+                self._self_edit_policy.commit(mutation)
+            self._registry.register(instance)
+            candidate.unlink()
+        except Exception as exc:
+            return ToolOutput(success=False, error=f"Failed to activate tool '{name}': {exc}")
+        self._validated.pop(name, None)
+        self._tested.pop(name, None)
+        return ToolOutput(
+            success=True,
+            data={"action": "activate", "name": name, "path": str(target), "status": "active"},
+        )
 
 
 # ── Code safety ──────────────────────────────────────────────────────────────
@@ -389,7 +493,7 @@ def _check_code_safety(code: str) -> tuple[bool, str]:
 
 
 def _list_tools(learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
-    rows = []
+    rows_by_name: dict[str, dict[str, Any]] = {}
     roots = ((_TOOLS_ROOT, "builtin"), (learned_root, "learned"))
     for root, source in roots:
         for kind in ("universal", "specialized"):
@@ -402,16 +506,37 @@ def _list_tools(learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
                 source_text = path.read_text(encoding="utf-8")
                 name_m = _NAME_RE.search(source_text)
                 desc_m = _DESC_RE.search(source_text)
-                rows.append(
-                    {
-                        "name": name_m.group(1) if name_m else path.stem,
-                        "type": kind,
-                        "source": source,
-                        "description": desc_m.group(1) if desc_m else "(no description)",
-                        "path": str(path),
-                    }
-                )
-    return ToolOutput(success=True, data={"action": "list", "tools": rows})
+                name = name_m.group(1) if name_m else path.stem
+                rows_by_name[name] = {
+                    "name": name,
+                    "type": kind,
+                    "source": source,
+                    "status": "active",
+                    "description": desc_m.group(1) if desc_m else "(no description)",
+                    "path": str(path),
+                }
+    candidate_root = _candidate_root(learned_root)
+    for kind in ("universal", "specialized"):
+        directory = candidate_root / kind
+        if not directory.exists():
+            continue
+        for path in sorted(directory.glob("*.py")):
+            source_text = path.read_text(encoding="utf-8")
+            name_m = _NAME_RE.search(source_text)
+            desc_m = _DESC_RE.search(source_text)
+            name = name_m.group(1) if name_m else path.stem
+            rows_by_name[name] = {
+                "name": name,
+                "type": kind,
+                "source": "learned",
+                "status": "candidate",
+                "description": desc_m.group(1) if desc_m else "(no description)",
+                "path": str(path),
+            }
+    return ToolOutput(
+        success=True,
+        data={"action": "list", "tools": sorted(rows_by_name.values(), key=lambda row: row["name"])},
+    )
 
 
 def _read_tool(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
@@ -430,13 +555,84 @@ def _read_tool(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
         },
     )
 
-def _find_tool_path(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> Path | None:
+def _candidate_root(learned_root: Path) -> Path:
+    return learned_root / "candidates"
+
+
+def _find_candidate_path(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> Path | None:
+    for kind in ("universal", "specialized"):
+        path = _candidate_root(learned_root) / kind / f"{tool_name}.py"
+        if path.exists():
+            return path
+    return None
+
+
+def _find_active_tool_path(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> Path | None:
     for root in (learned_root, _TOOLS_ROOT):
         for kind in ("universal", "specialized"):
             p = root / kind / f"{tool_name}.py"
             if p.exists():
                 return p
     return None
+
+
+def _find_tool_path(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> Path | None:
+    return _find_candidate_path(tool_name, learned_root) or _find_active_tool_path(tool_name, learned_root)
+
+
+def _tool_fingerprint(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_tool_file(path: Path, *, expected_name: str) -> Tool:
+    """Load one candidate without exposing it through the live registry."""
+    module_name = f"north_tool_candidate_{expected_name}_{_tool_fingerprint(path)[:12]}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ValueError("Python could not create an import specification")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    matches: list[Tool] = []
+    for obj in vars(module).values():
+        if not isinstance(obj, type) or not issubclass(obj, Tool) or obj is Tool or inspect.isabstract(obj):
+            continue
+        if _needs_constructor_args(obj):
+            raise ValueError(f"{obj.__name__} requires constructor arguments and cannot be auto-loaded")
+        instance = obj()
+        if instance.name == expected_name:
+            matches.append(instance)
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one concrete Tool named {expected_name!r}, found {len(matches)}")
+    return matches[0]
+
+
+def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
+    signature = inspect.signature(tool_cls)
+    parameter_kinds = {
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }
+    return any(
+        parameter.default is inspect.Parameter.empty and parameter.kind in parameter_kinds
+        for parameter in signature.parameters.values()
+    )
+
+
+def _validate_tool_contract(tool: Tool) -> None:
+    if not tool.name or not re.fullmatch(r"[a-z][a-z0-9_]*", tool.name):
+        raise ValueError("tool name must use snake_case")
+    if not isinstance(tool.description, str) or not tool.description.strip():
+        raise ValueError("tool description must be non-empty")
+    schema = tool.parameters_schema
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        raise ValueError("parameters_schema must be an object schema")
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        raise ValueError("parameters_schema.properties must be an object")
+    required = schema.get("required", [])
+    if not isinstance(required, list) or any(name not in properties for name in required):
+        raise ValueError("every required parameter must be declared in properties")
 
 
 def _to_class_name(snake: str) -> str:

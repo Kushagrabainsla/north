@@ -15,6 +15,10 @@ from tools.universal.browser import (
 )
 
 
+def _isolated(**params):
+    return {"browser_context": "isolated", "context_confirmed": True, **params}
+
+
 def test_find_chrome_agent_binary():
     # When shutil.which finds it
     with patch("shutil.which", side_effect=lambda x: "/usr/local/bin/chrome-agent" if x == "chrome-agent" else None):
@@ -112,6 +116,15 @@ def test_format_output():
     assert "Assertion [PASS]" in fmt
 
 
+def test_browser_classifies_actions_and_existing_profile_access_per_call():
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
+
+    assert tool.mutates({"action": "inspect"}) is False
+    assert tool.mutates({"action": "click"}) is True
+    assert tool.mutates({"action": "goto", "copy_cookies": True}) is True
+    assert tool.mutates({"action": "goto", "connect": "9222"}) is True
+
+
 @pytest.mark.asyncio
 async def test_run_success_json():
     tool = BrowserTool(binary_cmd=["chrome-agent"])
@@ -124,7 +137,7 @@ async def test_run_success_json():
     mock_proc.communicate = AsyncMock(return_value=(mock_stdout, mock_stderr))
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-        output = await tool.run(ToolInput(params={"action": "extract", "limit": 5}))
+        output = await tool.run(ToolInput(params=_isolated(action="extract", limit=5)))
         assert output.success is True
         assert output.data["count"] == 1
         assert output.data["items"][0]["name"] == "Item"
@@ -148,7 +161,7 @@ async def test_run_error_with_hint():
     mock_proc.communicate = AsyncMock(return_value=(mock_stdout, mock_stderr))
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-        output = await tool.run(ToolInput(params={"action": "click", "uid": "n12"}))
+        output = await tool.run(ToolInput(params=_isolated(action="click", uid="n12")))
         assert output.success is False
         assert "Node n12 not found" in output.error
         assert "Hint: run inspect to refresh element UIDs" in output.error
@@ -166,7 +179,9 @@ async def test_run_assert_unmet_exit_code_2():
     mock_proc.communicate = AsyncMock(return_value=(mock_stdout, mock_stderr))
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-        output = await tool.run(ToolInput(params={"action": "assert", "assert_type": "text", "value": "Welcome"}))
+        output = await tool.run(
+            ToolInput(params=_isolated(action="assert", assert_type="text", value="Welcome"))
+        )
         assert output.success is False
         assert output.data["held"] is False
         assert "Assertion unmet" in output.error
@@ -177,9 +192,32 @@ async def test_ssrf_blocking_for_private_ips():
     tool = BrowserTool(binary_cmd=["chrome-agent"])
 
     # Attempting to access private metadata IP
-    output = await tool.run(ToolInput(params={"action": "goto", "url": "http://169.254.169.254/latest/meta-data"}))
+    output = await tool.run(
+        ToolInput(params=_isolated(action="goto", url="http://169.254.169.254/latest/meta-data"))
+    )
     assert output.success is False
     assert "Security policy blocked navigation" in output.error
+
+
+@pytest.mark.asyncio
+async def test_browser_requires_explicit_user_context_choice():
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
+
+    missing = await tool.run(ToolInput(params={"action": "status"}))
+    assert not missing.success
+    assert "Ask the user" in missing.error
+
+    isolated_with_profile = await tool.run(
+        ToolInput(params=_isolated(action="status", connect="9222"))
+    )
+    assert not isolated_with_profile.success
+    assert "isolated browser" in isolated_with_profile.error
+
+    existing_without_connection = await tool.run(
+        ToolInput(params={"action": "status", "browser_context": "existing", "context_confirmed": True})
+    )
+    assert not existing_without_connection.success
+    assert "requires connect or copy_cookies" in existing_without_connection.error
 
 
 def test_tool_registry_discovers_browser_tool():

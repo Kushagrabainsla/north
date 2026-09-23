@@ -11,6 +11,7 @@ No real network calls are made; inference is fully mocked.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +19,7 @@ import pytest
 
 from agents.agentic_llm_agent import MAX_UNANSWERED_APPROVALS
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
+from approval import ApprovalDecision
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
@@ -311,6 +313,87 @@ async def test_quick_profile_refuses_mutation_before_it_happens(tmp_path: Path) 
     assert success is False
     assert "unavailable in the quick read-only profile" in result
     assert tool.called is False
+
+
+async def test_flow_read_only_policy_blocks_mutation_before_it_happens(tmp_path: Path) -> None:
+    class MutatingTool(Tool):
+        name = "change_external_state"
+        description = "Change external state."
+        is_mutating = True
+
+        def __init__(self) -> None:
+            self.called = False
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            self.called = True
+            return ToolOutput(success=True)
+
+    agent = _load_agent("researcher", tmp_path)
+    tool = MutatingTool()
+    payload = AgentPayload(
+        task_id="flow-read-only",
+        prompt="inspect",
+        skills=["review-item"],
+        mutation_policy="deny",
+    )
+
+    _call, result, success, _images = await agent._safe_execute_call(
+        ToolCall(name=tool.name, call_id="change-1", params={}),
+        payload,
+        {tool.name: tool},
+    )
+
+    assert success is False
+    assert "read-only" in result
+    assert tool.called is False
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_success", "expected_called"),
+    [
+        (ApprovalDecision.APPROVED, True, True),
+        (ApprovalDecision.REJECTED, False, False),
+    ],
+)
+async def test_flow_on_mutation_policy_enforces_approval(
+    tmp_path: Path,
+    decision: ApprovalDecision,
+    expected_success: bool,
+    expected_called: bool,
+) -> None:
+    class MutatingTool(Tool):
+        name = "change_external_state"
+        description = "Change external state."
+        is_mutating = True
+
+        def __init__(self) -> None:
+            self.called = False
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            self.called = True
+            return ToolOutput(success=True)
+
+    agent = _load_agent("researcher", tmp_path)
+    agent._request_approval = AsyncMock(return_value=decision)
+    tool = MutatingTool()
+    payload = AgentPayload(
+        task_id="flow-approval",
+        prompt="change",
+        skills=["review-item"],
+        mutation_policy="require_approval",
+    )
+
+    _call, result, success, _images = await agent._safe_execute_call(
+        ToolCall(name=tool.name, call_id="change-1", params={"target": "record"}),
+        payload,
+        {tool.name: tool},
+    )
+
+    assert success is expected_success
+    assert tool.called is expected_called
+    agent._request_approval.assert_awaited_once()
+    if not expected_success:
+        assert "Approval was not granted" in result
 
 
 async def test_quick_profile_escalates_after_tool_failure(tmp_path: Path) -> None:
@@ -1024,6 +1107,38 @@ async def test_load_tools_no_cap_and_skill_tool_inclusion(tmp_path: Path) -> Non
     assert "take_screenshot" in loaded_names
     assert "take_photo" in loaded_names
     assert "custom_tool" in loaded_names
+
+
+async def test_flow_skill_contract_hard_limits_tools_and_find_tools(tmp_path: Path) -> None:
+    """A required skill's allowlist cannot be widened by retrieval or find_tools."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    agent = _load_agent("general", tmp_path)
+
+    def _tool(name: str):
+        tool = MagicMock()
+        tool.name = name
+        tool.description = f"Use {name}."
+        return tool
+
+    catalog = [_tool("browser"), _tool("write_file"), _tool("git")]
+    agent._deps.tool_registry = MagicMock()
+    agent._deps.tool_registry.available_tools.return_value = catalog
+    agent._deps.confidence_tracker = MagicMock()
+    agent._deps.confidence_tracker.scores_for_agent = AsyncMock(return_value=[])
+
+    payload = AgentPayload(
+        task_id="contract-tools",
+        prompt="Browse and then write a file",
+        allowed_tools=["browser"],
+    )
+    loaded = await agent._load_tools(payload, [])
+    tool_map = {tool.name: tool for tool, _score in loaded}
+    result = await agent._find_tools({"query": "write_file"}, tool_map, payload.allowed_tools)
+
+    assert set(tool_map) == {"browser"}
+    assert not json.loads(result)["success"]
+    assert "write_file" not in tool_map
 
 
 # ---------------------------------------------------------------------------

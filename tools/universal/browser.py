@@ -453,6 +453,19 @@ class BrowserTool(Tool):
 
     name = "browser"
     is_mutating = False
+    _MUTATING_ACTIONS = frozenset(
+        {
+            "click",
+            "dblclick",
+            "fill",
+            "type",
+            "press",
+            "select",
+            "check",
+            "uncheck",
+            "eval",
+        }
+    )
     description = (
         "Drive a real Chrome browser. Use it ONLY when plain text is not enough: the page "
         "needs a login or a click, it builds itself in JavaScript so fetch_url returns an "
@@ -461,6 +474,9 @@ class BrowserTool(Tool):
         "For an ordinary article, documentation page or any URL you only need to READ, use "
         "fetch_url instead - it is one request against this tool's whole browser, so reach "
         "for a browser only after text has failed or the task needs hands. "
+        "Before the first browser action, ask whether to use an isolated browser or the user's existing "
+        "browser over CDP. Explain that existing-browser access can expose logged-in sessions, cookies, "
+        "open tabs, and extensions. Do not infer that choice. "
         "Actions:\n"
         "  - 'goto' (or 'navigate'): Navigate to URL. Supports --stealth, --copy-cookies, --connect.\n"
         "  - 'extract': Discover and extract structured lists/tables as JSON records (saves 80% tokens).\n"
@@ -577,6 +593,20 @@ class BrowserTool(Tool):
                 "type": "string",
                 "description": "Attach to an existing Chrome instance at ws://... or port 9222.",
             },
+            "browser_context": {
+                "type": "string",
+                "enum": ["isolated", "existing"],
+                "description": (
+                    "The browser context the user explicitly chose: isolated, or their existing browser/profile."
+                ),
+            },
+            "context_confirmed": {
+                "type": "boolean",
+                "description": (
+                    "True only after the user chose the browser context after being told that existing-browser "
+                    "access can expose sessions, cookies, tabs, and extensions."
+                ),
+            },
             "task_id": {
                 "type": "string",
                 "description": "Task identifier for browser session concurrency isolation.",
@@ -587,11 +617,17 @@ class BrowserTool(Tool):
                 "default": 30,
             },
         },
-        "required": ["action"],
+        "required": ["action", "browser_context", "context_confirmed"],
     }
 
     def __init__(self, binary_cmd: list[str] | None = None) -> None:
         self._binary_cmd = binary_cmd
+
+    def mutates(self, params: dict[str, Any] | None = None) -> bool:
+        """Classify writes and sensitive existing-browser attachment per call."""
+        values = params or {}
+        action = str(values.get("action") or "").strip().lower()
+        return action in self._MUTATING_ACTIONS or bool(values.get("copy_cookies") or values.get("connect"))
 
     def _get_cmd(self) -> list[str]:
         if self._binary_cmd:
@@ -633,6 +669,29 @@ class BrowserTool(Tool):
         action = params.get("action", "") or ("goto" if params.get("url") else "")
         if not action:
             return ToolOutput(success=False, error="Parameter 'action' is required.")
+
+        browser_context = str(params.get("browser_context") or "").strip().lower()
+        if params.get("context_confirmed") is not True or browser_context not in {"isolated", "existing"}:
+            return ToolOutput(
+                success=False,
+                error=(
+                    "Browser context is not confirmed. Ask the user to choose an isolated browser or their "
+                    "existing browser through CDP, explaining that existing-browser access can expose logged-in "
+                    "sessions, cookies, open tabs, and extensions. Then pass browser_context and "
+                    "context_confirmed=true."
+                ),
+            )
+        attaches_to_existing = bool(params.get("connect") or params.get("copy_cookies"))
+        if browser_context == "isolated" and attaches_to_existing:
+            return ToolOutput(
+                success=False,
+                error="An isolated browser cannot use connect or copy_cookies from the user's existing profile.",
+            )
+        if browser_context == "existing" and not attaches_to_existing:
+            return ToolOutput(
+                success=False,
+                error="Existing-browser context requires connect or copy_cookies.",
+            )
 
         unsafe_url = _unsafe_url_reason(action, params)
         if unsafe_url:

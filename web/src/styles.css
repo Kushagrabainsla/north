@@ -653,6 +653,14 @@ button:not(:disabled):active { transform: translateY(1px); }
 .tool-create-footer { margin-top: 11px; }
 .skill-create-grid { display: grid; grid-template-columns: minmax(180px, .65fr) minmax(220px, 1fr); gap: 10px; }
 .skill-create-wide { grid-column: 1 / -1; }
+.skill-create select { box-sizing: border-box; width: 100%; min-height: 36px; padding: 9px; border: 1px solid var(--line); border-radius: 6px; outline: 0; background: var(--surface-2); color: var(--text); font: 11px/1.45 "DM Mono", monospace; }
+.skill-create select:focus { border-color: var(--accent); }
+.contract-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; margin-top: 3px; }
+.contract-chips button { padding: 4px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--accent-soft); color: var(--accent); cursor: pointer; font: 9px "DM Mono", monospace; }
+.contract-chips small { align-self: center; color: var(--faint); font-size: 10px; letter-spacing: normal; text-transform: none; }
+.flow-contract { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface); }
+.flow-contract span { min-width: 0; color: var(--text); font: 10px/1.45 "DM Mono", monospace; overflow-wrap: anywhere; }
+.flow-contract b { display: block; margin-bottom: 3px; color: var(--faint); font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
 .tool-create textarea { width: 100%; resize: vertical; padding: 9px; border: 1px solid var(--line); border-radius: 3px; background: #0a0d0f; color: var(--text); font: 11px/1.55 inherit; text-transform: none; letter-spacing: normal; }
 .tool-create textarea:focus { border-color: var(--accent); outline: 0; }
 .capability-empty-state { min-height: clamp(300px, 55vh, 760px); display: grid; place-items: center; padding: 28px; text-align: center; }
@@ -758,6 +766,7 @@ button:not(:disabled):active { transform: translateY(1px); }
   .tool-create-grid { grid-template-columns: 1fr; }
   .skill-create-grid { grid-template-columns: 1fr; }
   .skill-create-wide { grid-column: auto; }
+  .flow-contract { grid-template-columns: 1fr; }
   .tool-create-footer { align-items: stretch; flex-direction: column; }
   .capability-empty-state { min-height: 280px; }
   .chat-list { padding: 8px; }

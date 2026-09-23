@@ -21,7 +21,7 @@ from jobs.scheduler import (
     next_firing_epoch,
 )
 from orchestrator.api.deps import _get_cron_store, router
-from utils.time import format_local, is_known_timezone, local_timezone_name
+from utils.time import format_local, is_known_timezone, local_timezone_name, now_epoch
 from utils.weekdays import parse_weekdays
 
 
@@ -53,6 +53,8 @@ class CronEntryOut(BaseModel):
     task: str
     hour: int
     minute: int
+    interval_minutes: int | None = None
+    anchor_epoch: float | None = None
     weekdays: list[int]
     cadence: str
     enabled: bool
@@ -71,8 +73,9 @@ class CronEntryCreate(BaseModel):
     label: str = ""
     agent: str = "general"
     task: str
-    hour: int
+    hour: int | None = None
     minute: int = 0
+    interval_minutes: int | None = None
     # Accepts day numbers, day names, or "weekdays" / "weekends" / "daily",
     # matching what the schedule_task tool takes - one vocabulary, two doors.
     days: Any = None
@@ -92,6 +95,7 @@ class CronEntryUpdate(BaseModel):
     task: str | None = None
     hour: int | None = None
     minute: int | None = None
+    interval_minutes: int | None = None
     days: Any = None
     tz: str | None = None
     enabled: bool | None = None
@@ -118,6 +122,8 @@ def _entry_out(entry: CronEntry, source: str, *, modified: bool = False) -> Cron
         task=entry.task,
         hour=entry.hour,
         minute=entry.minute,
+        interval_minutes=entry.interval_minutes,
+        anchor_epoch=entry.anchor_epoch,
         weekdays=sorted(entry.weekdays) if entry.weekdays else [],
         cadence=entry.cadence,
         enabled=entry.enabled,
@@ -130,11 +136,13 @@ def _entry_out(entry: CronEntry, source: str, *, modified: bool = False) -> Cron
     )
 
 
-def _validate(hour: int | None, minute: int | None) -> None:
+def _validate(hour: int | None, minute: int | None, interval_minutes: int | None = None) -> None:
     if hour is not None and not (0 <= hour <= 23):
         raise HTTPException(status_code=422, detail="hour must be 0-23")
     if minute is not None and not (0 <= minute <= 59):
         raise HTTPException(status_code=422, detail="minute must be 0-59")
+    if interval_minutes is not None and interval_minutes < 1:
+        raise HTTPException(status_code=422, detail="interval_minutes must be at least 1")
 
 
 def _timezone(value: str | None) -> str:
@@ -179,6 +187,8 @@ async def _ensure_editable_row(store, name: str) -> None:
         tz=default.zone_name,
         enabled=default.enabled,
         label=default.label,
+        interval_minutes=default.interval_minutes,
+        anchor_epoch=default.anchor_epoch,
     )
 
 
@@ -208,7 +218,11 @@ async def list_cron_entries(builtin: bool = True) -> list[CronEntryOut]:
 @router.post("/cron", response_model=CronEntryOut, status_code=201)
 async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
     """Add a recurring schedule. Times are wall clock in `tz` (default: North's configured zone)."""
-    _validate(body.hour, body.minute)
+    _validate(body.hour, body.minute, body.interval_minutes)
+    if (body.hour is None) == (body.interval_minutes is None):
+        raise HTTPException(status_code=422, detail="provide exactly one of hour or interval_minutes")
+    if body.interval_minutes is not None and body.days is not None:
+        raise HTTPException(status_code=422, detail="interval_minutes cannot be combined with days")
     store = _get_cron_store()
     # An unnamed schedule gets a name derived from its task, made unique - two
     # reminders whose text happens to slug the same must not overwrite one another.
@@ -219,12 +233,14 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
         name=name,
         agent=body.agent,
         task=body.task,
-        hour=body.hour,
-        minute=body.minute,
+        hour=body.hour or 0,
+        minute=0 if body.interval_minutes is not None else body.minute,
         weekdays=_days(body.days),
         tz=_timezone(body.tz),
         enabled=body.enabled,
         label=body.label,
+        interval_minutes=body.interval_minutes,
+        anchor_epoch=now_epoch() if body.interval_minutes is not None else None,
     )
     row = await store.get(name)
     if row is None:  # pragma: no cover - the row was just written
@@ -235,16 +251,25 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
 @router.patch("/cron/{name}", response_model=CronEntryOut)
 async def update_cron_entry(name: str, body: CronEntryUpdate) -> CronEntryOut:
     """Change some fields of one schedule; omitted fields are left alone."""
-    _validate(body.hour, body.minute)
+    _validate(body.hour, body.minute, body.interval_minutes)
+    if body.interval_minutes is not None and (body.hour is not None or body.days is not None):
+        raise HTTPException(status_code=422, detail="interval_minutes cannot be combined with hour or days")
     store = _get_cron_store()
     await _ensure_editable_row(store, name)
     changes: dict[str, Any] = body.model_dump(exclude_none=True, exclude={"days"})
+    if body.interval_minutes is not None:
+        changes.update(hour=0, minute=0, weekdays=None, anchor_epoch=now_epoch())
+    elif body.hour is not None:
+        # Naming a wall-clock hour is the explicit way to leave interval mode.
+        changes.update(interval_minutes=None, anchor_epoch=None)
     if body.tz is not None:
         changes["tz"] = _timezone(body.tz)
     # `days` is translated rather than passed through, and only when the caller
     # sent it: UNSET is how the store tells "leave the days alone" apart from
     # "clear them back to daily", which both look like None on the wire.
-    if body.days is not None:
+    if body.interval_minutes is not None:
+        changes["weekdays"] = None
+    elif body.days is not None:
         changes["weekdays"] = _days(body.days)
     else:
         changes["weekdays"] = UNSET

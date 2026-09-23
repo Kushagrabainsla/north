@@ -101,18 +101,20 @@ north is built from six distinct layers - Perception, Orchestrator, Agent, Appro
 
 **Critical data flow note:** Input goes directly from the Perception Layer to the Orchestrator. The Ledger is not in the request path. Every layer writes to the Ledger asynchronously as a side effect. The Ledger feeds the Context Layer via the extraction pipeline, which runs as a background job. The Orchestrator reads from the Context Layer at the start of each task, not from the Ledger directly.
 
-### 2.1 Capability primitives: tool, skill, policy, agent
+### 2.1 Capability entities: tool, skill, flow, policy, agent, schedule
 
-north extends itself through exactly four primitives. Choosing the right one is the core design decision, so the boundaries are fixed:
+north extends itself through a small hierarchy. Choosing the right entity is the core design decision, so the boundaries are fixed:
 
 | Primitive | What it is | Authority | Activation | Cost | Use when |
 |---|---|---|---|---|---|
 | **Tool** | Deterministic code the model calls (`read_file`, `git`, `web_search`) | n/a (it just runs) | The model decides to call it | one function call | the work is deterministic - never make a model do what code can do reliably |
-| **Skill** | Advisory procedural *knowledge* (a `SKILL.md`) | advisory - never overrides instructions | semantically selected per task, injected low (in the user-message `## Context`) | no extra model call | there's a known-good *procedure* for a *some* tasks ("how to debug a flaky test") |
+| **Skill** | Reusable procedural knowledge (a `SKILL.md`) that can own an executor and several atomic tools | advisory in ordinary tasks; server-enforced execution contract when selected by a flow | selected semantically for a task or explicitly by a flow step | no extra call when suggested; one agent run when invoked by a flow | there is a known-good procedure for a class of work ("how to debug a flaky test") |
+| **Flow** | An ordered sequence of skill invocations with inputs and approval boundaries | coordinates skills; never calls tools directly | explicitly run or triggered by a schedule after evidence-backed activation | one agent run per skill step | several reusable procedures must complete in a controlled order |
 | **Policy** | An authoritative *rule* (a `resources/policies/*.md`) | binding - overrides task/skill/user on conflict | deterministic, by agent name (`applies_to`), injected high (system prompt), always on | no extra model call | a cross-cutting rule must *always* hold (safety guardrails, clean-code) |
-| **Agent** | A separate model call with its own persona/tools | its own instructions | chosen by the planner | a full model call + handoff | the work needs a *different model*, *context isolation*, *unique tools*, or is a distinct autonomous *mission* - not merely a different persona (that's a skill/policy) |
+| **Agent** | A separate model call with its own context and mission | its own instructions | chosen by the planner or by an executable skill contract | a full model call + handoff | the work needs a *different model*, *context isolation*, or is a distinct autonomous *mission* - not merely a different persona (that's a skill/policy) |
+| **Schedule** | A durable time trigger for an active flow, skill, or task | starts work but does not define its procedure | one-shot, interval, wall-clock, or cron timing | no model cost until it fires | known work should begin later or recur |
 
-Skills teach; policies bind. A policy is only as strong as the model that reads it, so the critical ones are also backed by deterministic enforcement (approval-gated mutating tools, the Definition-of-Done gate) - see `resources/policies/` and `agents/policy.py`. Some authoritative rules still live as per-agent prose or Python constants (e.g. tool-creation and deliverable policies); those may migrate into `resources/policies/` over time.
+The execution hierarchy is **flow -> skill -> tool**. A flow stores no executor or tool choice. An executable skill declares its agent, exact tool allowlist, input/output object schemas, minimum approval, and success criteria; the runner resolves all of them through the skill fingerprint. Skills teach; policies bind. Flow approval modes are server-enforced at the tool boundary, so a read-only skill step cannot mutate merely because its prose was misunderstood. A policy is only as strong as the model that reads it, so critical policies are also backed by deterministic enforcement (approval-gated mutating tools, the Definition-of-Done gate) - see `resources/policies/` and `agents/policy.py`.
 
 ---
 

@@ -60,6 +60,7 @@ from utils.execution_context import current_execution
 from utils.tasks import spawn
 from utils.text import normalize_dashes
 from utils.time import RUNTIME_CONTEXT_INSTRUCTION, runtime_context
+from utils.tools import tool_mutates
 
 logger = logging.getLogger(__name__)
 
@@ -463,7 +464,7 @@ class AgenticLLMAgent(LLMAgent):
         if store is None or not payload.task_id:
             return
         mutated = any(
-            item[2] and (tool_map.get(item[0].name) is not None and tool_map[item[0].name].is_mutating)
+            item[2] and self._is_mutating_call(item[0], tool_map)
             for item in results
         )
         if not mutated:
@@ -480,11 +481,40 @@ class AgenticLLMAgent(LLMAgent):
         tool_map: dict[str, Tool],
     ) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
         """Execute one call, turning any unexpected exception into a failed result."""
-        if payload.execution_profile == "quick_readonly" and self._is_mutating_call(call, tool_map):
+        is_mutating = self._is_mutating_call(call, tool_map)
+        if payload.execution_profile == "quick_readonly" and is_mutating:
             return _failed_call(
                 call,
                 RuntimeError("Mutating and delegated tools are unavailable in the quick read-only profile."),
             )
+        if is_mutating and payload.mutation_policy == "deny":
+            return _failed_call(
+                call,
+                RuntimeError("This flow skill step is read-only; mutating tools are blocked by policy."),
+            )
+        if is_mutating and payload.mutation_policy == "require_approval":
+            decision = await self._request_approval(
+                payload,
+                {
+                    "message": (
+                        f"Flow skill '{payload.skills[0] if payload.skills else self.name}' wants to call "
+                        f"the mutating tool '{call.name}' with parameters {call.params}."
+                    )
+                },
+            )
+            if _is_rejection(decision):
+                return (
+                    call,
+                    json.dumps(
+                        {
+                            "success": False,
+                            "failure_kind": "refused",
+                            "error": f"Approval was not granted for mutating tool '{call.name}'.",
+                        }
+                    ),
+                    False,
+                    [],
+                )
         try:
             return await self._execute_call(call, payload, tool_map)
         except Exception as exc:
@@ -497,7 +527,7 @@ class AgenticLLMAgent(LLMAgent):
         if call.name == "delegate_task":
             return True  # a sub-agent may mutate shared files or state
         tool = tool_map.get(call.name)
-        return bool(tool and tool.is_mutating)
+        return bool(tool and tool_mutates(tool, call.params))
 
     async def _execute(
         self,
@@ -878,7 +908,7 @@ class AgenticLLMAgent(LLMAgent):
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
         if call.name == "find_tools":
-            result_str = await self._find_tools(params, tool_map)
+            result_str = await self._find_tools(params, tool_map, payload.allowed_tools)
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
         # create_tool gates its own create/update actions behind an approval
@@ -892,7 +922,12 @@ class AgenticLLMAgent(LLMAgent):
         result_str, images = await self._call_tool(tool_map, call.name, params, payload.edit_scope)
         return call, result_str, _extract_success(result_str), images
 
-    async def _find_tools(self, params: dict[str, Any], tool_map: dict[str, Tool]) -> str:
+    async def _find_tools(
+        self,
+        params: dict[str, Any],
+        tool_map: dict[str, Tool],
+        allowed_tools: list[str] | None = None,
+    ) -> str:
         """Search the global catalog and expose matches on the next model turn."""
         query = str(params.get("query", "")).strip()
         if not query:
@@ -906,6 +941,9 @@ class AgenticLLMAgent(LLMAgent):
         if registry is None:
             return _failed_json("Tool registry is unavailable.")
         registry_tools = registry.available_tools()
+        if allowed_tools is not None:
+            allowed = set(allowed_tools)
+            registry_tools = [tool for tool in registry_tools if tool.name in allowed]
         catalog = {tool.name: tool for tool in registry_tools}
 
         ranked: list[str] = []

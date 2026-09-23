@@ -49,6 +49,16 @@ class Tool(ABC):
             },
         }
 
+    def mutates(self, params: dict[str, Any] | None = None) -> bool:
+        """Return whether this particular call can change local or external state.
+
+        Most tools have one permission shape and use the class-level
+        ``is_mutating`` flag. Mixed tools such as the browser can override this
+        method so a read/inspect call stays read-only while click/fill actions
+        receive sequencing, recovery, and approval treatment as mutations.
+        """
+        return self.is_mutating
+
     @abstractmethod
     async def run(self, input: ToolInput) -> ToolOutput:
         """Execute the tool against `input.params`. Must not raise on
@@ -64,8 +74,6 @@ class Tool(ABC):
         maintaining a central switch-on-tool-name.
         """
         return json.dumps(data, indent=2) if data else "Done."
-
-
 class ApprovalGatedTool(Tool, ABC):
     """Base class for tools that gate actions behind user approval.
 

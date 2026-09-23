@@ -58,11 +58,10 @@ class CronEntry:
     """One scheduled job. `weekdays` is a set of 0=Mon..6=Sun, or None for daily.
 
     `hour`/`minute` are wall-clock time in `tz` (an IANA name; None means
-    North's configured zone), never UTC. A recurrence is a rule, not an instant, so
-    it cannot be an epoch: "07:00 in Asia/Kolkata" stays 07:00 across a DST
-    shift, where a fixed epoch interval would slide to 06:00 or 08:00. Every
-    *instant* the rule produces - the next firing, the job it enqueues - is an
-    epoch, and is rendered in local time for the user.
+    North's configured zone), never UTC. A wall-clock recurrence is a rule, not
+    an instant: "07:00 in Asia/Kolkata" stays 07:00 across a DST shift. A fixed
+    interval is intentionally different and carries ``interval_minutes`` plus an
+    epoch anchor. Every instant either rule produces is rendered in local time.
 
     `weekdays` is a set rather than a single day because the most ordinary
     request there is - "every weekday at 9:30" - cannot be said with one day and
@@ -75,6 +74,11 @@ class CronEntry:
     task: str
     hour: int
     minute: int
+    # Fixed interval schedules are anchored to their creation instant. When set,
+    # hour/minute/weekdays are retained only for storage compatibility and are
+    # not used to calculate firings.
+    interval_minutes: int | None = None
+    anchor_epoch: float | None = None
     weekdays: frozenset[int] | None = None
     tz: str | None = None
     enabled: bool = True
@@ -99,6 +103,11 @@ class CronEntry:
             raise ValueError(f"hour must be in [0, 23], got {self.hour}")
         if not (0 <= self.minute <= 59):
             raise ValueError(f"minute must be in [0, 59], got {self.minute}")
+        if self.interval_minutes is not None:
+            if self.interval_minutes < 1:
+                raise ValueError(f"interval_minutes must be at least 1, got {self.interval_minutes}")
+            if self.anchor_epoch is None:
+                object.__setattr__(self, "anchor_epoch", now_epoch())
         # Frozen, so the canonical form is written back through object.__setattr__:
         # every reader downstream can then assume "None means daily" without
         # re-deriving it from a set of seven.
@@ -113,6 +122,8 @@ class CronEntry:
             task=row["task"],
             hour=row["hour"],
             minute=row["minute"],
+            interval_minutes=row.get("interval_minutes"),
+            anchor_epoch=row.get("anchor_epoch"),
             weekdays=row.get("weekdays"),
             tz=row.get("tz"),
             enabled=bool(row.get("enabled", True)),
@@ -133,11 +144,16 @@ class CronEntry:
 
     def describe(self) -> str:
         """One line a person can check: "weekdays at 07:00 (Asia/Kolkata)"."""
+        if self.interval_minutes is not None:
+            return self.cadence
         return f"{self.cadence} at {self.hour:02d}:{self.minute:02d} ({self.zone_name})"
 
     @property
     def cadence(self) -> str:
         """How often this runs, in the words a person would use for it."""
+        if self.interval_minutes is not None:
+            unit = "minute" if self.interval_minutes == 1 else "minutes"
+            return f"every {self.interval_minutes} {unit}"
         if self.weekdays is None:
             return "daily"
         if self.weekdays == WEEKDAYS:
@@ -179,6 +195,15 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
     stays 07:00 through a DST shift rather than sliding by an hour. The returned
     datetime is aware, so callers comparing it to a UTC clock compare instants.
     """
+    if entry.interval_minutes is not None:
+        anchor = float(entry.anchor_epoch or to_epoch(after))
+        after_epoch = to_epoch(after)
+        period = entry.interval_minutes * 60
+        if after_epoch < anchor:
+            return from_epoch(anchor)
+        periods = int((after_epoch - anchor) // period) + 1
+        return from_epoch(anchor + periods * period)
+
     zone = resolve_timezone(entry.tz)
     day = after.astimezone(zone).date()
     candidate = _wall_clock_on(entry, day)
@@ -205,6 +230,13 @@ def previous_firing(entry: CronEntry, at: datetime) -> datetime:
     The inverse of `next_firing`: used on startup to find the slot a cron should
     have run in, so a firing missed while north was down can be caught up.
     """
+    if entry.interval_minutes is not None:
+        anchor = float(entry.anchor_epoch or to_epoch(at))
+        at_epoch = to_epoch(at)
+        period = entry.interval_minutes * 60
+        periods = max(0, int((at_epoch - anchor) // period))
+        return from_epoch(anchor + periods * period)
+
     zone = resolve_timezone(entry.tz)
     day = at.astimezone(zone).date()
     candidate = _wall_clock_on(entry, day)

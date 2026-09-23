@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from policies.self_edit import SelfEditPolicy
+from tools.base import Tool
 from tools.models import ToolInput
 from tools.universal.create_tool import CreateToolTool, _check_code_safety
 
@@ -71,10 +72,22 @@ class TestFailClosedGate:
         assert result.success is True
 
 
-def test_learned_tool_is_created_and_core_tool_is_not_updateable(tmp_path: Path) -> None:
+class _Registry:
+    def __init__(self) -> None:
+        self.tools: dict[str, Tool] = {}
+
+    def register(self, tool: Tool) -> None:
+        self.tools[tool.name] = tool
+
+    def all_tool_names(self) -> set[str]:
+        return set(self.tools)
+
+
+async def test_tool_stays_candidate_until_validated_tested_and_activated(tmp_path: Path) -> None:
     learned = tmp_path / "learned" / "tools"
     policy = SelfEditPolicy(learned, tmp_path / "mutations")
-    tool = CreateToolTool(tools_dir=learned, self_edit_policy=policy)
+    registry = _Registry()
+    tool = CreateToolTool(tool_registry=registry, tools_dir=learned, self_edit_policy=policy)
 
     created = tool._create(
         {
@@ -85,7 +98,36 @@ def test_learned_tool_is_created_and_core_tool_is_not_updateable(tmp_path: Path)
         }
     )
     assert created.success
-    assert (learned / "specialized" / "learned_demo.py").exists()
+    candidate = learned / "candidates" / "specialized" / "learned_demo.py"
+    active = learned / "specialized" / "learned_demo.py"
+    assert candidate.exists()
+    assert not active.exists()
+    assert "learned_demo" not in registry.tools
+
+    refused = tool._activate({"name": "learned_demo", "user_confirmed": True})
+    assert not refused.success
+    assert "Test" in refused.error
+
+    validated = tool._validate({"name": "learned_demo"})
+    assert validated.success
+    tested = await tool._test({"name": "learned_demo", "test_params": {}})
+    assert tested.success
+
+    unconfirmed = tool._activate({"name": "learned_demo"})
+    assert not unconfirmed.success
+    assert "confirmation" in unconfirmed.error
+
+    activated = tool._activate({"name": "learned_demo", "user_confirmed": True})
+    assert activated.success
+    assert active.exists()
+    assert not candidate.exists()
+    assert "learned_demo" in registry.tools
+
+
+def test_updating_builtin_tool_stages_learned_candidate(tmp_path: Path) -> None:
+    learned = tmp_path / "learned" / "tools"
+    policy = SelfEditPolicy(learned, tmp_path / "mutations")
+    tool = CreateToolTool(tools_dir=learned, self_edit_policy=policy)
 
     core_update = tool._update(
         {
@@ -93,5 +135,5 @@ def test_learned_tool_is_created_and_core_tool_is_not_updateable(tmp_path: Path)
             "content": _BENIGN_TOOL.replace("my_tool", "read_file"),
         }
     )
-    assert not core_update.success
-    assert "outside the managed root" in core_update.error
+    assert core_update.success
+    assert (learned / "candidates" / "universal" / "read_file.py").exists()

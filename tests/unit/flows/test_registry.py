@@ -23,11 +23,12 @@ def test_loads_valid_flow(tmp_path):
 description: Review a prepared item
 steps:
   - name: inspect
-    tool: browser
+    skill: browser-research
+    instructions: Inspect the prepared item.
     approval: never
   - name: approve
-    tool: request_approval
     skill: review-guidelines
+    instructions: Review the inspection result.
     approval: always
 """,
     )
@@ -37,6 +38,74 @@ steps:
     assert flow.source is FlowSource.BUILTIN
     assert flow.step_names() == ["inspect", "approve"]
     assert flow.steps[1].skill == "review-guidelines"
+    assert flow.status == "active"
+
+
+def test_legacy_tool_step_is_migrated_to_a_skill_invocation_in_memory(tmp_path):
+    _write_flow(
+        tmp_path,
+        "legacy",
+        """name: legacy
+description: Preserve an older definition
+steps:
+  - name: inspect
+    tool: browser
+    params: {action: inspect}
+    approval: never
+""",
+    )
+
+    flow = FlowRegistry(tmp_path).get("legacy")
+    step = flow.steps[0]
+
+    assert step.skill == "using-a-north-tool"
+    assert step.inputs == {"tool": "browser", "arguments": {"action": "inspect"}}
+    assert "browser" in step.instructions
+    assert flow.status == "candidate"
+
+
+def test_legacy_boolean_approval_migrates_to_a_safe_candidate(tmp_path):
+    _write_flow(
+        tmp_path,
+        "legacy",
+        """name: legacy
+description: Preserve an older definition
+steps:
+  - name: inspect
+    tool: browser
+    skill: browser-research-and-extraction
+    approval: false
+    description: Inspect notifications without submitting anything.
+""",
+    )
+
+    flow = FlowRegistry(tmp_path).get("legacy")
+
+    assert flow.status == "candidate"
+    assert flow.steps[0].approval == "on_mutation"
+    assert flow.steps[0].skill == "using-a-north-tool"
+
+
+def test_legacy_agent_choice_is_removed_and_requires_retesting(tmp_path):
+    _write_flow(
+        tmp_path,
+        "legacy-agent",
+        """name: legacy-agent
+description: Preserve an older executor choice
+status: active
+steps:
+  - name: inspect
+    skill: browser-research-and-extraction
+    agent: general
+    instructions: Inspect safely.
+    approval: always
+""",
+    )
+
+    flow = FlowRegistry(tmp_path).get("legacy-agent")
+
+    assert flow.status == "candidate"
+    assert not hasattr(flow.steps[0], "agent")
 
 
 def test_skips_invalid_flows_without_crashing(tmp_path):

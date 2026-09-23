@@ -144,6 +144,41 @@ def _task_intents(task_text: str) -> frozenset[str]:
         for phrase in ("add a tool", "add new tool", "create a tool", "new capability", "create-tool")
     ):
         detected.add(SkillIntent.CREATE_TOOL.value)
+    if any(
+        phrase in text
+        for phrase in (
+            "add a flow",
+            "build a flow",
+            "create a flow",
+            "new flow",
+            "create-flow",
+            "automate this workflow",
+        )
+    ):
+        detected.add(SkillIntent.CREATE_FLOW.value)
+    if any(
+        phrase in text
+        for phrase in ("add a skill", "build a skill", "create a skill", "new skill", "create-skill")
+    ):
+        detected.add(SkillIntent.CREATE_SKILL.value)
+    if any(
+        phrase in text
+        for phrase in ("add an agent", "build an agent", "create an agent", "new agent", "create-agent")
+    ):
+        detected.add(SkillIntent.CREATE_AGENT.value)
+    if any(
+        phrase in text
+        for phrase in (
+            "add a schedule",
+            "create a schedule",
+            "schedule this",
+            "run every",
+            "every day at",
+            "every weekday",
+            "create-schedule",
+        )
+    ):
+        detected.add(SkillIntent.CREATE_SCHEDULE.value)
     if ("overview" in text and ("repository" in text or "codebase" in text)) or any(
         phrase in text
         for phrase in (

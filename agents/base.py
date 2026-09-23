@@ -91,7 +91,7 @@ class Agent(ABC):
             try:
                 # Selected once and shared: _load_context and _load_tools both need
                 # the task's skills, and each selection costs an embedding call.
-                selected_skills = await self._select_skills(payload.prompt)
+                selected_skills = await self._select_skills(payload.prompt, payload.skills)
                 context, scored_tools = await asyncio.gather(
                     self._load_context(payload, selected_skills),
                     self._load_tools(payload, selected_skills),
@@ -141,7 +141,7 @@ class Agent(ABC):
             self._deps.episodic_store,
         )
 
-    async def _select_skills(self, task_prompt: str) -> list[Any]:
+    async def _select_skills(self, task_prompt: str, required_names: list[str] | None = None) -> list[Any]:
         """Skills relevant to this task, selected once per run.
 
         Selection embeds the prompt, so it is done here and passed to both
@@ -149,6 +149,18 @@ class Agent(ABC):
         (which boosts the tools those skills name) rather than run twice.
         """
         registry = self._deps.skill_registry
+        if required_names:
+            if registry is None:
+                raise ValueError("Required skills cannot run because the skill registry is unavailable")
+            selected = []
+            for name in dict.fromkeys(required_names):
+                skill = registry.get(name)
+                if not skill.available_to(self.domain):
+                    raise ValueError(
+                        f"Skill {name!r} is not active for agent {self.name!r} in domain {self.domain!r}"
+                    )
+                selected.append(skill)
+            return selected
         selector = self._deps.skill_selector
         if registry is None or selector is None or not task_prompt:
             return []
@@ -235,11 +247,10 @@ class Agent(ABC):
                 logger.debug("Plan injection failed for task %s: %s", payload.task_id, exc)
 
         # Procedural skills: give the agent the relevant playbook up front, so the
-        # same model repeats a known-good procedure instead of improvising. Enabled
-        # for engineering and the general assistant - general handles cross-domain,
-        # open-ended work (e.g. scouting OSS contributions), and the top-2 +
-        # similarity threshold inject nothing when no skill is relevant enough.
-        if self.domain in _SKILLS_ENABLED_DOMAINS:
+        # same model repeats a known-good procedure instead of improvising. Semantic
+        # suggestions are enabled for engineering and general; a flow's explicit
+        # required skill is loaded for any compatible agent domain.
+        if payload.skills or self.domain in _SKILLS_ENABLED_DOMAINS:
             if selected_skills is None:
                 selected_skills = await self._select_skills(payload.prompt)
             skills_block = await self._load_skills_block(payload, selected_skills)
@@ -305,6 +316,23 @@ class Agent(ABC):
         selected_names = {skill.name for skill in selected}
 
         sections: list[str] = []
+        if payload.skills:
+            required = []
+            for skill in selected:
+                required.append(
+                    f"## Required skill: {skill.name}\n"
+                    f"{skill.description}\n\n"
+                    f"{skill.body.strip()}"
+                )
+            sections.append(
+                "# Required flow procedures\n"
+                "Execute the procedures below for this flow step. They are the execution contract, "
+                "not optional suggestions. Follow the step's server-enforced mutation policy and do not "
+                "substitute a different procedure.\n\n"
+                + "\n\n".join(required)
+            )
+            await self._emit_skill_selected(payload, selected)
+            return "\n\n".join(sections)
         if selected:
             offered = "\n".join(f"- {skill.name}: {skill.description}" for skill in selected)
             sections.append(
@@ -371,6 +399,17 @@ class Agent(ABC):
         by_name = {tool.name: tool for tool in registry_tools}
         all_names = set(by_name)
         prompt = payload.prompt if payload is not None else ""
+
+        if payload is not None and payload.allowed_tools is not None:
+            # Executable skill contracts are a hard boundary, not retrieval
+            # hints. Unknown names are rejected during flow validation; keeping
+            # the intersection here makes the runtime fail closed as well.
+            allowed = set(payload.allowed_tools) & all_names
+            scores = dict(await self._deps.confidence_tracker.scores_for_agent(self.name))
+            return sorted(
+                ((by_name[name], scores.get(name, 0.5)) for name in allowed),
+                key=lambda pair: (-pair[1], pair[0].name),
+            )
 
         mandatory = set(_ESSENTIAL_TOOL_NAMES) & all_names
         mandatory.update(_mentioned_tool_names(selected_skills or [], all_names))

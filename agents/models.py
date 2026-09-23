@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -45,6 +45,14 @@ class AgentPayload(BaseModel):
     parent_run_id: str | None = None
     attempt: int = 0
     prompt: str
+    # Exact procedures required by a flow step. Unlike semantic suggestions,
+    # these skills are loaded in full and form part of the execution contract.
+    skills: list[str] = Field(default_factory=list)
+    # Exact server-owned tool allowlist for an executable skill. None keeps the
+    # normal task-time catalog behavior; an empty list means no external tools.
+    allowed_tools: list[str] | None = None
+    # Server-owned guard applied immediately before every mutating tool call.
+    mutation_policy: Literal["allow", "require_approval", "deny"] = "allow"
     context: str = ""  # optional pre-loaded context summary
     # Runtime-only attribution for the material merged into ``context``. Agents
     # populate it while loading context so prompt telemetry can say where the
@@ -209,5 +217,8 @@ class AgentDependencies:
     # Both are optional so non-engineering setups and tests need not wire them.
     skill_registry: Any | None = field(default=None)
     skill_selector: Any | None = field(default=None)
+    # Declarative processes already known to North. Exposed to the capability
+    # summary so a fresh session can reuse a flow instead of recreating it.
+    flow_registry: Any | None = field(default=None)
     # Durable execution index shared by top-level and delegated agents.
     agent_run_store: Any | None = field(default=None)

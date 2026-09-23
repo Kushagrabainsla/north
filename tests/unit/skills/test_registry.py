@@ -97,6 +97,61 @@ def test_invalid_skill_status_is_rejected(tmp_path):
     assert SkillRegistry(builtin_dir=tmp_path).names() == []
 
 
+def test_loads_flow_execution_contract(tmp_path):
+    _write_skill(
+        tmp_path,
+        "browser-step",
+        """---
+name: browser-step
+description: Use when browsing one page
+domains: [general]
+execution:
+  agent: general
+  tools: [browser]
+  approval: on_mutation
+  inputs:
+    type: object
+    properties:
+      url: {type: string}
+    required: [url]
+  outputs:
+    type: object
+    properties:
+      evidence: {type: string}
+    required: [evidence]
+  success_criteria:
+    - The requested page was verified.
+---
+1. Open and verify the page.
+""",
+    )
+
+    skill = SkillRegistry(builtin_dir=tmp_path).get("browser-step")
+
+    assert skill.execution is not None
+    assert skill.execution.agent == "general"
+    assert skill.execution.tools == ("browser",)
+    assert skill.execution.inputs["required"] == ["url"]
+
+
+def test_rejects_incomplete_execution_contract(tmp_path):
+    _write_skill(
+        tmp_path,
+        "unsafe",
+        """---
+name: unsafe
+description: Use when doing unsafe work
+execution:
+  agent: general
+  tools: [browser]
+---
+1. Act without a completion check.
+""",
+    )
+
+    assert SkillRegistry(builtin_dir=tmp_path).names() == []
+
+
 def test_get_unknown_raises(tmp_path):
     with pytest.raises(SkillNotFoundError):
         SkillRegistry(builtin_dir=tmp_path).get("nope")

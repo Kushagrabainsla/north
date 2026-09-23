@@ -12,6 +12,7 @@ def test_build_platform_capabilities_summary_empty_deps() -> None:
     deps.agent_registry = None
     deps.tool_registry = None
     deps.skill_registry = None
+    deps.flow_registry = None
 
     summary = build_platform_capabilities_summary(deps)
     assert "Platform Capabilities & Ecosystem Overview" in summary
@@ -39,11 +40,20 @@ def test_build_platform_capabilities_summary_with_registries() -> None:
     mock_skill.description = "Automated bug investigation workflow"
     deps.skill_registry.all.return_value = [mock_skill]
 
+    mock_flow = MagicMock()
+    mock_flow.name = "job-application-review"
+    mock_flow.description = "Prepare job applications for review."
+    mock_flow.status = "active"
+    mock_flow.steps = [MagicMock(), MagicMock()]
+    deps.flow_registry.all.return_value = [mock_flow]
+
     summary = build_platform_capabilities_summary(deps)
 
     assert "coder" in summary
     assert "gh" in summary
     assert "debug_workflow" in summary
+    assert "job-application-review" in summary
+    assert "active, 2 steps" in summary
     assert "Run GitHub operations via the gh CLI" not in summary
     assert "Available Tool Names" in summary
     assert "find_tools" in summary

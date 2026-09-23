@@ -35,6 +35,19 @@ def test_register_then_get_round_trips() -> None:
     assert registry.get("web_search") is tool
 
 
+def test_remove_learned_override_restores_builtin_fallback() -> None:
+    registry = ToolRegistry()
+    builtin = _make_tool("web_search")
+    learned = _make_tool("web_search")
+    type(learned).__module__ = "north_learned_tool_web_search"
+    registry.register(builtin)
+    registry.register(learned)
+
+    assert registry.get("web_search") is learned
+    assert registry.remove("web_search") is True
+    assert registry.get("web_search") is builtin
+
+
 def test_get_unknown_tool_raises_tool_not_found() -> None:
     registry = ToolRegistry()
     with pytest.raises(ToolNotFoundError):

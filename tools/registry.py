@@ -140,11 +140,17 @@ def _needs_constructor_args(tool_cls: type[Tool]) -> bool:
     )
 
 
+def _is_learned_tool(tool: Tool) -> bool:
+    module = type(tool).__module__
+    return module.startswith(("north_learned_tool_", "north_tool_candidate_"))
+
+
 class ToolRegistry:
     """Global catalog of tools available for task-time selection."""
 
     def __init__(self, auto_register: bool = False, learned_dir: Path | None = None) -> None:
         self._tools: dict[str, Tool] = {}
+        self._fallbacks: dict[str, Tool] = {}
         self._learned_dir = learned_dir
         self._last_reload: float = 0.0  # monotonic timestamp of last filesystem scan
         self._dir_mtimes: dict[Path, float] = {}
@@ -165,7 +171,7 @@ class ToolRegistry:
                 with contextlib.suppress(OSError):
                     self._dir_mtimes[directory] = _dir_fingerprint(directory)
             for tool in _discover_external(directory).values():
-                self._tools[tool.name] = tool
+                self._register_learned(tool)
 
     def reload(self) -> None:
         """Re-scan tool directories for new or edited files.
@@ -186,7 +192,7 @@ class ToolRegistry:
             if not self._directory_changed(directory):
                 continue
             for tool in _discover_external(directory).values():
-                self._tools[tool.name] = tool
+                self._register_learned(tool)
                 logger.info("ToolRegistry.reload: picked up learned tool %r", tool.name)
 
     def _learned_directories(self) -> tuple[Path, ...]:
@@ -214,6 +220,26 @@ class ToolRegistry:
 
     def register(self, tool: Tool) -> None:
         """Add a tool to the global catalog."""
+        current = self._tools.get(tool.name)
+        if current is not None and not _is_learned_tool(current):
+            self._fallbacks[tool.name] = current
+        self._tools[tool.name] = tool
+
+    def remove(self, name: str) -> bool:
+        """Remove a live learned tool, restoring its built-in fallback if any."""
+        if name not in self._tools:
+            return False
+        fallback = self._fallbacks.pop(name, None)
+        if fallback is None:
+            self._tools.pop(name, None)
+        else:
+            self._tools[name] = fallback
+        return True
+
+    def _register_learned(self, tool: Tool) -> None:
+        current = self._tools.get(tool.name)
+        if current is not None and not _is_learned_tool(current):
+            self._fallbacks[tool.name] = current
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> Tool:

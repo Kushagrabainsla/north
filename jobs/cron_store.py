@@ -1,8 +1,8 @@
 """Persistent storage for user-defined cron entries in the jobs SQLite DB.
 
-A recurrence is stored as wall-clock `hour`/`minute`/`weekday` plus the IANA
-`tz` they are read in - see `CronEntry` for why a repeating rule is not an
-epoch. `created_epoch` is an instant, so it is one.
+A wall-clock recurrence stores `hour`/`minute`/`weekday` plus its IANA `tz`.
+A fixed interval stores `interval_minutes` and an epoch anchor instead. See
+`CronEntry` for why those are distinct scheduling semantics.
 """
 
 from __future__ import annotations
@@ -63,6 +63,10 @@ _ADDED_COLUMNS = {
     "skill": "TEXT",
     # Optional declarative flow to execute when the schedule fires.
     "flow": "TEXT",
+    # Fixed-interval schedules (for example every five minutes) use these
+    # fields instead of overloading a wall-clock hour/minute pair.
+    "interval_minutes": "INTEGER",
+    "anchor_epoch": "REAL",
 }
 
 # User-created entries carry this prefix so a listing can tell them apart from
@@ -72,7 +76,20 @@ _SLUG_MAX_LENGTH = 40
 
 # Fields a caller may change on an existing entry. `name` is the key, so
 # renaming is a remove + add, not an update.
-_UPDATABLE = ("agent", "task", "hour", "minute", "weekdays", "tz", "enabled", "label", "skill", "flow")
+_UPDATABLE = (
+    "agent",
+    "task",
+    "hour",
+    "minute",
+    "weekdays",
+    "tz",
+    "enabled",
+    "label",
+    "skill",
+    "flow",
+    "interval_minutes",
+    "anchor_epoch",
+)
 
 # Distinguishes "the caller did not mention this field" from "the caller set it
 # to nothing". Both arrive as None otherwise, which made it impossible to move a
@@ -148,9 +165,24 @@ class UserCronStore:
         label: str = "",
         skill: str = "",
         flow: str = "",
+        interval_minutes: int | None = None,
+        anchor_epoch: float | None = None,
     ) -> None:
         await asyncio.to_thread(
-            self._add_sync, name, agent, task, hour, minute, weekdays, tz, enabled, label, skill, flow
+            self._add_sync,
+            name,
+            agent,
+            task,
+            hour,
+            minute,
+            weekdays,
+            tz,
+            enabled,
+            label,
+            skill,
+            flow,
+            interval_minutes,
+            anchor_epoch,
         )
 
     def _add_sync(
@@ -166,13 +198,16 @@ class UserCronStore:
         label: str = "",
         skill: str = "",
         flow: str = "",
+        interval_minutes: int | None = None,
+        anchor_epoch: float | None = None,
     ) -> None:
         with open_db_connection(self._db_path) as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO user_cron_entries
-                    (name, agent, task, hour, minute, weekdays, tz, enabled, label, skill, flow, created_epoch)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (name, agent, task, hour, minute, weekdays, tz, enabled, label, skill, flow,
+                     interval_minutes, anchor_epoch, created_epoch)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -186,6 +221,8 @@ class UserCronStore:
                     label,
                     skill,
                     flow,
+                    interval_minutes,
+                    anchor_epoch,
                     now_epoch(),
                 ),
             )
@@ -309,5 +346,7 @@ def _row_to_entry(row: sqlite3.Row) -> dict:
         "label": row["label"] or "",
         "skill": row["skill"] or "",
         "flow": row["flow"] or "",
+        "interval_minutes": row["interval_minutes"],
+        "anchor_epoch": row["anchor_epoch"],
         "created_epoch": row["created_epoch"],
     }

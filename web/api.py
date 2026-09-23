@@ -45,6 +45,8 @@ SkillCreate = _extensions.SkillCreate
 SkillDuplicate = _extensions.SkillDuplicate
 FlowCreate = _extensions.FlowCreate
 FlowUpdate = _extensions.FlowUpdate
+ToolCreate = _extensions.ToolCreate
+ToolUpdate = _extensions.ToolUpdate
 create_skill = _extensions.create_skill
 duplicate_skill = _extensions.duplicate_skill
 delete_skill = _extensions.delete_skill
@@ -56,6 +58,11 @@ delete_flow = _extensions.delete_flow
 get_flow = _extensions.get_flow
 list_flows = _extensions.list_flows
 update_flow = _extensions.update_flow
+create_tool = _extensions.create_tool
+delete_tool = _extensions.delete_tool
+get_tool = _extensions.get_tool
+list_tools = _extensions.list_tools
+update_tool = _extensions.update_tool
 extensions_router = _extensions.router
 
 if TYPE_CHECKING:

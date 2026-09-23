@@ -61,19 +61,52 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
             if skills:
                 lines.append("\n### Procedural Skills")
                 for s in sorted(skills, key=lambda x: x.name):
-                    lines.append(f"- **{s.name}**: {s.description}")
+                    contract = (
+                        f", executable by {s.execution.agent} with [{', '.join(s.execution.tools) or 'no tools'}]"
+                        if s.execution is not None
+                        else ", advisory"
+                    )
+                    lines.append(f"- **{s.name}** ({s.status}{contract}): {s.description}")
         except Exception:
             pass
 
-    # 4. Meta-Capabilities & Self-Extension
+    # 4. Declarative Flows
+    flow_registry = getattr(deps, "flow_registry", None)
+    if flow_registry is not None:
+        try:
+            flows = flow_registry.all()
+            if flows:
+                lines.append("\n### Reusable Flows")
+                for flow in sorted(flows, key=lambda item: item.name):
+                    lines.append(
+                        f"- **{flow.name}** ({flow.status}, {len(flow.steps)} steps): {flow.description}"
+                    )
+        except Exception:
+            pass
+
+    # 5. Meta-Capabilities & Self-Extension
     lines.append("\n### Meta-Capabilities (Self-Extension)")
-    lines.append("- **create_tool**: Create, update, or hot-reload custom Python tools at runtime.")
+    lines.append(
+        "- **create_tool**: Stage a Python tool candidate, validate and test it, then activate it with confirmation."
+    )
+    lines.append(
+        "- **create_skill**: Stage reusable procedural guidance and an optional flow-execution contract, "
+        "test selection, then activate it with confirmation."
+    )
+    lines.append(
+        "- **create_flow**: Compose active skills into a candidate process, then validate and test it "
+        "before activation."
+    )
     lines.append("- **create_agent**: Create new specialized sub-agents with custom prompts and configs at runtime.")
-    lines.append("- **use_skill**: Access and execute procedural skills and workflows.")
+    lines.append("- **schedule_task**: Install one-shot, wall-clock, or fixed-interval work after preflight.")
+    lines.append("- **use_skill**: Access a reusable procedure that may call several atomic tools.")
+    lines.append("- **run_flow**: Test or execute a validated declarative flow with persisted checkpoints.")
 
     lines.append(
         "\nWhen asked what North can do, answer accurately using the platform capabilities above. "
-        "North can delegate tasks to its specialized agents, execute work directly via these tools and skills, "
+        "The execution hierarchy is flow to skill to tool: flows reference only skills; executable skills own "
+        "their agent, exact tools, I/O contract, approval floor, and success checks; tools provide atomic "
+        "operations. North can delegate tasks to its specialized agents, "
         "or create new tools and agents on the fly when new capabilities are needed."
     )
     return "\n".join(lines)

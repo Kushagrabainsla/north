@@ -54,6 +54,25 @@ async def test_no_days_means_every_day(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fixed_interval_routine_can_be_created_and_edited_from_the_page(store) -> None:
+    with bind_services(ApiServices(cron_store=store)):
+        entry = await api.create_cron_entry(api.CronEntryCreate(task="check jobs", interval_minutes=5))
+        edited = await update(entry.name, interval_minutes=15)
+
+    assert entry.cadence == "every 5 minutes"
+    assert entry.interval_minutes == 5
+    assert entry.anchor_epoch is not None
+    assert edited.cadence == "every 15 minutes"
+
+
+@pytest.mark.asyncio
+async def test_schedule_api_rejects_ambiguous_timing_modes(store) -> None:
+    with bind_services(ApiServices(cron_store=store)), pytest.raises(HTTPException) as exc:
+        await api.create_cron_entry(api.CronEntryCreate(task="ambiguous", hour=9, interval_minutes=5))
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_a_bad_day_is_a_422_not_a_500(store) -> None:
     with bind_services(ApiServices(cron_store=store)), pytest.raises(HTTPException) as exc:
         await create(days="someday")

@@ -1,7 +1,9 @@
 # Skills
 
-A **skill** is a reusable procedure north gives an engineering agent *before* it acts,
-so the same model repeats a known-good approach instead of improvising.
+A **skill** is a reusable procedure north gives an agent *before* it acts, so the
+same model repeats a known-good approach instead of improvising. Skills are
+advisory in ordinary tasks. A flow may invoke a skill only when it also declares
+a server-enforced `execution` contract.
 
 Each skill is a folder with a `SKILL.md`:
 
@@ -16,6 +18,31 @@ description: Use when a reproducible bug or test failure has an unknown cause...
 ```
 
 The `description` is the retrieval key — write it as a trigger ("Use when …").
+
+An executable skill adds this frontmatter:
+
+```yaml
+execution:
+  agent: general
+  tools: [browser]
+  approval: on_mutation
+  inputs:
+    type: object
+    properties:
+      url: {type: string}
+    required: [url]
+  outputs:
+    type: object
+    properties:
+      evidence: {type: string}
+    required: [evidence]
+  success_criteria:
+    - The requested page was verified.
+```
+
+The contract owns the executor, exact tool allowlist, I/O schemas, minimum
+approval, and success checks. A flow stores none of those choices; it references
+the skill and binds step inputs. Runtime tool discovery cannot widen the allowlist.
 
 ## How it works
 
@@ -45,7 +72,9 @@ Create `resources/builtin-skills/<name>/SKILL.md` with a trigger `description` a
 **procedural** body (steps, not principles). Keep it distinct from other skills so
 selection stays crisp. Don't restate what the agent prompts already say. Add a
 `domains: [general]` frontmatter line if the skill serves the general assistant
-rather than the engineering agents (the default).
+rather than the engineering agents (the default). Add a complete `execution`
+block only when the skill is intended for flows; malformed or incomplete
+contracts are rejected instead of degrading to advisory behavior.
 
 ## Measuring value
 

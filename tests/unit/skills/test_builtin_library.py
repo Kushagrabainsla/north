@@ -56,6 +56,11 @@ def test_key_skills_present():
         "interactive-human-wizard",
         "two-axis-code-review",
         "plain-english-reframing",
+        "adding-a-north-tool",
+        "authoring-a-north-flow",
+        "authoring-a-north-skill",
+        "authoring-a-north-agent",
+        "scheduling-north-work",
     }
     assert expected <= names
 
@@ -75,3 +80,25 @@ def test_research_skill_serves_general_not_engineering():
     skill = _REGISTRY.get("conducting-a-literature-review")
     assert skill.available_to("general")
     assert not skill.available_to("engineering")
+
+
+def test_browser_and_self_extension_guidance_reaches_the_general_agent():
+    for name in (
+        "browser-research-and-extraction",
+        "adding-a-north-tool",
+        "authoring-a-north-flow",
+        "authoring-a-north-skill",
+        "authoring-a-north-agent",
+        "scheduling-north-work",
+    ):
+        assert _REGISTRY.get(name).available_to("general"), name
+
+
+def test_browser_skill_has_an_enforced_flow_contract():
+    skill = _REGISTRY.get("browser-research-and-extraction")
+
+    assert skill.execution is not None
+    assert skill.execution.agent == "general"
+    assert skill.execution.tools == ("browser",)
+    assert skill.execution.approval == "on_mutation"
+    assert {"browser_context", "context_confirmed"} <= set(skill.execution.inputs["required"])

@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from jobs.scheduler import builtin_default
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal._schedules import entry_view, parse_weekdays, resolve_zone_name
+from utils.time import now_epoch
+
+if TYPE_CHECKING:
+    from agents.registry import AgentRegistry
+    from flows.registry import FlowRegistry
+    from skills.registry import SkillRegistry
 
 
 class UpdateScheduleTool(Tool):
@@ -17,7 +25,9 @@ class UpdateScheduleTool(Tool):
         "list_schedules, and pass only the fields that change - anything omitted is left "
         "alone. Times are the user's local time. 'days' takes day names or numbers "
         "(0=Mon … 6=Sun), or 'weekdays' / 'weekends' / 'daily'; pass 'daily' to go back to "
-        "running every day. Pass enabled false to pause a schedule without losing it, and "
+        "running every day. Pass interval_minutes to change it to a fixed interval, or pass "
+        "hour to change an interval back to a wall-clock schedule. Pass enabled false to "
+        "pause a schedule without losing it, and "
         "true to resume it. To move a one-shot task instead, cancel it and schedule a new "
         "one. To remove a schedule for good, use cancel_schedule."
     )
@@ -31,6 +41,10 @@ class UpdateScheduleTool(Tool):
             "agent": {"type": "string", "description": "New agent to run it"},
             "hour": {"type": "integer", "description": "New hour (0-23), local"},
             "minute": {"type": "integer", "description": "New minute (0-59)"},
+            "interval_minutes": {
+                "type": "integer",
+                "description": "Change to every N minutes, anchored when this update is made.",
+            },
             "days": {
                 "description": (
                     "New days: names or numbers (0=Mon…6=Sun), or 'weekdays' / 'weekends' / "
@@ -45,13 +59,27 @@ class UpdateScheduleTool(Tool):
         "required": ["name"],
     }
 
-    def __init__(self, cron_store) -> None:
+    def __init__(
+        self,
+        cron_store,
+        skill_registry: SkillRegistry | None = None,
+        flow_registry: FlowRegistry | None = None,
+        agent_registry: AgentRegistry | None = None,
+        tool_registry=None,
+    ) -> None:
         self._cron_store = cron_store
+        self._skill_registry = skill_registry
+        self._flow_registry = flow_registry
+        self._agent_registry = agent_registry
+        self._tool_registry = tool_registry
 
     async def run(self, input: ToolInput) -> ToolOutput:
         name = str(input.params.get("name", "")).strip()
         if not name:
             return ToolOutput(success=False, error="Parameter 'name' is required.")
+        reference_error = self._reference_error(input.params)
+        if reference_error:
+            return ToolOutput(success=False, error=reference_error)
         if await self._cron_store.get(name) is None and not await self._seed_builtin(name):
             return ToolOutput(
                 success=False,
@@ -65,6 +93,43 @@ class UpdateScheduleTool(Tool):
         await self._cron_store.update(name, **changes)
         row = await self._cron_store.get(name)
         return ToolOutput(success=True, data={"changed": sorted(changes), **entry_view(row)})
+
+    def _reference_error(self, params: dict) -> str:
+        agent_name = str(params.get("agent") or "").strip()
+        if agent_name and self._agent_registry is not None and agent_name not in self._agent_registry.names():
+            return f"Unknown agent '{agent_name}'."
+        skill_name = str(params.get("skill") or "").strip()
+        if skill_name and self._skill_registry is not None:
+            try:
+                skill = self._skill_registry.get(skill_name)
+            except Exception:
+                return f"Unknown skill '{skill_name}'."
+            if skill.status != "active":
+                return f"Skill '{skill_name}' is {skill.status}, not active."
+        flow_name = str(params.get("flow") or "").strip()
+        if flow_name and self._flow_registry is not None:
+            try:
+                flow = self._flow_registry.get(flow_name)
+            except Exception:
+                return f"Unknown flow '{flow_name}'."
+            if flow.status != "active":
+                return f"Flow '{flow_name}' is {flow.status}, not active."
+            if flow.activation_fingerprint and self._skill_registry is not None:
+                from flows.models import flow_fingerprint
+
+                if flow.activation_fingerprint != flow_fingerprint(flow, self._skill_registry.get):
+                    return f"Flow '{flow_name}' changed after activation; test and activate it again."
+            from tools.universal._flow_validation import validate_flow_capabilities
+
+            report = validate_flow_capabilities(
+                flow,
+                skill_registry=self._skill_registry,
+                agent_registry=self._agent_registry,
+                tool_registry=self._tool_registry,
+            )
+            if not report.valid:
+                return f"Flow '{flow_name}' is no longer executable: {'; '.join(report.errors)}"
+        return ""
 
     async def _seed_builtin(self, name: str) -> bool:
         """Write a stored row for a built-in so an edit has somewhere to land.
@@ -87,6 +152,8 @@ class UpdateScheduleTool(Tool):
             label=default.label,
             skill=default.skill,
             flow=default.flow,
+            interval_minutes=default.interval_minutes,
+            anchor_epoch=default.anchor_epoch,
         )
         return True
 
@@ -109,6 +176,20 @@ class UpdateScheduleTool(Tool):
             if not 0 <= value <= ceiling:
                 raise ValueError(f"{field} must be in [0, {ceiling}], got {value}")
             changes[field] = value
+        if params.get("interval_minutes") is not None:
+            if any(params.get(field) is not None for field in ("hour", "minute", "days", "weekday")):
+                raise ValueError("interval_minutes cannot be combined with hour, minute, or days")
+            interval = int(params["interval_minutes"])
+            if interval < 1:
+                raise ValueError(f"interval_minutes must be at least 1, got {interval}")
+            changes["interval_minutes"] = interval
+            changes["anchor_epoch"] = now_epoch()
+            changes["hour"] = 0
+            changes["minute"] = 0
+            changes["weekdays"] = None
+        elif params.get("hour") is not None:
+            changes["interval_minutes"] = None
+            changes["anchor_epoch"] = None
         days = params.get("days", params.get("weekday"))
         if days is not None:
             changes["weekdays"] = parse_weekdays(days)

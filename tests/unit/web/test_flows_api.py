@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import HTTPException
 
 from flows.exceptions import FlowNotFoundError
 from flows.models import FlowSource
@@ -17,8 +16,11 @@ def _document(name: str = "job-review", description: str = "Review a prepared jo
         + "\n"
         + "description: "
         + description
-        + "\nversion: 1.0.0\ndomains: [general]\nstatus: active\nsteps:\n"
-        + "  - name: inspect\n    tool: browser\n    approval: always\n"
+        + "\ndomains: [general]\nstatus: active\nsteps:\n"
+        + "  - name: inspect\n"
+        + "    skill: review-item\n"
+        + "    instructions: Review the prepared job.\n"
+        + "    approval: always\n"
     )
 
 
@@ -48,8 +50,10 @@ async def test_flow_api_lists_reads_and_updates(flow_registry: FlowRegistry) -> 
 
     updated = _document(description="Updated job review")
     result = await web_api.update_flow("job-review", web_api.FlowUpdate(content=updated))
-    assert result["content"] == updated
+    assert result["status"] == "candidate"
+    assert "version:" not in result["content"]
     assert flow_registry.get("job-review").description == "Updated job review"
+    assert flow_registry.get("job-review").status == "candidate"
 
 
 async def test_flow_api_creates_and_deletes_learned_flow(tmp_path) -> None:
@@ -57,6 +61,7 @@ async def test_flow_api_creates_and_deletes_learned_flow(tmp_path) -> None:
     with bind_services(ApiServices(flow_registry=registry, north_home=tmp_path)):
         created = await web_api.create_flow(web_api.FlowCreate(content=_document("new-flow")))
         assert created["name"] == "new-flow"
+        assert created["status"] == "candidate"
         assert registry.get("new-flow").source is FlowSource.LEARNED
         assert await web_api.delete_flow("new-flow") is None
         with pytest.raises(FlowNotFoundError):
@@ -69,7 +74,10 @@ async def test_flow_api_creates_user_override_for_builtin_edits(tmp_path) -> Non
     (builtin / "FLOW.yaml").write_text(_document("system-flow"), encoding="utf-8")
     registry = FlowRegistry(tmp_path / "builtin", tmp_path / "flows")
     with bind_services(ApiServices(flow_registry=registry, north_home=tmp_path)):
-        result = await web_api.update_flow("system-flow", web_api.FlowUpdate(content=_document("system-flow", "changed")))
+        result = await web_api.update_flow(
+            "system-flow",
+            web_api.FlowUpdate(content=_document("system-flow", "changed")),
+        )
 
     assert result["source"] == "learned"
     assert registry.get("system-flow").description == "changed"

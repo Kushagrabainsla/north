@@ -18,8 +18,16 @@ from orchestrator.api_context import current_services
 from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME, SkillSource
 from skills.parser import parse_skill_document
-from skills.registry import rejection_reason
-from tools.universal.create_tool import _check_code_safety, _find_tool_path, _render_stub
+from skills.registry import parse_execution_contract, rejection_reason
+from tools.universal._flow_validation import validate_flow_capabilities
+from tools.universal.create_tool import (
+    _candidate_root,
+    _check_code_safety,
+    _find_candidate_path,
+    _find_tool_path,
+    _list_tools,
+    _render_stub,
+)
 
 # This router is composed into ``web.api.router``, which owns the public
 # ``/web/api`` prefix and request-level dependencies. Repeating either here
@@ -36,6 +44,18 @@ class SkillCreate(BaseModel):
     description: str = Field(min_length=1, max_length=2_000)
     instructions: str = Field(min_length=1, max_length=8_000)
     domains: list[str] = Field(default_factory=lambda: ["general"])
+    executor: str = "general"
+    tools: list[str] = Field(default_factory=list)
+    approval: str = Field(default="never", pattern="^(never|on_mutation|always)$")
+    inputs: dict[str, Any] = Field(
+        default_factory=lambda: {"type": "object", "properties": {}}
+    )
+    outputs: dict[str, Any] = Field(
+        default_factory=lambda: {"type": "object", "properties": {}}
+    )
+    success_criteria: list[str] = Field(
+        default_factory=lambda: ["The requested procedure completed and returned verifiable evidence."]
+    )
 
 
 class SkillDuplicate(BaseModel):
@@ -56,9 +76,8 @@ class FlowUpdate(BaseModel):
     content: str | None = Field(default=None, max_length=100_000)
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=2_000)
-    version: str = "1.0.0"
     domains: list[str] = Field(default_factory=lambda: ["general"])
-    status: str = "active"
+    status: str = "candidate"
     steps: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -72,9 +91,8 @@ class FlowCreate(BaseModel):
     content: str | None = Field(default=None, max_length=100_000)
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=2_000)
-    version: str = "1.0.0"
     domains: list[str] = Field(default_factory=lambda: ["general"])
-    status: str = "active"
+    status: str = "candidate"
     steps: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -85,22 +103,86 @@ class FlowCreate(BaseModel):
 
 
 def _flow_document(body: FlowCreate | FlowUpdate, *, fallback_name: str = "") -> str:
-    if body.content:
-        return body.content
-    import yaml
-
-    return yaml.safe_dump(
-        {
+    data = (
+        yaml.safe_load(body.content)
+        if body.content
+        else {
             "name": body.name or fallback_name,
             "description": body.description or "",
-            "version": body.version,
             "domains": body.domains,
             "status": body.status,
             "steps": body.steps,
-        },
+        }
+    )
+    if not isinstance(data, dict):
+        raise FlowParseError("Flow definition must be a YAML mapping")
+    steps = data.get("steps") or []
+    if any(isinstance(step, dict) and ({"tool", "agent"} & step.keys()) for step in steps):
+        raise FlowParseError(
+            "Flow steps reference only skills. Move agent and tool choices into the skill execution contract."
+        )
+    # Dashboard edits are executable changes. They may retire a flow, but they
+    # cannot bypass evidence-backed activation by writing status: active.
+    data["status"] = "retired" if str(data.get("status") or "").lower() == "retired" else "candidate"
+    data.pop("version", None)
+    data.pop("activation_fingerprint", None)
+    return yaml.safe_dump(
+        data,
         sort_keys=False,
         allow_unicode=True,
     )
+
+
+def _validate_flow_definition(flow) -> None:
+    services = current_services()
+    report = validate_flow_capabilities(
+        flow,
+        skill_registry=services.skill_registry,
+        agent_registry=services.agent_registry,
+        tool_registry=services.tool_registry,
+    )
+    if not report.valid:
+        raise HTTPException(status_code=422, detail="Flow is not executable: " + "; ".join(report.errors))
+
+
+def _execution_view(execution) -> dict[str, Any] | None:
+    if execution is None:
+        return None
+    return {
+        "agent": execution.agent,
+        "tools": list(execution.tools),
+        "inputs": execution.inputs,
+        "outputs": execution.outputs,
+        "approval": execution.approval,
+        "success_criteria": list(execution.success_criteria),
+    }
+
+
+def _validate_execution_dependencies(execution, domains: list[str]) -> None:
+    if execution is None:
+        return
+    services = current_services()
+    if services.agent_registry is not None:
+        try:
+            agent = services.agent_registry.get(execution.agent)
+        except Exception:
+            raise HTTPException(status_code=422, detail=f"Unknown executor {execution.agent!r}") from None
+        if agent.domain not in domains:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Executor {execution.agent!r} has domain {agent.domain!r}, which is not "
+                    "listed in the skill domains"
+                ),
+            )
+    if services.tool_registry is not None:
+        for tool_name in execution.tools:
+            if tool_name.startswith("$input."):
+                continue
+            try:
+                services.tool_registry.get(tool_name)
+            except Exception:
+                raise HTTPException(status_code=422, detail=f"Unknown tool {tool_name!r}") from None
 
 
 @router.get("/skills")
@@ -114,6 +196,7 @@ async def list_skills() -> list[dict[str, Any]]:
             "version": skill.version,
             "status": skill.status,
             "domains": sorted(skill.domains),
+            "execution": _execution_view(skill.execution),
         }
         for skill in sorted(registry.all(), key=lambda item: item.name)
     ]
@@ -128,16 +211,38 @@ async def create_skill(body: SkillCreate) -> dict[str, Any]:
     if name in registry.names():
         raise HTTPException(status_code=409, detail=f"Skill {name!r} already exists")
     learned_dir = Path(current_services().require("north_home")) / "skills"
+    description = body.description.strip()
+    instructions = body.instructions.strip()
+    if not description.startswith("Use when"):
+        raise HTTPException(status_code=422, detail="Skill description must start with 'Use when'.")
+    reason = rejection_reason(name, description, instructions, source=SkillSource.LEARNED)
+    if reason:
+        raise HTTPException(status_code=422, detail=reason)
+    execution = {
+        "agent": body.executor.strip(),
+        "tools": body.tools,
+        "approval": body.approval,
+        "inputs": body.inputs,
+        "outputs": body.outputs,
+        "success_criteria": body.success_criteria,
+    }
+    try:
+        execution_contract = parse_execution_contract(execution)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    _validate_execution_dependencies(execution_contract, body.domains)
     document = "---\n" + yaml.safe_dump(
         {
             "name": name,
-            "description": body.description.strip(),
+            "description": description,
+            "source": SkillSource.LEARNED.value,
             "version": "1.0.0",
-            "status": "active",
+            "status": "candidate",
             "domains": body.domains,
+            "execution": execution,
         },
         sort_keys=False,
-    ) + "---\n\n" + body.instructions.strip() + "\n"
+    ) + "---\n\n" + instructions + "\n"
     target = learned_dir / name
     await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread((target / SKILL_FILENAME).write_text, document, encoding="utf-8")
@@ -157,8 +262,14 @@ async def duplicate_skill(name: str, body: SkillDuplicate) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="Skill name must use lowercase letters, digits, and hyphens")
     if new_name in registry.names():
         raise HTTPException(status_code=409, detail=f"Skill {new_name!r} already exists")
-    frontmatter, content_body = parse_skill_document(await asyncio.to_thread((skill.directory / SKILL_FILENAME).read_text, encoding="utf-8"))
+    content = await asyncio.to_thread(
+        (skill.directory / SKILL_FILENAME).read_text,
+        encoding="utf-8",
+    )
+    frontmatter, content_body = parse_skill_document(content)
     frontmatter["name"] = new_name
+    frontmatter["source"] = SkillSource.LEARNED.value
+    frontmatter["status"] = "candidate"
     learned_dir = Path(current_services().require("north_home")) / "skills"
     target = learned_dir / new_name
     document = "---\n" + yaml.safe_dump(frontmatter, sort_keys=False) + "---\n\n" + content_body.strip() + "\n"
@@ -176,7 +287,12 @@ async def get_skill(name: str) -> dict[str, Any]:
     except SkillNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     content = await asyncio.to_thread((skill.directory / "SKILL.md").read_text, encoding="utf-8")
-    return {"name": skill.name, "content": content, "source": skill.source.value}
+    return {
+        "name": skill.name,
+        "content": content,
+        "source": skill.source.value,
+        "execution": _execution_view(skill.execution),
+    }
 
 
 @router.put("/skills/{name}")
@@ -195,14 +311,30 @@ async def update_skill(name: str, body: SkillUpdate) -> dict[str, Any]:
     reason = rejection_reason(parsed_name, description, content_body, source=SkillSource.LEARNED)
     if parsed_name != name or reason:
         raise HTTPException(status_code=422, detail=reason or "Skill name cannot be changed")
-    status = str(frontmatter.get("status") or "active").strip().lower()
+    status = str(frontmatter.get("status") or "candidate").strip().lower()
     if status not in {"candidate", "active", "retired"}:
         raise HTTPException(status_code=422, detail=f"Invalid skill status: {status!r}")
+    try:
+        execution = parse_execution_contract(frontmatter.get("execution"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    raw_domains = frontmatter.get("domains") or ["engineering"]
+    domains = (
+        [str(domain).strip() for domain in raw_domains if str(domain).strip()]
+        if isinstance(raw_domains, list)
+        else ["engineering"]
+    )
+    _validate_execution_dependencies(execution, domains)
+    # Any instruction edit invalidates selection and execution evidence. The
+    # dashboard may retire a skill, but activation goes through create_skill.
+    frontmatter["status"] = "retired" if status == "retired" else "candidate"
+    frontmatter["source"] = SkillSource.LEARNED.value
+    document = "---\n" + yaml.safe_dump(frontmatter, sort_keys=False) + "---\n\n" + content_body.strip() + "\n"
     target = skill.directory
     if skill.source is SkillSource.BUILTIN:
         target = Path(current_services().require("north_home")) / "skills" / name
         await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread((target / SKILL_FILENAME).write_text, body.content, encoding="utf-8")
+    await asyncio.to_thread((target / SKILL_FILENAME).write_text, document, encoding="utf-8")
     registry.reload()
     return await get_skill(name)
 
@@ -221,20 +353,34 @@ async def delete_skill(name: str) -> None:
 @router.get("/tools")
 async def list_tools() -> list[dict[str, Any]]:
     registry = current_services().require("tool_registry")
-    return [
-        {
+    learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
+    catalog = _list_tools(learned_dir)
+    rows = catalog.data.get("tools", []) if catalog.data else []
+    result = {
+        tool.name: {
             "name": tool.name,
             "description": tool.description,
-            "source": (
-                "learned"
-                if str(getattr(tool, "__module__", "")).startswith("north_learned_tool_")
-                else "built-in"
-            ),
+            "source": "learned" if str(type(tool).__module__).startswith("north_learned_tool_") else "built-in",
             "status": "active",
             "mutating": tool.is_mutating,
         }
-        for tool in sorted(registry.available_tools(), key=lambda item: item.name)
-    ]
+        for tool in registry.available_tools()
+    }
+    for row in rows:
+        if row["name"] not in result and row["status"] != "candidate":
+            continue
+        try:
+            active = registry.get(row["name"])
+        except Exception:
+            active = None
+        result[row["name"]] = {
+            "name": row["name"],
+            "description": row["description"],
+            "source": "learned" if row["source"] == "learned" else "built-in",
+            "status": row["status"],
+            "mutating": bool(active and active.is_mutating),
+        }
+    return [result[name] for name in sorted(result)]
 
 
 @router.post("/tools", status_code=201)
@@ -246,7 +392,9 @@ async def create_tool(body: ToolCreate) -> dict[str, Any]:
     if name in registry.all_tool_names():
         raise HTTPException(status_code=409, detail=f"Tool {name!r} already exists")
     learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
-    target = learned_dir / body.tool_type / f"{name}.py"
+    target = _candidate_root(learned_dir) / body.tool_type / f"{name}.py"
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"Tool candidate {name!r} already exists")
     await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
     content = _render_stub(
         name,
@@ -256,12 +404,11 @@ async def create_tool(body: ToolCreate) -> dict[str, Any]:
         "Created from the North dashboard.",
     )
     await asyncio.to_thread(target.write_text, content, encoding="utf-8")
-    registry.reload()
     return {
         "name": name,
         "description": body.description.strip(),
         "source": "learned",
-        "status": "active",
+        "status": "candidate",
         "mutating": False,
     }
 
@@ -269,40 +416,43 @@ async def create_tool(body: ToolCreate) -> dict[str, Any]:
 @router.get("/tools/{name}")
 async def get_tool(name: str) -> dict[str, Any]:
     registry = current_services().require("tool_registry")
-    try:
-        tool = registry.get(name)
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"Tool {name!r} was not found") from exc
     learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
     path = _find_tool_path(name, learned_dir)
-    content = await asyncio.to_thread(path.read_text, encoding="utf-8") if path else ""
-    source = "learned" if path and path.is_relative_to(learned_dir) else "built-in"
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Tool {name!r} was not found")
+    content = await asyncio.to_thread(path.read_text, encoding="utf-8")
+    candidate = _find_candidate_path(name, learned_dir)
+    try:
+        active = registry.get(name)
+    except Exception:
+        active = None
+    catalog = _list_tools(learned_dir)
+    row = next((item for item in (catalog.data or {}).get("tools", []) if item["name"] == name), None)
     return {
-        "name": tool.name,
-        "description": tool.description,
-        "source": source,
+        "name": name,
+        "description": row["description"] if row else (active.description if active else ""),
+        "source": "learned" if path.is_relative_to(learned_dir) else "built-in",
+        "status": "candidate" if candidate is not None else "active",
         "content": content,
-        "mutating": tool.is_mutating,
+        "mutating": bool(active and active.is_mutating),
     }
 
 
 @router.put("/tools/{name}")
 async def update_tool(name: str, body: ToolUpdate) -> dict[str, Any]:
-    registry = current_services().require("tool_registry")
     learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
     path = _find_tool_path(name, learned_dir)
     if path is None:
         raise HTTPException(status_code=404, detail=f"Tool {name!r} was not found")
-    target = path
-    if not path.is_relative_to(learned_dir):
-        kind = path.parent.name if path.parent.name in {"universal", "specialized"} else "specialized"
-        target = learned_dir / kind / f"{name}.py"
+    kind = path.parent.name if path.parent.name in {"universal", "specialized"} else "specialized"
+    target = _candidate_root(learned_dir) / kind / f"{name}.py"
     safe, reason = _check_code_safety(body.content)
     if not safe:
         raise HTTPException(status_code=422, detail=f"Tool code rejected by safety check: {reason}")
+    if f'name = "{name}"' not in body.content and f"name = '{name}'" not in body.content:
+        raise HTTPException(status_code=422, detail=f"Tool code must keep name = {name!r}")
     await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(target.write_text, body.content, encoding="utf-8")
-    registry.reload()
     return await get_tool(name)
 
 
@@ -310,11 +460,15 @@ async def update_tool(name: str, body: ToolUpdate) -> dict[str, Any]:
 async def delete_tool(name: str) -> None:
     registry = current_services().require("tool_registry")
     learned_dir = Path(current_services().require("north_home")) / "learned" / "tools"
+    candidate = _find_candidate_path(name, learned_dir)
+    if candidate is not None:
+        await asyncio.to_thread(candidate.unlink)
+        return
     path = _find_tool_path(name, learned_dir)
     if path is None or not path.is_relative_to(learned_dir):
         raise HTTPException(status_code=403, detail="Built-in tools cannot be deleted")
     await asyncio.to_thread(path.unlink)
-    registry.reload()
+    registry.remove(name)
 
 
 @router.get("/flow-definitions")
@@ -325,7 +479,6 @@ async def list_flows() -> list[dict[str, Any]]:
             "name": flow.name,
             "description": flow.description,
             "source": flow.source.value,
-            "version": flow.version,
             "status": flow.status,
             "domains": sorted(flow.domains),
             "steps": len(flow.steps),
@@ -347,17 +500,15 @@ async def get_flow(name: str) -> dict[str, Any]:
         "description": flow.description,
         "content": content,
         "source": flow.source.value,
-        "version": flow.version,
         "status": flow.status,
         "domains": sorted(flow.domains),
         "steps": [
             {
                 "name": step.name,
-                "tool": step.tool,
-                "params": step.params,
                 "skill": step.skill,
+                "instructions": step.instructions,
+                "inputs": step.inputs,
                 "approval": step.approval,
-                "description": step.description,
             }
             for step in flow.steps
         ],
@@ -370,8 +521,9 @@ async def create_flow(body: FlowCreate) -> dict[str, Any]:
     learned_dir = Path(current_services().require("north_home")) / "flows"
     try:
         parsed = parse_flow_document(_flow_document(body), learned_dir / "new-flow", FlowSource.LEARNED)
-    except FlowParseError as exc:
+    except (FlowParseError, yaml.YAMLError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    _validate_flow_definition(parsed)
     target = learned_dir / parsed.name
     if target.exists() and parsed.name in registry.names():
         raise HTTPException(status_code=409, detail=f"Flow {parsed.name!r} already exists")
@@ -394,8 +546,9 @@ async def update_flow(name: str, body: FlowUpdate) -> dict[str, Any]:
         target = Path(current_services().require("north_home")) / "flows" / name
     try:
         parsed = parse_flow_document(_flow_document(body, fallback_name=name), target, FlowSource.LEARNED)
-    except FlowParseError as exc:
+    except (FlowParseError, yaml.YAMLError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    _validate_flow_definition(parsed)
     if parsed.name != name:
         raise HTTPException(status_code=422, detail="Flow name cannot be changed")
     await asyncio.to_thread(

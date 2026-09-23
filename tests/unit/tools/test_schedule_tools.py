@@ -27,6 +27,11 @@ class _RecordingProcessor:
         self.jobs.append(job)
 
 
+class _Agents:
+    def names(self) -> list[str]:
+        return ["general"]
+
+
 @pytest.fixture
 def store(tmp_path) -> UserCronStore:
     return UserCronStore(tmp_path / "jobs.db")
@@ -106,6 +111,24 @@ async def test_omitting_days_schedules_every_day(tool) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_fixed_interval_schedule_is_stored_without_fake_wall_clock_semantics(tool, store) -> None:
+    result = await run(tool, task="check for matching jobs", interval_minutes=5)
+
+    assert result.success, result.error
+    assert result.data["cadence"] == "every 5 minutes"
+    (row,) = await store.list()
+    assert row["interval_minutes"] == 5
+    assert row["anchor_epoch"] is not None
+
+
+@pytest.mark.asyncio
+async def test_schedule_requires_exactly_one_timing_mode(tool) -> None:
+    result = await run(tool, task="ambiguous", hour=9, interval_minutes=5)
+    assert not result.success
+    assert "exactly one" in result.error
+
+
+@pytest.mark.asyncio
 async def test_a_recurring_task_can_reference_a_reusable_skill(tool, store) -> None:
     result = await run(tool, task="find and summarize new roles", skill="job-search", hour=9)
     assert result.success, result.error
@@ -133,6 +156,49 @@ async def test_unknown_skill_is_rejected_when_a_registry_is_configured(tool, tmp
     result = await run(checked_tool, task="do work", skill="does-not-exist", hour=9)
     assert not result.success
     assert "Unknown skill" in result.error
+
+
+@pytest.mark.asyncio
+async def test_candidate_flow_cannot_be_scheduled_before_activation(tool, tmp_path) -> None:
+    from flows.registry import FlowRegistry
+
+    flow_dir = tmp_path / "flows" / "candidate"
+    flow_dir.mkdir(parents=True)
+    (flow_dir / "FLOW.yaml").write_text(
+        """name: candidate
+description: Not proven yet
+status: candidate
+steps:
+  - name: inspect
+    tool: browser
+""",
+        encoding="utf-8",
+    )
+    checked_tool = ScheduleTaskTool(
+        job_processor=tool._job_processor,
+        cron_store=tool._cron_store,
+        flow_registry=FlowRegistry(tmp_path / "flows"),
+    )
+
+    result = await run(checked_tool, task="run candidate", flow="candidate", hour=9)
+
+    assert not result.success
+    assert "not active" in result.error
+
+
+@pytest.mark.asyncio
+async def test_unknown_agent_is_rejected_before_schedule_is_stored(tool, store) -> None:
+    checked_tool = ScheduleTaskTool(
+        job_processor=tool._job_processor,
+        cron_store=store,
+        agent_registry=_Agents(),
+    )
+
+    result = await run(checked_tool, task="do work", agent="missing", hour=9)
+
+    assert not result.success
+    assert "Unknown agent" in result.error
+    assert await store.list() == []
 
 
 @pytest.mark.asyncio
@@ -222,6 +288,22 @@ async def test_changing_the_time_leaves_the_days_alone(tool, store) -> None:
     updated = await store.get(row["name"])
     assert updated["hour"] == 11
     assert updated["weekdays"] == frozenset({0, 1, 2, 3, 4})
+
+
+@pytest.mark.asyncio
+async def test_schedule_can_switch_between_wall_clock_and_fixed_interval(tool, store) -> None:
+    await run(tool, task="check", hour=9)
+    (row,) = await store.list()
+    updater = UpdateScheduleTool(cron_store=store)
+
+    interval = await updater.run(ToolInput(params={"name": row["name"], "interval_minutes": 10}))
+    assert interval.success and interval.data["cadence"] == "every 10 minutes"
+
+    wall_clock = await updater.run(ToolInput(params={"name": row["name"], "hour": 11, "minute": 30}))
+    assert wall_clock.success
+    updated = await store.get(row["name"])
+    assert updated["interval_minutes"] is None
+    assert (updated["hour"], updated["minute"]) == (11, 30)
 
 
 @pytest.mark.asyncio

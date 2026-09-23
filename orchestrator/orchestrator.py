@@ -100,6 +100,7 @@ from utils.tools import (
     ToolDispatchRegistryPort,
     ToolInputFactory,
     ToolNotFoundError,
+    tool_mutates,
 )
 
 logger = logging.getLogger(__name__)
@@ -1846,7 +1847,7 @@ class Orchestrator:
             # mode - it always runs inside an agent's ReAct loop, which feeds the
             # image to the model as a proper image message. A second synthesis path
             # here would be unreachable and worse.
-            if success and getattr(tool, "is_mutating", False) and self._running_task_store is not None:
+            if success and tool_mutates(tool, params) and self._running_task_store is not None:
                 await self._running_task_store.mark_side_effect(task_id)
         except ToolNotFoundError:
             logger.warning("single_tool fallback: tool %r not found, re-routing to agent", plan.direct_tool)

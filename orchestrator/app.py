@@ -179,8 +179,13 @@ def _build_tool_registry(
             skill_registry=skill_registry,
         )
     )
+    tool_registry.register(
+        UpdateScheduleTool(
+            cron_store=deps.cron_store,
+            skill_registry=skill_registry,
+        )
+    )
     tool_registry.register(ListSchedulesTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
-    tool_registry.register(UpdateScheduleTool(cron_store=deps.cron_store))
     tool_registry.register(CancelScheduleTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     # create/update actions are gated behind a user approval card inside the
     # tool itself, so every entry point (agent loop, delegation, direct-tool
@@ -847,23 +852,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             flow_registry=flow_registry,
         )
     )
+    tool_registry.register(
+        UpdateScheduleTool(
+            cron_store=deps.cron_store,
+            skill_registry=skill_registry,
+            flow_registry=flow_registry,
+        )
+    )
 
     tool_registry.register(UseSkillTool(skill_registry))
-    tool_registry.register(
-        CreateSkillTool(
-            skill_registry,
-            learned_dir=settings.north_home / "learned_skills",
-            self_edit_policy=SelfEditPolicy(settings.north_home / "learned_skills", settings.north_home / "mutations"),
-        )
+    create_skill_tool = CreateSkillTool(
+        skill_registry,
+        learned_dir=settings.north_home / "skills",
+        self_edit_policy=SelfEditPolicy(settings.north_home / "skills", settings.north_home / "mutations"),
+        skill_selector=skill_selector,
+        tool_registry=tool_registry,
     )
+    tool_registry.register(create_skill_tool)
     tool_registry.register(UseFlowTool(flow_registry))
-    tool_registry.register(
-        CreateFlowTool(
-            flow_registry,
-            learned_dir=settings.north_home / "flows",
-            self_edit_policy=SelfEditPolicy(settings.north_home / "flows", settings.north_home / "mutations"),
-        )
-    )
     flow_store = FlowRunStore(settings.north_home / "flow_runs.db")
     flow_interaction = UserInteraction(
         deps.approval_store,
@@ -872,7 +878,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         stream_manager=deps.stream_manager,
         default_timeout=deps.north_settings.approval_timeout_seconds,
     )
-    tool_registry.register(RunFlowTool(FlowRunner(flow_registry, tool_registry, flow_store, flow_interaction)))
 
     _step("refreshing inference pools")
     await deps.inference_router.refresh_pools()
@@ -887,8 +892,58 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     agent_deps.tool_index = tool_index
     agent_deps.skill_registry = skill_registry
     agent_deps.skill_selector = skill_selector
+    agent_deps.flow_registry = flow_registry
     agent_registry = _build_agent_registry(agent_deps)
     create_agent_tool._agent_registry = agent_registry  # late-wire after registry is built
+    create_skill_tool._agent_registry = agent_registry
+    # Flows execute agents with exact skills, so their management and runner
+    # tools are registered only after both live registries exist.
+    tool_registry.register(
+        CreateFlowTool(
+            flow_registry,
+            learned_dir=settings.north_home / "flows",
+            self_edit_policy=SelfEditPolicy(settings.north_home / "flows", settings.north_home / "mutations"),
+            skill_registry=skill_registry,
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+            flow_store=flow_store,
+        )
+    )
+    tool_registry.register(
+        RunFlowTool(
+            FlowRunner(
+                flow_registry,
+                agent_registry,
+                skill_registry,
+                flow_store,
+                flow_interaction,
+                tool_registry=tool_registry,
+                workspace=settings.north_workspace,
+            )
+        )
+    )
+    # Replace the bootstrap instances now that the final live dependency exists.
+    # This closes the construction cycle while still rejecting schedules that
+    # name an agent the runtime cannot dispatch to.
+    tool_registry.register(
+        ScheduleTaskTool(
+            job_processor=deps.job_processor,
+            cron_store=deps.cron_store,
+            skill_registry=skill_registry,
+            flow_registry=flow_registry,
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+        )
+    )
+    tool_registry.register(
+        UpdateScheduleTool(
+            cron_store=deps.cron_store,
+            skill_registry=skill_registry,
+            flow_registry=flow_registry,
+            agent_registry=agent_registry,
+            tool_registry=tool_registry,
+        )
+    )
     _step(f"registered agents: {agent_registry.names()}")
     _warn_unknown_cron_agents(agent_registry)
 

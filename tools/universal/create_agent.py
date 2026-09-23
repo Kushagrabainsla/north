@@ -164,6 +164,9 @@ class CreateAgentTool(Tool):
 
         return str(data)
 
+    def mutates(self, params: dict[str, Any] | None = None) -> bool:
+        return str((params or {}).get("action") or "").strip().lower() == "create"
+
     async def run(self, input: ToolInput) -> ToolOutput:
         action = (input.params.get("action") or "").strip()
 

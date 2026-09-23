@@ -1,6 +1,33 @@
 ---
 name: browser-research-and-extraction
 description: "Use when navigating live web pages, scraping tabular or list data, reading articles/documentation, or asserting web UI states with browser."
+domains:
+  - general
+  - engineering
+execution:
+  agent: general
+  tools:
+    - browser
+  approval: on_mutation
+  inputs:
+    type: object
+    properties:
+      browser_context:
+        type: string
+        enum: [isolated, existing]
+      context_confirmed:
+        type: boolean
+      request:
+        type: string
+    required: [browser_context, context_confirmed]
+    additionalProperties: true
+  outputs:
+    type: object
+    properties: {}
+    additionalProperties: true
+  success_criteria:
+    - The browser context was explicitly selected and confirmed before navigation.
+    - The requested browser work completed with a deterministic assertion or clearly reported blocker.
 ---
 # Browser Research and Structured Web Extraction
 
@@ -14,12 +41,19 @@ description: "Use when navigating live web pages, scraping tabular or list data,
 
 ## Key Action Guidelines
 
+### 0. Choose the browser context before opening anything
+Ask the user whether North should use an isolated browser or attach to their existing browser through CDP. Explain that the existing-browser option can expose logged-in sessions, cookies, open tabs, and extensions. Do not infer this choice from the fact that a site requires login. If the user already made the choice in the current request, do not ask again.
+
+Before promising the task can run, call `browser` with `action="status"`, then verify the selected context can reach the site and that the required account is logged in. Never describe an untested browser flow as ready.
+
 ### 1. Structured Data Harvesting (`action="extract"`)
 Use `extract` instead of reading the raw DOM. It uses structural heuristic pattern recognition (MDR/DEPTA) to parse repeating lists/tables directly into structured JSON records:
 ```json
 {
   "action": "goto",
   "url": "https://news.ycombinator.com",
+  "browser_context": "isolated",
+  "context_confirmed": true,
   "stealth": true
 }
 ```
@@ -27,6 +61,8 @@ followed by:
 ```json
 {
   "action": "extract",
+  "browser_context": "isolated",
+  "context_confirmed": true,
   "limit": 25
 }
 ```
@@ -36,7 +72,9 @@ Use `read` to extract clean readability text/markdown from documentation or blog
 ```json
 {
   "action": "read",
-  "url": "https://docs.rs/tokio/latest/tokio/"
+  "url": "https://docs.rs/tokio/latest/tokio/",
+  "browser_context": "isolated",
+  "context_confirmed": true
 }
 ```
 
@@ -46,7 +84,9 @@ Use `read` to extract clean readability text/markdown from documentation or blog
 ```json
 {
   "action": "click",
-  "uid": "n12"
+  "uid": "n12",
+  "browser_context": "isolated",
+  "context_confirmed": true
 }
 ```
 3. Use `diff=True` on `inspect` after an action to see only what changed on the page rather than re-reading the entire tree.
@@ -58,9 +98,11 @@ Use `assert` in testing or conductor loops:
   "action": "assert",
   "assert_type": "text",
   "assert_condition": "contains",
-  "value": "Welcome back"
+  "value": "Welcome back",
+  "browser_context": "isolated",
+  "context_confirmed": true
 }
 ```
 
 ## Done when
-- The requested web data is retrieved with minimal token overhead, or UI actions/assertions complete successfully.
+- The browser context was explicitly chosen, its dependencies and login were checked, and the requested web data or UI action completed with a deterministic assertion.

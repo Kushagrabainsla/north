@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 # Every skill lives in its own folder as this file.
 SKILL_FILENAME = "SKILL.md"
@@ -24,8 +27,28 @@ class SkillIntent(StrEnum):
     IMPLEMENT = "implement"
     DEBUG = "debug"
     CREATE_TOOL = "create-tool"
+    CREATE_FLOW = "create-flow"
+    CREATE_SKILL = "create-skill"
+    CREATE_AGENT = "create-agent"
+    CREATE_SCHEDULE = "create-schedule"
     REVIEW = "review"
     RESEARCH = "research"
+
+
+@dataclass(frozen=True)
+class SkillExecution:
+    """Server-enforced runtime contract for a flow-executable skill."""
+
+    agent: str
+    tools: tuple[str, ...] = ()
+    inputs: dict[str, Any] = field(
+        default_factory=lambda: {"type": "object", "properties": {}}
+    )
+    outputs: dict[str, Any] = field(
+        default_factory=lambda: {"type": "object", "properties": {}}
+    )
+    approval: str = "on_mutation"
+    success_criteria: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -52,6 +75,8 @@ class Skill:
     # skill, which serves the general assistant) declares the domains it serves.
     domains: frozenset[str] = frozenset({"engineering"})
     intents: frozenset[str] = frozenset()
+    # Advisory skills omit this. Flows may reference only executable skills.
+    execution: SkillExecution | None = None
 
     def metadata_line(self) -> str:
         """One-line ``name: description`` used in the compact fallback listing."""
@@ -60,6 +85,10 @@ class Skill:
     def available_to(self, domain: str) -> bool:
         """True when this skill may be injected into an agent of ``domain``."""
         return self.status == "active" and domain in self.domains
+
+    def fingerprint(self) -> str:
+        """Hash the behaviorally relevant parts used by flow test evidence."""
+        return skill_fingerprint(self)
 
     def bundled_file_names(self) -> list[str]:
         """Names of supporting files in the skill folder (everything but SKILL.md).
@@ -72,3 +101,29 @@ class Skill:
         return sorted(
             entry.name for entry in self.directory.iterdir() if entry.is_file() and entry.name != SKILL_FILENAME
         )
+
+
+def skill_fingerprint(skill: Skill) -> str:
+    """Hash the behaviorally relevant parts of a skill for flow evidence."""
+    payload = {
+        "name": skill.name,
+        "description": skill.description,
+        "body": skill.body,
+        "status": skill.status,
+        "domains": sorted(skill.domains),
+        "intents": sorted(skill.intents),
+        "execution": (
+            {
+                "agent": skill.execution.agent,
+                "tools": list(skill.execution.tools),
+                "inputs": skill.execution.inputs,
+                "outputs": skill.execution.outputs,
+                "approval": skill.execution.approval,
+                "success_criteria": list(skill.execution.success_criteria),
+            }
+            if skill.execution is not None
+            else None
+        ),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()

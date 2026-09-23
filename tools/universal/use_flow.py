@@ -36,15 +36,13 @@ class UseFlowTool(Tool):
             data={
                 "name": flow.name,
                 "description": flow.description,
-                "version": flow.version,
                 "steps": [
                     {
                         "name": step.name,
-                        "tool": step.tool,
-                        "params": step.params,
                         "skill": step.skill,
+                        "instructions": step.instructions,
+                        "inputs": step.inputs,
                         "approval": step.approval,
-                        "description": step.description,
                     }
                     for step in flow.steps
                 ],
@@ -55,7 +53,10 @@ class UseFlowTool(Tool):
         lines = [f"# Flow: {data.get('name')}", "", str(data.get("description") or ""), "", "Steps:"]
         for index, step in enumerate(data.get("steps") or [], start=1):
             approval = step.get("approval", "on_mutation")
-            lines.append(f"{index}. {step.get('name')} [{step.get('tool')}; approval={approval}]")
-            if step.get("description"):
-                lines.append(f"   {step['description']}")
+            lines.append(
+                f"{index}. {step.get('name')} "
+                f"[skill={step.get('skill')}; approval={approval}]"
+            )
+            if step.get("instructions"):
+                lines.append(f"   {step['instructions']}")
         return "\n".join(lines)

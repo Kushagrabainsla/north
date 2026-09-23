@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 
 from skills.exceptions import SkillNotFoundError, SkillParseError
-from skills.models import SKILL_FILENAME, Skill, SkillIntent, SkillSource
+from skills.models import SKILL_FILENAME, Skill, SkillExecution, SkillIntent, SkillSource
 from skills.parser import parse_skill_document
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # built-in is a review problem, not a load-time failure, and must never be
 # silently dropped (every shipped skill should be usable).
 MAX_BODY_CHARS = 8_000
+_APPROVALS = {"never", "on_mutation", "always"}
 
 
 # An absolute path rooted in somebody's home directory, on any platform. A
@@ -34,6 +35,55 @@ MAX_BODY_CHARS = 8_000
 # `/Users/<name>/.north/tasks/<a-specific-task-id>/research/context.md` and to
 # write its output to a summary file under that developer's project directory.
 _MACHINE_PATH = re.compile(r"(?:/Users/|/home/|/root/|[A-Za-z]:\\Users\\)[^\s`'\"),;]+")
+
+
+def _object_schema(value: object, label: str) -> dict[str, object]:
+    """Validate the small JSON-schema subset used by skill contracts."""
+    if not isinstance(value, dict) or value.get("type") != "object":
+        raise ValueError(f"execution.{label} must be an object schema")
+    properties = value.get("properties", {})
+    required = value.get("required", [])
+    if not isinstance(properties, dict):
+        raise ValueError(f"execution.{label}.properties must be a mapping")
+    if not isinstance(required, list) or any(
+        not isinstance(name, str) or name not in properties for name in required
+    ):
+        raise ValueError(f"execution.{label}.required must name declared properties")
+    return dict(value)
+
+
+def parse_execution_contract(raw: object) -> SkillExecution | None:
+    """Parse a skill's optional executable contract from frontmatter."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("execution must be a mapping")
+    agent = str(raw.get("agent") or "").strip()
+    if not agent:
+        raise ValueError("execution.agent is required")
+    tools = raw.get("tools", [])
+    if not isinstance(tools, list) or any(
+        not isinstance(name, str) or not name.strip() for name in tools
+    ):
+        raise ValueError("execution.tools must be a list of tool names")
+    approval = str(raw.get("approval") or "on_mutation").strip().lower()
+    if approval not in _APPROVALS:
+        raise ValueError(f"execution.approval must be one of {sorted(_APPROVALS)}")
+    success_criteria = raw.get("success_criteria", [])
+    if not isinstance(success_criteria, list) or any(
+        not isinstance(item, str) or not item.strip() for item in success_criteria
+    ):
+        raise ValueError("execution.success_criteria must be a list of non-empty strings")
+    if not success_criteria:
+        raise ValueError("execution.success_criteria must contain at least one check")
+    return SkillExecution(
+        agent=agent,
+        tools=tuple(dict.fromkeys(name.strip() for name in tools)),
+        inputs=_object_schema(raw.get("inputs", {"type": "object", "properties": {}}), "inputs"),
+        outputs=_object_schema(raw.get("outputs", {"type": "object", "properties": {}}), "outputs"),
+        approval=approval,
+        success_criteria=tuple(item.strip() for item in success_criteria),
+    )
 
 
 def rejection_reason(name: str, description: str, body: str, *, source: SkillSource = SkillSource.LEARNED) -> str:
@@ -126,6 +176,11 @@ class SkillRegistry:
         if unknown_intents:
             logger.warning("SkillRegistry: skipping skill %r - unknown intents %s", name, sorted(unknown_intents))
             return None
+        try:
+            execution = parse_execution_contract(frontmatter.get("execution"))
+        except ValueError as exc:
+            logger.warning("SkillRegistry: skipping skill %r - %s", name, exc)
+            return None
         return Skill(
             name=name,
             description=description,
@@ -137,6 +192,7 @@ class SkillRegistry:
             provenance=provenance,
             domains=domains,
             intents=intents,
+            execution=execution,
         )
 
     def reload(self) -> None:

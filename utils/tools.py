@@ -31,9 +31,24 @@ See docs/CODING_STYLE.md Section 15 and architecture/modules.yaml (platform laye
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Protocol, runtime_checkable
 
 from utils.edit_scope import EditAuthorizer
+
+
+def tool_mutates(tool: Any, params: dict[str, Any] | None = None) -> bool:
+    """Classify one call while preserving the older duck-typed tool contract.
+
+    New tools may define ``mutates(params)`` for action-specific behavior.
+    Older integrations and lightweight test doubles expose only
+    ``is_mutating``. Static lookup avoids mistaking a MagicMock's dynamically
+    generated ``mutates`` attribute for a real implementation.
+    """
+    method = inspect.getattr_static(type(tool), "mutates", None)
+    if callable(method):
+        return bool(method(tool, params))
+    return bool(getattr(tool, "is_mutating", False))
 
 
 class ToolNotFoundError(Exception):

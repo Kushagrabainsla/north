@@ -20,6 +20,8 @@ class FlowRun:
     current_step: int
     inputs: dict[str, Any]
     outputs: list[dict[str, Any]]
+    flow_fingerprint: str = ""
+    test_mode: bool = False
     error: str = ""
     updated_at: str = ""
 
@@ -51,6 +53,11 @@ class FlowRunStore:
                 )
                 """
             )
+            existing = {row[1] for row in connection.execute("PRAGMA table_info(flow_runs)")}
+            if "flow_fingerprint" not in existing:
+                connection.execute("ALTER TABLE flow_runs ADD COLUMN flow_fingerprint TEXT NOT NULL DEFAULT ''")
+            if "test_mode" not in existing:
+                connection.execute("ALTER TABLE flow_runs ADD COLUMN test_mode INTEGER NOT NULL DEFAULT 0")
 
     def create(
         self,
@@ -60,15 +67,41 @@ class FlowRunStore:
         task_id: str = "",
         agent: str = "",
         inputs: dict[str, Any] | None = None,
+        flow_fingerprint: str = "",
+        test_mode: bool = False,
     ) -> FlowRun:
         now = _now()
-        run = FlowRun(run_id, flow_name, task_id, agent, "running", 0, inputs or {}, [], updated_at=now)
+        run = FlowRun(
+            run_id=run_id,
+            flow_name=flow_name,
+            task_id=task_id,
+            agent=agent,
+            status="running",
+            current_step=0,
+            inputs=inputs or {},
+            outputs=[],
+            flow_fingerprint=flow_fingerprint,
+            test_mode=test_mode,
+            updated_at=now,
+        )
         with sqlite3.connect(self._path) as connection:
             connection.execute(
                 "INSERT INTO flow_runs "
-                "(run_id, flow_name, task_id, agent, status, current_step, inputs_json, outputs_json, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, flow_name, task_id, agent, run.status, 0, json.dumps(run.inputs), "[]", now),
+                "(run_id, flow_name, task_id, agent, status, current_step, inputs_json, outputs_json, "
+                "flow_fingerprint, test_mode, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    flow_name,
+                    task_id,
+                    agent,
+                    run.status,
+                    0,
+                    json.dumps(run.inputs),
+                    "[]",
+                    flow_fingerprint,
+                    int(test_mode),
+                    now,
+                ),
             )
         return run
 
@@ -114,6 +147,8 @@ def _from_row(row: sqlite3.Row) -> FlowRun:
         current_step=row["current_step"],
         inputs=json.loads(row["inputs_json"]),
         outputs=json.loads(row["outputs_json"]),
+        flow_fingerprint=row["flow_fingerprint"],
+        test_mode=bool(row["test_mode"]),
         error=row["error"],
         updated_at=row["updated_at"],
     )

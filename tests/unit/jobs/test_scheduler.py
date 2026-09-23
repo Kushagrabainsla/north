@@ -54,6 +54,26 @@ def test_next_firing_daily_strictly_after_when_same_minute() -> None:
     assert next_firing(entry, after) == datetime(2026, 5, 22, 7, 0, tzinfo=UTC)
 
 
+def test_fixed_interval_fires_from_its_creation_anchor() -> None:
+    anchor = datetime(2026, 5, 22, 9, 0, tzinfo=UTC)
+    entry = CronEntry(
+        name="scan",
+        agent="a",
+        task="scan",
+        hour=0,
+        minute=0,
+        interval_minutes=5,
+        anchor_epoch=anchor.timestamp(),
+        tz="UTC",
+    )
+
+    assert next_firing(entry, anchor) == datetime(2026, 5, 22, 9, 5, tzinfo=UTC)
+    assert next_firing(entry, datetime(2026, 5, 22, 9, 7, tzinfo=UTC)) == datetime(
+        2026, 5, 22, 9, 10, tzinfo=UTC
+    )
+    assert entry.cadence == "every 5 minutes"
+
+
 # next_firing - weekly
 
 

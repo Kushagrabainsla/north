@@ -47,8 +47,9 @@ async def test_skill_api_lists_reads_updates_and_reloads(skill_registry: SkillRe
     updated = _document("Updated description")
     result = await web_api.update_skill("test-skill", web_api.SkillUpdate(content=updated))
 
-    assert result["content"] == updated
+    assert "status: candidate" in result["content"]
     assert skill_registry.get("test-skill").description == "Updated description"
+    assert skill_registry.get("test-skill").status == "candidate"
 
 
 async def test_skill_api_creates_a_structured_learned_skill(tmp_path) -> None:
@@ -63,9 +64,12 @@ async def test_skill_api_creates_a_structured_learned_skill(tmp_path) -> None:
 
     assert result["name"] == "review-job-match"
     assert result["source"] == "learned"
+    assert "status: candidate" in result["content"]
     created = tmp_path / "skills" / "review-job-match" / "SKILL.md"
     assert created.exists()
     assert "domains:" in created.read_text(encoding="utf-8")
+    assert result["execution"]["agent"] == "general"
+    assert result["execution"]["approval"] == "never"
 
 
 async def test_skill_api_duplicates_builtin_as_editable_skill(tmp_path) -> None:

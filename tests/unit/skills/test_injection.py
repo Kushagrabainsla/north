@@ -86,6 +86,28 @@ async def test_offers_the_selected_skill_by_description_not_body(tmp_path):
     assert "add-tool" in block  # non-selected skills stay discoverable by name
 
 
+async def test_flow_required_skill_is_loaded_in_full_as_the_execution_contract(tmp_path):
+    _write_skill(tmp_path, "db-migration", "Use when adding a database migration")
+    _write_skill(tmp_path, "add-tool", "Use when adding a tool")
+    registry = SkillRegistry(builtin_dir=tmp_path)
+    selector = SkillSelector(registry, embed_fn=_fake_embed, min_similarity=0.5)
+    agent = _agent(registry, selector)
+    payload = AgentPayload(
+        task_id="flow-step",
+        prompt="an unrelated prompt that semantic selection would not match",
+        skills=["db-migration"],
+    )
+
+    selected = await agent._select_skills(payload.prompt, payload.skills)
+    block = await agent._load_skills_block(payload, selected)
+
+    assert [skill.name for skill in selected] == ["db-migration"]
+    assert "Required flow procedures" in block
+    assert "BODY-db-migration" in block
+    assert "not optional suggestions" in block
+    assert "add-tool" not in block
+
+
 async def test_no_skills_returns_empty(tmp_path):
     registry = SkillRegistry(builtin_dir=tmp_path)  # empty dir
     selector = SkillSelector(registry, embed_fn=_fake_embed)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from skills.registry import SkillRegistry
 from skills.selector import SkillSelector
 
@@ -121,3 +123,28 @@ async def test_intent_filter_preserves_multiple_intents(tmp_path):
     picked = await selector.select("Explore the repository and implement the requested change")
 
     assert {skill.name for skill in picked} == {"explore", "implement"}
+
+
+@pytest.mark.parametrize(
+    ("prompt", "intent", "expected"),
+    [
+        ("Create a flow for reviewing job applications", "create-flow", "flow-author"),
+        ("Create a skill for recurring interview prep", "create-skill", "skill-author"),
+        ("Create an agent for tracking applications", "create-agent", "agent-author"),
+        ("Run this every weekday at nine", "create-schedule", "schedule-author"),
+    ],
+)
+async def test_self_extension_prompts_select_the_matching_authoring_skill(tmp_path, prompt, intent, expected):
+    _write_skill(tmp_path, "flow-author", "Use when authoring an automation", ["create-flow"])
+    _write_skill(tmp_path, "skill-author", "Use when authoring guidance", ["create-skill"])
+    _write_skill(tmp_path, "agent-author", "Use when authoring a specialist", ["create-agent"])
+    _write_skill(tmp_path, "schedule-author", "Use when scheduling recurring work", ["create-schedule"])
+
+    async def embed(texts: list[str]) -> list[list[float]]:
+        return [[1.0] for _ in texts]
+
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=embed, min_similarity=0.0)
+    picked = await selector.select(prompt)
+
+    assert intent in picked[0].intents
+    assert picked[0].name == expected

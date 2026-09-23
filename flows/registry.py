@@ -25,20 +25,38 @@ def _as_mapping(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
-def _parse_steps(raw: Any) -> tuple[FlowStep, ...]:
+def _parse_steps(raw: Any) -> tuple[tuple[FlowStep, ...], bool]:
     if not isinstance(raw, list) or not raw:
         raise FlowParseError("steps must be a non-empty list")
     steps: list[FlowStep] = []
+    migrated_legacy_step = False
     seen: set[str] = set()
     for index, item in enumerate(raw, start=1):
         data = _as_mapping(item, f"steps[{index}]")
         name = str(data.get("name") or "").strip()
-        tool = str(data.get("tool") or "").strip()
-        approval = str(data.get("approval") or "on_mutation").strip().lower()
+        skill = str(data.get("skill") or "").strip()
+        legacy_tool = str(data.get("tool") or "").strip()
+        if data.get("agent") is not None:
+            # Executor ownership moved to the skill contract. Keep old files
+            # readable, but require an explicit save/test before execution.
+            migrated_legacy_step = True
+        raw_approval = data.get("approval", "on_mutation")
+        if isinstance(raw_approval, bool):
+            if not legacy_tool:
+                raise FlowParseError(
+                    f"steps[{index}].approval must be one of {sorted(_APPROVALS)}, not a boolean"
+                )
+            # Old flows used booleans before mutation-aware modes existed. A
+            # false value cannot safely mean "never ask", so migrate it to the
+            # per-mutation gate; true keeps the stronger whole-step gate.
+            approval = "always" if raw_approval else "on_mutation"
+            migrated_legacy_step = True
+        else:
+            approval = str(raw_approval or "on_mutation").strip().lower()
         if not name:
             raise FlowParseError(f"steps[{index}] is missing name")
-        if not tool:
-            raise FlowParseError(f"steps[{index}] is missing tool")
+        if not skill and not legacy_tool:
+            raise FlowParseError(f"steps[{index}] is missing skill")
         if name in seen:
             raise FlowParseError(f"duplicate step name: {name}")
         if approval not in _APPROVALS:
@@ -46,21 +64,35 @@ def _parse_steps(raw: Any) -> tuple[FlowStep, ...]:
                 f"steps[{index}] has invalid approval {approval!r}; "
                 f"expected one of {sorted(_APPROVALS)}"
             )
-        params = data.get("params") or {}
-        if not isinstance(params, dict):
-            raise FlowParseError(f"steps[{index}].params must be a mapping")
+        raw_inputs = data.get("inputs", data.get("params")) or {}
+        if not isinstance(raw_inputs, dict):
+            raise FlowParseError(f"steps[{index}].inputs must be a mapping")
+
+        # Read old on-disk flows without executing their tools directly. They
+        # become ordinary skill invocations in memory and are written in the new
+        # format the next time the user edits them.
+        if legacy_tool:
+            migrated_legacy_step = True
+            skill = "using-a-north-tool"
+            legacy_instruction = f"Call the North tool '{legacy_tool}' with the supplied inputs."
+            supplied = str(data.get("instructions") or data.get("description") or "").strip()
+            instructions = f"{supplied}\n\n{legacy_instruction}".strip()
+            raw_inputs = {"tool": legacy_tool, "arguments": dict(raw_inputs)}
+        else:
+            instructions = str(data.get("instructions") or data.get("description") or "").strip()
+        if not instructions:
+            raise FlowParseError(f"steps[{index}] is missing instructions")
         seen.add(name)
         steps.append(
             FlowStep(
                 name=name,
-                tool=tool,
-                params=dict(params),
-                skill=str(data.get("skill") or "").strip(),
+                skill=skill,
+                instructions=instructions,
+                inputs=dict(raw_inputs),
                 approval=approval,
-                description=str(data.get("description") or "").strip(),
             )
         )
-    return tuple(steps)
+    return tuple(steps), migrated_legacy_step
 
 
 def parse_flow_document(text: str, directory: Path, source: FlowSource) -> Flow:
@@ -75,9 +107,14 @@ def parse_flow_document(text: str, directory: Path, source: FlowSource) -> Flow:
         raise FlowParseError("name must contain lowercase letters, numbers, and hyphens")
     if not description:
         raise FlowParseError("missing description")
+    steps, migrated_legacy_step = _parse_steps(data.get("steps"))
     status = str(data.get("status") or "active").strip().lower()
     if status not in {"candidate", "active", "retired"}:
         raise FlowParseError(f"invalid status: {status}")
+    if migrated_legacy_step and status != "retired":
+        # Loading is non-destructive: expose the migrated shape in the UI but
+        # require an explicit save, test, and activation before it can execute.
+        status = "candidate"
     raw_domains = data.get("domains")
     domains = (
         frozenset(str(item).strip() for item in raw_domains if str(item).strip())
@@ -88,13 +125,13 @@ def parse_flow_document(text: str, directory: Path, source: FlowSource) -> Flow:
     return Flow(
         name=name,
         description=description,
-        steps=_parse_steps(data.get("steps")),
+        steps=steps,
         directory=directory,
         source=source,
-        version=str(data.get("version") or "1.0.0").strip(),
         status=status,
         domains=domains,
         provenance=provenance,
+        activation_fingerprint=str(data.get("activation_fingerprint") or "").strip(),
     )
 
 

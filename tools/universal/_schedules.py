@@ -87,6 +87,7 @@ def _view(entry: CronEntry, source: str) -> dict[str, Any]:
         "cadence": entry.cadence,
         "hour": entry.hour,
         "minute": entry.minute,
+        "interval_minutes": entry.interval_minutes,
         "weekdays": sorted(entry.weekdays) if entry.weekdays else [],
         "tz": entry.zone_name,
         "skill": entry.skill,
