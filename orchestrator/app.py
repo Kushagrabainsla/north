@@ -709,9 +709,27 @@ def _launch_background_tasks(
             return
         skill = str((job.payload or {}).get("skill") or "").strip()
         skill_hint = f" Use the '{skill}' skill before acting." if skill else ""
+        scheduled_prompt = f"[scheduled]{skill_hint}\n{job.task}"
+        if job.agent == "news_briefing":
+            scheduled_prompt += (
+                "\n\nThis is a scheduled briefing. Save the completed briefing under the handoff "
+                "directory path required by your agent contract so it appears under this task's artifacts."
+            )
+        elif job.agent == "researcher" and any(
+            phrase in job.task.lower() for phrase in ("published papers", "recently published", "ai/ml")
+        ):
+            scheduled_prompt += (
+                "\n\nThis is a scheduled paper briefing, not an engineering task. Do not inspect the local "
+                "codebase, propose implementation approaches, or write a project context/options memo. "
+                "Search for and synthesize a concise, high-signal reading list of recently published "
+                "AI/ML papers across the requested topics. Include title, date, venue or preprint status, "
+                "URL, 2-3 sentence contribution summary, and a short cross-paper takeaway. Write that "
+                "finished briefing to the declared research context artifact and put the source list in "
+                "the declared references artifact."
+            )
         await _run_scheduled_task(
             orchestrator,
-            f"[scheduled]{skill_hint}\n{job.task}",
+            scheduled_prompt,
             forced_agent=job.agent,
         )
 

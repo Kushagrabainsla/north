@@ -17,7 +17,7 @@ accepts:
   - "update me"
   - "catch me up"
 produces:
-  - "~/.north/news/{date}.md"
+  - "{handoff_dir}/news/{date}.md"
 output_format: structured_json
 version: 1.0.0
 class_name: NewsBriefingAgent
