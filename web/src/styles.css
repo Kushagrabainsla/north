@@ -1371,10 +1371,64 @@ button:not(:disabled):active { transform: translateY(1px); }
 .session-toolbar > span { color: var(--muted); font: 10px var(--mono); }
 .session-registry { flex: 1; height: auto; min-height: 0; }
 .session-registry .capability-registry-head,
-.session-registry .capability-registry-row { grid-template-columns: minmax(190px, 1.15fr) minmax(150px, 1fr) minmax(120px, .8fr) 70px 86px 54px; }
-.session-registry-row { text-align: left; }
+.session-registry .capability-registry-row { grid-template-columns: minmax(190px, 1.15fr) minmax(150px, 1fr) minmax(120px, .8fr) 70px 86px 128px; }
+.session-registry-row { text-align: left; cursor: pointer; }
+.session-registry-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .session-registry-row .capability-registry-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-registry-row .capability-registry-name small { max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-pin-indicator { display: inline-block; color: var(--accent); margin-right: 5px; vertical-align: -1px; }
+.session-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.session-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.session-action-button:hover, .session-action-button:focus-visible {
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.session-action-button.danger:hover, .session-action-button.danger:focus-visible {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
+  color: var(--red);
+}
+.session-open-indicator { color: var(--faint); margin-left: 2px; }
+.session-registry-row:hover .session-open-indicator,
+.session-registry-row:focus-visible .session-open-indicator { color: var(--accent); }
+.session-tabs { display: flex; gap: 3px; border: 1px solid var(--line); border-radius: 7px; padding: 3px; background: var(--surface-2); flex: 0 0 auto; }
+.session-tab { border: 0; background: transparent; color: var(--muted); font: 10px var(--mono); letter-spacing: .04em; padding: 6px 12px; border-radius: 5px; cursor: pointer; }
+.session-tab.active { background: var(--surface); color: var(--text); }
+.session-tab:hover:not(.active) { color: var(--text); }
+@media (max-width: 1100px) {
+  .session-registry .capability-registry-head,
+  .session-registry .capability-registry-row { grid-template-columns: minmax(150px, 1.3fr) minmax(120px, 1fr) 70px 86px 128px; }
+  .session-registry .capability-registry-head span:nth-child(3),
+  .session-registry .capability-registry-row .capability-registry-meta:first-of-type { display: none; }
+}
+@media (max-width: 680px) {
+  .session-registry .capability-registry-head { display: none; }
+  .session-registry .capability-registry-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px 12px;
+    min-height: auto;
+    padding: 13px;
+  }
+  .session-registry .capability-registry-name { grid-column: 1; grid-row: 1; }
+  .session-registry .capability-registry-row > .status { grid-column: 2; grid-row: 1; justify-self: end; }
+  .session-registry .capability-registry-description { grid-column: 1 / -1; grid-row: 2; white-space: normal; }
+  .session-registry .capability-registry-row .capability-registry-meta { display: inline; grid-row: 3; }
+  .session-registry .capability-registry-row .capability-registry-meta:first-of-type { grid-column: 1; }
+  .session-registry .capability-registry-row .capability-registry-meta:last-of-type { grid-column: 2; justify-self: end; }
+  .session-actions { grid-column: 1 / -1; grid-row: 4; justify-content: flex-end; }
+}
 
 .session-goal {
   display: flex;
