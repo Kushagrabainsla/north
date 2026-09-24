@@ -2913,18 +2913,36 @@ function FlowStepCard({
   const activeSkills = skills.filter((skill) => skill.status === "active");
   const selectedSkill = skills.find((skill) => skill.name === step.skill);
   const execution = selectedSkill?.execution;
-  const selectSkill = (name: string) => {
-    const contract = skills.find((skill) => skill.name === name)?.execution;
+  // A step is one kind or the other - never both - so this is derived from
+  // step.skill rather than tracked as separate state that could drift out of
+  // sync with it. "Existing skill" always leaves with a real skill selected
+  // (see chooseSkillKind below), so an empty step.skill unambiguously means
+  // "instructions"; there is no third "chosen skill, picked nothing yet" state
+  // to represent.
+  const kind: "skill" | "instructions" = step.skill ? "skill" : "instructions";
+  const defaultInputsFor = (contract: typeof execution) => {
     const required = contract?.inputs.required || [];
     const properties = contract?.inputs.properties || {};
-    const nextInputs = Object.fromEntries(
+    return Object.fromEntries(
       required.map((key) => [
         key,
         properties[key]?.type === "boolean" ? false : "",
       ]),
     );
-    set({ skill: name, inputs: nextInputs });
   };
+  const selectSkill = (name: string) => {
+    const contract = skills.find((skill) => skill.name === name)?.execution;
+    set({ skill: name, inputs: defaultInputsFor(contract) });
+  };
+  // Switching kind clears the other field rather than leaving it hidden but
+  // still set: a step submitted mid-edit should unambiguously be one kind,
+  // not a skill with orphaned leftover instructions (or vice versa).
+  const chooseSkillKind = () => {
+    const first = activeSkills[0];
+    if (!first) return;
+    set({ skill: first.name, instructions: "", inputs: defaultInputsFor(first.execution) });
+  };
+  const chooseInstructionsKind = () => set({ skill: "", inputs: {} });
   return (
     <article className="flow-step-card">
       <header>
@@ -2952,6 +2970,30 @@ function FlowStepCard({
           />
         </label>
         <label>
+          Kind
+          <div className="segmented">
+            <button
+              type="button"
+              className={kind === "skill" ? "active" : ""}
+              disabled={!editable || !activeSkills.length}
+              title={activeSkills.length ? undefined : "No active skills to choose from"}
+              onClick={chooseSkillKind}
+            >
+              Existing skill
+            </button>
+            <button
+              type="button"
+              className={kind === "instructions" ? "active" : ""}
+              disabled={!editable}
+              onClick={chooseInstructionsKind}
+            >
+              Instructions
+            </button>
+          </div>
+        </label>
+      </div>
+      {kind === "skill" ? (
+        <label className="flow-wide-field">
           Skill
           <select
             aria-label="Skill"
@@ -2959,7 +3001,6 @@ function FlowStepCard({
             value={step.skill}
             onChange={(event) => selectSkill(event.target.value)}
           >
-            <option value="">Use step instructions</option>
             {step.skill &&
               !activeSkills.some((skill) => skill.name === step.skill) && (
                 <option value={step.skill}>{step.skill} (unavailable)</option>
@@ -2971,12 +3012,22 @@ function FlowStepCard({
               </option>
             ))}
           </select>
-          <small>
-            Choose an existing skill, or leave this blank to write the procedure
-            below.
-          </small>
+          <small>North runs this step using the selected reusable skill.</small>
         </label>
-      </div>
+      ) : (
+        <label className="flow-wide-field">
+          Step instructions
+          <textarea
+            aria-label="Step instructions"
+            disabled={!editable}
+            value={step.instructions}
+            rows={3}
+            placeholder="Write the procedure North should follow for this step."
+            onChange={(event) => set({ instructions: event.target.value })}
+          />
+          <small>North follows these instructions directly - no reusable skill involved.</small>
+        </label>
+      )}
       {execution && (
         <div className="flow-contract">
           <span>
@@ -2997,26 +3048,6 @@ function FlowStepCard({
           </span>
         </div>
       )}
-      <label className="flow-wide-field">
-        {step.skill ? "Step instructions" : "Inline skill instructions"}
-        <textarea
-          aria-label="Step instructions"
-          disabled={!editable}
-          value={step.instructions}
-          rows={3}
-          placeholder={
-            step.skill
-              ? "Specialize the selected skill for this step."
-              : "Write the procedure North should follow for this step."
-          }
-          onChange={(event) => set({ instructions: event.target.value })}
-        />
-        <small>
-          {step.skill
-            ? "These instructions specialize the selected reusable skill."
-            : "These instructions are used as the skill for this step."}
-        </small>
-      </label>
       {execution && (
         <div className="flow-params">
           <div className="flow-params-heading">
