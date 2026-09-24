@@ -111,8 +111,17 @@ class FlowRunner:
             execution = skill.execution if skill else None
             selected_agent_name = execution.agent if execution else "general"
             allowed_tools = resolve_execution_tools(execution, step.inputs) if execution else ()
-            approval = execution.approval if execution else "on_mutation"
-            success_criteria = execution.success_criteria if execution else ("The step completed and returned useful evidence.",)
+            # The step's own approval, never the skill's declared baseline
+            # (execution.approval): a flow step must be able to require
+            # different approval than the skill's default for this one use,
+            # which is the entire reason FlowStep carries its own field.
+            # Reading execution.approval here silently dropped every step's
+            # override - a step declaring "always" ran with whatever the
+            # skill's baseline happened to be instead.
+            approval = step.approval
+            success_criteria = (
+                execution.success_criteria if execution else ("The step completed and returned useful evidence.",)
+            )
             output_schema = execution.outputs if execution else {"type": "object", "properties": {}}
 
             if approval == "always":
@@ -129,8 +138,8 @@ class FlowRunner:
                     agent=selected_agent_name,
                     title=f"Flow approval: {flow.name}",
                     message=(
-                        f"Step '{step.name}' is ready to run "
-                        f"using {step.skill or 'inline instructions'} with executor '{selected_agent_name}'.\n\n{step.instructions}"
+                        f"Step '{step.name}' is ready to run using {step.skill or 'inline instructions'} "
+                        f"with executor '{selected_agent_name}'.\n\n{step.instructions}"
                     ),
                 )
                 if decision is not ApprovalDecision.APPROVED:

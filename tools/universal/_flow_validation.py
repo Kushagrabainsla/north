@@ -138,6 +138,15 @@ def validate_flow_capabilities(
             # instructions, but cannot declare tool or I/O contracts.
             continue
 
+        if _APPROVAL_RANK[step.approval] < _APPROVAL_RANK[execution.approval]:
+            # The skill author's declared approval is a floor, not a default a
+            # step can silently relax: a skill that says "ask before mutating"
+            # must not become "never ask" just because a flow step said so.
+            errors.append(
+                f"{prefix}: approval {step.approval!r} is below skill {step.skill!r}'s "
+                f"minimum {execution.approval!r}"
+            )
+
         errors.extend(
             f"{prefix}: {message}"
             for message in schema_errors(

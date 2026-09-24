@@ -47,14 +47,17 @@ def _skill(tmp_path, *, execution=None):
     )
 
 
-def test_validation_rejects_advisory_skill(tmp_path):
+def test_validation_accepts_advisory_skill(tmp_path):
+    """A skill with no execution contract (advisory: description and body
+    only, no agent/tools/inputs) is a valid instruction source for a step -
+    it runs through the general agent under the same safe mutation gate as
+    inline instructions, just without a declared tool/IO contract to check."""
     report = validate_flow_capabilities(
         _flow(tmp_path),
         skill_registry=_Registry({"strict": _skill(tmp_path)}),
     )
 
-    assert not report.valid
-    assert "advisory" in report.errors[0]
+    assert report.valid
 
 
 def test_validation_enforces_inputs_approval_executor_and_tools(tmp_path):
