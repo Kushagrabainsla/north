@@ -107,13 +107,15 @@ class FlowRunner:
         for index in range(run.current_step, len(flow.steps)):
             step = flow.steps[index]
             step_inputs = _resolve_inputs(step.inputs, run.inputs, outputs)
-            skill = self._skills.get(step.skill)
-            execution = skill.execution
-            if execution is None:  # guarded by validation; keep runtime fail-closed
-                raise ValueError(f"Skill '{step.skill}' has no execution contract")
-            allowed_tools = resolve_execution_tools(execution, step.inputs)
+            skill = self._skills.get(step.skill) if step.skill else None
+            execution = skill.execution if skill else None
+            selected_agent_name = execution.agent if execution else "general"
+            allowed_tools = resolve_execution_tools(execution, step.inputs) if execution else ()
+            approval = execution.approval if execution else "on_mutation"
+            success_criteria = execution.success_criteria if execution else ("The step completed and returned useful evidence.",)
+            output_schema = execution.outputs if execution else {"type": "object", "properties": {}}
 
-            if step.approval == "always":
+            if approval == "always":
                 if self._interaction is None:
                     return self._store.update(
                         run.run_id,
@@ -124,11 +126,11 @@ class FlowRunner:
                     )
                 decision = await self._interaction.request_approval_status(
                     task_id=run.task_id or None,
-                    agent=execution.agent,
+                    agent=selected_agent_name,
                     title=f"Flow approval: {flow.name}",
                     message=(
-                        f"Skill step '{step.name}' is ready to run using skill '{step.skill}' "
-                        f"with its executor '{execution.agent}'.\n\n{step.instructions}"
+                        f"Step '{step.name}' is ready to run "
+                        f"using {step.skill or 'inline instructions'} with executor '{selected_agent_name}'.\n\n{step.instructions}"
                     ),
                 )
                 if decision is not ApprovalDecision.APPROVED:
@@ -141,7 +143,7 @@ class FlowRunner:
                     )
 
             try:
-                selected_agent = self._agents.get(execution.agent)
+                selected_agent = self._agents.get(selected_agent_name)
                 result = await selected_agent.run(
                     AgentPayload(
                         task_id=run.task_id or f"flow:{run.run_id}",
@@ -150,18 +152,18 @@ class FlowRunner:
                             step,
                             step_inputs,
                         outputs,
-                        execution.success_criteria,
-                        execution.outputs,
+                        success_criteria,
+                        output_schema,
                     ),
                         workspace=self._workspace,
                         model_pool=selected_agent.config.model_pool or "reasoning",
-                        skills=[step.skill],
+                        skills=[step.skill] if step.skill else [],
                         allowed_tools=list(allowed_tools),
                         mutation_policy={
                             "never": "deny",
                             "on_mutation": "require_approval",
                             "always": "allow",
-                        }[step.approval],
+                        }[approval],
                         allow_delegation=False,
                     )
                 )
@@ -183,8 +185,8 @@ class FlowRunner:
                     error=result.question or f"Skill step '{step.name}' needs user attention.",
                 )
 
-            contract_output = _contract_output(result, execution.outputs)
-            output_errors = schema_errors(contract_output, execution.outputs, path="output")
+            contract_output = _contract_output(result, output_schema)
+            output_errors = schema_errors(contract_output, output_schema, path="output")
             if output_errors:
                 return self._store.update(
                     run.run_id,
@@ -193,15 +195,15 @@ class FlowRunner:
                     outputs=outputs,
                     error=(
                         f"Skill step '{step.name}' returned data outside skill "
-                        f"'{step.skill}'s output contract: {'; '.join(output_errors)}"
+                        f"'{step.skill or 'inline instructions'}'s output contract: {'; '.join(output_errors)}"
                     ),
                 )
 
             outputs.append(
                 {
                     "step": step.name,
-                    "skill": step.skill,
-                    "agent": execution.agent,
+                    "skill": step.skill or "inline-instructions",
+                    "agent": selected_agent_name,
                     "data": {
                         "output": result.output,
                         "summary": result.summary,
@@ -237,7 +239,7 @@ def _step_prompt(
     previous = {item["step"]: item.get("data", {}) for item in outputs}
     criteria = "\n".join(f"- {item}" for item in success_criteria)
     return (
-        f"Execute flow '{flow_name}', step '{step.name}', using the required skill '{step.skill}'.\n\n"
+        f"Execute flow '{flow_name}', step '{step.name}', using {step.skill or 'the inline procedure'}.\n\n"
         f"Step instructions:\n{step.instructions}\n\n"
         f"Resolved inputs:\n{json.dumps(inputs, indent=2, default=str)}\n\n"
         f"Previous step outputs:\n{json.dumps(previous, indent=2, default=str)}\n\n"

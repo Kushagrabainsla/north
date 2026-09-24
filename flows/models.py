@@ -65,7 +65,7 @@ def flow_fingerprint(
     """Hash the executable definition and the exact procedures it references."""
     skill_fingerprints: dict[str, str] = {}
     if skill_resolver is not None:
-        for name in sorted({step.skill for step in flow.steps}):
+        for name in sorted({step.skill for step in flow.steps if step.skill}):
             try:
                 skill_fingerprints[name] = skill_resolver(name).fingerprint()
             except Exception:

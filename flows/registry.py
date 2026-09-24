@@ -55,8 +55,8 @@ def _parse_steps(raw: Any) -> tuple[tuple[FlowStep, ...], bool]:
             approval = str(raw_approval or "on_mutation").strip().lower()
         if not name:
             raise FlowParseError(f"steps[{index}] is missing name")
-        if not skill and not legacy_tool:
-            raise FlowParseError(f"steps[{index}] is missing skill")
+        # A step may either reference a reusable skill or provide its own
+        # inline instructions. The latter is executed by the general agent.
         if name in seen:
             raise FlowParseError(f"duplicate step name: {name}")
         if approval not in _APPROVALS:

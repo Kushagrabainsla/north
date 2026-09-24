@@ -111,12 +111,16 @@ def validate_flow_capabilities(
     agent_registry=None,
     tool_registry=None,
 ) -> FlowValidationReport:
-    """Validate a flow by resolving every capability through its skill."""
+    """Validate skill-backed and inline-instruction flow steps."""
     errors: list[str] = []
     warnings: list[str] = []
 
     for index, step in enumerate(flow.steps, start=1):
         prefix = f"step {index} ({step.name!r})"
+        if not step.skill:
+            if not step.instructions.strip():
+                errors.append(f"{prefix}: inline instructions are required when no skill is selected")
+            continue
         if skill_registry is None:
             warnings.append(f"{prefix}: skill {step.skill!r} could not be checked")
             continue
@@ -129,14 +133,11 @@ def validate_flow_capabilities(
             errors.append(f"{prefix}: skill {step.skill!r} is {skill.status}, not active")
         execution = skill.execution
         if execution is None:
-            errors.append(f"{prefix}: skill {step.skill!r} is advisory and has no execution contract")
+            # Advisory skills are valid instruction sources. They run through
+            # the general agent with the same safe mutation gate as inline
+            # instructions, but cannot declare tool or I/O contracts.
             continue
 
-        if _APPROVAL_RANK[step.approval] < _APPROVAL_RANK[execution.approval]:
-            errors.append(
-                f"{prefix}: approval {step.approval!r} is below skill {step.skill!r}'s "
-                f"minimum {execution.approval!r}"
-            )
         errors.extend(
             f"{prefix}: {message}"
             for message in schema_errors(
