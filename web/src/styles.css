@@ -137,7 +137,7 @@ a { color: inherit; text-decoration: none; }
 .list-row small { color: var(--muted); margin-top: 3px; font-size: 9px; }
 .list-row > div { min-width: 0; }
 .list-row.compact { padding: 6px 0; }
-.status { display: inline-block; padding: 3px 7px; border-radius: 20px; font: 500 8px "DM Mono", monospace; text-transform: uppercase; color: var(--muted); background: #20252b; white-space: nowrap; }
+.status { display: inline-block; max-width: 100%; padding: 3px 7px; border-radius: 20px; font: 500 8px "DM Mono", monospace; text-transform: uppercase; color: var(--muted); background: #20252b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
 .status-completed, .status-approved, .status-answered { color: var(--accent); background: var(--accent-soft); }
 .status-pending, .status-running, .status-queued, .status-retrying { color: var(--blue); background: rgba(118,185,255,.12); }
 .status-failed, .status-rejected, .status-cancelled, .status-needs_attention { color: var(--red); background: rgba(255,119,119,.12); }
@@ -1409,7 +1409,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 .session-tab:hover:not(.active) { color: var(--text); }
 @media (max-width: 1100px) {
   .session-registry .capability-registry-head,
-  .session-registry .capability-registry-row { grid-template-columns: minmax(150px, 1.3fr) minmax(120px, 1fr) 70px 86px 128px; }
+  .session-registry .capability-registry-row { grid-template-columns: minmax(140px, 1.2fr) minmax(110px, .9fr) 42px 104px 118px; }
   .session-registry .capability-registry-head span:nth-child(3),
   .session-registry .capability-registry-row .capability-registry-meta:first-of-type { display: none; }
 }
