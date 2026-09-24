@@ -4,11 +4,29 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import click
 from typer.testing import CliRunner
 
 from cli.main import _NORTH_GIT_URL, app
 
 runner = CliRunner()
+
+
+def _plain(result) -> str:
+    """result.output with ANSI codes stripped.
+
+    Typer's usage-error panel runs its message through Rich's CLI-token
+    highlighter, which wraps recognised tokens (``--flags``, 'quoted
+    strings') in their own colour codes whenever the environment reads as
+    colour-capable - splicing escape sequences into the middle of a phrase
+    like "--path requires --source local". Whether that triggers depends on
+    the environment's own colour detection, not on anything this test
+    controls, and it does trigger in CI while not doing so locally - so a
+    literal substring check against the raw text is fragile in exactly the
+    place these tests need it least. Stripping first checks the message
+    that's actually there, independent of that.
+    """
+    return click.unstyle(result.output)
 
 
 def test_update_defaults_to_remote_even_when_local_checkout_exists(tmp_path, monkeypatch) -> None:
@@ -63,14 +81,14 @@ def test_update_rejects_path_for_remote_source(tmp_path) -> None:
     result = runner.invoke(app, ["update", "--path", str(tmp_path), "--yes", "--no-restart"])
 
     assert result.exit_code == 2
-    assert "--path requires --source local" in result.output
+    assert "--path requires --source local" in _plain(result)
 
 
 def test_update_rejects_unknown_source() -> None:
     result = runner.invoke(app, ["update", "--source", "archive", "--yes", "--no-restart"])
 
     assert result.exit_code == 2
-    assert "--source must be 'remote' or 'local'" in result.output
+    assert "--source must be 'remote' or 'local'" in _plain(result)
 
 
 def test_local_update_installs_editable_without_pulling(tmp_path, monkeypatch) -> None:
