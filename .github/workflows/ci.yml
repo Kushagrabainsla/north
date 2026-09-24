@@ -33,11 +33,11 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install ruff
-        run: uv pip install --system ruff
+      - name: Install dependencies
+        run: uv sync --locked
 
       - name: Lint
-        run: ruff check .
+        run: uv run ruff check .
 
   types:
     # Ruff and pytest both passed on a tree where a `str` was passed where a
@@ -62,10 +62,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system -e . mypy
+        run: uv sync --locked
 
       - name: Type check
-        run: mypy --ignore-missing-imports --follow-imports=silent inference/ architecture/
+        run: uv run mypy --ignore-missing-imports --follow-imports=silent inference/ architecture/
 
   web:
     # The browser interface had no CI at all: a type error or a broken unit test
@@ -120,13 +120,13 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system -e . pytest pytest-asyncio
+        run: uv sync --locked
 
       - name: Enforce module contracts, import direction, edit scopes and packaging
         env:
           NORTH_HOME: /tmp/north-ci-architecture
           NORTH_ENV: test
-        run: python -m pytest tests/unit/architecture -q
+        run: uv run pytest tests/unit/architecture -q
 
   package:
     name: Package (source distribution)
@@ -230,11 +230,11 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system -e . pytest pytest-asyncio
+        run: uv sync --locked
 
       - name: Run tests
         env:
           NORTH_HOME: /tmp/north-ci
           NORTH_ENV: test
           NORTH_OPENROUTER_API_KEY: ci-dummy-key
-        run: python -m pytest -x -q --tb=short -m "not integration"
+        run: uv run pytest -x -q --tb=short -m "not integration"

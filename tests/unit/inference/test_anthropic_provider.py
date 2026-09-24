@@ -79,7 +79,11 @@ def test_assistant_tool_calls_become_tool_use_blocks():
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    }
                 ],
             },
         ]
