@@ -24,7 +24,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
@@ -41,6 +43,7 @@ _COLUMN_SAMPLE_SIZE = 5
 _ASSERTION_UNMET_EXIT_CODE = 2
 _NAVIGATING_ACTIONS = ("goto", "navigate", "read")
 _LOOPBACK_HOSTNAMES = ("localhost", "127.0.0.1", "::1")
+_MAX_CDP_RESPONSE_BYTES = 1_000_000
 
 
 def _find_chrome_agent_binary() -> list[str] | None:
@@ -249,6 +252,76 @@ def _close_args(params: dict[str, Any]) -> list[str]:
 
 def _status_args(params: dict[str, Any]) -> list[str]:
     return ["status"]
+
+
+def _cdp_http_base(connect: str) -> str:
+    """Normalize a user-provided CDP port/URL to a loopback HTTP base URL."""
+    raw = connect.strip()
+    if not raw:
+        raise ValueError("Existing-browser access requires a CDP connection endpoint.")
+    if raw.isdigit():
+        raw = f"http://127.0.0.1:{raw}"
+    elif "://" not in raw:
+        raw = f"http://{raw}"
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.hostname:
+        raise ValueError("CDP endpoint must be a port or an http(s)/ws(s) URL.")
+    if parsed.hostname.lower() not in _LOOPBACK_HOSTNAMES:
+        raise ValueError("CDP connections are restricted to this machine (localhost only).")
+    scheme = "https" if parsed.scheme in {"https", "wss"} else "http"
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{scheme}://{host}{port}"
+
+
+def _read_cdp_json(url: str, timeout: int) -> Any:
+    request = Request(url, headers={"Accept": "application/json", "User-Agent": "north-cdp-preflight"})
+    with urlopen(request, timeout=max(1, min(timeout, 10))) as response:  # noqa: S310 - loopback-only above
+        if response.status != 200:
+            raise ValueError(f"HTTP {response.status}")
+        payload = response.read(_MAX_CDP_RESPONSE_BYTES + 1)
+    if len(payload) > _MAX_CDP_RESPONSE_BYTES:
+        raise ValueError("response was unexpectedly large")
+    return json.loads(payload.decode("utf-8"))
+
+
+def _probe_cdp_endpoint(connect: str, timeout: int) -> ToolOutput:
+    """Prove that *connect* is a live Chrome DevTools endpoint, not merely an open port."""
+    try:
+        base = _cdp_http_base(connect)
+        version = _read_cdp_json(f"{base}/json/version", timeout)
+        if not isinstance(version, dict) or not version.get("webSocketDebuggerUrl"):
+            raise ValueError("/json/version did not return a DevTools WebSocket URL")
+        target_count: int | None = None
+        try:
+            targets = _read_cdp_json(f"{base}/json/list", timeout)
+            if isinstance(targets, list):
+                target_count = len(targets)
+        except (HTTPError, URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError):
+            # /json/version is the authoritative handshake. Target enumeration
+            # is useful context, but not required by every Chrome derivative.
+            pass
+        return ToolOutput(
+            success=True,
+            data={
+                "action": "preflight",
+                "verified": True,
+                "endpoint": base,
+                "browser": str(version.get("Browser") or "Chrome"),
+                "protocol_version": str(version.get("Protocol-Version") or "unknown"),
+                "target_count": target_count,
+            },
+        )
+    except HTTPError as exc:
+        return ToolOutput(
+            success=False,
+            error=(
+                f"CDP preflight failed: {connect} responded with HTTP {exc.code}, but it is not a usable "
+                "Chrome DevTools endpoint. Start Chrome with remote debugging and verify /json/version."
+            ),
+        )
+    except (URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        return ToolOutput(success=False, error=f"CDP preflight failed for {connect}: {exc}")
 
 
 # Every chrome-agent action north exposes, mapped to the builder for its arguments.
@@ -488,6 +561,7 @@ class BrowserTool(Tool):
         "  - 'screenshot', 'pdf': Capture viewport or full page to a file.\n"
         "  - 'eval': Execute JavaScript in the page context.\n"
         "  - 'assert': Deterministically verify page text, values, element existence, or state.\n"
+        "  - 'preflight': Verify an existing-browser CDP endpoint with /json/version before use.\n"
         "  - 'wait': Wait for text, selector, URL, or network-idle.\n"
         "  - 'close': Close the browser instance or tab for this task."
     )
@@ -518,6 +592,7 @@ class BrowserTool(Tool):
                     "wait",
                     "close",
                     "status",
+                    "preflight",
                 ],
                 "description": "Action to perform in the browser.",
             },
@@ -692,6 +767,20 @@ class BrowserTool(Tool):
                 success=False,
                 error="Existing-browser context requires connect or copy_cookies.",
             )
+
+        # chrome-agent's generic status output describes its own managed
+        # browsers; it does not prove that a supplied CDP endpoint is reachable.
+        # Perform the DevTools handshake ourselves before claiming attachment.
+        if browser_context == "existing" and params.get("connect"):
+            preflight = await asyncio.to_thread(
+                _probe_cdp_endpoint,
+                str(params["connect"]),
+                int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)),
+            )
+            if not preflight.success or action in {"preflight", "status"}:
+                return preflight
+        elif action == "preflight":
+            return ToolOutput(success=False, error="CDP preflight requires browser_context='existing' and connect.")
 
         unsafe_url = _unsafe_url_reason(action, params)
         if unsafe_url:

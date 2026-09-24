@@ -433,6 +433,54 @@ async def test_request_approval_resolved_reject_returns_status(tmp_path: Path) -
     assert decision == "Reject"
 
 
+async def test_request_approval_returns_reviewed_field_values(tmp_path: Path) -> None:
+    """Rich approval cards return the user's edited values to the running agent."""
+    from approval.store import ApprovalStore
+
+    store = ApprovalStore()
+    agent = _make_agent(tmp_path, approval_store=store, approval_timeout_seconds=5.0)
+
+    async def _approve_with_edit():
+        await asyncio.sleep(0.05)
+        card = store.pending()[0]
+        store.resolve(card.id, "approved", values={"cover_note": "Edited by the user"})
+
+    approval_task = asyncio.create_task(_approve_with_edit())
+    card = await agent._request_approval_card(
+        _payload(),
+        {
+            "title": "Submit application to Example Co",
+            "message": "Review the filled application before submission.",
+            "fields": [
+                {
+                    "name": "cover_note",
+                    "label": "Cover note",
+                    "type": "textarea",
+                    "value": "Draft from North",
+                    "editable": True,
+                },
+                {
+                    "name": "job_url",
+                    "label": "Job",
+                    "type": "link",
+                    "value": "https://example.com/jobs/1",
+                    "editable": False,
+                },
+            ],
+            "context": "Example Co role description",
+        },
+    )
+    await approval_task
+
+    assert card.status == "approved"
+    assert card.title == "Submit application to Example Co"
+    assert card.response == {
+        "cover_note": "Edited by the user",
+        "job_url": "https://example.com/jobs/1",
+    }
+    assert card.context == "Example Co role description"
+
+
 # ---------------------------------------------------------------------------
 # Tool execution routing
 # ---------------------------------------------------------------------------

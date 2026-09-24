@@ -47,6 +47,57 @@ _REPO_STRUCTURE_TOOLS = frozenset({"list_dir", "glob"})
 _REPO_CONTENT_TOOLS = frozenset({"read_file", "search_files", "search_code"})
 _WEB_EVIDENCE_TOOLS = frozenset({"web_search", "fetch_url"})
 
+_CAPABILITY_REQUESTS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
+    (
+        "flow creation or update",
+        re.compile(
+            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\b(?:north\s+)?flow\b"
+            r"|\bcreate_flow\b",
+            re.IGNORECASE,
+        ),
+        frozenset({"create_flow:create", "create_flow:update"}),
+    ),
+    (
+        "skill creation or update",
+        re.compile(
+            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\b(?:north\s+)?skill\b"
+            r"|\bcreate_skill\b",
+            re.IGNORECASE,
+        ),
+        frozenset({"create_skill:create", "create_skill:update"}),
+    ),
+    (
+        "North tool creation or update",
+        re.compile(
+            r"\b(?:create|build|add|set\s*up|implement|update|edit)\b[^.\n]{0,80}\bnorth\s+tool\b"
+            r"|\bcreate_tool\b",
+            re.IGNORECASE,
+        ),
+        frozenset({"create_tool:create", "create_tool:update"}),
+    ),
+)
+
+_CAPABILITY_COMPLETION_CLAIMS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
+    (
+        "creating or updating a flow",
+        re.compile(r"\b(?:created|built|added|implemented|updated|edited|saved)\b[^.\n]{0,80}\bflow\b", re.I),
+        frozenset({"create_flow:create", "create_flow:update"}),
+    ),
+    (
+        "creating or updating a skill",
+        re.compile(r"\b(?:created|built|added|implemented|updated|edited|saved)\b[^.\n]{0,80}\bskill\b", re.I),
+        frozenset({"create_skill:create", "create_skill:update"}),
+    ),
+    (
+        "creating or updating a North tool",
+        re.compile(
+            r"\b(?:created|built|added|implemented|updated|edited|saved)\b[^.\n]{0,80}\b(?:north\s+)?tool\b",
+            re.I,
+        ),
+        frozenset({"create_tool:create", "create_tool:update"}),
+    ),
+)
+
 # Deterministic physical check: regex matching explicit file path claims like "saved to /path/to/file.md"
 _EXPLICIT_PATH_CLAIM_RE = re.compile(
     r"\b(?:saved|written|created|stored|compiled|exported|generated)\s+(?:to\s+|at\s+|in\s+)?[`'\"]?([~/\.\w\-\_]+/[~\w\.\-\_]+\.[a-zA-Z0-9]+)[`'\"]?",
@@ -145,6 +196,8 @@ def verify_claims(
     output: str,
     successful_tools: Iterable[str],
     workspace: str | None = None,
+    *,
+    evidence_actions: dict[str, int] | None = None,
 ) -> list[str]:
     """Return violations: claims in *output* unsupported by tool evidence or physical reality.
 
@@ -169,6 +222,16 @@ def verify_claims(
             if msg not in violations:
                 violations.append(msg)
 
+    # A successful registry lookup is not evidence that a capability was
+    # created. Require the mutating action itself for capability claims.
+    actions = {name for name, count in (evidence_actions or {}).items() if count > 0}
+    for label, pattern, required in _CAPABILITY_COMPLETION_CLAIMS:
+        if not (required & actions) and _has_completion_claim(output, pattern):
+            action_list = " or ".join(f"`{action}`" for action in sorted(required))
+            msg = f"output describes {label} but no successful {action_list} action was recorded"
+            if msg not in violations:
+                violations.append(msg)
+
     return violations
 
 
@@ -176,8 +239,10 @@ def evidence_sufficiency_violations(
     task: str,
     successful_tools: Iterable[str],
     evidence_counts: dict[str, int] | None = None,
+    evidence_actions: dict[str, int] | None = None,
     *,
     repository_context: bool = False,
+    outcome_status: str = "response_ready",
 ) -> list[str]:
     """Return task-level gaps where successful calls are not relevant enough.
 
@@ -204,5 +269,15 @@ def evidence_sufficiency_violations(
 
     if _EXTERNAL_RESEARCH_RE.search(task) and not (succeeded & _WEB_EVIDENCE_TOOLS):
         violations.append("external/current research used no successful `web_search` or `fetch_url` evidence")
+
+    # Waiting and blocked answers are honest intermediate states. Any other
+    # answer to an explicit capability-authoring request must include evidence
+    # of the actual create/update action, not merely list/read discovery.
+    if outcome_status not in {"waiting_for_user", "blocked"}:
+        actions = {name for name, count in (evidence_actions or {}).items() if count > 0}
+        for label, pattern, required in _CAPABILITY_REQUESTS:
+            if pattern.search(task) and not (required & actions):
+                action_list = " or ".join(f"`{action}`" for action in sorted(required))
+                violations.append(f"{label} used no successful {action_list} evidence")
 
     return violations

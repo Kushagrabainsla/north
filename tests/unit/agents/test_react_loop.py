@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agents.agentic_llm_agent import MAX_UNANSWERED_APPROVALS
+from agents.agentic_llm_agent import MAX_UNANSWERED_APPROVALS, _infer_outcome_status
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from approval import ApprovalDecision
 from inference.models import ToolCall, ToolCallResponse
@@ -62,6 +62,15 @@ def _load_agent(name: str, tmp_path: Path, router: MockInferenceRouter | None = 
 # ---------------------------------------------------------------------------
 # Final answer path - all 4 agents complete successfully
 # ---------------------------------------------------------------------------
+
+
+def test_outcome_status_marks_direct_questions_and_user_handoffs_as_waiting() -> None:
+    assert _infer_outcome_status("Do you want me to continue?") == "waiting_for_user"
+    assert (
+        _infer_outcome_status("Once it is open, tell me and I will verify the connection.")
+        == "waiting_for_user"
+    )
+    assert _infer_outcome_status("The requested report is ready.") == "response_ready"
 
 
 @pytest.mark.parametrize("name", ["architect", "coder", "researcher", "reviewer"])

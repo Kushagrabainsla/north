@@ -61,6 +61,9 @@ def test_key_skills_present():
         "authoring-a-north-skill",
         "authoring-a-north-agent",
         "scheduling-north-work",
+        "preparing-job-applications",
+        "submitting-an-approved-job-application",
+        "processing-a-job-application-queue",
     }
     assert expected <= names
 
@@ -102,3 +105,24 @@ def test_browser_skill_has_an_enforced_flow_contract():
     assert skill.execution.tools == ("browser",)
     assert skill.execution.approval == "on_mutation"
     assert {"browser_context", "context_confirmed"} <= set(skill.execution.inputs["required"])
+
+
+def test_job_application_skills_split_drafting_from_submission() -> None:
+    prepare = _REGISTRY.get("preparing-job-applications")
+    submit = _REGISTRY.get("submitting-an-approved-job-application")
+
+    assert prepare.execution is not None
+    assert prepare.execution.approval == "always"
+    assert {"browser", "read_file", "write_file"} == set(prepare.execution.tools)
+    assert "never submits" in prepare.body.lower()
+
+    assert submit.execution is not None
+    assert submit.execution.approval == "always"
+    assert submit.execution.tools == ("browser", "write_file")
+    assert "exactly once" in submit.body.lower()
+
+    queue = _REGISTRY.get("processing-a-job-application-queue")
+    assert queue.execution is not None
+    assert queue.execution.approval == "always"
+    assert "request_approval" in queue.body
+    assert "returned `response` values" in queue.body

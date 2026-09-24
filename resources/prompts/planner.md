@@ -55,15 +55,18 @@ Set `mode` to `single_agent` and leave `agents` empty. The system builds a fixed
 
 ### Is it consequential?
 
-Set `is_consequential: true` ONLY when the task **directly causes** an irreversible external action:
+Set `is_consequential: true` when the task performs an external action, uses sensitive authenticated context, or creates an executable capability. This includes:
 - Sending emails/messages (not drafting)
 - Moving money, buying/selling
 - Deleting or permanently altering data
 - Creating calendar events involving others
+- Filling or submitting forms, including job applications
+- Accessing an existing logged-in browser/profile through CDP, cookies, tabs, sessions, or extensions
+- Creating, activating, or scheduling a North flow, skill, tool, agent, or automation
 
-Set `false` for: reading, reasoning, drafting, planning, searching, computing, creating local files, answering questions.
+Set `false` for: ordinary reading, reasoning, drafting, planning, searching, computing, creating inert local files, and answering questions.
 
-**When in doubt: false.** The north star check is expensive.
+**When uncertain whether the task can affect an account, another person, or North's future behavior: true.**
 
 ### Confidence
 

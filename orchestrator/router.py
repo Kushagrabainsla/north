@@ -36,6 +36,25 @@ _DEEP_WORK_TERMS = re.compile(
     r"\b(audit|benchmark|compare|debug|design|fix|implement|investigate|modify|performance|research|security|test|trace|verify)\b"
 )
 
+_CONSEQUENTIAL_PATTERNS = (
+    re.compile(
+        r"\b(?:apply|applying|submit|send)\b[^.\n]{0,100}\b(?:job|application|form|message|email)\b"
+        r"|\b(?:job|application|form|message|email)\b[^.\n]{0,100}\b(?:apply|submit|send)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:existing|logged[- ]in|personal)\b[^.\n]{0,100}\b(?:browser|profile|session|cookies?|tabs?|cdp)\b"
+        r"|\b(?:browser|cdp)\b[^.\n]{0,100}\b(?:cookies?|logged[- ]in|profile|sessions?|tabs?|extensions?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:create|build|add|set\s*up|activate|schedule|enable|update)\b[^.\n]{0,100}"
+        r"\b(?:north\s+)?(?:flow|skill|tool|agent|automation)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:buy|purchase|sell|transfer|pay|delete|remove permanently)\b", re.IGNORECASE),
+)
+
 
 def _normalize(text: str) -> str:
     return " ".join(_NORMALIZE_RE.sub("", text.lower().strip()).split())
@@ -113,10 +132,20 @@ def _recent_conversation(context: str) -> str:
     personal background facts add noise and would pollute the routing cache key.
     Returns "" when the blob has no conversation section (backward compatible).
     """
+    goal = extract_markdown_section(context, "Active session goal")
     section = extract_markdown_section(context, "Recent conversation")
+    pieces = []
+    if goal:
+        pieces.append(f"Active session goal:\n{goal[:1000]}")
     if section:
-        return section[-_PLANNER_CONVERSATION_TAIL_CHARS:]
-    return ""
+        pieces.append(f"Recent conversation:\n{section[-_PLANNER_CONVERSATION_TAIL_CHARS:]}")
+    return "\n\n".join(pieces)
+
+
+def _requires_consequential_guard(prompt: str, conversation: str = "") -> bool:
+    """Apply a safety floor where a false negative would bypass goal review."""
+    text = f"{conversation}\n{prompt}"
+    return any(pattern.search(text) for pattern in _CONSEQUENTIAL_PATTERNS)
 
 
 def _execution_profile(prompt: str, classification: IntentClassification, plan: ExecutionPlan) -> str:
@@ -294,6 +323,18 @@ class ExecutionPlanner:
             reasoning=str(data.get("reasoning", "")),
             confidence=confidence,
         )
+        if _requires_consequential_guard(prompt, conversation) and not classification.is_consequential:
+            classification = classification.model_copy(
+                update={
+                    "is_consequential": True,
+                    "confidence": max(classification.confidence, 0.9),
+                    "reasoning": (
+                        f"{classification.reasoning} "
+                        "North safety floor: this request uses sensitive browser context, performs an external "
+                        "action, or creates an executable capability."
+                    ).strip(),
+                }
+            )
         if classification.domain == "engineering":
             # Deterministic engineering chain (#4): ignore any LLM-invented agent
             # graph and build a fixed researcher→architect→coder→reviewer subset.

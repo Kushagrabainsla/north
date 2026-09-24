@@ -31,7 +31,7 @@ from orchestrator.journal import TaskJournal
 from orchestrator.verification import evidence_sufficiency_violations, verify_claims
 from utils.ids import generate_id
 from utils.prompts import load_prompt
-from utils.text import extract_json
+from utils.text import extract_json, extract_markdown_section
 
 logger = logging.getLogger(__name__)
 
@@ -82,14 +82,22 @@ class ResultAuditor:
         workspace = payload.workspace if payload is not None else None
         # verify_claims stats claimed paths on disk - off-thread so the check
         # never blocks the event loop (CODING_STYLE §10.3).
-        violations = await asyncio.to_thread(verify_claims, result.output, result.successful_tools, workspace)
+        violations = await asyncio.to_thread(
+            verify_claims,
+            result.output,
+            result.successful_tools,
+            workspace,
+            evidence_actions=_evidence_actions(result),
+        )
         if payload is not None:
             violations.extend(
                 evidence_sufficiency_violations(
-                    payload.prompt,
+                    _evidence_task(payload),
                     result.successful_tools,
                     _evidence_counts(result),
+                    _evidence_actions(result),
                     repository_context=bool(payload.workspace and agent.domain == "engineering"),
+                    outcome_status=_outcome_status(result),
                 )
             )
         violations = self._with_evidence_gate_violations(agent, result, violations)
@@ -173,14 +181,20 @@ class ResultAuditor:
             return violations
 
         remaining = await asyncio.to_thread(
-            verify_claims, repaired.output, repaired.successful_tools, payload.workspace
+            verify_claims,
+            repaired.output,
+            repaired.successful_tools,
+            payload.workspace,
+            evidence_actions=_evidence_actions(repaired),
         )
         remaining.extend(
             evidence_sufficiency_violations(
-                payload.prompt,
+                _evidence_task(payload),
                 repaired.successful_tools,
                 _evidence_counts(repaired),
+                _evidence_actions(repaired),
                 repository_context=bool(payload.workspace and agent.domain == "engineering"),
+                outcome_status=_outcome_status(repaired),
             )
         )
         remaining = self._with_evidence_gate_violations(agent, repaired, remaining)
@@ -269,3 +283,22 @@ def _evidence_counts(result: AgentResult) -> dict[str, int]:
     if not isinstance(raw, dict):
         return dict.fromkeys(result.successful_tools or [], 1)
     return {str(name): max(0, int(count)) for name, count in raw.items() if isinstance(count, int | float)}
+
+
+def _evidence_actions(result: AgentResult) -> dict[str, int]:
+    """Read successful tool+action counts, tolerating results from older agents."""
+    raw = result.data.get("evidence_actions") if isinstance(result.data, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    return {str(name): max(0, int(count)) for name, count in raw.items() if isinstance(count, int | float)}
+
+
+def _outcome_status(result: AgentResult) -> str:
+    raw = result.data.get("outcome_status") if isinstance(result.data, dict) else None
+    return str(raw) if raw else "response_ready"
+
+
+def _evidence_task(payload: AgentPayload) -> str:
+    """Include a durable session goal when a short follow-up continues earlier work."""
+    goal = extract_markdown_section(payload.context, "Active session goal")
+    return f"{payload.prompt}\n\n{goal}" if goal else payload.prompt

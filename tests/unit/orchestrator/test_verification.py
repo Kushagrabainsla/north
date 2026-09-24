@@ -126,6 +126,50 @@ def test_ordinary_task_does_not_invent_evidence_requirements() -> None:
     assert evidence_sufficiency_violations("Explain this error message", []) == []
 
 
+def test_listing_flows_does_not_count_as_creating_one() -> None:
+    violations = evidence_sufficiency_violations(
+        "Create a North flow that applies for jobs.",
+        ["create_flow"],
+        {"create_flow": 1},
+        {"create_flow:list": 1},
+    )
+    assert any("flow creation" in violation for violation in violations)
+
+
+def test_flow_create_action_satisfies_capability_request() -> None:
+    assert (
+        evidence_sufficiency_violations(
+            "Create a North flow that applies for jobs.",
+            ["create_flow"],
+            {"create_flow": 1},
+            {"create_flow:create": 1},
+        )
+        == []
+    )
+
+
+def test_waiting_for_user_is_not_a_false_capability_completion() -> None:
+    assert (
+        evidence_sufficiency_violations(
+            "Create a North flow that applies for jobs.",
+            ["create_flow"],
+            {"create_flow": 1},
+            {"create_flow:list": 1},
+            outcome_status="waiting_for_user",
+        )
+        == []
+    )
+
+
+def test_created_flow_claim_requires_create_action_not_list_action() -> None:
+    violations = verify_claims(
+        "I created the job application flow.",
+        ["create_flow"],
+        evidence_actions={"create_flow:list": 1},
+    )
+    assert any("creating or updating a flow" in violation for violation in violations)
+
+
 # ---------------------------------------------------------------------------
 # Wider claim coverage (#7): fixed / implemented / refactored / verified / types
 # ---------------------------------------------------------------------------

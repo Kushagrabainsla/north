@@ -11,6 +11,7 @@ from tools.models import ToolInput
 from tools.registry import ToolRegistry
 from tools.universal.browser import (
     BrowserTool,
+    _cdp_http_base,
     _find_chrome_agent_binary,
 )
 
@@ -125,6 +126,13 @@ def test_browser_classifies_actions_and_existing_profile_access_per_call():
     assert tool.mutates({"action": "goto", "connect": "9222"}) is True
 
 
+def test_cdp_endpoint_normalization_is_loopback_only():
+    assert _cdp_http_base("9222") == "http://127.0.0.1:9222"
+    assert _cdp_http_base("ws://localhost:9222/devtools/browser/example") == "http://localhost:9222"
+    with pytest.raises(ValueError, match="localhost only"):
+        _cdp_http_base("http://example.com:9222")
+
+
 @pytest.mark.asyncio
 async def test_run_success_json():
     tool = BrowserTool(binary_cmd=["chrome-agent"])
@@ -218,6 +226,52 @@ async def test_browser_requires_explicit_user_context_choice():
     )
     assert not existing_without_connection.success
     assert "requires connect or copy_cookies" in existing_without_connection.error
+
+
+@pytest.mark.asyncio
+async def test_existing_browser_status_performs_real_cdp_preflight():
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
+    verified = MagicMock(success=True, data={"action": "preflight", "verified": True}, error="")
+    with patch("tools.universal.browser._probe_cdp_endpoint", return_value=verified) as probe:
+        output = await tool.run(
+            ToolInput(
+                params={
+                    "action": "status",
+                    "browser_context": "existing",
+                    "context_confirmed": True,
+                    "connect": "9222",
+                }
+            )
+        )
+
+    assert output.success is True
+    assert output.data == {"action": "preflight", "verified": True}
+    probe.assert_called_once_with("9222", 30)
+
+
+@pytest.mark.asyncio
+async def test_failed_cdp_preflight_stops_before_browser_command():
+    tool = BrowserTool(binary_cmd=["chrome-agent"])
+    failed = MagicMock(success=False, data={}, error="not a DevTools endpoint")
+    with (
+        patch("tools.universal.browser._probe_cdp_endpoint", return_value=failed),
+        patch("asyncio.create_subprocess_exec") as subprocess,
+    ):
+        output = await tool.run(
+            ToolInput(
+                params={
+                    "action": "goto",
+                    "url": "https://linkedin.com/jobs",
+                    "browser_context": "existing",
+                    "context_confirmed": True,
+                    "connect": "9222",
+                }
+            )
+        )
+
+    assert output.success is False
+    assert output.error == "not a DevTools endpoint"
+    subprocess.assert_not_called()
 
 
 def test_tool_registry_discovers_browser_tool():

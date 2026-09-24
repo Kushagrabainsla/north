@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import mimetypes
 import os
+import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -226,6 +227,8 @@ class ConversationCreate(BaseModel):
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=160)
     workspace: str | None = Field(default=None, max_length=4096)
+    goal: str | None = Field(default=None, max_length=4000)
+    goal_status: Literal["idle", "active", "waiting_for_user", "blocked", "achieved"] | None = None
     pinned: bool | None = None
     archived: bool | None = None
 
@@ -236,6 +239,28 @@ class TurnCreate(BaseModel):
 
 def _conversation_payload(conversation) -> dict[str, Any]:
     return asdict(conversation)
+
+
+_LEGACY_WAITING_RE = re.compile(
+    r"\b(?:tell me once|let me know once|please (?:confirm|choose|provide|open|start)|"
+    r"need you to|once (?:it|you) [^.\n]{0,100}(?:tell me|let me know)|"
+    r"(?:do|would|could|can) you (?:want|prefer|confirm|choose|provide|open|start))\b",
+    re.IGNORECASE,
+)
+_LEGACY_BLOCKED_RE = re.compile(
+    r"\b(?:blocked|cannot continue|can't continue|unable to continue|not reachable|"
+    r"missing (?:a )?(?:capability|credential|dependency))\b",
+    re.IGNORECASE,
+)
+
+
+def _legacy_outcome_status(output: str) -> str:
+    """Recover an honest state for ledger rows written before outcome_status existed."""
+    if _LEGACY_WAITING_RE.search(output) or output.rstrip().endswith("?"):
+        return "waiting_for_user"
+    if _LEGACY_BLOCKED_RE.search(output):
+        return "blocked"
+    return "response_ready"
 
 
 def _workspace_path(value: str) -> str:
@@ -373,18 +398,28 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
             for model in pool.models:
                 provider_by_model[model.id] = model.provider
     output = ""
+    outcome_status = "working"
     for entry in reversed(entries):
         if entry.action == "agent_completed" and entry.output:
             output = entry.output
+            if isinstance(entry.agent_output, dict) and entry.agent_output.get("outcome_status"):
+                outcome_status = str(entry.agent_output["outcome_status"])
             break
     if not output:
         for entry in reversed(entries):
             if entry.output:
                 output = entry.output
                 break
+    if output and outcome_status == "working":
+        outcome_status = _legacy_outcome_status(output)
+    if task and task.status in {"failed", "cancelled", "needs_attention"}:
+        outcome_status = "blocked"
+    elif task and task.status == "completed" and outcome_status == "working":
+        outcome_status = "response_ready"
     return {
         "task": task.model_dump(mode="json") if task else {"task_id": task_id, "status": "unknown"},
         "output": output,
+        "outcome_status": outcome_status,
         "entries": [_entry_payload(entry) for entry in entries],
         "inference_categories": _inference_categories(entries),
         "runs": [
@@ -443,6 +478,8 @@ async def update_conversation(conversation_id: str, body: ConversationUpdate) ->
             conversation_id,
             title=body.title,
             workspace=_workspace_path(body.workspace) if body.workspace is not None else None,
+            goal=body.goal,
+            goal_status=body.goal_status,
             pinned=body.pinned,
             archived=body.archived,
         )
@@ -467,6 +504,24 @@ async def get_conversation(conversation_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Conversation not found")
     turns = await store.turns(conversation_id)
     payloads = await asyncio.gather(*[_turn_payload(turn) for turn in turns])
+    if payloads:
+        latest = payloads[-1].get("detail") or {}
+        outcome = latest.get("outcome_status")
+        task_status = (latest.get("task") or {}).get("status")
+        derived_status = conversation.goal_status
+        if task_status in {"failed", "cancelled", "needs_attention"} or outcome == "blocked":
+            derived_status = "blocked"
+        elif outcome == "waiting_for_user":
+            derived_status = "waiting_for_user"
+        elif task_status in {"pending", "running", "queued", "paused"} or (
+            outcome == "response_ready" and derived_status not in {"achieved", "idle"}
+        ):
+            derived_status = "active"
+        if derived_status != conversation.goal_status:
+            conversation = (
+                await store.update(conversation_id, goal_status=derived_status, touch_updated_at=False)
+                or conversation
+            )
     return {**_conversation_payload(conversation), "turns": payloads}
 
 
@@ -493,7 +548,18 @@ async def create_turn(conversation_id: str, body: TurnCreate) -> dict[str, Any]:
         answer = detail.get("output", "")
         if answer:
             context_parts.append(f"User: {item.prompt}\nNorth: {answer[:4000]}")
-    context = "## Recent conversation\n" + "\n\n".join(context_parts) if context_parts else ""
+    context_sections: list[str] = []
+    if conversation.goal:
+        context_sections.append(
+            "## Active session goal\n"
+            f"Goal: {conversation.goal}\n"
+            f"Status before this turn: {conversation.goal_status}\n"
+            "A finished response is not proof that this goal is achieved. Continue advancing it, "
+            "and report clearly when you are waiting for the user or blocked."
+        )
+    if context_parts:
+        context_sections.append("## Recent conversation\n" + "\n\n".join(context_parts))
+    context = "\n\n".join(context_sections)
     task = (
         await current_services()
         .require("orchestrator")

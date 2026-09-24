@@ -137,10 +137,40 @@ REQUEST_APPROVAL_SCHEMA: dict = {
                     "type": "string",
                     "description": "Describe exactly what you plan to do and why.",
                 },
+                "title": {
+                    "type": "string",
+                    "description": "Short title naming the exact item and action under review.",
+                },
                 "options": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Choices shown to the user (default ['Approve','Reject']).",
+                },
+                "fields": {
+                    "type": "array",
+                    "description": (
+                        "Structured work the user should review. Each field has name, label, type "
+                        "(text, textarea, number, boolean, select, or link), value, editable, and optional options."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "label": {"type": "string"},
+                            "type": {
+                                "type": "string",
+                                "enum": ["text", "textarea", "number", "boolean", "select", "link"],
+                            },
+                            "value": {},
+                            "editable": {"type": "boolean"},
+                            "options": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["name", "value"],
+                    },
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Read-only source material the user needs to judge the proposed fields.",
                 },
             },
             "required": ["message"],

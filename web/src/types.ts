@@ -5,10 +5,13 @@ export interface Conversation {
   title: string;
   workspace: string;
   source: "web" | "cli";
+  goal: string;
+  goal_status: "idle" | "active" | "waiting_for_user" | "blocked" | "achieved";
   pinned: boolean;
   archived: boolean;
   created_at: string;
   updated_at: string;
+  turn_count: number;
   turns?: Turn[];
 }
 
@@ -78,6 +81,7 @@ export interface AgentRun {
 export interface TaskDetail {
   task: { task_id: string; status: Status; created_at?: string };
   output?: string;
+  outcome_status?: "working" | "response_ready" | "waiting_for_user" | "blocked";
   entries?: LedgerEntry[];
   runs?: AgentRun[];
   inference_categories?: InferenceCategory[];

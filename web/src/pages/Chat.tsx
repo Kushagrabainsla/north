@@ -5,7 +5,7 @@ import { api, patch, post } from "../api";
 import { Empty, ErrorNotice, InferenceCategories, Loading, Markdown, PageHeader, PromptTelemetry, Status, timeAgo } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
-import type { Approval, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
+import type { Approval, CardField, Conversation, LedgerEntry, Signal, TaskDetail, Turn, WorkspaceListing } from "../types";
 
 /** North's self-checks, rendered live rather than only reachable in the ledger.
  *  Each entry turns one SSE payload into a one-line verdict plus its details. */
@@ -59,10 +59,20 @@ function useTaskStreams(turns: Turn[], reload: () => Promise<void>, reloadApprov
   return { live, signals };
 }
 
-function ApprovalCard({ card, respond }: { card: Approval; respond: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
+function InlineCardField({ field, value, onChange }: { field: CardField; value: unknown; onChange: (value: unknown) => void }) {
+  const text = value === null || value === undefined ? "" : String(value);
+  if (!field.editable) return <label className="card-field"><span>{field.label || field.name.replaceAll("_", " ")}</span>{field.type === "link" ? <a className="card-field-value" href={text} target="_blank" rel="noreferrer">{text}</a> : <div className="card-field-value">{field.type === "boolean" ? (value ? "yes" : "no") : text || "-"}</div>}</label>;
+  if (field.type === "textarea") return <label className="card-field"><span>{field.label || field.name}</span><textarea value={text} rows={5} onChange={event => onChange(event.target.value)}/></label>;
+  if (field.type === "boolean") return <label className="card-field"><span>{field.label || field.name}</span><input type="checkbox" checked={Boolean(value)} onChange={event => onChange(event.target.checked)}/></label>;
+  if (field.type === "select") return <label className="card-field"><span>{field.label || field.name}</span><select value={text} onChange={event => onChange(event.target.value)}>{field.options.map(option => <option key={option}>{option}</option>)}</select></label>;
+  return <label className="card-field"><span>{field.label || field.name}</span><input type={field.type === "number" ? "number" : "text"} value={text} onChange={event => onChange(event.target.value)}/></label>;
+}
+
+function ApprovalCard({ card, respond }: { card: Approval; respond: (card: Approval, decision: string, answer?: string, values?: Record<string, unknown>) => Promise<void> }) {
   const [answer, setAnswer] = useState("");
+  const [values, setValues] = useState<Record<string, unknown>>(() => Object.fromEntries((card.fields || []).map(field => [field.name, field.value])));
   const isQuestion = card.type === "question";
-  return <div className="inline-approval"><small>{isQuestion ? "North needs your answer" : "Approval required"}</small><b>{card.title}</b><p>{card.message}</p><div className="inline-approval-actions">{isQuestion ? <>{card.options.map(option => <button key={option} onClick={() => respond(card, "answered", option)}>{option}</button>)}<input value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Type your answer"/><button disabled={!answer.trim()} onClick={() => respond(card, "answered", answer)}>Answer</button></> : <><button onClick={() => respond(card, "approved")}>Approve</button><button className="danger-link" onClick={() => respond(card, "rejected")}>Reject</button></>}</div></div>;
+  return <div className="inline-approval"><small>{isQuestion ? "North needs your answer" : "Approval required"}</small><b>{card.title}</b><p>{card.message}</p>{(card.fields || []).length > 0 && <div className="card-fields">{card.fields.map(field => <InlineCardField key={field.name} field={field} value={values[field.name]} onChange={value => setValues(current => ({ ...current, [field.name]: value }))}/>)}</div>}{card.context && <details className="card-context"><summary>Review source</summary><pre>{card.context}</pre></details>}<div className="inline-approval-actions">{isQuestion ? <>{card.options.map(option => <button key={option} onClick={() => respond(card, "answered", option, values)}>{option}</button>)}<input value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Type your answer"/><button disabled={!answer.trim()} onClick={() => respond(card, "answered", answer, values)}>Answer</button></> : <><button onClick={() => respond(card, "approved", "", values)}>Approve</button><button className="danger-link" onClick={() => respond(card, "rejected", "", values)}>Reject</button></>}</div></div>;
 }
 
 function EventRows({ entries }: { entries: LedgerEntry[] }) {
@@ -124,7 +134,12 @@ function WorkspacePicker({ workspace, saving, onSelect }: { workspace: string; s
 
 function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, respondApproval }: { turn: Turn; streamed?: string; signals?: Signal[]; reload: () => Promise<void>; pendingApprovals: Approval[]; respondApproval: (card: Approval, decision: string, answer?: string) => Promise<void> }) {
   const detail = turn.detail;
-  const status = pendingApprovals.length ? "waiting_for_approval" : (detail?.task.status || "pending");
+  const taskStatus = detail?.task.status || "pending";
+  const status = pendingApprovals.length
+    ? "waiting_for_approval"
+    : taskStatus === "completed"
+      ? (detail?.outcome_status || "response_ready")
+      : taskStatus;
   const entries = detail?.entries || [];
   const runs = detail?.runs || [];
   const inferenceCategories = detail?.inference_categories || [];
@@ -138,7 +153,7 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
     ? inferenceCategories.reduce((total, item) => total + item.cost_usd, 0)
     : runs.reduce((total, run) => total + (run.cost_usd || 0), 0);
   const responseTimestamp = [...entries].reverse().find(entry => entry.action === "agent_completed" && entry.output)?.timestamp;
-  const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued", "retrying"].includes(status);
+  const isActive = ["waiting_for_approval", "paused", "pending", "running", "queued", "retrying", "working"].includes(status);
   const control = async (action: "pause" | "resume" | "cancel") => {
     if (!turn.task_id) return;
     if (action === "cancel") await api(`/orchestrator/task/${turn.task_id}`, { method: "DELETE" });
@@ -149,9 +164,9 @@ function TurnBundle({ turn, streamed, signals = [], reload, pendingApprovals, re
     <div className="user-prompt"><div className="user-message"><div className="turn-meta">You · {timeAgo(turn.created_at)}</div><p>{turn.prompt}</p></div><div className="avatar user-avatar">You</div></div>
     <div className="north-response"><div className="avatar north-avatar">N</div><div className="response-body">
       <div className="response-heading"><div><b>North</b>{responseTimestamp && <small>{timeAgo(responseTimestamp)}</small>}<Status value={status}/></div><div className="turn-actions">
-        {status === "paused" && <button onClick={() => control("resume")}>Resume</button>}
-        {["pending", "running", "queued", "retrying"].includes(status) && <button onClick={() => control("pause")}>Pause</button>}
-        {["pending", "running", "queued", "retrying", "paused"].includes(status) && <button className="danger-link" onClick={() => control("cancel")}>Cancel</button>}
+        {taskStatus === "paused" && <button onClick={() => control("resume")}>Resume</button>}
+        {["pending", "running", "queued", "retrying"].includes(taskStatus) && <button onClick={() => control("pause")}>Pause</button>}
+        {["pending", "running", "queued", "retrying", "paused"].includes(taskStatus) && <button className="danger-link" onClick={() => control("cancel")}>Cancel</button>}
       </div></div>
       {pendingApprovals.map(card => <ApprovalCard key={card.id} card={card} respond={respondApproval}/>)}
       {isActive && <div className={`thinking thinking-${status}`}><span className="pulse"/>{status === "waiting_for_approval" ? "North is waiting for you" : status === "paused" ? "Task paused" : "North is working on this prompt"}</div>}
@@ -198,7 +213,7 @@ export function Sessions() {
     <section className="session-toolbar"><label>Find a session<input aria-label="Search sessions" placeholder="Search sessions" value={search} onChange={event => setSearch(event.target.value)}/></label><span>{visibleSessions.length} session{visibleSessions.length === 1 ? "" : "s"}</span></section>
     <section className="capability-registry session-registry">
       <div className="capability-registry-head"><span>Session</span><span>Workspace</span><span>Activity</span><span>Turns</span><span>Status</span><span/></div>
-      <div className="capability-registry-list">{sessions.loading ? <Loading/> : visibleSessions.map(session => <button className="capability-registry-row session-registry-row" key={session.id} aria-label={`Open session ${session.title}`} onClick={() => navigate(`/sessions/${session.id}`)}><span className="capability-registry-name"><b>{session.title}</b><small>{session.source === "cli" ? "CLI session" : "North session"}</small></span><span className="capability-registry-description">{session.workspace || "No workspace selected"}</span><span className="capability-registry-meta">{timeAgo(session.updated_at)}</span><span className="capability-registry-meta">{session.turns?.length || 0}</span><Status value={session.archived ? "archived" : "active"}/><span className="capability-registry-open">Open</span></button>)}{!sessions.loading && !visibleSessions.length && <Empty>{search ? "No sessions match this search." : "No sessions have been created yet."}</Empty>}</div>
+      <div className="capability-registry-list">{sessions.loading ? <Loading/> : visibleSessions.map(session => <button className="capability-registry-row session-registry-row" key={session.id} aria-label={`Open session ${session.title}`} onClick={() => navigate(`/sessions/${session.id}`)}><span className="capability-registry-name"><b>{session.title}</b><small>{session.goal || (session.source === "cli" ? "CLI session" : "North session")}</small></span><span className="capability-registry-description">{session.workspace || "No workspace selected"}</span><span className="capability-registry-meta">{timeAgo(session.updated_at)}</span><span className="capability-registry-meta">{session.turn_count}</span><Status value={session.archived ? "archived" : session.goal_status}/><span className="capability-registry-open">Open</span></button>)}{!sessions.loading && !visibleSessions.length && <Empty>{search ? "No sessions match this search." : "No sessions have been created yet."}</Empty>}</div>
     </section>
   </div>;
 }
@@ -298,13 +313,30 @@ export function Chat() {
     await appendFiles(Array.from(event.target.files || []));
     event.target.value = "";
   };
-  const respondApproval = async (card: Approval, decision: string, answer = "") => { try { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option: answer }); setNotice("Response received. North is continuing the task."); await Promise.all([approvalResource.reload(), room.reload()]); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
+  const respondApproval = async (card: Approval, decision: string, answer = "", values: Record<string, unknown> = {}) => { try { await post("/orchestrator/approval/respond", { card_id: card.id, decision, chosen_option: answer, values }); setNotice("Response received. North is continuing the task."); await Promise.all([approvalResource.reload(), room.reload()]); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
   const rename = async () => {
     if (!room.data) return;
     const title = await dialog.prompt("What should this session be called?", room.data.title,
       { title: "Rename session", confirmLabel: "Rename" });
     if (title) { await patch(`/web/api/conversations/${room.data.id}`, { title }); await Promise.all([room.reload(), chats.reload()]); }
   };
+  const editGoal = async () => {
+    if (!room.data) return;
+    const goal = await dialog.prompt("What outcome should North keep working toward?", room.data.goal,
+      { title: "Edit active goal", confirmLabel: "Save goal" });
+    if (goal !== null) {
+      await patch(`/web/api/conversations/${room.data.id}`, { goal, goal_status: goal.trim() ? "active" : "idle" });
+      await Promise.all([room.reload(), chats.reload()]);
+    }
+  };
+  const markGoalAchieved = async () => {
+    if (!room.data) return;
+    await patch(`/web/api/conversations/${room.data.id}`, { goal_status: "achieved" });
+    await Promise.all([room.reload(), chats.reload()]);
+  };
+  const compactGoal = room.data?.goal
+    ? `${room.data.goal.slice(0, 110)}${room.data.goal.length > 110 ? "…" : ""}`
+    : "No active goal";
   const changeWorkspace = async (workspace: string) => {
     if (!room.data || workspace === room.data.workspace) return true;
     setSavingWorkspace(true);
@@ -327,7 +359,8 @@ export function Chat() {
   return <div className={`chat-page session-room ${dragging ? "dragging" : ""}`} onDragEnter={event => { event.preventDefault(); setDragging(true); }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); void appendFiles(Array.from(event.dataTransfer.files)); }}>
     <section className="chat-room" ref={chatRoom}>
       {!conversationId ? <div className="chat-welcome"><div className="welcome-wordmark" aria-label="North">north<span aria-hidden="true">.</span></div><h1>What are we working on?</h1><p>Start a new session or return to one of your previous sessions.</p><button className="primary-button" onClick={createSession}>New session</button></div> : room.loading ? <Loading/> : room.error || !room.data ? <ErrorNotice message={room.error || "Session unavailable"}/> : <>
-        <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · Updated ${timeAgo(room.data.updated_at)}`} actions={<button className="ghost-button" onClick={rename}>Rename</button>}/>
+        <PageHeader eyebrow={room.data.source === "cli" ? "CLI session" : "Session"} title={room.data.title} subtitle={`${room.data.turns?.length || 0} prompts · ${compactGoal}`} actions={<><Status value={room.data.goal_status}/><button className="ghost-button" onClick={editGoal}>Edit goal</button><button className="ghost-button" onClick={rename}>Rename</button></>}/>
+        <section className="session-goal"><div><small>Active goal</small><p>{room.data.goal || "No goal has been set for this session yet."}</p></div><div><Status value={room.data.goal_status}/>{room.data.goal && room.data.goal_status !== "achieved" && <button className="ghost-button" onClick={markGoalAchieved}>Mark achieved</button>}</div></section>
         <div className="turns">{room.data.turns?.length ? room.data.turns.map(turn => <TurnBundle key={turn.id} turn={turn} streamed={turn.task_id ? live[turn.task_id] : ""} signals={turn.task_id ? signals[turn.task_id] : []} reload={room.reload} pendingApprovals={(approvalResource.data || []).filter(card => card.task_id === turn.task_id && card.status === "pending")} respondApproval={respondApproval}/>) : <div className="empty-room"><span>✦</span><h2>A fresh room</h2><p>Your prompts, North's responses, and every execution detail will stay together here.</p></div>}</div>
         {notice && <div className="chat-notice" onClick={() => setNotice("")}>{notice}</div>}
         <form className="composer" onSubmit={submit}><textarea ref={composerInput} value={prompt} onChange={e => updatePrompt(e.target.value)} placeholder="Ask North anything…" rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}/><div className="composer-footer"><WorkspacePicker workspace={currentWorkspace} saving={savingWorkspace} onSelect={changeWorkspace}/><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={attachFile}/><button type="button" className="composer-tool" onClick={() => fileInput.current?.click()} aria-label="Attach files" title="Attach files or drag them here">＋</button><button type="button" className={`composer-tool ${recording ? "recording" : ""}`} onClick={toggleMic} aria-label="Use microphone" title="Use microphone">{recording ? "■" : "♩"}</button><button disabled={submitting || !prompt.trim()}>{submitting ? "Starting…" : "Send ↑"}</button></div></div></form>

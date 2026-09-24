@@ -11,7 +11,7 @@ import pytest
 
 from inference import CompletionResponse
 from orchestrator.models import ExecutionMode, ExecutionPlan, IntentClassification
-from orchestrator.router import ExecutionPlanner, _execution_profile
+from orchestrator.router import ExecutionPlanner, _execution_profile, _requires_consequential_guard
 
 
 @pytest.mark.asyncio
@@ -218,6 +218,22 @@ def test_repository_action_question_does_not_look_like_an_overview() -> None:
     )
 
     assert _execution_profile("How do I clone this repository?", classification, plan) == "standard"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Use my existing browser over CDP and inspect my logged-in LinkedIn session.",
+        "Fill and submit job applications for matching roles.",
+        "Create a North flow for this recurring task.",
+    ],
+)
+def test_sensitive_browser_external_actions_and_capabilities_are_consequential(prompt: str) -> None:
+    assert _requires_consequential_guard(prompt)
+
+
+def test_plain_read_only_browser_research_is_not_forced_consequential() -> None:
+    assert not _requires_consequential_guard("Open the public documentation in an isolated browser and summarize it.")
 
 
 @pytest.mark.parametrize(

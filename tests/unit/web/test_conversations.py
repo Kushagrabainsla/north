@@ -8,6 +8,20 @@ from web import api as web_api
 from web.conversations import ConversationStore
 
 
+def test_legacy_waiting_answer_is_not_labeled_complete() -> None:
+    assert (
+        web_api._legacy_outcome_status("Please confirm Chrome is open. Once it does, I'll continue.")
+        == "waiting_for_user"
+    )
+    assert web_api._legacy_outcome_status("Do you want me to continue?") == "waiting_for_user"
+    assert (
+        web_api._legacy_outcome_status("Once it is open, tell me and I will verify the connection.")
+        == "waiting_for_user"
+    )
+    assert web_api._legacy_outcome_status("Can we do that?") == "waiting_for_user"
+    assert web_api._legacy_outcome_status("The requested summary is ready.") == "response_ready"
+
+
 async def test_conversation_lifecycle_and_turn_order(tmp_path) -> None:
     store = ConversationStore(tmp_path / "web.db")
 
@@ -15,6 +29,8 @@ async def test_conversation_lifecycle_and_turn_order(tmp_path) -> None:
     assert conversation.title == "New chat"
     assert conversation.workspace == str(tmp_path)
     assert conversation.source == "web"
+    assert conversation.goal == ""
+    assert conversation.goal_status == "idle"
 
     first = await store.add_turn(conversation.id, "Design the cockpit")
     second = await store.add_turn(conversation.id, "Now build the chat room")
@@ -24,6 +40,12 @@ async def test_conversation_lifecycle_and_turn_order(tmp_path) -> None:
     assert [turn.position for turn in turns] == [1, 2]
     assert turns[0].task_id == "task_1"
     assert turns[1].prompt == second.prompt
+    active = await store.get(conversation.id)
+    assert active is not None
+    assert active.goal == "Design the cockpit"
+    assert active.goal_status == "active"
+    listed = await store.list()
+    assert listed[0].turn_count == 2
 
     other_workspace = tmp_path / "other"
     renamed = await store.update(conversation.id, title="North web", workspace=str(other_workspace), pinned=True)
@@ -47,6 +69,36 @@ async def test_existing_database_is_migrated_with_workspace_and_source(tmp_path)
     conversation = await store.create()
     assert conversation.workspace == ""
     assert conversation.source == "web"
+    assert conversation.goal == ""
+    assert conversation.goal_status == "idle"
+
+
+async def test_existing_session_is_backfilled_from_its_first_prompt(tmp_path) -> None:
+    db_path = tmp_path / "web.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE web_conversations (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE web_turns (
+                id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, position INTEGER NOT NULL,
+                prompt TEXT NOT NULL, task_id TEXT, created_at TEXT NOT NULL
+            );
+            INSERT INTO web_conversations VALUES ('session-1', 'New session', 0, 0, 'now', 'now');
+            INSERT INTO web_turns VALUES ('turn-2', 'session-1', 2, 'A follow-up', NULL, 'now');
+            INSERT INTO web_turns VALUES ('turn-1', 'session-1', 1, 'Build the original outcome', NULL, 'now');
+            """
+        )
+
+    store = ConversationStore(db_path)
+    conversation = await store.get("session-1")
+
+    assert conversation is not None
+    assert conversation.title == "Build the original outcome"
+    assert conversation.goal == "Build the original outcome"
+    assert conversation.goal_status == "active"
 
 
 async def test_chat_turn_uses_its_conversation_workspace(tmp_path) -> None:
@@ -68,6 +120,8 @@ async def test_chat_turn_uses_its_conversation_workspace(tmp_path) -> None:
 
     assert orchestrator.request is not None
     assert orchestrator.request.workspace == str(workspace)
+    assert "## Active session goal" in orchestrator.request.context
+    assert "Goal: Inspect this project" in orchestrator.request.context
 
 
 async def test_new_chat_inherits_the_server_workspace(tmp_path) -> None:
@@ -122,6 +176,51 @@ async def test_first_prompt_titles_new_conversation_and_searches_safely(tmp_path
     assert updated.title == "A detailed dashboard with every subsystem"
     assert [item.id for item in await store.list(query="dashboard")] == [conversation.id]
     assert await store.list(query="%") == []
+
+
+async def test_first_prompt_titles_new_session_and_sets_durable_goal(tmp_path) -> None:
+    store = ConversationStore(tmp_path / "web.db")
+    conversation = await store.create("New session")
+
+    await store.add_turn(conversation.id, "Build a safe job application flow")
+
+    updated = await store.get(conversation.id)
+    assert updated is not None
+    assert updated.title == "Build a safe job application flow"
+    assert updated.goal == "Build a safe job application flow"
+    assert updated.goal_status == "active"
+
+
+async def test_user_reply_resumes_waiting_goal_without_replacing_it(tmp_path) -> None:
+    store = ConversationStore(tmp_path / "web.db")
+    conversation = await store.create()
+    await store.add_turn(conversation.id, "Build a safe job application flow")
+    await store.update(conversation.id, goal_status="waiting_for_user")
+
+    await store.add_turn(conversation.id, "Use my existing browser")
+
+    updated = await store.get(conversation.id)
+    assert updated is not None
+    assert updated.goal == "Build a safe job application flow"
+    assert updated.goal_status == "active"
+
+
+async def test_derived_goal_status_does_not_change_session_activity_time(tmp_path) -> None:
+    store = ConversationStore(tmp_path / "web.db")
+    conversation = await store.create()
+    await store.add_turn(conversation.id, "Original goal")
+    before = await store.get(conversation.id)
+
+    updated = await store.update(
+        conversation.id,
+        goal_status="waiting_for_user",
+        touch_updated_at=False,
+    )
+
+    assert before is not None
+    assert updated is not None
+    assert updated.goal_status == "waiting_for_user"
+    assert updated.updated_at == before.updated_at
 
 
 async def test_archived_conversations_leave_active_list(tmp_path) -> None:

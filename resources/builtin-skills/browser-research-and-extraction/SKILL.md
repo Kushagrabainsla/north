@@ -44,7 +44,7 @@ execution:
 ### 0. Choose the browser context before opening anything
 Ask the user whether North should use an isolated browser or attach to their existing browser through CDP. Explain that the existing-browser option can expose logged-in sessions, cookies, open tabs, and extensions. Do not infer this choice from the fact that a site requires login. If the user already made the choice in the current request, do not ask again.
 
-Before promising the task can run, call `browser` with `action="status"`, then verify the selected context can reach the site and that the required account is logged in. Never describe an untested browser flow as ready.
+Before promising the task can run, call `browser` with `action="preflight"` for an existing CDP browser (include `connect`), or `action="status"` for an isolated browser. A successful existing-browser preflight must report `verified: true`; a generic browser process listing is not proof of attachment. Then navigate to the site and assert that the required account is logged in. Never describe an untested browser flow as ready.
 
 ### 1. Structured Data Harvesting (`action="extract"`)
 Use `extract` instead of reading the raw DOM. It uses structural heuristic pattern recognition (MDR/DEPTA) to parse repeating lists/tables directly into structured JSON records:

@@ -45,7 +45,7 @@ from agents.tool_results import is_delegation_failure as _is_delegation_failure
 from agents.tool_results import is_unanswered_approval as _is_unanswered_approval
 from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface_card
 from agents.workspace_lock import workspace_lock
-from approval.models import ApprovalDecision, Card, CardType
+from approval.models import ApprovalDecision, Card, CardField, CardType
 from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import ContextTooLargeError, is_model_unavailable_error
 from inference.models import ToolCall, ToolCallRequest, ToolCallResponse
@@ -151,6 +151,7 @@ class _RunTally:
     tools_used: list[str] = field(default_factory=list)
     successful_tools: list[str] = field(default_factory=list)
     successful_tool_calls: dict[str, int] = field(default_factory=dict)
+    successful_tool_actions: dict[str, int] = field(default_factory=dict)
     models_used: list[str] = field(default_factory=list)
     tool_call_count: int = 0
 
@@ -173,9 +174,13 @@ class _RunTally:
         self.tool_call_count += 1
         _append_once(self.tools_used, tool_name)
 
-    def note_success(self, tool_name: str) -> None:
+    def note_success(self, tool_name: str, params: dict[str, Any]) -> None:
         _append_once(self.successful_tools, tool_name)
         self.successful_tool_calls[tool_name] = self.successful_tool_calls.get(tool_name, 0) + 1
+        action = params.get("action")
+        if isinstance(action, str) and action.strip():
+            key = f"{tool_name}:{action.strip().lower()}"
+            self.successful_tool_actions[key] = self.successful_tool_actions.get(key, 0) + 1
 
     def answer(self, output: str, summary: str) -> dict[str, Any]:
         return _final_answer(
@@ -191,6 +196,7 @@ class _RunTally:
             cache_missed_tokens=self.cache_waste.totals.missed_tokens,
             cache_miss_count=self.cache_waste.totals.miss_count,
             evidence_counts=self.successful_tool_calls,
+            evidence_actions=self.successful_tool_actions,
         )
 
 
@@ -619,9 +625,9 @@ class AgenticLLMAgent(LLMAgent):
                     await self._escalate_execution_profile(payload, "mutating_or_delegated_tool")
                 elif any(not success for _, success in evidence):
                     await self._escalate_execution_profile(payload, "tool_failure")
-            for name, success in evidence:
+            for call, (name, success) in zip(response.calls, evidence, strict=True):
                 if success:
-                    tally.note_success(name)
+                    tally.note_success(name, call.params)
 
             # One expired card is a slow user; several in a run means nobody is
             # there. Stop rather than spend the whole iteration budget stalling
@@ -895,14 +901,16 @@ class AgenticLLMAgent(LLMAgent):
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
         if call.name == "request_approval":
-            decision = await self._request_approval(payload, params)
+            card = await self._request_approval_card(payload, params)
             result_str = json.dumps(
                 {
-                    "decision": decision,
-                    "unanswered": decision == ApprovalDecision.TIMEOUT_REJECTED,
+                    "decision": card.status,
+                    "response": card.response,
+                    "card_id": card.id,
+                    "unanswered": card.status == ApprovalDecision.TIMEOUT_REJECTED,
                 }
             )
-            return call, result_str, not _is_rejection(decision), []
+            return call, result_str, not _is_rejection(card.status), []
         if call.name == "ask_user":
             result_str = await self._ask_user(payload, params)
             success = json.loads(result_str).get("success", False)
@@ -1235,7 +1243,16 @@ class AgenticLLMAgent(LLMAgent):
         return store
 
     async def _surface_card(
-        self, payload: AgentPayload, *, card_type: CardType, title: str, body: str, options: list[str], event: CardEvent
+        self,
+        payload: AgentPayload,
+        *,
+        card_type: CardType,
+        title: str,
+        body: str,
+        options: list[str],
+        event: CardEvent,
+        fields: list[CardField] | None = None,
+        context: str = "",
     ) -> Card:
         """Build, optionally auto-resolve, and surface a card; return it resolved."""
         return await surface_card(
@@ -1251,19 +1268,31 @@ class AgenticLLMAgent(LLMAgent):
             body=body,
             options=options,
             event=event,
+            fields=fields,
+            context=context,
         )
 
     async def _request_approval(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Ask the user to approve an irreversible action; return their decision."""
+        return (await self._request_approval_card(payload, params)).status
+
+    async def _request_approval_card(self, payload: AgentPayload, params: dict[str, Any]) -> Card:
+        """Surface an approval and return its decision plus any reviewed field values."""
+        raw_fields = params.get("fields") or []
+        if not isinstance(raw_fields, list) or len(raw_fields) > 100:
+            raise ValueError("request_approval fields must be a list of at most 100 items")
+        fields = [CardField.model_validate(item) for item in raw_fields]
         card = await self._surface_card(
             payload,
             card_type=CardType.APPROVAL,
-            title=f"{self.name.title()} - Approval Required",
+            title=str(params.get("title") or f"{self.name.title()} - Approval Required")[:160],
             body=str(params.get("message", "Action requires your approval.")),
             options=list(params.get("options", list(APPROVAL_DEFAULT_OPTIONS))),
             event=CardEvent.APPROVAL,
+            fields=fields,
+            context=str(params.get("context") or "")[:50_000],
         )
-        return card.status
+        return card
 
     def _is_autonomous(self) -> bool:
         """True when the live approval mode is autonomous (no human to ask)."""
@@ -1499,11 +1528,16 @@ def _final_answer(
     cache_missed_tokens: int = 0,
     cache_miss_count: int = 0,
     evidence_counts: dict[str, int] | None = None,
+    evidence_actions: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     return {
         "output": output,
         "summary": summary,
-        "data": {"evidence_counts": evidence_counts or {}},
+        "data": {
+            "evidence_counts": evidence_counts or {},
+            "evidence_actions": evidence_actions or {},
+            "outcome_status": _infer_outcome_status(output),
+        },
         "requires_approval": False,
         "has_question": False,
         "question": None,
@@ -1520,3 +1554,26 @@ def _final_answer(
         "successful_tools": successful_tools if successful_tools is not None else [],
         "models_used": models_used or [],
     }
+
+
+_WAITING_FOR_USER_RE = re.compile(
+    r"\b(?:tell me once|let me know once|please (?:confirm|choose|provide|open|start)|"
+    r"waiting for (?:your|the user)|need you to|which (?:option|browser|profile)|"
+    r"once (?:it|you) [^.\n]{0,100}(?:tell me|let me know)|"
+    r"(?:do|would|could|can) you (?:want|prefer|confirm|choose|provide|open|start))\b",
+    re.IGNORECASE,
+)
+_BLOCKED_OUTCOME_RE = re.compile(
+    r"\b(?:blocked|cannot continue|can't continue|unable to continue|"
+    r"missing (?:a )?(?:capability|credential|dependency))\b",
+    re.IGNORECASE,
+)
+
+
+def _infer_outcome_status(output: str) -> str:
+    """Classify what the turn achieved without equating an answer with a finished goal."""
+    if _WAITING_FOR_USER_RE.search(output) or output.rstrip().endswith("?"):
+        return "waiting_for_user"
+    if _BLOCKED_OUTCOME_RE.search(output):
+        return "blocked"
+    return "response_ready"
