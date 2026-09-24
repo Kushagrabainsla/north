@@ -12,7 +12,7 @@ import pytest
 from config.strategy import NorthSettings, RoutingMode, StrategyMode
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher
-from inference.exceptions import PinnedModelUnavailableError
+from inference.exceptions import AllModelsRateLimitedError, PaymentRequiredError, PinnedModelUnavailableError
 from inference.models import CompletionRequest, CompletionResponse
 from tests.unit.inference._catalog import publish_catalog
 
@@ -39,6 +39,32 @@ class _Provider:
     async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
         self.calls.append(model_id)
         return CompletionResponse(text="ok", model_used=model_id, tokens_in=1, tokens_out=1, cost_usd=0.0)
+
+
+class _FailingProvider:
+    """A provider whose one model always fails with *exc_type* (e.g. a billing error)."""
+
+    def __init__(self, name: str, model_id: str, exc_type: type[Exception], *, quality: float = 0.9) -> None:
+        self.name = name
+        self.calls: list[str] = []
+        self._exc_type = exc_type
+        self._models = {
+            model_id: ModelInfo(
+                model_id=model_id,
+                provider_name=name,
+                capabilities=frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
+                context_window=400_000,
+                cost_per_token=0.0,
+                base_quality=quality,
+            )
+        }
+
+    def get_models(self) -> dict[str, ModelInfo]:
+        return dict(self._models)
+
+    async def complete(self, model_id: str, request: CompletionRequest) -> CompletionResponse:
+        self.calls.append(model_id)
+        raise self._exc_type(model_id, self.name)
 
 
 def _setup(tmp_path, **routing):
@@ -105,6 +131,36 @@ async def test_a_pin_on_another_provider_matches_nothing(tmp_path) -> None:
     dispatcher, _provider, _settings = _setup(tmp_path, mode=RoutingMode.MANUAL, model="groq:good/weak-model")
     with pytest.raises(PinnedModelUnavailableError):
         await _ask(dispatcher)
+
+
+@pytest.mark.asyncio
+async def test_a_provider_qualified_pin_never_falls_through_to_another_provider(tmp_path) -> None:
+    """A candidate bundles every provider that serves one canonical model.
+
+    Pinning to ``primary:shared-model`` must narrow that bundle down to
+    ``primary``'s endpoint alone. If the bundle survived whole, a billing
+    failure on ``primary`` would fall through to ``backup``'s endpoint for the
+    same model - a provider the pin never named and the user never authorised
+    paying for. Regression for the bug reported against manual routing pinned
+    to ``openai_codex:gpt-5.6-terra``, which fell through to OpenRouter and
+    OpenCode Zen once the openai_codex endpoint was rate-limited.
+    """
+    primary = _FailingProvider("primary", "primary/shared-model", PaymentRequiredError)
+    backup = _Provider("backup", {"backup/shared-model": 0.5})
+    settings = NorthSettings(tmp_path / "settings.json")
+    settings.set_routing(mode=RoutingMode.MANUAL, model="primary:primary/shared-model")
+    dispatcher = ModelDispatcher(
+        [primary, backup],
+        north_settings=settings,
+        cooldowns_path=tmp_path / "cooldowns.json",
+        models_db_path=tmp_path / "models.db",
+    )
+    publish_catalog(dispatcher)
+
+    with pytest.raises(AllModelsRateLimitedError):
+        await _ask(dispatcher)
+    assert primary.calls == ["primary/shared-model"]
+    assert backup.calls == []  # never quietly served by the provider the pin excluded
 
 
 def test_power_is_not_offered_while_a_model_is_pinned(tmp_path) -> None:

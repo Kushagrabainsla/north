@@ -164,6 +164,16 @@ class ChainRouter:
         the answer came from that model, so a pin that cannot be honoured is an
         error rather than a preference north quietly declines.
 
+        A candidate bundles every provider that serves one canonical model, so a
+        provider-qualified pin (``"openai_codex:gpt-5.6-terra"``) must narrow a
+        surviving candidate's endpoints down to the matching one(s), not just keep
+        the whole bundle because one endpoint in it matched. Keeping the bundle
+        let a rate limit or a billing failure on the named provider fall through
+        to some other provider's endpoint for the same model - one the user never
+        named and never authorised paying for. An unqualified pin (bare model
+        name, no ``provider:`` prefix) names no provider to narrow to, so every
+        endpoint for a matching model is kept.
+
         Requirements still apply afterwards. A pinned model too small for the part
         fails as a context overflow, which is the true reason, rather than being
         reported as an unavailable pin.
@@ -171,11 +181,12 @@ class ChainRouter:
         pin = (self._pinned() if self._pinned else "") or ""
         if not pin:
             return chain
-        kept = [
-            candidate
-            for candidate in chain
-            if any(model_matches(pin, e.provider, e.provider_model_id) for e in candidate.endpoints)
-        ]
+        kept: list[Candidate] = []
+        for candidate in chain:
+            matching = tuple(e for e in candidate.endpoints if model_matches(pin, e.provider, e.provider_model_id))
+            if not matching:
+                continue
+            kept.append(candidate if matching == candidate.endpoints else replace(candidate, endpoints=matching))
         if not kept:
             raise PinnedModelUnavailableError(
                 f"Manual routing is pinned to {pin!r}, which nothing in the model catalog matches. "
