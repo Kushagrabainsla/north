@@ -158,11 +158,20 @@ def format_timestamp(dt: datetime.datetime | None = None) -> str:
     return dt.isoformat()
 
 
-def format_local(value: float | datetime.datetime | None, fmt: str = LOCAL_DISPLAY_FORMAT) -> str:
-    """Render an epoch or datetime in local time for display. None renders as "-"."""
+def format_local(
+    value: float | datetime.datetime | None,
+    fmt: str = LOCAL_DISPLAY_FORMAT,
+    timezone: str | None = None,
+) -> str:
+    """Render an epoch or datetime in a named zone, defaulting to North's zone."""
     if value is None:
         return "-"
-    dt = epoch_to_local(value) if isinstance(value, int | float) else value.astimezone(local_timezone())
+    zone = resolve_timezone(timezone)
+    dt = (
+        datetime.datetime.fromtimestamp(value, zone)
+        if isinstance(value, int | float)
+        else value.astimezone(zone)
+    )
     return dt.strftime(fmt)
 
 

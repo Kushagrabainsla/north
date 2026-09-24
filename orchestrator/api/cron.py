@@ -130,7 +130,7 @@ def _entry_out(entry: CronEntry, source: str, *, modified: bool = False) -> Cron
         tz=entry.zone_name,
         schedule=entry.describe(),
         next_run_epoch=next_epoch,
-        next_run_local=format_local(next_epoch),
+        next_run_local=format_local(next_epoch, timezone=entry.zone_name),
         source=source,
         modified=modified,
     )
