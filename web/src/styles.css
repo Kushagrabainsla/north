@@ -1676,3 +1676,5 @@ button:not(:disabled):active { transform: translateY(1px); }
   .capability-create-panel > header > div:last-child button { flex: 1; }
   .capability-modal .modal-editor .editor-label { align-items: flex-start; flex-direction: column; gap: 4px; }
 }
+/* Collapse unused artifact columns so short task runs do not show empty cells. */
+.artifact-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
