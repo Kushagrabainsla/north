@@ -1627,16 +1627,16 @@ button:not(:disabled):active { transform: translateY(1px); }
   .tool-preview-pane { border-top: 1px solid var(--line-strong); border-left: 0; }
 }
 
+/* Same principle as the session list (see .session-registry above): a table
+   row plus its action column doesn't have room to sit side by side below
+   desktop widths, on a vertical monitor as much as on a phone, so the stacked
+   card used to start only at 680px now covers this whole range. Only above
+   1100px, where six-ish columns plus actions genuinely fit, do rows go back
+   to a line. Everything else that used to share this breakpoint (modal
+   sizing, form layout) stays at 680px below - a modal at, say, 900px wide
+   has room to be a normal centered dialog and doesn't need to go edge to edge
+   just because the row above it switched to a card. */
 @media (max-width: 1100px) {
-  .capability-registry-head,
-  .capability-registry-row {
-    grid-template-columns: minmax(145px, 1fr) minmax(180px, 1.6fr) max-content 44px;
-  }
-  .capability-registry-head span:nth-child(3),
-  .capability-registry-row .capability-registry-meta { display: none; }
-}
-
-@media (max-width: 680px) {
   .capability-registry { height: max(500px, calc(100dvh - 176px)); }
   .capability-registry-head { display: none; }
   .capability-registry-row {
@@ -1650,6 +1650,9 @@ button:not(:disabled):active { transform: translateY(1px); }
   .capability-registry-description { grid-column: 1 / -1; grid-row: 2; white-space: normal; line-height: 1.45; }
   .capability-registry-row .capability-registry-meta { display: block; grid-column: 1; grid-row: 3; }
   .capability-registry-open { grid-column: 2; grid-row: 3; }
+}
+
+@media (max-width: 680px) {
   .capability-modal,
   .capability-modal.flow-modal {
     width: calc(100vw - 20px);
