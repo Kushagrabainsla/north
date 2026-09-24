@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     # lower latency for those providers' models. Empty = provider not used.
     groq_api_key: str = ""
     gemini_api_key: str = ""
+    anthropic_api_key: str = ""
 
     # OpenCode Zen API key for inference.
     # Set NORTH_OPENCODE_ZEN_API_KEY in environment or .env.

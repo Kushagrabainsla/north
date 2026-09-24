@@ -43,6 +43,10 @@ dependencies = [
     "onnxruntime>=1.20.0",
     "tokenizers>=0.21.0",
     "huggingface-hub>=0.30.0",
+    # Claude provider (inference/providers/anthropic_provider.py). Anthropic's
+    # Messages API is not OpenAI-compatible, so unlike the other providers this
+    # one is not hand-rolled over httpx - it uses the official SDK.
+    "anthropic>=1.0.0",
 ]
 
 [project.scripts]
