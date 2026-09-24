@@ -59,7 +59,6 @@ from cli._server import (
     _docker_available,
     _find_compose_file,
     _find_project_root,
-    _get_install_url,
     _is_north_server,
     _kill_port,
     _port_in_use,
@@ -2211,20 +2210,39 @@ def _update_docker_deployment(options: _UpdateOptions) -> None:
 
 
 def _update_local_checkout(project_root: Path, options: _UpdateOptions) -> None:
-    _console.print(f"  [dim]source     [/dim]  {project_root} (local git repository)")
+    project_root = project_root.expanduser().resolve()
+    if not (project_root / "pyproject.toml").is_file() or not (project_root / "agents").is_dir():
+        typer.secho(
+            f"Local source is not a North checkout: {project_root}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    if not shutil.which("uv"):
+        typer.secho("ERROR: uv is required for local updates.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+
+    _console.print(f"  [dim]source     [/dim]  {project_root} (local checkout)")
     _stop_server_if_running(options.port)
     _console.print()
     _confirm_update(options)
 
-    _console.print("  [dim]→[/dim]  pulling latest changes from git…")
-    _run_command(["git", "pull"], cwd=project_root)
-    _console.print("  [dim]→[/dim]  reinstalling dependencies…")
-    subprocess.run(["uv", "pip", "install", "-e", "."], cwd=project_root, check=False)
-    subprocess.run(
-        ["uv", "tool", "install", "--editable", "--force", str(project_root)], capture_output=True, check=False
+    _console.print("  [dim]→[/dim]  installing the local checkout in editable mode…")
+    result = subprocess.run(
+        ["uv", "tool", "install", "--editable", "--force", str(project_root)],
+        capture_output=True,
+        text=True,
     )
+    if result.returncode != 0:
+        typer.secho(
+            f"Install failed:\n{(result.stdout + result.stderr).strip()}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    _install_helper_binaries()
     _console.print()
-    typer.secho("✓ north updated and synced.", fg=typer.colors.GREEN)
+    typer.secho("✓ north installed from the local checkout.", fg=typer.colors.GREEN)
     if options.restart:
         _start_server_process(options.port)
 
@@ -2275,11 +2293,22 @@ def update(
     docker: bool = typer.Option(False, "--docker", help="Update a Docker Compose deployment."),
     restart: bool = typer.Option(True, "--restart/--no-restart", help="Restart the server after updating."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    source: str = typer.Option(
+        "remote",
+        "--source",
+        help="Install source: 'remote' for GitHub main (default), or 'local' for a local checkout.",
+    ),
+    path: Path | None = typer.Option(
+        None,
+        "--path",
+        help="North checkout to install with --source local. Defaults to the detected checkout.",
+    ),
 ) -> None:
     """Update north to the latest version.
 
-    Mirrors the install script: pulls the latest code from GitHub and
-    reinstalls. Pass --docker to update a Docker Compose deployment instead.
+    Remote is the default and always installs GitHub main. Local installs an
+    explicit checkout in editable mode without pulling or changing its files.
+    Pass --docker to update a Docker Compose deployment instead.
     """
     _console.print()
     _console.print("  [bold white]north update[/bold white]")
@@ -2287,16 +2316,24 @@ def update(
 
     options = _UpdateOptions(port=port, restart=restart, assume_yes=yes)
     if docker:
+        if source.lower().strip() != "remote" or path is not None:
+            raise typer.BadParameter("--source and --path cannot be combined with --docker")
         _update_docker_deployment(options)
         return
 
-    install_url, is_git_url = _get_install_url()
-    project_root = _find_project_root()
-    if not is_git_url and project_root and (project_root / ".git").exists():
-        _update_local_checkout(project_root, options)
+    normalized_source = source.lower().strip()
+    if normalized_source not in {"remote", "local"}:
+        raise typer.BadParameter("--source must be 'remote' or 'local'")
+    if normalized_source == "remote":
+        if path is not None:
+            raise typer.BadParameter("--path requires --source local")
+        _update_from_git(_NORTH_GIT_URL, options)
         return
 
-    _update_from_git(install_url if is_git_url and install_url else _NORTH_GIT_URL, options)
+    project_root = path.expanduser().resolve() if path is not None else _find_project_root()
+    if project_root is None:
+        raise typer.BadParameter("No local North checkout found; pass --path /path/to/north")
+    _update_local_checkout(project_root, options)
 
 
 def _listens_on(proc, port: int) -> bool:

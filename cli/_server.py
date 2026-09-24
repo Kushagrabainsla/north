@@ -152,28 +152,6 @@ def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
 
-def _get_install_url() -> tuple[str | None, bool]:
-    """Return (url, is_git_url) describing how north was installed.
-
-    Reads the PEP 610 direct_url.json from the installed dist-info.
-    is_git_url is True when north was installed with `uv tool install git+<url>`,
-    meaning `uv tool upgrade north` is the right update path.
-    """
-    try:
-        import json as _json
-        from importlib.metadata import Distribution
-
-        du = Distribution.from_name("north").read_text("direct_url.json")
-        if du:
-            data = _json.loads(du)
-            url = data.get("url", "")
-            is_git = "vcs_info" in data and not url.startswith("file://")
-            return url, is_git
-    except Exception:
-        pass
-    return None, False
-
-
 def _find_project_root() -> Path | None:
     """Find the north project root (directory containing pyproject.toml + agents/).
 

@@ -91,7 +91,8 @@ headless setups.
 | `north auth status` | Show provider authentication status |
 | `north auth logout openai-codex` | Remove North's Codex credentials |
 | `north reset --all` | Wipe everything |
-| `north update` | Update to latest version |
+| `north update` | Install the latest North from GitHub |
+| `north update --source local [--path /path/to/north]` | Install a local checkout in editable mode for development |
 | `north task "..."` | Submit a task |
 | `north cancel <id>` | Cancel a task or job |
 | `north tasks` | List active tasks |
