@@ -2,7 +2,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "reac
 import type { ChangeEvent, TextareaHTMLAttributes } from "react";
 import { api, del, patch, post } from "../api";
 import { configureDisplayTimezone, dateInNorthTimezone, Empty, ErrorNotice, HealthIndicator, Loading, Markdown, PageHeader, Panel, Status, timeAgo, weekdayInNorthTimezone } from "../components";
-import { isTypeScale, TYPE_SCALES, UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
+import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import type { Approval, Artifact, CardField, LedgerEntry, RoutingDecision, RoutingSkip } from "../types";
 
@@ -1222,10 +1222,8 @@ function ModelPicker({ value, onPick, busy }: { value: string; onPick: (spec: st
 
 export function SettingsPage() {
   const resource = useResource<SettingsData>("/orchestrator/settings");
-  const [typeScale, setTypeScale] = usePersistentState(UI_PREFERENCE_KEYS.typeScale, "comfortable", isTypeScale);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { document.documentElement.dataset.typeScale = typeScale; }, [typeScale]);
   const update = async (body: Partial<SettingsData>) => {
     setBusy(true);
     setError("");
@@ -1286,13 +1284,6 @@ export function SettingsPage() {
               onClick={() => update({ autonomy: value })} key={value}>{value}</button>)}
         </div>
         <p className="muted">Consequential and destructive actions remain governed by North's safety policy.</p>
-      </Panel>
-      <Panel title="Text size" label="Personal preference">
-        <div className="segmented text-scale-selector">
-          {TYPE_SCALES.map(value =>
-            <button className={typeScale === value ? "active" : ""} onClick={() => setTypeScale(value)} key={value}>{value[0].toUpperCase() + value.slice(1)}</button>)}
-        </div>
-        <p className="muted">Choose the reading scale used throughout the web interface.</p>
       </Panel>
       <Panel title="Time zone" label="Dates and schedules">
         {resource.loading ? <Loading/> : <label className="timezone-picker">North uses

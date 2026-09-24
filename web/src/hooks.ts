@@ -6,13 +6,7 @@ export const UI_PREFERENCE_KEYS = {
   chatListWidth: "north-chat-list-width",
   memoryTab: "north-memory-tab",
   memoryDocument: "north-memory-document",
-  typeScale: "north-type-scale",
 } as const;
-
-export const TYPE_SCALES = ["compact", "comfortable", "large"] as const;
-export type TypeScale = typeof TYPE_SCALES[number];
-export const isTypeScale = (value: unknown): value is TypeScale =>
-  typeof value === "string" && TYPE_SCALES.some(scale => scale === value);
 
 /** Decode a browser preference without letting stale or malformed storage break the UI. */
 export function parsePersistentValue<T>(raw: string | null, fallback: T, isValid?: (value: unknown) => boolean): T {
