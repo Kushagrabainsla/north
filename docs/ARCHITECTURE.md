@@ -250,7 +250,7 @@ context/
 
 ### 5.2 The ContextStore Interface
 
-Nothing in the system reads or writes context files directly. Everything goes through the `ContextStore` interface (defined in `memory/base.py`). Agents, tools, and internal checks read through the `MemoryGateway`, the single read path over facts, episodes, and documents. Context documents and facts are non-sensitive and readable by every caller; the one boundary the gateway enforces is episodic task history, scoped to a caller's own domain plus a shared set. This makes the storage backend swappable: files today, database tomorrow, without changing any other layer.
+Nothing in the system reads or writes context files directly. Everything goes through the `ContextStore` interface (defined in `memory/base.py`). Agents, tools, and internal checks read through the `MemoryGateway`, the single read path over facts, episodes, and documents. Context documents and facts are non-sensitive - there is no privacy tier between them - but that is not the same as unscoped. A `MemoryPrincipal` carries the calling agent's domain, and the gateway uses it to bound two things independently: which fact topics come back (Section 5.7) and which episodic task history comes back, scoped to a caller's own domain plus a shared set. This makes the storage backend swappable: files today, database tomorrow, without changing any other layer.
 
 ```python
 from abc import ABC, abstractmethod
@@ -361,23 +361,42 @@ The context documents are plain markdown under `~/.north/context/`, so the user 
 
 Full visibility and control over what north knows.
 
-### 5.7 Semantic Search and Embedding Index
+### 5.7 Semantic Search, the Embedding Index, and Fact-Topic Gating
 
-`FileContextStore.search()` uses an `EmbeddingIndex` backed by `~/.north/embeddings.db` when one is wired in at startup.
+> **Superseded:** this section originally described `FileContextStore.search()` embedding whole context documents via OpenRouter's hosted embedding endpoint. That is no longer how personal-fact recall works day to day - it has been replaced by the atomic `FactStore` search below, run on-device. Document-level search over the four markdown files still exists as the fallback path described here, and both now share the same embedding model and index-freshness invariant.
 
-**How it works:**
+**Embedding model:** on-device, no API key. `inference/providers/onnx_encoder.py` drives `BAAI/bge-small-en-v1.5` (384-dim, CLS pooling) from its own ONNX export directly via `onnxruntime` + `tokenizers`, in preference to `fastembed` (pulls in `loguru`, banned by CODING_STYLE §22, plus `pillow`/`tqdm`/`mmh3`) or `sentence-transformers` (~2 GB via `torch`). Of the configured inference providers only Gemini sold embeddings, so a single missing `NORTH_GEMINI_API_KEY` used to disable semantic recall entirely (v1.13.0); moving on-device removed that dependency. A prior on-device attempt used a static `model2vec` model, which is a lookup table averaged over tokens and so matches on literal word overlap - measured on 220 real facts it put the right fact in the injected set 82% of the time and ranked the fact answering "what is my name" 94th. `BAAI/bge-small-en-v1.5` reaches 93% and ranks that fact 1st.
 
-1. **Indexing** - every `write()` or `append()` call schedules a supervised background task (`utils/tasks.py:spawn`) that chunks the updated document into paragraphs, calls `InferenceRouter.embed()` in a batch, and stores `(doc, chunk_idx, chunk_text, embedding_vector)` rows in `embeddings.db`.  Indexing never blocks the write path.
+**Two independent indexes**, same model:
 
-2. **Retrieval** - `search(query)` embeds the query string (one API call), computes cosine similarity against every stored paragraph vector using numpy, and returns the top-k `[Source Document]\n<paragraph>` blocks as a single string.
+1. **Context documents** (`~/.north/embeddings.db`) - every `write()`/`append()` on a `ContextDocument` schedules a background task (`utils/tasks.py:spawn`) that chunks the document into paragraphs, embeds them in a batch, and stores `(doc, chunk_idx, chunk_text, embedding_vector)` rows. `search(query)` embeds the query, ranks by cosine similarity, and returns the top-k `[Source Document]\n<paragraph>` blocks. Falls back to keyword overlap scoring if embedding is unavailable, so a caller always gets a result.
+2. **Facts** (`~/.north/facts.db`) - `FactStore.search()`, the path `MemoryGateway.recall()` actually calls for personal-fact recall (Section 5.8). Each fact is its own row with its own embedding; there is no chunking.
 
-3. **Fallback** - if the `EmbeddingIndex` is absent or the embed call fails, `search()` falls back to paragraph-level keyword overlap scoring (already implemented in v1.2).  Agents that call `search()` always get a result.
+**Similarity thresholds are relative, not absolute.** A fixed cosine floor is a property of the embedding model, not of relevance - the same 0.25 floor that worked for the old model threw away "who am I" (scored 0.096 against the fact that answered it, ranked first) when reused verbatim after the model swap. `FactStore.search()` now cuts at `max(0.30, best_for_this_query - 0.05)`: relative to the best match this particular query produced, so it travels with whatever range the current model happens to produce.
 
-**Embedding model:** `openai/text-embedding-3-small` via OpenRouter's `POST /api/v1/embeddings` endpoint, same API key as inference.  Embedding calls are not tracked by the `CostTracker` - they are small enough that the noise is acceptable.
+**Model-change safety:** `utils/vector_space.py`'s `ensure_vector_space` deletes rows on a model change, which is correct for derived caches (tool descriptions, code chunks) but would destroy facts whose source documents may be gone. Facts and episodes instead use `ensure_vector_space_reembed`, which clears only the embedding column; `FactStore.backfill_embeddings` refills it as a background task at startup (220 facts in ~1.7s). Recall degrades to recency until that finishes, rather than silently comparing vectors from two different models.
 
-**Scope:** the embedding index covers the context documents only.  It does not index the Ledger or the job queue.  Episodic memories (Section 5.8) have their own separate embedding store.
+**Scope:** this section's indexes cover the context documents and the fact store. Neither indexes the Ledger or the job queue. Episodic memories (Section 5.9) have their own separate embedding store.
 
-### 5.8 Episodic Memory
+### 5.8 Fact-Topic Gating
+
+A relevance *score* cannot decide whether a task wants personal facts at all: measured against a real store, an unrelated prompt ("deploy to production") scored 0.678 against its best fact while a genuine personal question ("what school do I go to") scored 0.534 - the two populations overlap completely, so no threshold separates them, and tightening the margin only shrinks the unrelated prompt's injected set, never empties it.
+
+`MemoryGateway.recall()` gates on the *caller's domain* instead. Each `MemoryPrincipal` carries `allowed_fact_topics`, derived in `memory/gateway.py` from `_FACT_TOPICS_BY_DOMAIN`:
+
+```python
+_FACT_TOPICS_BY_DOMAIN = {
+    "engineering": frozenset({"preferences"}),
+    "home": frozenset({"preferences", "schedule"}),
+    "wellness": frozenset({"health", "preferences", "schedule"}),
+}
+```
+
+plus `identity` and `user` topics, always allowed everywhere - the user stated those directly, so no domain is denied them. `engineering` is deliberately the narrow one: a coding prompt about a bug pulled "the user is familiar with PyTorch" and a fact that matched only on the word "fail", both plausible by cosine score and useless to the task. A domain absent from the map (`general`, and any newly added agent) stays **unrestricted** rather than silently blind - the safe default until someone has measured that domain the way `engineering`/`home`/`wellness` were measured. The whole-document `user.md` fallback (Section 5.3) is gated the same way: it is served only to unrestricted principals, because serving it to a topic-scoped caller would hand back by another route exactly what the scoping just excluded.
+
+What this does not solve: within an unrestricted domain, there is still no per-task signal deciding whether *this particular* prompt wants personal facts - `general` recalls against the raw prompt text on every turn, including one-word acknowledgements. See "Task-Level Fact Recall Gating" in Section 15 for the still-unshipped fix.
+
+### 5.9 Episodic Memory
 
 The episodic memory layer gives north a growing record of what it has actually done - not just facts about you, but memories of specific past tasks.
 
@@ -1062,7 +1081,7 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
 
 `complete_with_tools` uses the provider's streaming endpoint (`stream: true`) internally - this lives in the shared `OpenAICompatibleProvider` base, so every OpenAI-compatible provider streams the same way. Text tokens from the final answer are forwarded to `token_callback` in real time.  Tool call arguments are accumulated from streaming delta chunks and resolved when `finish_reason: tool_calls` is received.  `CostTracker` wraps this method and accumulates `response.cost_usd` per `task_id` exactly as it does for `complete()`.
 
-`embed` calls `POST /api/v1/embeddings` with `openai/text-embedding-3-small`.  Used by `EmbeddingIndex` (§5.7) and `EpisodicStore` (§5.8).
+`embed` is served on-device by default (Section 8.9) rather than calling a remote endpoint. Used by `EmbeddingIndex` (§5.7), `FactStore` (§5.8), and `EpisodicStore` (§5.9).
 
 ### 8.8 Audio Transcription
 
@@ -1070,7 +1089,7 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
 
 Embeddings back tool selection, the code index and memory recall - all of it high volume, latency sensitive, and about the user's own data. Of the remote providers north talks to, **only Gemini sells embeddings**: OpenRouter's catalog has none, Groq has none, and Codex refuses outright. One empty key therefore used to disable every semantic index at once; north kept working but fell back to keyword overlap and to injecting all tools into every prompt.
 
-They are now served on-device by default (`inference/providers/local_embeddings.py`). The model is a *static* embedding model - inference is numpy over a lookup table, so the dependency brings a tokenizer and safetensors but no torch and no ONNX runtime. A batch of 200 texts takes ~2 ms. The weights are fetched once on first use and cached on disk; if that fails the provider reports no models and north degrades exactly as before. Remote embedding providers remain as a fallback.
+They are now served on-device by default (`inference/providers/local_embeddings.py`, driving `inference/providers/onnx_encoder.py`). An earlier version of this provider used a *static* embedding model - inference as numpy over a lookup table, so it matched only literal word overlap and could not see that "when do I graduate" is answered by a fact about May 2027. Measured on 220 real facts, it put the right fact in the injected set 82% of the time and ranked the fact answering "what is my name" 94th. It was replaced by `BAAI/bge-small-en-v1.5` (384-dim, CLS pooling), driven from the model's own ONNX export directly via `onnxruntime` + `tokenizers` in ~40 lines - not `fastembed` (pulls in `loguru`, banned by CODING_STYLE §22) or `sentence-transformers` (~2 GB via `torch`). It reaches 93% on the same measurement and ranks the name fact 1st. The weights are fetched once on first use and cached on disk; if that fails the provider reports no models and north degrades exactly as before. Remote embedding providers remain as a fallback.
 
 **One embedding space per store** (`utils/vector_space.py`). Similarity is only meaningful between vectors from the same model - compare across two and cosine similarity returns a confident, meaningless number. No store recorded which model produced a row, so a change of embedding provider would have silently poisoned every search. Each store is now stamped with its model and clears itself when that changes; every vector north keeps is derived data (tool descriptions, code chunks, document chunks are all still on disk), so a space change discards a cache rather than losing anything. An unstamped store is adopted rather than wiped, so upgrading does not force a full re-index. Because of this invariant, embedding selection is deliberately *not* subject to the usual tie-break: `ModelDispatcher._prefer_local` puts the local model first every time, since alternating between two embedding models would empty and rebuild every index in turn.
 
@@ -1710,7 +1729,10 @@ How `judgement_rules.md`, `north_stars.md`, and `episodic.db` stay consistent ac
 `episodic.db` is pruned on write today by age only: episodes older than 365 days are deleted, with no row cap.  A more principled strategy (deduplicate similar summaries, age out low-relevance episodes, and re-introduce a cap as the store grows) is not yet designed.
 
 **Embedding Model Upgrade Path**
-`openai/text-embedding-3-small` is the current embedding model.  If better models appear on OpenRouter or if the 1536-dimension vectors become expensive to store at scale, the `EmbeddingIndex` needs a migration path for existing vectors.  Not designed yet.
+Embeddings moved on-device (`BAAI/bge-small-en-v1.5`, 384-dim, see Section 5.7) so there is no external model catalog to track. If a better on-device model appears, the store needs the same `ensure_vector_space_reembed` migration path used for the model2vec swap: clear the embedding column, not the rows, and re-embed as a background task. Not yet needed, but the path exists and is exercised.
+
+**Task-Level Fact Recall Gating**
+Fact-topic gating (Section 5.8) scopes recall by the *calling agent's domain*, decided once when the agent is registered. It does not decide, per task, whether personal facts are wanted at all - `general` and any other domain absent from `_FACT_TOPICS_BY_DOMAIN` recall against the raw prompt text unconditionally, including one-word acknowledgements ("hey", "yes, go ahead") that carry no retrievable signal. A cosine-score cutoff cannot do this job: measured on a real store, an unrelated prompt and a genuine personal question score in fully overlapping ranges. A fix needs a task-intent signal upstream of the similarity search - not yet designed.
 
 **Error Recovery and Context Correction**
 Manual override of specific judgement rules, rollback of bad context deltas, reprocessing Ledger entries with a corrected extraction prompt. Mechanism not yet designed.  (Versioning infrastructure is the recommended first step.)
