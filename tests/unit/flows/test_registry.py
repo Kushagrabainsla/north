@@ -108,6 +108,47 @@ steps:
     assert not hasattr(flow.steps[0], "agent")
 
 
+def test_skill_step_with_no_instructions_loads(tmp_path):
+    """A step naming a skill needs no instructions of its own - the skill's body is
+    the procedure. tools/universal/_flow_validation.py already enforces this same
+    rule at the semantic layer; the parser used to reject the step before
+    validation ever ran, silently dropping any flow like this one - including
+    what the dashboard's flow editor saves for a step whose kind is "existing
+    skill" (see web/src/pages/Verbose.tsx FlowStepCard).
+    """
+    _write_flow(
+        tmp_path,
+        "skill-only",
+        """name: skill-only
+description: Run a skill with no inline instructions
+steps:
+  - name: run-it
+    skill: browser-research
+    instructions: ''
+    approval: on_mutation
+""",
+    )
+    registry = FlowRegistry(tmp_path)
+    flow = registry.get("skill-only")
+    assert flow.status == "active"
+    assert flow.steps[0].skill == "browser-research"
+    assert flow.steps[0].instructions == ""
+
+
+def test_step_with_neither_skill_nor_instructions_is_rejected(tmp_path):
+    _write_flow(
+        tmp_path,
+        "empty-step",
+        """name: empty-step
+description: Missing both a skill and instructions
+steps:
+  - name: run-it
+    approval: on_mutation
+""",
+    )
+    assert FlowRegistry(tmp_path).names() == []
+
+
 def test_skips_invalid_flows_without_crashing(tmp_path):
     _write_flow(tmp_path, "missing-description", "name: missing-description\nsteps: []\n")
     _write_flow(

@@ -80,7 +80,15 @@ def _parse_steps(raw: Any) -> tuple[tuple[FlowStep, ...], bool]:
             raw_inputs = {"tool": legacy_tool, "arguments": dict(raw_inputs)}
         else:
             instructions = str(data.get("instructions") or data.get("description") or "").strip()
-        if not instructions:
+        # A skill-backed step needs no instructions of its own - the skill's body
+        # is the procedure. Only a step with no skill (inline instructions are
+        # its entire procedure) must have them. tools/universal/_flow_validation.py
+        # already enforces exactly this rule at the semantic-validation layer;
+        # requiring instructions unconditionally here made the parser reject a
+        # skill step with none before validation ever ran, which is also what
+        # the dashboard's flow editor now saves for a step whose kind is
+        # "existing skill" (see web/src/pages/Verbose.tsx FlowStepCard).
+        if not instructions and not skill:
             raise FlowParseError(f"steps[{index}] is missing instructions")
         seen.add(name)
         steps.append(

@@ -468,10 +468,9 @@ PROVISIONED_CRON_ENTRIES: list[CronEntry] = [
             "Reads the morning's news across tech & AI, world events, science & health, and business, "
             "and files one briefing you can read in Artifacts."
         ),
-        agent="news_briefing",
-        task=(
-            "Compile the daily news briefing across Tech & AI, world events, science & health, and business & markets"
-        ),
+        agent="general",
+        task="Compile and save the daily news briefing.",
+        flow="daily-news-briefing",
         hour=8,
         minute=0,
     ),
