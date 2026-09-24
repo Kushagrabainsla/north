@@ -76,7 +76,7 @@ from cli.constants import (
 )
 from cli.dictation import parse_hotkey as _parse_hotkey
 from cli.dictation import wav_bytes as _wav_bytes
-from cli.formatting import _reconstruct_task_output
+from cli.formatting import _reconstruct_task_output, wordmark
 from cli.provider_env import any_provider_configured, parse_provider_selection, provider_is_configured
 from cli.provider_env import load_env_keys as _load_env_keys
 from cli.provider_env import save_provider_key as _save_provider_key
@@ -348,11 +348,11 @@ def _run_task(prompt: str, workspace: str | None = None) -> str:
         return ""
 
     if feed.failure:
-        _print_panel(Text(feed.failure, style="red"), "[dim]north - error[/dim]")
+        _print_panel(Text(feed.failure, style="red"), f"{wordmark(dim=True)} - error")
         return ""
 
     output_text = feed.answer or _answer_from_ledger(task_id)
-    _print_panel(Markdown(output_text), "[dim]north[/dim]")
+    _print_panel(Markdown(output_text), wordmark(dim=True))
     return output_text
 
 
@@ -1367,7 +1367,7 @@ def status() -> None:
         health = {}
 
     _console.print()
-    _console.print("  [bold white]north status[/bold white]")
+    _console.print(f"  {wordmark()} [bold white]status[/bold white]")
 
     # ── Server ──
     health_icon = "[green]●[/green]" if server_ok else "[red]●[/red]"
@@ -1686,7 +1686,7 @@ def config_list() -> None:
     from config.settings import settings
 
     _console.print()
-    _console.print("  [bold white]north configuration[/bold white]")
+    _console.print(f"  {wordmark()} [bold white]configuration[/bold white]")
     _console.print(f"  [bright_black]{'─' * 58}[/bright_black]")
     for key, (field_name, _) in sorted(_CONFIG_KEYS.items()):
         val = getattr(settings, field_name, None)
@@ -1831,7 +1831,7 @@ class _StartOptions:
 
 def _print_start_header(mode: str, rows: list[tuple[str, str]]) -> None:
     _console.print()
-    _console.print(f"  [bold white]north[/bold white]  [bright_black]{mode}[/bright_black]")
+    _console.print(f"  {wordmark()}  [bright_black]{mode}[/bright_black]")
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
     for label, value in rows:
         _console.print(f"  [dim]{label:<11}[/dim]  {value}")
@@ -2311,7 +2311,7 @@ def update(
     Pass --docker to update a Docker Compose deployment instead.
     """
     _console.print()
-    _console.print("  [bold white]north update[/bold white]")
+    _console.print(f"  {wordmark()} [bold white]update[/bold white]")
     _console.print(f"  [bright_black]{'─' * 44}[/bright_black]")
 
     options = _UpdateOptions(port=port, restart=restart, assume_yes=yes)

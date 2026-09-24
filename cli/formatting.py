@@ -16,7 +16,26 @@ from rich.box import ROUNDED
 from rich.table import Table
 from rich.text import Text
 
-from cli.constants import _FILL_COLOURS, _MARKUP_RE, _SLASH_COMMANDS
+from cli.constants import _FILL_COLOURS, _MARKUP_RE, _SLASH_COMMANDS, WORDMARK_ACCENT
+
+
+def wordmark(*, dim: bool = False) -> str:
+    """The "north." brand mark, as Rich console markup: white "north", a
+    green "." - the same mark the web dashboard's sidebar and welcome screen
+    use (web/src/components.tsx .brand-wordmark), so the CLI, TUI, and
+    dashboard all read as one product.
+
+    *dim* renders "north" in the same muted grey a panel border already uses,
+    for spots (a panel title) too quiet for the full bold mark. The dot stays
+    full-strength either way - it is the mark, not a heading weight.
+
+    Callers append their own trailing text with their own styling (a page
+    name, a tagline) rather than this function guessing at it - the TUI
+    banner's tagline is dim, a CLI heading's is bold, and only the call site
+    knows which.
+    """
+    name_style = "dim" if dim else "bold white"
+    return f"[{name_style}]north[/{name_style}][bold {WORDMARK_ACCENT}].[/bold {WORDMARK_ACCENT}]"
 
 
 def _reconstruct_task_output(entries: list[dict]) -> str:

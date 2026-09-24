@@ -55,6 +55,7 @@ from cli.formatting import (
     _short_model,
     _strip_markup,
     summarize_diff,
+    wordmark,
 )
 from cli.tui_text import estimated_tokens as _estimated_tokens
 from cli.tui_text import requested_context_document as _requested_context_document
@@ -849,7 +850,7 @@ class NorthApp(App[None]):
         tools = toolsets if toolsets is not None else getattr(self, "_cached_agent_toolsets", None)
 
         log.write("")
-        log.write("  [bold white]north[/bold white]  [bright_black]personal operating system[/bright_black]")
+        log.write(f"  {wordmark()}  [bright_black]personal operating system[/bright_black]")
         log.write("")
         log.write(f"  [bright_black]model[/bright_black]     {_short_model(self._model) if self._model else 'auto'}")
         log.write(f"  [bright_black]backend[/bright_black]   {backend}")

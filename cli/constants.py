@@ -57,6 +57,13 @@ THEME = {
     "danger": "#f85149",
 }
 
+# The dashboard's wordmark colour (web/src/styles.css --accent): "north" in
+# white/dim, its trailing "." in this green. Kept apart from THEME["accent"]
+# (used for focus/model-state colour elsewhere in the TUI) so retiring one
+# does not silently retint the other - the wordmark is a brand mark, not a
+# semantic state colour.
+WORDMARK_ACCENT = "#b8ef72"
+
 
 # ── Pipeline step rendering (task progress table) ───────────────────────────
 _STEP_ICONS: dict[str, str] = {
