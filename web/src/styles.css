@@ -1410,6 +1410,10 @@ button:not(:disabled):active { transform: translateY(1px); }
   .session-registry .capability-registry-row { grid-template-columns: minmax(140px, 1.2fr) minmax(110px, .9fr) 42px 104px 118px; }
   .session-registry .capability-registry-head span:nth-child(3),
   .session-registry .capability-registry-row .capability-registry-meta:first-of-type { display: none; }
+  /* A page-wide rule at this width hides every .capability-registry-meta with
+     no exception; without restating it, the turn count (the second meta span)
+     stayed hidden too, and every column after it slid one track to the left. */
+  .session-registry .capability-registry-row .capability-registry-meta:last-of-type { display: block; }
 }
 @media (max-width: 680px) {
   .session-registry .capability-registry-head { display: none; }
