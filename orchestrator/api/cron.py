@@ -9,8 +9,10 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from flows.exceptions import FlowNotFoundError
+from flows.validation import schedulable_flow_error
 from jobs.cron_store import UNSET
 from jobs.scheduler import (
     V1_CRON_ENTRIES,
@@ -21,6 +23,7 @@ from jobs.scheduler import (
     next_firing_epoch,
 )
 from orchestrator.api.deps import _get_cron_store, router
+from orchestrator.api_context import current_services
 from utils.time import format_local, is_known_timezone, local_timezone_name, now_epoch
 from utils.weekdays import parse_weekdays
 
@@ -51,6 +54,10 @@ class CronEntryOut(BaseModel):
     description: str = ""
     agent: str
     task: str
+    # The flow this schedule runs, or empty for an older prompt-only schedule.
+    # When set, `task` and `agent` are only labels: the flow carries the work.
+    flow: str = ""
+    skill: str = ""
     hour: int
     minute: int
     interval_minutes: int | None = None
@@ -69,10 +76,11 @@ class CronEntryOut(BaseModel):
 
 
 class CronEntryCreate(BaseModel):
+    """A new schedule. It runs a flow, so all it says is which flow and when."""
+
     name: str | None = None
     label: str = ""
-    agent: str = "general"
-    task: str
+    flow: str = Field(min_length=1)
     hour: int | None = None
     minute: int = 0
     interval_minutes: int | None = None
@@ -86,13 +94,15 @@ class CronEntryCreate(BaseModel):
 class CronEntryUpdate(BaseModel):
     """Every field optional: what is not sent is left as it is.
 
+    What a schedule does lives in its flow, so there is no prompt or agent to
+    change here - only when it runs, what it is called, and which flow it runs.
+
     ``days`` is the exception that proves it. Sending ``"daily"`` clears a day
     restriction, which is a real change and not the same as omitting the field.
     """
 
-    agent: str | None = None
     label: str | None = None
-    task: str | None = None
+    flow: str | None = None
     hour: int | None = None
     minute: int | None = None
     interval_minutes: int | None = None
@@ -120,6 +130,8 @@ def _entry_out(entry: CronEntry, source: str, *, modified: bool = False) -> Cron
         description=entry.description,
         agent=entry.agent,
         task=entry.task,
+        flow=entry.flow,
+        skill=entry.skill,
         hour=entry.hour,
         minute=entry.minute,
         interval_minutes=entry.interval_minutes,
@@ -159,6 +171,29 @@ def _days(value: Any) -> frozenset[int] | None:
         return parse_weekdays(value)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _schedulable_flow(name: str):
+    """The flow *name*, once it is known to be safe to run unattended.
+
+    The same question every other door asks - active, unchanged since it was
+    tested, still executable - so a schedule made here obeys the rules of one
+    made in chat or on the Flows page.
+    """
+    services = current_services()
+    try:
+        flow = services.require("flow_registry").get(name)
+    except FlowNotFoundError:
+        raise HTTPException(status_code=422, detail=f"Unknown flow '{name}'.") from None
+    problem = schedulable_flow_error(
+        flow,
+        skill_registry=services.skill_registry,
+        agent_registry=services.agent_registry,
+        tool_registry=services.tool_registry,
+    )
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
+    return flow
 
 
 async def _ensure_editable_row(store, name: str) -> None:
@@ -223,16 +258,17 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
         raise HTTPException(status_code=422, detail="provide exactly one of hour or interval_minutes")
     if body.interval_minutes is not None and body.days is not None:
         raise HTTPException(status_code=422, detail="interval_minutes cannot be combined with days")
+    flow = _schedulable_flow(body.flow)
     store = _get_cron_store()
-    # An unnamed schedule gets a name derived from its task, made unique - two
-    # reminders whose text happens to slug the same must not overwrite one another.
-    # The key is slugged from the title when there is one: a routine called
-    # "Morning stretch" should be addressable as that, not as its prompt.
-    name = body.name or await store.unique_name(body.label or body.task)
+    # An unnamed schedule gets a name derived from its title, or else its flow,
+    # made unique - two schedules that happen to slug the same must not overwrite
+    # one another.
+    name = body.name or await store.unique_name(body.label or body.flow)
     await store.add(
         name=name,
-        agent=body.agent,
-        task=body.task,
+        agent="general",
+        task=flow.description,
+        flow=body.flow,
         hour=body.hour or 0,
         minute=0 if body.interval_minutes is not None else body.minute,
         weekdays=_days(body.days),
@@ -254,6 +290,8 @@ async def update_cron_entry(name: str, body: CronEntryUpdate) -> CronEntryOut:
     _validate(body.hour, body.minute, body.interval_minutes)
     if body.interval_minutes is not None and (body.hour is not None or body.days is not None):
         raise HTTPException(status_code=422, detail="interval_minutes cannot be combined with hour or days")
+    if body.flow is not None:
+        _schedulable_flow(body.flow)
     store = _get_cron_store()
     await _ensure_editable_row(store, name)
     changes: dict[str, Any] = body.model_dump(exclude_none=True, exclude={"days"})

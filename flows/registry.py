@@ -25,7 +25,7 @@ def _as_mapping(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
-def _parse_steps(raw: Any) -> tuple[tuple[FlowStep, ...], bool]:
+def _parse_steps(raw: Any, *, allow_actions: bool = False) -> tuple[tuple[FlowStep, ...], bool]:
     if not isinstance(raw, list) or not raw:
         raise FlowParseError("steps must be a non-empty list")
     steps: list[FlowStep] = []
@@ -35,6 +35,9 @@ def _parse_steps(raw: Any) -> tuple[tuple[FlowStep, ...], bool]:
         data = _as_mapping(item, f"steps[{index}]")
         name = str(data.get("name") or "").strip()
         skill = str(data.get("skill") or "").strip()
+        action = str(data.get("action") or "").strip()
+        if action and not allow_actions:
+            raise FlowParseError(f"steps[{index}].action is only available to built-in flows")
         legacy_tool = str(data.get("tool") or "").strip()
         if data.get("agent") is not None:
             # Executor ownership moved to the skill contract. Keep old files
@@ -82,13 +85,13 @@ def _parse_steps(raw: Any) -> tuple[tuple[FlowStep, ...], bool]:
             instructions = str(data.get("instructions") or data.get("description") or "").strip()
         # A skill-backed step needs no instructions of its own - the skill's body
         # is the procedure. Only a step with no skill (inline instructions are
-        # its entire procedure) must have them. tools/universal/_flow_validation.py
+        # its entire procedure) must have them. flows/validation.py
         # already enforces exactly this rule at the semantic-validation layer;
         # requiring instructions unconditionally here made the parser reject a
         # skill step with none before validation ever ran, which is also what
         # the dashboard's flow editor now saves for a step whose kind is
         # "existing skill" (see web/src/pages/Verbose.tsx FlowStepCard).
-        if not instructions and not skill:
+        if not instructions and not skill and not action:
             raise FlowParseError(f"steps[{index}] is missing instructions")
         seen.add(name)
         steps.append(
@@ -98,6 +101,7 @@ def _parse_steps(raw: Any) -> tuple[tuple[FlowStep, ...], bool]:
                 instructions=instructions,
                 inputs=dict(raw_inputs),
                 approval=approval,
+                action=action,
             )
         )
     return tuple(steps), migrated_legacy_step
@@ -115,7 +119,7 @@ def parse_flow_document(text: str, directory: Path, source: FlowSource) -> Flow:
         raise FlowParseError("name must contain lowercase letters, numbers, and hyphens")
     if not description:
         raise FlowParseError("missing description")
-    steps, migrated_legacy_step = _parse_steps(data.get("steps"))
+    steps, migrated_legacy_step = _parse_steps(data.get("steps"), allow_actions=source is FlowSource.BUILTIN)
     status = str(data.get("status") or "active").strip().lower()
     if status not in {"candidate", "active", "retired"}:
         raise FlowParseError(f"invalid status: {status}")

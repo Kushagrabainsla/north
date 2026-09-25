@@ -12,10 +12,10 @@ import yaml
 from flows.models import FLOW_FILENAME, FlowSource, flow_fingerprint
 from flows.registry import FlowRegistry, parse_flow_document
 from flows.store import FlowRunStore
+from flows.validation import validate_flow_capabilities
 from policies.self_edit import SelfEditPolicy
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.universal._flow_validation import validate_flow_capabilities
 
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
 
@@ -389,6 +389,7 @@ def _view(flow, *, include_steps: bool = False) -> dict[str, Any]:
                 "instructions": step.instructions,
                 "inputs": step.inputs,
                 "approval": step.approval,
+                "action": step.action,
             }
             for step in flow.steps
         ]

@@ -57,7 +57,7 @@ management, scripting, debugging, and recovery.
 | `/briefings/:date` | Read one daily briefing | rendered Markdown, sources |
 | `/artifacts` | Browse every generated output | reports, files, images, exports |
 | `/artifacts/:artifactId` | Preview or download one output | metadata, preview, producing task |
-| `/schedule` | Manage queued and recurring work | jobs, cron entries, calendar |
+| `/flows` | See what North runs, when it runs next, and how it went | flows, their schedules, next runs, run history |
 | `/approvals` | Resolve items that need attention | approvals, questions, information cards |
 | `/memory` | Inspect and edit North's context | context documents, imports |
 | `/agents` | Understand and invoke agents | capabilities, domains, model pools |
@@ -209,7 +209,7 @@ Every cockpit panel maps to a dedicated page:
 | Active work and conversations | `/chat/:conversationId` and `/tasks` |
 | Agents | `/agents` and `/agents/:name` |
 | Briefing and reports | `/briefings` and `/briefings/:date` |
-| Schedule | `/schedule` |
+| Flows, schedules and run history | `/flows` (`/schedule` redirects here) |
 | Artifacts | `/artifacts` and `/artifacts/:artifactId` |
 | Memory and context | `/memory` |
 | Usage, models, and cost | `/insights` |

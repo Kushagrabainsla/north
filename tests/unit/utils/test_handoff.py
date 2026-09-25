@@ -12,8 +12,10 @@ from pathlib import Path
 
 from utils.handoff import (
     _handoff_root,
+    declared_artifact_paths,
     ensure_handoff_dir,
     handoff_dir_for,
+    missing_artifact_paths,
     prune_handoff_dirs,
 )
 
@@ -143,3 +145,25 @@ class TestToolsPathReExportsSameObjects:
         assert _path.resolve_path(handoff_file, None) is not None
         # ...but a DB file in the same subtree stays blocked.
         assert _path.resolve_path(f"{handoff_dir_for('t1')}/ctx.db", None) is None
+
+
+class TestDeclaredArtifacts:
+    def test_placeholders_resolve_to_this_tasks_directory_and_the_date(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("NORTH_HOME", str(tmp_path))
+        _handoff_root.cache_clear()
+
+        paths = declared_artifact_paths(["{handoff_dir}/news/{date}.md"], "task_1", "2026-09-25")
+
+        assert paths == [f"{(tmp_path / 'tasks').resolve()}/task_1/news/2026-09-25.md"]
+
+    def test_a_path_with_no_placeholder_is_left_alone(self) -> None:
+        assert declared_artifact_paths(["/tmp/fixed.md"], "task_1", "2026-09-25") == ["/tmp/fixed.md"]
+
+    def test_absent_and_empty_files_are_missing_and_a_written_one_is_not(self, tmp_path: Path) -> None:
+        written = tmp_path / "written.md"
+        written.write_text("content", encoding="utf-8")
+        empty = tmp_path / "empty.md"
+        empty.write_text("", encoding="utf-8")
+        absent = tmp_path / "absent.md"
+
+        assert missing_artifact_paths([str(written), str(empty), str(absent)]) == [str(empty), str(absent)]

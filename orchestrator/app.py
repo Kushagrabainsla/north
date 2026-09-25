@@ -478,7 +478,7 @@ def _build_context_injector(deps) -> ContextInjector:
 
 def _configure_routers(
     app, orchestrator, deps, agent_registry, context_injector, skill_registry, flow_registry, tool_registry,
-    approval_memory=None
+    approval_memory=None, flow_store=None, flow_runner=None
 ) -> None:
     configure_api(
         app,
@@ -515,6 +515,8 @@ def _configure_routers(
         inference_router=deps.inference_router,
         skill_registry=skill_registry,
         flow_registry=flow_registry,
+        flow_store=flow_store,
+        flow_runner=flow_runner,
         tool_registry=tool_registry,
         codex_credentials_factory=_build_codex_credentials,
     )
@@ -655,55 +657,67 @@ def _launch_background_tasks(
     skill_distiller: SkillDistiller,
     callback_server: uvicorn.Server,
     telegram_gateway: TelegramGateway | None = None,
+    flow_store: FlowRunStore | None = None,
+    flow_runner: FlowRunner | None = None,
 ) -> list[asyncio.Task]:
+    async def _nightly_cleanup() -> str:
+        """north's own housekeeping: the one step of the built-in nightly-cleanup flow."""
+        n = await deps.task_context_store.cleanup_stale_tasks(
+            active_task_ids=orchestrator.active_task_ids,
+        )
+        now = utcnow()
+        completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)
+        failed_before = now - datetime.timedelta(days=settings.task_cleanup_failed_days)
+        pruned = await deps.ledger.prune(completed_before, failed_before)
+        pruned_runs = await deps.agent_run_store.prune(
+            min(completed_before, failed_before),
+            keep_task_ids=orchestrator.active_task_ids,
+        )
+        # Flow run history lives as long as the tasks it belongs beside.
+        pruned_flow_runs = (
+            await asyncio.to_thread(flow_store.prune, min(completed_before, failed_before))
+            if flow_store is not None
+            else 0
+        )
+        # Routing decisions age out with the tasks they explain.
+        decisions = _prune_routing_decisions(deps, settings.task_cleanup_completed_days)
+        # Handoff artifacts are what the cockpit lists, so they need a window
+        # of their own: nothing ever deleted these directories, and one is
+        # created for every task the install has ever run.
+        handoffs = await asyncio.to_thread(
+            prune_handoff_dirs,
+            settings.handoff_retention_days,
+            keep=orchestrator.active_task_ids,
+        )
+        # north writes its own skills, so it can write down a mistake. Nothing
+        # looked back: one learned skill told agents to stop when a file was
+        # missing, they did, and it stayed active. A skill whose tasks keep
+        # failing is retired here - reversibly, by a status field.
+        retired = await skill_retirement.sweep(deps.ledger, settings.north_home / "skills")
+        if retired:
+            skill_distiller.reload_registry()
+        summary = (
+            f"removed {n} stale rows, pruned {pruned} ledger entries"
+            f", {pruned_runs} agent runs, {pruned_flow_runs} flow runs, {decisions} routing decisions"
+            f", {handoffs} handoff directories"
+            f"{f', retired {len(retired)} learned skill(s)' if retired else ''}"
+        )
+        await deps.ledger.write(
+            LedgerEntry.new(
+                source=LedgerSource.SYSTEM,
+                action=f"task_context_cleanup: {summary}",
+                status=LedgerStatus.COMPLETED,
+            )
+        )
+        return summary
+
+    if flow_runner is not None:
+        flow_runner.register_action("task_context_cleanup", _nightly_cleanup)
+
     async def _dispatch_job(job: Job) -> None:
-        if job.task == "task_context_cleanup":
-            n = await deps.task_context_store.cleanup_stale_tasks(
-                active_task_ids=orchestrator.active_task_ids,
-            )
-            now = utcnow()
-            completed_before = now - datetime.timedelta(days=settings.task_cleanup_completed_days)
-            failed_before = now - datetime.timedelta(days=settings.task_cleanup_failed_days)
-            pruned = await deps.ledger.prune(completed_before, failed_before)
-            pruned_runs = await deps.agent_run_store.prune(
-                min(completed_before, failed_before),
-                keep_task_ids=orchestrator.active_task_ids,
-            )
-            # Routing decisions age out with the tasks they explain.
-            decisions = _prune_routing_decisions(deps, settings.task_cleanup_completed_days)
-            # Handoff artifacts are what the cockpit lists, so they need a window
-            # of their own: nothing ever deleted these directories, and one is
-            # created for every task the install has ever run.
-            handoffs = await asyncio.to_thread(
-                prune_handoff_dirs,
-                settings.handoff_retention_days,
-                keep=orchestrator.active_task_ids,
-            )
-            # north writes its own skills, so it can write down a mistake. Nothing
-            # looked back: one learned skill told agents to stop when a file was
-            # missing, they did, and it stayed active. A skill whose tasks keep
-            # failing is retired here - reversibly, by a status field.
-            retired = await skill_retirement.sweep(deps.ledger, settings.north_home / "skills")
-            if retired:
-                skill_distiller.reload_registry()
-            await deps.ledger.write(
-                LedgerEntry.new(
-                    source=LedgerSource.SYSTEM,
-                    action=(
-                        f"task_context_cleanup: removed {n} stale rows, pruned {pruned} ledger entries"
-                        f", {pruned_runs} agent runs, {decisions} routing decisions"
-                        f", {handoffs} handoff directories"
-                        f"{f', retired {len(retired)} learned skill(s)' if retired else ''}"
-                    ),
-                    status=LedgerStatus.COMPLETED,
-                )
-            )
-            return
         flow = str((job.payload or {}).get("flow") or "").strip()
         if flow:
-            result = await tool_registry.get("run_flow").run(
-                ToolInput(params={"name": flow, "task_id": job.job_id})
-            )
+            result = await tool_registry.get("run_flow").run_scheduled(flow, job.job_id)
             if not result.success:
                 raise JobNeedsAttention(result.error or f"scheduled flow '{flow}' failed")
             return
@@ -888,6 +902,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     tool_registry.register(create_skill_tool)
     tool_registry.register(UseFlowTool(flow_registry))
     flow_store = FlowRunStore(settings.north_home / "flow_runs.db")
+    if cut_off := flow_store.fail_interrupted():
+        logger.info("Marked %d flow run(s) interrupted by the last shutdown as failed", cut_off)
     flow_interaction = UserInteraction(
         deps.approval_store,
         notifier=deps.notifier,
@@ -926,19 +942,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             flow_store=flow_store,
         )
     )
-    tool_registry.register(
-        RunFlowTool(
-            FlowRunner(
-                flow_registry,
-                agent_registry,
-                skill_registry,
-                flow_store,
-                flow_interaction,
-                tool_registry=tool_registry,
-                workspace=settings.north_workspace,
-            )
-        )
+    flow_runner = FlowRunner(
+        flow_registry,
+        agent_registry,
+        skill_registry,
+        flow_store,
+        flow_interaction,
+        tool_registry=tool_registry,
+        workspace=settings.north_workspace,
     )
+    tool_registry.register(RunFlowTool(flow_runner))
     # Replace the bootstrap instances now that the final live dependency exists.
     # This closes the construction cycle while still rejecting schedules that
     # name an agent the runtime cannot dispatch to.
@@ -994,7 +1007,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("configuring API router")
     _configure_routers(
         app, orchestrator, deps, agent_registry, context_injector, skill_registry, flow_registry, tool_registry,
-        approval_memory
+        approval_memory, flow_store=flow_store, flow_runner=flow_runner
     )
 
     _step("configuring callback server")
@@ -1023,6 +1036,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             skill_distiller,
             callback_server,
             telegram_gateway=telegram_gateway,
+            flow_store=flow_store,
+            flow_runner=flow_runner,
         )
         if tool_index is not None:
             background_tasks.append(

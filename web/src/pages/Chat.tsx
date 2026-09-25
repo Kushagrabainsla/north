@@ -329,10 +329,10 @@ export function Chat() {
   const handleSlash = async (command: string) => {
     const [name] = command.toLowerCase().split(/\s+/, 1);
     if (name === "/new") { updatePrompt(""); await createSession(); return true; }
-    if (name === "/schedule") { updatePrompt(""); navigate("/schedule"); return true; }
+    if (name === "/flows" || name === "/schedule") { updatePrompt(""); navigate("/flows"); return true; }
     if (name === "/approvals") { updatePrompt(""); navigate("/approvals"); return true; }
     if (name === "/clear") { updatePrompt(""); setNotice("Draft cleared."); return true; }
-    if (name === "/help") { setNotice("Commands: /new, /clear, /status, /pause, /resume, /cancel, /schedule, /approvals"); return true; }
+    if (name === "/help") { setNotice("Commands: /new, /clear, /status, /pause, /resume, /cancel, /flows, /approvals"); return true; }
     if (name === "/status") { await Promise.all([room.reload(), approvalResource.reload()]); setNotice("Task status refreshed."); updatePrompt(""); return true; }
     if (["/pause", "/resume", "/cancel"].includes(name)) {
       const turn = [...(room.data?.turns || [])].reverse().find(item => item.task_id && !["completed", "failed", "cancelled"].includes(item.detail?.task.status || ""));

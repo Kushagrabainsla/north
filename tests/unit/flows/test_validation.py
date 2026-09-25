@@ -5,8 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from flows.models import Flow, FlowStep
+from flows.validation import validate_flow_capabilities
 from skills.models import Skill, SkillExecution
-from tools.universal._flow_validation import validate_flow_capabilities
 
 
 class _Registry:

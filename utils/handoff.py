@@ -18,7 +18,7 @@ import functools
 import os
 import shutil
 import time
-from collections.abc import Container
+from collections.abc import Container, Iterable
 from pathlib import Path
 
 
@@ -95,3 +95,29 @@ def prune_handoff_dirs(retention_days: int, *, keep: Container[str] = ()) -> int
             shutil.rmtree(path, ignore_errors=True)
             removed += 1
     return removed
+
+
+def declared_artifact_paths(produces: Iterable[str], task_id: str, date: str) -> list[str]:
+    """Resolve an agent's declared output templates to concrete paths.
+
+    Agent configs use two server-owned placeholders: ``{handoff_dir}`` for
+    task-scoped pipeline output and ``{date}`` for personal daily artifacts.
+    """
+    return [
+        str(Path(declared.replace("{handoff_dir}", handoff_dir_for(task_id)).replace("{date}", date)).expanduser())
+        for declared in produces
+    ]
+
+
+def missing_artifact_paths(paths: Iterable[str]) -> list[str]:
+    """The paths that are absent or empty - a file that exists but says nothing is missing too."""
+    missing: list[str] = []
+    for value in paths:
+        path = Path(value)
+        try:
+            valid = path.is_file() and path.stat().st_size > 0
+        except OSError:
+            valid = False
+        if not valid:
+            missing.append(str(path))
+    return missing

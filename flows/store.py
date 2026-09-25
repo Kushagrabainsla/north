@@ -24,6 +24,10 @@ class FlowRun:
     test_mode: bool = False
     error: str = ""
     updated_at: str = ""
+    # When the run began, and what began it: "schedule", "manual" or "test".
+    # Both are empty on runs recorded before history was shown anywhere.
+    created_at: str = ""
+    trigger: str = ""
 
 
 class FlowRunStore:
@@ -58,6 +62,10 @@ class FlowRunStore:
                 connection.execute("ALTER TABLE flow_runs ADD COLUMN flow_fingerprint TEXT NOT NULL DEFAULT ''")
             if "test_mode" not in existing:
                 connection.execute("ALTER TABLE flow_runs ADD COLUMN test_mode INTEGER NOT NULL DEFAULT 0")
+            if "created_at" not in existing:
+                connection.execute("ALTER TABLE flow_runs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+            if "trigger" not in existing:
+                connection.execute("ALTER TABLE flow_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT ''")
 
     def create(
         self,
@@ -69,6 +77,7 @@ class FlowRunStore:
         inputs: dict[str, Any] | None = None,
         flow_fingerprint: str = "",
         test_mode: bool = False,
+        trigger: str = "",
     ) -> FlowRun:
         now = _now()
         run = FlowRun(
@@ -83,12 +92,15 @@ class FlowRunStore:
             flow_fingerprint=flow_fingerprint,
             test_mode=test_mode,
             updated_at=now,
+            created_at=now,
+            trigger=trigger,
         )
         with sqlite3.connect(self._path) as connection:
             connection.execute(
                 "INSERT INTO flow_runs "
                 "(run_id, flow_name, task_id, agent, status, current_step, inputs_json, outputs_json, "
-                "flow_fingerprint, test_mode, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "flow_fingerprint, test_mode, updated_at, created_at, trigger) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     flow_name,
@@ -101,6 +113,8 @@ class FlowRunStore:
                     flow_fingerprint,
                     int(test_mode),
                     now,
+                    now,
+                    trigger,
                 ),
             )
         return run
@@ -110,6 +124,52 @@ class FlowRunStore:
             connection.row_factory = sqlite3.Row
             row = connection.execute("SELECT * FROM flow_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _from_row(row) if row is not None else None
+
+    def list_runs(self, flow_name: str | None = None, limit: int = 50) -> list[FlowRun]:
+        """Most recently started runs first, optionally for one flow.
+
+        Ordered by start time, falling back to the last update for runs that
+        predate the start time being recorded.
+        """
+        query = "SELECT * FROM flow_runs"
+        params: list[Any] = []
+        if flow_name is not None:
+            query += " WHERE flow_name = ?"
+            params.append(flow_name)
+        query += " ORDER BY CASE WHEN created_at = '' THEN updated_at ELSE created_at END DESC LIMIT ?"
+        params.append(limit)
+        with sqlite3.connect(self._path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(query, params).fetchall()
+        return [_from_row(row) for row in rows]
+
+    def prune(self, before: datetime) -> int:
+        """Delete finished runs last touched before *before*; returns how many.
+
+        A run that is still running or paused is never pruned - a paused run
+        can be resumed, so its checkpoint is the only copy of its progress.
+        """
+        with sqlite3.connect(self._path) as connection:
+            cursor = connection.execute(
+                "DELETE FROM flow_runs WHERE updated_at < ? "
+                "AND status IN ('completed', 'failed', 'rejected', 'cancelled')",
+                (before.isoformat(),),
+            )
+            return cursor.rowcount
+
+    def fail_interrupted(self) -> int:
+        """Mark runs still recorded as running as failed; returns how many.
+
+        Run at startup: nothing can be running before the process that would
+        run it exists, so a "running" run was cut off by the last shutdown.
+        Left alone it would read as in progress forever.
+        """
+        with sqlite3.connect(self._path) as connection:
+            cursor = connection.execute(
+                "UPDATE flow_runs SET status = 'failed', error = ? WHERE status = 'running'",
+                ("North stopped while this run was in progress.",),
+            )
+            return cursor.rowcount
 
     def update(
         self,
@@ -151,4 +211,6 @@ def _from_row(row: sqlite3.Row) -> FlowRun:
         test_mode=bool(row["test_mode"]),
         error=row["error"],
         updated_at=row["updated_at"],
+        created_at=row["created_at"],
+        trigger=row["trigger"],
     )

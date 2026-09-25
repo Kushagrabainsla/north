@@ -78,6 +78,10 @@ class ApiServices:
     decision_log: Any | None = None
     skill_registry: Any | None = None
     flow_registry: Any | None = None
+    # Flow run history, and the runner behind "run now" / "test" on the Flows
+    # page - the same instances the run_flow tool and the scheduler use.
+    flow_store: Any | None = None
+    flow_runner: Any | None = None
     tool_registry: Any | None = None
     north_home: Any | None = None
     # Mutable per-app runtime state for the web layer (in-flight logins,

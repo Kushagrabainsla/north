@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
 import type { AgentRun, Conversation, InferenceCategory } from "./types";
-import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, CalendarClock, ShieldAlert, Brain, Bot, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, MessagesSquare, CheckSquare, FileText, ShieldAlert, Brain, Bot, Sparkles, GitBranch, Wrench, Cpu, Settings, type LucideIcon } from "lucide-react";
 
 let displayTimezone = "UTC";
 
@@ -43,7 +43,7 @@ export function weekdayInNorthTimezone(date = new Date()) {
 const primaryNav: [string, string, LucideIcon, boolean?][] = [
   ["/", "Dashboard", LayoutDashboard], ["/sessions", "Sessions", MessagesSquare], ["/tasks", "Tasks", CheckSquare],
   ["/artifacts", "Artifacts", FileText],
-  ["/schedule", "Schedule", CalendarClock], ["/approvals", "Approvals", ShieldAlert],
+  ["/approvals", "Approvals", ShieldAlert],
   ["/memory", "Memory", Brain], ["/agents", "Agents", Bot],
 ];
 

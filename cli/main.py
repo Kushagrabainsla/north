@@ -656,7 +656,7 @@ def _day_selection(days: str | None) -> list[str] | str | None:
 
 def _print_cron_entries(entries: list[dict]) -> None:
     if not entries:
-        _console.print("  [dim]no schedules - add one with `north cron add`[/dim]")
+        _console.print("  [dim]no schedules - add one with `north cron add <flow>`[/dim]")
         return
     # The footer names the local zone once, so a row only spells out its own zone
     # when the schedule is in a different one - that is the case worth reading.
@@ -665,8 +665,7 @@ def _print_cron_entries(entries: list[dict]) -> None:
     table.add_column("name", no_wrap=True)
     table.add_column("when", no_wrap=True)
     table.add_column("next run", style="bright_black", no_wrap=True)
-    table.add_column("agent", style="dim", no_wrap=True)
-    table.add_column("task")
+    table.add_column("runs")
     for entry in entries:
         name = entry["name"]
         if entry.get("source") == "builtin":
@@ -675,8 +674,8 @@ def _print_cron_entries(entries: list[dict]) -> None:
             name,
             entry["schedule"].removesuffix(local_suffix),
             entry["next_run_local"],
-            entry["agent"],
-            entry["task"],
+            # A schedule runs a flow. One made before that was the rule shows the prompt it runs.
+            entry.get("flow") or entry["task"],
         )
     _console.print()
     _console.print(table)
@@ -699,7 +698,7 @@ def list_cron() -> None:
 
 @cron_app.command("add")
 def add_cron(
-    task: str = typer.Argument(..., help="What north should do, in plain language."),
+    flow: str = typer.Argument(..., help="The active flow to run (see the Flows page)."),
     hour: int = typer.Option(..., "--hour", "-h", help="Hour to run, 0-23, your local time."),
     minute: int = typer.Option(0, "--minute", "-m", help="Minute to run, 0-59."),
     days: str | None = typer.Option(
@@ -708,14 +707,14 @@ def add_cron(
         "-d",
         help="Days to run: mon…sun (comma-separated), or weekdays / weekends / daily. Omit for daily.",
     ),
-    agent: str = typer.Option("general", "--agent", "-a", help="Agent that runs it."),
-    name: str | None = typer.Option(None, "--name", help="Name to address it by (default: from the task)."),
+    name: str | None = typer.Option(None, "--name", help="Name to address it by (default: from the flow)."),
+    label: str = typer.Option("", "--label", "-l", help="A short title for lists."),
 ) -> None:
-    """Add a recurring schedule. Times are your local time."""
+    """Run a flow on a recurring schedule. Times are your local time."""
     body = {
         "name": name,
-        "agent": agent,
-        "task": task,
+        "label": label,
+        "flow": flow,
         "hour": hour,
         "minute": minute,
         "days": _day_selection(days),
@@ -732,8 +731,7 @@ def set_cron(
     days: str | None = typer.Option(
         None, "--days", "-d", help="New days: mon…sun (comma-separated), or weekdays / weekends / daily."
     ),
-    task: str | None = typer.Option(None, "--task", help="New task text."),
-    agent: str | None = typer.Option(None, "--agent", "-a", help="New agent."),
+    flow: str | None = typer.Option(None, "--flow", help="Point it at a different active flow."),
     pause: bool = typer.Option(False, "--pause", help="Pause it without deleting it."),
     resume: bool = typer.Option(False, "--resume", help="Resume a paused schedule."),
 ) -> None:
@@ -745,14 +743,13 @@ def set_cron(
         "hour": hour,
         "minute": minute,
         "days": _day_selection(days),
-        "task": task,
-        "agent": agent,
+        "flow": flow,
         "enabled": False if pause else (True if resume else None),
     }
     changes = {k: v for k, v in body.items() if v is not None}
     if not changes:
         typer.secho(
-            "Nothing to change - pass --hour, --minute, --days, --task, --agent, --pause or --resume.",
+            "Nothing to change - pass --hour, --minute, --days, --flow, --pause or --resume.",
             fg=typer.colors.RED,
             err=True,
         )

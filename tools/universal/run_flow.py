@@ -41,16 +41,44 @@ class RunFlowTool(Tool):
         name = str(input.params.get("name") or "").strip()
         if not name:
             return ToolOutput(success=False, error="Parameter 'name' is required.")
+        mode = str(input.params.get("mode") or "execute").strip().lower()
+        if mode not in {"execute", "test"}:
+            return ToolOutput(success=False, error="Parameter 'mode' must be execute or test.")
+        return await self._start(
+            name,
+            run_id=str(input.params.get("run_id") or "").strip() or None,
+            task_id=str(input.params.get("task_id") or "").strip(),
+            inputs=input.params.get("inputs") if isinstance(input.params.get("inputs"), dict) else None,
+            test_mode=mode == "test",
+        )
+
+    async def run_scheduled(self, name: str, job_id: str) -> ToolOutput:
+        """Run *name* because a schedule fired.
+
+        Separate from ``run`` so a run is recorded as scheduled only when the
+        scheduler started it: the trigger is not a parameter an agent could
+        set on itself.
+        """
+        return await self._start(name, task_id=job_id, trigger="schedule")
+
+    async def _start(
+        self,
+        name: str,
+        *,
+        run_id: str | None = None,
+        task_id: str = "",
+        inputs: dict[str, Any] | None = None,
+        test_mode: bool = False,
+        trigger: str = "",
+    ) -> ToolOutput:
         try:
-            mode = str(input.params.get("mode") or "execute").strip().lower()
-            if mode not in {"execute", "test"}:
-                return ToolOutput(success=False, error="Parameter 'mode' must be execute or test.")
             run = await self._runner.run(
                 name,
-                run_id=str(input.params.get("run_id") or "").strip() or None,
-                task_id=str(input.params.get("task_id") or "").strip(),
-                inputs=input.params.get("inputs") if isinstance(input.params.get("inputs"), dict) else None,
-                test_mode=mode == "test",
+                run_id=run_id,
+                task_id=task_id,
+                inputs=inputs,
+                test_mode=test_mode,
+                trigger=trigger,
             )
             return ToolOutput(success=run.status not in {"failed", "needs_approval", "rejected"}, data=_view(run))
         except Exception as exc:

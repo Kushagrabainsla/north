@@ -36,6 +36,8 @@ class JobOut(BaseModel):
     # A one-off scheduled from the page carries its own title the same way a
     # routine does, so the same event is not named two different ways.
     label: str = ""
+    # The flow a run of this job executes, when it is a flow's firing.
+    flow: str = ""
 
 
 class JobCreateRequest(BaseModel):
@@ -61,6 +63,7 @@ def _job_to_out(j: Job) -> JobOut:
         created_epoch=to_epoch(j.created_at) if j.created_at else None,
         cron_entry=(j.payload or {}).get("cron_entry"),
         label=(j.payload or {}).get("label") or "",
+        flow=(j.payload or {}).get("flow") or "",
     )
 
 

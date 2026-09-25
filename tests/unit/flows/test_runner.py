@@ -12,6 +12,7 @@ from skills.registry import SkillRegistry
 from tools.models import ToolInput
 from tools.universal.flow_runner import FlowRunner
 from tools.universal.run_flow import RunFlowTool
+from utils.time import localnow
 
 
 class FakeAgent:
@@ -269,6 +270,117 @@ steps:
     assert out.data["current_step"] == 1
 
 
+async def test_a_run_records_what_started_it(tmp_path):
+    registry = _flow(
+        tmp_path,
+        """name: demo
+description: Demo flow
+steps:
+  - name: first
+    skill: review-item
+    instructions: Inspect one item.
+    approval: never
+""",
+    )
+    store = FlowRunStore(tmp_path / "runs.db")
+    runner = FlowRunner(registry, FakeAgents(FakeAgent()), _skills(tmp_path), store)
+    tool = RunFlowTool(runner)
+
+    manual = await tool.run(ToolInput(params={"name": "demo"}))
+    test = await tool.run(ToolInput(params={"name": "demo", "mode": "test"}))
+    scheduled = await tool.run_scheduled("demo", "job-1")
+
+    assert store.get(manual.data["run_id"]).trigger == "manual"
+    assert store.get(test.data["run_id"]).trigger == "test"
+    fired = store.get(scheduled.data["run_id"])
+    assert fired.trigger == "schedule"
+    assert fired.task_id == "job-1"
+
+
+class ProducingAgent(FakeAgent):
+    """An agent whose config promises a file, and which keeps or breaks the promise."""
+
+    def __init__(self, tmp_path, *, writes: bool) -> None:
+        super().__init__()
+        self.target = tmp_path / "briefings" / f"{localnow().date().isoformat()}.md"
+        self.config = SimpleNamespace(
+            model_pool="reasoning", produces=[str(tmp_path / "briefings" / "{date}.md")]
+        )
+        self._writes = writes
+
+    async def run(self, payload):
+        if self._writes:
+            self.target.parent.mkdir(parents=True, exist_ok=True)
+            self.target.write_text("today's briefing", encoding="utf-8")
+        return await super().run(payload)
+
+
+_ONE_STEP = """name: demo
+description: Demo flow
+steps:
+  - name: first
+    skill: review-item
+    instructions: Inspect one item.
+    approval: never
+"""
+
+
+async def test_a_scheduled_run_fails_when_the_agent_never_wrote_its_declared_file(tmp_path):
+    agent = ProducingAgent(tmp_path, writes=False)
+    store = FlowRunStore(tmp_path / "runs.db")
+    tool = RunFlowTool(FlowRunner(_flow(tmp_path, _ONE_STEP), FakeAgents(agent), _skills(tmp_path), store))
+
+    out = await tool.run_scheduled("demo", "job-1")
+
+    assert not out.success
+    run = store.get(out.data["run_id"])
+    assert run.status == "failed"
+    assert "completed without writing" in run.error
+    assert str(agent.target) in run.error
+
+
+async def test_a_scheduled_run_succeeds_and_records_the_file_it_wrote(tmp_path):
+    agent = ProducingAgent(tmp_path, writes=True)
+    store = FlowRunStore(tmp_path / "runs.db")
+    tool = RunFlowTool(FlowRunner(_flow(tmp_path, _ONE_STEP), FakeAgents(agent), _skills(tmp_path), store))
+
+    out = await tool.run_scheduled("demo", "job-1")
+
+    assert out.success
+    assert store.get(out.data["run_id"]).outputs[0]["data"]["artifacts"] == [str(agent.target)]
+
+
+async def test_a_hand_started_run_is_not_failed_for_a_missing_file(tmp_path):
+    agent = ProducingAgent(tmp_path, writes=False)
+    store = FlowRunStore(tmp_path / "runs.db")
+    tool = RunFlowTool(FlowRunner(_flow(tmp_path, _ONE_STEP), FakeAgents(agent), _skills(tmp_path), store))
+
+    out = await tool.run(ToolInput(params={"name": "demo"}))
+
+    assert out.success
+    assert store.get(out.data["run_id"]).outputs[0]["data"]["artifacts"] == []
+
+
+async def test_an_agent_cannot_claim_its_run_was_scheduled(tmp_path):
+    registry = _flow(
+        tmp_path,
+        """name: demo
+description: Demo flow
+steps:
+  - name: first
+    skill: review-item
+    instructions: Inspect one item.
+    approval: never
+""",
+    )
+    store = FlowRunStore(tmp_path / "runs.db")
+    tool = RunFlowTool(FlowRunner(registry, FakeAgents(FakeAgent()), _skills(tmp_path), store))
+
+    out = await tool.run(ToolInput(params={"name": "demo", "trigger": "schedule"}))
+
+    assert store.get(out.data["run_id"]).trigger == "manual"
+
+
 async def test_runner_fails_when_skill_output_breaks_its_contract(tmp_path):
     registry = _flow(
         tmp_path,
@@ -344,3 +456,67 @@ steps:
 
     assert run.status == "completed"
     assert run.outputs[0]["data"]["result"] == {"evidence": "verified"}
+
+
+_CLEANUP_FLOW = """name: demo
+description: Housekeeping
+steps:
+  - name: clean-up
+    action: task_context_cleanup
+"""
+
+
+def _builtin_flow(tmp_path, text: str):
+    directory = tmp_path / "builtin" / "demo"
+    directory.mkdir(parents=True)
+    (directory / "FLOW.yaml").write_text(text, encoding="utf-8")
+    return FlowRegistry(tmp_path / "builtin")
+
+
+async def test_a_system_action_step_runs_the_registered_job_with_no_agent(tmp_path):
+    agent = FakeAgent()
+    store = FlowRunStore(tmp_path / "runs.db")
+    runner = FlowRunner(_builtin_flow(tmp_path, _CLEANUP_FLOW), FakeAgents(agent), _skills(tmp_path), store)
+    calls = []
+
+    async def cleanup() -> str:
+        calls.append("ran")
+        return "removed 3 stale rows"
+
+    runner.register_action("task_context_cleanup", cleanup)
+    tool = RunFlowTool(runner)
+
+    out = await tool.run_scheduled("demo", "job-1")
+
+    assert out.success, out.error
+    assert calls == ["ran"]
+    assert agent.payloads == []
+    run = store.get(out.data["run_id"])
+    assert run.status == "completed" and run.trigger == "schedule"
+    assert run.outputs[0]["data"]["summary"] == "removed 3 stale rows"
+    assert run.outputs[0]["agent"] == "system"
+
+
+async def test_a_system_action_that_is_not_registered_fails_the_run_by_name(tmp_path):
+    store = FlowRunStore(tmp_path / "runs.db")
+    runner = FlowRunner(_builtin_flow(tmp_path, _CLEANUP_FLOW), FakeAgents(FakeAgent()), _skills(tmp_path), store)
+
+    out = await RunFlowTool(runner).run_scheduled("demo", "job-1")
+
+    assert not out.success
+    assert "task_context_cleanup" in store.get(out.data["run_id"]).error
+
+
+async def test_a_system_action_that_raises_fails_the_run_with_its_message(tmp_path):
+    store = FlowRunStore(tmp_path / "runs.db")
+    runner = FlowRunner(_builtin_flow(tmp_path, _CLEANUP_FLOW), FakeAgents(FakeAgent()), _skills(tmp_path), store)
+
+    async def broken() -> str:
+        raise RuntimeError("database is locked")
+
+    runner.register_action("task_context_cleanup", broken)
+
+    out = await RunFlowTool(runner).run_scheduled("demo", "job-1")
+
+    assert not out.success
+    assert "database is locked" in store.get(out.data["run_id"]).error

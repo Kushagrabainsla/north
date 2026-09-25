@@ -94,7 +94,7 @@ from orchestrator.synthesizer import ResultSynthesizer
 from orchestrator.task_context import TaskContextStore
 from orchestrator.tiering import resolve_model_pool
 from utils.edit_scope import EditAuthorizer
-from utils.handoff import ensure_handoff_dir, handoff_dir_for
+from utils.handoff import declared_artifact_paths, ensure_handoff_dir, handoff_dir_for, missing_artifact_paths
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
 from utils.prompts import load_prompt
@@ -115,31 +115,11 @@ _HANDOFF_ARTIFACT_MAX_CHARS: int = 6000
 
 
 def _declared_artifact_paths(agent: Agent, task_id: str, date: str) -> list[str]:
-    """Resolve an agent's declared output templates to concrete paths.
+    """An agent's declared outputs as concrete paths, so scheduled work can prove it
+    produced the durable thing the dashboard reads instead of treating a model
+    answer as equivalent."""
+    return declared_artifact_paths(agent.config.produces, task_id, date)
 
-    Agent configs use two server-owned placeholders: ``{handoff_dir}`` for
-    task-scoped pipeline output and ``{date}`` for personal daily artifacts.
-    Resolving both here lets scheduled work prove it produced the durable thing
-    the dashboard reads instead of treating a model answer as equivalent.
-    """
-    return [
-        str(Path(declared.replace("{handoff_dir}", handoff_dir_for(task_id)).replace("{date}", date)).expanduser())
-        for declared in agent.config.produces
-    ]
-
-
-def _missing_artifact_paths(paths: list[str]) -> list[str]:
-    """Return required artifact paths that are absent or empty."""
-    missing: list[str] = []
-    for value in paths:
-        path = Path(value)
-        try:
-            valid = path.is_file() and path.stat().st_size > 0
-        except OSError:
-            valid = False
-        if not valid:
-            missing.append(str(path))
-    return missing
 
 # Engineering conductor (2e): coder→reviewer fix rounds allowed after the first
 # review before the bounded loop stops and the DoD gate takes over.
@@ -2172,7 +2152,7 @@ class Orchestrator:
             try:
                 result = await agent.run(payload)
                 missing_artifacts = await asyncio.to_thread(
-                    _missing_artifact_paths,
+                    missing_artifact_paths,
                     payload.required_artifacts,
                 )
                 if missing_artifacts:

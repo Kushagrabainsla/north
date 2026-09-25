@@ -2,7 +2,8 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Layout } from "./components";
 import { Chat, Sessions } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
-import { Agents, Approvals, Artifacts, Flows, Insights, Memory, Schedule, SettingsPage, Skills, SystemPage, Tools } from "./pages/Verbose";
+import { Agents, Approvals, Artifacts, Insights, Memory, SettingsPage, Skills, SystemPage, Tools } from "./pages/Verbose";
+import { Flows } from "./pages/Flows";
 import { Tasks } from "./pages/Tasks";
 import { DialogProvider } from "./dialog";
 
@@ -26,7 +27,7 @@ export function App() {
     <Route path="/chat/:conversationId" element={<SessionRedirect/>}/>
     <Route path="/briefings" element={<Navigate to="/artifacts" replace/>}/>
     <Route path="/artifacts" element={<Artifacts/>}/>
-    <Route path="/schedule" element={<Schedule/>}/>
+    <Route path="/schedule" element={<Navigate to="/flows" replace/>}/>
     <Route path="/approvals" element={<Approvals/>}/>
     <Route path="/memory" element={<Memory/>}/>
     <Route path="/agents" element={<Agents/>}/>

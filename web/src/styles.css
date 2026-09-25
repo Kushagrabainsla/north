@@ -1678,3 +1678,14 @@ button:not(:disabled):active { transform: translateY(1px); }
 }
 /* Collapse unused artifact columns so short task runs do not show empty cells. */
 .artifact-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+/* Flows page: run rows reuse the schedule row layout; these only add what a run has. */
+.run-error { color: var(--red); white-space: normal; overflow-wrap: anywhere; }
+.run-details { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 10px 0 2px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: rgba(0,0,0,.2); }
+.run-details dt { color: var(--faint); font: 9px "DM Mono", monospace; text-transform: uppercase; letter-spacing: .1em; }
+.run-details dd { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.flow-tabs { margin: 14px 18px 6px; max-width: 420px; }
+.flow-tab-body { padding: 0 18px 18px; }
+.flow-row .schedule-actions { flex-wrap: wrap; justify-content: flex-end; }
+.flow-schedule-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.flow-schedule-head small { color: var(--muted); font-size: 10px; }
+.flow-modal-notice { margin: 14px 18px 0; }

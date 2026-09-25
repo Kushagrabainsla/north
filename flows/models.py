@@ -33,6 +33,10 @@ class FlowStep:
     instructions: str = ""
     inputs: dict[str, Any] = field(default_factory=dict)
     approval: str = "on_mutation"
+    # A built-in flow's step can be one of north's own maintenance jobs instead
+    # of a skill: deterministic code, no model, named here and run by the server.
+    # Only built-in flows may use it (see flows/registry.py).
+    action: str = ""
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,9 @@ def flow_fingerprint(
                 "instructions": step.instructions,
                 "inputs": step.inputs,
                 "approval": step.approval,
+                # Only when set, so a flow with no system action keeps the
+                # fingerprint it was activated under.
+                **({"action": step.action} if step.action else {}),
             }
             for step in flow.steps
         ],

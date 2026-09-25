@@ -33,8 +33,8 @@ export function Dashboard() {
       <Panel title={todaysBriefing ? "Today's briefing" : "Latest briefing"} label="Daily intelligence" to="/artifacts" className="wide-panel briefing-panel">
         {briefing ? <div className="briefing-summary"><div className="sun-mark"><Sun size={18}/></div><div><b>{briefing.name}</b><p>{todaysBriefing ? "Today's news briefing is ready to read." : `Last updated ${timeAgo(briefing.updated_at)}.`}</p></div><NavLink to="/artifacts" className="primary-button">Open artifact</NavLink></div> : <Empty>No briefing has been generated yet.</Empty>}
       </Panel>
-      <Panel title="Schedule" label={`${data.cron.length} recurring`} to="/schedule">
-        {data.jobs.length ? data.jobs.slice(0, 3).map(job => <div className="list-row" key={job.job_id}><div><b>{job.task}</b><small>{formatDateTime(job.scheduled_at)}</small></div><Status value={job.status}/></div>) : <Empty>No scheduled runs yet.</Empty>}
+      <Panel title="Flows" label={`${data.cron.length} scheduled`} to="/flows">
+        {data.jobs.length ? data.jobs.slice(0, 3).map(job => <div className="list-row" key={job.job_id}><div><b>{job.task}</b><small>{formatDateTime(job.scheduled_at)}</small></div><Status value={job.status}/></div>) : <Empty>No flow has run yet.</Empty>}
       </Panel>
       <Panel title="Artifacts" label={`${data.artifacts.length} recent`} to="/artifacts">
         {data.artifacts.length ? data.artifacts.slice(0, 4).map(file => <div className="list-row compact" key={file.id}><div><b>{file.name}</b><small>{file.kind} · {timeAgo(file.updated_at)}</small></div><File size={14}/></div>) : <Empty>No generated outputs.</Empty>}

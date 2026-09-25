@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from agents.models import AgentPayload
@@ -12,11 +13,13 @@ from approval.interaction import UserInteraction
 from flows.models import flow_fingerprint
 from flows.registry import FlowRegistry
 from flows.store import FlowRun, FlowRunStore
-from tools.universal._flow_validation import (
+from flows.validation import (
     resolve_execution_tools,
     schema_errors,
     validate_flow_capabilities,
 )
+from utils.handoff import declared_artifact_paths, missing_artifact_paths
+from utils.time import localnow
 
 
 class FlowRunner:
@@ -39,6 +42,7 @@ class FlowRunner:
         tool_registry=None,
         workspace: str = "",
     ) -> None:
+        self._actions: dict[str, Callable[[], Awaitable[str]]] = {}
         self._flows = flow_registry
         self._agents = agent_registry
         self._skills = skill_registry
@@ -46,6 +50,15 @@ class FlowRunner:
         self._store = store
         self._interaction = interaction
         self._workspace = workspace
+
+    def register_action(self, name: str, handler: Callable[[], Awaitable[str]]) -> None:
+        """Make a maintenance job runnable as a built-in flow's step.
+
+        The handler is deterministic server code that returns a one-line account
+        of what it did. It is registered by whoever owns the state it touches,
+        after that state exists, so the runner is built without it.
+        """
+        self._actions[name] = handler
 
     async def run(
         self,
@@ -56,6 +69,7 @@ class FlowRunner:
         agent: str = "general",
         inputs: dict[str, Any] | None = None,
         test_mode: bool = False,
+        trigger: str = "",
     ) -> FlowRun:
         flow = self._flows.get(flow_name)
         if flow.status != "active" and not (test_mode and flow.status == "candidate"):
@@ -93,6 +107,7 @@ class FlowRunner:
                 inputs=inputs,
                 flow_fingerprint=fingerprint,
                 test_mode=test_mode,
+                trigger=trigger or ("test" if test_mode else "manual"),
             )
         elif run.flow_name != flow.name:
             raise ValueError(f"Run '{run_id}' belongs to flow '{run.flow_name}'")
@@ -106,6 +121,43 @@ class FlowRunner:
         outputs = list(run.outputs)
         for index in range(run.current_step, len(flow.steps)):
             step = flow.steps[index]
+            if step.action:
+                handler = self._actions.get(step.action)
+                if handler is None:
+                    return self._store.update(
+                        run.run_id,
+                        status="failed",
+                        current_step=index,
+                        outputs=outputs,
+                        error=f"Step '{step.name}': system action '{step.action}' is not available.",
+                    )
+                try:
+                    summary = await handler()
+                except Exception as exc:
+                    return self._store.update(
+                        run.run_id,
+                        status="failed",
+                        current_step=index,
+                        outputs=outputs,
+                        error=f"Step '{step.name}' failed: {exc}",
+                    )
+                outputs.append(
+                    {
+                        "step": step.name,
+                        "skill": "",
+                        "agent": "system",
+                        "data": {
+                            "output": summary,
+                            "summary": summary,
+                            "result": {},
+                            "tools_used": [],
+                            "agent_run_id": "",
+                            "artifacts": [],
+                        },
+                    }
+                )
+                run = self._store.update(run.run_id, status="running", current_step=index + 1, outputs=outputs)
+                continue
             step_inputs = _resolve_inputs(step.inputs, run.inputs, outputs)
             skill = self._skills.get(step.skill) if step.skill else None
             execution = skill.execution if skill else None
@@ -151,11 +203,12 @@ class FlowRunner:
                         error=f"Approval was not granted for step '{step.name}'.",
                     )
 
+            step_task_id = run.task_id or f"flow:{run.run_id}"
             try:
                 selected_agent = self._agents.get(selected_agent_name)
                 result = await selected_agent.run(
                     AgentPayload(
-                        task_id=run.task_id or f"flow:{run.run_id}",
+                        task_id=step_task_id,
                         prompt=_step_prompt(
                             flow.name,
                             step,
@@ -194,6 +247,27 @@ class FlowRunner:
                     error=result.question or f"Skill step '{step.name}' needs user attention.",
                 )
 
+            # What the agent promises to leave behind (its config's `produces`) is
+            # the durable result a schedule exists for. A model saying it wrote the
+            # file is not the file: unattended runs fail when it is absent, so a
+            # briefing that was never saved is not recorded as a success.
+            declared = declared_artifact_paths(
+                getattr(selected_agent.config, "produces", None) or [],
+                step_task_id,
+                localnow().date().isoformat(),
+            )
+            missing = missing_artifact_paths(declared)
+            if missing and run.trigger == "schedule":
+                return self._store.update(
+                    run.run_id,
+                    status="failed",
+                    current_step=index,
+                    outputs=outputs,
+                    error=f"Skill step '{step.name}': {selected_agent_name} completed without writing: "
+                    + ", ".join(missing),
+                )
+            written = [path for path in declared if path not in missing]
+
             contract_output = _contract_output(result, output_schema)
             output_errors = schema_errors(contract_output, output_schema, path="output")
             if output_errors:
@@ -219,6 +293,7 @@ class FlowRunner:
                         "result": contract_output,
                         "tools_used": result.tools_used,
                         "agent_run_id": result.run_id,
+                        "artifacts": written,
                     },
                 }
             )

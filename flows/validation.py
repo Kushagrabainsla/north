@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from flows.models import flow_fingerprint
+
 _APPROVAL_RANK = {"never": 0, "on_mutation": 1, "always": 2}
 
 
@@ -117,6 +119,11 @@ def validate_flow_capabilities(
 
     for index, step in enumerate(flow.steps, start=1):
         prefix = f"step {index} ({step.name!r})"
+        if step.action:
+            # A system action is server code named by a built-in flow: there is
+            # no skill or instruction text to check. Whether the server has it is
+            # answered when the step runs.
+            continue
         if not step.skill:
             if not step.instructions.strip():
                 errors.append(f"{prefix}: inline instructions are required when no skill is selected")
@@ -187,3 +194,35 @@ def validate_flow_capabilities(
                     errors.append(f"{prefix}: unknown tool {tool_name!r} in skill contract")
 
     return FlowValidationReport(tuple(errors), tuple(warnings))
+
+
+def schedulable_flow_error(
+    flow,
+    *,
+    skill_registry=None,
+    agent_registry=None,
+    tool_registry=None,
+) -> str:
+    """Why *flow* cannot be put on a schedule right now, or "" when it can.
+
+    A schedule promises a run nobody is watching, so the flow has to be active,
+    unchanged since it was tested, and still executable. Every door that creates
+    or retargets a schedule asks this one question.
+    """
+    if flow.status != "active":
+        return f"Flow '{flow.name}' is {flow.status}, not active."
+    if (
+        flow.activation_fingerprint
+        and skill_registry is not None
+        and flow.activation_fingerprint != flow_fingerprint(flow, skill_registry.get)
+    ):
+        return f"Flow '{flow.name}' changed after activation; test and activate it again."
+    report = validate_flow_capabilities(
+        flow,
+        skill_registry=skill_registry,
+        agent_registry=agent_registry,
+        tool_registry=tool_registry,
+    )
+    if not report.valid:
+        return f"Flow '{flow.name}' is no longer executable: {'; '.join(report.errors)}"
+    return ""

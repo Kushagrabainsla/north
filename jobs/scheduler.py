@@ -448,7 +448,8 @@ SYSTEM_CRON_ENTRIES: list[CronEntry] = [
             "grows for as long as it is installed."
         ),
         agent="system",
-        task="task_context_cleanup",
+        task="Nightly cleanup",
+        flow="nightly-cleanup",
         hour=3,
         minute=0,
     ),
@@ -521,15 +522,21 @@ def apply_shipped_defaults(entry: CronEntry) -> CronEntry:
 
     A description is taken from the shipped entry outright rather than only when
     the override lacks one - it says what the schedule *is*, which retiming or
-    pausing it does not change, and there is no way to edit it.
+    pausing it does not change, and there is no way to edit it. So is what it runs.
     """
     shipped = BUILTIN_BY_NAME.get(entry.name)
     if shipped is None:
         return entry
+    # What a built-in runs is shipped too: a form cannot change it, and a row
+    # written before the built-in ran a flow must not keep pointing at the old way.
     return dataclasses.replace(
         entry,
         label=entry.label or shipped.label,
         description=shipped.description,
+        agent=shipped.agent,
+        task=shipped.task,
+        skill=shipped.skill,
+        flow=shipped.flow,
     )
 
 

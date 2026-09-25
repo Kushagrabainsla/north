@@ -98,7 +98,7 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
         "before activation."
     )
     lines.append("- **create_agent**: Create new specialized sub-agents with custom prompts and configs at runtime.")
-    lines.append("- **schedule_task**: Install one-shot, wall-clock, or fixed-interval work after preflight.")
+    lines.append("- **schedule_task**: Run an active flow later, once or on a routine or fixed interval.")
     lines.append("- **use_skill**: Access a reusable procedure that may call several atomic tools.")
     lines.append("- **run_flow**: Test or execute a validated declarative flow with persisted checkpoints.")
 

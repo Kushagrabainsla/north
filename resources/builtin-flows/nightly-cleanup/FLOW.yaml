@@ -1,0 +1,10 @@
+name: nightly-cleanup
+description: Housekeeping north runs on itself. It closes tasks left half-finished,
+  deletes the databases, ledger entries, routing records and handoff files of runs
+  old enough to have stopped mattering, and retires learned skills whose tasks keep
+  failing. Without it north's storage grows for as long as it is installed.
+domains:
+  - general
+steps:
+  - name: clean-up
+    action: task_context_cleanup

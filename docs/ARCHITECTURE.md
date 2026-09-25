@@ -1471,13 +1471,15 @@ Full CRUD, in three interchangeable surfaces:
 
 | | conversation | CLI | API |
 |---|---|---|---|
-| create | `schedule_task` | `north cron add "…" --hour 7` | `POST /orchestrator/cron` |
+| create | `schedule_task` | `north cron add <flow> --hour 7` | `POST /orchestrator/cron` |
 | read | `list_schedules` | `north cron` | `GET /orchestrator/cron` |
 | update | `update_schedule` | `north cron set <name> --hour 8` | `PATCH /orchestrator/cron/{name}` |
 | delete | `cancel_schedule` | `north cron rm <name>` | `DELETE /orchestrator/cron/{name}` |
 
-"Remind me every Monday at 9am to review my goals" reaches `schedule_task` with `hour`,
-`minute` and `weekday`; "what have I got scheduled?" and "move it to 8" reach the read and
+Every schedule runs a flow, so a request is a flow first and a timer second: "Remind me every
+Monday at 9am to review my goals" becomes a one-step flow of instructions, tested and activated,
+which `schedule_task` then triggers with `flow`, `hour`, `minute` and `days`. The Flows page shows
+each flow's schedule, next run and run history, and manages them; it calls the same tools. "what have I got scheduled?" and "move it to 8" reach the read and
 update tools. All four verbs live in the global catalog, so any agent can retrieve the
 complete scheduling lifecycle when the task calls for it.
 

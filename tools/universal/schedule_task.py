@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from flows.validation import schedulable_flow_error
 from jobs.models import Job, JobPriority, JobType
 from jobs.scheduler import CronEntry
 from tools.base import Tool
@@ -41,47 +42,41 @@ def _whole_number(params: dict, field: str, ceiling: int, default: int | None = 
     return value
 
 
+NO_FLOW = (
+    "Schedules run flows. Pass the 'flow' to run. To schedule something that is not a flow yet, "
+    "create one first with create_flow (a single step of instructions or an existing skill is enough), "
+    "test it with run_flow in test mode, activate it once the user confirms, then schedule it here."
+)
+
+
 class ScheduleTaskTool(Tool):
     name = "schedule_task"
     description = (
-        "Schedule a task for north to run later in the background, even when the user is "
-        "not chatting. Give the work as a natural-language prompt in 'task', and a short "
-        "title in 'label' so it reads well in a list; the prompt runs at the "
-        "scheduled time under the named agent. Times are the USER'S LOCAL TIME - pass the "
-        "hour they said, do not convert to UTC. For a single future run, pass run_at as "
+        "Schedule a flow for north to run later in the background, even when the user is not "
+        "chatting. Every schedule runs a flow: pass its name as 'flow' and give a short title in "
+        "'label' so it reads well in a list. The flow must be active - use create_flow to make "
+        "one, run_flow in test mode to prove it, then activate it before scheduling. A reminder "
+        "or a routine is a flow with one step of instructions. Times are the USER'S LOCAL TIME - "
+        "pass the hour they said, do not convert to UTC. For a single future run, pass run_at as "
         "'YYYY-MM-DDTHH:MM' local (an explicit offset or trailing Z is honoured if given). "
         "For a fixed interval such as every five minutes, pass interval_minutes. "
         "For a repeating wall-clock run, pass hour (0-23) plus optional minute (0-59) and days (omit "
         "days for every day). 'days' takes a list of day names or numbers (0=Mon … 6=Sun), "
         "or one of the words 'weekdays', 'weekends', 'daily' - so \"every weekday at 9:30\" "
         "is hour 9, minute 30, days 'weekdays'. Pass tz only to schedule in a zone other "
-        "than the user's own, as an IANA name like 'Asia/Kolkata'. Good for reminders, "
-        "digests, and check-ins. Use list_schedules to see what is scheduled, "
-        "update_schedule to change one, and cancel_schedule to remove one."
+        "than the user's own, as an IANA name like 'Asia/Kolkata'. Use list_schedules to see what "
+        "is scheduled, update_schedule to change one, and cancel_schedule to remove one."
     )
     parameters_schema = {
         "type": "object",
         "properties": {
-            "task": {"type": "string", "description": "The task prompt to run"},
+            "flow": {"type": "string", "description": "Name of the active flow to run"},
             "label": {
                 "type": "string",
                 "description": (
                     "A short title for this schedule, 2-4 words, e.g. 'Morning stretch'. "
-                    "Shown in lists; the prompt in 'task' is what actually runs."
+                    "Shown in lists."
                 ),
-            },
-            "agent": {
-                "type": "string",
-                "description": "Agent to run it (default 'general')",
-                "default": "general",
-            },
-            "skill": {
-                "type": "string",
-                "description": "Optional reusable skill/playbook to apply when the task runs",
-            },
-            "flow": {
-                "type": "string",
-                "description": "Optional declarative flow to execute when the schedule fires",
             },
             "run_at": {"type": "string", "description": "Local ISO 8601 datetime for a one-shot run"},
             "hour": {"type": "integer", "description": "Hour (0-23), local, for a recurring schedule"},
@@ -98,7 +93,7 @@ class ScheduleTaskTool(Tool):
             },
             "tz": {"type": "string", "description": "IANA zone, only if not the user's own"},
         },
-        "required": ["task"],
+        "required": ["flow"],
     }
 
     def __init__(
@@ -118,56 +113,30 @@ class ScheduleTaskTool(Tool):
         self._tool_registry = tool_registry
 
     async def run(self, input: ToolInput) -> ToolOutput:
-        task = str(input.params.get("task", "")).strip()
-        if not task:
-            return ToolOutput(success=False, error="Parameter 'task' is required.")
-
-        agent = str(input.params.get("agent", "general"))
-        if self._agent_registry is not None and agent not in self._agent_registry.names():
-            return ToolOutput(success=False, error=f"Unknown agent '{agent}'.")
-        skill = str(input.params.get("skill", "")).strip()
         flow = str(input.params.get("flow", "")).strip()
-        if skill and self._skill_registry is not None:
-            from skills.exceptions import SkillNotFoundError
-
-            try:
-                selected_skill = self._skill_registry.get(skill)
-            except SkillNotFoundError:
-                return ToolOutput(success=False, error=f"Unknown skill '{skill}'.")
-            if selected_skill.status != "active":
-                return ToolOutput(success=False, error=f"Skill '{skill}' is {selected_skill.status}, not active.")
-        if flow and self._flow_registry is not None:
+        if not flow:
+            return ToolOutput(success=False, error=NO_FLOW)
+        # Every schedule is run by the general agent through its flow: what it does
+        # is the flow's business, so there is no agent or skill to choose here.
+        agent, skill = "general", ""
+        task = str(input.params.get("task", "")).strip()
+        if self._flow_registry is not None:
             from flows.exceptions import FlowNotFoundError
 
             try:
                 selected_flow = self._flow_registry.get(flow)
             except FlowNotFoundError:
                 return ToolOutput(success=False, error=f"Unknown flow '{flow}'.")
-            if selected_flow.status != "active":
-                return ToolOutput(success=False, error=f"Flow '{flow}' is {selected_flow.status}, not active.")
-            if selected_flow.activation_fingerprint and self._skill_registry is not None:
-                from flows.models import flow_fingerprint
-
-                if selected_flow.activation_fingerprint != flow_fingerprint(
-                    selected_flow, self._skill_registry.get
-                ):
-                    return ToolOutput(
-                        success=False,
-                        error=f"Flow '{flow}' changed after activation; test and activate it again.",
-                    )
-            from tools.universal._flow_validation import validate_flow_capabilities
-
-            report = validate_flow_capabilities(
+            problem = schedulable_flow_error(
                 selected_flow,
                 skill_registry=self._skill_registry,
                 agent_registry=self._agent_registry,
                 tool_registry=self._tool_registry,
             )
-            if not report.valid:
-                return ToolOutput(
-                    success=False,
-                    error=f"Flow '{flow}' is no longer executable: {'; '.join(report.errors)}",
-                )
+            if problem:
+                return ToolOutput(success=False, error=problem)
+            task = task or selected_flow.description
+        task = task or f"Run the {flow} flow."
         run_at = input.params.get("run_at")
         hour = input.params.get("hour")
         interval_minutes = input.params.get("interval_minutes")

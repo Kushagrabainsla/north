@@ -12,14 +12,18 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from flows.exceptions import FlowNotFoundError, FlowParseError
-from flows.models import FLOW_FILENAME, FlowSource
+from flows.models import FLOW_FILENAME, FlowSource, flow_fingerprint
 from flows.registry import parse_flow_document
+from flows.store import FlowRun
+from flows.validation import schedulable_flow_error, validate_flow_capabilities
 from orchestrator.api_context import current_services
 from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME, SkillSource
 from skills.parser import parse_skill_document
 from skills.registry import parse_execution_contract, rejection_reason
-from tools.universal._flow_validation import validate_flow_capabilities
+from tools.models import ToolInput
+from tools.universal.cancel_schedule import CancelScheduleTool
+from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_tool import (
     _candidate_root,
     _check_code_safety,
@@ -28,6 +32,10 @@ from tools.universal.create_tool import (
     _list_tools,
     _render_stub,
 )
+from tools.universal.schedule_task import ScheduleTaskTool
+from tools.universal.update_schedule import UpdateScheduleTool
+from utils.ids import generate_id
+from utils.tasks import spawn
 
 # This router is composed into ``web.api.router``, which owns the public
 # ``/web/api`` prefix and request-level dependencies. Repeating either here
@@ -487,6 +495,306 @@ async def list_flows() -> list[dict[str, Any]]:
     ]
 
 
+def _tested_run_id(flow) -> str:
+    """The latest completed test-mode run of this exact flow definition, or ""."""
+    services = current_services()
+    store = services.flow_store
+    if store is None or flow.status != "candidate":
+        return ""
+    skills = services.skill_registry
+    fingerprint = flow_fingerprint(flow, skills.get if skills is not None else None)
+    for run in store.list_runs(flow.name, 50):
+        if run.test_mode and run.status == "completed" and run.flow_fingerprint == fingerprint:
+            return run.run_id
+    return ""
+
+
+_RUN_TEXT_LIMIT = 1_200
+
+
+def _clip(value: Any, limit: int = _RUN_TEXT_LIMIT) -> str:
+    text = str(value or "").strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def _meaningful(value: Any) -> str:
+    text = _clip(value)
+    return "" if text in {"{}", "[]"} else text
+
+
+def flow_run_view(run: FlowRun, total_steps: int | None = None) -> dict[str, Any]:
+    """One run as the Flows page reads it: what started it, how far it got, what it said.
+
+    Step output is clipped: a run keeps whole agent answers, and a history list
+    needs enough to recognise the run, not a copy of every briefing.
+    """
+    steps = []
+    for item in run.outputs:
+        data = item.get("data") or {}
+        steps.append(
+            {
+                "step": item.get("step", ""),
+                "skill": item.get("skill", ""),
+                "agent": item.get("agent", ""),
+                # A step whose skill declares no outputs answers with an empty
+                # object, which says nothing worth showing.
+                "summary": _meaningful(data.get("summary")),
+                "output": _meaningful(data.get("output")),
+                "tools_used": [str(tool) for tool in data.get("tools_used") or []],
+                # What the step left behind, named the way the Artifacts page names it.
+                "artifacts": [
+                    {"name": Path(path).name, "kind": Path(path).parent.name}
+                    for path in data.get("artifacts") or []
+                ],
+            }
+        )
+    return {
+        "run_id": run.run_id,
+        "flow": run.flow_name,
+        "status": run.status,
+        # Runs recorded before the trigger was kept are only known to be tests or not.
+        "trigger": run.trigger or ("test" if run.test_mode else ""),
+        "test_mode": run.test_mode,
+        "task_id": run.task_id,
+        "current_step": run.current_step,
+        "total_steps": total_steps if total_steps is not None else len(steps),
+        "error": run.error,
+        "started_at": run.created_at or run.updated_at,
+        "updated_at": run.updated_at,
+        "steps": steps,
+    }
+
+
+@router.get("/flow-runs")
+async def list_flow_runs(flow: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Recent flow runs, newest first; pass `flow` for one flow's history."""
+    services = current_services()
+    store = services.require("flow_store")
+    registry = services.flow_registry
+    runs = await asyncio.to_thread(store.list_runs, flow, max(1, min(limit, 200)))
+
+    def total(name: str) -> int | None:
+        if registry is None:
+            return None
+        try:
+            return len(registry.get(name).steps)
+        except FlowNotFoundError:
+            return None
+
+    return [flow_run_view(run, total(run.flow_name)) for run in runs]
+
+
+class FlowRunRequest(BaseModel):
+    mode: str = Field(default="test", pattern="^(test|execute)$")
+
+
+class FlowActivation(BaseModel):
+    test_run_id: str = Field(min_length=1, max_length=100)
+
+
+class FlowScheduleCreate(BaseModel):
+    """When a flow should run. The flow carries the work, so there is no prompt or agent."""
+
+    label: str = Field(default="", max_length=200)
+    hour: int | None = None
+    minute: int | None = None
+    interval_minutes: int | None = None
+    days: Any = None
+    tz: str | None = None
+    run_at: str | None = None
+
+
+class FlowScheduleUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=200)
+    hour: int | None = None
+    minute: int | None = None
+    interval_minutes: int | None = None
+    days: Any = None
+    tz: str | None = None
+    enabled: bool | None = None
+
+
+def _known_flow(name: str):
+    try:
+        return current_services().require("flow_registry").get(name)
+    except FlowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+def _set_fields(model: BaseModel) -> dict[str, Any]:
+    return {key: value for key, value in model.model_dump().items() if value is not None}
+
+
+async def _flow_schedule_row(name: str) -> dict[str, Any]:
+    """The stored schedule *name*, if it is one that runs a flow."""
+    row = await current_services().require("cron_store").get(name)
+    if row is None or not row.get("flow"):
+        raise HTTPException(status_code=404, detail=f"No flow schedule named {name!r}")
+    return row
+
+
+def _schedule_tools() -> tuple[ScheduleTaskTool, UpdateScheduleTool, CancelScheduleTool]:
+    services = current_services()
+    common = {
+        "skill_registry": services.skill_registry,
+        "flow_registry": services.flow_registry,
+        "agent_registry": services.agent_registry,
+        "tool_registry": services.tool_registry,
+    }
+    cron_store = services.require("cron_store")
+    return (
+        ScheduleTaskTool(job_processor=services.require("job_processor"), cron_store=cron_store, **common),
+        UpdateScheduleTool(cron_store=cron_store, **common),
+        CancelScheduleTool(job_processor=services.require("job_processor"), cron_store=cron_store),
+    )
+
+
+@router.post("/flow-definitions/{name}/schedules", status_code=201)
+async def create_flow_schedule(name: str, body: FlowScheduleCreate) -> dict[str, Any]:
+    """Put a flow on a schedule: a repeating one, or a single run at a set time.
+
+    Goes through the same tool the chat uses, so a schedule made here obeys the
+    same rules: the flow must be active, unchanged since it was tested, and
+    still executable.
+    """
+    flow = _known_flow(name)
+    scheduler, _, _ = _schedule_tools()
+    result = await scheduler.run(
+        ToolInput(
+            params={
+                "task": flow.description or f"Run the {name} flow.",
+                "agent": "general",
+                "flow": name,
+                **_set_fields(body),
+            }
+        )
+    )
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.error or "Could not schedule this flow")
+    return result.data
+
+
+@router.patch("/flow-schedules/{schedule}")
+async def update_flow_schedule(schedule: str, body: FlowScheduleUpdate) -> dict[str, Any]:
+    """Retime, rename, pause or resume one of a flow's schedules."""
+    await _flow_schedule_row(schedule)
+    _, updater, _ = _schedule_tools()
+    result = await updater.run(ToolInput(params={"name": schedule, **_set_fields(body)}))
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.error or "Could not change this schedule")
+    return result.data
+
+
+@router.delete("/flow-schedules/{schedule}", status_code=204)
+async def delete_flow_schedule(schedule: str) -> None:
+    await _flow_schedule_row(schedule)
+    _, _, canceller = _schedule_tools()
+    result = await canceller.run(ToolInput(params={"name": schedule}))
+    if not result.success:
+        raise HTTPException(status_code=409, detail=result.error or "Could not delete this schedule")
+
+
+@router.post("/flow-definitions/{name}/runs", status_code=202)
+async def start_flow_run(name: str, body: FlowRunRequest) -> dict[str, Any]:
+    """Start a run in the background and return at once; it can take minutes.
+
+    ``test`` is how a candidate earns activation. ``execute`` is a real run and
+    needs the flow to be schedulable: active, unchanged since it was tested.
+    Approvals the run needs appear in the Approvals page like any other.
+    """
+    services = current_services()
+    flow = _known_flow(name)
+    runner = services.require("flow_runner")
+    store = services.require("flow_store")
+    skills = services.skill_registry
+    test_mode = body.mode == "test"
+    if test_mode:
+        if flow.status not in {"candidate", "active"}:
+            raise HTTPException(status_code=409, detail=f"Flow '{name}' is {flow.status}, so it cannot be run.")
+        report = validate_flow_capabilities(
+            flow,
+            skill_registry=skills,
+            agent_registry=services.agent_registry,
+            tool_registry=services.tool_registry,
+        )
+        problem = "Flow is not executable: " + "; ".join(report.errors) if not report.valid else ""
+    else:
+        problem = schedulable_flow_error(
+            flow,
+            skill_registry=skills,
+            agent_registry=services.agent_registry,
+            tool_registry=services.tool_registry,
+        )
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
+
+    run_id = generate_id()
+    task_id = f"flow_{run_id[:12]}"
+    trigger = "test" if test_mode else "manual"
+    # Created before returning so the run is on the page the moment it starts.
+    store.create(
+        run_id=run_id,
+        flow_name=name,
+        task_id=task_id,
+        agent="general",
+        flow_fingerprint=flow_fingerprint(flow, skills.get if skills is not None else None),
+        test_mode=test_mode,
+        trigger=trigger,
+    )
+
+    async def _drive() -> None:
+        try:
+            await runner.run(name, run_id=run_id, task_id=task_id, test_mode=test_mode, trigger=trigger)
+        except Exception as exc:
+            current = store.get(run_id)
+            if current is not None and current.status == "running":
+                store.update(
+                    run_id,
+                    status="failed",
+                    current_step=current.current_step,
+                    outputs=current.outputs,
+                    error=str(exc),
+                )
+            raise
+
+    spawn(_drive(), name=f"flow_run:{run_id}")
+    return {"run_id": run_id, "task_id": task_id, "status": "running", "trigger": trigger}
+
+
+@router.post("/flow-definitions/{name}/activate")
+async def activate_flow(name: str, body: FlowActivation) -> dict[str, Any]:
+    """Activate a candidate on the evidence of a completed test run.
+
+    Clicking activate in the page is the explicit confirmation the tool asks
+    for; the evidence rules are the tool's own, so the chat and the page cannot
+    disagree about what earns activation.
+    """
+    services = current_services()
+    flow = _known_flow(name)
+    if flow.source is FlowSource.BUILTIN:
+        raise HTTPException(status_code=409, detail="A built-in flow is already active as shipped.")
+    # Built here rather than taken from the tool registry: the registered tool
+    # carries the self-edit policy that guards north editing its own files, and
+    # that policy only knows files north wrote itself. This is the user editing
+    # through the page, like every other flow write in this module.
+    tool = CreateFlowTool(
+        services.require("flow_registry"),
+        learned_dir=Path(services.require("north_home")) / "flows",
+        tool_registry=services.tool_registry,
+        skill_registry=services.skill_registry,
+        agent_registry=services.agent_registry,
+        flow_store=services.flow_store,
+    )
+    result = await tool.run(
+        ToolInput(
+            params={"action": "activate", "name": name, "test_run_id": body.test_run_id, "user_confirmed": True}
+        )
+    )
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.error or "Could not activate this flow")
+    return await get_flow(name)
+
+
 @router.get("/flow-definitions/{name}")
 async def get_flow(name: str) -> dict[str, Any]:
     registry = current_services().require("flow_registry")
@@ -501,6 +809,9 @@ async def get_flow(name: str) -> dict[str, Any]:
         "content": content,
         "source": flow.source.value,
         "status": flow.status,
+        # The test run that proves this exact candidate works, when there is one:
+        # activation is offered only against it.
+        "tested_run_id": await asyncio.to_thread(_tested_run_id, flow),
         "domains": sorted(flow.domains),
         "steps": [
             {
@@ -509,6 +820,7 @@ async def get_flow(name: str) -> dict[str, Any]:
                 "instructions": step.instructions,
                 "inputs": step.inputs,
                 "approval": step.approval,
+                "action": step.action,
             }
             for step in flow.steps
         ],

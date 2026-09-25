@@ -32,6 +32,21 @@ class _Agents:
         return ["general"]
 
 
+def _flows(tmp_path, flows: dict[str, str]):
+    """A registry of instruction-only flows, name -> status, whose description is derived from the name."""
+    from flows.registry import FlowRegistry
+
+    for name, status in flows.items():
+        directory = tmp_path / "flows" / name
+        directory.mkdir(parents=True)
+        (directory / "FLOW.yaml").write_text(
+            f"name: {name}\ndescription: Compile the {name}\nstatus: {status}\n"
+            "steps:\n  - name: go\n    instructions: Do it.\n    approval: never\n",
+            encoding="utf-8",
+        )
+    return FlowRegistry(tmp_path / "flows")
+
+
 @pytest.fixture
 def store(tmp_path) -> UserCronStore:
     return UserCronStore(tmp_path / "jobs.db")
@@ -43,7 +58,8 @@ def tool(store) -> ScheduleTaskTool:
 
 
 async def run(tool, **params):
-    return await tool.run(ToolInput(params=params))
+    """A call as a model makes it: every schedule names the flow it runs."""
+    return await tool.run(ToolInput(params={"flow": "morning-routine", **params}))
 
 
 # ---- reading a day selection ----
@@ -129,33 +145,85 @@ async def test_schedule_requires_exactly_one_timing_mode(tool) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_recurring_task_can_reference_a_reusable_skill(tool, store) -> None:
-    result = await run(tool, task="find and summarize new roles", skill="job-search", hour=9)
+async def test_a_schedule_must_name_the_flow_it_runs(tool, store) -> None:
+    result = await tool.run(ToolInput(params={"hour": 9, "label": "Stretch"}))
+
+    assert not result.success
+    assert "create_flow" in result.error and "flow" in result.error
+    assert await store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_reminder_is_scheduled_as_a_flow_not_as_a_prompt(tool, store) -> None:
+    result = await tool.run(ToolInput(params={"flow": "stretch-reminder", "hour": 9, "label": "Stretch"}))
+
     assert result.success, result.error
     (row,) = await store.list()
-    assert row["skill"] == "job-search"
+    assert row["flow"] == "stretch-reminder"
+    assert row["agent"] == "general" and not row["skill"]
 
 
 @pytest.mark.asyncio
-async def test_a_one_shot_task_carries_its_skill_reference(tool) -> None:
-    result = await run(tool, task="prepare the morning digest", skill="daily-digest", run_at="2030-01-01T09:00")
+async def test_a_schedule_takes_the_flows_description_as_what_it_does(tool, store, tmp_path) -> None:
+    registry = _flows(tmp_path, {"briefing": "active"})
+    checked_tool = ScheduleTaskTool(job_processor=tool._job_processor, cron_store=store, flow_registry=registry)
+
+    result = await checked_tool.run(ToolInput(params={"flow": "briefing", "hour": 7}))
+
+    assert result.success, result.error
+    (row,) = await store.list()
+    assert row["task"] == "Compile the briefing"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_flow_is_refused_when_flows_can_be_checked(tool, store, tmp_path) -> None:
+    checked_tool = ScheduleTaskTool(
+        job_processor=tool._job_processor, cron_store=store, flow_registry=_flows(tmp_path, {})
+    )
+
+    result = await checked_tool.run(ToolInput(params={"flow": "nope", "hour": 9}))
+
+    assert not result.success
+    assert "Unknown flow" in result.error
+    assert await store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_run_of_a_flow_carries_the_flow(tool) -> None:
+    result = await run(tool, flow="briefing", run_at="2030-01-01T09:00")
+
     assert result.success, result.error
     assert result.data["type"] == "one-shot"
-    assert tool._job_processor.jobs[-1].payload["skill"] == "daily-digest"
+    assert tool._job_processor.jobs[-1].payload["flow"] == "briefing"
 
 
 @pytest.mark.asyncio
-async def test_unknown_skill_is_rejected_when_a_registry_is_configured(tool, tmp_path) -> None:
-    from skills.registry import SkillRegistry
+async def test_a_schedule_cannot_have_its_prompt_or_agent_changed(tool, store) -> None:
+    created = await run(tool, hour=9)
+    updater = UpdateScheduleTool(cron_store=store)
 
-    checked_tool = ScheduleTaskTool(
-        job_processor=tool._job_processor,
-        cron_store=tool._cron_store,
-        skill_registry=SkillRegistry(tmp_path / "builtin"),
-    )
-    result = await run(checked_tool, task="do work", skill="does-not-exist", hour=9)
-    assert not result.success
-    assert "Unknown skill" in result.error
+    for field, value in (("task", "do something else"), ("agent", "coder"), ("skill", "job-search")):
+        result = await updater.run(ToolInput(params={"name": created.data["name"], field: value}))
+
+        assert not result.success
+        assert field in result.error and "flow" in result.error
+    (row,) = await store.list()
+    assert row["flow"] == "morning-routine"
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_can_be_pointed_at_a_different_active_flow(tool, store, tmp_path) -> None:
+    created = await run(tool, hour=9)
+    flows = _flows(tmp_path, {"other": "active", "draft": "candidate"})
+    updater = UpdateScheduleTool(cron_store=store, flow_registry=flows)
+
+    moved = await updater.run(ToolInput(params={"name": created.data["name"], "flow": "other"}))
+    refused = await updater.run(ToolInput(params={"name": created.data["name"], "flow": "draft"}))
+
+    assert moved.success, moved.error
+    assert not refused.success and "not active" in refused.error
+    (row,) = await store.list()
+    assert row["flow"] == "other"
 
 
 @pytest.mark.asyncio
@@ -184,21 +252,6 @@ steps:
 
     assert not result.success
     assert "not active" in result.error
-
-
-@pytest.mark.asyncio
-async def test_unknown_agent_is_rejected_before_schedule_is_stored(tool, store) -> None:
-    checked_tool = ScheduleTaskTool(
-        job_processor=tool._job_processor,
-        cron_store=store,
-        agent_registry=_Agents(),
-    )
-
-    result = await run(checked_tool, task="do work", agent="missing", hour=9)
-
-    assert not result.success
-    assert "Unknown agent" in result.error
-    assert await store.list() == []
 
 
 @pytest.mark.asyncio

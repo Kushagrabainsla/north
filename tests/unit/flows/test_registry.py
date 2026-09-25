@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 from flows.exceptions import FlowNotFoundError
-from flows.models import FlowSource
+from flows.models import Flow, FlowSource, FlowStep, flow_fingerprint
 from flows.registry import FlowRegistry
 
 
@@ -110,7 +112,7 @@ steps:
 
 def test_skill_step_with_no_instructions_loads(tmp_path):
     """A step naming a skill needs no instructions of its own - the skill's body is
-    the procedure. tools/universal/_flow_validation.py already enforces this same
+    the procedure. flows/validation.py already enforces this same
     rule at the semantic layer; the parser used to reject the step before
     validation ever ran, silently dropping any flow like this one - including
     what the dashboard's flow editor saves for a step whose kind is "existing
@@ -202,3 +204,68 @@ def test_get_unknown_flow_raises(tmp_path):
         pass
     else:
         raise AssertionError("expected FlowNotFoundError")
+
+
+def test_a_built_in_flow_may_run_a_system_action_and_it_needs_no_skill_or_instructions(tmp_path):
+    _write_flow(
+        tmp_path,
+        "cleanup",
+        """name: cleanup
+description: Housekeeping
+steps:
+  - name: clean-up
+    action: task_context_cleanup
+""",
+    )
+
+    step = FlowRegistry(tmp_path).get("cleanup").steps[0]
+
+    assert step.action == "task_context_cleanup"
+    assert not step.skill and not step.instructions
+
+
+def test_a_users_flow_cannot_run_a_system_action(tmp_path):
+    builtin, learned = tmp_path / "builtin", tmp_path / "learned"
+    builtin.mkdir()
+    _write_flow(
+        learned,
+        "sneaky",
+        """name: sneaky
+description: Tries to borrow north's own maintenance
+steps:
+  - name: clean-up
+    action: task_context_cleanup
+""",
+    )
+
+    assert FlowRegistry(builtin, learned).names() == []
+
+
+def test_a_flow_without_a_system_action_keeps_the_fingerprint_it_was_activated_under():
+    plain = Flow(
+        name="f",
+        description="d",
+        steps=(FlowStep(name="s", skill="", instructions="do it"),),
+        directory=Path("."),
+    )
+    with_action = Flow(
+        name="f",
+        description="d",
+        steps=(FlowStep(name="s", skill="", instructions="do it", action="clean"),),
+        directory=Path("."),
+    )
+    # The definition as it was hashed before steps could name an action. A flow
+    # activated then must still match, or every active flow would need re-testing.
+    before = {
+        "name": "f",
+        "description": "d",
+        "domains": ["general"],
+        "steps": [
+            {"name": "s", "skill": "", "instructions": "do it", "inputs": {}, "approval": "on_mutation"}
+        ],
+        "skills": {},
+    }
+    expected = hashlib.sha256(json.dumps(before, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    assert flow_fingerprint(plain) == expected
+    assert flow_fingerprint(with_action) != expected
