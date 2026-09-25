@@ -1446,13 +1446,11 @@ constants, are layered under any stored override by `merge_entries`, are
 read-only in the UI except for retime/pause, and deleting an override restores
 the shipped default.
 
-**Provisioned defaults** (`jobs/scheduler.py` - `PROVISIONED_CRON_ENTRIES`):
-```
-news_daily_briefing            -> daily 8:00 AM
-```
+**Provisioned defaults** (`jobs/scheduler.py` - `PROVISIONED_CRON_ENTRIES`): none
+are shipped today. A fresh install starts with no schedules of its own.
 
-These are schedules a *fresh install* should start with but which are the user's
-own the moment they exist. `provision_default_schedules()` seeds each one into
+The mechanism is for a schedule a *fresh install* should start with that is the user's
+own the moment it exists. `provision_default_schedules()` seeds each one into
 `user_cron_entries` exactly once (guarded by the `schedule_provisioning` ledger),
 after which it behaves like any user-created schedule: fully editable, and
 deletable for good. A provisioned default the user deletes is never re-seeded, and

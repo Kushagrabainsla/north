@@ -16,6 +16,7 @@ from flows.models import FLOW_FILENAME, FlowSource, flow_fingerprint
 from flows.registry import parse_flow_document
 from flows.store import FlowRun
 from flows.validation import schedulable_flow_error, validate_flow_capabilities
+from jobs.models import JobStatus
 from orchestrator.api_context import current_services
 from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME, SkillSource
@@ -614,6 +615,19 @@ class FlowScheduleUpdate(BaseModel):
     enabled: bool | None = None
 
 
+async def _remove_schedules_of(flow: str) -> None:
+    """A schedule with no flow can only fail when it fires, so it goes with the flow."""
+    services = current_services()
+    if services.cron_store is not None:
+        for row in await services.cron_store.list():
+            if row.get("flow") == flow:
+                await services.cron_store.remove(row["name"])
+    if services.job_processor is not None:
+        for job in await services.job_processor.list_jobs(status=JobStatus.PENDING, limit=1000):
+            if (job.payload or {}).get("flow") == flow:
+                await services.job_processor.cancel(job.job_id)
+
+
 def _known_flow(name: str):
     try:
         return current_services().require("flow_registry").get(name)
@@ -888,3 +902,4 @@ async def delete_flow(name: str) -> None:
         raise HTTPException(status_code=403, detail="Built-in flows cannot be deleted")
     if not registry.remove_learned(name):
         raise HTTPException(status_code=404, detail=f"Learned flow {name!r} was not found")
+    await _remove_schedules_of(name)

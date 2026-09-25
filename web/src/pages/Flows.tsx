@@ -18,6 +18,7 @@ import {
   buildUpcoming,
   cadenceText,
   flowActions,
+  flowDeletionPrompt,
   flowScheduleBody,
   flowStepsComplete,
   lastRunOf,
@@ -823,7 +824,16 @@ export function Flows() {
       flows.data?.find((flow) => flow.name === selected)?.source !==
         "learned" ||
       !(await dialog.confirm(
-        `Delete learned flow '${selected}'? This cannot be undone.`,
+        flowDeletionPrompt(
+          selected,
+          (byFlow.get(selected) || []).map((entry) => entry.title),
+          (jobs.data || []).filter(
+            (job) =>
+              job.flow === selected &&
+              !job.cron_entry &&
+              job.status === "queued",
+          ).length,
+        ),
         { title: "Delete flow?", confirmLabel: "Delete flow", danger: true },
       ))
     )

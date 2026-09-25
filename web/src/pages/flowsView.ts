@@ -261,3 +261,22 @@ export function flowScheduleBody(draft: Draft) {
     days: draft.repeat === "custom" ? draft.days : draft.repeat,
   };
 }
+
+// What deleting a flow will also remove, said before it happens: a schedule
+// with no flow can only fail when it fires, so it is deleted with the flow.
+export function flowDeletionPrompt(
+  flow: string,
+  scheduleTitles: string[],
+  queuedRuns: number,
+): string {
+  const lines = [`Delete flow '${flow}'? This cannot be undone.`];
+  if (scheduleTitles.length)
+    lines.push(
+      `These schedules run it and will also be deleted:\n${scheduleTitles.map((title) => `• ${title}`).join("\n")}`,
+    );
+  if (queuedRuns)
+    lines.push(
+      `${queuedRuns} queued run${queuedRuns === 1 ? "" : "s"} will also be cancelled.`,
+    );
+  return lines.join("\n\n");
+}

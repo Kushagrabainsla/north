@@ -94,6 +94,9 @@ class FakeJobs:
     async def get(self, job_id):
         return next((job for job in self.enqueued if job.job_id == job_id), None)
 
+    async def list_jobs(self, status=None, limit=100):
+        return [job for job in self.enqueued if status is None or job.status == status][:limit]
+
     async def cancel(self, job_id) -> None:
         self.enqueued = [job for job in self.enqueued if job.job_id != job_id]
 
@@ -341,3 +344,20 @@ async def test_activation_from_the_page_does_not_go_through_the_self_edit_guarde
         activated = await web_api.activate_flow("draft", web_api.FlowActivation(test_run_id=started["run_id"]))
 
     assert activated["status"] == "active"
+
+
+async def test_deleting_a_flow_takes_its_schedules_and_queued_runs_with_it(env) -> None:
+    scheduled = await web_api.create_flow_schedule("live", web_api.FlowScheduleCreate(hour=7))
+    await web_api.create_flow_schedule("live", web_api.FlowScheduleCreate(run_at="2099-01-01T09:00"))
+    await env.cron.add(name="stretch", agent="general", task="stretch", hour=9, minute=0, weekdays=None)
+
+    assert await web_api.delete_flow("live") is None
+
+    assert await env.cron.get(scheduled["name"]) is None
+    assert env.jobs.enqueued == []
+    # Schedules of other things are left alone.
+    assert await env.cron.get("stretch") is not None
+
+
+async def test_deleting_a_flow_with_no_schedules_still_works(env) -> None:
+    assert await web_api.delete_flow("draft") is None

@@ -3,6 +3,7 @@ import {
   buildUpcoming,
   cadenceText,
   flowActions,
+  flowDeletionPrompt,
   flowScheduleBody,
   flowStepsComplete,
   usesSystemAction,
@@ -366,5 +367,26 @@ describe("flowScheduleBody", () => {
       label: "Morning run",
       run_at: "2026-10-01T07:05",
     });
+  });
+});
+
+describe("flowDeletionPrompt", () => {
+  it("names every schedule and queued run that goes with the flow", () => {
+    const prompt = flowDeletionPrompt(
+      "daily-news-briefing",
+      ["Daily news briefing", "Evening digest"],
+      2,
+    );
+
+    expect(prompt).toContain("Delete flow 'daily-news-briefing'?");
+    expect(prompt).toContain("• Daily news briefing");
+    expect(prompt).toContain("• Evening digest");
+    expect(prompt).toContain("2 queued runs will also be cancelled.");
+  });
+
+  it("does not imply a cascade when nothing else depends on the flow", () => {
+    expect(flowDeletionPrompt("scratch", [], 0)).toBe(
+      "Delete flow 'scratch'? This cannot be undone.",
+    );
   });
 });

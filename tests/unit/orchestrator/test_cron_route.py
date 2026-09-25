@@ -299,8 +299,8 @@ async def test_the_builtin_has_a_readable_name(store, flows) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_provisioned_briefing_lists_as_the_users_own(store, flows) -> None:
-    """Once provisioned, the daily briefing is a user schedule, not a built-in.
+async def test_a_provisioned_default_lists_as_the_users_own(store, flows, sample_provisioned_default) -> None:
+    """Once provisioned, a default is a user schedule, not a built-in.
 
     It can be retimed, paused, and deleted for good like anything the user made.
     """
@@ -309,14 +309,16 @@ async def test_a_provisioned_briefing_lists_as_the_users_own(store, flows) -> No
     await provision_default_schedules(store)
     with bind_services(ApiServices(cron_store=store, flow_registry=flows)):
         listed = await api.list_cron_entries()
-        briefing = next(e for e in listed if e.name == "news_daily_briefing")
-        assert briefing.source == "user"
-        assert briefing.title == "Daily news briefing"
-        assert briefing.hour == 8
+        sample = next(e for e in listed if e.name == "morning_digest")
+        assert sample.source == "user"
+        assert sample.title == "Morning digest"
+        assert sample.hour == 8
+        # It keeps the flow it runs: a default that lost it would fire as a bare prompt.
+        assert sample.flow == "morning-digest"
         # Deletable for good - not the 409 a built-in gives.
-        await api.delete_cron_entry("news_daily_briefing")
+        await api.delete_cron_entry("morning_digest")
         after = await api.list_cron_entries()
-    assert not any(e.name == "news_daily_briefing" for e in after)
+    assert not any(e.name == "morning_digest" for e in after)
 
 
 @pytest.mark.asyncio

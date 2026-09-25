@@ -428,7 +428,7 @@ class CronScheduler:
 #       delete restores the shipped default rather than removing it.
 #
 #   PROVISIONED_CRON_ENTRIES - schedules a *fresh install* should start with, but
-#       which are the user's own the instant they exist (the news briefing). They
+#       which are the user's own the instant they exist (none are shipped today). They
 #       are seeded into user_cron_entries once, by provision_default_schedules(),
 #       then behave exactly like a user-created schedule: fully editable, and
 #       deletable for good. They are data, not code - so the constant below can be
@@ -456,26 +456,11 @@ SYSTEM_CRON_ENTRIES: list[CronEntry] = [
 ]
 
 # Seeded into the user's own schedule store once (see provision_default_schedules).
-# The news briefing lives here rather than in SYSTEM_CRON_ENTRIES because it is a
-# person's routine, not north's own upkeep: once seeded it is a plain user row the
-# user can retime, pause, or delete for good. This list is the ONLY reason a fresh
-# install has a briefing - remove an entry and no new install seeds it, while every
-# install that already provisioned it keeps its stored row untouched.
-PROVISIONED_CRON_ENTRIES: list[CronEntry] = [
-    CronEntry(
-        name="news_daily_briefing",
-        label="Daily news briefing",
-        description=(
-            "Reads the morning's news across tech & AI, world events, science & health, and business, "
-            "and files one briefing you can read in Artifacts."
-        ),
-        agent="general",
-        task="Compile and save the daily news briefing.",
-        flow="daily-news-briefing",
-        hour=8,
-        minute=0,
-    ),
-]
+# Empty on purpose: a fresh install starts with no schedules of its own. Routines
+# such as a daily news briefing are personal - the person who wants one builds it as
+# a flow and schedules it - so nothing here may name a flow that north does not
+# itself ship. The mechanism stays for a default north ever does want to seed.
+PROVISIONED_CRON_ENTRIES: list[CronEntry] = []
 
 # The schedules that fire from code, layered under user overrides by the scheduler.
 # Only system upkeep runs this way now; provisioned defaults run as stored rows.
@@ -593,6 +578,8 @@ async def provision_default_schedules(cron_store: UserCronStore) -> list[str]:
             tz=entry.zone_name,
             enabled=entry.enabled,
             label=entry.label,
+            skill=entry.skill,
+            flow=entry.flow,
         )
         await cron_store.mark_provisioned(entry.name)
         seeded.append(entry.name)

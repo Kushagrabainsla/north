@@ -207,3 +207,26 @@ def rejecting_store():
     resolved = MagicMock(chosen_option="Reject", status="rejected")
     store.wait_for_decision = AsyncMock(return_value=resolved)
     return store
+
+
+@pytest.fixture
+def sample_provisioned_default(monkeypatch):
+    """One provisioned default schedule, for testing the mechanism.
+
+    North ships none (a fresh install starts with no schedules of its own), so the
+    tests that cover seeding, editing and deleting a provisioned default supply one.
+    """
+    from jobs import scheduler
+
+    entry = scheduler.CronEntry(
+        name="morning_digest",
+        label="Morning digest",
+        description="A sample default.",
+        agent="general",
+        task="Compile the digest.",
+        flow="morning-digest",
+        hour=8,
+        minute=0,
+    )
+    monkeypatch.setattr(scheduler, "PROVISIONED_CRON_ENTRIES", [entry])
+    return entry

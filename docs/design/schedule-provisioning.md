@@ -12,6 +12,10 @@ The fix the user asked for: north's schedules are **data** in `~/.north/jobs.db`
 (which already survives update / reinstall). Once a schedule lives in the data, the
 code seed can be removed and a north update simply picks the stored schedule up.
 
+> **Status:** no schedule is provisioned today. A daily news briefing is one person's
+> routine, so a fresh install starts with none; the mechanism below remains for a default
+> north ever does want to seed, and a schedule it must run has to run a flow north ships.
+
 ## Three kinds of schedule
 
 1. **System built-ins** — `SYSTEM_CRON_ENTRIES`. Self-maintenance north runs on

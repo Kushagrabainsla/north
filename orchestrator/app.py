@@ -1016,7 +1016,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("scheduling background tasks")
     background_tasks: list[asyncio.Task] = []
     if settings.autonomous_background_tasks_active:
-        # Seed provisioned-default schedules (e.g. the daily news briefing) into
+        # Seed provisioned-default schedules (none are shipped today) into
         # the user's store before the scheduler starts. Test mode deliberately
         # leaves the store untouched unless autonomous workers are opted into.
         await provision_default_schedules(deps.cron_store)

@@ -398,35 +398,35 @@ async def test_an_untouched_builtin_cannot_be_deleted_only_paused(store) -> None
 
 
 @pytest.mark.asyncio
-async def test_a_provisioned_briefing_is_a_deletable_user_schedule(store) -> None:
-    """After provisioning the briefing is the user's own: cancel deletes it for good."""
+async def test_a_provisioned_default_is_a_deletable_user_schedule(store, sample_provisioned_default) -> None:
+    """After provisioning a default is the user's own: cancel deletes it for good."""
     from jobs.scheduler import provision_default_schedules
     from tools.universal.cancel_schedule import CancelScheduleTool
 
     await provision_default_schedules(store)
-    assert await store.get("news_daily_briefing") is not None
+    assert await store.get("morning_digest") is not None
 
     canceller = CancelScheduleTool(job_processor=None, cron_store=store)
-    result = await canceller.run(ToolInput(params={"name": "news_daily_briefing"}))
+    result = await canceller.run(ToolInput(params={"name": "morning_digest"}))
 
     assert result.success and result.data["type"] != "restored"
-    assert await store.get("news_daily_briefing") is None
+    assert await store.get("morning_digest") is None
 
 
 @pytest.mark.asyncio
-async def test_provisioning_does_not_resurrect_a_deleted_briefing(store) -> None:
+async def test_provisioning_does_not_resurrect_a_deleted_default(store, sample_provisioned_default) -> None:
     """A provisioned default the user deleted stays gone across restarts."""
     from jobs.scheduler import provision_default_schedules
     from tools.universal.cancel_schedule import CancelScheduleTool
 
     await provision_default_schedules(store)
     canceller = CancelScheduleTool(job_processor=None, cron_store=store)
-    await canceller.run(ToolInput(params={"name": "news_daily_briefing"}))
+    await canceller.run(ToolInput(params={"name": "morning_digest"}))
 
     # A later start runs provisioning again - it must not come back.
     seeded = await provision_default_schedules(store)
     assert seeded == []
-    assert await store.get("news_daily_briefing") is None
+    assert await store.get("morning_digest") is None
 
 
 @pytest.mark.asyncio
