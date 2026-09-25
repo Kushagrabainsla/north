@@ -86,6 +86,7 @@ resources = [
     "prompts/*.md",
     "policies/*.md",
     "builtin-skills/**/*.md",
+    "builtin-flows/**/*.yaml",
 ]
 web = [
     "dist/*.html",

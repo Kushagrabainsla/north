@@ -20,10 +20,10 @@ execution:
     - A markdown briefing file was saved under the news handoff directory for today's date, covering all four sections with sourced, dated stories.
 ---
 
-Run the daily news briefing: search live news across Tech & AI, world events,
-science & health, and business & markets, synthesize the most significant,
-recent, non-duplicate stories from each with their sources, and save the
-completed briefing with write_file at the path your agent contract requires for
-today's date. Follow the agent's own section structure and format exactly - do
-not write the file from memory or skip a section that returned no results;
-note that instead.
+# Daily news briefing
+
+1. Search live news with web_search for each section: Tech & AI, world events, science & health, and business & markets.
+2. Keep the most significant, recent, non-duplicate stories from each, with their sources and dates.
+3. Follow the news_briefing agent's own section structure and format exactly.
+4. Save the completed briefing with write_file at the path the agent contract requires for today's date. Never write it from memory.
+5. If a section returned nothing, say so under that section rather than skipping it or inventing a story.
