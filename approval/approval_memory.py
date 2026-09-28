@@ -69,6 +69,33 @@ def _drop_prefix_fingerprints(conn: Any) -> None:
         )
 
 
+# Marks the one-time removal of decisions keyed by the card's message text.
+_MESSAGE_KEY_PURGE_KEY = "message_keyed_decisions_dropped"
+
+
+def _drop_message_keyed_decisions(conn: Any) -> None:
+    """Delete decisions recorded under the card's message text, once.
+
+    Since 64789a2 the policy recalls a decision by the action's identity
+    (`Action.describe()`), while the orchestrator kept recording it by the
+    card's message - so no decision recorded since has ever been replayed, and
+    none recorded before it matches the new key either. The message behind each
+    fingerprint was never stored in full, so the rows cannot be re-keyed; they
+    would only sit on the Memory page looking learned while never firing.
+    """
+    if conn.execute("SELECT 1 FROM approval_memory_meta WHERE key = ?", (_MESSAGE_KEY_PURGE_KEY,)).fetchone():
+        return
+    dropped = conn.execute("DELETE FROM approval_decisions").rowcount
+    conn.execute("INSERT INTO approval_memory_meta(key, value) VALUES (?, '1')", (_MESSAGE_KEY_PURGE_KEY,))
+    if dropped:
+        logger.info(
+            "ApprovalMemory: dropped %d learned decision(s) keyed by the card's message text - "
+            "they were never matched by the policy's action key. north will ask about those "
+            "actions again and remember the answer correctly.",
+            dropped,
+        )
+
+
 _FENCE_RE = re.compile(r"```[a-z]*")
 _WS_RE = re.compile(r"\s+")
 # How much of the action text is shown as its label in the cockpit. Display
@@ -116,6 +143,7 @@ class ApprovalMemory:
             conn.execute(_SCHEMA)
             conn.execute(_META_SCHEMA)
             _drop_prefix_fingerprints(conn)
+            _drop_message_keyed_decisions(conn)
         # fingerprint -> decision, loaded lazily and kept in sync on record().
         self._cache: dict[str, str] | None = None
 

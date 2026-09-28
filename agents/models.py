@@ -64,6 +64,12 @@ class AgentPayload(BaseModel):
     # model-visible prompt.
     context_sections: dict[str, str] = Field(default_factory=dict, exclude=True)
     workspace: str = ""  # root directory for filesystem/shell tools
+    # The folder the server granted this run. Unlike `workspace`, which a
+    # delegating model can choose, this is only ever set by the server - the
+    # task's own workspace - and narrowed, never widened, on delegation. It is
+    # what "an edit inside the task's folder" is measured against. Empty means
+    # no folder was granted.
+    granted_workspace: str = Field(default="", exclude=True)
     model_pool: str = "reasoning"  # task-scoped model pool (reasoning, speed, fast_cheap, vision)
     # Server-selected execution shape. ``quick_readonly`` gets an efficiency
     # reminder after a small number of turns/tools, but that reminder is soft:

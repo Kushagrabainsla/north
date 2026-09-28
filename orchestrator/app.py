@@ -95,6 +95,7 @@ from tools.universal.update_plan import UpdatePlanTool
 from tools.universal.update_schedule import UpdateScheduleTool
 from tools.universal.use_flow import UseFlowTool
 from tools.universal.use_skill import UseSkillTool
+from tools.universal.write_file import WriteFileTool
 from utils.logging import configure_structured_logging
 from utils.runtime_resources import builtin_skills_dir, web_dist_dir
 from utils.tasks import drain
@@ -236,17 +237,18 @@ def _build_tool_registry(
             notifier=deps.notifier,
         )
     )
-    # Override the auto-discovered (immediate) PatchFileTool with one that previews
-    # a unified diff in an approval card before writing.
-    tool_registry.register(
-        PatchFileTool(
-            approval_store=deps.approval_store,
-            stream_manager=deps.stream_manager,
-            approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-            policy=policy,
-            notifier=deps.notifier,
+    # Override the auto-discovered (immediate) PatchFileTool and WriteFileTool with
+    # ones that preview a unified diff in an approval card before writing.
+    for file_tool_cls in (PatchFileTool, WriteFileTool):
+        tool_registry.register(
+            file_tool_cls(
+                approval_store=deps.approval_store,
+                stream_manager=deps.stream_manager,
+                approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
+                policy=policy,
+                notifier=deps.notifier,
+            )
         )
-    )
     # Override the auto-discovered (gate-less, fail-closed) GitTool/GhTool/KasaTool
     # with instances wired to the approval flow so their mutating actions surface
     # approval cards instead of being refused outright.

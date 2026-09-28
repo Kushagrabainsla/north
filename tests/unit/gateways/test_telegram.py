@@ -184,3 +184,57 @@ async def test_telegram_gateway_callback_query_approval(monkeypatch: pytest.Monk
     gw._edit_message_text.assert_awaited_once()
     assert "Approved" in gw._edit_message_text.call_args[0][2]
     gw._answer_callback_query.assert_awaited_once_with("cb_123", text="✅ Decision recorded: approved")
+
+
+# ── Fail closed: no valid allowlist, no gateway ──────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("raw", "problem"),
+    [
+        ("", "empty"),
+        ("@myname", "@myname"),
+        ("12345, @myname", "@myname"),
+        ("12345", ""),
+        ("12345, -1001234567890", ""),  # group chats have negative ids
+    ],
+)
+def test_allowlist_problem(raw: str, problem: str) -> None:
+    found = Settings(telegram_allowed_chat_ids=raw).telegram_allowlist_problem
+
+    assert (problem in found) if problem else found == ""
+
+
+@pytest.mark.parametrize("raw", ["", "@myname"])
+@pytest.mark.asyncio
+async def test_gateway_does_not_start_without_a_valid_allowlist(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_bot_token", "123:abc")
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", raw)
+    gw = TelegramGateway()
+    gw.start = AsyncMock()  # type: ignore[method-assign]
+
+    await gw.run()
+
+    gw.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_empty_allowlist_lets_nobody_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "")
+    gw = TelegramGateway()
+    gw._send_message = AsyncMock()  # type: ignore[method-assign]
+    gw._submit_task = AsyncMock()  # type: ignore[method-assign]
+    gw._answer_callback_query = AsyncMock()  # type: ignore[method-assign]
+    gw._respond_approval = AsyncMock()  # type: ignore[method-assign]
+
+    await gw._process_message({"message_id": 1, "chat": {"id": 7}, "from": {"id": 7}, "text": "hi"})
+    await gw._process_callback_query(
+        {"id": "cb", "from": {"id": 7}, "message": {"message_id": 2, "chat": {"id": 7}}, "data": "approval:approved:c1"}
+    )
+
+    gw._submit_task.assert_not_awaited()
+    gw._respond_approval.assert_not_awaited()

@@ -100,6 +100,9 @@ class Action:
     # do not yet.
     reaches_third_party: bool = False
     spends_money: bool = False
+    # A file edit inside north's own scratch space (task handoff notes, personal
+    # notes) rather than anywhere of the user's. See `tools._path.is_north_scratch`.
+    in_north_scratch: bool = False
 
     def describe(self) -> str:
         """A short, stable identity for this action, for learned decisions.
@@ -160,6 +163,11 @@ class ApprovalPolicy:
         #    "interactive" already means by "read-only actions run freely".
         if action.read_only or not action.mutating:
             return Ruling(Verdict.ALLOW, "read-only")
+
+        # 1b. North writing its own notes. Asking about these would stall every
+        #     unattended run that writes a handoff or a briefing, in every mode.
+        if action.kind is ActionKind.FILE_EDIT and action.in_north_scratch:
+            return Ruling(Verdict.ALLOW, "north's own scratch space")
 
         # 2. Allow-all. The operator has made the mode the only authority, and
         #    has explicitly declined a hard-danger floor.

@@ -23,12 +23,18 @@ class ToolInput(BaseModel):
     field just before dispatch, so mutation guards read authority from a channel
     the model cannot reach. `None` means no scope was supplied and mutating tools
     fall back to their prior, unrestricted behavior (preserving public callers).
+
+    `granted_workspace` is the task's folder as the server granted it, for the
+    same reason: `params["workspace"]` is whatever the model chose to pass, so a
+    decision like "is this edit inside the task's folder?" must never read it.
+    `None` means the task was granted no folder, and nothing counts as inside.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     params: dict[str, Any] = Field(default_factory=dict)
     edit_scope: EditAuthorizer | None = Field(default=None, exclude=True)
+    granted_workspace: str | None = Field(default=None, exclude=True)
 
 
 class ToolOutput(BaseModel):

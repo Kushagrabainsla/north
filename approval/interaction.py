@@ -43,7 +43,7 @@ def _telegram_configured() -> bool:
     """
     from config.settings import settings
 
-    return bool(settings.telegram_bot_token and settings.parsed_telegram_allowed_chat_ids)
+    return settings.telegram_ready
 
 
 # Default choices for an approval card when the caller supplies none.
@@ -275,6 +275,8 @@ class UserInteraction:
                 await self._notifier.notify(notification)
             return notification
 
+        if card.type is CardType.APPROVAL and not card.action_key:
+            card = card.model_copy(update={"action_key": _action_for(card).describe()})
         auto = await self._auto_resolve(card)
         if auto is not None:
             return auto
@@ -289,15 +291,8 @@ class UserInteraction:
         """Ask the ApprovalPolicy about a directly-raised approval card."""
         if self._policy is None:
             return None
-        action = Action(
-            agent=card.agent,
-            kind=ActionKind.OTHER,
-            summary=card.title,
-            command=card.message,
-            carries_work=bool(card.fields),
-        )
         try:
-            ruling = await self._policy.rule(action)
+            ruling = await self._policy.rule(_action_for(card))
         except Exception:
             logger.debug("ApprovalPolicy failed for card %s - surfacing it", card.id)
             return None
@@ -387,3 +382,19 @@ class UserInteraction:
             fields=fields or [],
             context=context,
         )
+
+
+def _action_for(card: Card) -> Action:
+    """The action a directly-raised approval card asks about.
+
+    One definition, used both to rule on the card and to stamp its
+    `action_key`, so the key a decision is learned under is the key the policy
+    recalls it by.
+    """
+    return Action(
+        agent=card.agent,
+        kind=ActionKind.OTHER,
+        summary=card.title,
+        command=card.message,
+        carries_work=bool(card.fields),
+    )

@@ -159,3 +159,21 @@ def test_a_fresh_database_is_unaffected(tmp_path) -> None:
     memory.record("bash", "pytest", "approved")
 
     assert ApprovalMemory(tmp_path / "fresh.db").recall("bash", "pytest") == "approved"
+
+
+# ── The one-time purge of message-keyed rows ─────────────────────────────────
+
+
+def test_decisions_keyed_by_card_message_are_dropped_once(tmp_path) -> None:
+    """An install past the prefix purge still holds rows keyed by card text, which never match."""
+    db_path = tmp_path / "approval_memory.db"
+    _write_legacy_row(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE approval_memory_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT INTO approval_memory_meta VALUES ('prefix_fingerprints_dropped', '1')")
+
+    memory = ApprovalMemory(db_path)
+    assert memory.all_decisions() == []
+
+    memory.record("bash", "bash shell_command cmd=pytest", "approved")
+    assert ApprovalMemory(db_path).recall("bash", "bash shell_command cmd=pytest") == "approved"

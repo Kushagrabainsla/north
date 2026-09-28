@@ -1363,29 +1363,51 @@ async def test_get_task_unknown_returns_none(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_respond_approval_records_decision_for_learning(tmp_path):
+async def test_respond_approval_records_decision_under_the_policys_key(tmp_path):
+    """The decision is learned under the key `ApprovalPolicy` recalls it by.
+
+    It used to be recorded under the card's message while the policy looked it
+    up by `Action.describe()`, so no approval was ever replayed (regression from
+    64789a2).
+    """
+    from approval.approval_memory import ApprovalMemory
+    from approval.models import Card, CardType
+    from approval.policy import Action, ActionKind
+
+    orch, _, approval = _make_orchestrator(tmp_path)
+    mem = ApprovalMemory(tmp_path / "am.db")
+    orch._approval_memory = mem
+    action = Action(agent="bash", kind=ActionKind.SHELL_COMMAND, summary="npm test", command="npm test")
+
+    approval.add(
+        Card.new(
+            type=CardType.APPROVAL,
+            task_id="t1",
+            agent="bash",
+            title="Shell Command",
+            message="```\nnpm test\n```",
+            options=["Run", "Cancel"],
+            action_key=action.describe(),
+        )
+    )
+    await orch.respond_approval(approval.pending()[0].id, "approved", "Run")
+
+    assert mem.recall(action.agent, action.describe()) == "approved"
+
+
+@pytest.mark.asyncio
+async def test_respond_approval_does_not_learn_a_card_about_no_action(tmp_path):
     from approval.approval_memory import ApprovalMemory
     from approval.models import Card, CardType
 
     orch, _, approval = _make_orchestrator(tmp_path)
     mem = ApprovalMemory(tmp_path / "am.db")
     orch._approval_memory = mem
-
-    card = Card(
-        id="card-1",
-        type=CardType.APPROVAL,
-        task_id="t1",
-        agent="bash",
-        title="Shell Command",
-        message="```\nnpm install left-pad\n```",
-        options=["Run", "Cancel"],
-    )
-    approval.add(card)
+    approval.add(Card(id="card-1", type=CardType.APPROVAL, task_id="t1", agent="bash", title="t", message="m"))
 
     await orch.respond_approval("card-1", "approved", "Run")
 
-    # The human decision is now learnable -> autonomous mode can replay it.
-    assert mem.recall("bash", "```\nnpm install left-pad\n```") == "approved"
+    assert mem.all_decisions() == []
 
 
 class _NamedAgent:

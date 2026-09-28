@@ -218,6 +218,8 @@ class FlowRunner:
                         output_schema,
                     ),
                         workspace=self._workspace,
+                        # Configured by the operator (settings), so the server grants it.
+                        granted_workspace=self._workspace or "",
                         model_pool=selected_agent.config.model_pool or "reasoning",
                         skills=[step.skill] if step.skill else [],
                         allowed_tools=list(allowed_tools),

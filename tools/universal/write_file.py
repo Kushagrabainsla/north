@@ -1,21 +1,35 @@
 """WriteFileTool - write or overwrite a file in the workspace.
 
-See docs/CODING_STYLE.md Section 16.1.
+Gated exactly like patch_file: the tool reports what it is about to write and
+where, and `approval/policy.py` decides whether that runs, asks, or is refused.
+It used to write without asking at all, which made it the one way to change a
+file that no mode, allowlist, or card ever saw.
+
+See docs/CODING_STYLE.md Sections 7.3 and 16.1.
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from tools._path import resolve_path, scope_refusal
-from tools.base import Tool
+from approval.policy import Action, ActionKind
+from tools._path import is_north_scratch, resolve_path, scope_refusal
+from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
+from tools.specialized._approval import gate_action
+from tools.specialized.patch_file import unified_diff
 from utils.text import normalize_dashes, should_normalize_prose
 
+if TYPE_CHECKING:
+    from approval.base import Notifier
+    from approval.policy import ApprovalPolicy
+    from approval.store import ApprovalStore
+    from utils.events import EventEmitter
 
-class WriteFileTool(Tool):
+
+class WriteFileTool(ApprovalGatedTool):
     """Writes content to a file, creating parent directories as needed."""
 
     name = "write_file"
@@ -40,6 +54,16 @@ class WriteFileTool(Tool):
         },
         "required": ["path", "content"],
     }
+
+    def __init__(
+        self,
+        approval_store: ApprovalStore | None = None,
+        stream_manager: EventEmitter | None = None,
+        approval_timeout_seconds: float = 300.0,
+        policy: ApprovalPolicy | None = None,
+        notifier: Notifier | None = None,
+    ) -> None:
+        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
 
     def format_output(self, data: dict[str, Any]) -> str:
         return f"Created `{data.get('path', '?')}` ({data.get('bytes_written', 0)} bytes written)."
@@ -67,7 +91,47 @@ class WriteFileTool(Tool):
         if should_normalize_prose(resolved):
             content = normalize_dashes(content)
 
+        # Same wiring as patch_file: the instance app.py registers carries the
+        # approval store; an auto-discovered one without it is replaced at startup.
+        if self._approval_store is not None:
+            refused = await self._gate(input, resolved, content)
+            if refused is not None:
+                return refused
+
         return await asyncio.to_thread(_write_sync, resolved, content)
+
+    async def _gate(self, input: ToolInput, path: Path, content: str) -> ToolOutput | None:
+        """``None`` when the file may be written; otherwise what to return instead."""
+        old = await asyncio.to_thread(_read_existing, path)
+        return await gate_action(
+            Action(
+                agent="write_file",
+                kind=ActionKind.FILE_EDIT,
+                summary=f"write {path}",
+                path=path,
+                # The folder the server granted - never the model's `workspace` param.
+                workspace=input.granted_workspace or "",
+                in_north_scratch=is_north_scratch(path),
+            ),
+            policy=self._policy,
+            approval_store=self._approval_store,
+            title="File Write - Approval Required",
+            message=f"Write `{path}`?\n```diff\n{unified_diff(path, old, content)}\n```",
+            options=("Write", "Cancel"),
+            task_id=input.params.get("task_id"),
+            stream_manager=self._stream_manager,
+            notifier=self._notifier,
+            timeout=self._approval_timeout_seconds,
+            declined="Write cancelled by user.",
+        )
+
+
+def _read_existing(path: Path) -> str:
+    """The file's current text, so the card shows what the write replaces."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
 
 
 def _write_sync(path: Path, content: str) -> ToolOutput:

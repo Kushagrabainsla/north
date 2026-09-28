@@ -489,7 +489,7 @@ async def test_request_approval_returns_reviewed_field_values(tmp_path: Path) ->
 async def test_unknown_tool_returns_error_json(tmp_path: Path) -> None:
     """_call_tool must return structured error JSON for a tool not in tool_map."""
     agent = _make_agent(tmp_path)
-    result_str, _ = await agent._call_tool({}, "nonexistent", {})
+    result_str, _ = await agent._call_tool({}, "nonexistent", {}, AgentPayload(task_id="t", prompt="p"))
     result = json.loads(result_str)
     assert result["success"] is False
     assert "nonexistent" in result["error"]
@@ -511,7 +511,56 @@ async def test_tool_exception_returns_error_json(tmp_path: Path) -> None:
             raise RuntimeError("Kaboom!")
 
     agent = _make_agent(tmp_path)
-    result_str, _ = await agent._call_tool({"exploding": ExplodingTool()}, "exploding", {})
+    result_str, _ = await agent._call_tool(
+        {"exploding": ExplodingTool()}, "exploding", {}, AgentPayload(task_id="t", prompt="p")
+    )
     result = json.loads(result_str)
     assert result["success"] is False
     assert "Kaboom" in result["error"]
+
+
+async def _delegate_capturing(tmp_path: Path, parent: AgentPayload, params: dict) -> AgentPayload:
+    captured: list[AgentPayload] = []
+
+    class CapturingRegistry:
+        def get(self, name: str):
+            class CapAgent:
+                async def run(self, payload: AgentPayload) -> AgentResult:
+                    captured.append(payload)
+                    return AgentResult(output="ok", summary="ok")
+
+            return CapAgent()
+
+    deps = _make_deps(tmp_path)
+    deps.agent_registry = CapturingRegistry()
+    agent = GeneralAgent(AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml"), deps)
+    await agent._delegate_task(parent, {"agent": "architect", "task": "t", **params})
+    return captured[0]
+
+
+async def test_delegation_can_narrow_the_granted_folder(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    parent = AgentPayload(task_id="t1", prompt="x", workspace=str(project), granted_workspace=str(project))
+
+    sub = await _delegate_capturing(tmp_path, parent, {"workspace": str(project / "web")})
+
+    assert sub.granted_workspace == str(project / "web")
+
+
+async def test_delegation_cannot_widen_the_granted_folder(tmp_path: Path) -> None:
+    """A model delegating with a broader `workspace` does not get broader authority."""
+    project = tmp_path / "project"
+    parent = AgentPayload(task_id="t1", prompt="x", workspace=str(project), granted_workspace=str(project))
+
+    sub = await _delegate_capturing(tmp_path, parent, {"workspace": str(tmp_path)})
+
+    assert sub.workspace == str(tmp_path)  # still where the tools run
+    assert sub.granted_workspace == str(project)  # but not what counts as "inside"
+
+
+async def test_delegation_grants_nothing_when_nothing_was_granted(tmp_path: Path) -> None:
+    parent = AgentPayload(task_id="t1", prompt="x")
+
+    sub = await _delegate_capturing(tmp_path, parent, {"workspace": str(tmp_path)})
+
+    assert sub.granted_workspace == ""

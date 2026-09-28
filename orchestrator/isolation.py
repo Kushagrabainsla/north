@@ -112,7 +112,7 @@ class AgentIsolation:
             logger.warning("worktree: create failed for agent %s; running in-place", agent.name, exc_info=True)
             return await self._run_agent(agent, payload)
 
-        isolated_payload = payload.model_copy(update={"workspace": wt.path})
+        isolated_payload = payload.model_copy(update=_in_worktree(payload, wt.path))
         try:
             result = await self._run_agent(agent, isolated_payload)
             integration = await manager.integrate(wt, lock=workspace_lock(payload.workspace))
@@ -144,7 +144,7 @@ class AgentIsolation:
                     wt,
                     payload.model_copy(
                         update={
-                            "workspace": wt.path,
+                            **_in_worktree(payload, wt.path),
                             "task_id": cand_task_id,
                             "run_id": generate_id(),
                             "attempt": i,
@@ -303,3 +303,12 @@ class AgentIsolation:
                     status=LedgerStatus.COMPLETED,
                 )
             )
+
+
+def _in_worktree(payload: AgentPayload, path: str) -> dict[str, str]:
+    """Move a run into its worktree - the folder it may edit moves with it.
+
+    The worktree is the server's own copy of the granted workspace, so it is
+    granted in the workspace's place; a run granted nothing stays granted nothing.
+    """
+    return {"workspace": path, "granted_workspace": path if payload.granted_workspace else ""}

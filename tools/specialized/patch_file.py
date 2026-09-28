@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from approval.policy import Action, ActionKind
-from tools._path import resolve_path, scope_refusal
+from tools._path import is_north_scratch, resolve_path, scope_refusal
 from tools._read_tracker import record_read, was_read
 from tools.base import ApprovalGatedTool
 from tools.models import ToolInput, ToolOutput
@@ -157,7 +157,7 @@ class PatchFileTool(ApprovalGatedTool):
             refused = await self._gate(
                 input.params.get("task_id"),
                 resolved,
-                input.params.get("workspace"),
+                input.granted_workspace,
                 plan.old_content,
                 plan.new_content,
             )
@@ -173,7 +173,7 @@ class PatchFileTool(ApprovalGatedTool):
         self, task_id: str | None, path: Path, workspace: str | None, old: str, new: str
     ) -> ToolOutput | None:
         """``None`` when the edit may be written; otherwise what to return instead."""
-        diff = _unified_diff(path, old, new)
+        diff = unified_diff(path, old, new)
         return await gate_action(
             Action(
                 agent="patch_file",
@@ -181,6 +181,7 @@ class PatchFileTool(ApprovalGatedTool):
                 summary=f"edit {path}",
                 path=path,
                 workspace=workspace or "",
+                in_north_scratch=is_north_scratch(path),
             ),
             policy=self._policy,
             approval_store=self._approval_store,
@@ -195,7 +196,7 @@ class PatchFileTool(ApprovalGatedTool):
         )
 
 
-def _unified_diff(path: Path, old: str, new: str) -> str:
+def unified_diff(path: Path, old: str, new: str) -> str:
     lines = difflib.unified_diff(
         old.splitlines(keepends=True),
         new.splitlines(keepends=True),

@@ -96,6 +96,7 @@ async def gate_action(
             title=title,
             message=message,
             options=list(options or APPROVAL_DEFAULT_OPTIONS),
+            action_key=action.describe(),
         ),
         event=CardEvent.APPROVAL,
         timeout=timeout,

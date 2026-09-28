@@ -279,3 +279,26 @@ async def test_the_mode_is_read_at_decision_time() -> None:
     mode = ApprovalMode.AUTO
 
     assert (await live.rule(action)).verdict is Verdict.ALLOW
+
+
+def _edit(path: Path, **kw) -> Action:
+    return Action(agent="write_file", kind=ActionKind.FILE_EDIT, summary="write", path=path, **kw)
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_north_writing_its_own_notes_never_asks(mode: ApprovalMode, tmp_path: Path) -> None:
+    ruling = await policy(mode).rule(_edit(tmp_path / "notes.md", in_north_scratch=True))
+
+    assert ruling.verdict is Verdict.ALLOW
+
+
+async def test_an_edit_outside_the_granted_folder_asks_in_auto(tmp_path: Path) -> None:
+    ruling = await policy(ApprovalMode.AUTO).rule(_edit(tmp_path / "x.md", workspace=str(tmp_path / "task")))
+
+    assert ruling.verdict is Verdict.ASK
+
+
+async def test_only_file_edits_use_the_scratch_rule(tmp_path: Path) -> None:
+    ruling = await policy(ApprovalMode.INTERACTIVE).rule(shell("rm notes.md", in_north_scratch=True))
+
+    assert ruling.verdict is Verdict.ASK

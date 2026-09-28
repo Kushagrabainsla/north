@@ -31,3 +31,22 @@ class EditAuthorizer(Protocol):
     def authorize(self, path: Path) -> str | None:
         """Return ``None`` when the edit is allowed, else a refusal reason."""
         ...
+
+
+def narrow_workspace(granted: str, requested: str) -> str:
+    """The folder a delegated run is granted: *requested* only if it lies inside *granted*.
+
+    Delegation can hand a sub-agent a narrower folder than its caller's, never a
+    wider or different one - otherwise a model could widen its own authority by
+    delegating to itself with a broader ``workspace``. With nothing granted,
+    nothing is passed on, whatever the model asked for.
+    """
+    if not granted:
+        return ""
+    if not requested:
+        return granted
+    try:
+        Path(requested).resolve().relative_to(Path(granted).resolve())
+    except (ValueError, OSError):
+        return granted
+    return requested

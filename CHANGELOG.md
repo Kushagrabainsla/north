@@ -60,6 +60,9 @@ All notable changes to north are documented here.
 - Every page spaces its blocks alike: 28px under the header, 18px between blocks, matching the gap panels already had side by side.
 
 ### Fixed
+- **Remembered approvals are replayed again** (`approval/models.py`, `approval/interaction.py`, `tools/specialized/_approval.py`, `orchestrator/orchestrator.py`, `approval/approval_memory.py`). Since 64789a2 the orchestrator recorded a decision under the card's text while the policy looked it up by the action's identity, so no approval was ever replayed in `auto`. Cards now carry `action_key` and the answer is recorded under it; the unmatchable rows are dropped once, with a log line.
+- **The Telegram gateway fails closed** (`gateways/telegram.py`, `config/settings.py`). With a bot token but an empty allowlist, anyone who found the bot could run tasks, answer approval cards and switch to `autonomous`; a non-numeric entry such as `@name` was skipped silently, emptying the list. The gateway now refuses to start without a valid numeric allowlist, and an empty list admits nobody.
+
 - **Scheduled agents now run as configured and must produce their declared artifacts.** The job dispatcher previously discarded `job.agent`, allowing the planner to replace `news_briefing` with `general`; Telegram then received a generated answer while no `~/.north/news/{date}.md` file existed for the dashboard. Scheduled tasks now force the stored agent, validate every declared output before recording agent completion or sending the success notification, and fail into the existing job retry path when an artifact is absent or empty.
 - **Runtime-authored skills now land in the directory the live registry actually scans** (`~/.north/skills`), so a successful `create_skill` call is visible on the next selection pass.
 - **Deleting an active learned tool now updates the live registry** and restores the built-in implementation when the learned tool was an override, instead of leaving deleted code callable until restart.
@@ -73,6 +76,9 @@ All notable changes to north are documented here.
 - **The Tasks and Activity pages, and the "model pools" panel.** The first two described one thing in two places; answering "what happened in this run?" meant copying a task id from one page into the other's filter box. Both now redirect to the merged page. Model pools was a grouping left over from the router that was deleted - it selected nothing, and routing ranks a chain per part instead.
 
 ---
+
+### Security
+- **"Inside the task's folder" is decided by the server, never by the model** (`agents/models.py`, `tools/models.py`, `agents/agentic_llm_agent.py`, `orchestrator/isolation.py`, `utils/edit_scope.py`). `write_file` had no approval gate at all, and `auto` mode judged an edit "inside the workspace" from the model's own `workspace` argument, so either could write outside the task's folder without a card. The task's folder now travels as `granted_workspace` beside the model's params, delegation can only narrow it, and `write_file` goes through the same gate as `patch_file`. North's own notes and handoff files are allowed in every mode, so unattended runs do not stall. Measured in `experiments/approval_integrity/`: 11/21 gate cases before, 21/21 after.
 
 ## [1.20.0] - 2026-09-04
 ### Changed

@@ -636,9 +636,10 @@ class Orchestrator:
                 if card.message
                 else f"card_id={card_id}"
             )
-            # Learn from this human decision so autonomous mode can replay it later.
-            if self._approval_memory is not None and card.type == CardType.APPROVAL:
-                self._approval_memory.record(card.agent, card.message, decision)
+            # Learn from this human decision so auto mode can replay it later -
+            # under the card's action key, which is what the policy recalls by.
+            if self._approval_memory is not None and card.type == CardType.APPROVAL and card.action_key:
+                self._approval_memory.record(card.agent, card.action_key, decision)
         await self._journal.record(
             card.task_id,
             action,
@@ -1857,7 +1858,9 @@ class Orchestrator:
                 params["workspace"] = workspace
             if task_id and "task_id" not in params:
                 params["task_id"] = task_id
-            result = await tool.run(self._tool_input_factory(params=params, edit_scope=edit_scope))
+            result = await tool.run(
+                self._tool_input_factory(params=params, edit_scope=edit_scope, granted_workspace=workspace or None)
+            )
             success = result.success
             output = tool.format_output(result.data) if result.success else f"Tool error: {result.error}"
             # No image-interpretation branch here on purpose: every tool that returns
@@ -2053,6 +2056,8 @@ class Orchestrator:
                 task_id=task_id,
                 prompt=prompt,
                 workspace=workspace,
+                # The task's own workspace, from the request - the server grants it.
+                granted_workspace=workspace or "",
                 context=context,
                 model_pool=model_pool,
                 execution_profile=execution_profile,

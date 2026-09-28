@@ -148,6 +148,20 @@ def _in_personal_subdir(resolved: str) -> bool:
     return False
 
 
+def is_north_scratch(path: Path) -> bool:
+    """True when *path* is in one of north's own writable areas.
+
+    The per-task handoff directory and the personal-data subdirs (news, notes,
+    wellness) are where agents are told to put their output. Writing there is
+    north keeping its own notes, not touching the user's files. North's state
+    DBs share the handoff directory and are never scratch.
+    """
+    resolved = str(path)
+    if _in_handoff_root(resolved):
+        return not resolved.endswith(DB_SUFFIXES)
+    return _in_personal_subdir(resolved)
+
+
 def personal_dir(subdir: str) -> str:
     """Absolute path of a writable personal-data subdir (``<NORTH_HOME>/<subdir>``).
 

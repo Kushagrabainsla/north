@@ -1180,6 +1180,7 @@ later, softer tier can never overturn an earlier, harder one:
 | # | Tier | interactive | auto | autonomous |
 |---|---|---|---|---|
 | 1 | Read-only / non-mutating | allow | allow | allow |
+| 1b | File edit in north's own scratch space (handoff, personal notes) | allow | allow | allow |
 | 2 | Allow-all | – | – | **allow** |
 | 3 | Recognised as catastrophic (`rm -rf /`, force-push) | refuse | refuse | (allowed by 2) |
 | 4 | **Card carries work for review** | **ask** | **ask** | (allowed by 2) |
@@ -1202,6 +1203,18 @@ what somebody remembered to add to it.
 An action allowed without asking still leaves a **resolved card** behind, naming
 the rule that allowed it. Something north did unasked has to be visible
 afterwards.
+
+**Authority never comes from the model's arguments.** "Inside the workspace"
+(tier 5) is measured against `granted_workspace` - the task's folder as the
+server granted it, carried on `AgentPayload` and `ToolInput` beside `params`,
+never inside them. Delegation can only narrow it (`utils.edit_scope.narrow_workspace`),
+and a worktree run is granted its worktree. The model's `workspace` argument
+still sets where a tool runs; it no longer decides whether an edit is asked about.
+
+**A replayed decision (tier 6) is keyed by the action, not the card's text.** A
+card carries `action_key` (`Action.describe()`), and the answer is recorded
+under it - the same key the policy recalls by. From 64789a2 until this fix they differed, so
+nothing was ever replayed.
 
 ### 9.5 Trust Thresholds
 

@@ -28,12 +28,33 @@ async def test_unattended_applies_in_workspace_edit_without_card(tmp_path: Path)
                 "old_string": "value = 1",
                 "new_string": "value = 2",
                 "workspace": str(tmp_path),
-            }
+            },
+            granted_workspace=str(tmp_path),
         )
     )
     assert out.success, out.error
     assert f.read_text() == "value = 2\n"
     store.wait_for_decision.assert_not_awaited()  # no approval card surfaced
+
+
+@pytest.mark.asyncio
+async def test_unattended_ignores_a_workspace_the_model_chose(tmp_path: Path):
+    """Only the server's grant makes an edit "inside the workspace"; the model's param does not."""
+    f = tmp_path / "m.py"
+    f.write_text("value = 1\n")
+    store = MagicMock()
+    store.wait_for_decision = AsyncMock(return_value=None)  # nobody answers
+    tool = PatchFileTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTO))
+
+    out = await tool.run(
+        ToolInput(
+            params={"path": str(f), "old_string": "value = 1", "new_string": "value = 2", "workspace": str(tmp_path)},
+            granted_workspace=str(tmp_path / "the-real-task"),
+        )
+    )
+    assert not out.success
+    assert f.read_text() == "value = 1\n"
+    store.wait_for_decision.assert_awaited_once()  # it asked instead
 
 
 @pytest.mark.asyncio

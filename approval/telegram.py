@@ -60,7 +60,7 @@ class TelegramNotifier(Notifier):
 
     @property
     def configured(self) -> bool:
-        return bool(settings.telegram_bot_token and settings.parsed_telegram_allowed_chat_ids)
+        return settings.telegram_ready
 
     async def notify(self, card: Card) -> None:
         if not self.configured:

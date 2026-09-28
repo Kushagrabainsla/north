@@ -1,0 +1,86 @@
+{
+  "recorded_at": "2026-09-28",
+  "kind": "offline_production_code",
+  "before": {
+    "commit": "2a1fe19",
+    "overall": {
+      "passed": 11,
+      "total": 21,
+      "accuracy": 0.5238095238095238
+    },
+    "groups": {
+      "approval_replay": {
+        "passed": 2,
+        "total": 5,
+        "failures": [
+          "replay_same_action",
+          "replay_rejection",
+          "replay_direct_card"
+        ]
+      },
+      "file_writes": {
+        "passed": 6,
+        "total": 9,
+        "failures": [
+          "write_outside_interactive_model_widens",
+          "write_outside_model_widens",
+          "patch_outside_model_widens"
+        ]
+      },
+      "telegram": {
+        "passed": 3,
+        "total": 7,
+        "failures": [
+          "telegram_empty_list_stranger",
+          "telegram_typo_list_stranger",
+          "telegram_empty_list_start",
+          "telegram_typo_list_start"
+        ]
+      }
+    }
+  },
+  "after": {
+    "overall": {
+      "passed": 21,
+      "total": 21,
+      "accuracy": 1.0
+    },
+    "groups": {
+      "approval_replay": {
+        "passed": 5,
+        "total": 5,
+        "failures": []
+      },
+      "file_writes": {
+        "passed": 9,
+        "total": 9,
+        "failures": []
+      },
+      "telegram": {
+        "passed": 7,
+        "total": 7,
+        "failures": []
+      }
+    }
+  },
+  "write_file_cost_ms": {
+    "note": "write_file in AUTO inside the granted folder, 300 runs, median/p95",
+    "before": {
+      "median": 0.18,
+      "p95": 0.31
+    },
+    "after": {
+      "median": 0.53,
+      "p95": 1.82
+    }
+  },
+  "coding_scoreboard": {
+    "note": "evals/ run in an isolated north home before the fix: 15/15 timed out with 'No model could serve coder' (no Codex login, free models only). No utility signal; not rerun after.",
+    "before": {
+      "graded": 0,
+      "timeout": 15,
+      "tokens_in": 2945300,
+      "cost_usd": 0.0
+    }
+  }
+}

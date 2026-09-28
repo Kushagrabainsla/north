@@ -7,6 +7,8 @@ same primitives, but it must not import recorded results.
 
 ## Experiments
 
+- [`approval_integrity/`](approval_integrity/) — approval replay, server-granted
+  file-write scope, and the Telegram allowlist, before and after the fix.
 - [`tool_selection/`](tool_selection/) — capability-catalog size and runtime
   tool-retrieval strategy.
 - [`system_quality/`](system_quality/) — quick-path routing, task-specific

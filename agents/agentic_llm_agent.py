@@ -55,7 +55,7 @@ from tools.base import Tool
 from tools.models import ToolInput
 from tools.output_spill import overflow_note, store_overflow
 from tools.retrieval import tool_index_documents
-from utils.edit_scope import EditAuthorizer
+from utils.edit_scope import narrow_workspace
 from utils.execution_context import current_execution
 from utils.tasks import spawn
 from utils.text import normalize_dashes
@@ -927,7 +927,7 @@ class AgenticLLMAgent(LLMAgent):
             params["workspace"] = payload.workspace
         if payload.task_id and "task_id" not in params:
             params["task_id"] = payload.task_id
-        result_str, images = await self._call_tool(tool_map, call.name, params, payload.edit_scope)
+        result_str, images = await self._call_tool(tool_map, call.name, params, payload)
         return call, result_str, _extract_success(result_str), images
 
     async def _find_tools(
@@ -1131,6 +1131,8 @@ class AgenticLLMAgent(LLMAgent):
             parent_run_id=payload.run_id,
             prompt=task,
             workspace=workspace,
+            # The model chose `workspace`; the server-granted folder can only narrow.
+            granted_workspace=narrow_workspace(payload.granted_workspace, workspace),
             # The sub-agent inherits the run's framing: the caller's context
             # (conversation history / webhook data), the task's model pool, and any
             # model-independence constraint. Without these it silently reverted to
@@ -1348,12 +1350,18 @@ class AgenticLLMAgent(LLMAgent):
         tool_map: dict[str, Tool],
         tool_name: str,
         params: dict[str, Any],
-        edit_scope: EditAuthorizer | None = None,
+        payload: AgentPayload,
     ) -> tuple[str, list[tuple[str, str]]]:
         if tool_name not in tool_map:
             return _failed_json(f"Tool '{tool_name}' not found. Available: {sorted(tool_map)}"), []
+        # Authority travels beside the model's params, never inside them.
+        tool_input = ToolInput(
+            params=params,
+            edit_scope=payload.edit_scope,
+            granted_workspace=payload.granted_workspace or None,
+        )
         try:
-            result = await tool_map[tool_name].run(ToolInput(params=params, edit_scope=edit_scope))
+            result = await tool_map[tool_name].run(tool_input)
             images: list[tuple[str, str]] = []
             if result.success:
                 if result.data and "base64_image" in result.data and "mime_type" in result.data:

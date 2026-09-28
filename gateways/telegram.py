@@ -48,12 +48,14 @@ class _Reply:
     message_id: int
 
 
-def _is_allowed_sender(msg: dict) -> bool:
+def _is_allowed(chat_id: int | None, from_id: int | None) -> bool:
+    """Whether this chat or user is on the allowlist. An empty list allows nobody."""
     allowed = settings.parsed_telegram_allowed_chat_ids
-    if not allowed:
-        return True
-    from_id = msg.get("from", {}).get("id")
-    return msg["chat"]["id"] in allowed or (from_id is not None and from_id in allowed)
+    return (chat_id is not None and chat_id in allowed) or (from_id is not None and from_id in allowed)
+
+
+def _is_allowed_sender(msg: dict) -> bool:
+    return _is_allowed(msg["chat"]["id"], msg.get("from", {}).get("id"))
 
 
 _LEDGER_POLL_LIMIT = 50
@@ -391,8 +393,7 @@ class TelegramGateway:
         chat_id = msg.get("chat", {}).get("id")
         data = cb.get("data", "")
 
-        allowed = settings.parsed_telegram_allowed_chat_ids
-        if allowed and (chat_id not in allowed and (from_id is None or from_id not in allowed)):
+        if not _is_allowed(chat_id, from_id):
             await self._answer_callback_query(cb_id, text="⛔ Unauthorized")
             return
 
@@ -583,6 +584,13 @@ class TelegramGateway:
         """Main polling loop — background task entrypoint."""
         if not settings.telegram_bot_token:
             logger.info("Telegram gateway skipped (no bot token)")
+            return
+        if problem := settings.telegram_allowlist_problem:
+            logger.error(
+                "Telegram gateway not started: %s. Without a valid allowlist anyone who finds the "
+                "bot could run tasks. Set it to your numeric Telegram user id.",
+                problem,
+            )
             return
 
         await self.start()

@@ -198,8 +198,9 @@ class Settings(BaseSettings):
     # Set NORTH_TELEGRAM_BOT_TOKEN in environment or .env.
     telegram_bot_token: str = ""
 
-    # Optional comma-separated list of allowed Telegram chat IDs or user IDs.
-    # When set, messages from other chats/users are rejected with an access error.
+    # Comma-separated numeric Telegram chat IDs or user IDs allowed to use the bot.
+    # Required when a bot token is set: the gateway will not start without a
+    # valid list, because a bot anyone can find would run tasks for anyone.
     # Set NORTH_TELEGRAM_ALLOWED_CHAT_IDS="12345678,87654321" in environment or .env.
     telegram_allowed_chat_ids: str = ""
 
@@ -243,15 +244,35 @@ class Settings(BaseSettings):
 
     @property
     def parsed_telegram_allowed_chat_ids(self) -> frozenset[int]:
-        if not self.telegram_allowed_chat_ids:
-            return frozenset()
         ids = set()
-        for token in self.telegram_allowed_chat_ids.split(","):
-            token = token.strip()
-            if token:
-                with contextlib.suppress(ValueError):
-                    ids.add(int(token))
+        for token in self._telegram_allowlist_entries():
+            with contextlib.suppress(ValueError):
+                ids.add(int(token))
         return frozenset(ids)
+
+    @property
+    def telegram_allowlist_problem(self) -> str:
+        """Why the Telegram allowlist cannot be trusted, or "" when it can.
+
+        An entry that is not a number is not skipped: it is most likely the
+        owner's id mistyped (``@name`` instead of the numeric id), and skipping it
+        once left the list empty - which let everyone in.
+        """
+        entries = self._telegram_allowlist_entries()
+        if not entries:
+            return "NORTH_TELEGRAM_ALLOWED_CHAT_IDS is empty"
+        invalid = [entry for entry in entries if not entry.lstrip("-").isdigit()]
+        if invalid:
+            return f"NORTH_TELEGRAM_ALLOWED_CHAT_IDS has entries that are not numeric ids: {', '.join(invalid)}"
+        return ""
+
+    @property
+    def telegram_ready(self) -> bool:
+        """A bot token and a trustworthy allowlist - the only state the gateway runs in."""
+        return bool(self.telegram_bot_token) and not self.telegram_allowlist_problem
+
+    def _telegram_allowlist_entries(self) -> list[str]:
+        return [token.strip() for token in self.telegram_allowed_chat_ids.split(",") if token.strip()]
 
     @property
     def secret(self) -> str:

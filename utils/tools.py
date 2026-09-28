@@ -157,6 +157,11 @@ class ToolInput(Protocol):
         """The task's server-owned scope, or ``None`` for unrestricted edits."""
         ...
 
+    @property
+    def granted_workspace(self) -> str | None:
+        """The task's server-granted folder, or ``None`` when it was granted none."""
+        ...
+
 
 class ToolInputFactory(Protocol):
     """Builds a :class:`ToolInput` envelope from server-controlled inputs.
@@ -166,8 +171,14 @@ class ToolInputFactory(Protocol):
     and the work committer call it instead of importing ``integrations.tools``.
     """
 
-    def __call__(self, *, params: dict[str, Any], edit_scope: EditAuthorizer | None = ...) -> ToolInput:
-        """Return a tool-call envelope carrying ``params`` and ``edit_scope``."""
+    def __call__(
+        self,
+        *,
+        params: dict[str, Any],
+        edit_scope: EditAuthorizer | None = ...,
+        granted_workspace: str | None = ...,
+    ) -> ToolInput:
+        """Return a tool-call envelope carrying ``params`` and the server-owned fields."""
         ...
 
 

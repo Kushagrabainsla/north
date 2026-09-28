@@ -952,7 +952,7 @@ async def test_multimodal_tool_image_context(tmp_path: Path) -> None:
     tool_map = {"mock_vision": MockVisionTool()}
 
     # 1. Verify _call_tool extracts base64_image and mime_type from result.data
-    res_str, images = await agent._call_tool(tool_map, "mock_vision", {})
+    res_str, images = await agent._call_tool(tool_map, "mock_vision", {}, AgentPayload(task_id="t", prompt="p"))
     assert images == [("abcdef", "image/png")]
     parsed = json.loads(res_str)
     assert parsed["success"] is True

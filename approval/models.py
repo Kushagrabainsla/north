@@ -104,6 +104,11 @@ class Card(BaseModel):
     # for prepared work: the task finishing is the *normal* case there, not the
     # reason to throw the card away. Empty for an ordinary in-flight question.
     source: str = ""
+    # The identity of the action this card asks about (`Action.describe()`), so
+    # the answer is learned under the same key the policy recalls it by. Set by
+    # the server when the card is raised; empty for a card that asks about no
+    # action, which is then never learned from.
+    action_key: str = ""
 
     @classmethod
     def new(
@@ -119,6 +124,7 @@ class Card(BaseModel):
         context: str = "",
         blocking: bool = True,
         source: str = "",
+        action_key: str = "",
     ) -> Card:
         """Build a card with a fresh id and the defaults every caller wants.
 
@@ -141,6 +147,7 @@ class Card(BaseModel):
             # when a caller does not go through UserInteraction.inform().
             blocking=False if type is CardType.INFORMATION else blocking,
             source=source,
+            action_key=action_key,
         )
 
     @property
