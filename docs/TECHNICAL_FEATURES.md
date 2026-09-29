@@ -290,11 +290,11 @@ for _ in range(300):
 
 **After (event-based):**
 ```python
-card = await approval_store.wait_for_decision(card_id, timeout=300.0)
+card = await approval_store.wait_for_decision(card_id)
 # wakes exactly when resolve() is called - zero CPU while waiting
 ```
 
-**Implementation:** `ApprovalStore.add()` allocates a `asyncio.Event` per card. `resolve()` calls `event.set()`. `wait_for_decision()` uses `asyncio.wait_for(event.wait(), timeout=...)` (default 30 minutes). Under load with many concurrent pending approvals (e.g., multiple parallel agent tasks each waiting for sign-off), each coroutine is independently suspended with no shared state contention.
+**Implementation:** `ApprovalStore.add()` allocates a `asyncio.Event` per card. `resolve()` calls `event.set()`. `wait_for_decision()` awaits `event.wait()` with no timeout: a card waits until it is answered, and north reminds you of waiting cards instead of expiring them. Under load with many concurrent pending approvals (e.g., multiple parallel agent tasks each waiting for sign-off), each coroutine is independently suspended with no shared state contention.
 
 **Only for cards something is waiting on.** A card carrying prepared work is
 non-blocking: the task ends, the card is written to `~/.north/approvals.db`, and
@@ -408,7 +408,7 @@ The same approval flow is shared by every gated tool (`BashTool`, `ShellTool`, `
 
 **Why:** the surface-then-await sequence used to be reimplemented in three places, which let them drift. For example, one path decided "approved" by matching a button label while another used the card status. One mediator removes the duplication and gives every card the same behavior.
 
-**How:** for each card it applies the learned `JudgementFilter` (which can auto-resolve), registers the card in the `ApprovalStore`, emits the SSE event, fires the TUI-aware `Notifier`, and for decisions it blocks on `wait_for_decision`. The decision is read from the card's `status` (approved or rejected), never from a button label. A timeout resolves the card as `timeout_rejected`. Each caller passes only the dependencies it has: the orchestrator wires a notifier and a ledger audit hook, while tools and agents pass the stream manager.
+**How:** for each card it applies the learned `JudgementFilter` (which can auto-resolve), registers the card in the `ApprovalStore`, emits the SSE event, fires the TUI-aware `Notifier`, and for decisions it blocks on `wait_for_decision`. The decision is read from the card's `status` (approved or rejected), never from a button label. A card never expires; `timeout_rejected` survives only on cards from before that rule. Each caller passes only the dependencies it has: the orchestrator wires a notifier and a ledger audit hook, while tools and agents pass the stream manager.
 
 ---
 

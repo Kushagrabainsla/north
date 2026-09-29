@@ -453,6 +453,19 @@ SYSTEM_CRON_ENTRIES: list[CronEntry] = [
         hour=3,
         minute=0,
     ),
+    CronEntry(
+        name="waiting_cards_reminder",
+        label="Waiting cards reminder",
+        description=(
+            "Tells you what is still waiting for your answer. Cards never expire, so north reminds "
+            "you of them instead. Sends nothing when nothing is waiting."
+        ),
+        agent="system",
+        task="Remind about waiting cards",
+        flow="waiting-cards-reminder",
+        hour=9,
+        minute=0,
+    ),
 ]
 
 # Seeded into the user's own schedule store once (see provision_default_schedules).

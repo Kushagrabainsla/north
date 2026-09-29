@@ -26,7 +26,7 @@ def _silent_store() -> MagicMock:
 
 
 def _tool(mode: ApprovalMode, store: MagicMock) -> WriteFileTool:
-    return bind_approvals(WriteFileTool(), mode, store=store, timeout=0.01)
+    return bind_approvals(WriteFileTool(), mode, store=store)
 
 
 @pytest.mark.asyncio

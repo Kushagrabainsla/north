@@ -1241,7 +1241,7 @@ Every approval, rejection, and answered question is processed by the extraction 
 
 ### 9.7 Event-Based Approval Waiting
 
-When a coroutine needs to wait for a user decision (north star conflict approval, mid-task `request_approval` tool call), it calls `approval_store.wait_for_decision(card_id, timeout=300.0)` rather than polling in a loop.
+When a coroutine needs to wait for a user decision (north star conflict approval, mid-task `request_approval` tool call), it calls `approval_store.wait_for_decision(card_id)` rather than polling in a loop.
 
 ```python
 # Before (polling - held the event loop busy for up to 1 s per tick):
@@ -1252,10 +1252,10 @@ for _ in range(300):
         break
 
 # After (event-based - wakes exactly when the user clicks):
-card = await approval_store.wait_for_decision(card_id, timeout=300.0)
+card = await approval_store.wait_for_decision(card_id)
 ```
 
-`ApprovalStore` allocates an `asyncio.Event` for each card on `add()`.  `resolve()` calls `event.set()`.  `wait_for_decision()` awaits the event with an `asyncio.wait_for` timeout (default 30 minutes; the real ceiling is the stuck-task watchdog at 24h).  Under load with many concurrent pending approvals, zero CPU is consumed while waiting - each coroutine is simply suspended until its specific event fires.
+`ApprovalStore` allocates an `asyncio.Event` for each card on `add()`.  `resolve()` calls `event.set()`.  `wait_for_decision()` awaits the event with no timeout: a card waits until it is answered (CODING_STYLE §13.5). A task waiting on a card holds no concurrency slot, the stuck-task watchdog and the scheduled-run deadline skip it, and the built-in `waiting-cards-reminder` flow lists waiting cards each morning.  Under load with many concurrent pending approvals, zero CPU is consumed while waiting - each coroutine is simply suspended until its specific event fires.
 
 ### 9.8 Blocking and Non-Blocking Cards
 

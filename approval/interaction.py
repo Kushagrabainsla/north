@@ -2,8 +2,8 @@
 
 `UserInteraction` is the one place north turns a `Card` into a user interaction:
 decision cards are registered in the `ApprovalStore`, while information cards
-go only to notification channels. For decisions it can then block until the
-user responds or the timeout elapses.
+go only to notification channels. For decisions it then blocks until the user
+responds - however long that takes (CODING_STYLE §13.5: a card never expires).
 
 Tools reach it through `Approvals`, which owns the one instance; agents and the
 Orchestrator still build their own until the autonomous decider lands (see
@@ -17,6 +17,7 @@ See docs/CODING_STYLE.md Section 15.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -33,17 +34,6 @@ if TYPE_CHECKING:
     from approval.store import ApprovalStore
 
 logger = logging.getLogger(__name__)
-
-
-def _telegram_configured() -> bool:
-    """Whether north has somewhere to send a card other than this machine.
-
-    Read at call time, not at construction: turning Telegram on should change
-    how long the next card waits without a restart.
-    """
-    from config.settings import settings
-
-    return settings.telegram_ready
 
 
 # Default choices for an approval card when the caller supplies none.
@@ -85,10 +75,6 @@ class UserInteraction:
         stream_manager: Any | None = None,
         policy: ApprovalPolicy | None = None,
         on_auto_resolve: Callable[[Card, str, str], Awaitable[None]] | None = None,
-        default_timeout: float = 300.0,
-        # Both exist to be overridden in tests; production reads settings.
-        reachable_timeout: float | None = None,
-        reachable: Callable[[], bool] | None = None,
     ) -> None:
         self._store = store
         self._notifier = notifier
@@ -96,9 +82,6 @@ class UserInteraction:
         self._stream = stream_manager
         self._policy = policy
         self._on_auto_resolve = on_auto_resolve
-        self._default_timeout = default_timeout
-        self._reachable_timeout = reachable_timeout
-        self._reachable = reachable or _telegram_configured
 
     async def request_approval(
         self,
@@ -108,11 +91,10 @@ class UserInteraction:
         title: str,
         message: str,
         options: tuple[str, ...] | list[str] = APPROVAL_DEFAULT_OPTIONS,
-        timeout: float | None = None,
     ) -> bool:
         """Surface an APPROVAL card and block; return True only if approved."""
         status = await self.request_approval_status(
-            task_id=task_id, agent=agent, title=title, message=message, options=options, timeout=timeout
+            task_id=task_id, agent=agent, title=title, message=message, options=options
         )
         return status == ApprovalDecision.APPROVED
 
@@ -124,18 +106,15 @@ class UserInteraction:
         title: str,
         message: str,
         options: tuple[str, ...] | list[str] = APPROVAL_DEFAULT_OPTIONS,
-        timeout: float | None = None,
     ) -> ApprovalDecision:
         """Surface an APPROVAL card and block; return how it actually resolved.
 
         Callers that only need yes/no should use ``request_approval``. This exists
-        for the ones that must tell "a person said no" apart from "the card timed
-        out because nobody was there" - collapsing both into a rejection told the
-        agent it had been refused, so it tried another route, hit another card,
-        and stalled for the timeout again on a loop that never ended.
+        for the ones that must tell "a person said no" apart from "the task ended
+        while the card waited".
         """
         card = self._build(CardType.APPROVAL, task_id, agent, title, message, list(options))
-        resolved = await self.request_decision(card, event=CardEvent.APPROVAL, timeout=timeout)
+        resolved = await self.request_decision(card, event=CardEvent.APPROVAL)
         return resolved.status
 
     async def request_work_approval(
@@ -148,7 +127,6 @@ class UserInteraction:
         fields: list[CardField],
         context: str = "",
         options: tuple[str, ...] | list[str] = APPROVAL_DEFAULT_OPTIONS,
-        timeout: float | None = None,
     ) -> Card:
         """Hand over filled-in work for a decision; return the resolved card.
 
@@ -158,7 +136,7 @@ class UserInteraction:
         something was.
         """
         card = self._build(CardType.APPROVAL, task_id, agent, title, message, list(options), fields, context)
-        return await self.request_decision(card, event=CardEvent.APPROVAL, timeout=timeout)
+        return await self.request_decision(card, event=CardEvent.APPROVAL)
 
     async def hand_over(
         self,
@@ -196,82 +174,62 @@ class UserInteraction:
         title: str,
         question: str,
         options: list[str],
-        timeout: float | None = None,
     ) -> Card:
         """Surface a QUESTION card and block; return the resolved card.
 
         The user's answer (a chosen option or free text) is on ``chosen_option``.
         """
         card = self._build(CardType.QUESTION, task_id, agent, title, question, list(options))
-        return await self.request_decision(card, event=CardEvent.QUESTION, timeout=timeout)
+        return await self.request_decision(card, event=CardEvent.QUESTION)
 
     async def inform(self, *, task_id: str | None, agent: str, title: str, message: str) -> None:
         """Surface an INFORMATION card. Never blocks."""
         card = self._build(CardType.INFORMATION, task_id, agent, title, message, [])
         await self.notify(card)
 
-    async def request_decision(
-        self, card: Card, *, event: CardEvent | None = None, timeout: float | None = None
-    ) -> Card:
+    async def remind_waiting(self) -> str:
+        """Tell the user what is still waiting on them. Cards never expire, so they are reminded instead."""
+        waiting = sorted(self._store.pending(), key=lambda card: card.created_at)
+        if not waiting:
+            return "nothing is waiting for you"
+        now = datetime.now(UTC)
+        lines = [f"- {card.title} ({card.agent}), waiting {_waited(now - card.created_at)}" for card in waiting]
+        await self.inform(
+            task_id=None,
+            agent="north",
+            title=f"{len(waiting)} waiting for you",
+            message="\n".join(lines),
+        )
+        return f"reminded you of {len(waiting)} waiting card(s)"
+
+    async def request_decision(self, card: Card, *, event: CardEvent | None = None) -> Card:
         """Surface *card* and block until it resolves; return the resolved card.
 
-        A learned rule may resolve it immediately. A timeout resolves it as
-        ``TIMEOUT_REJECTED`` - unless the user resolved it at the same instant,
-        in which case their decision is honoured.
+        A learned rule may resolve it immediately; otherwise it waits for the user.
         """
         surfaced = await self.notify(card, event=event)
         if surfaced.status != _PENDING:
             return surfaced  # auto-resolved by a learned rule
-        return await self._await(card, timeout)
+        return await self._await(card)
 
-    async def ask_person(self, card: Card, *, event: CardEvent, timeout: float | None = None) -> Card:
+    async def ask_person(self, card: Card, *, event: CardEvent) -> Card:
         """Show *card* to the user and wait, consulting no rule: the caller already ruled.
 
         `Approvals` rules on the action's own facts before it gets here, so ruling
         again on the card's text would only second-guess that with less to go on.
         """
         await self._surface(card, event)
-        return await self._await(card, timeout)
+        return await self._await(card)
 
     def record_resolved(self, card: Card, decision: str, *, chosen_option: str = "") -> None:
         """Store *card* already decided - an action north took, or answered, without asking."""
         self._store.add(card)
         self._store.resolve(card.id, decision, chosen_option=chosen_option)
 
-    async def _await(self, card: Card, timeout: float | None) -> Card:
-        resolved = await self._store.wait_for_decision(card.id, timeout=timeout or self._timeout_for(card))
-        if resolved is not None:
-            return resolved
-        # These two copies bypass the store, so they must carry what the store
-        # would have written: a card that holds work always reports its values,
-        # and a caller reading `response` on an unanswered card gets what north
-        # proposed rather than a bare {} it has to special-case.
-        timed_out = {"status": ApprovalDecision.TIMEOUT_REJECTED, "response": card.field_values()}
-        if self._store.resolve(card.id, ApprovalDecision.TIMEOUT_REJECTED):
-            return card.model_copy(update=timed_out)
-        late = self._store.get(card.id)
-        return late if late is not None else card.model_copy(update=timed_out)
-
-    def _timeout_for(self, card: Card) -> float:
-        """How long to wait for an answer, given where the card can be answered.
-
-        The 300s default assumes a person at a prompt. When north can reach the
-        user off this machine - Telegram configured - that assumption is wrong
-        for every card, not only scheduled ones: a card raised at 03:00 expires
-        long before anyone sees it, and an expiry denies the action. So a
-        reachable card waits far longer, and `TIMEOUT_REJECTED` keeps saying
-        "nobody answered" rather than "the user said no" when it does give up.
-
-        Only blocking cards use a timeout at all - prepared work is non-blocking
-        and nothing awaits it.
-        """
-        if not self._reachable():
-            return self._default_timeout
-        if self._reachable_timeout is not None:
-            return self._reachable_timeout
-        from config.settings import settings
-
-        return settings.approval_reachable_timeout_seconds
+    async def _await(self, card: Card) -> Card:
+        """Wait for the user's answer, however long it takes (CODING_STYLE §13.5)."""
+        resolved = await self._store.wait_for_decision(card.id)
+        return resolved or self._store.get(card.id) or card
 
     async def notify(self, card: Card, *, event: CardEvent | None = None) -> Card:
         """Surface *card* without blocking; register only decision cards.
@@ -400,6 +358,16 @@ class UserInteraction:
             fields=fields or [],
             context=context,
         )
+
+
+def _waited(elapsed: timedelta) -> str:
+    """How long a card has waited, in the largest whole unit."""
+    hours = int(elapsed.total_seconds() // 3600)
+    if hours >= 48:
+        return f"{hours // 24} days"
+    if hours >= 1:
+        return f"{hours}h"
+    return f"{int(elapsed.total_seconds() // 60)}m"
 
 
 def _action_for(card: Card) -> Action:

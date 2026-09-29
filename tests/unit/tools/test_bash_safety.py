@@ -97,7 +97,7 @@ class TestBashToolApprovalBypass:
     @staticmethod
     def _tool(*, mode=None, advisor=None, store=None) -> tuple[BashTool, MagicMock]:
         store = store or MagicMock()
-        return bind_approvals(BashTool(), mode, store=store, advisor=advisor, timeout=5.0), store
+        return bind_approvals(BashTool(), mode, store=store, advisor=advisor), store
 
     @staticmethod
     async def _allowed(tool: BashTool, command: str) -> bool:
@@ -273,29 +273,11 @@ class TestBashAllowDangerous:
 
 
 class TestBashApprovalOutcomes:
-    """A command nobody approved is not a broken tool.
-
-    Observed live: a reviewer whose approvals went unanswered drove `bash` down
-    to 0.09 confidence in three calls. Nothing was wrong with bash - there was
-    nobody at the keyboard.
-    """
+    """A command the user declined is a refusal, not a broken tool."""
 
     @staticmethod
     def _tool(store):
-        return bind_approvals(BashTool(), store=store, timeout=0.01)
-
-    @pytest.mark.asyncio
-    async def test_an_unanswered_command_is_refused_not_failed(self) -> None:
-        store = MagicMock()
-        store.wait_for_decision = AsyncMock(return_value=None)
-        store.resolve = MagicMock(return_value=True)
-
-        result = await self._tool(store).execute(ToolInput(params={"command": "rm -rf build"}))
-
-        assert result.success is False
-        assert result.failure_kind == "refused", "an absent human must not count against the tool"
-        assert result.data.get("unanswered") is True
-        assert "No one answered" in result.error
+        return bind_approvals(BashTool(), store=store)
 
     @pytest.mark.asyncio
     async def test_a_declined_command_says_the_user_cancelled_it(self) -> None:
@@ -310,4 +292,3 @@ class TestBashApprovalOutcomes:
         assert result.success is False
         assert result.failure_kind == "refused"
         assert result.error == "Command cancelled by user."
-        assert result.data.get("unanswered") is not True

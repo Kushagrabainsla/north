@@ -230,7 +230,6 @@ class Orchestrator:
             judgement_filter=judgement_filter,
             stream_manager=stream_manager,
             on_auto_resolve=self._record_auto_resolve_ledger,
-            default_timeout=(north_settings.approval_timeout_seconds if north_settings else 300.0),
         )
         self._synthesizer = synthesizer
         self._tracked_router = tracked_router
@@ -312,9 +311,9 @@ class Orchestrator:
                     if existing is not None and existing.status in ("pending", "running", "queued", "retrying"):
                         logger.info("submit_task: deduped duplicate submission to task %s", existing_id)
                         return existing
-            if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
+            if (working := self._working_tasks()) >= MAX_CONCURRENT_TASKS:
                 raise TaskCapacityError(
-                    f"Too many concurrent tasks ({len(self._active_tasks)} active, "
+                    f"Too many concurrent tasks ({working} working, "
                     f"max {MAX_CONCURRENT_TASKS}). Try again once a task finishes."
                 )
             task_id = generate_task_id()
@@ -365,7 +364,7 @@ class Orchestrator:
         async with self._submit_lock:
             if task_id in self._active_tasks:
                 return False
-            if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
+            if self._working_tasks() >= MAX_CONCURRENT_TASKS:
                 logger.warning("resume_task: at capacity, leaving task %s registered for a later restart", task_id)
                 return False
 
@@ -408,7 +407,7 @@ class Orchestrator:
 
                 now = utcnow()
                 for rt in queued_tasks:
-                    if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
+                    if self._working_tasks() >= MAX_CONCURRENT_TASKS:
                         break
                     # If not explicitly woken by model recovery, enforce exponential backoff to prevent burning retries
                     if not wake_signaled and rt.attempt > 0:
@@ -556,7 +555,7 @@ class Orchestrator:
             rt = await self._running_task_store.get(task_id)
             if rt is None:
                 return False
-            if len(self._active_tasks) >= MAX_CONCURRENT_TASKS:
+            if self._working_tasks() >= MAX_CONCURRENT_TASKS:
                 logger.warning("resume_paused_task: at capacity, leaving task %s paused", task_id)
                 await self._running_task_store.mark_paused(task_id)
                 return False
@@ -687,6 +686,21 @@ class Orchestrator:
     def active_task_ids(self) -> frozenset[str]:
         """Ids of tasks currently in flight (asyncio tasks still running)."""
         return frozenset(self._active_tasks)
+
+    def is_waiting_on_you(self, task_id: str) -> bool:
+        """Whether *task_id* is paused on a card only you can answer - not working, not stuck."""
+        return task_id in self._tasks_waiting_on_you()
+
+    def _working_tasks(self) -> int:
+        """In-flight tasks that count against the cap.
+
+        A task paused on your answer holds no slot: cards never expire
+        (CODING_STYLE §13.5), so enough of them would otherwise fill the cap.
+        """
+        return len(self._active_tasks.keys() - self._tasks_waiting_on_you())
+
+    def _tasks_waiting_on_you(self) -> set[str]:
+        return self._approval_store.tasks_waiting_on_you() if self._approval_store is not None else set()
 
     @property
     def running_task_store(self) -> RunningTaskStore | None:
@@ -1075,11 +1089,8 @@ class Orchestrator:
         await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
         # The shared mediator registers the card, applies the JudgementFilter
         # (auto-resolving if a rule matches), fires the Notifier, and blocks until
-        # the user responds or the timeout elapses (then TIMEOUT_REJECTED).
-        timeout = self._north_settings.approval_timeout_seconds if self._north_settings else 300.0
-        decided = await self._interaction.request_decision(card, timeout=timeout)
-        if decided.status == ApprovalDecision.TIMEOUT_REJECTED:
-            logger.warning("North Star approval timed out for task %s - treating as rejection", task_id)
+        # the user responds.
+        decided = await self._interaction.request_decision(card)
         if decided.status != ApprovalDecision.APPROVED:
             raise NorthStarConflictError(tension or "North Star conflict")
 

@@ -42,7 +42,6 @@ from agents.tool_results import extract_success as _extract_success
 from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
 from agents.tool_results import is_delegation_failure as _is_delegation_failure
-from agents.tool_results import is_unanswered_approval as _is_unanswered_approval
 from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface_card
 from agents.workspace_lock import workspace_lock
 from approval.models import ApprovalDecision, Card, CardField, CardType
@@ -75,20 +74,6 @@ _ASK_USER_NO_ANSWER = (
 # Agent-loop built-ins, not registry tools - excluded from tool-reliability tracking.
 _INTERNAL_TOOLS = frozenset({"request_approval", "delegate_task", "ask_user", "find_tools"})
 
-# How many approval cards may expire unanswered in one run before the agent
-# gives up. Nobody is watching: each card costs a full approval timeout, and an
-# agent that reads the expiry as a refusal goes looking for another way to do
-# the same thing, so the run repeats that stall until the iteration cap.
-#
-# Counted across the whole run, not consecutively. An earlier version reset on
-# any batch that raised no card, which meant an ordinary `read_file` between two
-# expired cards cleared the count - observed live, where a coder raised a
-# patch_file card, read some files, raised a git card, and sailed past the cap.
-# Reading a file is not evidence that a human is at the keyboard. Answering a
-# card would be, but a granted approval is indistinguishable from any other
-# successful tool call by the time the loop sees it. So: two expired cards in one
-# run means nobody is there, whatever happened in between.
-MAX_UNANSWERED_APPROVALS = 2
 
 # Soft limits guide the model toward synthesis; they never terminate a run.
 # The global ``agent_max_iterations`` setting remains the hard safety ceiling.
@@ -316,14 +301,13 @@ class AgenticLLMAgent(LLMAgent):
         payload: AgentPayload,
         tool_map: dict[str, Tool],
         messages: list[dict],
-    ) -> tuple[list[tuple[str, bool]], int]:
+    ) -> list[tuple[str, bool]]:
         """Execute the requested tool calls and update logging/history.
 
         Read-only calls run concurrently; mutating calls run sequentially so two
         edits to the same file cannot race. Results are returned in call order.
         Returns ``(tool_name, success)`` per call as evidence for output
-        verification, plus how many approval cards in this batch expired with
-        nobody answering them.
+        verification.
         """
         # Announce every call *before* execution so the UI shows live in-progress
         # state rather than a retrospective log after the tool has already finished.
@@ -353,8 +337,7 @@ class AgenticLLMAgent(LLMAgent):
             await self._record_tool_call_confidence(call.name, result_str, success)
 
         self._append_tool_call_exchange(messages, results)
-        unanswered = sum(1 for item in results if _is_unanswered_approval(item[1]))
-        return [(call.name, success) for call, _, success, _ in results], unanswered
+        return [(call.name, success) for call, _, success, _ in results]
 
     async def _record_quick_evidence(
         self,
@@ -522,7 +505,6 @@ class AgenticLLMAgent(LLMAgent):
         messages, tool_map, compact_tokens = self._init_conversation(payload, context, scored_tools, persona)
         tally = _RunTally()
         emitted_model: str = ""
-        unanswered_approvals: int = 0
         soft_budget_noted = False
 
         known_registry_tools = (
@@ -596,7 +578,7 @@ class AgenticLLMAgent(LLMAgent):
 
             for call in response.calls:
                 tally.note_call(call.name)
-            evidence, unanswered = await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
+            evidence = await self._handle_tool_calls_response(response.calls, payload, tool_map, messages)
             if payload.execution_profile == "quick_readonly":
                 if any(self._is_mutating_call(call, tool_map) for call in response.calls):
                     await self._escalate_execution_profile(payload, "mutating_or_delegated_tool")
@@ -605,18 +587,6 @@ class AgenticLLMAgent(LLMAgent):
             for call, (name, success) in zip(response.calls, evidence, strict=True):
                 if success:
                     tally.note_success(name, call.params)
-
-            # One expired card is a slow user; several in a run means nobody is
-            # there. Stop rather than spend the whole iteration budget stalling
-            # for a timeout each time.
-            unanswered_approvals += unanswered
-            if unanswered_approvals >= MAX_UNANSWERED_APPROVALS:
-                return tally.answer(
-                    f"Stopped: {unanswered_approvals} approval requests expired with no answer, so "
-                    "the work that needed approval was never done. Re-run this when you are "
-                    "available to approve, or switch the approval mode to auto.",
-                    "No one available to approve",
-                )
 
         return tally.answer(
             "Reached the maximum number of reasoning steps without a final answer.",
@@ -884,7 +854,6 @@ class AgenticLLMAgent(LLMAgent):
                     "decision": card.status,
                     "response": card.response,
                     "card_id": card.id,
-                    "unanswered": card.status == ApprovalDecision.TIMEOUT_REJECTED,
                 }
             )
             return call, result_str, not _is_rejection(card.status), []
@@ -1238,7 +1207,6 @@ class AgenticLLMAgent(LLMAgent):
             stream_manager=self._deps.stream_manager,
             judgement_filter=self._deps.judgement_filter,
             notifier=self._deps.notifier,
-            timeout=self._deps.approval_timeout_seconds,
             agent_name=self.name,
             task_id=payload.task_id,
             card_type=card_type,

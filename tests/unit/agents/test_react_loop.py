@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agents.agentic_llm_agent import MAX_UNANSWERED_APPROVALS, _infer_outcome_status
+from agents.agentic_llm_agent import _infer_outcome_status
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
@@ -1220,100 +1220,6 @@ async def test_a_real_tool_error_still_counts_against_the_tool(tmp_path: Path) -
 
     after = await agent._deps.confidence_tracker.get_score("researcher", "read_file")
     assert after < before, "a tool that actually broke must lose confidence"
-
-
-# ---------------------------------------------------------------------------
-# An approval nobody answers must not spin the loop
-# ---------------------------------------------------------------------------
-
-
-class _UnansweredApprovalTool(Tool):
-    """Stands in for any gated tool whose approval card expires."""
-
-    name = "gated"
-    description = "needs approval"
-    parameters_schema = {"type": "object", "properties": {}}
-
-    async def run(self, input: ToolInput) -> ToolOutput:
-        return ToolOutput(
-            success=False,
-            failure_kind="refused",
-            data={"unanswered": True},
-            error="No one answered the approval request within 300s.",
-        )
-
-
-async def test_repeated_unanswered_approvals_stop_the_run(tmp_path: Path) -> None:
-    """Nobody is there: keep asking and every card costs a full timeout, which is
-    how one abandoned task kept calling the provider for twelve minutes."""
-
-    class AlwaysCallsGatedTool(MockInferenceRouter):
-        calls = 0
-
-        async def complete_with_tools(self, request, token_callback=None):
-            AlwaysCallsGatedTool.calls += 1
-            return ToolCallResponse(
-                type="tool_calls",
-                calls=[ToolCall(name="gated", call_id=f"c{AlwaysCallsGatedTool.calls}", params={})],
-                model_used="mock",
-                tokens_in=1,
-                tokens_out=1,
-            )
-
-    AlwaysCallsGatedTool.calls = 0
-    router = AlwaysCallsGatedTool()
-    agent = _load_agent("coder", tmp_path, router)
-    agent._deps.agent_max_iterations = 40
-    _registering(agent, _UnansweredApprovalTool())
-
-    result = await agent.run(AgentPayload(task_id="t-unans", prompt="Do the gated thing."))
-
-    assert AlwaysCallsGatedTool.calls == MAX_UNANSWERED_APPROVALS, (
-        "the run must stop at the cap, not spend the whole iteration budget"
-    )
-    assert "no answer" in result.output.lower()
-
-
-async def test_ordinary_work_between_two_expired_cards_does_not_clear_the_count(tmp_path: Path) -> None:
-    """Reading a file is not evidence that a human is at the keyboard.
-
-    An earlier version reset on any batch that raised no card. Observed live: a
-    coder raised a patch_file card, read some files, raised a git card, and
-    sailed straight past the cap while nobody was there to answer either one.
-    """
-
-    class GatedThenReadThenGated(MockInferenceRouter):
-        calls = 0
-
-        async def complete_with_tools(self, request, token_callback=None):
-            GatedThenReadThenGated.calls += 1
-            name = "reader" if GatedThenReadThenGated.calls == 2 else "gated"
-            return ToolCallResponse(
-                type="tool_calls",
-                calls=[ToolCall(name=name, call_id=f"c{GatedThenReadThenGated.calls}", params={})],
-                model_used="mock",
-                tokens_in=1,
-                tokens_out=1,
-            )
-
-    class _ReaderTool(Tool):
-        name = "reader"
-        description = "an ordinary successful read"
-        parameters_schema = {"type": "object", "properties": {}}
-
-        async def run(self, input: ToolInput) -> ToolOutput:
-            return ToolOutput(success=True, data={"ok": True})
-
-    GatedThenReadThenGated.calls = 0
-    agent = _load_agent("coder", tmp_path, GatedThenReadThenGated())
-    agent._deps.agent_max_iterations = 40
-    _registering(agent, _UnansweredApprovalTool())
-    _registering(agent, _ReaderTool())
-
-    result = await agent.run(AgentPayload(task_id="t-interleaved", prompt="Do the gated thing."))
-
-    assert GatedThenReadThenGated.calls == 3, "two expired cards end the run, read or no read"
-    assert "no answer" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

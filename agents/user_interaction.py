@@ -29,7 +29,6 @@ async def surface_card(
     stream_manager: Any | None,
     judgement_filter: JudgementFilter | None,
     notifier: Notifier | None = None,
-    timeout: float,
     agent_name: str,
     task_id: str,
     card_type: CardType,
@@ -43,15 +42,14 @@ async def surface_card(
     """Surface a card and block until it resolves; return it resolved.
 
     Thin agent-facing adapter over ``UserInteraction`` (see module docstring).
-    Always returns a resolved card - a learned rule may answer it, and a timeout
-    resolves it as ``TIMEOUT_REJECTED``.
+    Always returns a resolved card - a learned rule may answer it; otherwise it
+    waits for the user, however long that takes.
     """
     interaction = UserInteraction(
         store,
         notifier=notifier,
         judgement_filter=judgement_filter,
         stream_manager=stream_manager,
-        default_timeout=timeout,
     )
     card = Card.new(
         type=card_type,
@@ -63,4 +61,4 @@ async def surface_card(
         fields=fields or [],
         context=context,
     )
-    return await interaction.request_decision(card, event=event, timeout=timeout)
+    return await interaction.request_decision(card, event=event)

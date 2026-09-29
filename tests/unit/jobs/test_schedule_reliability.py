@@ -117,10 +117,17 @@ async def test_a_builtin_schedule_is_always_offered(tmp_path) -> None:
 class _FakeOrchestrator:
     """Accepts a task, then reports the statuses it was given, in order."""
 
-    def __init__(self, statuses: list[str]) -> None:
+    def __init__(self, statuses: list[str], *, waiting_polls: int = 0) -> None:
         self._statuses = list(statuses)
+        self._waiting_polls = waiting_polls
         self.submitted: list[str] = []
         self.requests = []
+
+    def is_waiting_on_you(self, task_id: str) -> bool:
+        if self._waiting_polls:
+            self._waiting_polls -= 1
+            return True
+        return False
 
     async def submit_task(self, request):
         self.requests.append(request)
@@ -174,6 +181,14 @@ async def test_a_task_still_running_at_the_timeout_needs_attention() -> None:
     orchestrator = _FakeOrchestrator(["running"] * 5)
     with pytest.raises(JobNeedsAttention):
         await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0, timeout_seconds=0.05)
+
+
+@pytest.mark.asyncio
+async def test_time_spent_waiting_on_you_does_not_run_out_the_deadline() -> None:
+    """Cards never expire (CODING_STYLE §13.5): the deadline counts only time spent working."""
+    orchestrator = _FakeOrchestrator(["completed"], waiting_polls=20)
+
+    await _run_scheduled_task(orchestrator, "[scheduled] brief", poll_seconds=0.01, timeout_seconds=0.05)
 
 
 @pytest.mark.asyncio

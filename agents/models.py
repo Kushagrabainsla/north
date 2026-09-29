@@ -209,9 +209,6 @@ class AgentDependencies:
     # Iteration caps injected from Settings so agents never read config globals.
     agent_max_iterations: int = 40
     agent_history_keep_recent: int = 10
-    # Approval wait timeout injected from NorthSettings so it is configurable
-    # without touching source code.
-    approval_timeout_seconds: float = 300.0
     # Optional in-flight registry. When set, the agent marks the task as having
     # performed side effects the first time a mutating tool succeeds, so an
     # interrupted task that already acted is not blindly re-run on restart.

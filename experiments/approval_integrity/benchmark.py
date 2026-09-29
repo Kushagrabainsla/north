@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import tempfile
 import time
@@ -36,8 +37,8 @@ from gateways import telegram as telegram_gateway
 from inference.models import ToolCall
 from orchestrator.orchestrator import Orchestrator
 
-# Long enough for a pending card to be seen and answered, short enough that a
-# card nobody answers does not stall the run.
+# Long enough for a pending card to be seen and answered. Cards never expire, so
+# "nobody answers" is the benchmark giving up after _UNANSWERED, not the card.
 _ANSWER_WINDOW = 5.0
 _UNANSWERED = 0.3
 
@@ -77,7 +78,7 @@ async def _tool_card_replay(tmp: Path, decision: str, mode: ApprovalMode, second
     store = ApprovalStore(tmp / "approvals.db")
     memory = ApprovalMemory(tmp / "memory.db")
     policy = ApprovalPolicy(mode_provider=lambda: mode, approval_memory=memory)
-    approvals = Approvals(policy, UserInteraction(store, reachable=lambda: False), timeout=_ANSWER_WINDOW)
+    approvals = Approvals(policy, UserInteraction(store))
     first = "make lint"
     request = Request(_bash_action(first), "Shell Command - Approval Required", f"```\n{first}\n```")
     await asyncio.gather(
@@ -92,7 +93,7 @@ async def _direct_card_replay(tmp: Path) -> str:
     store = ApprovalStore(tmp / "approvals.db")
     memory = ApprovalMemory(tmp / "memory.db")
     policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTO, approval_memory=memory)
-    interaction = UserInteraction(store, policy=policy, reachable=lambda: False)
+    interaction = UserInteraction(store, policy=policy)
 
     def card() -> Card:
         return Card.new(
@@ -104,10 +105,13 @@ async def _direct_card_replay(tmp: Path) -> str:
         )
 
     await asyncio.gather(
-        interaction.request_decision(card(), timeout=_ANSWER_WINDOW),
+        interaction.request_decision(card()),
         _answer_first_card(store, memory, "approved"),
     )
-    again = await interaction.request_decision(card(), timeout=_UNANSWERED)
+    try:
+        again = await asyncio.wait_for(interaction.request_decision(card()), _UNANSWERED)
+    except TimeoutError:
+        return "ask"  # it surfaced and is waiting for you
     return "allow" if again.status == "approved" else "ask"
 
 
@@ -124,9 +128,8 @@ def _registry(tmp: Path, mode: ApprovalMode, store: ApprovalStore):
     deps.stream_manager = None
     deps.notifier = None
     deps.code_index = None
-    deps.north_settings.approval_timeout_seconds = _UNANSWERED
     policy = ApprovalPolicy(mode_provider=lambda: mode, unattended=UnattendedPolicy())
-    approvals = Approvals(policy, UserInteraction(store, reachable=lambda: False), timeout=_UNANSWERED)
+    approvals = Approvals(policy, UserInteraction(store))
     with patch.object(settings, "north_home", tmp / "north_home"):
         registry, _ = _build_tool_registry(deps, approvals)
     return registry
@@ -138,7 +141,10 @@ async def _dispatch(tool_name: str, params: dict[str, Any], workspace: Path, reg
     # Built the way `Orchestrator._run_agents` builds it: the task's workspace, granted.
     payload = AgentPayload(task_id="bench", prompt="bench", workspace=str(workspace), granted_workspace=str(workspace))
     tool_map = {tool.name: tool for tool in registry.all_tools()}
-    await AgenticLLMAgent._execute_call(agent, ToolCall(name=tool_name, call_id="c1", params=params), payload, tool_map)
+    call = ToolCall(name=tool_name, call_id="c1", params=params)
+    # Nobody answers any card: a call still waiting after _UNANSWERED did not act.
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(AgenticLLMAgent._execute_call(agent, call, payload, tool_map), _UNANSWERED)
 
 
 async def _file_write(tmp: Path, *, tool: str, inside: bool, mode: ApprovalMode, model_widens: bool) -> str:

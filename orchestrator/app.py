@@ -325,7 +325,6 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
         ledger=deps.ledger,
         agent_max_iterations=settings.agent_max_iterations,
         agent_history_keep_recent=settings.agent_history_keep_recent,
-        approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
         running_task_store=deps.running_task_store,
         plan_store=deps.plan_store,
         north_settings=deps.north_settings,
@@ -575,13 +574,19 @@ async def _run_scheduled_task(
     Only a clean task completion returns success. Cancellation is propagated to
     the job as cancellation; exhausted recovery and an overlong in-flight task
     are parked for attention so neither can be mislabeled completed or duplicated.
+    The deadline counts only time spent working: while the task waits on your
+    answer it is pushed back, because a card never expires (CODING_STYLE §13.5).
     """
     response = await orchestrator.submit_task(
         TaskRequest(prompt=prompt, source=LedgerSource.CRON, forced_agent=forced_agent)
     )
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        polled_at = time.monotonic()
         await asyncio.sleep(poll_seconds)
+        if orchestrator.is_waiting_on_you(response.task_id):
+            deadline += time.monotonic() - polled_at
+            continue
         task = await orchestrator.get_task(response.task_id)
         if task is None or task.status in _TASK_STILL_GOING:
             continue
@@ -605,6 +610,7 @@ def _launch_background_tasks(
     telegram_gateway: TelegramGateway | None = None,
     flow_store: FlowRunStore | None = None,
     flow_runner: FlowRunner | None = None,
+    approvals: Approvals | None = None,
 ) -> list[asyncio.Task]:
     async def _nightly_cleanup() -> str:
         """north's own housekeeping: the one step of the built-in nightly-cleanup flow."""
@@ -657,8 +663,11 @@ def _launch_background_tasks(
         )
         return summary
 
+    # north's built-in flow actions: deterministic code, no model.
     if flow_runner is not None:
         flow_runner.register_action("task_context_cleanup", _nightly_cleanup)
+        if approvals is not None and approvals.interaction is not None:
+            flow_runner.register_action("remind_waiting_cards", approvals.interaction.remind_waiting)
 
     async def _dispatch_job(job: Job) -> None:
         flow = str((job.payload or {}).get("flow") or "").strip()
@@ -822,9 +831,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             judgement_filter=judgement_filter,
             stream_manager=deps.stream_manager,
             policy=approval_policy,
-            default_timeout=deps.north_settings.approval_timeout_seconds,
         ),
-        timeout=deps.north_settings.approval_timeout_seconds,
     )
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)
@@ -990,6 +997,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             telegram_gateway=telegram_gateway,
             flow_store=flow_store,
             flow_runner=flow_runner,
+            approvals=approvals,
         )
         if tool_index is not None:
             background_tasks.append(

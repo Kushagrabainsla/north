@@ -21,7 +21,6 @@ have no waiter by design and are simply loaded.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 from pathlib import Path
@@ -267,19 +266,20 @@ class ApprovalStore:
             )
         return True
 
-    async def wait_for_decision(self, card_id: str, timeout: float = 300.0) -> Card | None:
-        """Block until the card is resolved or *timeout* seconds elapse.
+    async def wait_for_decision(self, card_id: str) -> Card | None:
+        """Block until the card is resolved - however long that takes.
 
-        Returns the resolved ``Card`` (status ≠ "pending") or ``None`` on
-        timeout. Never polls; wakes exactly when ``resolve()`` is called.
+        A card never expires (CODING_STYLE §13.5): an expiry reads as "no" and
+        kills work nobody refused. Returns the resolved ``Card``, or ``None`` for
+        a card this store does not hold. Never polls; wakes exactly when
+        ``resolve()`` is called, or when the waiting task is cancelled.
         """
         event = self._events.get(card_id)
         if event is None:
             card = self._cards.get(card_id)
             return card if (card and card.status != _PENDING) else None
         try:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(event.wait(), timeout=timeout)
+            await event.wait()
         finally:
             self._events.pop(card_id, None)
 
@@ -293,6 +293,14 @@ class ApprovalStore:
 
     def pending(self) -> list[Card]:
         return [c for c in self._cards.values() if c.status == _PENDING]
+
+    def tasks_waiting_on_you(self) -> set[str]:
+        """Tasks paused on a card only you can answer.
+
+        Such a task is not working and not stuck, so it holds no concurrency slot
+        and the stuck-task watchdog leaves it alone.
+        """
+        return {c.task_id for c in self._cards.values() if c.status == _PENDING and c.blocking and c.task_id}
 
     def waiting_for_you(self) -> list[Card]:
         """Pending cards nothing is blocked on - prepared work, oldest first."""

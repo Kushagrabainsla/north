@@ -63,10 +63,9 @@ class Decision:
 class Approvals:
     """Rules on a `Request`; asks the user only when the policy says ASK."""
 
-    def __init__(self, policy: ApprovalPolicy, interaction: UserInteraction | None, *, timeout: float = 300.0) -> None:
+    def __init__(self, policy: ApprovalPolicy, interaction: UserInteraction | None) -> None:
         self._policy = policy
         self._interaction = interaction
-        self._timeout = timeout
 
     @classmethod
     def unbound(cls) -> Approvals:
@@ -94,9 +93,7 @@ class Approvals:
     async def _ask(self, request: Request, task_id: str | None) -> Decision:
         if self._interaction is None:
             return Decision(Verdict.REFUSE, _NOBODY_TO_ASK)
-        card = await self._interaction.ask_person(
-            self._card(request, task_id), event=CardEvent.APPROVAL, timeout=self._timeout
-        )
+        card = await self._interaction.ask_person(self._card(request, task_id), event=CardEvent.APPROVAL)
         verdict = Verdict.ALLOW if card.status == ApprovalDecision.APPROVED else Verdict.REFUSE
         return Decision(verdict, "you decided", status=card.status)
 

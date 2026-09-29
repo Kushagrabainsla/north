@@ -201,7 +201,6 @@ async def test_request_work_approval_returns_the_decided_values() -> None:
             message="Submit?",
             fields=_application_fields(),
             context="the original posting",
-            timeout=5,
         )
     )
     await asyncio.sleep(0)
@@ -211,24 +210,6 @@ async def test_request_work_approval_returns_the_decided_values() -> None:
     assert resolved.status == ApprovalDecision.APPROVED
     assert resolved.response["cover_letter"] == "Edited."
     assert resolved.context == "the original posting"
-
-
-@pytest.mark.asyncio
-async def test_an_unanswered_work_card_reports_what_was_proposed() -> None:
-    store = ApprovalStore()
-    interaction = UserInteraction(store)
-
-    resolved = await interaction.request_work_approval(
-        task_id="task-1",
-        agent="job",
-        title="Application ready",
-        message="Submit?",
-        fields=_application_fields(),
-        timeout=0.01,
-    )
-
-    assert resolved.status == ApprovalDecision.TIMEOUT_REJECTED
-    assert resolved.response["salary"] == 100, "a caller reading response must not get a bare {}"
 
 
 @pytest.mark.asyncio
@@ -244,17 +225,17 @@ async def test_fields_and_context_reach_the_stream() -> None:
     store = ApprovalStore()
     interaction = UserInteraction(store, stream_manager=stream)
 
-    await interaction.request_work_approval(
-        task_id="task-1",
-        agent="job",
-        title="Application ready",
-        message="Submit?",
-        fields=_application_fields(),
-        context="posting",
-        timeout=0.01,
+    payload = await _first_emitted(
+        stream,
+        interaction.request_work_approval(
+            task_id="task-1",
+            agent="job",
+            title="Application ready",
+            message="Submit?",
+            fields=_application_fields(),
+            context="posting",
+        ),
     )
-
-    payload = stream.payloads[0]
     assert [f["name"] for f in payload["fields"]] == ["company", "url", "cover_letter", "salary"]
     assert payload["context"] == "posting"
 
@@ -273,9 +254,19 @@ async def test_a_plain_approval_still_emits_empty_fields() -> None:
     stream = Recorder()
     interaction = UserInteraction(ApprovalStore(), stream_manager=stream)
 
-    await interaction.request_approval_status(
-        task_id="task-1", agent="bash", title="Run?", message="rm -rf /tmp/x", timeout=0.01
+    payload = await _first_emitted(
+        stream,
+        interaction.request_approval_status(task_id="task-1", agent="bash", title="Run?", message="rm -rf /tmp/x"),
     )
 
-    assert stream.payloads[0]["fields"] == []
-    assert stream.payloads[0]["context"] == ""
+    assert payload["fields"] == []
+    assert payload["context"] == ""
+
+
+async def _first_emitted(stream, request) -> dict:
+    """What the card showed when it surfaced. Cards never expire, so stop waiting once it has."""
+    waiting = asyncio.create_task(request)
+    while not stream.payloads:
+        await asyncio.sleep(0)
+    waiting.cancel()
+    return stream.payloads[0]

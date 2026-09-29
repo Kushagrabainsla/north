@@ -32,9 +32,13 @@ class _StubStore:
 
 
 class _StubOrchestrator:
-    def __init__(self, tasks: list[RunningTask]) -> None:
+    def __init__(self, tasks: list[RunningTask], *, waiting_on_you: frozenset[str] = frozenset()) -> None:
         self._store = _StubStore(tasks)
+        self._waiting_on_you = waiting_on_you
         self.cancelled: list[str] = []
+
+    def is_waiting_on_you(self, task_id: str) -> bool:
+        return task_id in self._waiting_on_you
 
     @property
     def running_task_store(self) -> _StubStore:
@@ -43,6 +47,13 @@ class _StubOrchestrator:
     async def cancel_stuck_task(self, task_id: str) -> bool:
         self.cancelled.append(task_id)
         return True
+
+
+async def test_a_task_waiting_on_you_is_not_stuck_however_long_it_waits() -> None:
+    """Cards never expire (CODING_STYLE §13.5), so waiting is not stalling."""
+    orch = _StubOrchestrator([_task("t1", heartbeat_age=_MAX_AGE * 10)], waiting_on_you=frozenset({"t1"}))
+    await _sweep(orch, _MAX_AGE)
+    assert orch.cancelled == []
 
 
 async def test_fresh_task_is_not_cancelled() -> None:

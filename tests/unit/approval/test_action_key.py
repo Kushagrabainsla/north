@@ -23,7 +23,10 @@ async def test_a_tool_card_carries_its_actions_identity(tmp_path: Path) -> None:
     store = ApprovalStore(tmp_path / "a.db")
     action = Action(agent="bash", kind=ActionKind.SHELL_COMMAND, summary="make", command="make")
 
-    await approvals(store=store, timeout=0.01).decide(Request(action, "t", "```\nmake\n```"), task_id=None)
+    waiting = asyncio.create_task(approvals(store=store).decide(Request(action, "t", "```\nmake\n```"), task_id=None))
+    while not store.pending():
+        await asyncio.sleep(0.01)
+    waiting.cancel()
 
     assert store.all()[0].action_key == action.describe()
 
@@ -33,12 +36,12 @@ async def test_a_direct_card_is_stamped_with_the_key_the_policy_recalls(tmp_path
     store = ApprovalStore(tmp_path / "a.db")
     memory = ApprovalMemory(tmp_path / "m.db")
     policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTO, approval_memory=memory)
-    interaction = UserInteraction(store, policy=policy, reachable=lambda: False)
+    interaction = UserInteraction(store, policy=policy)
 
     def card() -> Card:
         return Card.new(type=CardType.APPROVAL, agent="general", title="t", message="Archive old notes?")
 
-    waiting = asyncio.create_task(interaction.request_decision(card(), timeout=5))
+    waiting = asyncio.create_task(interaction.request_decision(card()))
     while not store.pending():
         await asyncio.sleep(0.01)
     raised = store.pending()[0]
@@ -46,6 +49,6 @@ async def test_a_direct_card_is_stamped_with_the_key_the_policy_recalls(tmp_path
     store.resolve(raised.id, "approved", chosen_option="Approve")
     await waiting
 
-    again = await interaction.request_decision(card(), timeout=0.01)
+    again = await asyncio.wait_for(interaction.request_decision(card()), 1)  # replayed, so it never waits
 
     assert again.status == "approved"

@@ -253,40 +253,8 @@ class TestBranchListPattern:
         assert not fake_run_capture
 
 
-# ── an approval nobody answers ───────────────────────────────────────────────
-
-
-def _timing_out_store() -> MagicMock:
-    """A store where the card expires: no decision arrives before the timeout."""
-    store = MagicMock()
-    store.wait_for_decision = AsyncMock(return_value=None)
-    store.resolve = MagicMock(return_value=True)
-    return store
-
-
-class TestUnansweredApproval:
-    """An expired card is not a rejection, and must not be described as one.
-
-    Reporting "Action rejected by user" when nobody was watching sent the agent
-    looking for another way to do the same thing; each attempt raised a fresh
-    card and stalled for the full timeout, which is how one abandoned task kept
-    calling the provider for twelve minutes.
-    """
-
-    async def test_timeout_is_reported_as_unanswered_not_rejected(self, fake_run_capture) -> None:
-        tool = bind_approvals(GitTool(), store=_timing_out_store(), timeout=0.01)
-        result = await tool.execute(ToolInput(params={"action": "commit", "args": "wip"}))
-        assert result.success is False
-        assert "No one answered" in result.error
-        assert "rejected" not in result.error.lower() or "Nobody rejected" in result.error
-        assert result.data.get("unanswered") is True
-        assert not fake_run_capture, "the action must not run when nobody approved it"
-
-    async def test_timeout_is_marked_refused_not_a_tool_error(self, fake_run_capture) -> None:
-        """`refused` keeps an absent human from being counted against the tool."""
-        tool = bind_approvals(GitTool(), store=_timing_out_store(), timeout=0.01)
-        result = await tool.execute(ToolInput(params={"action": "commit", "args": "wip"}))
-        assert result.failure_kind == "refused"
+class TestRejectedApproval:
+    """A person saying no is reported as exactly that - a refusal, not a broken tool."""
 
     async def test_a_real_rejection_still_says_rejected(self, fake_run_capture) -> None:
         tool = bind_approvals(GitTool(), store=_rejecting_store())
@@ -294,4 +262,3 @@ class TestUnansweredApproval:
         assert result.success is False
         assert result.error == "Git operation rejected by user."
         assert result.failure_kind == "refused"
-        assert result.data.get("unanswered") is not True

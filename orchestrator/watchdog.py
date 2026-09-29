@@ -1,10 +1,11 @@
 """Background watchdog that fails tasks whose heartbeat has gone stale.
 
 A task heartbeats the ``RunningTaskStore`` as it makes progress. If a task stops
-progressing - a wedged agent, a provider that never responds, an approval nobody
-answers - its heartbeat stops advancing. This loop periodically scans the
-registry and cancels any task whose heartbeat is older than the configured
-threshold, so a single stuck task can never occupy a slot forever.
+progressing - a wedged agent, a provider that never responds - its heartbeat
+stops advancing. This loop periodically scans the registry and cancels any task
+whose heartbeat is older than the configured threshold, so a single stuck task
+can never occupy a slot forever. A task waiting on your answer is exempt: that
+is not stuck.
 """
 
 from __future__ import annotations
@@ -42,9 +43,10 @@ async def _sweep(orchestrator: Orchestrator, max_age_seconds: int) -> None:
         return
     now = datetime.now(UTC)
     for rt in await store.list_all():
-        # Paused tasks are intentionally idle, and queued tasks are waiting for capacity:
-        # only actively running tasks are expected to heartbeat.
-        if rt.status in ("paused", "queued"):
+        # Paused tasks are intentionally idle, queued tasks are waiting for capacity,
+        # and a task waiting on your answer is not stuck - cards never expire
+        # (CODING_STYLE §13.5). Only tasks that are working are expected to heartbeat.
+        if rt.status in ("paused", "queued") or orchestrator.is_waiting_on_you(rt.task_id):
             continue
         stalled_for = (now - rt.heartbeat_at).total_seconds()
         if stalled_for <= max_age_seconds:

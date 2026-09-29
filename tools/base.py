@@ -131,25 +131,11 @@ def prepared(input: ToolInput) -> Any:
 def _refused(decision: Decision, request: Request) -> ToolOutput:
     """What the agent is told when a call is not allowed - and whether anyone was asked.
 
-    A refusal is not the tool malfunctioning (``failure_kind="refused"``), and an
-    unanswered card is nobody saying no rather than someone saying no.
+    A refusal is not the tool malfunctioning (``failure_kind="refused"``).
     """
-    from approval.models import ApprovalDecision
-
     if decision.status is None:
         blocked = f"Blocked: {decision.reason}. This was refused outright and never shown to the user."
         return ToolOutput(success=False, failure_kind="refused", error=f"{blocked} {request.refused_hint}".strip())
-    if decision.status == ApprovalDecision.TIMEOUT_REJECTED:
-        return ToolOutput(
-            success=False,
-            failure_kind="refused",
-            data={"unanswered": True},
-            error=(
-                "No one answered the approval request, so the action did not run. Nobody rejected "
-                "it - there is simply no one available to approve. "
-                "Do not retry this or look for another way to do it."
-            ),
-        )
     return ToolOutput(success=False, failure_kind="refused", error=request.declined)
 
 

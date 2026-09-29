@@ -377,26 +377,12 @@ async def test_request_approval_without_store_raises(tmp_path: Path) -> None:
         )
 
 
-async def test_request_approval_timeout_returns_timeout_rejected(tmp_path: Path) -> None:
-    """When approval times out, the card's status must be 'timeout_rejected'."""
-    from approval.store import ApprovalStore
-
-    agent = _make_agent(tmp_path, approval_store=ApprovalStore(), approval_timeout_seconds=0.01)
-    decision = (
-        await agent._request_approval_card(
-            _payload(),
-            {"message": "Should I proceed?"},
-        )
-    ).status
-    assert decision == "timeout_rejected"
-
-
 async def test_request_approval_resolved_approve_returns_status(tmp_path: Path) -> None:
     """When a card is approved, its status must be the resolution status."""
     from approval.store import ApprovalStore
 
     store = ApprovalStore()
-    agent = _make_agent(tmp_path, approval_store=store, approval_timeout_seconds=5.0)
+    agent = _make_agent(tmp_path, approval_store=store)
 
     async def _approve_after_delay():
         await asyncio.sleep(0.05)
@@ -420,7 +406,7 @@ async def test_request_approval_resolved_reject_returns_status(tmp_path: Path) -
     from approval.store import ApprovalStore
 
     store = ApprovalStore()
-    agent = _make_agent(tmp_path, approval_store=store, approval_timeout_seconds=5.0)
+    agent = _make_agent(tmp_path, approval_store=store)
 
     async def _reject_after_delay():
         await asyncio.sleep(0.05)
@@ -444,7 +430,7 @@ async def test_request_approval_returns_reviewed_field_values(tmp_path: Path) ->
     from approval.store import ApprovalStore
 
     store = ApprovalStore()
-    agent = _make_agent(tmp_path, approval_store=store, approval_timeout_seconds=5.0)
+    agent = _make_agent(tmp_path, approval_store=store)
 
     async def _approve_with_edit():
         await asyncio.sleep(0.05)

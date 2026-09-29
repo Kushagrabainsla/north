@@ -610,7 +610,7 @@ daily surface, while the TUI remains the fallback.
 - Compare every TUI action and slash command against an equivalent web or CLI
   path.
 - Run both clients against the same API contract tests.
-- Exercise restart, reconnect, approval timeout, and multi-tab behavior.
+- Exercise restart, reconnect, a long-waiting approval, and multi-tab behavior.
 - Mark the web interface as default only after critical parity is complete.
 - Retire the TUI in a later release, with a documented fallback to CLI commands.
 
