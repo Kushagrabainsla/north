@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from config.approval_mode import ApprovalMode, require_approval_mode
 from config.settings import settings
 from gateways.telegram_api import (
     HTTP_TIMEOUT as _HTTP_TIMEOUT,
@@ -37,7 +38,13 @@ _TASK_POLL_MAX_ATTEMPTS = 90  # 90 × 1s = 90s max wait for task completion
 _MAX_RETRIES = 3
 
 _MAX_LISTED_TASKS = 5
-_APPROVAL_MODES = ("interactive", "auto", "autonomous")
+
+
+def _mode_label(mode: str) -> str:
+    """The mode as Telegram shows it: YOLO carries a badge, since it says yes to everything."""
+    if mode == ApprovalMode.YOLO:
+        return f"⚠️ **YOLO** `{mode}` — every approval is yes"
+    return f"`{mode}`"
 
 
 @dataclass(frozen=True)
@@ -478,7 +485,7 @@ class TelegramGateway:
             "**Available Controls:**\n"
             "  • `/status` — View active tasks & orchestrator status\n"
             "  • `/cancel` — Cancel the currently running task\n"
-            "  • `/autonomy` — View or set approval mode (`/autonomy interactive|auto|autonomous`)\n"
+            f"  • `/autonomy` — View or set approval mode (`/autonomy {'|'.join(ApprovalMode)}`)\n"
             "  • `/limits` — Show provider/model rate-limit & cooldown status\n"
             "  • `/help` — Show this command reference",
         )
@@ -526,18 +533,29 @@ class TelegramGateway:
     async def _command_autonomy(self, chat: _Reply, args: list[str]) -> None:
         if not args:
             current = await self._get_settings()
-            mode = current.get("approval_mode", "interactive") if current else settings.approval_mode
-            await self._reply(chat, f"⚙️ Current approval mode: `{mode}`\nUse `/autonomy <mode>` to change.")
+            if current is None:
+                await self._reply(chat, "❌ Could not read the approval mode from north.")
+                return
+            options = "\n".join(
+                f"  • `{option['value']}` — {option['description']}" for option in current.get("autonomy_options", [])
+            )
+            await self._reply(
+                chat,
+                f"⚙️ Approval mode: {_mode_label(current['autonomy'])}\n\n{options}\n\n"
+                "Use `/autonomy <mode>` to change.",
+            )
             return
 
-        new_mode = args[0].lower()
-        if new_mode not in _APPROVAL_MODES:
-            await self._reply(chat, "⚠️ Invalid mode. Choose: `interactive`, `auto`, or `autonomous`.")
+        try:
+            wanted = require_approval_mode(args[0])
+        except ValueError as exc:
+            await self._reply(chat, f"⚠️ {exc}")
             return
-        if await self._update_settings({"approval_mode": new_mode}):
-            await self._reply(chat, f"✅ Approval mode updated to: `{new_mode}`")
-        else:
+        updated = await self._update_settings({"autonomy": wanted.value})
+        if updated is None:
             await self._reply(chat, "❌ Failed to update approval mode.")
+            return
+        await self._reply(chat, f"✅ Approval mode: {_mode_label(updated['autonomy'])}")
 
     async def _run_task(self, chat: _Reply, text: str) -> None:
         """Submit a message to north and reply with whatever it produces."""

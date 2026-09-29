@@ -10,12 +10,13 @@ import pytest
 from fastapi import HTTPException
 
 from approval.unattended_rules import UnattendedRuleStore, rule_id
+from config.approval_mode import ApprovalMode
 from orchestrator.api_context import ApiServices, bind_services
 from web import api as web_api
 
 
 class _Settings:
-    def __init__(self, mode: str = "auto") -> None:
+    def __init__(self, mode: ApprovalMode = ApprovalMode.SAFE) -> None:
         self.autonomy = mode
 
 
@@ -35,14 +36,24 @@ async def test_the_list_is_visible(store) -> None:
 
 
 async def test_the_page_is_told_when_no_rule_can_fire(tmp_path) -> None:
-    """A rule only fires in `auto`. Listing inert rules with nothing saying so
+    """A rule only fires in `safe`. Listing inert rules with nothing saying so
     is how someone concludes the feature is broken."""
     rules = UnattendedRuleStore(tmp_path / "approval_memory.db")
-    with bind_services(ApiServices(unattended_rules=rules, north_settings=_Settings("interactive"))):
+    with bind_services(ApiServices(unattended_rules=rules, north_settings=_Settings(ApprovalMode.ASK))):
         payload = await web_api.unattended_rules()
 
     assert payload["active"] is False
-    assert payload["mode"] == "interactive"
+    assert payload["mode"] == "ask"
+
+
+@pytest.mark.parametrize("mode", [ApprovalMode.AUTONOMOUS, ApprovalMode.YOLO])
+async def test_rules_are_inert_in_the_modes_that_never_ask(tmp_path, mode) -> None:
+    """Autonomous and yolo allow everything before the safe list is consulted."""
+    rules = UnattendedRuleStore(tmp_path / "approval_memory.db")
+    with bind_services(ApiServices(unattended_rules=rules, north_settings=_Settings(mode))):
+        payload = await web_api.unattended_rules()
+
+    assert payload["active"] is False
 
 
 async def test_a_rule_can_be_added_disabled_and_deleted(store) -> None:

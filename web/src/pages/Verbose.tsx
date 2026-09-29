@@ -21,6 +21,7 @@ import {
   Status,
   timeAgo,
   weekdayInNorthTimezone,
+  YoloBadge,
 } from "../components";
 import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { hhmm } from "../schedule";
@@ -829,7 +830,7 @@ const KIND_HELP: Record<string, string> = {
     "Messages addressed to you. A message to anyone else is never auto-approved.",
 };
 
-// The safe-action list north runs in `auto` mode without asking. It used to be a
+// The safe-action list north runs in `safe` mode without asking. It used to be a
 // tuple in a source file: you could not see it, add to it, or take anything out
 // of it. approval_memory next door already settled the principle - a decision
 // that cannot be withdrawn is not consent - and a hardcoded allowlist fails it.
@@ -914,17 +915,17 @@ function SafeActionsPanel() {
     >
       {error && <ErrorNotice message={error} />}
 
-      {/* A rule only ever fires in `auto`. Listing rules that cannot fire, with
+      {/* A rule only ever fires in `safe`. Listing rules that cannot fire, with
         nothing saying so, is how someone concludes the feature is broken. */}
       {data && !data.active && (
         <div className="notice">
-          These rules are inactive: north is in <b>{data.mode}</b> mode and asks
-          about everything. They apply in <b>auto</b> mode.
+          These rules are inactive: north is in <b>{data.mode}</b> mode. They
+          apply only in <b>safe</b> mode.
         </div>
       )}
 
       <p className="muted memory-note">
-        What north may do without asking, in auto mode. Two things are never on
+        What north may do without asking, in safe mode. Two things are never on
         this list, whatever you add: sending something to another person, and
         spending money. A sent email cannot be unsent.
       </p>
@@ -2325,9 +2326,15 @@ interface PartChain {
   models: ChainModel[];
 }
 
+interface ModeOption {
+  value: string;
+  description: string;
+}
 interface SettingsData {
   power: string;
   autonomy: string;
+  // The approval modes, served by the API so every surface lists the same ones.
+  autonomy_options: ModeOption[];
   routing: string;
   model: string;
   timezone: string;
@@ -2437,6 +2444,9 @@ export function SettingsPage() {
     }
   };
   const routing = resource.data?.routing || "auto";
+  const autonomy = resource.data?.autonomy;
+  const autonomyOptions = resource.data?.autonomy_options || [];
+  const currentMode = autonomyOptions.find((option) => option.value === autonomy);
   const manual = routing === "manual";
   // Manual routing needs a model, and the server refuses the switch without one.
   // So choosing "manual" with nothing stored opens the picker and waits: the
@@ -2518,20 +2528,21 @@ export function SettingsPage() {
         </Panel>
         <Panel title="Autonomy" label="Approval behavior">
           <div className="segmented">
-            {["interactive", "auto", "autonomous"].map((value) => (
+            {autonomyOptions.map((option) => (
               <button
-                className={resource.data?.autonomy === value ? "active" : ""}
+                className={autonomy === option.value ? "active" : ""}
                 disabled={busy}
-                onClick={() => update({ autonomy: value })}
-                key={value}
+                onClick={() => update({ autonomy: option.value })}
+                title={option.description}
+                key={option.value}
               >
-                {value}
+                {option.value}
               </button>
             ))}
           </div>
           <p className="muted">
-            Consequential and destructive actions remain governed by North's
-            safety policy.
+            {currentMode?.description}
+            <YoloBadge mode={autonomy} />
           </p>
         </Panel>
         <Panel title="Time zone" label="Dates and schedules">
@@ -2982,7 +2993,10 @@ export function SystemPage() {
           </div>
           <div className="list-row">
             <b>Autonomy</b>
-            <span>{overview.data?.settings?.autonomy || "–"}</span>
+            <span>
+              {overview.data?.settings?.autonomy || "–"}
+              <YoloBadge mode={overview.data?.settings?.autonomy} />
+            </span>
           </div>
           <div className="list-row">
             <b>Bootstrap</b>

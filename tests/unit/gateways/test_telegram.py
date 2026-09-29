@@ -135,8 +135,7 @@ async def test_telegram_gateway_slash_commands(monkeypatch: pytest.MonkeyPatch) 
     gw = TelegramGateway()
     gw._send_message = AsyncMock()  # type: ignore[method-assign]
     gw._cancel_task = AsyncMock(return_value=True)  # type: ignore[method-assign]
-    gw._update_settings = AsyncMock(return_value={"approval_mode": "auto"})  # type: ignore[method-assign]
-    gw._get_settings = AsyncMock(return_value={"approval_mode": "interactive"})  # type: ignore[method-assign]
+    gw._update_settings = AsyncMock(return_value={"autonomy": "safe"})  # type: ignore[method-assign]
 
     # /help command
     await gw._process_message({"message_id": 1, "chat": {"id": 12345}, "text": "/help"})
@@ -150,10 +149,68 @@ async def test_telegram_gateway_slash_commands(monkeypatch: pytest.MonkeyPatch) 
     gw._cancel_task.assert_awaited_with("task_abc")
     assert "cancelled" in gw._send_message.call_args[0][1].lower()
 
-    # /autonomy auto command
+    # /autonomy auto: the old name still works, and is sent as the key the API reads.
     await gw._process_message({"message_id": 3, "chat": {"id": 12345}, "text": "/autonomy auto"})
-    gw._update_settings.assert_awaited_with({"approval_mode": "auto"})
-    assert "updated" in gw._send_message.call_args[0][1].lower()
+    gw._update_settings.assert_awaited_with({"autonomy": "safe"})
+    assert "`safe`" in gw._send_message.call_args[0][1]
+
+
+def _autonomy_gateway(monkeypatch: pytest.MonkeyPatch) -> TelegramGateway:
+    from config.approval_mode import mode_options
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+    gw = TelegramGateway()
+    gw._send_message = AsyncMock()  # type: ignore[method-assign]
+    gw._get_settings = AsyncMock(  # type: ignore[method-assign]
+        return_value={"autonomy": "yolo", "autonomy_options": mode_options()}
+    )
+    gw._update_settings = AsyncMock(return_value={"autonomy": "yolo"})  # type: ignore[method-assign]
+    return gw
+
+
+@pytest.mark.asyncio
+async def test_autonomy_lists_the_modes_the_api_serves_with_a_yolo_badge(monkeypatch: pytest.MonkeyPatch) -> None:
+    gw = _autonomy_gateway(monkeypatch)
+
+    await gw._process_message({"message_id": 1, "chat": {"id": 12345}, "text": "/autonomy"})
+
+    reply = gw._send_message.call_args[0][1]
+    for mode in ("ask", "safe", "autonomous", "yolo"):
+        assert f"`{mode}`" in reply
+    assert "YOLO" in reply
+
+
+@pytest.mark.asyncio
+async def test_autonomy_confirms_the_mode_the_api_reports(monkeypatch: pytest.MonkeyPatch) -> None:
+    gw = _autonomy_gateway(monkeypatch)
+
+    await gw._process_message({"message_id": 1, "chat": {"id": 12345}, "text": "/autonomy yolo"})
+
+    gw._update_settings.assert_awaited_with({"autonomy": "yolo"})
+    assert "YOLO" in gw._send_message.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_mode_is_refused_before_anything_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    gw = _autonomy_gateway(monkeypatch)
+
+    await gw._process_message({"message_id": 1, "chat": {"id": 12345}, "text": "/autonomy reckless"})
+
+    gw._update_settings.assert_not_awaited()
+    reply = gw._send_message.call_args[0][1]
+    assert "reckless" in reply and "ask, safe, autonomous, yolo" in reply
+
+
+@pytest.mark.asyncio
+async def test_a_failed_update_is_not_reported_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It used to post a key the API ignores and then say "updated" anyway."""
+    gw = _autonomy_gateway(monkeypatch)
+    gw._update_settings = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    await gw._process_message({"message_id": 1, "chat": {"id": 12345}, "text": "/autonomy safe"})
+
+    assert "Failed" in gw._send_message.call_args[0][1]
 
 
 @pytest.mark.asyncio

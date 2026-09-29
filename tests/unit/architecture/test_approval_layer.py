@@ -18,6 +18,10 @@ _SKIPPED = ("tests", "experiments", ".venv", "web/node_modules", "build")
 MODE_READERS = {
     "orchestrator/api/settings.py": "the one API every surface shows and sets the mode through",
     "tools/specialized/north_config.py": "sets the mode when asked in chat",
+    "web/api.py": "says whether the safe-action rules can fire; decides nothing",
+    "gateways/telegram.py": "parses /autonomy with the API's parser and shows the YOLO badge; decides nothing",
+    "cli/main.py": "--yolo sets the mode through the settings API; status shows the YOLO badge",
+    "cli/tui.py": "shows the YOLO badge; decides nothing",
     "agents/agentic_llm_agent.py": "until step 7: the memory decider answers questions in autonomous",
     "orchestrator/orchestrator.py": "until step 7: the memory decider replaces _human_available",
 }

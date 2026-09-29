@@ -166,18 +166,15 @@ class Settings(BaseSettings):
     sandbox_cpus: str = "1"
     sandbox_pids_limit: int = 512
 
-    # Approval mode - one dial for how much north does without asking:
-    #   "interactive" (default): read-only runs free, every mutation asks
-    #   "auto":       + auto-approve the safe engineering subset (in-workspace edits,
-    #                   test/lint/build allowlist, local git); ask for the rest
-    #   "autonomous": auto-approve everything except a hard-danger floor
+    # Approval mode - one dial for how much north does without asking: ask
+    # (default), safe, autonomous or yolo, defined in config/approval_mode.py.
     # Set via NORTH_APPROVAL_MODE. Empty = fall back to the legacy booleans below,
-    # then to "interactive". See approval/mode.py.
+    # then to "ask".
     approval_mode: str = ""
 
     # Legacy boolean toggles - still honoured as a fallback when approval_mode is
     # left at its default, so older configs keep working. Prefer approval_mode.
-    # unattended -> "auto"; autonomous -> "autonomous".
+    # unattended -> "safe"; autonomous -> "autonomous".
     unattended_mode: bool = False
     unattended_extra_commands: tuple[str, ...] = ()
     autonomous_mode: bool = False

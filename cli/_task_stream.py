@@ -44,23 +44,18 @@ class TaskStream:
 
     task_id: str
     console: Console
-    yolo: bool = False
 
     @property
     def url(self) -> str:
         return f"{_BASE_URL}/orchestrator/stream/{self.task_id}"
 
 
-def _approval_decision(chosen: str, *, yolo: bool) -> str:
+def _approval_decision(chosen: str) -> str:
     """Map the user's pick on an approval card to a decision the server accepts.
 
-    This is only ever reached for ``approval_required``; questions arrive under
-    their own event. So under --yolo the first option is a yes whatever it is
-    called, and anything unrecognised stays ``answered`` rather than being
-    guessed into consent.
+    Anything unrecognised stays ``answered`` rather than being guessed into
+    consent. Yolo never reaches here: the approval layer answers for it.
     """
-    if yolo:
-        return "approved"
     picked = chosen.strip().lower()
     if picked in _AFFIRMATIVE:
         return "approved"
@@ -260,7 +255,7 @@ class TaskStepFeed:
         self.live.stop()
 
         chosen = self._ask_for_approval(data)
-        decision = _approval_decision(chosen, yolo=self.stream.yolo)
+        decision = _approval_decision(chosen)
         self._send_approval(data, decision=decision, chosen=chosen)
         self.steps[-1] = ("✓" if decision != "rejected" else "✗", f"Approval: {chosen}", False)
         # Do NOT restart Live - the cursor is now past the approval panel. Later
@@ -282,11 +277,7 @@ class TaskStepFeed:
             console.print(f"  [bright_black][{number}][/bright_black]  {option}")
         console.print()
 
-        if self.stream.yolo:
-            console.print("  [yellow]⚠ YOLO[/yellow]  auto-approved")
-            raw_choice = "1"
-        else:
-            raw_choice = input("  ❯ ").strip()
+        raw_choice = input("  ❯ ").strip()
         return _chosen_option(raw_choice, options)
 
     def _send_approval(self, data: dict[str, Any], *, decision: str, chosen: str) -> None:

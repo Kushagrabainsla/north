@@ -72,6 +72,7 @@ from cli.constants import (
     _CONFIG_KEYS,
     _PROVIDERS,
     _VALID_DOCS,
+    YOLO_BADGE,
     _Provider,
 )
 from cli.dictation import parse_hotkey as _parse_hotkey
@@ -86,6 +87,7 @@ from cli.startup_report import last_error_lines as _last_error_lines
 from cli.tui import run as _tui_run
 from cli.update_spec import pinned_git_spec as _pinned_git_spec
 from cli.web_build import web_build_is_stale as _web_build_is_stale
+from config.approval_mode import ApprovalMode
 from config.security import load_secret
 from utils.time import local_timezone_name
 from utils.version import NORTH_VERSION
@@ -204,34 +206,45 @@ app = typer.Typer(
 )
 
 
-# Set by the root callback; read by `_run_task` so --yolo works outside the TUI.
+# Set by the root callback. `--yolo` is a root option, so whichever command first
+# reaches a running server (the TUI or `task`) applies it.
 _YOLO = False
+
+
+def _apply_yolo() -> None:
+    """Switch north to yolo through the settings API, as `/autonomy yolo` does anywhere.
+
+    The mode belongs to north, not to this terminal: Telegram and the dashboard
+    run under it too, and it stays until someone sets another mode.
+    """
+    if not _YOLO:
+        return
+    _api("POST", "/orchestrator/settings", json={"autonomy": ApprovalMode.YOLO.value})
+    _console.print(f"  {YOLO_BADGE}  [bright_black]every approval is yes until you set another mode[/bright_black]")
 
 
 @app.callback()
 def _root(
     ctx: typer.Context,
-    yolo: bool = typer.Option(False, "--yolo", help="Auto-approve every approval prompt (shows a ⚠ YOLO badge)."),
+    yolo: bool = typer.Option(
+        False, "--yolo", help="Switch north to yolo: every approval is yes, everywhere, until another mode is set."
+    ),
 ) -> None:
     """north - Personal Life Operating System.
 
     Run without a subcommand to open the interactive TUI.
     """
-    # Remembered for whichever subcommand runs next: `--yolo` is a root option,
-    # but it used to reach only the TUI, so `north --yolo task "..."` parsed the
-    # flag, ignored it, and still stopped dead at an approval prompt.
     global _YOLO
     _YOLO = yolo
     if ctx.invoked_subcommand is None:
         # No subcommand - boot the server if needed, then open the TUI.
-        _launch_tui(yolo=yolo)
+        _launch_tui()
 
 
 def _launch_tui(
     host: str = "127.0.0.1",
     port: int = 8000,
     workspace: str | None = None,
-    yolo: bool = False,
 ) -> None:
     """Auto-start the server if not running, then launch the TUI."""
     if not _port_in_use(host, port) or not _is_north_server(host, port):
@@ -251,10 +264,11 @@ def _launch_tui(
     base_url = f"http://{host}:{port}"
     headers = _headers()
     resolved_workspace = _resolve_workspace(workspace)
+    _apply_yolo()
 
     import asyncio
 
-    asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace, yolo=yolo))
+    asyncio.run(_tui_run(base_url=base_url, headers=headers, workspace=resolved_workspace))
 
 
 # ── task ─────────────────────────────────────────────────────────────────────
@@ -340,9 +354,10 @@ def _print_panel(body: Markdown | Text, title: str) -> None:
 
 def _run_task(prompt: str, workspace: str | None = None) -> str:
     """Submit prompt, stream SSE pipeline steps live, then render the response. Returns output text."""
+    _apply_yolo()
     task_id = _submit_task(prompt, workspace)
     try:
-        feed = follow_task(TaskStream(task_id=task_id, console=_console, yolo=_YOLO))
+        feed = follow_task(TaskStream(task_id=task_id, console=_console))
     except KeyboardInterrupt:
         _console.print("[dim]Interrupted.[/dim]")
         return ""
@@ -1377,14 +1392,14 @@ def status() -> None:
         _console.print()
         return
 
-    # ── Strategy ──
+    # ── Dials ──
     try:
         settings = _api("GET", "/orchestrator/settings").json()
-        strategy = settings.get("strategy", "cruise")
-        approval = settings.get("approval_mode", "interactive")
+        power, autonomy = settings["power"], settings["autonomy"]
     except Exception:
-        strategy, approval = "?", "?"
-    _console.print(f"  [dim]strategy  [/dim] {strategy}   [bright_black](approval: {approval})[/bright_black]")
+        power, autonomy = "?", "?"
+    badge = f"  {YOLO_BADGE}" if autonomy == ApprovalMode.YOLO else ""
+    _console.print(f"  [dim]power     [/dim] {power}   [bright_black](autonomy: {autonomy})[/bright_black]{badge}")
 
     # ── Inference models per pool ──
     try:

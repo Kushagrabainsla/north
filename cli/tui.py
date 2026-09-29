@@ -38,6 +38,7 @@ from cli.constants import (
     _SSE_BACKOFF_BASE,
     _SSE_BACKOFF_MAX,
     _VALID_DOCS,
+    YOLO_BADGE,
 )
 from cli.formatting import (
     _compute_suggestion,
@@ -60,6 +61,7 @@ from cli.formatting import (
 from cli.tui_text import estimated_tokens as _estimated_tokens
 from cli.tui_text import requested_context_document as _requested_context_document
 from cli.tui_text import slash_argument as _slash_argument
+from config.approval_mode import ApprovalMode
 
 
 class ToolInspectorModal(ModalScreen[None]):
@@ -446,20 +448,6 @@ _MODEL_SAMPLE_SIZE = 4
 _MAX_REMEMBERED_INPUTS = 1000
 
 
-def _read_power(settings_path: Path) -> str:
-    """Read the current power dial from the north settings file.
-
-    Falls back to 'cruise' if the file is absent or unreadable so the info bar
-    always shows something meaningful without crashing the TUI. Reads the new
-    'power' key, falling back to the legacy 'strategy' key for older files.
-    """
-    try:
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
-        return str(data.get("power", data.get("strategy", "cruise")))
-    except Exception:
-        return "cruise"
-
-
 class NorthApp(App[None]):
     """Textual chat UI for north."""
 
@@ -646,13 +634,11 @@ class NorthApp(App[None]):
         base_url: str,
         headers: dict,
         workspace: str | None = None,
-        yolo: bool = False,
     ) -> None:
         super().__init__()
         self.base_url = base_url
         self.headers = headers
         self.workspace = workspace
-        self.yolo = yolo
 
         # One HTTP client reused for the app's lifetime (closed on unmount) so
         # each action/stream doesn't pay connection setup. Lazily created.
@@ -694,9 +680,10 @@ class NorthApp(App[None]):
         self._current_input: str = ""
         self._spin_frame: int = 0
         self._status_text: str = ""
+        # The power and autonomy dials, as the settings API last reported them.
         self._strategy: str = "cruise"
+        self._autonomy: str = ""
         self._model: str = ""
-        self._settings_path = Path.home() / ".north" / "settings.json"
 
         # SSE event name → handler. Adding an event = adding one _on_* method
         # and one entry here; no change to the dispatch path itself.
@@ -816,7 +803,6 @@ class NorthApp(App[None]):
             with contextlib.suppress(Exception):
                 self._input_history = [line for line in history_file.read_text().splitlines() if line.strip()]
 
-        self._strategy = _read_power(self._settings_path)
         self._refresh_hint()
         self._render_header_bar()
         self._render_status_bar()
@@ -859,13 +845,15 @@ class NorthApp(App[None]):
         if tools:
             shown = ", ".join(tools[:10]) + ("…" if len(tools) > 10 else "")
             log.write(f"  [bright_black]toolsets[/bright_black]  {shown}")
-        if self.yolo:
-            log.write("  [#f85149]⚠ YOLO[/#f85149]     [bright_black]auto-approve enabled[/bright_black]")
+        if self._autonomy:
+            badge = f"  {YOLO_BADGE}" if self._autonomy == ApprovalMode.YOLO else ""
+            log.write(f"  [bright_black]autonomy[/bright_black]  {self._autonomy}{badge}")
         log.write("")
         self._write_rule()
 
     async def _draw_banner_async(self) -> None:
         log = self.query_one("#log", RichLog)
+        await self._refresh_dials()
         self._cached_agent_toolsets = await self._fetch_agents()
         self._write_banner_lines(log, self._cached_agent_toolsets)
 
@@ -888,8 +876,8 @@ class NorthApp(App[None]):
     async def _set_dial(self, url: str, key: str, value: str | None, ok: str = "") -> None:
         """Set a live dial (power/autonomy) via the settings endpoint.
 
-        Called from slash commands. With no value, just shows the current value
-        by re-reading the settings file. Accepts the legacy names too.
+        Called from slash commands. With no value, shows the current value - and
+        for autonomy, the modes the API offers. Accepts the legacy names too.
         """
         full_url = f"{self.base_url}{url}"
         try:
@@ -913,10 +901,29 @@ class NorthApp(App[None]):
                     data = r.json()
                     shown = data.get("power") if key in ("power", "strategy") else data.get("autonomy")
                     self._log(f"{ok}`{shown}` (current)")
-                self._strategy = _read_power(self._settings_path)
-                self._render_status_bar()
+                    if key == "autonomy":
+                        for option in data.get("autonomy_options", []):
+                            self._log(f"    [bright_black]{option['value']:<11}[/bright_black] {option['description']}")
+                self._show_dials(data)
         except Exception as exc:
             self._log(f"  [red]error setting {key}: {exc}[/red]")
+
+    async def _refresh_dials(self) -> None:
+        """Re-read the power and autonomy dials from the settings API; keep the last known on failure."""
+        try:
+            async with self._http() as c:
+                r = await c.get(f"{self.base_url}/orchestrator/settings", headers=self.headers, timeout=5.0)
+                if r.status_code == 200:
+                    self._show_dials(r.json())
+        except Exception:
+            return
+
+    def _show_dials(self, settings: dict) -> None:
+        self._strategy = settings.get("power", self._strategy)
+        self._autonomy = settings.get("autonomy", self._autonomy)
+        self._refresh_hint()
+        self._render_header_bar()
+        self._render_status_bar()
 
     # ── rendering helpers ────────────────────────────────────────────────────
 
@@ -960,7 +967,7 @@ class NorthApp(App[None]):
         active = sum(1 for _ in self._user_task_ids)
         tasks = f"⚙{active}" if active else ""
         elapsed = _fmt_elapsed(time.monotonic() - self._start_time)
-        yolo = "[#f85149]⚠ YOLO[/#f85149]" if self.yolo else ""
+        yolo = YOLO_BADGE if self._autonomy == ApprovalMode.YOLO else ""
 
         # (text, priority) - higher priority survives longer as width shrinks.
         segments: list[tuple[str, int]] = [
@@ -1398,9 +1405,8 @@ class NorthApp(App[None]):
         if output:
             self._last_assistant_response = output
 
-        # Refresh strategy in case the user issued a strategy command.
-        self._strategy = _read_power(self._settings_path)
-        self._refresh_hint()
+        # The task may have changed a dial (north_config sets them when asked in chat).
+        await self._refresh_dials()
         self._set_status("")
         self._user_task_ids.discard(task_id)
         self._render_status_bar()
@@ -1557,10 +1563,6 @@ class NorthApp(App[None]):
             turn["phase"] = "waiting for approval"
             turn["interaction"] = {"kind": "approval", "message": msg, "options": options}
             self._render_active_turns()
-        if self.yolo:
-            # Auto-approve mode: take the first option without prompting.
-            await self._submit_approval("1")
-            return
         if turn is not None:
             return
         # Check if the message contains a unified diff code block
@@ -1812,10 +1814,6 @@ class NorthApp(App[None]):
                 "options": options,
             }
             self._render_active_turns()
-        if self.yolo:
-            ans = options[0] if options else "Use your best judgment."
-            await self._submit_approval("1" if options else ans)
-            return
         if turn is None:
             self._log("  [cyan]question required[/cyan]")
             self._log_rich(RichText("    " + data.get("question", ""), style="white"))
@@ -2690,8 +2688,7 @@ async def run(
     base_url: str,
     headers: dict,
     workspace: str | None = None,
-    yolo: bool = False,
 ) -> None:
     """Launch the TUI. Blocks until the user exits."""
-    app = NorthApp(base_url=base_url, headers=headers, workspace=workspace, yolo=yolo)
+    app = NorthApp(base_url=base_url, headers=headers, workspace=workspace)
     await app.run_async()

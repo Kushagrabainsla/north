@@ -15,7 +15,7 @@ from cli.tui import NorthApp
 
 
 def _make_app() -> NorthApp:
-    app = NorthApp(base_url="http://x", headers={}, workspace=None, yolo=False)
+    app = NorthApp(base_url="http://x", headers={}, workspace=None)
     # Neutralise Textual screen machinery the handler doesn't need.
     app._log = lambda *a, **k: None  # type: ignore[method-assign]
     app._log_rich = lambda *a, **k: None  # type: ignore[method-assign]

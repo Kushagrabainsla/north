@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from approval.models import CardType
 from approval.unattended_rules import KINDS as RULE_KINDS
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
+from config.approval_mode import ApprovalMode
 from config.security import WEB_SESSION_COOKIE, issue_web_session, verify_api_access
 from inference.codex_auth import CodexCredentialProvider
 from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinition
@@ -812,19 +813,19 @@ class UnattendedRuleUpdate(BaseModel):
 
 @router.get("/unattended/rules")
 async def unattended_rules() -> dict[str, Any]:
-    """The safe-action list: what north runs in `auto` mode without asking.
+    """The safe-action list: what north runs in `safe` mode without asking.
 
     Returned with the live approval mode, because a rule only ever fires in
-    `auto` - in `interactive` the whole table is inert. Showing rules that cannot
+    `safe` - in `ask` the whole table is inert. Showing rules that cannot
     fire, with no indication of that, is how someone concludes the feature is
     broken.
     """
     store = current_services().unattended_rules
     north_settings = current_services().north_settings
-    mode = str(north_settings.autonomy) if north_settings else "interactive"
+    mode = north_settings.autonomy if north_settings else ApprovalMode.ASK
     return {
-        "mode": mode,
-        "active": mode == "auto",
+        "mode": mode.value,
+        "active": mode is ApprovalMode.SAFE,
         "kinds": list(RULE_KINDS),
         "rules": [] if store is None else [rule.as_dict() for rule in store.all()],
     }

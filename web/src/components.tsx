@@ -109,6 +109,12 @@ export function Status({ value }: { value?: string }) {
   return <span className={`status status-${normalized}`}>{normalized.replaceAll("_", " ")}</span>;
 }
 
+// Shown beside the approval mode wherever it appears, while that mode says yes to everything.
+export function YoloBadge({ mode }: { mode?: string }) {
+  if (mode !== "yolo") return null;
+  return <span className="status status-yolo" title="Every approval is yes">⚠ yolo</span>;
+}
+
 export function Empty({ children = "Nothing here yet." }: { children?: ReactNode }) {
   return <div className="empty">{children}</div>;
 }

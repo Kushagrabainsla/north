@@ -64,6 +64,9 @@ THEME = {
 # semantic state colour.
 WORDMARK_ACCENT = "#b8ef72"
 
+# Shown wherever the terminal shows the mode while it is yolo: every approval is yes.
+YOLO_BADGE = f"[{THEME['danger']}]⚠ YOLO[/{THEME['danger']}]"
+
 
 # ── Pipeline step rendering (task progress table) ───────────────────────────
 _STEP_ICONS: dict[str, str] = {
@@ -175,7 +178,7 @@ _SLASH_COMMANDS: dict[str, str] = {
     "/cost": "show session tokens and cost",
     "/agents": "list registered agents",
     "/power": "show or set the model-selection dial (eco|cruise|sport)",
-    "/autonomy": "show or set the approval dial (interactive|auto|autonomous)",
+    "/autonomy": "list the approval modes, or set one (/autonomy <mode>)",
     "/quit": "exit north",
 }
 

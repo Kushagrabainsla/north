@@ -179,7 +179,7 @@ async def test_status_bar_renders_on_a_narrow_terminal():
         app._session_cost = 1.2345
         app._compactions = 3
         app._user_task_ids = {"a", "b"}
-        app.yolo = True
+        app._autonomy = "yolo"
         app._render_status_bar()  # must not raise on the width-drop loop
         await pilot.pause()
 
