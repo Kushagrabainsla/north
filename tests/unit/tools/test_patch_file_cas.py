@@ -36,7 +36,7 @@ async def test_patch_file_rejects_concurrent_modification(tmp_path: Path):
         )
 
     store.wait_for_decision = AsyncMock(side_effect=simulate_concurrent_edit)
-    tool = bind_approvals(PatchFileTool(), ApprovalMode.INTERACTIVE, store=store)
+    tool = bind_approvals(PatchFileTool(), ApprovalMode.ASK, store=store)
 
     out = await tool.execute(
         ToolInput(

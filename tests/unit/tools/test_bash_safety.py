@@ -121,15 +121,13 @@ class TestBashToolApprovalBypass:
         store.add.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_a_learned_rule_can_approve_in_auto(self) -> None:
+    async def test_safe_never_lets_a_model_approve_a_command(self) -> None:
+        """Safe is deterministic: off the safe list and never answered before, it asks."""
         from config.approval_mode import ApprovalMode
 
-        async def advisor(action):
-            return "approved", "learned rule"
+        tool, _ = self._tool(mode=ApprovalMode.SAFE, store=rejecting_store())
 
-        tool, _ = self._tool(mode=ApprovalMode.AUTO, advisor=advisor)
-
-        assert await self._allowed(tool, "npm run deploy")
+        assert not await self._allowed(tool, "npm run deploy")
 
     @pytest.mark.asyncio
     async def test_a_learned_rule_is_not_consulted_in_interactive(self) -> None:
@@ -151,7 +149,7 @@ class TestBashToolApprovalBypass:
         """Something north did unasked has to be visible afterwards."""
         from config.approval_mode import ApprovalMode
 
-        tool, store = self._tool(mode=ApprovalMode.AUTO)
+        tool, store = self._tool(mode=ApprovalMode.SAFE)
 
         assert await self._allowed(tool, "pytest -q")
         store.add.assert_called_once()
@@ -160,7 +158,7 @@ class TestBashToolApprovalBypass:
     async def test_auto_mode_still_gates_a_command_off_the_allowlist(self) -> None:
         from config.approval_mode import ApprovalMode
 
-        tool, _ = self._tool(mode=ApprovalMode.AUTO, store=rejecting_store())
+        tool, _ = self._tool(mode=ApprovalMode.SAFE, store=rejecting_store())
 
         assert not await self._allowed(tool, "rm -rf /tmp/x")
 

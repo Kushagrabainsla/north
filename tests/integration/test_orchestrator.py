@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from agents.models import AgentDependencies, AgentPayload, AgentResult
+from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from approval.terminal import TerminalNotifier
 from jobs import SQLiteJobProcessor
@@ -103,7 +104,7 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
         tool_registry=tool_registry,
         confidence_tracker=confidence_tracker,
         stream_manager=stream,
-        approval_store=approval,
+        interaction=UserInteraction(approval),
     )
     agent_registry = AgentRegistry(agents_dir=agents_dir, deps=agent_deps)
     agent_deps.agent_registry = agent_registry
@@ -114,6 +115,7 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
         stream_manager=stream,
     )
 
+    approval_store_ = approval
     orch = Orchestrator(
         ledger=ledger,
         agent_registry=agent_registry,
@@ -121,9 +123,9 @@ def _make_orchestrator(tmp_path: Path) -> tuple[Orchestrator, SQLiteLedgerWriter
         execution_planner=ExecutionPlanner(agent_registry, inference, tool_registry),
         task_context_store=task_ctx,
         failure_handler=failure_handler,
-        notifier=TerminalNotifier(),
+        interaction=UserInteraction(approval_store_, notifier=TerminalNotifier(), stream_manager=stream),
         stream_manager=stream,
-        approval_store=approval,
+        approval_store=approval_store_,
         synthesizer=ResultSynthesizer(inference_router=inference, memory=LocalMemoryGateway(context_store)),
     )
     return orch, ledger, approval

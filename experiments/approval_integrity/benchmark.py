@@ -92,7 +92,7 @@ async def _direct_card_replay(tmp: Path) -> str:
     """An agent raises an approval card directly; the user approves; it is raised again."""
     store = ApprovalStore(tmp / "approvals.db")
     memory = ApprovalMemory(tmp / "memory.db")
-    policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTO, approval_memory=memory)
+    policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.SAFE, approval_memory=memory)
     interaction = UserInteraction(store, policy=policy)
 
     def card() -> Card:
@@ -183,7 +183,7 @@ async def _north_notes_write(tmp: Path) -> str:
     workspace.mkdir()
     north_home = tmp / "north_home"
     target = north_home / "notes" / "today.md"
-    registry = _registry(tmp, ApprovalMode.INTERACTIVE, ApprovalStore(tmp / "approvals.db"))
+    registry = _registry(tmp, ApprovalMode.ASK, ApprovalStore(tmp / "approvals.db"))
     with patch.dict("os.environ", {"NORTH_HOME": str(north_home)}):
         await _dispatch("write_file", {"path": str(target), "content": "done\n"}, workspace, registry)
     return "written" if target.exists() else "not_written"
@@ -232,25 +232,25 @@ CASES: list[dict[str, Any]] = [
         "id": "replay_same_action",
         "group": "approval_replay",
         "expect": Verdict.ALLOW.value,
-        "run": lambda t: _tool_card_replay(t, "approved", ApprovalMode.AUTO, "make lint"),
+        "run": lambda t: _tool_card_replay(t, "approved", ApprovalMode.SAFE, "make lint"),
     },
     {
         "id": "replay_other_action_still_asks",
         "group": "approval_replay",
         "expect": Verdict.ASK.value,
-        "run": lambda t: _tool_card_replay(t, "approved", ApprovalMode.AUTO, "make lint deploy"),
+        "run": lambda t: _tool_card_replay(t, "approved", ApprovalMode.SAFE, "make lint deploy"),
     },
     {
         "id": "replay_rejection",
         "group": "approval_replay",
         "expect": Verdict.REFUSE.value,
-        "run": lambda t: _tool_card_replay(t, "rejected", ApprovalMode.AUTO, "make lint"),
+        "run": lambda t: _tool_card_replay(t, "rejected", ApprovalMode.SAFE, "make lint"),
     },
     {
         "id": "no_replay_in_interactive",
         "group": "approval_replay",
         "expect": Verdict.ASK.value,
-        "run": lambda t: _tool_card_replay(t, "approved", ApprovalMode.INTERACTIVE, "make lint"),
+        "run": lambda t: _tool_card_replay(t, "approved", ApprovalMode.ASK, "make lint"),
     },
     {"id": "replay_direct_card", "group": "approval_replay", "expect": "allow", "run": _direct_card_replay},
     # Fix 2: a write outside the task's folder is never silent; inside still works.
@@ -258,47 +258,43 @@ CASES: list[dict[str, Any]] = [
         "id": "write_outside_interactive",
         "group": "file_writes",
         "expect": "not_written",
-        "run": lambda t: _file_write(
-            t, tool="write_file", inside=False, mode=ApprovalMode.INTERACTIVE, model_widens=False
-        ),
+        "run": lambda t: _file_write(t, tool="write_file", inside=False, mode=ApprovalMode.ASK, model_widens=False),
     },
     {
         "id": "write_outside_auto",
         "group": "file_writes",
         "expect": "not_written",
-        "run": lambda t: _file_write(t, tool="write_file", inside=False, mode=ApprovalMode.AUTO, model_widens=False),
+        "run": lambda t: _file_write(t, tool="write_file", inside=False, mode=ApprovalMode.SAFE, model_widens=False),
     },
     {
         "id": "write_outside_interactive_model_widens",
         "group": "file_writes",
         "expect": "not_written",
-        "run": lambda t: _file_write(
-            t, tool="write_file", inside=False, mode=ApprovalMode.INTERACTIVE, model_widens=True
-        ),
+        "run": lambda t: _file_write(t, tool="write_file", inside=False, mode=ApprovalMode.ASK, model_widens=True),
     },
     {
         "id": "write_outside_model_widens",
         "group": "file_writes",
         "expect": "not_written",
-        "run": lambda t: _file_write(t, tool="write_file", inside=False, mode=ApprovalMode.AUTO, model_widens=True),
+        "run": lambda t: _file_write(t, tool="write_file", inside=False, mode=ApprovalMode.SAFE, model_widens=True),
     },
     {
         "id": "patch_outside_model_widens",
         "group": "file_writes",
         "expect": "not_written",
-        "run": lambda t: _file_write(t, tool="patch_file", inside=False, mode=ApprovalMode.AUTO, model_widens=True),
+        "run": lambda t: _file_write(t, tool="patch_file", inside=False, mode=ApprovalMode.SAFE, model_widens=True),
     },
     {
         "id": "write_inside_auto",
         "group": "file_writes",
         "expect": "written",
-        "run": lambda t: _file_write(t, tool="write_file", inside=True, mode=ApprovalMode.AUTO, model_widens=False),
+        "run": lambda t: _file_write(t, tool="write_file", inside=True, mode=ApprovalMode.SAFE, model_widens=False),
     },
     {
         "id": "patch_inside_auto",
         "group": "file_writes",
         "expect": "written",
-        "run": lambda t: _file_write(t, tool="patch_file", inside=True, mode=ApprovalMode.AUTO, model_widens=False),
+        "run": lambda t: _file_write(t, tool="patch_file", inside=True, mode=ApprovalMode.SAFE, model_widens=False),
     },
     {
         "id": "write_outside_autonomous",

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from ledger.models import LedgerEntry, LedgerSource
 from orchestrator.dod import evaluate_engineering_dod
@@ -275,6 +276,7 @@ def _orchestrator(entries: list[LedgerEntry]):
     stream_manager = MagicMock()
     stream_manager.emit = AsyncMock()
     stream_manager.emit_done = AsyncMock()
+    approval_store_ = ApprovalStore()
     orch = Orchestrator(
         ledger=ledger,
         agent_registry=MagicMock(),
@@ -282,9 +284,9 @@ def _orchestrator(entries: list[LedgerEntry]):
         execution_planner=MagicMock(),
         task_context_store=MagicMock(),
         failure_handler=MagicMock(),
-        notifier=MagicMock(),
+        interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream_manager),
         stream_manager=stream_manager,
-        approval_store=ApprovalStore(),
+        approval_store=approval_store_,
     )
     return orch, ledger, stream_manager
 

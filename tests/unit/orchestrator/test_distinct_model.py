@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
+from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher
@@ -145,6 +146,7 @@ def _orch(entries):
     ledger.write = AsyncMock()
     stream = MagicMock()
     stream.emit = AsyncMock()
+    approval_store_ = ApprovalStore()
     return Orchestrator(
         ledger=ledger,
         agent_registry=MagicMock(),
@@ -152,9 +154,9 @@ def _orch(entries):
         execution_planner=MagicMock(),
         task_context_store=MagicMock(),
         failure_handler=MagicMock(),
-        notifier=MagicMock(),
+        interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream),
         stream_manager=stream,
-        approval_store=ApprovalStore(),
+        approval_store=approval_store_,
     )
 
 

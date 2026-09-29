@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.interaction import UserInteraction
 from approval.models import ApprovalDecision, Card, CardField, CardFieldType, CardType
 from approval.store import ApprovalStore
 from orchestrator.constants import MAX_CONCURRENT_TASKS
@@ -23,6 +24,7 @@ def _orchestrator(approval_store: ApprovalStore | None = None) -> Orchestrator:
     stream_manager = MagicMock()
     stream_manager.emit = AsyncMock()
     stream_manager.emit_done = AsyncMock()
+    approval_store_ = approval_store or ApprovalStore()
     return Orchestrator(
         ledger=ledger,
         agent_registry=MagicMock(),
@@ -30,9 +32,9 @@ def _orchestrator(approval_store: ApprovalStore | None = None) -> Orchestrator:
         execution_planner=MagicMock(),
         task_context_store=MagicMock(),
         failure_handler=MagicMock(),
-        notifier=MagicMock(),
+        interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream_manager),
         stream_manager=stream_manager,
-        approval_store=approval_store or ApprovalStore(),
+        approval_store=approval_store_,
     )
 
 

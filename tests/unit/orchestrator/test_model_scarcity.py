@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from orchestrator.model_scarcity import AgentFailure, is_model_scarcity
@@ -27,6 +28,7 @@ def _orch():
     stream.emit_done = AsyncMock()
     ledger = MagicMock()
     ledger.write = AsyncMock()
+    approval_store_ = ApprovalStore()
     return Orchestrator(
         ledger=ledger,
         agent_registry=registry,
@@ -34,9 +36,9 @@ def _orch():
         execution_planner=MagicMock(),
         task_context_store=MagicMock(),
         failure_handler=MagicMock(),
-        notifier=MagicMock(),
+        interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream),
         stream_manager=stream,
-        approval_store=ApprovalStore(),
+        approval_store=approval_store_,
     )
 
 

@@ -35,7 +35,7 @@ async def test_interactive_asks_before_writing(tmp_path: Path) -> None:
     target = tmp_path / "notes.md"
     target.write_text("old line\n")
 
-    out = await _tool(ApprovalMode.INTERACTIVE, store).execute(
+    out = await _tool(ApprovalMode.ASK, store).execute(
         ToolInput(params={"path": str(target), "content": "new line\n"}, granted_workspace=str(tmp_path))
     )
 
@@ -50,7 +50,7 @@ async def test_auto_writes_inside_the_granted_folder_without_a_card(tmp_path: Pa
     store = _silent_store()
     target = tmp_path / "src" / "m.py"
 
-    out = await _tool(ApprovalMode.AUTO, store).execute(
+    out = await _tool(ApprovalMode.SAFE, store).execute(
         ToolInput(params={"path": str(target), "content": "x = 1\n"}, granted_workspace=str(tmp_path))
     )
 
@@ -64,7 +64,7 @@ async def test_auto_ignores_a_workspace_the_model_chose(tmp_path: Path) -> None:
     store = _silent_store()
     target = tmp_path / "elsewhere.md"
 
-    out = await _tool(ApprovalMode.AUTO, store).execute(
+    out = await _tool(ApprovalMode.SAFE, store).execute(
         ToolInput(
             params={"path": str(target), "content": "x\n", "workspace": str(tmp_path)},
             granted_workspace=str(tmp_path / "task"),
@@ -82,9 +82,7 @@ async def test_north_notes_are_written_without_a_card_in_interactive(tmp_path: P
     target = tmp_path / "home" / "notes" / "today.md"
 
     with patch.dict("os.environ", {"NORTH_HOME": str(tmp_path / "home")}):
-        out = await _tool(ApprovalMode.INTERACTIVE, store).execute(
-            ToolInput(params={"path": str(target), "content": "done\n"})
-        )
+        out = await _tool(ApprovalMode.ASK, store).execute(ToolInput(params={"path": str(target), "content": "done\n"}))
 
     assert out.success, out.error
     assert target.read_text() == "done\n"

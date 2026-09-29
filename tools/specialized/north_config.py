@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from config.approval_mode import ApprovalMode, require_approval_mode
 from inference.registry import PROVIDER_DEFINITIONS
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
@@ -96,7 +97,7 @@ class NorthConfigTool(Tool):
                 "description": "Actions: 'list' (show all keys), "
                 "'get <key>' (show one), 'set <key>=<value>' (write a key), "
                 "'power [eco|cruise|sport]' (get/set model-selection dial), "
-                "'autonomy [interactive|auto|autonomous]' (get/set approval dial)",
+                f"'autonomy [{'|'.join(ApprovalMode)}]' (get/set approval dial)",
             },
             "key": {
                 "type": "string",
@@ -256,18 +257,14 @@ class NorthConfigTool(Tool):
         return _dial_output("power", mode.value)
 
     async def _autonomy(self, params: dict) -> ToolOutput:
-        from config.approval_mode import parse_approval_mode
-
         north_settings = self._north_settings()
         requested = (params.get("value") or "").strip().lower()
         if not requested:
             return _dial_output("autonomy", north_settings.autonomy.value, note=_SHOWED_CURRENT)
-        mode = parse_approval_mode(requested)
-        if mode is None:
-            return ToolOutput(
-                success=False,
-                error=f"Unknown autonomy mode {requested!r}. Valid: interactive, auto, autonomous.",
-            )
+        try:
+            mode = require_approval_mode(requested)
+        except ValueError as exc:
+            return ToolOutput(success=False, error=str(exc))
         north_settings.set_autonomy(mode)
         return _dial_output("autonomy", mode.value)
 

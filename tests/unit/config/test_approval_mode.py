@@ -14,13 +14,16 @@ def _settings(**kw) -> SimpleNamespace:
 
 
 def test_parse_canonical_and_synonyms():
-    assert parse_approval_mode("interactive") is ApprovalMode.INTERACTIVE
-    assert parse_approval_mode("readonly") is ApprovalMode.INTERACTIVE
-    assert parse_approval_mode("auto") is ApprovalMode.AUTO
-    assert parse_approval_mode("unattended") is ApprovalMode.AUTO
+    assert parse_approval_mode("ask") is ApprovalMode.ASK
+    assert parse_approval_mode("safe") is ApprovalMode.SAFE
+    assert parse_approval_mode("interactive") is ApprovalMode.ASK
+    assert parse_approval_mode("readonly") is ApprovalMode.ASK
+    assert parse_approval_mode("auto") is ApprovalMode.SAFE
+    assert parse_approval_mode("unattended") is ApprovalMode.SAFE
     assert parse_approval_mode("autonomous") is ApprovalMode.AUTONOMOUS
-    assert parse_approval_mode("yolo") is ApprovalMode.AUTONOMOUS
-    assert parse_approval_mode("  AUTO  ") is ApprovalMode.AUTO
+    assert parse_approval_mode("yolo") is ApprovalMode.YOLO
+    assert parse_approval_mode("all") is ApprovalMode.YOLO
+    assert parse_approval_mode("  AUTO  ") is ApprovalMode.SAFE
 
 
 def test_parse_empty_or_unknown_is_none():
@@ -30,7 +33,7 @@ def test_parse_empty_or_unknown_is_none():
 
 
 def test_resolve_defaults_to_interactive():
-    assert resolve_approval_mode(_settings()) is ApprovalMode.INTERACTIVE
+    assert resolve_approval_mode(_settings()) is ApprovalMode.ASK
 
 
 def test_resolve_explicit_mode_wins():
@@ -38,11 +41,11 @@ def test_resolve_explicit_mode_wins():
 
 
 def test_resolve_falls_back_to_legacy_booleans():
-    assert resolve_approval_mode(_settings(unattended_mode=True)) is ApprovalMode.AUTO
+    assert resolve_approval_mode(_settings(unattended_mode=True)) is ApprovalMode.SAFE
     assert resolve_approval_mode(_settings(autonomous_mode=True)) is ApprovalMode.AUTONOMOUS
 
 
 def test_explicit_mode_overrides_legacy_boolean():
     # approval_mode set to interactive must win even if a legacy boolean is on
     s = _settings(approval_mode="interactive", autonomous_mode=True)
-    assert resolve_approval_mode(s) is ApprovalMode.INTERACTIVE
+    assert resolve_approval_mode(s) is ApprovalMode.ASK

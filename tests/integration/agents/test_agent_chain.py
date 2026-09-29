@@ -22,6 +22,7 @@ from pathlib import Path
 
 from agents.models import AgentDependencies, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
+from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
@@ -102,7 +103,7 @@ def _make_registry(tmp_path: Path, router: ChainRouter) -> tuple[AgentRegistry, 
         inference_router=router,
         tool_registry=ToolRegistry(auto_register=False),
         confidence_tracker=ConfidenceTracker(db_path=tmp_path / "tools.db"),
-        approval_store=ApprovalStore(),
+        interaction=UserInteraction(ApprovalStore()),
         agent_max_iterations=10,  # keep tests fast
     )
     registry = AgentRegistry(agents_dir=AGENTS_DIR, deps=deps)

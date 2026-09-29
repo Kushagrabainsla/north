@@ -24,14 +24,13 @@ from typing import TYPE_CHECKING, Any
 from approval.models import ApprovalDecision, Card, CardField, CardType
 from approval.policy import Action, ActionKind, Verdict
 from config.approval_mode import approve_option
+from ledger import LedgerEntry, LedgerSource, LedgerStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from approval.base import Notifier
-    from approval.judgement_filter import JudgementFilter
     from approval.policy import ApprovalPolicy
     from approval.store import ApprovalStore
+    from ledger import LedgerWriter
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +58,8 @@ _EVENT_BODY_KEY: dict[CardEvent, str] = {
 class UserInteraction:
     """The single entry point for surfacing cards and awaiting user decisions.
 
-    One instance is wired per caller with whatever dependencies it has. The
-    Orchestrator passes a `Notifier` (system alert) and an ``on_auto_resolve``
-    audit hook; tools and agents pass a stream manager for SSE. Behaviour is the
-    superset that each channel allows - absent dependencies are skipped, never
+    The composition root builds one instance for tools, flows, agents and the
+    orchestrator alike. Absent dependencies (in tests) are skipped, never
     reimplemented elsewhere.
     """
 
@@ -71,17 +68,15 @@ class UserInteraction:
         store: ApprovalStore,
         *,
         notifier: Notifier | None = None,
-        judgement_filter: JudgementFilter | None = None,
         stream_manager: Any | None = None,
         policy: ApprovalPolicy | None = None,
-        on_auto_resolve: Callable[[Card, str, str], Awaitable[None]] | None = None,
+        ledger: LedgerWriter | None = None,
     ) -> None:
         self._store = store
         self._notifier = notifier
-        self._judgement_filter = judgement_filter
         self._stream = stream_manager
         self._policy = policy
-        self._on_auto_resolve = on_auto_resolve
+        self._ledger = ledger
 
     async def request_approval(
         self,
@@ -265,55 +260,58 @@ class UserInteraction:
         if self._notifier is not None:
             await self._notifier.notify(card)
 
-    async def _rule_on(self, card: Card) -> Card | None:
-        """Ask the ApprovalPolicy about a directly-raised approval card."""
-        if self._policy is None:
-            return None
-        try:
-            ruling = await self._policy.rule(_action_for(card))
-        except Exception:
-            logger.debug("ApprovalPolicy failed for card %s - surfacing it", card.id)
-            return None
-        if ruling.verdict is Verdict.ASK:
-            return None
-        decision = ApprovalDecision.APPROVED if ruling.allowed else ApprovalDecision.REJECTED
-        chosen = approve_option(card.options) if ruling.allowed else ""
-        self.record_resolved(card, decision, chosen_option=chosen)
-        if self._on_auto_resolve is not None:
-            await self._on_auto_resolve(card, decision, chosen)
-        logger.info("ApprovalPolicy: auto-%s card %s (%s)", decision, card.id, ruling.rule)
-        return card.model_copy(update={"status": decision, "chosen_option": chosen})
-
     async def _auto_resolve(self, card: Card) -> Card | None:
         """Resolve *card* without the user, or return None to surface it.
 
-        An APPROVAL card raised directly - by an agent, or by the orchestrator,
-        rather than through `Approvals.decide` - is ruled on by the same
-        `ApprovalPolicy` every tool uses, so there is one answer to "what does
-        north do without asking" and not two that can drift apart.
-
-        A QUESTION is not an action, so the policy has nothing to say about it;
-        those still go to the learned judgement rules.
-
-        Neither path may block the user from being asked: any error here logs
-        and falls through to surfacing the card.
+        The policy decides both kinds: a directly-raised APPROVAL card is ruled
+        on like any tool action, and a QUESTION is answered only in the modes
+        that answer for you (YOLO, Autonomous). Neither path may block the user
+        from being asked: any error logs and falls through to surfacing the card.
         """
-        if card.type is CardType.APPROVAL:
-            return await self._rule_on(card)
-        if self._judgement_filter is None or card.type is not CardType.QUESTION:
+        if self._policy is None:
             return None
         try:
-            decision, chosen_option = await self._judgement_filter.check(card)
+            if card.type is CardType.APPROVAL:
+                decided = await self._rule_on(card)
+            elif card.type is CardType.QUESTION:
+                decided = await self._policy.answer(card)
+            else:
+                decided = None
         except Exception:
-            logger.debug("JudgementFilter check failed for agent %s - surfacing card", card.agent)
+            logger.debug("ApprovalPolicy failed for card %s - surfacing it", card.id)
             return None
-        if decision is None:
+        if decided is None:
             return None
-        self.record_resolved(card, decision, chosen_option=chosen_option or "")
-        if self._on_auto_resolve is not None:
-            await self._on_auto_resolve(card, decision, chosen_option or "")
-        logger.info("Auto-%s for agent %s via learned rule", decision, card.agent)
-        return card.model_copy(update={"status": decision, "chosen_option": chosen_option or ""})
+        decision, chosen = decided
+        self.record_resolved(card, decision, chosen_option=chosen)
+        await self._audit(card, decision, chosen)
+        return card.model_copy(update={"status": decision, "chosen_option": chosen})
+
+    async def _audit(self, card: Card, decision: str, chosen: str) -> None:
+        """Ledger a decision north took for you, exactly as a decision of yours is ledgered."""
+        logger.info("ApprovalPolicy: auto-%s card %s", decision, card.id)
+        if self._ledger is None:
+            return
+        await self._ledger.write(
+            LedgerEntry.new(
+                source=LedgerSource.APPROVAL,
+                task_id=card.task_id,
+                agent=card.agent,
+                action=f"auto_{decision}",
+                input=card.title,
+                output=chosen or decision,
+                status=LedgerStatus.COMPLETED,
+            )
+        )
+
+    async def _rule_on(self, card: Card) -> tuple[str, str] | None:
+        """The policy's ruling on a directly-raised approval card, as ``(decision, chosen_option)``."""
+        ruling = await self._policy.rule(_action_for(card))
+        if ruling.verdict is Verdict.ASK:
+            return None
+        if ruling.allowed:
+            return ApprovalDecision.APPROVED, approve_option(card.options)
+        return ApprovalDecision.REJECTED, ""
 
     async def _emit(self, card: Card, event: CardEvent) -> None:
         if self._stream is None or not card.task_id:

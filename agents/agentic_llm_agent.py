@@ -42,8 +42,8 @@ from agents.tool_results import extract_success as _extract_success
 from agents.tool_results import failed_json as _failed_json
 from agents.tool_results import failure_kind as _failure_kind
 from agents.tool_results import is_delegation_failure as _is_delegation_failure
-from agents.user_interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, surface_card
 from agents.workspace_lock import workspace_lock
+from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent
 from approval.models import ApprovalDecision, Card, CardField, CardType
 from inference.cache_stats import CacheWasteTracker
 from inference.exceptions import ContextTooLargeError, is_model_unavailable_error
@@ -1179,16 +1179,6 @@ class AgenticLLMAgent(LLMAgent):
         except Exception as exc:  # never let audit-trail writes break the agent loop
             logger.warning("Failed to record delegation failure for task '%s': %s", payload.task_id, exc)
 
-    def _require_approval_store(self) -> Any:
-        """Return the injected ApprovalStore or fail loudly if it is missing."""
-        store = self._deps.approval_store
-        if store is None:
-            raise RuntimeError(
-                f"Agent '{self.name}' needs an ApprovalStore for user interaction but "
-                "none was injected into AgentDependencies. Wire it at startup."
-            )
-        return store
-
     async def _surface_card(
         self,
         payload: AgentPayload,
@@ -1201,22 +1191,24 @@ class AgenticLLMAgent(LLMAgent):
         fields: list[CardField] | None = None,
         context: str = "",
     ) -> Card:
-        """Build, optionally auto-resolve, and surface a card; return it resolved."""
-        return await surface_card(
-            store=self._require_approval_store(),
-            stream_manager=self._deps.stream_manager,
-            judgement_filter=self._deps.judgement_filter,
-            notifier=self._deps.notifier,
-            agent_name=self.name,
+        """Raise a card through the approval layer and return it resolved."""
+        interaction = self._deps.interaction
+        if interaction is None:
+            raise RuntimeError(
+                f"Agent '{self.name}' needs the approval layer's interaction to ask the user, "
+                "but none was injected into AgentDependencies. Wire it at startup."
+            )
+        card = Card.new(
+            type=card_type,
             task_id=payload.task_id,
-            card_type=card_type,
+            agent=self.name,
             title=title,
-            body=body,
+            message=body,
             options=options,
-            event=event,
-            fields=fields,
+            fields=fields or [],
             context=context,
         )
+        return await interaction.request_decision(card, event=event)
 
     async def _request_approval_card(self, payload: AgentPayload, params: dict[str, Any]) -> Card:
         """Surface an approval and return its decision plus any reviewed field values."""
@@ -1249,7 +1241,7 @@ class AgenticLLMAgent(LLMAgent):
         The card is a QUESTION and the return carries the user's actual answer (free
         text or a chosen option) so the agent continues with it instead of assuming.
         This is how an agent refuses to invent an unknown - it asks. A learned rule
-        may answer it automatically (see :func:`surface_card`).
+        may answer it automatically (see `ApprovalPolicy.answer`).
         """
         question = str(params.get("question", "")).strip()
         if not question:

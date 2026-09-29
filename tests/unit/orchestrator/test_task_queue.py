@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from inference.exceptions import AllModelsRateLimitedError
 from ledger import LedgerEntry, LedgerSource, LedgerStatus
@@ -33,6 +34,7 @@ def _orch(running_task_store: RunningTaskStore | None = None):
     ledger.write = AsyncMock()
     ledger.query = AsyncMock(return_value=[])
     ledger.query_summaries = AsyncMock(return_value=[])
+    approval_store_ = ApprovalStore()
     return Orchestrator(
         ledger=ledger,
         agent_registry=registry,
@@ -40,9 +42,9 @@ def _orch(running_task_store: RunningTaskStore | None = None):
         execution_planner=MagicMock(),
         task_context_store=MagicMock(),
         failure_handler=MagicMock(),
-        notifier=MagicMock(),
+        interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream),
         stream_manager=stream,
-        approval_store=ApprovalStore(),
+        approval_store=approval_store_,
         running_task_store=running_task_store,
     )
 

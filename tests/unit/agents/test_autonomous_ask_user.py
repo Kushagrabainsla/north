@@ -50,6 +50,6 @@ async def test_ask_user_requires_question_even_in_autonomous(tmp_path: Path) -> 
 
 def test_is_autonomous_reflects_mode(tmp_path: Path) -> None:
     assert _agent(tmp_path, ApprovalMode.AUTONOMOUS)._is_autonomous() is True
-    assert _agent(tmp_path, ApprovalMode.AUTO)._is_autonomous() is False
-    assert _agent(tmp_path, ApprovalMode.INTERACTIVE)._is_autonomous() is False
+    assert _agent(tmp_path, ApprovalMode.SAFE)._is_autonomous() is False
+    assert _agent(tmp_path, ApprovalMode.ASK)._is_autonomous() is False
     assert _agent(tmp_path, None)._is_autonomous() is False

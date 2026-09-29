@@ -17,9 +17,7 @@ from utils.edit_scope import EditAuthorizer
 from utils.ids import generate_id
 
 if TYPE_CHECKING:
-    from approval.base import Notifier
-    from approval.judgement_filter import JudgementFilter
-    from approval.store import ApprovalStore
+    from approval.interaction import UserInteraction
     from ledger.base import LedgerWriter
     from memory import MemoryGateway
     from memory.facts import FactStore
@@ -182,17 +180,9 @@ class AgentDependencies:
     # Injected after construction to break the circular dependency:
     # agent_registry → agent_deps → agent_registry.
     agent_registry: Any | None = field(default=None)
-    # Required for the request_approval tool.  Must be the same ApprovalStore
-    # instance used by the Orchestrator so waits and resolutions are consistent.
-    approval_store: ApprovalStore | None = field(default=None)
-    # Optional - when set, request_approval checks learned judgement rules first
-    # and skips the user prompt when a rule fires at high confidence.
-    # Injected after construction (same pattern as agent_registry) to avoid
-    # building it twice.
-    judgement_filter: JudgementFilter | None = field(default=None)
-    # Optional - when set, surfaced cards also fire a system alert (macOS/terminal)
-    # via the TUI-aware Notifier so approvals reach the user when no TUI is attached.
-    notifier: Notifier | None = field(default=None)
+    # The approval layer's one card channel, shared with tools, flows and the
+    # orchestrator. Required for request_approval and ask_user.
+    interaction: UserInteraction | None = field(default=None)
     # Semantic tool selection: top-K relevant tools injected per task instead
     # of the full registry list.  None → fall back to full injection.
     tool_index: ToolIndex | None = field(default=None)

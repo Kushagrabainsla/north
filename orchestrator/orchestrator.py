@@ -14,7 +14,7 @@ from typing import Any
 
 from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
-from approval import ApprovalDecision, Card, CardType, JudgementFilter, Notifier, UserInteraction
+from approval import ApprovalDecision, Card, CardType, UserInteraction
 from approval.approval_memory import ApprovalMemory
 from approval.decisions import DecisionLog
 from approval.store import ApprovalStore
@@ -182,10 +182,9 @@ class Orchestrator:
         execution_planner: ExecutionPlanner,
         task_context_store: TaskContextStore,
         failure_handler: FailureHandler,
-        notifier: Notifier,
+        interaction: UserInteraction,
         stream_manager: EventStreamManager,
         approval_store: ApprovalStore,
-        judgement_filter: JudgementFilter | None = None,
         north_settings: NorthSettings | None = None,
         synthesizer: ResultSynthesizer | None = None,
         tracked_router: CostTracker | None = None,
@@ -219,18 +218,9 @@ class Orchestrator:
         self._failure_handler = failure_handler
         self._stream_manager = stream_manager
         self._approval_store = approval_store
-        self._judgement_filter = judgement_filter
         self._north_settings = north_settings
-        # Single mediator for all user-facing cards (approvals, questions,
-        # information). Tools and agents use the same class with their own
-        # dependencies - see approval/interaction.py.
-        self._interaction = UserInteraction(
-            approval_store,
-            notifier=notifier,
-            judgement_filter=judgement_filter,
-            stream_manager=stream_manager,
-            on_auto_resolve=self._record_auto_resolve_ledger,
-        )
+        # The approval layer's one card channel, shared with tools, flows and agents.
+        self._interaction = interaction
         self._synthesizer = synthesizer
         self._tracked_router = tracked_router
         self._episodic_store = episodic_store
@@ -798,24 +788,6 @@ class Orchestrator:
     #  Notification with judgement filtering                               #
     # ------------------------------------------------------------------ #
 
-    async def _record_auto_resolve_ledger(self, card: Card, decision: str, chosen_option: str) -> None:
-        """Audit hook for UserInteraction: log a JudgementFilter auto-decision.
-
-        Writes the same APPROVAL ledger entry a user decision would, so an
-        auto-approved/rejected card stays fully traceable.
-        """
-        await self._journal.write(
-            LedgerEntry.new(
-                source=LedgerSource.APPROVAL,
-                task_id=card.task_id,
-                agent=card.agent,
-                action=f"judgement_filter_auto_{decision}",
-                input=card.title,
-                output=chosen_option or decision,
-                status=LedgerStatus.COMPLETED,
-            )
-        )
-
     # ------------------------------------------------------------------ #
     #  Stage pipeline                                                      #
     # ------------------------------------------------------------------ #
@@ -1074,8 +1046,7 @@ class Orchestrator:
 
         The north_star_conflict SSE event is emitted first for UI awareness, then
         the card is routed through the shared UserInteraction mediator so the
-        JudgementFilter and Notifier are applied consistently with every other
-        approval card.
+        approval policy and notifier apply to it as to every other card.
         """
         card = Card.new(
             type=CardType.APPROVAL,
@@ -1087,9 +1058,8 @@ class Orchestrator:
         )
         # Emit the conflict event before surfacing so the UI can show context.
         await self._stream_manager.emit(task_id, "north_star_conflict", {"tension": tension})
-        # The shared mediator registers the card, applies the JudgementFilter
-        # (auto-resolving if a rule matches), fires the Notifier, and blocks until
-        # the user responds.
+        # The shared mediator registers the card, lets the approval policy rule on
+        # it, fires the notifier, and blocks until the user responds.
         decided = await self._interaction.request_decision(card)
         if decided.status != ApprovalDecision.APPROVED:
             raise NorthStarConflictError(tension or "North Star conflict")

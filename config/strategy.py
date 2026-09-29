@@ -79,7 +79,7 @@ class NorthSettings:
         self._path = path
         self._power: StrategyMode = self._DEFAULT_POWER
         # Startup default (e.g. from NORTH_APPROVAL_MODE); settings.json overrides it.
-        self._autonomy: ApprovalMode = default_approval_mode or ApprovalMode.INTERACTIVE
+        self._autonomy: ApprovalMode = default_approval_mode or ApprovalMode.ASK
         # Per-part routing overrides (see inference/routing/parts.py). Profiles are
         # data, so an install can retune which part gets which model without a code
         # change. Persisted only when deliberately set, like scoring above.

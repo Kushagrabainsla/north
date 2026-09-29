@@ -12,11 +12,12 @@ from pathlib import Path
 import pytest
 
 from approval.approval_memory import ApprovalMemory
+from approval.models import Card, CardType
 from approval.policy import Action, ActionKind, ApprovalPolicy, Verdict
 from approval.unattended import UnattendedPolicy
 from config.approval_mode import ApprovalMode
 
-MODES = (ApprovalMode.INTERACTIVE, ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS)
+MODES = tuple(ApprovalMode)
 
 
 def policy(mode: ApprovalMode, *, memory=None, advisor=None) -> ApprovalPolicy:
@@ -24,7 +25,7 @@ def policy(mode: ApprovalMode, *, memory=None, advisor=None) -> ApprovalPolicy:
         mode_provider=lambda: mode,
         unattended=UnattendedPolicy(),
         approval_memory=memory,
-        llm_advisor=advisor,
+        question_advisor=advisor,
     )
 
 
@@ -32,11 +33,15 @@ def shell(command: str, **kw) -> Action:
     return Action(agent="bash", kind=ActionKind.SHELL_COMMAND, summary=command, command=command, **kw)
 
 
-def advisor(decision: str | None, reason: str = "a learned rule"):
-    async def _advise(action: Action) -> tuple[str | None, str]:
-        return decision, reason
+def advisor(decision: str | None, chosen: str = "the learned answer"):
+    async def _advise(card: Card) -> tuple[str | None, str]:
+        return decision, chosen
 
     return _advise
+
+
+def question(*options: str) -> Card:
+    return Card.new(type=CardType.QUESTION, agent="general", title="Which?", message="Which?", options=list(options))
 
 
 # ── 1. Read-only runs in every mode ──────────────────────────────────────────
@@ -63,7 +68,7 @@ async def test_autonomous_allows_a_destructive_command() -> None:
 # ── 3. Work handed over for review is never auto-decided below autonomous ────
 
 
-@pytest.mark.parametrize("mode", (ApprovalMode.INTERACTIVE, ApprovalMode.AUTO))
+@pytest.mark.parametrize("mode", (ApprovalMode.ASK, ApprovalMode.SAFE))
 async def test_a_card_carrying_work_always_asks(mode: ApprovalMode) -> None:
     """The regression this whole issue exists for: a job application must not self-submit."""
     submit = Action(
@@ -73,7 +78,7 @@ async def test_a_card_carrying_work_always_asks(mode: ApprovalMode) -> None:
         carries_work=True,
     )
 
-    ruling = await policy(mode, advisor=advisor("approved")).rule(submit)
+    ruling = await policy(mode).rule(submit)
 
     assert ruling.verdict is Verdict.ASK
     assert ruling.rule == "carries work for review"
@@ -84,7 +89,7 @@ async def test_work_is_not_saved_by_a_learned_rule_either(tmp_path: Path) -> Non
     memory = ApprovalMemory(tmp_path / "m.db")
     submit = Action(agent="job", kind=ActionKind.OTHER, summary="Submit?", carries_work=True)
 
-    ruling = await policy(ApprovalMode.AUTO, memory=memory, advisor=advisor("approved")).rule(submit)
+    ruling = await policy(ApprovalMode.SAFE, memory=memory).rule(submit)
 
     assert ruling.verdict is Verdict.ASK
 
@@ -99,7 +104,7 @@ async def test_autonomous_still_submits_work() -> None:
 
 
 async def test_auto_allows_an_allowlisted_command() -> None:
-    ruling = await policy(ApprovalMode.AUTO).rule(shell("pytest tests/unit"))
+    ruling = await policy(ApprovalMode.SAFE).rule(shell("pytest tests/unit"))
 
     assert ruling.verdict is Verdict.ALLOW
     assert ruling.rule == "auto: safe command allowlist"
@@ -107,19 +112,19 @@ async def test_auto_allows_an_allowlisted_command() -> None:
 
 async def test_interactive_asks_for_the_same_command() -> None:
     """The middle tier is what `auto` buys; `interactive` must not have it."""
-    assert (await policy(ApprovalMode.INTERACTIVE).rule(shell("pytest tests/unit"))).verdict is Verdict.ASK
+    assert (await policy(ApprovalMode.ASK).rule(shell("pytest tests/unit"))).verdict is Verdict.ASK
 
 
 async def test_a_chained_command_is_not_in_the_safe_subset() -> None:
-    assert (await policy(ApprovalMode.AUTO).rule(shell("pytest && rm -rf /"))).verdict is Verdict.ASK
+    assert (await policy(ApprovalMode.SAFE).rule(shell("pytest && rm -rf /"))).verdict is Verdict.ASK
 
 
 async def test_auto_allows_a_local_git_action_but_not_a_push() -> None:
     def git(operation: str, args: str = "") -> Action:
         return Action(agent="git", kind=ActionKind.GIT, summary=f"git {operation}", operation=operation, args=args)
 
-    assert (await policy(ApprovalMode.AUTO).rule(git("commit"))).verdict is Verdict.ALLOW
-    assert (await policy(ApprovalMode.AUTO).rule(git("push"))).verdict is Verdict.ASK
+    assert (await policy(ApprovalMode.SAFE).rule(git("commit"))).verdict is Verdict.ALLOW
+    assert (await policy(ApprovalMode.SAFE).rule(git("push"))).verdict is Verdict.ASK
 
 
 async def test_auto_allows_an_edit_inside_the_workspace_only(tmp_path: Path) -> None:
@@ -136,8 +141,8 @@ async def test_auto_allows_an_edit_inside_the_workspace_only(tmp_path: Path) -> 
             workspace=str(tmp_path),
         )
 
-    assert (await policy(ApprovalMode.AUTO).rule(edit(inside))).verdict is Verdict.ALLOW
-    assert (await policy(ApprovalMode.AUTO).rule(edit(Path.home() / ".ssh" / "id_rsa"))).verdict is Verdict.ASK
+    assert (await policy(ApprovalMode.SAFE).rule(edit(inside))).verdict is Verdict.ALLOW
+    assert (await policy(ApprovalMode.SAFE).rule(edit(Path.home() / ".ssh" / "id_rsa"))).verdict is Verdict.ASK
 
 
 # ── 5. Learned decisions, in auto only ───────────────────────────────────────
@@ -148,7 +153,7 @@ async def test_auto_replays_a_prior_decision(tmp_path: Path) -> None:
     action = shell("npm run deploy")
     memory.record(action.agent, action.describe(), "approved")
 
-    ruling = await policy(ApprovalMode.AUTO, memory=memory).rule(action)
+    ruling = await policy(ApprovalMode.SAFE, memory=memory).rule(action)
 
     assert ruling.verdict is Verdict.ALLOW
     assert "approved this action before" in ruling.rule
@@ -159,7 +164,7 @@ async def test_a_prior_rejection_refuses_rather_than_asking_again(tmp_path: Path
     action = shell("npm run deploy")
     memory.record(action.agent, action.describe(), "rejected")
 
-    assert (await policy(ApprovalMode.AUTO, memory=memory).rule(action)).verdict is Verdict.REFUSE
+    assert (await policy(ApprovalMode.SAFE, memory=memory).rule(action)).verdict is Verdict.REFUSE
 
 
 async def test_interactive_never_replays_a_prior_decision(tmp_path: Path) -> None:
@@ -167,45 +172,45 @@ async def test_interactive_never_replays_a_prior_decision(tmp_path: Path) -> Non
     action = shell("npm run deploy")
     memory.record(action.agent, action.describe(), "approved")
 
-    assert (await policy(ApprovalMode.INTERACTIVE, memory=memory).rule(action)).verdict is Verdict.ASK
+    assert (await policy(ApprovalMode.ASK, memory=memory).rule(action)).verdict is Verdict.ASK
 
 
-# ── 6. The learned judgement rules, in auto only ─────────────────────────────
+# ── 6. Questions: only YOLO and Autonomous answer for you ──────────────────
 
 
-async def test_the_advisor_can_decide_in_auto() -> None:
-    ruling = await policy(ApprovalMode.AUTO, advisor=advisor("approved", "user always deploys on green")).rule(
-        shell("npm run deploy")
-    )
-
-    assert ruling.verdict is Verdict.ALLOW
-    assert "user always deploys on green" in ruling.rule
+async def test_yolo_answers_a_question_yes() -> None:
+    assert await policy(ApprovalMode.YOLO).answer(question("Proceed", "Stop")) == ("answered", "Proceed")
+    assert (await policy(ApprovalMode.YOLO).answer(question()))[1].startswith("Yes")
 
 
-async def test_the_advisor_is_never_consulted_in_interactive() -> None:
-    """The bug: this tier had no mode check, so it decided in the default mode."""
+async def test_autonomous_lets_the_learned_rules_answer() -> None:
+    answered = await policy(ApprovalMode.AUTONOMOUS, advisor=advisor("answered", "Postgres")).answer(question())
+
+    assert answered == ("answered", "Postgres")
+
+
+@pytest.mark.parametrize("mode", [ApprovalMode.ASK, ApprovalMode.SAFE])
+async def test_ask_and_safe_never_let_a_model_answer_for_you(mode: ApprovalMode) -> None:
+    """The bug: the judgement tier answered questions in every mode, the strictest included."""
     consulted = False
 
-    async def spy(action: Action) -> tuple[str | None, str]:
+    async def spy(card: Card) -> tuple[str | None, str]:
         nonlocal consulted
         consulted = True
-        return "approved", ""
+        return "answered", "x"
 
-    ruling = await policy(ApprovalMode.INTERACTIVE, advisor=spy).rule(shell("npm run deploy"))
-
-    assert ruling.verdict is Verdict.ASK
-    assert not consulted, "interactive must not ask a model whether to skip asking the human"
+    assert await policy(mode, advisor=spy).answer(question()) is None
+    assert not consulted
 
 
-async def test_an_advisor_failure_falls_through_to_asking() -> None:
-    async def broken(action: Action) -> tuple[str | None, str]:
-        raise RuntimeError("model unavailable")
-
-    assert (await policy(ApprovalMode.AUTO, advisor=broken).rule(shell("npm run deploy"))).verdict is Verdict.ASK
+async def test_an_abstaining_advisor_leaves_the_question_to_you() -> None:
+    assert await policy(ApprovalMode.AUTONOMOUS, advisor=advisor(None)).answer(question()) is None
 
 
-async def test_an_abstaining_advisor_falls_through_to_asking() -> None:
-    assert (await policy(ApprovalMode.AUTO, advisor=advisor(None)).rule(shell("npm run deploy"))).verdict is Verdict.ASK
+async def test_yolo_says_yes_to_every_action() -> None:
+    ruling = await policy(ApprovalMode.YOLO).rule(shell("rm -rf build"))
+
+    assert ruling.allowed and ruling.rule.startswith("yolo")
 
 
 # ── Precedence between tiers ─────────────────────────────────────────────────
@@ -217,18 +222,7 @@ async def test_the_safe_subset_wins_over_a_learned_rejection(tmp_path: Path) -> 
     action = shell("pytest tests/unit")
     memory.record(action.agent, action.describe(), "rejected")
 
-    assert (await policy(ApprovalMode.AUTO, memory=memory).rule(action)).verdict is Verdict.ALLOW
-
-
-async def test_a_recalled_decision_wins_over_the_advisor(tmp_path: Path) -> None:
-    """The user's own verdict outranks a model's reading of their rules."""
-    memory = ApprovalMemory(tmp_path / "m.db")
-    action = shell("npm run deploy")
-    memory.record(action.agent, action.describe(), "rejected")
-
-    ruling = await policy(ApprovalMode.AUTO, memory=memory, advisor=advisor("approved")).rule(action)
-
-    assert ruling.verdict is Verdict.REFUSE
+    assert (await policy(ApprovalMode.SAFE, memory=memory).rule(action)).verdict is Verdict.ALLOW
 
 
 # ── Identity is the action, not the prose ────────────────────────────────────
@@ -270,13 +264,13 @@ async def test_autonomous_ignores_a_prior_rejection(tmp_path: Path) -> None:
 
 async def test_the_mode_is_read_at_decision_time() -> None:
     """Changing autonomy in settings takes effect on the next action, not the next restart."""
-    mode = ApprovalMode.INTERACTIVE
+    mode = ApprovalMode.ASK
     live = ApprovalPolicy(mode_provider=lambda: mode, unattended=UnattendedPolicy())
     action = shell("pytest tests/unit")
 
     assert (await live.rule(action)).verdict is Verdict.ASK
 
-    mode = ApprovalMode.AUTO
+    mode = ApprovalMode.SAFE
 
     assert (await live.rule(action)).verdict is Verdict.ALLOW
 
@@ -293,12 +287,12 @@ async def test_north_writing_its_own_notes_never_asks(mode: ApprovalMode, tmp_pa
 
 
 async def test_an_edit_outside_the_granted_folder_asks_in_auto(tmp_path: Path) -> None:
-    ruling = await policy(ApprovalMode.AUTO).rule(_edit(tmp_path / "x.md", workspace=str(tmp_path / "task")))
+    ruling = await policy(ApprovalMode.SAFE).rule(_edit(tmp_path / "x.md", workspace=str(tmp_path / "task")))
 
     assert ruling.verdict is Verdict.ASK
 
 
 async def test_only_file_edits_use_the_scratch_rule(tmp_path: Path) -> None:
-    ruling = await policy(ApprovalMode.INTERACTIVE).rule(shell("rm notes.md", in_north_scratch=True))
+    ruling = await policy(ApprovalMode.ASK).rule(shell("rm notes.md", in_north_scratch=True))
 
     assert ruling.verdict is Verdict.ASK

@@ -149,7 +149,7 @@ def test_unlocking_is_not_a_toggle(store) -> None:
 
 def _policy(store) -> ApprovalPolicy:
     return ApprovalPolicy(
-        mode_provider=lambda: ApprovalMode.AUTO,
+        mode_provider=lambda: ApprovalMode.SAFE,
         unattended=UnattendedPolicy(store=store),
     )
 

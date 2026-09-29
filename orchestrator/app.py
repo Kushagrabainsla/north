@@ -310,7 +310,7 @@ async def _populate_tool_index(tool_index: ToolIndex, tool_registry: ToolRegistr
         logger.info("Tool index: embedded %d new or changed retrieval profile(s)", indexed)
 
 
-def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
+def _build_agent_deps(deps, tool_registry: ToolRegistry, interaction: UserInteraction) -> AgentDependencies:
     return AgentDependencies(
         context_store=deps.context_store,
         inference_router=deps.cost_tracker,
@@ -318,8 +318,7 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry) -> AgentDependencies:
         confidence_tracker=deps.confidence_tracker,
         stream_manager=deps.stream_manager,
         episodic_store=deps.episodic_store,
-        approval_store=deps.approval_store,
-        notifier=deps.notifier,
+        interaction=interaction,
         fact_store=deps.fact_store,
         memory=deps.memory,
         ledger=deps.ledger,
@@ -362,7 +361,7 @@ def _build_orchestrator(
     agent_registry: AgentRegistry,
     tool_registry: ToolRegistry,
     extraction_pipeline: ExtractionPipeline,
-    judgement_filter: JudgementFilter,
+    interaction: UserInteraction,
     approval_memory: ApprovalMemory,
 ) -> Orchestrator:
     return Orchestrator(
@@ -385,10 +384,9 @@ def _build_orchestrator(
             task_context_store=deps.task_context_store,
             stream_manager=deps.stream_manager,
         ),
-        notifier=deps.notifier,
+        interaction=interaction,
         stream_manager=deps.stream_manager,
         approval_store=deps.approval_store,
-        judgement_filter=judgement_filter,
         north_settings=deps.north_settings,
         synthesizer=ResultSynthesizer(inference_router=deps.cost_tracker, memory=deps.memory),
         tracked_router=deps.cost_tracker,
@@ -807,12 +805,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     decision_log = DecisionLog(settings.north_home / "approval_memory.db")
     deps.decision_log = decision_log
     deps.unattended_rules = unattended_rules
-    judgement_filter = JudgementFilter(
-        memory=deps.memory,
-        inference_router=deps.cost_tracker,
-        approval_memory=approval_memory,
-        mode_provider=lambda: deps.north_settings.autonomy,
-    )
+    judgement_filter = JudgementFilter(memory=deps.memory, inference_router=deps.cost_tracker)
     # The one decision point every tool, agent and the orchestrator share.
     # Reads the mode at decision time, so a runtime change via the settings
     # API takes effect immediately - no restart.
@@ -820,17 +813,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         mode_provider=lambda: deps.north_settings.autonomy,
         unattended=UnattendedPolicy.from_settings(settings, store=unattended_rules),
         approval_memory=approval_memory,
-        llm_advisor=judgement_filter.advise,
+        question_advisor=judgement_filter.check,
     )
-    # The approval layer: the one object every tool and flow asks through.
+    # The approval layer: the one object every tool, flow, agent and the
+    # orchestrator asks through.
     approvals = Approvals(
         approval_policy,
         UserInteraction(
             deps.approval_store,
             notifier=deps.notifier,
-            judgement_filter=judgement_filter,
             stream_manager=deps.stream_manager,
             policy=approval_policy,
+            ledger=deps.ledger,
         ),
     )
     _step("loading skills")
@@ -880,7 +874,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     tool_index = _build_tool_index(deps)
 
     _step("scanning agent registry")
-    agent_deps = _build_agent_deps(deps, tool_registry)
+    agent_deps = _build_agent_deps(deps, tool_registry, approvals.interaction)
     agent_deps.tool_index = tool_index
     agent_deps.skill_registry = skill_registry
     agent_deps.skill_selector = skill_selector
@@ -945,11 +939,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     extraction_pipeline = _build_extraction_pipeline(deps)
     orchestrator = _build_orchestrator(
-        deps, agent_registry, tool_registry, extraction_pipeline, judgement_filter, approval_memory
+        deps, agent_registry, tool_registry, extraction_pipeline, approvals.interaction, approval_memory
     )
-    # Share the orchestrator's JudgementFilter with agents so request_approval
-    # calls skip the user prompt when a learned rule already covers the situation.
-    agent_deps.judgement_filter = orchestrator._judgement_filter
     context_injector = _build_context_injector(deps)
 
     if settings.autonomous_background_tasks_active:

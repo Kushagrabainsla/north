@@ -95,7 +95,7 @@ def test_an_old_settings_file_with_a_timeout_still_loads(tmp_path: Path) -> None
     settings = NorthSettings(path)
     settings.set_timezone("UTC")  # any save
 
-    assert settings.autonomy.value == "auto"
+    assert settings.autonomy.value == "safe"  # "auto" still loads, as its new name
     assert "approval_timeout_seconds" not in json.loads(path.read_text())
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from agents.models import AgentResult
+from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from orchestrator.orchestrator import Orchestrator
 
@@ -23,6 +24,7 @@ def _orchestrator():
     task_context_store.write = AsyncMock()
     notifier = MagicMock()
     notifier.notify = AsyncMock()
+    approval_store_ = ApprovalStore()
     orch = Orchestrator(
         ledger=ledger,
         agent_registry=MagicMock(),
@@ -30,9 +32,9 @@ def _orchestrator():
         execution_planner=MagicMock(),
         task_context_store=task_context_store,
         failure_handler=MagicMock(),
-        notifier=notifier,
+        interaction=UserInteraction(approval_store_, notifier=notifier, stream_manager=stream_manager),
         stream_manager=stream_manager,
-        approval_store=ApprovalStore(),
+        approval_store=approval_store_,
     )
     return orch, ledger
 

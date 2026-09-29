@@ -18,6 +18,7 @@ from agents.agentic_llm_agent import AgenticLLMAgent
 from agents.constants import MAX_DELEGATION_DEPTH as _MAX_DELEGATION_DEPTH
 from agents.general.agent import GeneralAgent
 from agents.models import AgentConfig, AgentDependencies, AgentPayload, AgentResult
+from approval.interaction import UserInteraction
 from inference.exceptions import AllModelsRateLimitedError
 from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
@@ -366,11 +367,11 @@ async def test_delegated_model_scarcity_propagates_to_the_parent_task(tmp_path: 
 
 
 async def test_request_approval_without_store_raises(tmp_path: Path) -> None:
-    """request_approval must raise RuntimeError when approval_store is not injected."""
+    """request_approval must raise RuntimeError when the approval layer is not injected."""
     agent = _make_agent(tmp_path)
-    assert agent._deps.approval_store is None
+    assert agent._deps.interaction is None
 
-    with pytest.raises(RuntimeError, match="ApprovalStore"):
+    with pytest.raises(RuntimeError, match="approval layer"):
         await agent._request_approval_card(
             _payload(),
             {"message": "Delete production database?"},
@@ -382,7 +383,7 @@ async def test_request_approval_resolved_approve_returns_status(tmp_path: Path) 
     from approval.store import ApprovalStore
 
     store = ApprovalStore()
-    agent = _make_agent(tmp_path, approval_store=store)
+    agent = _make_agent(tmp_path, interaction=UserInteraction(store))
 
     async def _approve_after_delay():
         await asyncio.sleep(0.05)
@@ -406,7 +407,7 @@ async def test_request_approval_resolved_reject_returns_status(tmp_path: Path) -
     from approval.store import ApprovalStore
 
     store = ApprovalStore()
-    agent = _make_agent(tmp_path, approval_store=store)
+    agent = _make_agent(tmp_path, interaction=UserInteraction(store))
 
     async def _reject_after_delay():
         await asyncio.sleep(0.05)
@@ -430,7 +431,7 @@ async def test_request_approval_returns_reviewed_field_values(tmp_path: Path) ->
     from approval.store import ApprovalStore
 
     store = ApprovalStore()
-    agent = _make_agent(tmp_path, approval_store=store)
+    agent = _make_agent(tmp_path, interaction=UserInteraction(store))
 
     async def _approve_with_edit():
         await asyncio.sleep(0.05)

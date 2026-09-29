@@ -19,7 +19,7 @@ async def test_unattended_applies_in_workspace_edit_without_card(tmp_path: Path)
     f.write_text("value = 1\n")
     store = MagicMock()
     store.wait_for_decision = AsyncMock()  # must never be called
-    tool = bind_approvals(PatchFileTool(), ApprovalMode.AUTO, store=store)
+    tool = bind_approvals(PatchFileTool(), ApprovalMode.SAFE, store=store)
 
     out = await tool.execute(
         ToolInput(
@@ -44,7 +44,7 @@ async def test_unattended_ignores_a_workspace_the_model_chose(tmp_path: Path):
     f.write_text("value = 1\n")
     store = MagicMock()
     store.wait_for_decision = AsyncMock(return_value=None)  # nobody answers
-    tool = bind_approvals(PatchFileTool(), ApprovalMode.AUTO, store=store)
+    tool = bind_approvals(PatchFileTool(), ApprovalMode.SAFE, store=store)
 
     out = await tool.execute(
         ToolInput(
@@ -64,7 +64,7 @@ async def test_unattended_disabled_still_gates(tmp_path: Path):
     store = MagicMock()
     # reject any surfaced decision
     store.wait_for_decision = AsyncMock(return_value=None)
-    tool = bind_approvals(PatchFileTool(), ApprovalMode.INTERACTIVE, store=store)
+    tool = bind_approvals(PatchFileTool(), ApprovalMode.ASK, store=store)
 
     out = await tool.execute(
         ToolInput(

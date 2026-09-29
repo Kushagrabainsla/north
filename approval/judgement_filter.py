@@ -4,14 +4,11 @@ Reads judgement_rules.md and asks a fast LLM whether an existing rule clearly
 covers the situation. Confidence >= 0.8 produces an answer; anything below
 abstains and the card goes to the user as normal.
 
-This is *one tier of* the approval decision, not the decision. For an action,
-``ApprovalPolicy`` calls ``advise`` last and only in ``auto`` and above - this
-module no longer reads the approval mode, replays learned decisions, or knows
-about the safe subset. It used to do all three, in a copy that had drifted from
-the tools' copies, and its own tier had no mode check at all.
-
-``check`` still answers QUESTION cards directly, because a question is not an
-action and the policy has nothing to say about it.
+This is one input to the approval decision, not the decision. ``ApprovalPolicy``
+consults ``check`` for a QUESTION card only in the modes that answer for you -
+it does not read the approval mode, replay learned decisions, or know about the
+safe subset. It used to do all three, and its model tier answered questions even
+in the strictest mode.
 
 High-stakes agents are never auto-approved here regardless of confidence.
 
@@ -21,14 +18,9 @@ See README Sections 9.4 and 9.5.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from approval.approval_memory import ApprovalMemory
-from approval.interaction import APPROVAL_DEFAULT_OPTIONS
 from approval.models import Card, CardType
-from approval.policy import Action
-from config.approval_mode import ApprovalMode
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest, PoolPriority
 from memory import ContextDocument, MemoryGateway
@@ -67,45 +59,14 @@ class JudgementFilter:
     or (None, "") to mean "surface to user as normal".
     """
 
-    def __init__(
-        self,
-        memory: MemoryGateway,
-        inference_router: InferenceRouter,
-        approval_memory: ApprovalMemory | None = None,
-        mode_provider: Callable[[], ApprovalMode] | None = None,
-    ) -> None:
+    def __init__(self, memory: MemoryGateway, inference_router: InferenceRouter) -> None:
         self._memory = memory
         self._inference_router = inference_router
-        self._approval_memory = approval_memory
-        self._mode_provider = mode_provider
-
-    def _mode(self) -> ApprovalMode:
-        return self._mode_provider() if self._mode_provider is not None else ApprovalMode.INTERACTIVE
-
-    async def advise(self, action: Action) -> tuple[str | None, str]:
-        """The learned judgement rules' opinion on *action*, for `ApprovalPolicy`.
-
-        One tier of the decision, not the decision. The policy calls this last
-        and only in `auto` and above; it used to be reached in every mode, which
-        is how a model came to approve actions in `interactive`.
-
-        Returns ("approved"|"rejected", rule) or (None, "") to abstain.
-        """
-        verdict = await self._consult(
-            card_type=CardType.APPROVAL,
-            agent=action.agent,
-            title=action.summary,
-            body=action.describe(),
-            options=list(APPROVAL_DEFAULT_OPTIONS),
-        )
-        return verdict.decision, verdict.rule
 
     async def check(self, card: Card) -> tuple[str | None, str]:
         """Return (decision, chosen_option) or (None, '') if nothing fires.
 
-        The card-shaped entry point, used for QUESTION cards. `advise` is the
-        action-shaped one. Both ask the same question of the same rules - the
-        consultation itself lives in `_consult` so the two cannot drift.
+        The policy's question advisor (`ApprovalPolicy.answer`).
         """
         # INFORMATION cards never need filtering - they carry no decision.
         if card.type == CardType.INFORMATION:
@@ -130,12 +91,7 @@ class JudgementFilter:
         options: list[str],
         task_id: str = "",
     ) -> _Verdict:
-        """Ask the learned rules about one thing. The only place that does.
-
-        Takes the primitives rather than a Card so the policy can consult it
-        about an `Action` without first inventing a card to carry it - a fake
-        card whose id and task were blank, built only to be taken apart again.
-        """
+        """Ask the learned rules about one thing. The only place that does."""
         rules = await self._memory.read_document(ContextDocument.JUDGEMENT_RULES)
         preferences = ""
         if card_type == CardType.QUESTION:

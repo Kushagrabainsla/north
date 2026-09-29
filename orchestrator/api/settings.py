@@ -5,16 +5,23 @@ from __future__ import annotations
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from config.approval_mode import parse_approval_mode
+from config.approval_mode import ApprovalMode, mode_options, require_approval_mode
 from config.strategy import NorthSettings, RoutingMode, StrategyMode
 from orchestrator.api.deps import router
 from orchestrator.api_context import current_services
 from utils.time import configure_timezone, format_local, now_epoch, timezone_names
 
 
+class ModeOption(BaseModel):
+    value: str
+    description: str
+
+
 class SettingsOut(BaseModel):
     power: str
     autonomy: str
+    # The approval modes, from the one definition every surface shows.
+    autonomy_options: list[ModeOption] = Field(default_factory=list)
     # Who picks the model, and - under "manual" - which one, as
     # "provider:model_id". `model` is reported whether or not it is in force, so
     # switching back to manual does not make the user find their model again.
@@ -38,7 +45,8 @@ def _settings_out(settings_obj: NorthSettings | None) -> SettingsOut:
     """Render the dials, falling back to the documented defaults when unwired."""
     return SettingsOut(
         power=settings_obj.power.value if settings_obj else "cruise",
-        autonomy=settings_obj.autonomy.value if settings_obj else "interactive",
+        autonomy=settings_obj.autonomy.value if settings_obj else ApprovalMode.ASK.value,
+        autonomy_options=[ModeOption(**option) for option in mode_options()],
         routing=settings_obj.routing_mode.value if settings_obj else "auto",
         model=settings_obj.routing_model if settings_obj else "",
         timezone=settings_obj.timezone if settings_obj else "UTC",
@@ -98,12 +106,10 @@ async def update_settings(body: SettingsUpdate) -> SettingsOut:
             settings_obj.set_routing(mode, body.model)
 
     if body.autonomy is not None:
-        approval_mode = parse_approval_mode(body.autonomy)
-        if approval_mode is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown autonomy {body.autonomy!r}. Valid: interactive, auto, autonomous",
-            ) from None
+        try:
+            approval_mode = require_approval_mode(body.autonomy)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
         if settings_obj is not None:
             settings_obj.set_autonomy(approval_mode)
 

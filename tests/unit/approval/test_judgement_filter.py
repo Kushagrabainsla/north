@@ -59,32 +59,3 @@ def test_dangerous_set_covers_destructive_tool_classes() -> None:
 
 
 # --- Autonomous mode (learned approvals + auto-approve) ---
-
-
-def _mode_filter(mode, recalled=None):
-    from config.approval_mode import ApprovalMode
-
-    memory = MagicMock()
-    memory.read_document = AsyncMock(return_value="")
-    router = MagicMock()
-    router.complete = AsyncMock(side_effect=AssertionError("LLM must not be called on the mode fast-path"))
-    am = MagicMock()
-    am.recall = MagicMock(return_value=recalled)
-    return JudgementFilter(
-        memory=memory,
-        inference_router=router,
-        approval_memory=am,
-        mode_provider=lambda: ApprovalMode(mode),
-    )
-
-
-async def test_auto_surfaces_unknown_action() -> None:
-    """In auto mode an action with no learned decision falls through to ask the user."""
-    # memory returns None (unknown); read_document returns "" so the LLM path also yields None.
-    decision, _ = await _mode_filter("auto", recalled=None).check(_card("bash"))
-    assert decision is None
-
-
-async def test_interactive_does_not_auto_resolve_mutations() -> None:
-    decision, _ = await _mode_filter("interactive", recalled="approved").check(_card("bash"))
-    assert decision is None

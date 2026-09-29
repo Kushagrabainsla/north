@@ -24,8 +24,6 @@ MODE_READERS = {
 # Modules outside approval/ that may build the card channel.
 INTERACTION_BUILDERS = {
     "orchestrator/app.py": "the composition root builds the one instance",
-    "agents/user_interaction.py": "until step 7: agents ask through approvals.interaction",
-    "orchestrator/orchestrator.py": "until step 7: the orchestrator asks through approvals.interaction",
 }
 # Modules that may call Tool.run directly instead of Tool.execute.
 RAW_TOOL_RUNS = {

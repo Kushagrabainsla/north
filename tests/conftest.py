@@ -180,12 +180,12 @@ def approval_policy(
     than echoed into every tool test - which is how the seven copies this
     replaced came to disagree with each other.
     """
-    resolved = mode or ApprovalMode.INTERACTIVE
+    resolved = mode or ApprovalMode.ASK
     return ApprovalPolicy(
         mode_provider=lambda: resolved,
         unattended=UnattendedPolicy(),
         approval_memory=memory,
-        llm_advisor=advisor,
+        question_advisor=advisor,
     )
 
 

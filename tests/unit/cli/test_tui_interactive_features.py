@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.interaction import UserInteraction
 from cli.formatting import _format_plan_table
 from cli.tui import (
     NorthApp,
@@ -267,6 +268,7 @@ async def test_orchestrator_emit_steer_and_api_endpoint():
     ledger_writer = MagicMock()
     ledger_writer.write = AsyncMock()
 
+    approval_store_ = approval_store
     orch = Orchestrator(
         ledger=ledger_writer,
         agent_registry=MagicMock(),
@@ -274,9 +276,9 @@ async def test_orchestrator_emit_steer_and_api_endpoint():
         execution_planner=MagicMock(),
         task_context_store=MagicMock(),
         failure_handler=MagicMock(),
-        notifier=MagicMock(),
+        interaction=UserInteraction(approval_store_, notifier=MagicMock(), stream_manager=stream_mgr),
         stream_manager=stream_mgr,
-        approval_store=approval_store,
+        approval_store=approval_store_,
     )
 
     await orch.emit_steer("task_123", "focus on edge cases")

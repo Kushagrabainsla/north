@@ -27,11 +27,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from approval.models import ApprovalDecision
 from approval.unattended import forbidden_reason
-from config.approval_mode import ApprovalMode
+from config.approval_mode import YES_ANSWER, ApprovalMode, approve_option
 
 if TYPE_CHECKING:
     from approval.approval_memory import ApprovalMemory
+    from approval.models import Card
     from approval.unattended import UnattendedPolicy
 
 logger = logging.getLogger(__name__)
@@ -135,19 +137,19 @@ class Ruling:
         return self.verdict is Verdict.ALLOW
 
 
-# An optional async second opinion (the learned judgement rules). Returns
-# ("approved"|"rejected", reason) or (None, "") to abstain.
-LlmAdvisor = Callable[[Action], Awaitable[tuple[str | None, str]]]
+# The learned judgement rules' answer to a question card. Returns
+# (decision, chosen_option) or (None, "") to abstain.
+QuestionAdvisor = Callable[["Card"], Awaitable[tuple[str | None, str]]]
 
 
 @dataclass
 class ApprovalPolicy:
-    """Rules on an `Action`. The only code that reads the approval mode."""
+    """Rules on an `Action`, and on who answers a question. The only code that reads the approval mode."""
 
-    mode_provider: Callable[[], ApprovalMode] = lambda: ApprovalMode.INTERACTIVE
+    mode_provider: Callable[[], ApprovalMode] = lambda: ApprovalMode.ASK
     unattended: UnattendedPolicy | None = None
     approval_memory: ApprovalMemory | None = None
-    llm_advisor: LlmAdvisor | None = field(default=None)
+    question_advisor: QuestionAdvisor | None = field(default=None)
 
     async def rule(self, action: Action) -> Ruling:
         """Decide whether *action* runs, asks, or is refused.
@@ -160,7 +162,7 @@ class ApprovalPolicy:
         mode = self.mode_provider()
 
         # 1. Reads nothing and changes nothing. True in every mode - this is what
-        #    "interactive" already means by "read-only actions run freely".
+        #    "ask" already means by "read-only actions run freely".
         if action.read_only or not action.mutating:
             return Ruling(Verdict.ALLOW, "read-only")
 
@@ -169,8 +171,10 @@ class ApprovalPolicy:
         if action.kind is ActionKind.FILE_EDIT and action.in_north_scratch:
             return Ruling(Verdict.ALLOW, "north's own scratch space")
 
-        # 2. Allow-all. The operator has made the mode the only authority, and
-        #    has explicitly declined a hard-danger floor.
+        # 2. Modes that never ask. The operator has made the mode the only
+        #    authority, and has explicitly declined a hard-danger floor.
+        if mode is ApprovalMode.YOLO:
+            return Ruling(Verdict.ALLOW, "yolo: yes to everything")
         if mode is ApprovalMode.AUTONOMOUS:
             return Ruling(Verdict.ALLOW, "autonomous: allow all")
 
@@ -185,24 +189,35 @@ class ApprovalPolicy:
         if action.carries_work:
             return Ruling(Verdict.ASK, "carries work for review")
 
-        if mode is ApprovalMode.AUTO:
+        if mode is ApprovalMode.SAFE:
             # 5. The deterministic safe subset: workspace-scoped edits, an
             #    allowlist of test/lint/build commands, local-only git. No model
             #    involved, which is why it can be trusted without a human.
             if (safe := self._safe_subset(action)) is not None:
                 return safe
 
-            # 6. The user's own prior decision for this exact action.
+            # 6. The user's own prior decision for this exact action. Safe has
+            #    no model tier: only deterministic facts and your own answers.
             if (recalled := self._recall(action)) is not None:
                 return recalled
 
-            # 7. The learned judgement rules, via a model. Last because it is the
-            #    only tier that can be wrong about what it was asked - and gated
-            #    to AUTO and above, which is the check it never had.
-            if (advised := await self._advice(action)) is not None:
-                return advised
-
         return Ruling(Verdict.ASK, "not covered by any rule")
+
+    async def answer(self, card: Card) -> tuple[str, str] | None:
+        """Answer a question card for the user, as ``(decision, chosen_option)``, or None to ask.
+
+        YOLO gives the yes answer. Autonomous lets the learned judgement rules
+        answer when they are confident. Ask and Safe put every question to you:
+        no model answers in your place there.
+        """
+        mode = self.mode_provider()
+        if mode is ApprovalMode.YOLO:
+            return ApprovalDecision.ANSWERED, approve_option(card.options) if card.options else YES_ANSWER
+        if mode is ApprovalMode.AUTONOMOUS and self.question_advisor is not None:
+            decision, chosen = await self.question_advisor(card)
+            if decision is not None:
+                return decision, chosen
+        return None
 
     def _safe_subset(self, action: Action) -> Ruling | None:
         """The deterministic allowlist, or None when it does not apply.
@@ -241,19 +256,4 @@ class ApprovalPolicy:
             return Ruling(Verdict.ALLOW, "auto: you approved this action before")
         if recalled == "rejected":
             return Ruling(Verdict.REFUSE, "auto: you rejected this action before")
-        return None
-
-    async def _advice(self, action: Action) -> Ruling | None:
-        """Ask the learned judgement rules. Never blocks the user from being asked."""
-        if self.llm_advisor is None:
-            return None
-        try:
-            decision, reason = await self.llm_advisor(action)
-        except Exception:
-            logger.debug("ApprovalPolicy: advisor failed for %s - falling through to ask", action.agent)
-            return None
-        if decision == "approved":
-            return Ruling(Verdict.ALLOW, f"auto: learned rule ({reason})" if reason else "auto: learned rule")
-        if decision == "rejected":
-            return Ruling(Verdict.REFUSE, f"auto: learned rule ({reason})" if reason else "auto: learned rule")
         return None

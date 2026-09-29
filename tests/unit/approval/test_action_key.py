@@ -35,7 +35,7 @@ async def test_a_tool_card_carries_its_actions_identity(tmp_path: Path) -> None:
 async def test_a_direct_card_is_stamped_with_the_key_the_policy_recalls(tmp_path: Path) -> None:
     store = ApprovalStore(tmp_path / "a.db")
     memory = ApprovalMemory(tmp_path / "m.db")
-    policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTO, approval_memory=memory)
+    policy = ApprovalPolicy(mode_provider=lambda: ApprovalMode.SAFE, approval_memory=memory)
     interaction = UserInteraction(store, policy=policy)
 
     def card() -> Card:
