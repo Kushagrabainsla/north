@@ -52,6 +52,12 @@ Every layer of north can be swapped without touching other layers. The Orchestra
 **Modularity**
 Each module owns one concept. It exposes a clean public interface and hides its implementation. You can understand, test, and replace a module without reading any other module.
 
+**Symmetry**
+Parallel things are built the same way: every mode, request kind and layer follows one shape, and every write has a matching read (set ↔ show, record ↔ list, create ↔ edit ↔ delete). An exception needs a reason in the code.
+
+**Every Surface Shows the Same State**
+The dashboard, TUI, CLI and Telegram read the same state from the same API; none keeps its own copy (such as a hard-coded list of modes). A change is not done until the dashboard shows it.
+
 **Open Source First**
 north is public. Every contributor should be able to read the codebase, understand it, and contribute without needing to ask questions. Clarity is more important than cleverness.
 
@@ -425,6 +431,20 @@ Two consequences worth keeping:
 - **Every ruling names the rule that produced it,** and an action allowed
   without asking still leaves a resolved card behind. An auto-approval nobody
   can see is indistinguishable from one that never happened.
+
+**The four modes:**
+
+- **Ask**: read-only runs; every mutating action asks.
+- **Safe** (was `auto`): read-only, safe mutating actions and exact replays of the user's past answers run; everything else asks.
+- **Autonomous**: never asks; a model given the user's memory as context always gives the answer that best fits the user. It uses the pinned model under manual routing and its own routing part under auto routing.
+- **YOLO**: never asks; every approval is yes and every question gets the affirmative answer.
+
+**Why:** each mode must mean one thing the user can predict.
+**How to apply:** old mode names stay as aliases; autonomous logs every decision with its reason and the memory it used.
+
+**One layer per concern.** Approvals, execution, memory, capabilities, inference and channels each have one layer with one entry point; nothing outside it re-implements or bypasses it.
+**Why:** fewer parts; every behaviour has one place to read and fix.
+**How to apply:** new code calls the layer's entry point; an architecture test fails on a bypass.
 
 ### 7.4 Standard Module Layout
 
@@ -1061,6 +1081,18 @@ try:
 except InferenceError as e:
     await self._handle_inference_failure(task_id, e)
 ```
+
+### 13.5 Wait, Never Expire
+
+- **Approvals never time out.** A card waits until the user answers or dismisses it.
+  **Why:** an expiry reads as "no" and kills work nobody refused.
+  **How to apply:** no timeout on cards; park the waiting task (state saved, slot freed) instead of holding it; remind, never expire.
+- **A flow that errors stops at that step.** It pauses with the error and its earlier outputs, and resumes from that step.
+  **Why:** failing the run throws away finished work.
+  **How to apply:** an error sets `paused`, `current_step` and the error; resume re-runs only that step, so steps must be safe to re-run.
+- **Missing resources freeze work; they do not fail it.** No model, network or credit means pause, then resume by itself when they return.
+  **Why:** a rate limit is not a failure of the task.
+  **How to apply:** classify resource errors apart from real failures; they never use up retries, resume attempts or the watchdog's stuck limit.
 
 ---
 
