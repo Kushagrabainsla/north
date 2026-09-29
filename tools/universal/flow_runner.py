@@ -223,11 +223,9 @@ class FlowRunner:
                         model_pool=selected_agent.config.model_pool or "reasoning",
                         skills=[step.skill] if step.skill else [],
                         allowed_tools=list(allowed_tools),
-                        mutation_policy={
-                            "never": "deny",
-                            "on_mutation": "require_approval",
-                            "always": "allow",
-                        }[approval],
+                        # "on_mutation" needs nothing here: every change a step
+                        # makes already goes to the approval layer.
+                        mutation_policy="deny" if approval == "never" else "allow",
                         allow_delegation=False,
                     )
                 )

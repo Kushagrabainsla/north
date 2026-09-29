@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from config.approval_mode import ApprovalMode
-from tests.conftest import approval_policy
+from tests.conftest import bind_approvals
 from tools.models import ToolInput
 from tools.universal.write_file import WriteFileTool
 
@@ -26,7 +26,7 @@ def _silent_store() -> MagicMock:
 
 
 def _tool(mode: ApprovalMode, store: MagicMock) -> WriteFileTool:
-    return WriteFileTool(approval_store=store, policy=approval_policy(mode), approval_timeout_seconds=0.01)
+    return bind_approvals(WriteFileTool(), mode, store=store, timeout=0.01)
 
 
 @pytest.mark.asyncio
@@ -35,7 +35,7 @@ async def test_interactive_asks_before_writing(tmp_path: Path) -> None:
     target = tmp_path / "notes.md"
     target.write_text("old line\n")
 
-    out = await _tool(ApprovalMode.INTERACTIVE, store).run(
+    out = await _tool(ApprovalMode.INTERACTIVE, store).execute(
         ToolInput(params={"path": str(target), "content": "new line\n"}, granted_workspace=str(tmp_path))
     )
 
@@ -50,7 +50,7 @@ async def test_auto_writes_inside_the_granted_folder_without_a_card(tmp_path: Pa
     store = _silent_store()
     target = tmp_path / "src" / "m.py"
 
-    out = await _tool(ApprovalMode.AUTO, store).run(
+    out = await _tool(ApprovalMode.AUTO, store).execute(
         ToolInput(params={"path": str(target), "content": "x = 1\n"}, granted_workspace=str(tmp_path))
     )
 
@@ -64,7 +64,7 @@ async def test_auto_ignores_a_workspace_the_model_chose(tmp_path: Path) -> None:
     store = _silent_store()
     target = tmp_path / "elsewhere.md"
 
-    out = await _tool(ApprovalMode.AUTO, store).run(
+    out = await _tool(ApprovalMode.AUTO, store).execute(
         ToolInput(
             params={"path": str(target), "content": "x\n", "workspace": str(tmp_path)},
             granted_workspace=str(tmp_path / "task"),
@@ -82,7 +82,7 @@ async def test_north_notes_are_written_without_a_card_in_interactive(tmp_path: P
     target = tmp_path / "home" / "notes" / "today.md"
 
     with patch.dict("os.environ", {"NORTH_HOME": str(tmp_path / "home")}):
-        out = await _tool(ApprovalMode.INTERACTIVE, store).run(
+        out = await _tool(ApprovalMode.INTERACTIVE, store).execute(
             ToolInput(params={"path": str(target), "content": "done\n"})
         )
 
@@ -92,10 +92,11 @@ async def test_north_notes_are_written_without_a_card_in_interactive(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_unwired_instance_still_writes(tmp_path: Path) -> None:
-    """The auto-discovered instance has no store; app.py replaces it at startup."""
+async def test_an_unbound_instance_refuses_rather_than_writes(tmp_path: Path) -> None:
+    """With no approval layer there is nobody to ask - a missing gate is not an open one."""
     target = tmp_path / "a.txt"
 
-    out = await WriteFileTool().run(ToolInput(params={"path": str(target), "content": "a"}))
+    out = await WriteFileTool().execute(ToolInput(params={"path": str(target), "content": "a"}))
 
-    assert out.success and target.read_text() == "a"
+    assert out.failure_kind == "refused" and "fail closed" in out.error
+    assert not target.exists()

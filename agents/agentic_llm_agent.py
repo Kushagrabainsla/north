@@ -498,29 +498,6 @@ class AgenticLLMAgent(LLMAgent):
                 call,
                 RuntimeError("This flow skill step is read-only; mutating tools are blocked by policy."),
             )
-        if is_mutating and payload.mutation_policy == "require_approval":
-            decision = await self._request_approval(
-                payload,
-                {
-                    "message": (
-                        f"Flow skill '{payload.skills[0] if payload.skills else self.name}' wants to call "
-                        f"the mutating tool '{call.name}' with parameters {call.params}."
-                    )
-                },
-            )
-            if _is_rejection(decision):
-                return (
-                    call,
-                    json.dumps(
-                        {
-                            "success": False,
-                            "failure_kind": "refused",
-                            "error": f"Approval was not granted for mutating tool '{call.name}'.",
-                        }
-                    ),
-                    False,
-                    [],
-                )
         try:
             return await self._execute_call(call, payload, tool_map)
         except Exception as exc:
@@ -919,9 +896,8 @@ class AgenticLLMAgent(LLMAgent):
             result_str = await self._find_tools(params, tool_map, payload.allowed_tools)
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
-        # create_tool gates its own create/update actions behind an approval
-        # card (see CreateToolTool._request_approval) - no special case here.
-        # Default the workspace but respect an explicit model-supplied value  -
+        # Every tool call that changes something is put to the approval layer
+        # by Tool.execute - no special case here. Default the workspace but respect an explicit model-supplied value  -
         # same semantics as the orchestrator's direct-tool path.
         if payload.workspace and "workspace" not in params:
             params["workspace"] = payload.workspace
@@ -1274,10 +1250,6 @@ class AgenticLLMAgent(LLMAgent):
             context=context,
         )
 
-    async def _request_approval(self, payload: AgentPayload, params: dict[str, Any]) -> str:
-        """Ask the user to approve an irreversible action; return their decision."""
-        return (await self._request_approval_card(payload, params)).status
-
     async def _request_approval_card(self, payload: AgentPayload, params: dict[str, Any]) -> Card:
         """Surface an approval and return its decision plus any reviewed field values."""
         raw_fields = params.get("fields") or []
@@ -1361,7 +1333,7 @@ class AgenticLLMAgent(LLMAgent):
             granted_workspace=payload.granted_workspace or None,
         )
         try:
-            result = await tool_map[tool_name].run(tool_input)
+            result = await tool_map[tool_name].execute(tool_input)
             images: list[tuple[str, str]] = []
             if result.success:
                 if result.data and "base64_image" in result.data and "mime_type" in result.data:

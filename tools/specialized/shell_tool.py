@@ -24,18 +24,12 @@ import os
 import pty
 import signal
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from tools.base import ApprovalGatedTool
+from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_action
-
-if TYPE_CHECKING:
-    from approval.base import Notifier
-    from approval.policy import ApprovalPolicy
-    from approval.store import ApprovalStore
-    from utils.events import EventEmitter
 
 # Most output the model needs after one read; a watcher can produce far more, so
 # the per-session buffer keeps only the most recent slice.
@@ -135,11 +129,15 @@ class _ShellSession:
         return self.read_new()
 
 
-class ShellTool(ApprovalGatedTool):
+# The actions that make a session run something. Reading, listing and stopping
+# a session north started change nothing of the user's.
+_ACTING_ACTIONS = frozenset({"start", "write"})
+
+
+class ShellTool(Tool):
     """Start, read, write, and stop long-lived PTY shell sessions."""
 
     name = "shell"
-    is_mutating = True
     description = (
         "Manage long-lived shell sessions for processes that must stay alive across "
         "tool calls (dev servers, file watchers, REPLs, debuggers). "
@@ -165,16 +163,35 @@ class ShellTool(ApprovalGatedTool):
         "required": ["action"],
     }
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore,
-        stream_manager: EventEmitter | None = None,
-        approval_timeout_seconds: float = 300.0,
-        policy: ApprovalPolicy | None = None,
-        notifier: Notifier | None = None,
-    ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
+    def __init__(self) -> None:
         self._sessions: dict[str, _ShellSession] = {}
+
+    def mutates(self, params: dict[str, Any] | None = None) -> bool:
+        return str((params or {}).get("action", "")).strip() in _ACTING_ACTIONS
+
+    async def describe(self, input: ToolInput) -> Request | None:
+        """An interactive session is never read-only: whatever is typed into it runs.
+
+        So there is nothing here for the tool to classify as safe.
+        """
+        params = input.params
+        if params.get("action") == "start":
+            if self._start_error(params) is not None:
+                return None
+            text = params["command"]
+            summary, declined = f"start shell:\n{text}", "Shell start"
+        else:
+            target = self._write_target(params)
+            if isinstance(target, ToolOutput):
+                return None
+            text = params["input"]
+            summary, declined = f"send to shell {target.shell_id}:\n{text}", "Shell input"
+        return Request(
+            action=Action(agent="shell", kind=ActionKind.SHELL_COMMAND, summary=summary, command=text),
+            title="Shell Session - Approval Required",
+            message=f"```\n{summary}\n```",
+            declined=f"{declined} cancelled by user.",
+        )
 
     def format_output(self, data: dict[str, Any]) -> str:
         if "sessions" in data:
@@ -205,23 +222,10 @@ class ShellTool(ApprovalGatedTool):
         return await handler(input.params)
 
     async def _start(self, params: dict[str, Any]) -> ToolOutput:
-        command = params.get("command")
-        if not command:
-            return ToolOutput(success=False, error="action=start requires 'command'.")
+        if (error := self._start_error(params)) is not None:
+            return error
 
-        self._reap_exited()
-        if len(self._sessions) >= _MAX_SESSIONS:
-            return ToolOutput(
-                success=False,
-                error=f"Too many active sessions ({_MAX_SESSIONS}). Stop one before starting another.",
-            )
-
-        refused = await self._gate(
-            params.get("task_id"), command, f"start shell:\n{command}", "Shell start cancelled by user."
-        )
-        if refused is not None:
-            return refused
-
+        command = params["command"]
         cwd = params.get("workspace") or None
         try:
             session = await _spawn_session(command, cwd)
@@ -246,23 +250,10 @@ class ShellTool(ApprovalGatedTool):
         )
 
     async def _write(self, params: dict[str, Any]) -> ToolOutput:
-        session = self._sessions.get(str(params.get("shell_id", "")))
-        if session is None:
-            return ToolOutput(success=False, error="Unknown shell_id. Use action=list to see sessions.")
-        if not session.is_running:
-            return ToolOutput(success=False, error="Session has exited; start a new one.")
-        text = params.get("input")
-        if text is None:
-            return ToolOutput(success=False, error="action=write requires 'input'.")
-
-        refused = await self._gate(
-            params.get("task_id"),
-            text,
-            f"send to shell {session.shell_id}:\n{text}",
-            "Shell input cancelled by user.",
-        )
-        if refused is not None:
-            return refused
+        session = self._write_target(params)
+        if isinstance(session, ToolOutput):
+            return session
+        text = params["input"]
 
         try:
             session.write(text if text.endswith("\n") else text + "\n")
@@ -315,24 +306,28 @@ class ShellTool(ApprovalGatedTool):
             with contextlib.suppress(Exception):
                 await s.stop()
 
-    async def _gate(self, task_id: str | None, command: str, summary: str, declined: str) -> ToolOutput | None:
-        """``None`` when it may proceed; otherwise what the tool must return.
+    def _start_error(self, params: dict[str, Any]) -> ToolOutput | None:
+        """Why ``start`` cannot run, or ``None`` when it can."""
+        if not params.get("command"):
+            return ToolOutput(success=False, error="action=start requires 'command'.")
+        self._reap_exited()
+        if len(self._sessions) >= _MAX_SESSIONS:
+            return ToolOutput(
+                success=False,
+                error=f"Too many active sessions ({_MAX_SESSIONS}). Stop one before starting another.",
+            )
+        return None
 
-        An interactive shell session is never read-only: whatever is typed into
-        it runs, so there is nothing here for the tool to classify as safe.
-        """
-        return await gate_action(
-            Action(agent="shell", kind=ActionKind.SHELL_COMMAND, summary=summary, command=command),
-            policy=self._policy,
-            approval_store=self._approval_store,
-            title="Shell Session - Approval Required",
-            message=f"```\n{summary}\n```",
-            task_id=task_id,
-            stream_manager=self._stream_manager,
-            notifier=self._notifier,
-            timeout=self._approval_timeout_seconds,
-            declined=declined,
-        )
+    def _write_target(self, params: dict[str, Any]) -> _ShellSession | ToolOutput:
+        """The session ``write`` sends to, or why it cannot."""
+        session = self._sessions.get(str(params.get("shell_id", "")))
+        if session is None:
+            return ToolOutput(success=False, error="Unknown shell_id. Use action=list to see sessions.")
+        if not session.is_running:
+            return ToolOutput(success=False, error="Session has exited; start a new one.")
+        if params.get("input") is None:
+            return ToolOutput(success=False, error="action=write requires 'input'.")
+        return session
 
 
 def _grace(raw: Any) -> float:

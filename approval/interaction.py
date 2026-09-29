@@ -5,11 +5,11 @@ decision cards are registered in the `ApprovalStore`, while information cards
 go only to notification channels. For decisions it can then block until the
 user responds or the timeout elapses.
 
-Tools, agents, and the Orchestrator all go through this class, so the
-surface -> await -> resolve sequence exists exactly once (DRY / SRP). Each caller
-supplies only the dependencies it has: the Orchestrator wires a `Notifier` and an
-auto-resolve audit hook; tools and agents pass the stream manager. A missing
-dependency simply means that channel is skipped.
+Tools reach it through `Approvals`, which owns the one instance; agents and the
+Orchestrator still build their own until the autonomous decider lands (see
+tests/unit/architecture/test_approval_layer.py). The surface -> await -> resolve
+sequence exists exactly once (DRY / SRP). A missing dependency simply means that
+channel is skipped.
 
 See docs/CODING_STYLE.md Section 15.
 """
@@ -222,7 +222,23 @@ class UserInteraction:
         surfaced = await self.notify(card, event=event)
         if surfaced.status != _PENDING:
             return surfaced  # auto-resolved by a learned rule
+        return await self._await(card, timeout)
 
+    async def ask_person(self, card: Card, *, event: CardEvent, timeout: float | None = None) -> Card:
+        """Show *card* to the user and wait, consulting no rule: the caller already ruled.
+
+        `Approvals` rules on the action's own facts before it gets here, so ruling
+        again on the card's text would only second-guess that with less to go on.
+        """
+        await self._surface(card, event)
+        return await self._await(card, timeout)
+
+    def record_resolved(self, card: Card, decision: str, *, chosen_option: str = "") -> None:
+        """Store *card* already decided - an action north took, or answered, without asking."""
+        self._store.add(card)
+        self._store.resolve(card.id, decision, chosen_option=chosen_option)
+
+    async def _await(self, card: Card, timeout: float | None) -> Card:
         resolved = await self._store.wait_for_decision(card.id, timeout=timeout or self._timeout_for(card))
         if resolved is not None:
             return resolved
@@ -280,12 +296,16 @@ class UserInteraction:
         auto = await self._auto_resolve(card)
         if auto is not None:
             return auto
+        await self._surface(card, event)
+        return card
+
+    async def _surface(self, card: Card, event: CardEvent | None) -> None:
+        """Register *card* as waiting and show it on every channel that is wired."""
         self._store.add(card)
         if event is not None:
             await self._emit(card, event)
         if self._notifier is not None:
             await self._notifier.notify(card)
-        return card
 
     async def _rule_on(self, card: Card) -> Card | None:
         """Ask the ApprovalPolicy about a directly-raised approval card."""
@@ -300,8 +320,7 @@ class UserInteraction:
             return None
         decision = ApprovalDecision.APPROVED if ruling.allowed else ApprovalDecision.REJECTED
         chosen = approve_option(card.options) if ruling.allowed else ""
-        self._store.add(card)
-        self._store.resolve(card.id, decision, chosen_option=chosen)
+        self.record_resolved(card, decision, chosen_option=chosen)
         if self._on_auto_resolve is not None:
             await self._on_auto_resolve(card, decision, chosen)
         logger.info("ApprovalPolicy: auto-%s card %s (%s)", decision, card.id, ruling.rule)
@@ -311,7 +330,7 @@ class UserInteraction:
         """Resolve *card* without the user, or return None to surface it.
 
         An APPROVAL card raised directly - by an agent, or by the orchestrator,
-        rather than through a tool's `gate_action` - is ruled on by the same
+        rather than through `Approvals.decide` - is ruled on by the same
         `ApprovalPolicy` every tool uses, so there is one answer to "what does
         north do without asking" and not two that can drift apart.
 
@@ -332,8 +351,7 @@ class UserInteraction:
             return None
         if decision is None:
             return None
-        self._store.add(card)
-        self._store.resolve(card.id, decision, chosen_option=chosen_option or "")
+        self.record_resolved(card, decision, chosen_option=chosen_option or "")
         if self._on_auto_resolve is not None:
             await self._on_auto_resolve(card, decision, chosen_option or "")
         logger.info("Auto-%s for agent %s via learned rule", decision, card.agent)

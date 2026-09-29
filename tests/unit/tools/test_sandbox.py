@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import bind_approvals
 from tools.models import ToolInput
 from tools.specialized import _sandbox
 from tools.specialized._sandbox import SandboxConfig, build_run_argv
@@ -68,8 +69,8 @@ async def test_bash_sandbox_fails_closed_without_docker(tmp_path: Path, monkeypa
         return False
 
     monkeypatch.setattr("tools.specialized.bash.docker_available", no_docker)
-    tool = BashTool(approval_store=_approving_store(), sandbox=SandboxConfig(enabled=True))
-    out = await tool.run(ToolInput(params={"command": "echo hi", "workspace": str(tmp_path)}))
+    tool = bind_approvals(BashTool(sandbox=SandboxConfig(enabled=True)), store=_approving_store())
+    out = await tool.execute(ToolInput(params={"command": "echo hi", "workspace": str(tmp_path)}))
     assert not out.success
     assert "Docker is unavailable" in (out.error or "")
 
@@ -80,8 +81,8 @@ async def test_bash_sandbox_requires_workspace(monkeypatch):
         return True
 
     monkeypatch.setattr("tools.specialized.bash.docker_available", yes_docker)
-    tool = BashTool(approval_store=_approving_store(), sandbox=SandboxConfig(enabled=True))
-    out = await tool.run(ToolInput(params={"command": "echo hi"}))
+    tool = bind_approvals(BashTool(sandbox=SandboxConfig(enabled=True)), store=_approving_store())
+    out = await tool.execute(ToolInput(params={"command": "echo hi"}))
     assert not out.success
     assert "workspace" in (out.error or "").lower()
 
@@ -109,8 +110,8 @@ async def test_bash_sandbox_runs_docker_argv(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr("tools.specialized.bash.docker_available", yes_docker)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    tool = BashTool(approval_store=_approving_store(), sandbox=SandboxConfig(enabled=True))
-    out = await tool.run(ToolInput(params={"command": "pytest -q", "workspace": str(tmp_path)}))
+    tool = bind_approvals(BashTool(sandbox=SandboxConfig(enabled=True)), store=_approving_store())
+    out = await tool.execute(ToolInput(params={"command": "pytest -q", "workspace": str(tmp_path)}))
 
     assert out.success
     assert out.data["stdout"] == "container-stdout"
@@ -120,8 +121,8 @@ async def test_bash_sandbox_runs_docker_argv(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bash_without_sandbox_runs_on_host(tmp_path: Path):
-    tool = BashTool(approval_store=_approving_store())  # sandbox disabled by default
-    out = await tool.run(ToolInput(params={"command": "echo hello-host", "workspace": str(tmp_path)}))
+    tool = bind_approvals(BashTool(), store=_approving_store())  # sandbox disabled by default
+    out = await tool.execute(ToolInput(params={"command": "echo hello-host", "workspace": str(tmp_path)}))
     assert out.success
     assert "hello-host" in out.data["stdout"]
 

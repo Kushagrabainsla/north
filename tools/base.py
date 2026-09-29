@@ -1,4 +1,4 @@
-"""Tool ABC hierarchy. See README Section 7 and docs/CODING_STYLE.md Section 16.1."""
+"""Tool ABC hierarchy. See README Section 7 and docs/CODING_STYLE.md Sections 7.3 and 16.1."""
 
 from __future__ import annotations
 
@@ -9,23 +9,27 @@ from typing import TYPE_CHECKING, Any
 from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
-    from approval.base import Notifier
-    from approval.policy import ApprovalPolicy
-    from approval.store import ApprovalStore
-    from utils.events import EventEmitter
+    from approval.approvals import Approvals, Decision, Request
+
+# Arguments north adds to every call itself. Left out of a call's description so
+# "did you approve this before?" matches the same call in a later task.
+_INJECTED_PARAMS = frozenset({"task_id"})
 
 
 class Tool(ABC):
     """Base class for every tool an agent can call.
 
     Subclasses set the class-level `name` and `description` strings and
-    implement `run()`. The Orchestrator only ever sees this interface  -
-    it does not know whether the concrete tool hits an external API, a
-    local cache, or a mocked test double.
+    implement `run()`; a tool whose calls change something may also override
+    `describe()`. Callers use `execute()`, which puts every such call to the
+    approval layer before `run()` - so no tool can forget to ask.
     """
 
     name: str
     description: str
+    # The approval layer, bound by `ToolRegistry`. Unbound, a call that would
+    # need asking is refused - see `Approvals.unbound`.
+    approvals: Approvals | None = None
     # Whether running this tool mutates the filesystem or external state. The
     # agent loop runs read-only tools concurrently but serializes mutating ones
     # so two edits to the same file can't race (lost update). Default False;
@@ -59,11 +63,54 @@ class Tool(ABC):
         """
         return self.is_mutating
 
+    async def execute(self, input: ToolInput) -> ToolOutput:
+        """Run this call on an agent's behalf. Do not override.
+
+        A call that changes something is described, decided by the approval
+        layer, and only then run - with the approved `Request` on `input.approved`
+        so `run()` acts on exactly what was approved.
+        """
+        if not self.mutates(input.params):
+            return await self.run(input)
+        request = await self.describe(input)
+        if request is None:
+            return await self.run(input)
+        decision = await self._approvals().decide(request, task_id=input.params.get("task_id"))
+        if not decision.allowed:
+            return _refused(decision, request)
+        return await self.run(input.model_copy(update={"approved": request}))
+
+    def _approvals(self) -> Approvals:
+        from approval.approvals import Approvals
+
+        return self.approvals or Approvals.unbound()
+
+    async def describe(self, input: ToolInput) -> Request | None:
+        """What this call would do, for the approval layer; ``None`` when it will not act.
+
+        The default describes the call by its name and arguments. A tool that
+        knows more - that a command is read-only, what an edit changes - says so.
+        """
+        from approval.approvals import Request
+        from approval.policy import Action, ActionKind
+
+        args = json.dumps(
+            {k: v for k, v in input.params.items() if k not in _INJECTED_PARAMS}, sort_keys=True, default=str
+        )
+        return Request(
+            action=Action(agent=self.name, kind=ActionKind.OTHER, summary=f"{self.name} {args}", args=args),
+            title=f"{self.name.replace('_', ' ').title()} - Approval Required",
+            message=f"```json\n{args}\n```",
+        )
+
     @abstractmethod
     async def run(self, input: ToolInput) -> ToolOutput:
         """Execute the tool against `input.params`. Must not raise on
         recoverable errors - return `ToolOutput(success=False, error=...)`
-        instead so the `ConfidenceTracker` can record the outcome."""
+        instead so the `ConfidenceTracker` can record the outcome.
+
+        Only `execute()` may call this on an agent's behalf: `run()` itself
+        asks no one."""
 
     def format_output(self, data: dict[str, Any]) -> str:
         """Render a successful ToolOutput.data as a human-readable string.
@@ -74,28 +121,36 @@ class Tool(ABC):
         maintaining a central switch-on-tool-name.
         """
         return json.dumps(data, indent=2) if data else "Done."
-class ApprovalGatedTool(Tool, ABC):
-    """Base class for tools that gate actions behind user approval.
 
-    A subclass describes what it is about to do as an `approval.policy.Action`
-    and passes it to `tools.specialized._approval.gate_action`. It does not read
-    the approval mode, hold an allowlist, or decide anything - `policy` does all
-    three, in one place, for every tool.
+
+def prepared(input: ToolInput) -> Any:
+    """What `describe()` computed for this call, if the call was approved through `execute()`."""
+    return input.approved.prepared if input.approved is not None else None
+
+
+def _refused(decision: Decision, request: Request) -> ToolOutput:
+    """What the agent is told when a call is not allowed - and whether anyone was asked.
+
+    A refusal is not the tool malfunctioning (``failure_kind="refused"``), and an
+    unanswered card is nobody saying no rather than someone saying no.
     """
+    from approval.models import ApprovalDecision
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventEmitter | None = None,
-        approval_timeout_seconds: float = 300.0,
-        policy: ApprovalPolicy | None = None,
-        notifier: Notifier | None = None,
-    ) -> None:
-        self._approval_store = approval_store
-        self._stream_manager = stream_manager
-        self._approval_timeout_seconds = approval_timeout_seconds
-        self._policy = policy
-        self._notifier = notifier
+    if decision.status is None:
+        blocked = f"Blocked: {decision.reason}. This was refused outright and never shown to the user."
+        return ToolOutput(success=False, failure_kind="refused", error=f"{blocked} {request.refused_hint}".strip())
+    if decision.status == ApprovalDecision.TIMEOUT_REJECTED:
+        return ToolOutput(
+            success=False,
+            failure_kind="refused",
+            data={"unanswered": True},
+            error=(
+                "No one answered the approval request, so the action did not run. Nobody rejected "
+                "it - there is simply no one available to approve. "
+                "Do not retry this or look for another way to do it."
+            ),
+        )
+    return ToolOutput(success=False, failure_kind="refused", error=request.declined)
 
 
 class AuthenticatedTool(Tool, ABC):

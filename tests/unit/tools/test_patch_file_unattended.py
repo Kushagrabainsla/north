@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from config.approval_mode import ApprovalMode
-from tests.conftest import approval_policy
+from tests.conftest import bind_approvals
 from tools.models import ToolInput
 from tools.specialized.patch_file import PatchFileTool
 
@@ -19,9 +19,9 @@ async def test_unattended_applies_in_workspace_edit_without_card(tmp_path: Path)
     f.write_text("value = 1\n")
     store = MagicMock()
     store.wait_for_decision = AsyncMock()  # must never be called
-    tool = PatchFileTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTO))
+    tool = bind_approvals(PatchFileTool(), ApprovalMode.AUTO, store=store)
 
-    out = await tool.run(
+    out = await tool.execute(
         ToolInput(
             params={
                 "path": str(f),
@@ -44,9 +44,9 @@ async def test_unattended_ignores_a_workspace_the_model_chose(tmp_path: Path):
     f.write_text("value = 1\n")
     store = MagicMock()
     store.wait_for_decision = AsyncMock(return_value=None)  # nobody answers
-    tool = PatchFileTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTO))
+    tool = bind_approvals(PatchFileTool(), ApprovalMode.AUTO, store=store)
 
-    out = await tool.run(
+    out = await tool.execute(
         ToolInput(
             params={"path": str(f), "old_string": "value = 1", "new_string": "value = 2", "workspace": str(tmp_path)},
             granted_workspace=str(tmp_path / "the-real-task"),
@@ -64,9 +64,9 @@ async def test_unattended_disabled_still_gates(tmp_path: Path):
     store = MagicMock()
     # reject any surfaced decision
     store.wait_for_decision = AsyncMock(return_value=None)
-    tool = PatchFileTool(approval_store=store, policy=approval_policy(ApprovalMode.INTERACTIVE))
+    tool = bind_approvals(PatchFileTool(), ApprovalMode.INTERACTIVE, store=store)
 
-    out = await tool.run(
+    out = await tool.execute(
         ToolInput(
             params={
                 "path": str(f),

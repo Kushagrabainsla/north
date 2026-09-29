@@ -1103,6 +1103,8 @@ Default transcription model: `groq/whisper-large-v3`. The Inference Router expos
 
 The Approval Layer is the primary interface between north and the user for consequential outputs. Users do not interact with agents directly. They interact with notifications, the CLI, and the TUI.
 
+**One entry point.** Every tool call that changes something reaches this layer through `Tool.execute()` → `Approvals.decide()` (`approval/approvals.py`): the tool describes the call, `ApprovalPolicy` rules on it, and only an ASK becomes a card. No tool gates itself, so none can forget to; an architecture test enforces it (CODING_STYLE §7.3).
+
 ### 9.1 Notifications and Security
 
 The Approval Layer sends notifications with action buttons. The default `Notifier` implementation (`TerminalNotifier`) prints approval cards to stdout/logs and works on any platform. An optional `MacOSNotifier` uses the `alerter` subprocess for native macOS notification banners with action buttons - swap it in via `config/dependencies.py` if running on macOS and alerter is installed. At runtime the active notifier is wrapped by `TUIAwareNotifier`, which stays silent while the interactive TUI is attached (the TUI shows cards inline) and fires the underlying notifier otherwise, and that in turn by `BatchingNotifier`, which coalesces prepared work into one alert per batch (§9.8). A local callback server runs on `localhost:8001` and receives button taps.

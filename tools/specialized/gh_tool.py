@@ -15,13 +15,14 @@ from __future__ import annotations
 import asyncio
 import shlex
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from tools.base import ApprovalGatedTool
+from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_action
 from tools.specialized._subprocess import format_diff_output, run_capture
 
 _TIMEOUT = 30
@@ -55,7 +56,17 @@ _MUTATING_ACTIONS: frozenset[str] = frozenset(
 )
 
 
-class GhTool(ApprovalGatedTool):
+@dataclass(frozen=True)
+class _GhCall:
+    """A checked gh command, ready to describe or run."""
+
+    action: str
+    args: str
+    cmd: list[str]
+    cwd: Path
+
+
+class GhTool(Tool):
     """Run GitHub CLI operations with structured output and safety guards."""
 
     name = "gh"
@@ -101,7 +112,35 @@ class GhTool(ApprovalGatedTool):
             return format_diff_output(stdout)
         return stdout or "(no output)"
 
+    async def describe(self, input: ToolInput) -> Request | None:
+        call = self._prepare(input)
+        if isinstance(call, ToolOutput):
+            return None
+        return Request(
+            action=Action(
+                agent="gh",
+                kind=ActionKind.GITHUB,
+                summary=" ".join(call.cmd),
+                operation=call.action,
+                args=call.args,
+                mutating=call.action in _MUTATING_ACTIONS,
+                read_only=call.action not in _MUTATING_ACTIONS,
+            ),
+            title="GitHub Operation - Approval Required",
+            message=f"```\n{' '.join(call.cmd)}\n```",
+            declined="GitHub operation rejected by user.",
+            prepared=call,
+        )
+
     async def run(self, input: ToolInput) -> ToolOutput:
+        call = prepared(input) or self._prepare(input)
+        if isinstance(call, ToolOutput):
+            return call
+        return await asyncio.to_thread(run_capture, call.cmd, call.cwd, timeout=_TIMEOUT)
+
+    @staticmethod
+    def _prepare(input: ToolInput) -> _GhCall | ToolOutput:
+        """Check the call and build its command, or say why it cannot run."""
         action = str(input.params.get("action", "")).strip()
         args = str(input.params.get("args", "")).strip()
         workspace = input.params.get("workspace") or None
@@ -117,35 +156,8 @@ class GhTool(ApprovalGatedTool):
                 success=False,
                 error=f"Unknown gh action: {action!r}. Valid: {', '.join(sorted(_ACTIONS))}.",
             )
-
         try:
             arg_parts = shlex.split(args) if args else []
         except ValueError as exc:
             return ToolOutput(success=False, error=f"Could not parse args: {exc}")
-
-        cmd = ["gh", *_ACTIONS[action], *arg_parts]
-
-        denial = await gate_action(
-            Action(
-                agent="gh",
-                kind=ActionKind.GITHUB,
-                summary=" ".join(cmd),
-                operation=action,
-                args=args,
-                mutating=action in _MUTATING_ACTIONS,
-                read_only=action not in _MUTATING_ACTIONS,
-            ),
-            policy=self._policy,
-            approval_store=self._approval_store,
-            title="GitHub Operation - Approval Required",
-            message=f"```\n{' '.join(cmd)}\n```",
-            task_id=input.params.get("task_id"),
-            stream_manager=self._stream_manager,
-            notifier=self._notifier,
-            timeout=self._approval_timeout_seconds,
-            declined="GitHub operation rejected by user.",
-        )
-        if denial is not None:
-            return denial
-
-        return await asyncio.to_thread(run_capture, cmd, cwd, timeout=_TIMEOUT)
+        return _GhCall(action, args, ["gh", *_ACTIONS[action], *arg_parts], cwd)

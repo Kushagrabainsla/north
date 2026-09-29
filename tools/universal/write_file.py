@@ -11,25 +11,28 @@ See docs/CODING_STYLE.md Sections 7.3 and 16.1.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from tools._path import is_north_scratch, resolve_path, scope_refusal
-from tools.base import ApprovalGatedTool
+from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_action
 from tools.specialized.patch_file import unified_diff
 from utils.text import normalize_dashes, should_normalize_prose
 
-if TYPE_CHECKING:
-    from approval.base import Notifier
-    from approval.policy import ApprovalPolicy
-    from approval.store import ApprovalStore
-    from utils.events import EventEmitter
+
+@dataclass(frozen=True)
+class _WriteCall:
+    """A checked write, ready to describe or run."""
+
+    path: Path
+    content: str
 
 
-class WriteFileTool(ApprovalGatedTool):
+class WriteFileTool(Tool):
     """Writes content to a file, creating parent directories as needed."""
 
     name = "write_file"
@@ -55,20 +58,40 @@ class WriteFileTool(ApprovalGatedTool):
         "required": ["path", "content"],
     }
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventEmitter | None = None,
-        approval_timeout_seconds: float = 300.0,
-        policy: ApprovalPolicy | None = None,
-        notifier: Notifier | None = None,
-    ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
-
     def format_output(self, data: dict[str, Any]) -> str:
         return f"Created `{data.get('path', '?')}` ({data.get('bytes_written', 0)} bytes written)."
 
+    async def describe(self, input: ToolInput) -> Request | None:
+        call = self._prepare(input)
+        if isinstance(call, ToolOutput):
+            return None
+        old = await asyncio.to_thread(_read_existing, call.path)
+        return Request(
+            action=Action(
+                agent="write_file",
+                kind=ActionKind.FILE_EDIT,
+                summary=f"write {call.path}",
+                path=call.path,
+                # The folder the server granted - never the model's `workspace` param.
+                workspace=input.granted_workspace or "",
+                in_north_scratch=is_north_scratch(call.path),
+            ),
+            title="File Write - Approval Required",
+            message=f"Write `{call.path}`?\n```diff\n{unified_diff(call.path, old, call.content)}\n```",
+            options=("Write", "Cancel"),
+            declined="Write cancelled by user.",
+            prepared=call,
+        )
+
     async def run(self, input: ToolInput) -> ToolOutput:
+        call = prepared(input) or self._prepare(input)
+        if isinstance(call, ToolOutput):
+            return call
+        return await asyncio.to_thread(_write_sync, call.path, call.content)
+
+    @staticmethod
+    def _prepare(input: ToolInput) -> _WriteCall | ToolOutput:
+        """Check the call and settle what will be written, or say why it cannot be."""
         path_str = input.params.get("path")
         content = input.params.get("content")
         if not path_str:
@@ -90,40 +113,7 @@ class WriteFileTool(ApprovalGatedTool):
         # never from code/data files, whose dashes may be literal, test-verified bytes.
         if should_normalize_prose(resolved):
             content = normalize_dashes(content)
-
-        # Same wiring as patch_file: the instance app.py registers carries the
-        # approval store; an auto-discovered one without it is replaced at startup.
-        if self._approval_store is not None:
-            refused = await self._gate(input, resolved, content)
-            if refused is not None:
-                return refused
-
-        return await asyncio.to_thread(_write_sync, resolved, content)
-
-    async def _gate(self, input: ToolInput, path: Path, content: str) -> ToolOutput | None:
-        """``None`` when the file may be written; otherwise what to return instead."""
-        old = await asyncio.to_thread(_read_existing, path)
-        return await gate_action(
-            Action(
-                agent="write_file",
-                kind=ActionKind.FILE_EDIT,
-                summary=f"write {path}",
-                path=path,
-                # The folder the server granted - never the model's `workspace` param.
-                workspace=input.granted_workspace or "",
-                in_north_scratch=is_north_scratch(path),
-            ),
-            policy=self._policy,
-            approval_store=self._approval_store,
-            title="File Write - Approval Required",
-            message=f"Write `{path}`?\n```diff\n{unified_diff(path, old, content)}\n```",
-            options=("Write", "Cancel"),
-            task_id=input.params.get("task_id"),
-            stream_manager=self._stream_manager,
-            notifier=self._notifier,
-            timeout=self._approval_timeout_seconds,
-            declined="Write cancelled by user.",
-        )
+        return _WriteCall(resolved, content)
 
 
 def _read_existing(path: Path) -> str:

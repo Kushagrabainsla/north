@@ -19,20 +19,15 @@ import asyncio
 import re
 import shlex
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from tools.base import ApprovalGatedTool
+from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_action
 from tools.specialized._subprocess import format_diff_output, run_capture
-
-if TYPE_CHECKING:
-    from approval.base import Notifier
-    from approval.policy import ApprovalPolicy
-    from approval.store import ApprovalStore
-    from utils.events import EventEmitter
 
 _TIMEOUT = 30
 # `git log -20` - a count with no option letter in front of it.
@@ -197,7 +192,18 @@ def _unsafe_flags(action: str, args: list[str]) -> list[str]:
     return unsafe
 
 
-class GitTool(ApprovalGatedTool):
+@dataclass(frozen=True)
+class _GitCall:
+    """A checked git command, ready to describe or run."""
+
+    action: str
+    args: str
+    cmd: list[str]
+    cwd: Path
+    mutating: bool
+
+
+class GitTool(Tool):
     """Run git commands with structured output and safety guards."""
 
     name = "git"
@@ -256,17 +262,38 @@ class GitTool(ApprovalGatedTool):
             return format_diff_output(stdout)
         return stdout
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventEmitter | None = None,
-        approval_timeout_seconds: float = 300.0,
-        policy: ApprovalPolicy | None = None,
-        notifier: Notifier | None = None,
-    ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
+    async def describe(self, input: ToolInput) -> Request | None:
+        call = self._prepare(input)
+        if isinstance(call, ToolOutput):
+            return None
+        return Request(
+            action=Action(
+                agent="git",
+                kind=ActionKind.GIT,
+                summary=" ".join(call.cmd),
+                operation=call.action,
+                args=call.args,
+                workspace=str(call.cwd),
+                mutating=call.mutating,
+                read_only=not call.mutating,
+                obviously_destructive=call.action == "push" and any(_is_force_flag(t) for t in call.cmd[2:]),
+            ),
+            title="Git Operation - Approval Required",
+            message=f"```\n{' '.join(call.cmd)}\n```",
+            declined="Git operation rejected by user.",
+            refused_hint="Push to a new branch instead.",
+            prepared=call,
+        )
 
     async def run(self, input: ToolInput) -> ToolOutput:
+        call = prepared(input) or self._prepare(input)
+        if isinstance(call, ToolOutput):
+            return call
+        return await asyncio.to_thread(run_capture, call.cmd, call.cwd, timeout=_TIMEOUT)
+
+    @staticmethod
+    def _prepare(input: ToolInput) -> _GitCall | ToolOutput:
+        """Check the call and build its command, or say why it cannot run."""
         action = str(input.params.get("action", "")).strip()
         args = str(input.params.get("args", "")).strip()
         workspace = input.params.get("workspace") or None
@@ -299,35 +326,7 @@ class GitTool(ApprovalGatedTool):
                     "an allowlist that cannot write files or run commands."
                 ),
             )
-
-        forced = action == "push" and any(_is_force_flag(t) for t in cmd[2:])
-        refused = await gate_action(
-            Action(
-                agent="git",
-                kind=ActionKind.GIT,
-                summary=" ".join(cmd),
-                operation=action,
-                args=args,
-                workspace=str(cwd),
-                mutating=mutating,
-                read_only=not mutating,
-                obviously_destructive=forced,
-            ),
-            policy=self._policy,
-            approval_store=self._approval_store,
-            title="Git Operation - Approval Required",
-            message=f"```\n{' '.join(cmd)}\n```",
-            task_id=input.params.get("task_id"),
-            stream_manager=self._stream_manager,
-            notifier=self._notifier,
-            timeout=self._approval_timeout_seconds,
-            declined="Git operation rejected by user.",
-            refused_hint="Push to a new branch instead.",
-        )
-        if refused is not None:
-            return refused
-
-        return await asyncio.to_thread(run_capture, cmd, cwd, timeout=_TIMEOUT)
+        return _GitCall(action, args, cmd, cwd, mutating)
 
 
 def _is_mutating(action: str, cmd: list[str]) -> bool:

@@ -54,21 +54,25 @@ class TestCodeSafetyCheck:
 
 
 class TestFailClosedGate:
-    async def test_create_refused_without_approval_store(self) -> None:
-        tool = CreateToolTool(tool_registry=None, approval_store=None)
-        result = await tool.run(ToolInput(params={"action": "create", "name": "evil_tool", "content": _BENIGN_TOOL}))
+    async def test_create_refused_without_an_approval_layer(self) -> None:
+        tool = CreateToolTool(tool_registry=None)
+        result = await tool.execute(
+            ToolInput(params={"action": "create", "name": "evil_tool", "content": _BENIGN_TOOL})
+        )
         assert result.success is False
         assert "fail closed" in result.error
 
-    async def test_update_refused_without_approval_store(self) -> None:
-        tool = CreateToolTool(tool_registry=None, approval_store=None)
-        result = await tool.run(ToolInput(params={"action": "update", "name": "read_file", "content": _BENIGN_TOOL}))
+    async def test_update_refused_without_an_approval_layer(self) -> None:
+        tool = CreateToolTool(tool_registry=None)
+        result = await tool.execute(
+            ToolInput(params={"action": "update", "name": "read_file", "content": _BENIGN_TOOL})
+        )
         assert result.success is False
         assert "fail closed" in result.error
 
-    async def test_list_and_read_still_work_without_store(self) -> None:
-        tool = CreateToolTool(tool_registry=None, approval_store=None)
-        result = await tool.run(ToolInput(params={"action": "list"}))
+    async def test_list_and_read_still_work_without_an_approval_layer(self) -> None:
+        tool = CreateToolTool(tool_registry=None)
+        result = await tool.execute(ToolInput(params={"action": "list"}))
         assert result.success is True
 
 

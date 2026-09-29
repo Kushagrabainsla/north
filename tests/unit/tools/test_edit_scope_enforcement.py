@@ -20,7 +20,9 @@ import pytest
 
 from agents.models import AgentPayload
 from architecture.scopes import ScopeGuard, TaskEditScope, build_guard
+from config.approval_mode import ApprovalMode
 from orchestrator.models import TaskRequest
+from tests.conftest import bind_approvals
 from tools.models import ToolInput
 from tools.specialized.patch_file import PatchFileTool
 from tools.universal.write_file import WriteFileTool
@@ -307,7 +309,8 @@ async def test_agent_execute_call_threads_scope_to_tool(tmp_path: Path) -> None:
         AgentConfig(agent="researcher", domain="engineering"),
         deps,
     )
-    tool_map = {"write_file": WriteFileTool()}
+    # Autonomous, so this asserts the scope and nothing else decides the write.
+    tool_map = {"write_file": bind_approvals(WriteFileTool(), ApprovalMode.AUTONOMOUS)}
     guard = _guard(tmp_path, TaskEditScope(modules=("platform.config",)))
     payload = AgentPayload(task_id="t-prop", prompt="p", workspace=str(tmp_path), edit_scope=guard)
 

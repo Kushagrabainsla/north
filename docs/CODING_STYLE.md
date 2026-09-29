@@ -391,25 +391,23 @@ the model-backed tier had no mode check at all, so it auto-approved in
 `interactive`, the default. No file could answer "what does north do without
 asking me?"
 
-**The split: a tool classifies, the policy decides.**
+**The split: a tool describes, the approval layer decides.** `Tool.execute()`
+puts every call that changes something to `Approvals.decide()` before `run()`;
+a tool only overrides `describe()`, and one that does not is still gated.
 
 ```python
-# correct - the tool reports facts about itself
-refused = await gate_action(
-    Action(
-        agent="bash",
-        kind=ActionKind.SHELL_COMMAND,
-        summary=command,
-        command=command,
-        read_only=self._safety_inspector.is_instantly_safe(command),
-        mutating=not self._safety_inspector.is_instantly_safe(command),
-    ),
-    policy=self._policy,
-    approval_store=self._approval_store,
-    ...
-)
-if refused is not None:
-    return refused
+# correct - the tool reports facts about the call
+async def describe(self, input: ToolInput) -> Request | None:
+    command = input.params.get("command")
+    if not command:
+        return None  # will not act
+    safe = self._safety_inspector.is_instantly_safe(command)
+    return Request(
+        action=Action(agent="bash", kind=ActionKind.SHELL_COMMAND, summary=command,
+                      command=command, read_only=safe, mutating=not safe),
+        title="Shell Command - Approval Required",
+        message=f"```\n{command}\n```",
+    )
 
 # wrong - the tool deciding what its own facts mean
 if self._mode() in (ApprovalMode.AUTO, ApprovalMode.AUTONOMOUS):

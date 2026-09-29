@@ -182,7 +182,9 @@ steps:
     run = await runner.run("demo")
 
     assert run.status == "completed"
-    assert [payload.mutation_policy for payload in agent.payloads] == ["require_approval", "allow"]
+    # Neither step restricts changes: each change the guarded step makes is put
+    # to the approval layer by Tool.execute, and "always" asked once up front.
+    assert [payload.mutation_policy for payload in agent.payloads] == ["allow", "allow"]
 
 
 async def test_runner_refuses_to_resume_after_a_referenced_skill_changes(tmp_path):

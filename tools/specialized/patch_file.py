@@ -5,9 +5,9 @@ Analogous to Claude Code's Edit tool. Supports three change shapes: an ordered
 `>>>>>>> REPLACE` blocks. Every shape fails loudly if a target is missing or not
 unique so the model can never silently corrupt a file.
 
-When an ApprovalStore is injected, the computed change is shown to the user as a
-unified diff and applied only on confirmation (see #15 diff-preview-before-write).
-Without one (e.g. in tests), the edit applies immediately.
+The computed change is described to the approval layer as a unified diff and
+applied only once approved (see #15 diff-preview-before-write). The approved plan
+is the one written, so a file changed while the card waited is refused.
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ import difflib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from tools._path import is_north_scratch, resolve_path, scope_refusal
 from tools._read_tracker import record_read, was_read
-from tools.base import ApprovalGatedTool
+from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_action
 from tools.specialized._edit_match import (
     detect_line_ending,
     find_unique,
@@ -35,17 +35,11 @@ from tools.specialized._edit_match import (
     split_bom,
 )
 
-if TYPE_CHECKING:
-    from approval.base import Notifier
-    from approval.policy import ApprovalPolicy
-    from approval.store import ApprovalStore
-    from utils.events import EventEmitter
-
 _BLOCK_RE = re.compile(r"<<<<<<< SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>> REPLACE", re.DOTALL)
 _MAX_DIFF_CHARS = 8_000
 
 
-class PatchFileTool(ApprovalGatedTool):
+class PatchFileTool(Tool):
     """Replace exact strings in a file. Previews a unified diff before applying."""
 
     name = "patch_file"
@@ -98,17 +92,41 @@ class PatchFileTool(ApprovalGatedTool):
     def format_output(self, data: dict[str, Any]) -> str:
         return f"Patched `{data.get('path', '?')}` successfully."
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventEmitter | None = None,
-        approval_timeout_seconds: float = 300.0,
-        policy: ApprovalPolicy | None = None,
-        notifier: Notifier | None = None,
-    ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
+    async def describe(self, input: ToolInput) -> Request | None:
+        call = await self._prepare(input)
+        if isinstance(call, ToolOutput) or call.plan.new_content == call.plan.old_content:
+            return None
+        diff = unified_diff(call.path, call.plan.old_content, call.plan.new_content)
+        return Request(
+            action=Action(
+                agent="patch_file",
+                kind=ActionKind.FILE_EDIT,
+                summary=f"edit {call.path}",
+                path=call.path,
+                workspace=input.granted_workspace or "",
+                in_north_scratch=is_north_scratch(call.path),
+            ),
+            title="File Edit - Approval Required",
+            message=f"Apply this change to `{call.path}`?\n```diff\n{diff}\n```",
+            options=("Apply", "Cancel"),
+            declined="Edit cancelled by user.",
+            prepared=call,
+        )
 
     async def run(self, input: ToolInput) -> ToolOutput:
+        call = prepared(input) or await self._prepare(input)
+        if isinstance(call, ToolOutput):
+            return call
+        if call.plan.new_content == call.plan.old_content:
+            return ToolOutput(success=True, data={"path": str(call.path), "blocks_applied": 0, "unchanged": True})
+        written = await asyncio.to_thread(_write, call.path, call.plan)
+        if written.success:
+            record_read(input.params.get("task_id"), str(call.path))
+        return written
+
+    @staticmethod
+    async def _prepare(input: ToolInput) -> _PatchCall | ToolOutput:
+        """Check the call and plan the edit, or say why it cannot be made."""
         path_str = input.params.get("path")
         edits = input.params.get("edits")
         old_string = input.params.get("old_string")
@@ -144,56 +162,8 @@ class PatchFileTool(ApprovalGatedTool):
 
         plan = await asyncio.to_thread(_plan, resolved, edits, old_string, new_string)
         if isinstance(plan, ToolOutput):
-            return plan  # error
-
-        if plan.new_content == plan.old_content:
-            return ToolOutput(success=True, data={"path": str(resolved), "blocks_applied": 0, "unchanged": True})
-
-        # An instance with no approval store is the plain, auto-discovered file
-        # writer the coder uses; app.py replaces it with a gated one at startup.
-        # Whether this tool is wired for approval is its own business - what the
-        # gate then decides is not.
-        if self._approval_store is not None:
-            refused = await self._gate(
-                input.params.get("task_id"),
-                resolved,
-                input.granted_workspace,
-                plan.old_content,
-                plan.new_content,
-            )
-            if refused is not None:
-                return refused
-
-        written = await asyncio.to_thread(_write, resolved, plan)
-        if written.success:
-            record_read(input.params.get("task_id"), str(resolved))
-        return written
-
-    async def _gate(
-        self, task_id: str | None, path: Path, workspace: str | None, old: str, new: str
-    ) -> ToolOutput | None:
-        """``None`` when the edit may be written; otherwise what to return instead."""
-        diff = unified_diff(path, old, new)
-        return await gate_action(
-            Action(
-                agent="patch_file",
-                kind=ActionKind.FILE_EDIT,
-                summary=f"edit {path}",
-                path=path,
-                workspace=workspace or "",
-                in_north_scratch=is_north_scratch(path),
-            ),
-            policy=self._policy,
-            approval_store=self._approval_store,
-            title="File Edit - Approval Required",
-            message=f"Apply this change to `{path}`?\n```diff\n{diff}\n```",
-            options=("Apply", "Cancel"),
-            task_id=task_id,
-            stream_manager=self._stream_manager,
-            notifier=self._notifier,
-            timeout=self._approval_timeout_seconds,
-            declined="Edit cancelled by user.",
-        )
+            return plan
+        return _PatchCall(resolved, plan)
 
 
 def unified_diff(path: Path, old: str, new: str) -> str:
@@ -406,3 +376,11 @@ def _write(path: Path, plan: EditPlan) -> ToolOutput:
             "blocks_applied": plan.blocks_applied,
         },
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _PatchCall:
+    """A checked, planned edit, ready to describe or write."""
+
+    path: Path
+    plan: EditPlan

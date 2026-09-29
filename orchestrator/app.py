@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from agents.models import AgentDependencies
 from agents.registry import AgentRegistry
 from approval.approval_memory import ApprovalMemory
+from approval.approvals import Approvals
 from approval.batching import BatchingNotifier
 from approval.callback_server import app as callback_app
 from approval.decisions import DecisionLog
@@ -73,11 +74,6 @@ from tools.retrieval import tool_index_documents
 from tools.semantic.search_code import SearchCodeTool
 from tools.specialized._sandbox import SandboxConfig
 from tools.specialized.bash import BashTool
-from tools.specialized.gh_tool import GhTool
-from tools.specialized.git_tool import GitTool
-from tools.specialized.kasa_tool import KasaTool
-from tools.specialized.patch_file import PatchFileTool
-from tools.specialized.shell_tool import ShellTool
 from tools.tool_index import ToolIndex
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_agent import CreateAgentTool
@@ -95,7 +91,6 @@ from tools.universal.update_plan import UpdatePlanTool
 from tools.universal.update_schedule import UpdateScheduleTool
 from tools.universal.use_flow import UseFlowTool
 from tools.universal.use_skill import UseSkillTool
-from tools.universal.write_file import WriteFileTool
 from utils.logging import configure_structured_logging
 from utils.runtime_resources import builtin_skills_dir, web_dist_dir
 from utils.tasks import drain
@@ -161,12 +156,14 @@ def _attach_embedding_index(deps) -> None:
 
 def _build_tool_registry(
     deps,
-    policy: ApprovalPolicy | None = None,
+    approvals: Approvals | None = None,
     skill_registry: SkillRegistry | None = None,
 ) -> tuple[ToolRegistry, CreateAgentTool]:
     learned_tools_dir = settings.north_home / "learned" / "tools"
     learned_tools_dir.mkdir(parents=True, exist_ok=True)
-    tool_registry = ToolRegistry(auto_register=True, learned_dir=learned_tools_dir)
+    # Every tool the registry holds gets `approvals`, so every call that changes
+    # something is decided in one place - see Tool.execute.
+    tool_registry = ToolRegistry(auto_register=True, learned_dir=learned_tools_dir, approvals=approvals)
     mutation_root = settings.north_home / "mutations"
     source_edit_policy = SelfEditPolicy(learned_tools_dir, mutation_root)
     agent_edit_policy = SelfEditPolicy(settings.north_home / "agents", mutation_root)
@@ -188,17 +185,9 @@ def _build_tool_registry(
     )
     tool_registry.register(ListSchedulesTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
     tool_registry.register(CancelScheduleTool(job_processor=deps.job_processor, cron_store=deps.cron_store))
-    # create/update actions are gated behind a user approval card inside the
-    # tool itself, so every entry point (agent loop, delegation, direct-tool
-    # execution) sees the same gate.
     tool_registry.register(
         CreateToolTool(
             tool_registry=tool_registry,
-            approval_store=deps.approval_store,
-            stream_manager=deps.stream_manager,
-            approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-            policy=policy,
-            notifier=deps.notifier,
             self_edit_policy=source_edit_policy,
             tools_dir=learned_tools_dir,
         )
@@ -216,54 +205,9 @@ def _build_tool_registry(
     # Semantic code search (#2) - only when embeddings are available.
     if deps.code_index is not None:
         tool_registry.register(SearchCodeTool(code_index=deps.code_index))
-    # BashTool and ShellTool gate every command behind user approval and cannot
-    # be auto-discovered (they need the ApprovalStore injected at startup).
-    tool_registry.register(
-        BashTool(
-            approval_store=deps.approval_store,
-            stream_manager=deps.stream_manager,
-            approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-            policy=policy,
-            notifier=deps.notifier,
-            sandbox=SandboxConfig.from_settings(settings),
-        )
-    )
-    tool_registry.register(
-        ShellTool(
-            approval_store=deps.approval_store,
-            stream_manager=deps.stream_manager,
-            approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-            policy=policy,
-            notifier=deps.notifier,
-        )
-    )
-    # Override the auto-discovered (immediate) PatchFileTool and WriteFileTool with
-    # ones that preview a unified diff in an approval card before writing.
-    for file_tool_cls in (PatchFileTool, WriteFileTool):
-        tool_registry.register(
-            file_tool_cls(
-                approval_store=deps.approval_store,
-                stream_manager=deps.stream_manager,
-                approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-                policy=policy,
-                notifier=deps.notifier,
-            )
-        )
-    # Override the auto-discovered (gate-less, fail-closed) GitTool/GhTool/KasaTool
-    # with instances wired to the approval flow so their mutating actions surface
-    # approval cards instead of being refused outright.
-    # Which of these may run unasked is the policy's call, from the facts each
-    # tool reports - not a per-tool switch here.
-    for tool_cls in (GitTool, GhTool, KasaTool):
-        tool_registry.register(
-            tool_cls(
-                approval_store=deps.approval_store,
-                stream_manager=deps.stream_manager,
-                approval_timeout_seconds=deps.north_settings.approval_timeout_seconds,
-                policy=policy,
-                notifier=deps.notifier,
-            )
-        )
+    # Registered by hand for its sandbox setting; approval comes from the
+    # registry like every other tool's.
+    tool_registry.register(BashTool(sandbox=SandboxConfig.from_settings(settings)))
     return tool_registry, create_agent_tool
 
 
@@ -869,12 +813,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         approval_memory=approval_memory,
         llm_advisor=judgement_filter.advise,
     )
+    # The approval layer: the one object every tool and flow asks through.
+    approvals = Approvals(
+        approval_policy,
+        UserInteraction(
+            deps.approval_store,
+            notifier=deps.notifier,
+            judgement_filter=judgement_filter,
+            stream_manager=deps.stream_manager,
+            policy=approval_policy,
+            default_timeout=deps.north_settings.approval_timeout_seconds,
+        ),
+        timeout=deps.north_settings.approval_timeout_seconds,
+    )
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)
     _step("loading flows")
     flow_registry = _build_flows()
     deps.approval_policy = approval_policy
-    tool_registry, create_agent_tool = _build_tool_registry(deps, approval_policy, skill_registry)
+    tool_registry, create_agent_tool = _build_tool_registry(deps, approvals, skill_registry)
     # Rebind the schedule tool after flows are loaded so scheduled flow names
     # are validated at creation time just like named skills.
     tool_registry.register(
@@ -906,13 +863,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     flow_store = FlowRunStore(settings.north_home / "flow_runs.db")
     if cut_off := flow_store.fail_interrupted():
         logger.info("Marked %d flow run(s) interrupted by the last shutdown as failed", cut_off)
-    flow_interaction = UserInteraction(
-        deps.approval_store,
-        notifier=deps.notifier,
-        judgement_filter=judgement_filter,
-        stream_manager=deps.stream_manager,
-        default_timeout=deps.north_settings.approval_timeout_seconds,
-    )
 
     _step("refreshing inference pools")
     await deps.inference_router.refresh_pools()
@@ -949,7 +899,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         agent_registry,
         skill_registry,
         flow_store,
-        flow_interaction,
+        approvals.interaction,
         tool_registry=tool_registry,
         workspace=settings.north_workspace,
     )

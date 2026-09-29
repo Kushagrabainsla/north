@@ -1858,7 +1858,7 @@ class Orchestrator:
                 params["workspace"] = workspace
             if task_id and "task_id" not in params:
                 params["task_id"] = task_id
-            result = await tool.run(
+            result = await tool.execute(
                 self._tool_input_factory(params=params, edit_scope=edit_scope, granted_workspace=workspace or None)
             )
             success = result.success

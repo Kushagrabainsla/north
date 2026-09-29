@@ -45,7 +45,7 @@ class _RecordingTool:
     def __init__(self) -> None:
         self.captured: dict[str, Any] = {}
 
-    async def run(self, tool_input):
+    async def execute(self, tool_input):
         self.captured["edit_scope"] = tool_input.edit_scope
         self.captured["params"] = dict(tool_input.params)
         return MagicMock(success=True, data={"k": "v"}, error=None)
@@ -132,7 +132,7 @@ class TestDirectSingleToolExecution:
         class _FailingTool:
             is_mutating = False
 
-            async def run(self, _tool_input):
+            async def execute(self, _tool_input):
                 return MagicMock(success=False, data={}, error="boom")
 
             def format_output(self, _data):  # pragma: no cover - not reached on failure

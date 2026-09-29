@@ -186,14 +186,15 @@ class ToolInputFactory(Protocol):
 class ToolRunnerPort(Protocol):
     """The single-tool surface the orchestrator dispatches against.
 
-    ``tools.base.Tool`` satisfies this structurally: run it, render its output,
-    and read whether it mutated state (so the task is marked with a side effect).
+    ``tools.base.Tool`` satisfies this structurally: execute it (through the
+    approval layer), render its output, and read whether it mutated state (so the
+    task is marked with a side effect).
     """
 
     is_mutating: bool
 
-    async def run(self, input: ToolInput) -> ToolOutcome:  # noqa: A002 - mirrors Tool.run signature
-        """Execute the tool against ``input``."""
+    async def execute(self, input: ToolInput) -> ToolOutcome:  # noqa: A002 - mirrors Tool.execute signature
+        """Execute the tool against ``input``, deciding any change first."""
         ...
 
     def format_output(self, data: dict[str, Any]) -> str:

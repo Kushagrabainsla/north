@@ -9,7 +9,7 @@ import pytest
 
 from approval.models import ApprovalDecision, Card, CardType
 from config.approval_mode import ApprovalMode
-from tests.conftest import approval_policy
+from tests.conftest import bind_approvals
 from tools.models import ToolInput
 from tools.specialized.patch_file import PatchFileTool
 
@@ -36,12 +36,9 @@ async def test_patch_file_rejects_concurrent_modification(tmp_path: Path):
         )
 
     store.wait_for_decision = AsyncMock(side_effect=simulate_concurrent_edit)
-    tool = PatchFileTool(
-        approval_store=store,
-        policy=approval_policy(ApprovalMode.INTERACTIVE),
-    )
+    tool = bind_approvals(PatchFileTool(), ApprovalMode.INTERACTIVE, store=store)
 
-    out = await tool.run(
+    out = await tool.execute(
         ToolInput(
             params={
                 "path": str(f),

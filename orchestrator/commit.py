@@ -64,7 +64,7 @@ class WorkCommitter:
         self._tool_input = tool_input_factory
 
     async def _git_action(self, action: str, args: str, workspace: str, task_id: str):
-        return await self._git.run(
+        return await self._git.execute(
             self._tool_input(params={"action": action, "args": args, "workspace": workspace, "task_id": task_id})
         )
 

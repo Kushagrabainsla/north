@@ -22,7 +22,8 @@ from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME, SkillSource
 from skills.parser import parse_skill_document
 from skills.registry import parse_execution_contract, rejection_reason
-from tools.models import ToolInput
+from tools.base import Tool
+from tools.models import ToolInput, ToolOutput
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_tool import (
@@ -635,6 +636,15 @@ def _known_flow(name: str):
         raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
+async def _as_user(tool: Tool, params: dict[str, Any]) -> ToolOutput:
+    """Run *tool* for the user, who is acting from the dashboard: there is nobody else to ask.
+
+    Every other caller goes through `Tool.execute`, which puts the call to the
+    approval layer first.
+    """
+    return await tool.run(ToolInput(params=params))
+
+
 def _set_fields(model: BaseModel) -> dict[str, Any]:
     return {key: value for key, value in model.model_dump().items() if value is not None}
 
@@ -673,15 +683,9 @@ async def create_flow_schedule(name: str, body: FlowScheduleCreate) -> dict[str,
     """
     flow = _known_flow(name)
     scheduler, _, _ = _schedule_tools()
-    result = await scheduler.run(
-        ToolInput(
-            params={
-                "task": flow.description or f"Run the {name} flow.",
-                "agent": "general",
-                "flow": name,
-                **_set_fields(body),
-            }
-        )
+    result = await _as_user(
+        scheduler,
+        {"task": flow.description or f"Run the {name} flow.", "agent": "general", "flow": name, **_set_fields(body)},
     )
     if not result.success:
         raise HTTPException(status_code=422, detail=result.error or "Could not schedule this flow")
@@ -693,7 +697,7 @@ async def update_flow_schedule(schedule: str, body: FlowScheduleUpdate) -> dict[
     """Retime, rename, pause or resume one of a flow's schedules."""
     await _flow_schedule_row(schedule)
     _, updater, _ = _schedule_tools()
-    result = await updater.run(ToolInput(params={"name": schedule, **_set_fields(body)}))
+    result = await _as_user(updater, {"name": schedule, **_set_fields(body)})
     if not result.success:
         raise HTTPException(status_code=422, detail=result.error or "Could not change this schedule")
     return result.data
@@ -703,7 +707,7 @@ async def update_flow_schedule(schedule: str, body: FlowScheduleUpdate) -> dict[
 async def delete_flow_schedule(schedule: str) -> None:
     await _flow_schedule_row(schedule)
     _, _, canceller = _schedule_tools()
-    result = await canceller.run(ToolInput(params={"name": schedule}))
+    result = await _as_user(canceller, {"name": schedule})
     if not result.success:
         raise HTTPException(status_code=409, detail=result.error or "Could not delete this schedule")
 
@@ -799,10 +803,8 @@ async def activate_flow(name: str, body: FlowActivation) -> dict[str, Any]:
         agent_registry=services.agent_registry,
         flow_store=services.flow_store,
     )
-    result = await tool.run(
-        ToolInput(
-            params={"action": "activate", "name": name, "test_run_id": body.test_run_id, "user_confirmed": True}
-        )
+    result = await _as_user(
+        tool, {"action": "activate", "name": name, "test_run_id": body.test_run_id, "user_confirmed": True}
     )
     if not result.success:
         raise HTTPException(status_code=422, detail=result.error or "Could not activate this flow")

@@ -19,7 +19,6 @@ import pytest
 
 from agents.agentic_llm_agent import MAX_UNANSWERED_APPROVALS, _infer_outcome_status
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
-from approval import ApprovalDecision
 from inference.models import ToolCall, ToolCallResponse
 from memory import FileContextStore
 from tests.conftest import MockInferenceRouter
@@ -357,19 +356,14 @@ async def test_flow_read_only_policy_blocks_mutation_before_it_happens(tmp_path:
     assert tool.called is False
 
 
-@pytest.mark.parametrize(
-    ("decision", "expected_success", "expected_called"),
-    [
-        (ApprovalDecision.APPROVED, True, True),
-        (ApprovalDecision.REJECTED, False, False),
-    ],
-)
-async def test_flow_on_mutation_policy_enforces_approval(
-    tmp_path: Path,
-    decision: ApprovalDecision,
-    expected_success: bool,
-    expected_called: bool,
+@pytest.mark.parametrize(("allowed", "expected_called"), [(True, True), (False, False)])
+async def test_a_flow_steps_change_goes_to_the_approval_layer(
+    tmp_path: Path, allowed: bool, expected_called: bool
 ) -> None:
+    """A flow step has no gate of its own: its changes are decided like any other call."""
+    from approval.approvals import Decision
+    from approval.policy import Verdict
+
     class MutatingTool(Tool):
         name = "change_external_state"
         description = "Change external state."
@@ -382,27 +376,23 @@ async def test_flow_on_mutation_policy_enforces_approval(
             self.called = True
             return ToolOutput(success=True)
 
-    agent = _load_agent("researcher", tmp_path)
-    agent._request_approval = AsyncMock(return_value=decision)
     tool = MutatingTool()
-    payload = AgentPayload(
-        task_id="flow-approval",
-        prompt="change",
-        skills=["review-item"],
-        mutation_policy="require_approval",
+    tool.approvals = MagicMock()
+    tool.approvals.decide = AsyncMock(
+        return_value=Decision(Verdict.ALLOW if allowed else Verdict.REFUSE, "test", status=None)
     )
+    agent = _load_agent("researcher", tmp_path)
+    payload = AgentPayload(task_id="flow-approval", prompt="change", skills=["review-item"])
 
-    _call, result, success, _images = await agent._safe_execute_call(
+    _call, _result, success, _images = await agent._safe_execute_call(
         ToolCall(name=tool.name, call_id="change-1", params={"target": "record"}),
         payload,
         {tool.name: tool},
     )
 
-    assert success is expected_success
+    assert success is allowed
     assert tool.called is expected_called
-    agent._request_approval.assert_awaited_once()
-    if not expected_success:
-        assert "Approval was not granted" in result
+    tool.approvals.decide.assert_awaited_once()
 
 
 async def test_quick_profile_escalates_after_tool_failure(tmp_path: Path) -> None:
@@ -1009,7 +999,10 @@ async def test_execute_calls_ordered_preserves_causal_chunks(tmp_path: Path) -> 
             return ToolOutput(success=True, data={"read": True})
 
     agent = _load_agent("coder", tmp_path)
-    tool_map = {"write_tool": WriteTool(), "read_tool": ReadTool()}
+    from config.approval_mode import ApprovalMode
+    from tests.conftest import bind_approvals
+
+    tool_map = {"write_tool": bind_approvals(WriteTool(), ApprovalMode.AUTONOMOUS), "read_tool": ReadTool()}
 
     calls = [
         ToolCall(name="write_tool", call_id="c1", params={}),

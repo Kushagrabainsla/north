@@ -281,7 +281,7 @@ async def test_direct_dispatch_stamps_scope_onto_tool_input() -> None:
     class _RecordingTool:
         is_mutating = False
 
-        async def run(self, tool_input: ToolInput):
+        async def execute(self, tool_input: ToolInput):
             captured["edit_scope"] = tool_input.edit_scope
             captured["params"] = dict(tool_input.params)
             return MagicMock(success=True, data={}, error=None)
@@ -322,7 +322,7 @@ async def test_direct_dispatch_none_scope_leaves_input_unrestricted() -> None:
     class _RecordingTool:
         is_mutating = False
 
-        async def run(self, tool_input: ToolInput):
+        async def execute(self, tool_input: ToolInput):
             captured["edit_scope"] = tool_input.edit_scope
             return MagicMock(success=True, data={}, error=None)
 

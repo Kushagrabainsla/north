@@ -17,7 +17,9 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-from tools.base import ApprovalGatedTool
+from approval.approvals import Request
+from approval.policy import Action, ActionKind
+from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 
 logger = logging.getLogger(__name__)
@@ -305,6 +307,12 @@ def _device_state(
     return entry
 
 
+def _action_of(params: dict[str, Any]) -> str:
+    """The requested action, lowercased and with aliases resolved."""
+    action = str(params.get("action", "")).strip().lower()
+    return _ACTION_ALIASES.get(action, action)
+
+
 def _resolve_action_params(action: str, params: dict[str, Any]) -> _ActionParams:
     """Parse and validate colour/brightness params for a control action.
 
@@ -478,7 +486,7 @@ def _summarize_action(
     return f"{verbs.get(action, action)}: {names}.{suffix}"
 
 
-class KasaTool(ApprovalGatedTool):
+class KasaTool(Tool):
     """Discover and control TP-Link Kasa smart-home devices on the local network."""
 
     name = "kasa"
@@ -491,7 +499,7 @@ class KasaTool(ApprovalGatedTool):
         "Identify the target by its alias/name (e.g. 'Desk lamp') or IP; if you do not know "
         "it, run action='list' first. Named scenes (moody, cozy, movie, focus, romantic, party, "
         "sunset) may target all discovered lights when no device is supplied. "
-        "Control actions execute immediately - no approval prompt."
+        "Control actions follow the approval mode; listing never asks."
     )
     parameters_schema = {
         "type": "object",
@@ -578,9 +586,25 @@ class KasaTool(ApprovalGatedTool):
             blocks.insert(0, msg)
         return "\n\n".join(blocks)
 
+    def mutates(self, params: dict[str, Any] | None = None) -> bool:
+        return _action_of(params or {}) != "list"
+
+    async def describe(self, input: ToolInput) -> Request | None:
+        action = _action_of(input.params)
+        if action not in _KNOWN_ACTIONS:
+            return None
+        device = str(input.params.get("device", "")).strip() or "all discovered lights"
+        return Request(
+            action=Action(
+                agent="kasa", kind=ActionKind.DEVICE, summary=f"{action} {device}", operation=action, args=device
+            ),
+            title="Device Control - Approval Required",
+            message=f"`{action}` on **{device}**",
+            declined="Device action cancelled by user.",
+        )
+
     async def run(self, input: ToolInput) -> ToolOutput:
-        action = str(input.params.get("action", "")).strip().lower()
-        action = _ACTION_ALIASES.get(action, action)
+        action = _action_of(input.params)
         if not action:
             return ToolOutput(success=False, error="Parameter 'action' is required.")
 
@@ -604,8 +628,7 @@ class KasaTool(ApprovalGatedTool):
         # made the only route out of the error the error itself.
         if action != "list" and action not in broad_actions and not target_hint:
             # Require an explicit target so a control action can never fan out
-            # to every device on the network. No approval prompt - actions run
-            # immediately once a device is named.
+            # to every device on the network.
             return ToolOutput(
                 success=False,
                 error=(

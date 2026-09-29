@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from agents.agentic_llm_agent import AgenticLLMAgent
 from agents.models import AgentPayload
 from approval.approval_memory import ApprovalMemory
+from approval.approvals import Approvals, Request
 from approval.interaction import UserInteraction
 from approval.models import Card, CardType
 from approval.policy import Action, ActionKind, ApprovalPolicy, Verdict
@@ -34,7 +35,6 @@ from config.settings import settings
 from gateways import telegram as telegram_gateway
 from inference.models import ToolCall
 from orchestrator.orchestrator import Orchestrator
-from tools.specialized._approval import gate_action
 
 # Long enough for a pending card to be seen and answered, short enough that a
 # card nobody answers does not stall the run.
@@ -77,16 +77,11 @@ async def _tool_card_replay(tmp: Path, decision: str, mode: ApprovalMode, second
     store = ApprovalStore(tmp / "approvals.db")
     memory = ApprovalMemory(tmp / "memory.db")
     policy = ApprovalPolicy(mode_provider=lambda: mode, approval_memory=memory)
+    approvals = Approvals(policy, UserInteraction(store, reachable=lambda: False), timeout=_ANSWER_WINDOW)
     first = "make lint"
+    request = Request(_bash_action(first), "Shell Command - Approval Required", f"```\n{first}\n```")
     await asyncio.gather(
-        gate_action(
-            _bash_action(first),
-            policy=policy,
-            approval_store=store,
-            title="Shell Command - Approval Required",
-            message=f"```\n{first}\n```",
-            timeout=_ANSWER_WINDOW,
-        ),
+        approvals.decide(request, task_id=None),
         _answer_first_card(store, memory, decision),
     )
     return (await policy.rule(_bash_action(second))).verdict.value
@@ -131,8 +126,9 @@ def _registry(tmp: Path, mode: ApprovalMode, store: ApprovalStore):
     deps.code_index = None
     deps.north_settings.approval_timeout_seconds = _UNANSWERED
     policy = ApprovalPolicy(mode_provider=lambda: mode, unattended=UnattendedPolicy())
+    approvals = Approvals(policy, UserInteraction(store, reachable=lambda: False), timeout=_UNANSWERED)
     with patch.object(settings, "north_home", tmp / "north_home"):
-        registry, _ = _build_tool_registry(deps, policy)
+        registry, _ = _build_tool_registry(deps, approvals)
     return registry
 
 

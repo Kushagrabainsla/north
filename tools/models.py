@@ -28,6 +28,10 @@ class ToolInput(BaseModel):
     same reason: `params["workspace"]` is whatever the model chose to pass, so a
     decision like "is this edit inside the task's folder?" must never read it.
     `None` means the task was granted no folder, and nothing counts as inside.
+
+    `approved` is the `approval.approvals.Request` the approval layer approved for
+    this call, set only by `Tool.execute`. Typed `Any` because the tool layer loads
+    before the approval layer; read it through `tools.base.prepared`.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -35,6 +39,7 @@ class ToolInput(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     edit_scope: EditAuthorizer | None = Field(default=None, exclude=True)
     granted_workspace: str | None = Field(default=None, exclude=True)
+    approved: Any = Field(default=None, exclude=True)
 
 
 class ToolOutput(BaseModel):

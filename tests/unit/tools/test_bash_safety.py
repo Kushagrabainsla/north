@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests.conftest import approval_policy, rejecting_store
+from tests.conftest import bind_approvals, rejecting_store
 from tools.models import ToolInput
 from tools.specialized.bash import BashTool, CommandSafetyInspector
 
@@ -83,7 +83,7 @@ class TestCommandSafetyInspector:
 
 
 # ---------------------------------------------------------------------------
-# BashTool._request_approval - integration of safety layers
+# BashTool through the approval layer - integration of safety layers
 # ---------------------------------------------------------------------------
 
 
@@ -94,29 +94,31 @@ class TestBashToolApprovalBypass:
     and `ApprovalPolicy` rules on them. These assert the outcome the user sees.
     """
 
-    def _tool(self, *, mode=None, advisor=None) -> BashTool:
-        return BashTool(
-            approval_store=MagicMock(),
-            stream_manager=None,
-            approval_timeout_seconds=5.0,
-            policy=approval_policy(mode, advisor=advisor),
-        )
+    @staticmethod
+    def _tool(*, mode=None, advisor=None, store=None) -> tuple[BashTool, MagicMock]:
+        store = store or MagicMock()
+        return bind_approvals(BashTool(), mode, store=store, advisor=advisor, timeout=5.0), store
+
+    @staticmethod
+    async def _allowed(tool: BashTool, command: str) -> bool:
+        request = await tool.describe(ToolInput(params={"command": command}))
+        return (await tool.approvals.decide(request, task_id="task-1")).allowed
 
     @pytest.mark.asyncio
     async def test_instantly_safe_command_skips_all_gates(self) -> None:
-        tool = self._tool()
+        tool, store = self._tool()
 
-        assert await tool._gate("task-1", "git status") is None
-        tool._approval_store.add.assert_not_called()
+        assert await self._allowed(tool, "git status")
+        store.add.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_a_read_only_command_is_not_recorded_as_a_decision(self) -> None:
         """Recording every `ls` would bury the decisions that mattered."""
-        tool = self._tool()
+        tool, store = self._tool()
 
-        await tool._gate("task-1", "git status")
+        await self._allowed(tool, "git status")
 
-        tool._approval_store.add.assert_not_called()
+        store.add.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_a_learned_rule_can_approve_in_auto(self) -> None:
@@ -125,9 +127,9 @@ class TestBashToolApprovalBypass:
         async def advisor(action):
             return "approved", "learned rule"
 
-        tool = self._tool(mode=ApprovalMode.AUTO, advisor=advisor)
+        tool, _ = self._tool(mode=ApprovalMode.AUTO, advisor=advisor)
 
-        assert await tool._gate("task-1", "npm run deploy") is None
+        assert await self._allowed(tool, "npm run deploy")
 
     @pytest.mark.asyncio
     async def test_a_learned_rule_is_not_consulted_in_interactive(self) -> None:
@@ -139,10 +141,9 @@ class TestBashToolApprovalBypass:
             consulted = True
             return "approved", ""
 
-        tool = self._tool(advisor=advisor)
-        tool._approval_store = rejecting_store()
+        tool, _ = self._tool(advisor=advisor, store=rejecting_store())
 
-        assert await tool._gate("task-1", "npm run deploy") is not None
+        assert not await self._allowed(tool, "npm run deploy")
         assert not consulted
 
     @pytest.mark.asyncio
@@ -150,19 +151,18 @@ class TestBashToolApprovalBypass:
         """Something north did unasked has to be visible afterwards."""
         from config.approval_mode import ApprovalMode
 
-        tool = self._tool(mode=ApprovalMode.AUTO)
+        tool, store = self._tool(mode=ApprovalMode.AUTO)
 
-        assert await tool._gate("task-1", "pytest -q") is None
-        tool._approval_store.add.assert_called_once()
+        assert await self._allowed(tool, "pytest -q")
+        store.add.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_auto_mode_still_gates_a_command_off_the_allowlist(self) -> None:
         from config.approval_mode import ApprovalMode
 
-        tool = self._tool(mode=ApprovalMode.AUTO)
-        tool._approval_store = rejecting_store()
+        tool, _ = self._tool(mode=ApprovalMode.AUTO, store=rejecting_store())
 
-        assert await tool._gate("task-1", "rm -rf /tmp/x") is not None
+        assert not await self._allowed(tool, "rm -rf /tmp/x")
 
 
 class TestBashToolDestructiveBlock:
@@ -170,15 +170,15 @@ class TestBashToolDestructiveBlock:
 
     @pytest.mark.asyncio
     async def test_rm_rf_root_blocked(self) -> None:
-        tool = BashTool(approval_store=MagicMock(), stream_manager=None)
-        result = await tool.run(ToolInput(params={"command": "rm -rf /"}))
+        tool = bind_approvals(BashTool(), store=MagicMock())
+        result = await tool.execute(ToolInput(params={"command": "rm -rf /"}))
         assert result.success is False
         assert "recognised as catastrophic" in result.error
 
     @pytest.mark.asyncio
     async def test_dd_blocked(self) -> None:
-        tool = BashTool(approval_store=MagicMock(), stream_manager=None)
-        result = await tool.run(ToolInput(params={"command": "dd if=/dev/zero of=/dev/sda"}))
+        tool = bind_approvals(BashTool(), store=MagicMock())
+        result = await tool.execute(ToolInput(params={"command": "dd if=/dev/zero of=/dev/sda"}))
         assert result.success is False
         assert "recognised as catastrophic" in result.error
 
@@ -191,8 +191,8 @@ class TestBashToolDestructiveBlock:
 class TestBashAllowDangerous:
     @pytest.mark.asyncio
     async def test_destructive_pattern_blocked_by_default(self) -> None:
-        tool = BashTool(approval_store=MagicMock())
-        out = await tool.run(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
+        tool = bind_approvals(BashTool(), store=MagicMock())
+        out = await tool.execute(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
         assert out.success is False
         assert "recognised as catastrophic" in (out.error or "")
 
@@ -220,8 +220,8 @@ class TestBashAllowDangerous:
         store.wait_for_decision = AsyncMock(return_value=resolved)
         from config.approval_mode import ApprovalMode
 
-        tool = BashTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTONOMOUS))
-        out = await tool.run(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
+        tool = bind_approvals(BashTool(), ApprovalMode.AUTONOMOUS, store=store)
+        out = await tool.execute(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
         assert out.success is True  # not pre-blocked; reached execution
 
     @pytest.mark.asyncio
@@ -264,8 +264,8 @@ class TestBashAllowDangerous:
 
         from config.approval_mode import ApprovalMode
 
-        tool = BashTool(approval_store=store, policy=approval_policy(ApprovalMode.AUTONOMOUS))
-        out = await tool.run(ToolInput(params={"command": "sleep 100", "timeout": 1}))
+        tool = bind_approvals(BashTool(), ApprovalMode.AUTONOMOUS, store=store)
+        out = await tool.execute(ToolInput(params={"command": "sleep 100", "timeout": 1}))
 
         assert out.success is False
         assert "timed out" in (out.error or "")
@@ -282,8 +282,7 @@ class TestBashApprovalOutcomes:
 
     @staticmethod
     def _tool(store):
-
-        return BashTool(approval_store=store, approval_timeout_seconds=0.01, policy=approval_policy())
+        return bind_approvals(BashTool(), store=store, timeout=0.01)
 
     @pytest.mark.asyncio
     async def test_an_unanswered_command_is_refused_not_failed(self) -> None:
@@ -291,7 +290,7 @@ class TestBashApprovalOutcomes:
         store.wait_for_decision = AsyncMock(return_value=None)
         store.resolve = MagicMock(return_value=True)
 
-        result = await self._tool(store).run(ToolInput(params={"command": "rm -rf build"}))
+        result = await self._tool(store).execute(ToolInput(params={"command": "rm -rf build"}))
 
         assert result.success is False
         assert result.failure_kind == "refused", "an absent human must not count against the tool"
@@ -306,7 +305,7 @@ class TestBashApprovalOutcomes:
         resolved.chosen_option = "Cancel"
         store.wait_for_decision = AsyncMock(return_value=resolved)
 
-        result = await self._tool(store).run(ToolInput(params={"command": "rm -rf build"}))
+        result = await self._tool(store).execute(ToolInput(params={"command": "rm -rf build"}))
 
         assert result.success is False
         assert result.failure_kind == "refused"

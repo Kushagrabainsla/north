@@ -20,9 +20,13 @@ import inspect
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tools.base import Tool
 from tools.exceptions import ToolNotFoundError
+
+if TYPE_CHECKING:
+    from approval.approvals import Approvals
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +152,10 @@ def _is_learned_tool(tool: Tool) -> bool:
 class ToolRegistry:
     """Global catalog of tools available for task-time selection."""
 
-    def __init__(self, auto_register: bool = False, learned_dir: Path | None = None) -> None:
+    def __init__(
+        self, auto_register: bool = False, learned_dir: Path | None = None, approvals: Approvals | None = None
+    ) -> None:
+        self._approvals = approvals
         self._tools: dict[str, Tool] = {}
         self._fallbacks: dict[str, Tool] = {}
         self._learned_dir = learned_dir
@@ -165,13 +172,13 @@ class ToolRegistry:
                 with contextlib.suppress(OSError):
                     self._dir_mtimes[dir_path] = _dir_fingerprint(dir_path)
             for tool in _discover(dir_path, package).values():
-                self._tools[tool.name] = tool
+                self._tools[tool.name] = self._bind(tool)
         for directory in self._learned_directories():
             if directory.exists():
                 with contextlib.suppress(OSError):
                     self._dir_mtimes[directory] = _dir_fingerprint(directory)
             for tool in _discover_external(directory).values():
-                self._register_learned(tool)
+                self.register(tool)
 
     def reload(self) -> None:
         """Re-scan tool directories for new or edited files.
@@ -186,13 +193,13 @@ class ToolRegistry:
                 continue
             for tool in _discover(dir_path, package).values():
                 if tool.name not in self._tools:
-                    self._tools[tool.name] = tool
+                    self._tools[tool.name] = self._bind(tool)
                     logger.info("ToolRegistry.reload: picked up new global tool %r", tool.name)
         for directory in self._learned_directories():
             if not self._directory_changed(directory):
                 continue
             for tool in _discover_external(directory).values():
-                self._register_learned(tool)
+                self.register(tool)
                 logger.info("ToolRegistry.reload: picked up learned tool %r", tool.name)
 
     def _learned_directories(self) -> tuple[Path, ...]:
@@ -223,7 +230,13 @@ class ToolRegistry:
         current = self._tools.get(tool.name)
         if current is not None and not _is_learned_tool(current):
             self._fallbacks[tool.name] = current
-        self._tools[tool.name] = tool
+        self._tools[tool.name] = self._bind(tool)
+
+    def _bind(self, tool: Tool) -> Tool:
+        """Give *tool* the approval layer, so every call it makes that changes something is decided."""
+        if self._approvals is not None:
+            tool.approvals = self._approvals
+        return tool
 
     def remove(self, name: str) -> bool:
         """Remove a live learned tool, restoring its built-in fallback if any."""
@@ -235,12 +248,6 @@ class ToolRegistry:
         else:
             self._tools[name] = fallback
         return True
-
-    def _register_learned(self, tool: Tool) -> None:
-        current = self._tools.get(tool.name)
-        if current is not None and not _is_learned_tool(current):
-            self._fallbacks[tool.name] = current
-        self._tools[tool.name] = tool
 
     def get(self, name: str) -> Tool:
         if name not in self._tools:

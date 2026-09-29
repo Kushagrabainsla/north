@@ -55,8 +55,9 @@ class AgentPayload(BaseModel):
     # accepted. Resolved by the orchestrator from AgentConfig.produces; never
     # supplied by model output.
     required_artifacts: list[str] = Field(default_factory=list, exclude=True)
-    # Server-owned guard applied immediately before every mutating tool call.
-    mutation_policy: Literal["allow", "require_approval", "deny"] = "allow"
+    # Server-owned: "deny" makes this run read-only. Whether an allowed change
+    # asks first is the approval layer's call (Tool.execute), never this field's.
+    mutation_policy: Literal["allow", "deny"] = "allow"
     context: str = ""  # optional pre-loaded context summary
     # Runtime-only attribution for the material merged into ``context``. Agents
     # populate it while loading context so prompt telemetry can say where the

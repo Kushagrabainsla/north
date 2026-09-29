@@ -1,9 +1,8 @@
 """BashTool - run shell commands inside the workspace.
 
-Every command is gated behind an explicit user approval card before the
-subprocess is spawned. The ApprovalStore + event emitter are injected
-at startup (see orchestrator/app.py), so this tool must be registered
-manually rather than auto-discovered.
+Every command is described to the approval layer before the subprocess is
+spawned (see `Tool.execute`). The sandbox setting is injected at startup (see
+orchestrator/app.py), so this tool is registered manually.
 
 See docs/CODING_STYLE.md Section 16.1.
 """
@@ -15,24 +14,18 @@ import contextlib
 import os
 import re
 import signal
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from tools._path import references_sensitive_path
-from tools.base import ApprovalGatedTool
+from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_action
 from tools.specialized._sandbox import (
     SandboxConfig,
     build_run_argv,
     docker_available,
 )
-
-if TYPE_CHECKING:
-    from approval.base import Notifier
-    from approval.policy import ApprovalPolicy
-    from approval.store import ApprovalStore
-    from utils.events import EventEmitter
 
 _TIMEOUT = 30
 # Stdout/stderr are capped so a single `cat` of a large file can't overflow the
@@ -112,7 +105,7 @@ def _grep_is_recursive(command: str) -> bool:
     return False
 
 
-class BashTool(ApprovalGatedTool):
+class BashTool(Tool):
     """Runs a shell command and returns stdout, stderr, and return code.
 
     Requires explicit user approval before executing any command - the approval
@@ -145,20 +138,11 @@ class BashTool(ApprovalGatedTool):
         "required": ["command"],
     }
 
-    def __init__(
-        self,
-        approval_store: ApprovalStore,
-        stream_manager: EventEmitter | None = None,
-        approval_timeout_seconds: float = 300.0,
-        policy: ApprovalPolicy | None = None,
-        notifier: Notifier | None = None,
-        sandbox: SandboxConfig | None = None,
-    ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
+    def __init__(self, sandbox: SandboxConfig | None = None) -> None:
         self._safety_inspector = CommandSafetyInspector()
         self._sandbox = sandbox or SandboxConfig()
 
-    def _describe(self, command: str) -> Action:
+    def _action(self, command: str) -> Action:
         """What this command is, as facts. What that *means* is the policy's call."""
         return Action(
             agent="bash",
@@ -173,18 +157,16 @@ class BashTool(ApprovalGatedTool):
     def format_output(self, data: dict[str, Any]) -> str:
         return str(data.get("stdout", data.get("output", ""))).strip()
 
-    async def _gate(self, task_id: str | None, command: str) -> ToolOutput | None:
-        """``None`` when the command may run; otherwise what to return instead."""
-        return await gate_action(
-            self._describe(command),
-            policy=self._policy,
-            approval_store=self._approval_store,
+    async def describe(self, input: ToolInput) -> Request | None:
+        # Whether a catastrophic pattern is refused, and in which modes, is the
+        # policy's call - this tool only reports that it recognises one.
+        command = input.params.get("command")
+        if not command:
+            return None
+        return Request(
+            action=self._action(command),
             title="Shell Command - Approval Required",
             message=f"```\n{command}\n```",
-            task_id=task_id,
-            stream_manager=self._stream_manager,
-            notifier=self._notifier,
-            timeout=self._approval_timeout_seconds,
             declined="Command cancelled by user.",
         )
 
@@ -214,12 +196,6 @@ class BashTool(ApprovalGatedTool):
         command = input.params.get("command")
         if not command:
             return ToolOutput(success=False, error="Parameter 'command' is required.")
-
-        # Whether a catastrophic pattern is refused, and in which modes, is the
-        # policy's call - this tool only reports that it recognises one.
-        refused = await self._gate(input.params.get("task_id"), command)
-        if refused is not None:
-            return refused
 
         cwd = input.params.get("workspace") or None
         raw_timeout = input.params.get("timeout")

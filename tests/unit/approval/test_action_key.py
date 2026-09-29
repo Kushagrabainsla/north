@@ -9,12 +9,13 @@ from pathlib import Path
 import pytest
 
 from approval.approval_memory import ApprovalMemory
+from approval.approvals import Request
 from approval.interaction import UserInteraction
 from approval.models import Card, CardType
 from approval.policy import Action, ActionKind, ApprovalPolicy
 from approval.store import ApprovalStore
 from config.approval_mode import ApprovalMode
-from tools.specialized._approval import gate_action
+from tests.conftest import approvals
 
 
 @pytest.mark.asyncio
@@ -22,7 +23,7 @@ async def test_a_tool_card_carries_its_actions_identity(tmp_path: Path) -> None:
     store = ApprovalStore(tmp_path / "a.db")
     action = Action(agent="bash", kind=ActionKind.SHELL_COMMAND, summary="make", command="make")
 
-    await gate_action(action, policy=None, approval_store=store, title="t", message="```\nmake\n```", timeout=0.01)
+    await approvals(store=store, timeout=0.01).decide(Request(action, "t", "```\nmake\n```"), task_id=None)
 
     assert store.all()[0].action_key == action.describe()
 

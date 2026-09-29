@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from config.approval_mode import ApprovalMode
-from tests.conftest import approval_policy
+from tests.conftest import bind_approvals
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import gh_tool as gh_module
 from tools.specialized import git_tool as git_module
@@ -56,35 +56,35 @@ def _rejecting_store() -> MagicMock:
 
 class TestGitGate:
     async def test_readonly_actions_run_without_approval(self, fake_run_capture) -> None:
-        result = await GitTool().run(ToolInput(params={"action": "status"}))
+        result = await GitTool().execute(ToolInput(params={"action": "status"}))
         assert result.success is True
         assert fake_run_capture, "git status should have executed"
 
     async def test_branch_listing_runs_without_approval(self, fake_run_capture) -> None:
-        result = await GitTool().run(ToolInput(params={"action": "branch", "args": "-a"}))
+        result = await GitTool().execute(ToolInput(params={"action": "branch", "args": "-a"}))
         assert result.success is True
 
     @pytest.mark.parametrize("action,args", [("commit", "msg"), ("push", ""), ("merge", "x"), ("add", ".")])
     async def test_mutating_actions_fail_closed_without_gate(self, fake_run_capture, action, args) -> None:
-        result = await GitTool().run(ToolInput(params={"action": action, "args": args}))
+        result = await GitTool().execute(ToolInput(params={"action": action, "args": args}))
         assert result.success is False
         assert "fail closed" in result.error
         assert not fake_run_capture, "no subprocess may run without an approval gate"
 
     async def test_branch_create_fails_closed_without_gate(self, fake_run_capture) -> None:
-        result = await GitTool().run(ToolInput(params={"action": "branch", "args": "-D main"}))
+        result = await GitTool().execute(ToolInput(params={"action": "branch", "args": "-D main"}))
         assert result.success is False
         assert not fake_run_capture
 
     async def test_mutating_action_runs_when_user_approves(self, fake_run_capture) -> None:
-        tool = GitTool(approval_store=_approving_store())
-        result = await tool.run(ToolInput(params={"action": "commit", "args": "fix: things"}))
+        tool = bind_approvals(GitTool(), store=_approving_store())
+        result = await tool.execute(ToolInput(params={"action": "commit", "args": "fix: things"}))
         assert result.success is True
         assert fake_run_capture[0][:3] == ["git", "commit", "-m"]
 
     async def test_mutating_action_refused_when_user_rejects(self, fake_run_capture) -> None:
-        tool = GitTool(approval_store=_rejecting_store())
-        result = await tool.run(ToolInput(params={"action": "push", "args": "origin main"}))
+        tool = bind_approvals(GitTool(), store=_rejecting_store())
+        result = await tool.execute(ToolInput(params={"action": "push", "args": "origin main"}))
         assert result.success is False
         assert not fake_run_capture
 
@@ -100,22 +100,22 @@ class TestGitGate:
         ],
     )
     async def test_force_push_always_blocked_even_with_approval(self, fake_run_capture, args) -> None:
-        tool = GitTool(approval_store=_approving_store())
-        result = await tool.run(ToolInput(params={"action": "push", "args": args}))
+        tool = bind_approvals(GitTool(), store=_approving_store())
+        result = await tool.execute(ToolInput(params={"action": "push", "args": args}))
         assert result.success is False
         assert "blocked" in result.error.lower() and "new branch" in result.error
         assert not fake_run_capture
 
     async def test_force_push_allowed_when_allow_dangerous(self, fake_run_capture) -> None:
         """In autonomous mode (allow_dangerous), the force-push hard refusal is lifted."""
-        tool = GitTool(approval_store=_approving_store(), policy=approval_policy(_AUTONOMOUS))
-        result = await tool.run(ToolInput(params={"action": "push", "args": "origin main --force"}))
+        tool = bind_approvals(GitTool(), _AUTONOMOUS, store=_approving_store())
+        result = await tool.execute(ToolInput(params={"action": "push", "args": "origin main --force"}))
         assert result.success is True
         assert fake_run_capture  # it actually ran (after approval), not pre-blocked
 
     async def test_reset_and_clean_are_not_offered(self, fake_run_capture) -> None:
         for action in ("reset", "clean"):
-            result = await GitTool().run(ToolInput(params={"action": action, "args": "--hard"}))
+            result = await GitTool().execute(ToolInput(params={"action": action, "args": "--hard"}))
             assert result.success is False
             assert "Unknown git action" in result.error
 
@@ -125,49 +125,49 @@ class TestGitGate:
 
 class TestGhGate:
     async def test_readonly_action_runs_without_approval(self, fake_run_capture) -> None:
-        result = await GhTool().run(ToolInput(params={"action": "pr_view", "args": "123"}))
+        result = await GhTool().execute(ToolInput(params={"action": "pr_view", "args": "123"}))
         assert result.success is True
 
     @pytest.mark.parametrize(
         "action", ["pr_create", "pr_comment", "pr_merge", "pr_review", "issue_create", "issue_comment"]
     )
     async def test_mutating_actions_fail_closed_without_gate(self, fake_run_capture, action) -> None:
-        result = await GhTool().run(ToolInput(params={"action": action, "args": "123"}))
+        result = await GhTool().execute(ToolInput(params={"action": action, "args": "123"}))
         assert result.success is False
         assert "fail closed" in result.error
         assert not fake_run_capture
 
     async def test_pr_merge_runs_only_after_approval(self, fake_run_capture) -> None:
-        tool = GhTool(approval_store=_approving_store())
-        result = await tool.run(ToolInput(params={"action": "pr_merge", "args": "123"}))
+        tool = bind_approvals(GhTool(), store=_approving_store())
+        result = await tool.execute(ToolInput(params={"action": "pr_merge", "args": "123"}))
         assert result.success is True
         assert fake_run_capture[0][:3] == ["gh", "pr", "merge"]
 
     async def test_pr_merge_refused_on_reject(self, fake_run_capture) -> None:
-        tool = GhTool(approval_store=_rejecting_store())
-        result = await tool.run(ToolInput(params={"action": "pr_merge", "args": "123"}))
+        tool = bind_approvals(GhTool(), store=_rejecting_store())
+        result = await tool.execute(ToolInput(params={"action": "pr_merge", "args": "123"}))
         assert result.success is False
         assert not fake_run_capture
 
     async def test_pr_status_runs_without_approval(self, fake_run_capture) -> None:
-        result = await GhTool().run(ToolInput(params={"action": "pr_status"}))
+        result = await GhTool().execute(ToolInput(params={"action": "pr_status"}))
         assert result.success is True
         assert fake_run_capture[0][:2] == ["gh", "pr"]
 
     async def test_pr_checks_runs_without_approval(self, fake_run_capture) -> None:
-        result = await GhTool().run(ToolInput(params={"action": "pr_checks", "args": "123"}))
+        result = await GhTool().execute(ToolInput(params={"action": "pr_checks", "args": "123"}))
         assert result.success is True
         assert fake_run_capture[0][:3] == ["gh", "pr", "checks"]
 
     async def test_pr_ready_fails_closed_without_gate(self, fake_run_capture) -> None:
-        result = await GhTool().run(ToolInput(params={"action": "pr_ready", "args": "123"}))
+        result = await GhTool().execute(ToolInput(params={"action": "pr_ready", "args": "123"}))
         assert result.success is False
         assert "fail closed" in result.error
         assert not fake_run_capture
 
     async def test_pr_ready_runs_only_after_approval(self, fake_run_capture) -> None:
-        tool = GhTool(approval_store=_approving_store())
-        result = await tool.run(ToolInput(params={"action": "pr_ready", "args": "123"}))
+        tool = bind_approvals(GhTool(), store=_approving_store())
+        result = await tool.execute(ToolInput(params={"action": "pr_ready", "args": "123"}))
         assert result.success is True
         assert fake_run_capture[0][:3] == ["gh", "pr", "ready"]
 
@@ -196,7 +196,7 @@ class TestReadOnlyArgumentAllowlist:
         ],
     )
     async def test_filesystem_touching_options_are_refused(self, fake_run_capture, action, args) -> None:
-        result = await GitTool().run(ToolInput(params={"action": action, "args": args}))
+        result = await GitTool().execute(ToolInput(params={"action": action, "args": args}))
         assert result.success is False
         assert "not permitted" in result.error
         assert not fake_run_capture, "no subprocess may run for a refused option"
@@ -218,21 +218,21 @@ class TestReadOnlyArgumentAllowlist:
         ],
     )
     async def test_ordinary_read_only_usage_still_runs(self, fake_run_capture, action, args) -> None:
-        result = await GitTool().run(ToolInput(params={"action": action, "args": args}))
+        result = await GitTool().execute(ToolInput(params={"action": action, "args": args}))
         assert result.success is True
         assert fake_run_capture, f"`git {action} {args}` should have executed"
 
     async def test_pathspec_after_separator_is_not_read_as_an_option(self, fake_run_capture) -> None:
         """A file legitimately named like a flag is a pathspec once `--` is seen."""
-        result = await GitTool().run(ToolInput(params={"action": "diff", "args": "-- --output=notaflag"}))
+        result = await GitTool().execute(ToolInput(params={"action": "diff", "args": "-- --output=notaflag"}))
         assert result.success is True
         assert fake_run_capture
 
     async def test_allowlist_does_not_gate_mutating_actions(self, fake_run_capture) -> None:
         """Mutating actions keep going through the approval card, which shows the
         full command - the allowlist is only for the ungated read-only path."""
-        tool = GitTool(approval_store=_approving_store())
-        result = await tool.run(ToolInput(params={"action": "checkout", "args": "-b feature/x"}))
+        tool = bind_approvals(GitTool(), store=_approving_store())
+        result = await tool.execute(ToolInput(params={"action": "checkout", "args": "-b feature/x"}))
         assert result.success is True
         assert fake_run_capture[0][:3] == ["git", "checkout", "-b"]
 
@@ -242,13 +242,13 @@ class TestBranchListPattern:
 
     @pytest.mark.parametrize("args", ["--list north/task_abc", "-l north/*", "--list"])
     async def test_listing_with_a_pattern_needs_no_approval(self, fake_run_capture, args) -> None:
-        result = await GitTool().run(ToolInput(params={"action": "branch", "args": args}))
+        result = await GitTool().execute(ToolInput(params={"action": "branch", "args": args}))
         assert result.success is True
         assert fake_run_capture, f"`git branch {args}` is read-only"
 
     @pytest.mark.parametrize("args", ["newbranch", "-v newbranch", "-d gone", "-m old new"])
     async def test_naming_a_branch_without_list_still_needs_approval(self, fake_run_capture, args) -> None:
-        result = await GitTool().run(ToolInput(params={"action": "branch", "args": args}))
+        result = await GitTool().execute(ToolInput(params={"action": "branch", "args": args}))
         assert result.success is False
         assert not fake_run_capture
 
@@ -274,8 +274,8 @@ class TestUnansweredApproval:
     """
 
     async def test_timeout_is_reported_as_unanswered_not_rejected(self, fake_run_capture) -> None:
-        tool = GitTool(approval_store=_timing_out_store(), approval_timeout_seconds=0.01)
-        result = await tool.run(ToolInput(params={"action": "commit", "args": "wip"}))
+        tool = bind_approvals(GitTool(), store=_timing_out_store(), timeout=0.01)
+        result = await tool.execute(ToolInput(params={"action": "commit", "args": "wip"}))
         assert result.success is False
         assert "No one answered" in result.error
         assert "rejected" not in result.error.lower() or "Nobody rejected" in result.error
@@ -284,13 +284,13 @@ class TestUnansweredApproval:
 
     async def test_timeout_is_marked_refused_not_a_tool_error(self, fake_run_capture) -> None:
         """`refused` keeps an absent human from being counted against the tool."""
-        tool = GitTool(approval_store=_timing_out_store(), approval_timeout_seconds=0.01)
-        result = await tool.run(ToolInput(params={"action": "commit", "args": "wip"}))
+        tool = bind_approvals(GitTool(), store=_timing_out_store(), timeout=0.01)
+        result = await tool.execute(ToolInput(params={"action": "commit", "args": "wip"}))
         assert result.failure_kind == "refused"
 
     async def test_a_real_rejection_still_says_rejected(self, fake_run_capture) -> None:
-        tool = GitTool(approval_store=_rejecting_store())
-        result = await tool.run(ToolInput(params={"action": "commit", "args": "wip"}))
+        tool = bind_approvals(GitTool(), store=_rejecting_store())
+        result = await tool.execute(ToolInput(params={"action": "commit", "args": "wip"}))
         assert result.success is False
         assert result.error == "Git operation rejected by user."
         assert result.failure_kind == "refused"

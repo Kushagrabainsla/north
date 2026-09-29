@@ -189,6 +189,29 @@ def approval_policy(
     )
 
 
+def approvals(
+    mode: ApprovalMode | None = None,
+    *,
+    store=None,
+    memory=None,
+    advisor=None,
+    timeout: float = 300.0,
+):
+    """The real approval layer, wired for a test - see `bind_approvals`."""
+    from approval.approvals import Approvals
+    from approval.interaction import UserInteraction
+    from approval.store import ApprovalStore
+
+    policy = approval_policy(mode, memory=memory, advisor=advisor)
+    return Approvals(policy, UserInteraction(store or ApprovalStore(), reachable=lambda: False), timeout=timeout)
+
+
+def bind_approvals(tool, mode: ApprovalMode | None = None, **kw):
+    """Give *tool* the approval layer, as `ToolRegistry` does, and return it."""
+    tool.approvals = approvals(mode, **kw)
+    return tool
+
+
 def approving_store():
     """An ApprovalStore stand-in whose card always comes back approved."""
     from unittest.mock import AsyncMock, MagicMock

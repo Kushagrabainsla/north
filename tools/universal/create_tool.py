@@ -11,18 +11,14 @@ import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from policies.self_edit import SelfEditPolicy
-from tools.base import ApprovalGatedTool, Tool
+from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.specialized._approval import gate_action
 
 if TYPE_CHECKING:
-    from approval.base import Notifier
-    from approval.policy import ApprovalPolicy
-    from approval.store import ApprovalStore
     from tools.registry import ToolRegistry
-    from utils.events import EventEmitter
 
 _TOOLS_ROOT = Path(__file__).parent.parent
 
@@ -33,7 +29,7 @@ _NAME_RE = re.compile(r'^\s+name\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
 _DESC_RE = re.compile(r'^\s+description\s*=\s*[\(\s]*["\']([^"\']+)["\']', re.MULTILINE)
 
 
-class CreateToolTool(ApprovalGatedTool):
+class CreateToolTool(Tool):
     """Creates, updates, or lists north tools so agents can extend their own capabilities."""
 
     name = "create_tool"
@@ -128,15 +124,9 @@ class CreateToolTool(ApprovalGatedTool):
     def __init__(
         self,
         tool_registry: ToolRegistry | None = None,
-        approval_store: ApprovalStore | None = None,
-        stream_manager: EventEmitter | None = None,
-        approval_timeout_seconds: float = 300.0,
-        policy: ApprovalPolicy | None = None,
-        notifier: Notifier | None = None,
         self_edit_policy: SelfEditPolicy | None = None,
         tools_dir: Path | None = None,
     ) -> None:
-        super().__init__(approval_store, stream_manager, approval_timeout_seconds, policy, notifier)
         self._registry = tool_registry
         self._self_edit_policy = self_edit_policy
         self._tools_dir = tools_dir or _TOOLS_ROOT
@@ -192,12 +182,6 @@ class CreateToolTool(ApprovalGatedTool):
         if action == "read":
             return _read_tool(input.params.get("name") or "", self._tools_dir)
         if action in {"create", "update", "validate", "test", "activate"}:
-            # Fail closed: model-authored code may be imported or hot-loaded,
-            # so every lifecycle transition that executes or publishes it is
-            # visible to the user approval system.
-            refused = await self._gate(input.params, action)
-            if refused is not None:
-                return refused
             if action == "create":
                 return self._create(input.params)
             if action == "update":
@@ -213,8 +197,11 @@ class CreateToolTool(ApprovalGatedTool):
             error=f"Unknown action '{action}'. Use: list, read, create, update, validate, test, activate.",
         )
 
-    async def _gate(self, params: dict, action: str) -> ToolOutput | None:
-        """Show the proposed code and wait. ``None`` when it may be written."""
+    async def describe(self, input: ToolInput) -> Request:
+        """Show the proposed code. Model-authored code may be imported or hot-loaded,
+        so every lifecycle step that executes or publishes it is put to the user."""
+        params = input.params
+        action = (params.get("action") or "create").strip()
         name = params.get("name", "unknown")
         tool_type = params.get("tool_type", "specialized")
         content = (params.get("content") or "").strip()
@@ -226,23 +213,16 @@ class CreateToolTool(ApprovalGatedTool):
         message = f"Agent wants to {action} the '{name}' tool ({tool_type}).\n\n" + (
             f"```python\n{preview}\n```" if preview else "(stub - no implementation provided)"
         )
-        return await gate_action(
-            Action(
+        return Request(
+            action=Action(
                 agent="create_tool",
                 kind=ActionKind.TOOL_CHANGE,
                 summary=f"{action} the {name!r} tool ({tool_type})",
                 operation=action,
                 args=name,
             ),
-            policy=self._policy,
-            approval_store=self._approval_store,
             title="Tool Change - Approval Required",
             message=message,
-            options=("Approve", "Reject"),
-            task_id=params.get("task_id"),
-            stream_manager=self._stream_manager,
-            notifier=self._notifier,
-            timeout=self._approval_timeout_seconds,
             declined=f"Tool {action} cancelled by user.",
         )
 
@@ -410,6 +390,8 @@ class CreateToolTool(ApprovalGatedTool):
         try:
             instance = _load_tool_file(path, expected_name=name)
             _validate_tool_contract(instance)
+            # The user approved this test through `describe()`, so the candidate
+            # runs directly: asking again about each of its own calls would ask twice.
             result = await instance.run(ToolInput(params=test_params))
         except Exception as exc:
             return ToolOutput(success=False, error=f"Tool candidate test raised an exception: {exc}")

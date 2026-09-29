@@ -371,26 +371,28 @@ async def test_request_approval_without_store_raises(tmp_path: Path) -> None:
     assert agent._deps.approval_store is None
 
     with pytest.raises(RuntimeError, match="ApprovalStore"):
-        await agent._request_approval(
+        await agent._request_approval_card(
             _payload(),
             {"message": "Delete production database?"},
         )
 
 
 async def test_request_approval_timeout_returns_timeout_rejected(tmp_path: Path) -> None:
-    """When approval times out, _request_approval must return 'timeout_rejected'."""
+    """When approval times out, the card's status must be 'timeout_rejected'."""
     from approval.store import ApprovalStore
 
     agent = _make_agent(tmp_path, approval_store=ApprovalStore(), approval_timeout_seconds=0.01)
-    decision = await agent._request_approval(
-        _payload(),
-        {"message": "Should I proceed?"},
-    )
+    decision = (
+        await agent._request_approval_card(
+            _payload(),
+            {"message": "Should I proceed?"},
+        )
+    ).status
     assert decision == "timeout_rejected"
 
 
 async def test_request_approval_resolved_approve_returns_status(tmp_path: Path) -> None:
-    """When a card is approved, _request_approval must return the resolution status."""
+    """When a card is approved, its status must be the resolution status."""
     from approval.store import ApprovalStore
 
     store = ApprovalStore()
@@ -403,16 +405,18 @@ async def test_request_approval_resolved_approve_returns_status(tmp_path: Path) 
             store.resolve(cards[0].id, "Approve")
 
     approval_task = asyncio.create_task(_approve_after_delay())
-    decision = await agent._request_approval(
-        _payload(),
-        {"message": "Send the email?", "options": ["Approve", "Reject"]},
-    )
+    decision = (
+        await agent._request_approval_card(
+            _payload(),
+            {"message": "Send the email?", "options": ["Approve", "Reject"]},
+        )
+    ).status
     await approval_task
     assert decision == "Approve"
 
 
 async def test_request_approval_resolved_reject_returns_status(tmp_path: Path) -> None:
-    """When a card is rejected, _request_approval must return 'Reject'."""
+    """When a card is rejected, its status must be 'Reject'."""
     from approval.store import ApprovalStore
 
     store = ApprovalStore()
@@ -425,10 +429,12 @@ async def test_request_approval_resolved_reject_returns_status(tmp_path: Path) -
             store.resolve(cards[0].id, "Reject")
 
     rejection_task = asyncio.create_task(_reject_after_delay())
-    decision = await agent._request_approval(
-        _payload(),
-        {"message": "Delete old logs?"},
-    )
+    decision = (
+        await agent._request_approval_card(
+            _payload(),
+            {"message": "Delete old logs?"},
+        )
+    ).status
     await rejection_task
     assert decision == "Reject"
 

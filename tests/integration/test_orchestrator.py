@@ -650,7 +650,7 @@ async def test_execute_single_tool_passes_task_id(tmp_path):
     # Set up a dummy tool registry with a mock tool
     mock_tool = mock.MagicMock()
     mock_tool.name = "test_tool"
-    mock_tool.run = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
+    mock_tool.execute = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
     mock_tool.format_output = mock.MagicMock(return_value="success")
 
     orch._tool_registry = mock.MagicMock()
@@ -674,8 +674,8 @@ async def test_execute_single_tool_passes_task_id(tmp_path):
         workspace=str(tmp_path),
     )
 
-    mock_tool.run.assert_called_once()
-    tool_input = mock_tool.run.call_args[0][0]
+    mock_tool.execute.assert_called_once()
+    tool_input = mock_tool.execute.call_args[0][0]
     assert tool_input.params["task_id"] == "t1"
     assert tool_input.params["workspace"] == str(tmp_path)
     assert tool_input.params["arg1"] == "val1"
@@ -1186,7 +1186,7 @@ async def test_single_tool_marks_side_effect_when_mutating(tmp_path):
     tool = mock.MagicMock()
     tool.name = "kasa"
     tool.is_mutating = True
-    tool.run = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
+    tool.execute = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
     tool.format_output = mock.MagicMock(return_value="ok")
     orch._tool_registry = mock.MagicMock()
     orch._tool_registry.get.return_value = tool
@@ -1222,7 +1222,7 @@ async def test_single_tool_no_side_effect_when_readonly(tmp_path):
     tool = mock.MagicMock()
     tool.name = "get_time"
     tool.is_mutating = False
-    tool.run = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
+    tool.execute = mock.AsyncMock(return_value=mock.MagicMock(success=True, data={}))
     tool.format_output = mock.MagicMock(return_value="noon")
     orch._tool_registry = mock.MagicMock()
     orch._tool_registry.get.return_value = tool

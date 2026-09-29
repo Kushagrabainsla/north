@@ -60,7 +60,7 @@ class _FakeGit:
         self._status_out = status_out
         self._fails = fails
 
-    async def run(self, tool_input):
+    async def execute(self, tool_input):
         action = tool_input.params["action"]
         args = tool_input.params.get("args", "")
         self.calls.append((action, args))
@@ -121,13 +121,13 @@ class TestCommittingTheWork:
         fails and a plain checkout is the right recovery."""
 
         class _BranchExists(_FakeGit):
-            async def run(self, tool_input):
+            async def execute(self, tool_input):
                 action = tool_input.params["action"]
                 args = tool_input.params.get("args", "")
                 if action == "checkout" and args.startswith("-b"):
                     self.calls.append((action, args))
                     return ToolOutput(success=False, error="already exists")
-                return await super().run(tool_input)
+                return await super().execute(tool_input)
 
         git = _BranchExists("## main\n M src/cart.py\n")
 
