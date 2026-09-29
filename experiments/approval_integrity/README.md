@@ -48,8 +48,12 @@ leaves a resolved card behind and builds a diff).
 
 - Deterministic gate checks, not a model-quality or attack-success score.
   Prompt-injection resistance needs AgentDojo-style runs with a live model.
-- The coding scoreboard (`evals/`) was run before the change in an isolated
-  north home and produced no signal: all 15 tasks timed out because no model
-  could serve the coder (no Codex login, free models only). It was not rerun.
+- The coding scoreboard (`evals/`), run on the installed north against the
+  real `~/.north` in autonomous mode, scored 50% before (6/12 graded, 3
+  timeouts) and 50% after (5/10 graded, 5 timeouts). Routing was pinned to one
+  model, and both runs hit its rate limit, which caused every timeout and every
+  fast failure; no failure came from an approval gate. So: no regression seen,
+  but the run cannot detect a small one. A tasks-passing-but-`status=failed`
+  pattern is the done-check refusing a review by the same pinned model.
 - The bash "instantly safe" fast path is out of scope here; it is to be
   replaced by an OS sandbox rather than patched again.

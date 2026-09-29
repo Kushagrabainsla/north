@@ -75,12 +75,25 @@
     }
   },
   "coding_scoreboard": {
-    "note": "evals/ run in an isolated north home before the fix: 15/15 timed out with 'No model could serve coder' (no Codex login, free models only). No utility signal; not rerun after.",
-    "before": {
+    "note": "evals/ on the installed north against the real ~/.north, autonomous mode, routing pinned to one model (openai_codex:gpt-5.6-terra). Both runs hit that model's rate limit, which caused every timeout and every fast failure; no failure came from an approval gate.",
+    "isolated_home_before": {
       "graded": 0,
       "timeout": 15,
-      "tokens_in": 2945300,
-      "cost_usd": 0.0
+      "reason": "no model could serve coder (no Codex login)"
+    },
+    "real_home_before": {
+      "commit": "2a1fe19",
+      "passed": 6,
+      "graded": 12,
+      "timeout": 3,
+      "wall_seconds": 3230
+    },
+    "real_home_after": {
+      "commit": "459b413",
+      "passed": 5,
+      "graded": 10,
+      "timeout": 5,
+      "wall_seconds": 4033
     }
   }
 }
