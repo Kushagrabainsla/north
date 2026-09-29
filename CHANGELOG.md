@@ -72,6 +72,7 @@ All notable changes to north are documented here.
 - **The repository formatter gate is clean** (`tests/unit/agents/test_context_compaction.py`, `tests/unit/web/test_css_cascade.py`). Corrected two pre-existing ruff formatting discrepancies without changing test behavior.
 - The collapsed sidebar centres its icons. Two CSS faults stacked: `max-width: 0` cannot shrink a flex item whose `min-width` defaults to its content, and the collapsed rule tied on specificity with the expanded one and lost on source order - leaving 8px of room for an 18px icon.
 - Test isolation: `settings.north_home` is patched as well as the environment variable, so tests can no longer read or write the developer's real `~/.north`.
+- **`docs/CODING_STYLE.md` §23.4 now reflects that tests ship with new code** ([#43](https://github.com/Kushagrabainsla/north/issues/43)), replacing the stale "Tests Are Currently Deferred" rule and removing the stray trailing `## [Unreleased]` / `## 13. Three-Layer BashTool Command Safety` block at the end of the file.
 
 ### Removed
 - **The Tasks and Activity pages, and the "model pools" panel.** The first two described one thing in two places; answering "what happened in this run?" meant copying a task id from one page into the other's filter box. Both now redirect to the merged page. Model pools was a grouping left over from the router that was deleted - it selected nothing, and routing ranks a chain per part instead.
