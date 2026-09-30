@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -18,34 +17,8 @@ SupersedeFn = Callable[[str, list[str]], Awaitable[list[int]]]
 GlossaryFn = Callable[[dict[str, list[str]]], Awaitable[dict[str, str]]]
 
 
-class PoolName(StrEnum):
-    REASONING = "reasoning"
-    SPEED = "speed"
-    TOOL_CALLING = "tool_calling"
-    VISION = "vision"
-    TRANSCRIPTION = "transcription"
-    AUDIO = "audio"
-    EMBEDDINGS = "embeddings"
-    FAST_CHEAP = "fast_cheap"
-    HIGH_VOLUME = "high_volume"
-
-
-# Canonical pool names: what an agent's `model_pool` and a request's `pool` may say.
-POOL_NAMES = (
-    "reasoning",
-    "speed",
-    "tool_calling",
-    "vision",
-    "transcription",
-    "audio",
-    "embeddings",
-    "fast_cheap",
-    "high_volume",
-)
-
-
 class ModelEntry(BaseModel):
-    """One model entry in a pool, carrying its router/provider alongside the model ID."""
+    """One model, with the provider that serves it."""
 
     id: str
     provider: str
@@ -62,7 +35,6 @@ class CompletionRequest(BaseModel):
     """Input to a chat-completion call."""
 
     prompt: str
-    pool: str | None = None  # Explicit capability pool override (e.g. reasoning, speed, vision)
     component: str
     task_id: str | None = None
     run_id: str | None = None
@@ -170,7 +142,6 @@ class ToolCallRequest(BaseModel):
 
     messages: list[dict]
     tools: list[dict]
-    pool: str | None = None
     component: str
     task_id: str | None = None
     run_id: str | None = None

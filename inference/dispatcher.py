@@ -509,7 +509,6 @@ class ModelDispatcher(InferenceRouter):
             is_valid=_valid,
             capability=str(capability),
             task_id=request.task_id,
-            pool=request.pool,
         )
 
     async def complete_with_tools(
@@ -573,7 +572,6 @@ class ModelDispatcher(InferenceRouter):
             is_valid=_toolcall_has_output,
             capability=str(ModelCapability.TOOL_CALLS),
             task_id=request.task_id,
-            pool=request.pool,
         )
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:

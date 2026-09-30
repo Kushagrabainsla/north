@@ -811,7 +811,7 @@ def _list_agents_impl() -> None:
         _console.print(
             f"  [white]{a['name']:<16}[/white]  "
             f"[dim]{a['domain']:<12}[/dim]  "
-            f"[bright_black]{a['model_pool']}[/bright_black]"
+            f"[bright_black]{a.get('source', '')}[/bright_black]"
         )
     _console.print()
 
@@ -823,7 +823,6 @@ class _AgentScaffold:
     name: str
     domain: str
     description: str
-    model_pool: str
     accepts: list[str]
     agentic: bool
     system_prompt: str
@@ -857,7 +856,6 @@ def _write_agent_scaffold(agent_dir: Path, scaffold: _AgentScaffold) -> None:
             {
                 "agent": scaffold.name,
                 "domain": scaffold.domain,
-                "model_pool": scaffold.model_pool,
                 "accepts": scaffold.accepts,
                 "output_format": "structured_json",
                 "version": NORTH_VERSION,
@@ -872,8 +870,7 @@ def _write_agent_scaffold(agent_dir: Path, scaffold: _AgentScaffold) -> None:
     (agent_dir / "prompts" / "system.md").write_text(scaffold.system_prompt, encoding="utf-8")
     (agent_dir / "README.md").write_text(
         f"# {scaffold.name.title()} Agent\n\n{scaffold.description}\n\n"
-        f"**Domain:** {scaffold.domain}  \n**Pool:** {scaffold.model_pool}  "
-        f"\n**Accepts:** {', '.join(scaffold.accepts)}\n",
+        f"**Domain:** {scaffold.domain}  \n**Accepts:** {', '.join(scaffold.accepts)}\n",
         encoding="utf-8",
     )
 
@@ -883,7 +880,6 @@ def create_agent(
     name: str | None = typer.Option(None, "--name", help="Agent name (slug, lowercase)."),
     domain: str | None = typer.Option(None, "--domain", help="Domain (e.g. health, finance)."),
     description: str | None = typer.Option(None, "--description", help="One-line description."),
-    model_pool: str = typer.Option("fast_cheap", "--pool", help="Model pool: reasoning / fast_cheap / high_volume."),
     output_dir: Path | None = typer.Option(
         None,
         "--output-dir",
@@ -935,7 +931,6 @@ def create_agent(
                 "name": name,
                 "domain": domain,
                 "description": description,
-                "model_pool": model_pool,
                 "accepts": accepts,
             },
         )
@@ -954,7 +949,6 @@ def create_agent(
             name=name,
             domain=domain,
             description=description,
-            model_pool=model_pool,
             accepts=accepts,
             agentic=agentic,
             system_prompt=system_prompt,

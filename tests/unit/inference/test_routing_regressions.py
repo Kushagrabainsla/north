@@ -20,7 +20,7 @@ from inference.facts.store import ModelFactsStore
 from inference.provider_health import ProviderHealthTracker
 from inference.routing.availability import AvailabilityView, EntitlementLedger
 from inference.routing.chain import ChainWalk, Requirements, Skip
-from inference.routing.parts import profile_for, with_pool
+from inference.routing.parts import profile_for
 from inference.routing.router import ChainRouter, requirements_from
 
 _WHEN = datetime(2026, 9, 3, tzinfo=UTC)
@@ -222,29 +222,23 @@ class TestContextVersusPayload:
             )
 
 
-class TestModelGroup:
-    """`model_pool` is still in every agent config and in the create_agent tool."""
+class TestNoModelPool:
+    """An agent's `model_pool` never reached routing under the chain router, so it is gone (#48)."""
 
-    @pytest.mark.asyncio
-    async def test_fast_cheap_moves_a_part_off_its_quality_ranking(self, tmp_path) -> None:
-        router, _ = _router(
-            tmp_path,
-            {"cheap": _facts("cheap", 0.2), "dear": _facts("dear", 0.9)},
-            [Endpoint("cheap", "openrouter", "cheap", 1e-9, 1e-9), Endpoint("dear", "openrouter", "dear", 1e-5, 1e-5)],
-        )
-        needs = requirements_from(needs_tools=True)
-        assert await router.dispatch(component="coder", requirements=needs, call_fn=_call) == "openrouter:dear"
-        assert (
-            await router.dispatch(component="coder", requirements=needs, call_fn=_call, pool="fast_cheap")
-            == "openrouter:cheap"
-        )
+    def test_an_old_config_that_still_names_a_pool_loads(self, tmp_path) -> None:
+        from agents.models import AgentConfig
 
-    def test_the_default_pool_never_changes_which_quality_axis_a_part_uses(self) -> None:
-        """`reasoning` is the default in every agent config; it must be a no-op here."""
-        assert with_pool(profile_for("coder"), "reasoning").order_by == "coding_score"
+        path = tmp_path / "config.yaml"
+        path.write_text("agent: legacy\ndomain: general\nmodel_pool: fast_cheap\n", encoding="utf-8")
 
-    def test_reasoning_lifts_a_cheapest_first_part(self) -> None:
-        assert with_pool(profile_for("planner"), "reasoning").order_by == "intelligence_score"
+        assert AgentConfig.from_yaml(path).agent == "legacy"
+
+    def test_the_router_takes_no_pool(self) -> None:
+        import inspect
+
+        from inference.routing.router import ChainRouter
+
+        assert "pool" not in inspect.signature(ChainRouter.dispatch).parameters
 
 
 class TestRetryHint:

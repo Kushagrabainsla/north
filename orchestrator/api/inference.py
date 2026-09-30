@@ -45,7 +45,7 @@ class ModelPoolOut(BaseModel):
 
 @router.get("/inference/models", response_model=dict[str, ModelPoolOut])
 async def inference_models() -> dict[str, ModelPoolOut]:
-    """Current model pool state. A catalog view only - pools select nothing."""
+    """The models north can reach, by capability. A catalog view only: routing does not read it."""
     pools = _get_inference_router().models_by_capability()
     return {name: ModelPoolOut(name=pool.name, models=pool.models) for name, pool in pools.items()}
 

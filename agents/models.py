@@ -69,7 +69,6 @@ class AgentPayload(BaseModel):
     # what "an edit inside the task's folder" is measured against. Empty means
     # no folder was granted.
     granted_workspace: str = Field(default="", exclude=True)
-    model_pool: str = "reasoning"  # task-scoped model pool (reasoning, speed, fast_cheap, vision)
     # Server-selected execution shape. ``quick_readonly`` gets an efficiency
     # reminder after a small number of turns/tools, but that reminder is soft:
     # the agent may continue when evidence is still missing.
@@ -138,7 +137,6 @@ class AgentConfig(BaseModel):
 
     agent: str
     domain: str
-    model_pool: str | None = None
     similar_to: str | None = None
     accepts: list[str] = Field(default_factory=list)
     produces: list[str] = Field(default_factory=list)

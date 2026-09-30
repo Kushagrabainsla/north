@@ -11,7 +11,6 @@ from inference.models import (
     CompletionResponse,
 )
 from inference.provider import Provider
-from tests.unit.inference._catalog import publish_catalog
 
 
 class _DummyProvider(Provider):
@@ -134,45 +133,6 @@ async def test_concurrent_refresh_with_graceful_failure_retention(tmp_path):
     # Gemini model was retained despite refresh error
     assert ("groq", "qwen3.6-27b") in disp._registry
     assert ("gemini", "gemini-2.5-flash") in disp._registry
-
-
-@pytest.mark.asyncio
-async def test_a_pool_name_now_only_orders_the_chain(tmp_path):
-    """``model_pool`` survives on agent configs, but it no longer picks the members.
-
-    It is read as an ordering hint: "reasoning" asks for the strongest model,
-    "speed" for the cheapest. Both chains contain both models - which is the whole
-    change from pools, where asking for speed meant a different, smaller list.
-    """
-    strong = _make_info(
-        "claude-opus-5",
-        "zen",
-        frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
-        quality=0.95,
-        cost=1e-5,
-        ctx=400_000,
-    )
-    cheap = _make_info(
-        "groq-compound-mini",
-        "groq",
-        frozenset({ModelCapability.COMPLETION, ModelCapability.TOOL_CALLS}),
-        quality=0.40,
-        cost=0.0,
-        ctx=400_000,
-    )
-
-    disp = ModelDispatcher(
-        [_DummyProvider("zen", {"claude-opus-5": strong}), _DummyProvider("groq", {"groq-compound-mini": cheap})],
-        cooldowns_path=tmp_path / "cooldowns.json",
-        models_db_path=tmp_path / "models.db",
-    )
-    publish_catalog(disp)
-
-    reasoning = await disp.complete(CompletionRequest(prompt="design it", component="coder", pool="reasoning"))
-    assert reasoning.model_used == "claude-opus-5"
-
-    speed = await disp.complete(CompletionRequest(prompt="classify", component="router", pool="speed"))
-    assert speed.model_used == "groq-compound-mini"
 
 
 def test_models_by_capability_lists_every_capability(tmp_path):

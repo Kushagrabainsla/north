@@ -661,7 +661,6 @@ class AgenticLLMAgent(LLMAgent):
                 payload.task_id,
                 token_cb,
                 payload.exclude_models,
-                model_pool=payload.model_pool,
             )
         except ContextTooLargeError:
             compact_history(messages, keep_recent=COMPACT_KEEP_RECENT_OVERFLOW)
@@ -675,7 +674,6 @@ class AgenticLLMAgent(LLMAgent):
                 payload.task_id,
                 token_cb,
                 payload.exclude_models,
-                model_pool=payload.model_pool,
             )
 
     def _init_conversation(
@@ -817,11 +815,7 @@ class AgenticLLMAgent(LLMAgent):
         task_id: str,
         token_callback: Callable[[str], Awaitable[None]] | None,
         exclude_models: list[str] | None = None,
-        model_pool: str | None = None,
     ) -> Any:
-        # `model_pool` is not sent: an agent's pool has never reached routing
-        # under the chain router, and sending it now would move the coder to the
-        # cheapest model for bugfix and test tasks (#48). Kept for that decision.
         return await self._deps.inference_router.complete_with_tools(
             ToolCallRequest(
                 messages=messages,
@@ -1071,11 +1065,10 @@ class AgenticLLMAgent(LLMAgent):
             # The model chose `workspace`; the server-granted folder can only narrow.
             granted_workspace=narrow_workspace(payload.granted_workspace, workspace),
             # The sub-agent inherits the run's framing: the caller's context
-            # (conversation history / webhook data), the task's model pool, and any
+            # (conversation history / webhook data) and any
             # model-independence constraint. Without these it silently reverted to
             # defaults and lost the conversation it was delegated within.
             context=payload.context,
-            model_pool=payload.model_pool,
             execution_profile=payload.execution_profile,
             exclude_models=list(payload.exclude_models),
             delegation_depth=payload.delegation_depth + 1,

@@ -19,7 +19,7 @@ from tools.universal.use_flow import UseFlowTool
 class FakeAgent:
     name = "general"
     domain = "general"
-    config = SimpleNamespace(model_pool="reasoning")
+    config = SimpleNamespace()
 
     async def run(self, payload):
         return AgentResult(output="ready", summary="done", data={"value": "ready"})

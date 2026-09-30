@@ -31,7 +31,7 @@ from inference.failure import OutageCorroboration, Scope, classify, invalid_resp
 from inference.model_policy import model_matches
 from inference.routing.availability import AvailabilityView
 from inference.routing.chain import Candidate, ChainWalk, Requirements, context_of, narrow
-from inference.routing.parts import PartProfile, profile_for, with_pool, with_power
+from inference.routing.parts import PartProfile, profile_for, with_power
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +107,7 @@ class ChainRouter:
 
     # ---- selection ----
 
-    def chain_for(
-        self, component: str, requirements: Requirements, pool: str | None = None
-    ) -> tuple[list[Candidate], PartProfile]:
+    def chain_for(self, component: str, requirements: Requirements) -> tuple[list[Candidate], PartProfile]:
         """The chain for *component*, narrowed to what this call needs.
 
         Raises :class:`ContextTooLargeError` when models qualify on capability but
@@ -119,7 +117,6 @@ class ChainRouter:
         different fix, and is never reported as a context overflow.
         """
         profile = profile_for(component, self._profiles)
-        profile = with_pool(profile, pool)
         profile = with_power(profile, self._power() if self._power else None)
         full = self._only_pinned(self._catalog.chain_for(profile, self._demoted))
         eligible = narrow(
@@ -220,7 +217,6 @@ class ChainRouter:
         is_valid: Callable[[Any], bool] | None = None,
         capability: str | None = None,
         task_id: str | None = None,
-        pool: str | None = None,
     ) -> Any:
         """Walk the chain for *component* until one endpoint returns a usable answer.
 
@@ -229,7 +225,7 @@ class ChainRouter:
         rate-limited for a tenth of a second is not a reason to fail a call. The
         chain is rebuilt after the wait, because what is available has changed.
         """
-        result, walk, profile = await self._walk(component, requirements, call_fn, is_valid, capability, task_id, pool)
+        result, walk, profile = await self._walk(component, requirements, call_fn, is_valid, capability, task_id)
         if result is not _NO_RESULT:
             return result
 
@@ -237,9 +233,7 @@ class ChainRouter:
         if wait is not None and 0 < wait <= _MAX_INLINE_WAIT_SECONDS:
             logger.info("Every candidate is cooling down - waiting %.1fs and walking again", wait)
             await asyncio.sleep(wait + _WAIT_GRACE_SECONDS)
-            result, walk, profile = await self._walk(
-                component, requirements, call_fn, is_valid, capability, task_id, pool
-            )
+            result, walk, profile = await self._walk(component, requirements, call_fn, is_valid, capability, task_id)
             if result is not _NO_RESULT:
                 return result
 
@@ -256,10 +250,9 @@ class ChainRouter:
         is_valid: Callable[[Any], bool] | None,
         capability: str | None,
         task_id: str | None,
-        pool: str | None,
     ) -> tuple[Any, ChainWalk, PartProfile]:
         """One pass down the chain. Returns ``_NO_RESULT`` when it is exhausted."""
-        chain, profile = self.chain_for(component, requirements, pool)
+        chain, profile = self.chain_for(component, requirements)
         decision = RoutingDecision(
             part=profile.part,
             task_id=task_id,

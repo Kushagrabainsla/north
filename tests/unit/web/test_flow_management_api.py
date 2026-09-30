@@ -65,7 +65,7 @@ def _flow_yaml(name: str, status: str) -> str:
 class FakeAgent:
     name = "general"
     domain = "general"
-    config = SimpleNamespace(model_pool="reasoning", produces=[])
+    config = SimpleNamespace(produces=[])
 
     async def run(self, payload):
         return AgentResult(output="{}", summary="looked", data={}, tools_used=[])

@@ -3,7 +3,6 @@ You are writing the system prompt for a new north AI agent.
 Agent name: {name}
 Domain: {domain}
 Description: {description}
-Model pool: {model_pool}
 Tools: selected automatically from north's global catalog for each task
 Accepts task types: {accepts}
 

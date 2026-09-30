@@ -30,17 +30,6 @@ def test_config_loads(name: str) -> None:
     assert config.domain == "engineering"
 
 
-@pytest.mark.parametrize("name", ["architect", "coder", "researcher", "reviewer"])
-def test_implementation_agents_use_reasoning_pool(name: str) -> None:
-    """Engineering and reasoning tasks resolve to the reasoning model pool dynamically."""
-    from orchestrator.orchestrator import Orchestrator
-
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._north_settings = None
-    pool = orch._resolve_task_model_pool(domain="engineering")
-    assert pool == "reasoning"
-
-
 @pytest.mark.parametrize("name", ENGINEERING_AGENTS)
 def test_config_declares_produces(name: str) -> None:
     """Every agent must declare at least one artifact it produces."""

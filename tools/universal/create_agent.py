@@ -89,11 +89,6 @@ class CreateAgentTool(Tool):
                 "type": "string",
                 "description": "Agent domain: general, wellness, engineering, news, home, etc. Default: general.",
             },
-            "model_pool": {
-                "type": "string",
-                "enum": ["fast_cheap", "reasoning", "high_volume"],
-                "description": "Model tier to use. Default: fast_cheap (sufficient for most agents).",
-            },
             "accepts": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -183,7 +178,6 @@ class CreateAgentTool(Tool):
         name = (params.get("name") or "").strip().lower()
         description = (params.get("description") or "").strip()
         domain = (params.get("domain") or "general").strip().lower()
-        model_pool = (params.get("model_pool") or "fast_cheap").strip()
         raw_accepts = params.get("accepts") or []
         system_prompt = (params.get("system_prompt") or "").strip()
 
@@ -209,8 +203,6 @@ class CreateAgentTool(Tool):
                 success=False,
                 error="'system_prompt' (prompts/system.md content) is required for action=create.",
             )
-        if model_pool not in ("fast_cheap", "reasoning", "high_volume"):
-            model_pool = "fast_cheap"
 
         if self._agent_registry is not None and name in self._agent_registry.names():
             return ToolOutput(
@@ -248,7 +240,6 @@ class CreateAgentTool(Tool):
                     {
                         "agent": name,
                         "domain": domain,
-                        "model_pool": model_pool,
                         "accepts": accepts,
                         "output_format": "structured_json",
                         "version": "1.0.0",

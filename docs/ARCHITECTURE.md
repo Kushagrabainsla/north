@@ -676,7 +676,7 @@ POST   /orchestrator/jobs                -> create a job
 DELETE /orchestrator/jobs/{id}           -> cancel a job
 
 GET    /orchestrator/inference/costs     -> inference cost summary
-GET    /orchestrator/inference/models    -> current model pool state
+GET    /orchestrator/inference/models    -> the models north can reach, by capability
 
 GET    /orchestrator/tools/confidence    -> tool confidence scores per agent
 
@@ -740,7 +740,7 @@ Each agent is a self-contained folder dropped into `/agents`. The Orchestrator s
 /agents
   /coder
     agent.py              <- core logic (usually a thin AgenticLLMAgent/LLMAgent subclass)
-    config.yaml           <- declaration: agent, domain, model pool, accepted keywords
+    config.yaml           <- declaration: agent, domain, accepted keywords
     prompts/
       system.md           <- system prompt defining the agent's expertise
   /architect/  /reviewer/  /researcher/  /general/  /home/  /news_briefing/
@@ -751,7 +751,6 @@ Each agent is a self-contained folder dropped into `/agents`. The Orchestrator s
 ```yaml
 agent: coder
 domain: engineering
-model_pool: reasoning
 accepts:                   # routing keywords matched against the prompt
   - "code"
   - "implement"
@@ -981,7 +980,7 @@ A part that needs tools still needs tools at every setting. Under manual routing
 
 A request says what it is through its `component` label (`coder`, `planner`, `approval_decider`, ...), and the router picks the model from that part's profile (`inference/routing/parts.py`) plus what the request itself needs (tools, JSON, context size). There is no per-call priority: `PoolPriority` and the pool router it steered were removed (b28c64d, #48).
 
-An agent's configured `model_pool`, and the pool the orchestrator's tiering assigns a task (`orchestrator/tiering.py`), are not sent to routing today. The router can take a `pool` as an ordering hint (`with_pool`), but wiring it in would put the coder on the cheapest model for bugfix and test tasks, so it waits on a decision (#48).
+Agents carry no model pool either. An agent's `model_pool` setting, and the pool the orchestrator's tiering gave each task, never reached routing under the chain router; both were removed (#48). An old `config.yaml` that still names one loads as before.
 
 ### 8.5 Automatic Fallback Chain
 
@@ -1357,7 +1356,7 @@ north job cancel {id}
 # Inference
 north inference costs --period week
 north inference costs --agent finance
-north inference models                   # current model pool state + active providers
+north inference models                   # models by capability + active providers
 
 # Metrics
 north metrics                            # per-agent task counts, success rates, costs, p50/p95 durations
@@ -1998,7 +1997,7 @@ In a second terminal while north is running:
 ```bash
 north tasks          # list active tasks (empty when nothing is running)
 north ledger         # recent ledger entries
-north inference models  # current model pool state
+north inference models  # models by capability
 ```
 
 #### Stop

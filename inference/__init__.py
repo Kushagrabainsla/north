@@ -21,7 +21,6 @@ from inference.exceptions import (
 )
 from inference.factory import build_router
 from inference.models import (
-    POOL_NAMES,
     CompletionRequest,
     CompletionResponse,
     CostSummary,
@@ -63,7 +62,6 @@ __all__ = [
     "ModelGroup",
     "ModelRateLimitedError",
     "OpenRouterRouter",
-    "POOL_NAMES",
     "PaymentRequiredError",
     "ProviderAuthError",
     "ProviderUnavailableError",

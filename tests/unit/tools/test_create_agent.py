@@ -42,7 +42,6 @@ def test_agent_tool_safely_serializes_untrusted_text(tmp_path: Path) -> None:
             "name": "safe_agent",
             "description": 'Ends a docstring """ and must not become Python.',
             "domain": "quality: review",
-            "model_pool": "reasoning",
             "accepts": ['quoted "value"', "colon: value", "line\nbreak"],
             "system_prompt": "Review carefully.",
         }

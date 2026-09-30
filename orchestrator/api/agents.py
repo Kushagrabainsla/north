@@ -25,7 +25,6 @@ from utils.prompts import load_prompt
 class AgentInfo(BaseModel):
     name: str
     domain: str
-    model_pool: str = "reasoning"
     accepts: list[str] = []
     source: str = "builtin"
     deletable: bool = False
@@ -52,7 +51,6 @@ async def list_agents() -> list[AgentInfo]:
         AgentInfo(
             name=a.name,
             domain=a.domain,
-            model_pool=a.config.model_pool or "reasoning",
             accepts=a.config.accepts,
             source=registry.source_of(a.name),
             deletable=registry.source_of(a.name) == "personal",
@@ -106,7 +104,6 @@ class AgentCreateRequest(BaseModel):
     name: str
     domain: str
     description: str = ""
-    model_pool: str = "fast_cheap"
     accepts: list[str] = []
 
 
@@ -126,7 +123,6 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
         name=body.name,
         domain=body.domain,
         description=body.description or "A domain specialist.",
-        model_pool=body.model_pool,
         accepts=", ".join(body.accepts) if body.accepts else "any",
     )
 

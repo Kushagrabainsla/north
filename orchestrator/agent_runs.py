@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     status          TEXT NOT NULL,
     prompt          TEXT NOT NULL DEFAULT '',
     workspace       TEXT NOT NULL DEFAULT '',
-    model_pool      TEXT NOT NULL DEFAULT '',
     delegation_depth INTEGER NOT NULL DEFAULT 0,
     started_at      TEXT NOT NULL,
     completed_at    TEXT,
@@ -87,7 +86,6 @@ class AgentRun:
     status: str
     prompt: str
     workspace: str
-    model_pool: str
     delegation_depth: int
     started_at: datetime
     completed_at: datetime | None
@@ -128,8 +126,8 @@ class AgentRunStore:
                 """
                 INSERT INTO agent_runs
                     (run_id, task_id, parent_run_id, agent, attempt, status, prompt,
-                     workspace, model_pool, delegation_depth, started_at)
-                VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
+                     workspace, delegation_depth, started_at)
+                VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET status='running', error=NULL
                 """,
                 (
@@ -140,7 +138,6 @@ class AgentRunStore:
                     payload.attempt,
                     payload.prompt,
                     payload.workspace,
-                    payload.model_pool,
                     payload.delegation_depth,
                     now,
                 ),
@@ -310,7 +307,6 @@ class AgentRunStore:
             status=row["status"],
             prompt=row["prompt"],
             workspace=row["workspace"],
-            model_pool=row["model_pool"],
             delegation_depth=row["delegation_depth"],
             started_at=datetime.fromisoformat(row["started_at"]),
             completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,

@@ -1203,10 +1203,7 @@ async def dashboard() -> dict[str, Any]:
         "attention": [card.model_dump(mode="json") for card in current_services().require("approval_store").pending()],
         "active_tasks": [task.model_dump(mode="json") for task in active],
         "conversations": [_conversation_payload(item) for item in conversations],
-        "agents": [
-            {"name": agent.name, "domain": agent.domain, "model_pool": agent.config.model_pool or "reasoning"}
-            for agent in agents
-        ],
+        "agents": [{"name": agent.name, "domain": agent.domain} for agent in agents],
         "jobs": [
             {
                 "job_id": job.job_id,

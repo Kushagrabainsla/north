@@ -363,7 +363,7 @@ recurrence consistently. It is not required for the first slice.
 
 ### 5.8 Agents and Insights
 
-The Agents index shows what each agent handles and which model pool it uses.
+The Agents index shows what each agent handles and where it comes from.
 Agent detail combines recent runs and tool-confidence data.
 
 Insights combines operational information that is valuable but not part of the

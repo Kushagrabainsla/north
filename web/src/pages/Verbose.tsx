@@ -1494,7 +1494,6 @@ export function Memory() {
 interface Agent {
   name: string;
   domain: string;
-  model_pool: string;
   accepts: string[];
   source: string;
   deletable: boolean;
@@ -1589,7 +1588,7 @@ export function Agents() {
             </div>
             <h2>{agent.name}</h2>
             <p>
-              {agent.domain} · {agent.model_pool} · {agent.source}
+              {agent.domain} · {agent.source}
             </p>
             <div className="tag-list">
               {agent.accepts.slice(0, 5).map((item) => (

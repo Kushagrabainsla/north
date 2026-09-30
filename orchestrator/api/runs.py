@@ -20,7 +20,6 @@ class AgentRunOut(BaseModel):
     status: str
     prompt: str
     workspace: str
-    model_pool: str
     delegation_depth: int
     started_at: datetime.datetime
     completed_at: datetime.datetime | None
