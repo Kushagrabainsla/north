@@ -1209,9 +1209,12 @@ safe: the fields exist precisely because a human is meant to read them.
 It is a property of the card, not a list of agent names - a list only protects
 what somebody remembered to add to it.
 
-An action allowed without asking still leaves a **resolved card** behind, naming
-the rule that allowed it. Something north did unasked has to be visible
-afterwards.
+An action decided without asking, allowed or refused, still leaves a **resolved
+card** behind, naming who decided (`Card.decided_by`: the safe list, your past
+answer, the memory decider, yolo, north's fixed rules) and why. Something north
+did unasked has to be visible afterwards. You can overrule any of them
+(`POST /orchestrator/approval/overrule`): the card keeps both decisions, memory
+learns yours, and nothing re-runs.
 
 **Authority never comes from the model's arguments.** "Inside the workspace"
 (tier 5) is measured against `granted_workspace` - the task's folder as the

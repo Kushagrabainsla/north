@@ -58,6 +58,7 @@ from cli.formatting import (
     summarize_diff,
     wordmark,
 )
+from cli.tui_text import decision_lines as _decision_lines
 from cli.tui_text import estimated_tokens as _estimated_tokens
 from cli.tui_text import requested_context_document as _requested_context_document
 from cli.tui_text import slash_argument as _slash_argument
@@ -446,6 +447,8 @@ _MODEL_SAMPLE_SIZE = 4
 
 # How many prompts the on-disk input history keeps.
 _MAX_REMEMBERED_INPUTS = 1000
+# How many recent decisions /decisions lists.
+_DECISIONS_SHOWN = 8
 
 
 class NorthApp(App[None]):
@@ -2135,6 +2138,22 @@ class NorthApp(App[None]):
         agents = await self._fetch_agents()
         self._log("  [bright_black]agents[/bright_black]  " + (", ".join(agents) or "none"))
 
+    async def _slash_decisions(self, text: str) -> None:
+        """Recent decisions: who decided, why, and the memory it used, as the approvals page shows them."""
+        try:
+            async with self._http() as c:
+                cards = _json_list(await c.get(f"{self.base_url}/web/api/approvals", headers=self.headers, timeout=5.0))
+        except Exception as exc:
+            self._log(f"  [red]error fetching decisions: {exc}[/red]")
+            return
+        decided = [card for card in cards if card.get("status") != "pending"][:_DECISIONS_SHOWN]
+        self._log("  [cyan]◆[/cyan]  [white]recent decisions[/white]  [bright_black]overrule on the web[/bright_black]")
+        if not decided:
+            self._log("    [bright_black]Nothing decided yet.[/bright_black]")
+        for card in decided:
+            for line in _decision_lines(card):
+                self._log(line)
+
     async def _slash_queue(self, text: str) -> None:
         try:
             async with self._http() as c:
@@ -2656,6 +2675,7 @@ _SLASH_HANDLERS: dict[str, Callable[[NorthApp, str], Awaitable[None]]] = {
     "/power": NorthApp._slash_power,
     "/autonomy": NorthApp._slash_autonomy,
     "/agents": NorthApp._slash_agents,
+    "/decisions": NorthApp._slash_decisions,
     "/queue": NorthApp._slash_queue,
     "/jobs": NorthApp._slash_jobs,
     "/context": NorthApp._slash_context,

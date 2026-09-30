@@ -14,7 +14,7 @@ import pytest
 
 from approval.approval_memory import ApprovalMemory
 from approval.decider import COMPONENT, MemoryDecider
-from approval.models import ApprovalDecision, Card, CardType
+from approval.models import ApprovalDecision, Card, CardType, MemoryKind, MemoryRef
 from approval.policy import Action, ActionKind
 from inference.models import CompletionRequest, CompletionResponse
 from inference.routing.parts import Order, profile_for
@@ -72,7 +72,8 @@ async def test_an_approval_carries_its_reason_and_the_memory_it_used() -> None:
 
     assert answer.decision == ApprovalDecision.APPROVED
     assert answer.reason == "it is Tuesday"
-    assert answer.memory_used == ("fact: You deploy only on weekdays",)
+    assert answer.decided_by == "memory_decider"
+    assert answer.memory_used == (MemoryRef(kind=MemoryKind.FACT, text="You deploy only on weekdays"),)
 
 
 async def test_a_rejection_is_a_decision_too() -> None:
@@ -101,8 +102,10 @@ async def test_it_reads_facts_rules_and_your_past_decisions_for_that_agent(tmp_p
     assert "Never push on Fridays." in prompt
     assert "npm run build" in prompt
     assert "op=push" not in prompt, "only decisions for the same agent bear on this one"
-    assert answer.memory_used[0].startswith("past decision: you approved")
-    assert answer.memory_used[1] == "judgement rules"
+    decision, rules = answer.memory_used
+    assert decision.kind is MemoryKind.PAST_DECISION and decision.text.startswith("you approved")
+    assert decision.ref, "a past decision links to its row on the Memory page"
+    assert rules.kind is MemoryKind.JUDGEMENT_RULES
 
 
 async def test_agent_text_is_fenced_as_untrusted_and_cannot_close_the_fence() -> None:

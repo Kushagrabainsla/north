@@ -12,7 +12,9 @@ from __future__ import annotations
 import pytest
 
 from approval.continuation import CardContinuations
-from approval.models import Card, CardField, CardType
+from approval.interaction import UserInteraction
+from approval.models import Card, CardField, CardType, DecidedBy, MemoryKind, MemoryRef
+from approval.policy import Answer
 from approval.store import ApprovalStore
 from orchestrator.api_context import ApiServices, bind_services
 from web import api as web_api
@@ -141,3 +143,33 @@ async def test_filtered_candidates_are_visible_and_reversible(tmp_path) -> None:
         assert len(await web_api.filtered_candidates()) == 1
         await web_api.unfilter_candidate("cand-1")
         assert await web_api.filtered_candidates() == []
+
+
+async def test_every_card_says_who_decided_it_in_words(wiring) -> None:
+    """#30: the page, TUI and Telegram all show the same label from here."""
+    _, store = wiring
+    decided = _guard_rail()
+    store.add(decided)
+    store.resolve(decided.id, "rejected", decided_by=DecidedBy.MEMORY_DECIDER)
+    store.overrule(decided.id, "approved", chosen_option="Approve")
+    store.add(_prepared())
+
+    by_title = {c["title"]: c for c in await web_api.approvals()}
+
+    assert by_title["Run migration?"]["decided_by_label"] == "you"
+    assert by_title["Run migration?"]["overruled"]["decided_by_label"] == "the memory decider"
+    assert by_title["Application ready"]["decided_by_label"] == ""
+
+
+async def test_each_memory_a_decision_used_is_named_in_words(wiring) -> None:
+    _, store = wiring
+    used = (MemoryRef(kind=MemoryKind.PAST_DECISION, text="you approved 'x'", ref="fp1"),)
+    answer = Answer("approved", "Approve", "you always allow this", DecidedBy.MEMORY_DECIDER, used)
+    UserInteraction(store).record_resolved(_guard_rail(), answer)
+
+    [card] = await web_api.approvals()
+
+    assert card["decided_by_label"] == "the memory decider"
+    assert card["memory_used"] == [
+        {"kind": "past_decision", "text": "you approved 'x'", "ref": "fp1", "label": "Your past decision"}
+    ]

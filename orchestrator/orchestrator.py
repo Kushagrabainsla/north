@@ -17,6 +17,7 @@ from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, UserInteraction
 from approval.approval_memory import ApprovalMemory
 from approval.decisions import DecisionLog
+from approval.models import DecidedBy
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
@@ -588,7 +589,9 @@ class Orchestrator:
         if card.status != "pending":
             raise ValueError(f"Approval card {card_id!r} is already resolved ({card.status}).")
 
-        if not self._approval_store.resolve(card_id, decision, chosen_option=chosen_option, values=values):
+        if not self._approval_store.resolve(
+            card_id, decision, chosen_option=chosen_option, values=values, decided_by=DecidedBy.YOU
+        ):
             raise ValueError(f"Approval card {card_id!r} could not be resolved.")
         # Which fields the user changed, by name only. Whether the work was
         # accepted as offered or corrected is the useful signal; the values
@@ -596,7 +599,39 @@ class Orchestrator:
         # the resolved card. Nothing below writes them to the ledger.
         proposed = card.field_values()
         edited = sorted(name for name, value in card.merge_response(values).items() if value != proposed.get(name))
+        await self._learn_your_decision(card, decision, chosen_option, reason=reason, edited=edited)
 
+    async def overrule_approval(self, card_id: str, decision: str, chosen_option: str = "", reason: str = "") -> Card:
+        """Replace a decision north took for you with yours, and teach memory.
+
+        Nothing re-runs: what north already did, or refused, stays done. Memory
+        learns your decision exactly as it learns an answer you gave on a
+        waiting card, so next time north decides your way (CODING_STYLE §7.3).
+
+        Raises:
+            LookupError: card_id does not correspond to an issued card.
+            ValueError: the card is not a decision north took, or *decision*
+                does not fit it.
+        """
+        card = self._approval_store.get(card_id)
+        if card is None:
+            raise LookupError(f"Unknown approval card {card_id!r}.")
+        overruled = self._approval_store.overrule(card_id, decision, chosen_option=chosen_option, reason=reason)
+        await self._learn_your_decision(card, decision, chosen_option, reason=reason, overruled=True)
+        return overruled
+
+    async def _learn_your_decision(
+        self,
+        card: Card,
+        decision: str,
+        chosen_option: str,
+        *,
+        reason: str = "",
+        edited: list[str] | None = None,
+        overruled: bool = False,
+    ) -> None:
+        """Record a decision of yours where north learns from it. The one path answers and overrules share."""
+        edited = edited or []
         # Log the decision as an example of the user's taste, before anything
         # else. Only cards with a source: a guard-rail is a question about one
         # action in one task, not evidence about what should be proposed.
@@ -622,12 +657,13 @@ class Orchestrator:
             ledger_input = (
                 f"question: {card.message}\noptions: {', '.join(card.options)}"
                 if card.message
-                else f"card_id={card_id}"
+                else f"card_id={card.id}"
             )
             # Learn from this human decision so auto mode can replay it later -
             # under the card's action key, which is what the policy recalls by.
             if self._approval_memory is not None and card.type == CardType.APPROVAL and card.action_key:
                 self._approval_memory.record(card.agent, card.action_key, decision)
+        event = "approval_overruled" if overruled else "approval_responded"
         await self._journal.record(
             card.task_id,
             action,
@@ -636,20 +672,22 @@ class Orchestrator:
             agent=card.agent,
             input=ledger_input,
             output=f"chosen_option={chosen_option or decision}",
-            event="approval_responded",
+            event=event,
             payload={
-                "card_id": card_id,
+                "card_id": card.id,
                 "decision": decision,
                 "chosen_option": chosen_option,
                 "edited_fields": edited,
+                "overruled": overruled,
             },
             agent_output={
-                "card_id": card_id,
+                "card_id": card.id,
                 "decision": decision,
                 "chosen_option": chosen_option,
                 "edited_fields": edited,
                 "reason": reason,
                 "source": card.source,
+                "overruled": overruled,
             },
         )
 

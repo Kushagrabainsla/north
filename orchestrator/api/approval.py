@@ -1,4 +1,4 @@
-"""Receive an approval decision and steer a running task."""
+"""Receive an approval decision, overrule one north took, and steer a running task."""
 
 from __future__ import annotations
 
@@ -47,6 +47,30 @@ async def respond_approval(body: ApprovalResponse) -> None:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
+class OverruleRequest(BaseModel):
+    card_id: str
+    decision: str
+    chosen_option: str = ""
+    reason: str = Field(default="", max_length=2000)
+
+
+@router.post("/approval/overrule")
+async def overrule_approval(body: OverruleRequest) -> dict[str, Any]:
+    """Replace a decision north took for you with yours. Memory learns it; nothing re-runs."""
+    try:
+        card = await _get_orchestrator().overrule_approval(
+            card_id=body.card_id,
+            decision=body.decision,
+            chosen_option=body.chosen_option,
+            reason=body.reason,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return card.model_dump(mode="json")
 
 
 class SteerRequest(BaseModel):

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from utils.ids import generate_id
 from utils.secrets import REDACTED, contains_secret, is_secret_field_name, redact
@@ -35,6 +35,74 @@ class ApprovalDecision(StrEnum):
     # paused, failed, or killed as stuck). Not a decision - the question simply
     # stopped mattering, and the card must not keep asking.
     TASK_ENDED = "task_ended"
+
+
+class DecidedBy(StrEnum):
+    """Who decided a card. Every surface shows it beside the decision (CODING_STYLE §7.3)."""
+
+    YOU = "you"
+    SAFE_LIST = "safe_list"
+    REPLAY = "replay"
+    MEMORY_DECIDER = "memory_decider"
+    YOLO = "yolo"
+    # North's own fixed rules: writing its own notes, refusing a catastrophic shape.
+    NORTH = "north"
+
+    @property
+    def label(self) -> str:
+        return _DECIDED_BY_LABELS[self]
+
+
+_DECIDED_BY_LABELS: dict[DecidedBy, str] = {
+    DecidedBy.YOU: "you",
+    DecidedBy.SAFE_LIST: "the safe list",
+    DecidedBy.REPLAY: "your past answer",
+    DecidedBy.MEMORY_DECIDER: "the memory decider",
+    DecidedBy.YOLO: "yolo",
+    DecidedBy.NORTH: "north's fixed rules",
+}
+
+
+class MemoryKind(StrEnum):
+    """What kind of memory a decision used."""
+
+    FACT = "fact"
+    EPISODE = "episode"
+    PAST_DECISION = "past_decision"
+    JUDGEMENT_RULES = "judgement_rules"
+    PROFILE = "profile"
+
+    @property
+    def label(self) -> str:
+        return _MEMORY_KIND_LABELS[self]
+
+
+_MEMORY_KIND_LABELS: dict[MemoryKind, str] = {
+    MemoryKind.FACT: "Fact",
+    MemoryKind.EPISODE: "Past task",
+    MemoryKind.PAST_DECISION: "Your past decision",
+    MemoryKind.JUDGEMENT_RULES: "Your judgement rules",
+    MemoryKind.PROFILE: "Your profile",
+}
+
+
+class MemoryRef(BaseModel):
+    """One piece of memory a decision used, so the page can show it and link to it."""
+
+    kind: MemoryKind
+    text: str = ""
+    # Where it lives, when it has an address: a past decision's fingerprint.
+    ref: str = ""
+
+
+class PriorDecision(BaseModel):
+    """North's decision on a card, kept when you overrule it."""
+
+    status: str
+    chosen_option: str = ""
+    decided_by: str = ""
+    reason: str = ""
+    memory_used: list[MemoryRef] = Field(default_factory=list)
 
 
 class CardFieldType(StrEnum):
@@ -109,11 +177,21 @@ class Card(BaseModel):
     # the server when the card is raised; empty for a card that asks about no
     # action, which is then never learned from.
     action_key: str = ""
-    # Why north decided this card without you, and what it knew that led there -
-    # the facts and past decisions the memory decider read. Empty for a card you
-    # decided yourself.
+    # Who decided it (a `DecidedBy`), why, and what memory led there. Empty while
+    # the card waits. `reason` is also yours when you give one.
+    decided_by: str = ""
     reason: str = ""
-    memory_used: list[str] = Field(default_factory=list)
+    memory_used: list[MemoryRef] = Field(default_factory=list)
+    # North's decision, when you overruled it. The card keeps both.
+    overruled: PriorDecision | None = None
+
+    @field_validator("memory_used", mode="before")
+    @classmethod
+    def _read_plain_memory(cls, value: Any) -> Any:
+        """Cards stored before memory was structured held plain "kind: text" strings."""
+        if not isinstance(value, list):
+            return value
+        return [_memory_ref_from_text(item) if isinstance(item, str) else item for item in value]
 
     @classmethod
     def new(
@@ -239,3 +317,18 @@ def _coerce(field: CardField, raw: Any) -> Any:
     if field.type == CardFieldType.SELECT:
         return raw if raw in field.options else field.value
     return raw
+
+
+_LEGACY_MEMORY_PREFIXES: dict[str, MemoryKind] = {
+    "fact": MemoryKind.FACT,
+    "episode": MemoryKind.EPISODE,
+    "past decision": MemoryKind.PAST_DECISION,
+    "judgement rules": MemoryKind.JUDGEMENT_RULES,
+    "your profile": MemoryKind.PROFILE,
+}
+
+
+def _memory_ref_from_text(text: str) -> MemoryRef:
+    head, _, rest = text.partition(":")
+    kind = _LEGACY_MEMORY_PREFIXES.get(head.strip(), MemoryKind.FACT)
+    return MemoryRef(kind=kind, text=rest.strip() if head.strip() in _LEGACY_MEMORY_PREFIXES else text)

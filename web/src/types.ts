@@ -167,6 +167,31 @@ export interface Approval {
   // registered for its source. "Submits the application" and "saves a draft"
   // must not be identical-looking buttons.
   next_step?: string;
+  // Who decided it, why, and what memory led there. Empty while it waits.
+  decided_by: string;
+  decided_by_label: string;
+  reason: string;
+  memory_used: MemoryRef[];
+  // North's decision, when you overruled it.
+  overruled: PriorDecision | null;
+}
+
+export interface MemoryRef {
+  kind: "fact" | "episode" | "past_decision" | "judgement_rules" | "profile";
+  // The kind in words, from the API.
+  label: string;
+  text: string;
+  // Where it lives, when it has an address: a past decision's fingerprint.
+  ref: string;
+}
+
+export interface PriorDecision {
+  status: string;
+  chosen_option: string;
+  decided_by: string;
+  decided_by_label: string;
+  reason: string;
+  memory_used: MemoryRef[];
 }
 
 export interface DashboardData {

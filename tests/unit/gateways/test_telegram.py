@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -295,3 +295,31 @@ async def test_an_empty_allowlist_lets_nobody_in(monkeypatch: pytest.MonkeyPatch
 
     gw._submit_task.assert_not_awaited()
     gw._respond_approval.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_decisions_shows_who_decided_why_and_the_memory_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+    gw = TelegramGateway()
+    gw._send_message = AsyncMock()  # type: ignore[method-assign]
+    cards = [
+        {"title": "Waiting", "status": "pending"},
+        {
+            "title": "Deploy",
+            "status": "rejected",
+            "decided_by_label": "the memory decider",
+            "reason": "it is Friday",
+            "memory_used": [{"kind": "fact", "label": "Fact", "text": "no deploys on Fridays", "ref": ""}],
+            "overruled": None,
+        },
+    ]
+    gw._http.get = AsyncMock(return_value=MagicMock(status_code=200, json=lambda: cards))  # type: ignore[method-assign]
+
+    await gw._process_message({"message_id": 1, "chat": {"id": 12345}, "text": "/decisions"})
+
+    reply = gw._send_message.call_args[0][1]
+    assert "Deploy" in reply and "Waiting" not in reply
+    assert "by the memory decider" in reply and "it is Friday" in reply
+    assert "Fact: no deploys on Fridays" in reply

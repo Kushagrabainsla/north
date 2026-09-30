@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from approval.models import CardType
+from approval.models import CardType, DecidedBy, MemoryKind
 from approval.unattended_rules import KINDS as RULE_KINDS
 from bootstrap.onboarding import _discover_files, _load_progress, run_bootstrap_if_needed
 from config.approval_mode import ApprovalMode
@@ -601,7 +601,7 @@ async def web_task_detail(task_id: str) -> dict[str, Any]:
 
 @router.get("/approvals")
 async def approvals(limit: int = 100) -> list[dict[str, Any]]:
-    """Every card, with what deciding it will actually cause.
+    """Every card, with what deciding it will actually cause and who decided it.
 
     `next_step` is the part the page cannot work out for itself. Since resolving
     a card runs the step its creator registered, "this submits the application"
@@ -620,8 +620,21 @@ async def approvals(limit: int = 100) -> list[dict[str, Any]]:
     for card in cards:
         item = card.model_dump(mode="json")
         item["next_step"] = "" if continuations is None else continuations.description_for(card.source)
+        _label_decision(item)
+        if item["overruled"] is not None:
+            _label_decision(item["overruled"])
         payload.append(item)
     return payload
+
+
+def _label_decision(decision: dict[str, Any]) -> None:
+    """Add who decided, and each memory's kind, in words, so every surface says them the same way."""
+    try:
+        decision["decided_by_label"] = DecidedBy(decision["decided_by"]).label
+    except ValueError:
+        decision["decided_by_label"] = ""
+    for ref in decision["memory_used"]:
+        ref["label"] = MemoryKind(ref["kind"]).label
 
 
 @router.get("/routing/decisions")

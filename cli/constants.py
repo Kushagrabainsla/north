@@ -177,6 +177,7 @@ _SLASH_COMMANDS: dict[str, str] = {
     "/clear": "clear the conversation log",
     "/cost": "show session tokens and cost",
     "/agents": "list registered agents",
+    "/decisions": "recent decisions: who decided, why, and the memory it used",
     "/power": "show or set the model-selection dial (eco|cruise|sport)",
     "/autonomy": "list the approval modes, or set one (/autonomy <mode>)",
     "/quit": "exit north",

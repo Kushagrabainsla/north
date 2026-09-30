@@ -38,6 +38,7 @@ _TASK_POLL_MAX_ATTEMPTS = 90  # 90 × 1s = 90s max wait for task completion
 _MAX_RETRIES = 3
 
 _MAX_LISTED_TASKS = 5
+_MAX_LISTED_DECISIONS = 5
 
 
 def _mode_label(mode: str) -> str:
@@ -45,6 +46,27 @@ def _mode_label(mode: str) -> str:
     if mode == ApprovalMode.YOLO:
         return f"⚠️ **YOLO** `{mode}` — every approval is yes"
     return f"`{mode}`"
+
+
+def _decision_text(card: dict) -> str:
+    """One decided card in Telegram Markdown, from the same fields the approvals page reads."""
+    chosen = f' "{card["chosen_option"]}"' if card.get("type") == "question" and card.get("chosen_option") else ""
+    who = f" by {card['decided_by_label']}" if card.get("decided_by_label") else ""
+    lines = [f"• **{card.get('title', '')}**: {card.get('status', '')}{chosen}{who}", *_why_text(card)]
+    prior = card.get("overruled")
+    if prior:
+        by = f" by {prior['decided_by_label']}" if prior.get("decided_by_label") else ""
+        lines.append(f"  You overruled north, which had {prior.get('status', '')}{by}")
+        lines += [f"  {line}" for line in _why_text(prior)]
+    return "\n".join(lines)
+
+
+def _why_text(decision: dict) -> list[str]:
+    lines = [f"  _{decision['reason']}_"] if decision.get("reason") else []
+    for ref in decision.get("memory_used") or []:
+        text = f": {ref['text']}" if ref.get("text") else ""
+        lines.append(f"  · {ref.get('label', ref.get('kind', ''))}{text}")
+    return lines
 
 
 @dataclass(frozen=True)
@@ -486,6 +508,7 @@ class TelegramGateway:
             "  • `/status` — View active tasks & orchestrator status\n"
             "  • `/cancel` — Cancel the currently running task\n"
             f"  • `/autonomy` — View or set approval mode (`/autonomy {'|'.join(ApprovalMode)}`)\n"
+            "  • `/decisions` — Recent decisions: who decided, why, and the memory it used\n"
             "  • `/limits` — Show provider/model rate-limit & cooldown status\n"
             "  • `/help` — Show this command reference",
         )
@@ -556,6 +579,23 @@ class TelegramGateway:
             await self._reply(chat, "❌ Failed to update approval mode.")
             return
         await self._reply(chat, f"✅ Approval mode: {_mode_label(updated['autonomy'])}")
+
+    async def _command_decisions(self, chat: _Reply, args: list[str]) -> None:
+        """Recent decisions as the approvals page shows them: who decided, why, and the memory it used."""
+        try:
+            resp = await self._http.get(f"{self._orchestrator_base}/web/api/approvals", headers=_headers())
+        except httpx.RequestError as exc:
+            await self._reply(chat, f"❌ Connection error: {exc}")
+            return
+        if resp.status_code != 200:
+            await self._reply(chat, "⚠️ Could not read decisions from north.")
+            return
+        decided = [card for card in resp.json() if card.get("status") != "pending"][:_MAX_LISTED_DECISIONS]
+        if not decided:
+            await self._reply(chat, "🧭 Nothing decided yet.")
+            return
+        body = "\n\n".join(_decision_text(card) for card in decided)
+        await self._reply(chat, within_telegram_limit(f"🧭 **Recent decisions**\n\n{body}\n\nOverrule one on the web."))
 
     async def _run_task(self, chat: _Reply, text: str) -> None:
         """Submit a message to north and reply with whatever it produces."""
@@ -654,4 +694,5 @@ _COMMAND_HANDLERS: dict[str, Callable[[TelegramGateway, _Reply, list[str]], Awai
     "/cancel": TelegramGateway._command_cancel,
     "/stop": TelegramGateway._command_cancel,
     "/autonomy": TelegramGateway._command_autonomy,
+    "/decisions": TelegramGateway._command_decisions,
 }

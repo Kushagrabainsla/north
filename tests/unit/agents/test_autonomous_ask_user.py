@@ -48,7 +48,7 @@ def _ask(agent: AgenticLLMAgent, question: str = "Which DB?", options=("Postgres
 @pytest.mark.asyncio
 async def test_autonomous_answers_from_memory_and_keeps_the_reason(tmp_path: Path) -> None:
     store = ApprovalStore()
-    decider = deciding(ApprovalDecision.ANSWERED, "Postgres", "you use Postgres everywhere", ("fact: uses Postgres",))
+    decider = deciding(ApprovalDecision.ANSWERED, "Postgres", "you use Postgres everywhere", ("uses Postgres",))
     agent = _agent(tmp_path, ApprovalMode.AUTONOMOUS, decider, store)
 
     out = json.loads(await _ask(agent))
@@ -56,7 +56,8 @@ async def test_autonomous_answers_from_memory_and_keeps_the_reason(tmp_path: Pat
     assert out == {"success": True, "answered": True, "answer": "Postgres"}
     [card] = store.all()
     assert card.reason == "you use Postgres everywhere"
-    assert card.memory_used == ["fact: uses Postgres"]
+    assert card.decided_by == "memory_decider"
+    assert [ref.text for ref in card.memory_used] == ["uses Postgres"]
     assert not store.pending()
 
 

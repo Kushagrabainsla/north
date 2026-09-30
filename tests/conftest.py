@@ -185,10 +185,12 @@ class StubDecider:
 
 
 def deciding(decision: str, chosen: str = "", reason: str = "fits the user", used: tuple[str, ...] = ()):
-    """A `StubDecider` that always decides *decision*."""
+    """A `StubDecider` that always decides *decision*; *used* are facts it cites."""
+    from approval.models import DecidedBy, MemoryKind, MemoryRef
     from approval.policy import Answer
 
-    return StubDecider(Answer(decision, chosen, reason, used))
+    refs = tuple(MemoryRef(kind=MemoryKind.FACT, text=text) for text in used)
+    return StubDecider(Answer(decision, chosen, reason, DecidedBy.MEMORY_DECIDER, refs))
 
 
 def approval_policy(

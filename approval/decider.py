@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from approval.models import ApprovalDecision, Card
+from approval.models import ApprovalDecision, Card, DecidedBy, MemoryKind, MemoryRef
 from approval.policy import Action, Answer
 from inference.models import CompletionRequest, PoolPriority
 from memory import ContextDocument
@@ -61,7 +61,7 @@ class _Item:
 
     id: str
     text: str
-    recorded_as: str
+    recorded_as: MemoryRef
 
 
 @dataclass(frozen=True)
@@ -152,25 +152,35 @@ class MemoryDecider:
         recalled = await self._memory.recall(principal, query, fact_limit=_FACT_LIMIT, episode_limit=_EPISODE_LIMIT)
         rules = (await self._memory.read_document(ContextDocument.JUDGEMENT_RULES)).strip()
 
-        items = [_Item(f"F{n}", fact, f"fact: {fact}") for n, fact in enumerate(recalled.facts, 1)]
-        items += [_Item(f"E{n}", episode, f"episode: {episode}") for n, episode in enumerate(recalled.episodes, 1)]
-        items += [
-            _Item(f"D{n}", line, f"past decision: {line}")
-            for n, line in enumerate(self._past_decisions(subject.agent), 1)
+        items = [
+            _Item(f"F{n}", fact, MemoryRef(kind=MemoryKind.FACT, text=fact)) for n, fact in enumerate(recalled.facts, 1)
         ]
-        if rules:
-            items.append(_Item("R1", f"Your judgement rules:\n{rules[:_DOCUMENT_CHARS]}", "judgement rules"))
         items += [
-            _Item(f"P{n}", f"Your profile:\n{document[:_DOCUMENT_CHARS]}", "your profile")
+            _Item(f"E{n}", episode, MemoryRef(kind=MemoryKind.EPISODE, text=episode))
+            for n, episode in enumerate(recalled.episodes, 1)
+        ]
+        items += [_Item(f"D{n}", ref.text, ref) for n, ref in enumerate(self._past_decisions(subject.agent), 1)]
+        if rules:
+            text = f"Your judgement rules:\n{rules[:_DOCUMENT_CHARS]}"
+            items.append(_Item("R1", text, MemoryRef(kind=MemoryKind.JUDGEMENT_RULES)))
+        items += [
+            _Item(f"P{n}", f"Your profile:\n{document[:_DOCUMENT_CHARS]}", MemoryRef(kind=MemoryKind.PROFILE))
             for n, document in enumerate(recalled.documents, 1)
         ]
         return items
 
-    def _past_decisions(self, agent: str) -> list[str]:
+    def _past_decisions(self, agent: str) -> list[MemoryRef]:
         if self._approval_memory is None:
             return []
         rows = [row for row in self._approval_memory.all_decisions() if row.get("agent") == agent]
-        return [f"you {row['decision']} {row['signature']!r} ({row['count']}x)" for row in rows[:_PAST_DECISION_LIMIT]]
+        return [
+            MemoryRef(
+                kind=MemoryKind.PAST_DECISION,
+                text=f"you {row['decision']} {row['signature']!r} ({row['count']}x)",
+                ref=str(row["fingerprint"]),
+            )
+            for row in rows[:_PAST_DECISION_LIMIT]
+        ]
 
 
 def _action_facts(action: Action) -> str:
@@ -215,14 +225,14 @@ def _read_reply(reply: Any, subject: _Subject, items: list[_Item]) -> Answer | N
 
     if subject.kind != "question":
         verdict = _ACTION_DECISIONS.get(decision)
-        return Answer(verdict, "", reason, used) if verdict is not None else None
+        return Answer(verdict, "", reason, DecidedBy.MEMORY_DECIDER, used) if verdict is not None else None
 
     if decision != "answer":
         return None
     option = str(reply.get("option") or "").strip()
     if subject.options:
         option = next((choice for choice in subject.options if choice.lower() == option.lower()), "")
-    return Answer(ApprovalDecision.ANSWERED, option, reason, used) if option else None
+    return Answer(ApprovalDecision.ANSWERED, option, reason, DecidedBy.MEMORY_DECIDER, used) if option else None
 
 
 def _cited(raw: Any) -> list[str]:

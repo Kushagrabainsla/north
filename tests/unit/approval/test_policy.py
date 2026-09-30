@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from approval.approval_memory import ApprovalMemory
-from approval.models import ApprovalDecision, Card, CardType
+from approval.models import ApprovalDecision, Card, CardType, DecidedBy
 from approval.policy import Action, ActionKind, Answer, ApprovalPolicy, Verdict
 from approval.unattended import UnattendedPolicy
 from config.approval_mode import ApprovalMode
@@ -54,13 +54,14 @@ async def test_a_read_only_action_never_asks(mode: ApprovalMode) -> None:
 
 async def test_autonomous_lets_the_decider_approve_even_a_destructive_command() -> None:
     """The operator declined a hard-danger floor: the decider has the last word."""
-    decider = deciding(ApprovalDecision.APPROVED, reason="you clean this cache weekly", used=("fact: cleans cache",))
+    decider = deciding(ApprovalDecision.APPROVED, reason="you clean this cache weekly", used=("cleans cache",))
 
     ruling = await policy(ApprovalMode.AUTONOMOUS, decider=decider).rule(shell("rm -rf ~/.cache/north"))
 
     assert ruling.verdict is Verdict.ALLOW
-    assert ruling.rule == "memory decider: you clean this cache weekly"
-    assert ruling.memory_used == ("fact: cleans cache",)
+    assert ruling.decided_by == DecidedBy.MEMORY_DECIDER
+    assert ruling.rule == "you clean this cache weekly"
+    assert [ref.text for ref in ruling.memory_used] == ["cleans cache"]
 
 
 async def test_autonomous_refuses_what_the_decider_rejects() -> None:
@@ -90,7 +91,7 @@ async def test_autonomous_uses_the_safe_list_before_the_model() -> None:
     ruling = await policy(ApprovalMode.AUTONOMOUS, decider=decider).rule(shell("pytest tests/unit"))
 
     assert ruling.verdict is Verdict.ALLOW
-    assert ruling.rule.startswith("safe list")
+    assert ruling.decided_by == DecidedBy.SAFE_LIST
     assert not decider.asked
 
 
@@ -155,7 +156,8 @@ async def test_auto_allows_an_allowlisted_command() -> None:
     ruling = await policy(ApprovalMode.SAFE).rule(shell("pytest tests/unit"))
 
     assert ruling.verdict is Verdict.ALLOW
-    assert ruling.rule == "safe list: test, lint or build command"
+    assert ruling.decided_by == DecidedBy.SAFE_LIST
+    assert ruling.rule == "test, lint or build command"
 
 
 async def test_interactive_asks_for_the_same_command() -> None:
@@ -233,7 +235,7 @@ async def test_yolo_answers_a_question_yes() -> None:
 
 
 async def test_autonomous_lets_the_memory_decider_answer() -> None:
-    decided = Answer(ApprovalDecision.ANSWERED, "Postgres", "you use Postgres", ("fact: uses Postgres",))
+    decided = Answer(ApprovalDecision.ANSWERED, "Postgres", "you use Postgres", DecidedBy.MEMORY_DECIDER)
 
     assert await policy(ApprovalMode.AUTONOMOUS, decider=StubDecider(decided)).answer(question()) == decided
 
@@ -254,7 +256,7 @@ async def test_an_undecided_question_is_left_to_you() -> None:
 async def test_yolo_says_yes_to_every_action() -> None:
     ruling = await policy(ApprovalMode.YOLO).rule(shell("rm -rf build"))
 
-    assert ruling.allowed and ruling.rule.startswith("yolo")
+    assert ruling.allowed and ruling.decided_by == DecidedBy.YOLO
 
 
 # ── Precedence between tiers ─────────────────────────────────────────────────

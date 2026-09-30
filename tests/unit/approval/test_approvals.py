@@ -125,7 +125,7 @@ async def test_the_approved_request_reaches_run() -> None:
 async def test_autonomous_leaves_nothing_pending_and_keeps_every_reason(decision: str, runs: bool) -> None:
     """#29: in autonomous no card is ever pending, and every decision has a stored reason."""
     store = ApprovalStore()
-    decider = deciding(decision, reason="fits how you work", used=("fact: works in ~/src",))
+    decider = deciding(decision, reason="fits how you work", used=("works in ~/src",))
     tool = bind_approvals(_Recorder(), ApprovalMode.AUTONOMOUS, store=store, decider=decider)
 
     await tool.execute(ToolInput(params={"target": "x"}))
@@ -134,8 +134,9 @@ async def test_autonomous_leaves_nothing_pending_and_keeps_every_reason(decision
     assert not store.pending()
     [card] = store.all()
     assert card.status == decision
-    assert card.reason == "memory decider: fits how you work"
-    assert card.memory_used == ["fact: works in ~/src"]
+    assert card.decided_by == "memory_decider"
+    assert card.reason == "fits how you work"
+    assert [ref.text for ref in card.memory_used] == ["works in ~/src"]
 
 
 @pytest.mark.asyncio

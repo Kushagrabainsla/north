@@ -19,7 +19,7 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -48,12 +48,14 @@ _UNANSWERED = 0.3
 
 def _fake_orchestrator(store: ApprovalStore, memory: ApprovalMemory) -> SimpleNamespace:
     """The attributes `Orchestrator.respond_approval` reads, and nothing else."""
-    return SimpleNamespace(
+    fake = SimpleNamespace(
         _approval_store=store,
         _approval_memory=memory,
         _decision_log=None,
         _journal=SimpleNamespace(record=AsyncMock()),
     )
+    fake._learn_your_decision = MethodType(Orchestrator._learn_your_decision, fake)
+    return fake
 
 
 async def _answer_first_card(store: ApprovalStore, memory: ApprovalMemory, decision: str) -> None:

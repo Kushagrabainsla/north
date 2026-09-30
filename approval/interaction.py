@@ -217,7 +217,7 @@ class UserInteraction:
     def record_resolved(self, card: Card, answer: Answer) -> None:
         """Store *card* already decided - an action north took, or answered, without asking - and why."""
         self._store.add(card.model_copy(update={"reason": answer.reason, "memory_used": list(answer.memory_used)}))
-        self._store.resolve(card.id, answer.decision, chosen_option=answer.chosen_option)
+        self._store.resolve(card.id, answer.decision, chosen_option=answer.chosen_option, decided_by=answer.decided_by)
 
     async def _await(self, card: Card) -> Card:
         """Wait for the user's answer, however long it takes (CODING_STYLE §13.5)."""
@@ -286,6 +286,7 @@ class UserInteraction:
             update={
                 "status": answer.decision,
                 "chosen_option": answer.chosen_option,
+                "decided_by": answer.decided_by,
                 "reason": answer.reason,
                 "memory_used": list(answer.memory_used),
             }
@@ -314,8 +315,9 @@ class UserInteraction:
         if ruling.verdict is Verdict.ASK:
             return None
         if ruling.allowed:
-            return Answer(ApprovalDecision.APPROVED, approve_option(card.options), ruling.rule, ruling.memory_used)
-        return Answer(ApprovalDecision.REJECTED, "", ruling.rule, ruling.memory_used)
+            chosen = approve_option(card.options)
+            return Answer(ApprovalDecision.APPROVED, chosen, ruling.rule, ruling.decided_by, ruling.memory_used)
+        return Answer(ApprovalDecision.REJECTED, "", ruling.rule, ruling.decided_by, ruling.memory_used)
 
     async def _emit(self, card: Card, event: CardEvent) -> None:
         if self._stream is None or not card.task_id:

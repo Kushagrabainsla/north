@@ -438,7 +438,7 @@ Two consequences worth keeping:
 - **YOLO**: never asks; every approval is yes and every question gets the affirmative answer.
 
 **Why:** each mode must mean one thing the user can predict.
-**How to apply:** old mode names stay as aliases; autonomous logs every decision with its reason and the memory it used.
+**How to apply:** old mode names stay as aliases; autonomous logs every decision with its reason and the memory it used. Every decided card names who decided it. You can overrule any decision north took: the card keeps both, memory learns yours, and nothing re-runs.
 
 **One layer per concern.** Approvals, execution, memory, capabilities, inference and channels each have one layer with one entry point; nothing outside it re-implements or bypasses it.
 **Why:** fewer parts; every behaviour has one place to read and fix.

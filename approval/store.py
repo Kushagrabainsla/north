@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from approval.continuation import CardContinuations, CardOutcome
-from approval.models import ApprovalDecision, Card, CardType
+from approval.models import ApprovalDecision, Card, CardType, DecidedBy, PriorDecision
 from utils.db import open_db_connection
 
 logger = logging.getLogger(__name__)
@@ -223,6 +223,7 @@ class ApprovalStore:
         status: str,
         chosen_option: str = "",
         values: dict[str, Any] | None = None,
+        decided_by: str = "",
     ) -> bool:
         """Resolve a pending card and wake any waiting coroutines.
 
@@ -240,6 +241,8 @@ class ApprovalStore:
         if card is None or card.status != _PENDING:
             return False
         update: dict[str, Any] = {"status": status, "chosen_option": chosen_option}
+        if decided_by:
+            update["decided_by"] = decided_by
         if card.fields:
             update["response"] = card.merge_response(values)
         resolved = card.model_copy(update=update).scrubbed()
@@ -265,6 +268,45 @@ class ApprovalStore:
                 )
             )
         return True
+
+    def overrule(self, card_id: str, status: str, *, chosen_option: str = "", reason: str = "") -> Card:
+        """Replace a decision north took for you with yours, and return the card.
+
+        The card keeps north's decision beside yours (`Card.overruled`). Nothing
+        is woken and nothing follows: what north already did, or refused, stays
+        done. Overruling teaches memory; it does not re-run (CODING_STYLE §7.3).
+
+        Raises:
+            LookupError: no card with that id.
+            ValueError: the card is not a decision north took, or the new
+                decision does not fit the card or repeats north's.
+        """
+        card = self._cards.get(card_id)
+        if card is None:
+            raise LookupError(f"Unknown approval card {card_id!r}.")
+        if card.status == _PENDING or card.decided_by in ("", DecidedBy.YOU):
+            raise ValueError("Only a decision north took for you can be overruled.")
+        _check_fits(card, status, chosen_option)
+        prior = PriorDecision(
+            status=card.status,
+            chosen_option=card.chosen_option,
+            decided_by=card.decided_by,
+            reason=card.reason,
+            memory_used=card.memory_used,
+        )
+        overruled = card.model_copy(
+            update={
+                "status": status,
+                "chosen_option": chosen_option,
+                "decided_by": DecidedBy.YOU,
+                "reason": reason,
+                "memory_used": [],
+                "overruled": prior,
+            }
+        ).scrubbed()
+        self._cards[card_id] = overruled
+        self._write(overruled)
+        return overruled
 
     async def wait_for_decision(self, card_id: str) -> Card | None:
         """Block until the card is resolved - however long that takes.
@@ -313,3 +355,17 @@ class ApprovalStore:
         cards = list(self._cards.values())
         cards.sort(key=lambda c: c.created_at, reverse=True)
         return cards[:limit]
+
+
+def _check_fits(card: Card, status: str, chosen_option: str) -> None:
+    """Raise ValueError unless *status* is a decision this card can take, and differs from the current one."""
+    if card.type is CardType.QUESTION:
+        if status != ApprovalDecision.ANSWERED or not chosen_option.strip():
+            raise ValueError("A question is overruled with an answer.")
+        if chosen_option.strip().lower() == card.chosen_option.strip().lower():
+            raise ValueError("That is the answer north already gave.")
+        return
+    if status not in (ApprovalDecision.APPROVED, ApprovalDecision.REJECTED):
+        raise ValueError("An approval is overruled with approved or rejected.")
+    if status == card.status:
+        raise ValueError("That is the decision north already took.")

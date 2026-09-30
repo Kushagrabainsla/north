@@ -26,11 +26,13 @@ import {
 import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { hhmm } from "../schedule";
 import { useDialog } from "../dialog";
+import { Link, useSearchParams } from "react-router-dom";
 import type {
   Approval,
   Artifact,
   CardField,
   LedgerEntry,
+  MemoryRef,
   RoutingDecision,
   RoutingSkip,
 } from "../types";
@@ -574,6 +576,20 @@ export function Approvals() {
     });
     await resource.reload();
   };
+  const overrule = async (
+    card: Approval,
+    decision: string,
+    chosen_option: string,
+    reason: string,
+  ) => {
+    await post("/orchestrator/approval/overrule", {
+      card_id: card.id,
+      decision,
+      chosen_option,
+      reason,
+    });
+    await resource.reload();
+  };
   if (resource.loading) return <Loading />;
   const pending = (resource.data || []).filter(
     (card) => card.status === "pending",
@@ -643,20 +659,197 @@ export function Approvals() {
       <h2 className="section-title">Resolved</h2>
       <div className="table-list">
         {history.map((card) => (
-          <div className="table-row" key={card.id}>
-            <div className="row-main">
-              <b>{card.title}</b>
-              <small>
-                {card.agent} · {timeAgo(card.created_at)}
-              </small>
-            </div>
-            <Status value={card.status} />
-          </div>
+          <DecisionRow
+            key={card.id}
+            card={card}
+            onOverrule={(d, o, r) => overrule(card, d, o, r)}
+          />
         ))}
       </div>
     </div>
   );
 }
+
+export function memoryLabel(ref: MemoryRef): string {
+  const label = ref.label || ref.kind;
+  return ref.text ? `${label}: ${ref.text}` : label;
+}
+
+// Where on the Memory page a piece of memory lives, so a decision can be traced
+// back to what it read - and that memory corrected or forgotten there.
+export function memoryLink(ref: MemoryRef): string {
+  const params = new URLSearchParams();
+  if (ref.kind === "fact") params.set("tab", "facts");
+  if (ref.kind === "episode") params.set("tab", "episodes");
+  if (ref.kind === "past_decision") params.set("tab", "approvals");
+  if (ref.kind === "judgement_rules" || ref.kind === "profile") {
+    params.set("tab", "documents");
+    params.set(
+      "doc",
+      ref.kind === "profile" ? "user.md" : "judgement_rules.md",
+    );
+  }
+  const find = ref.kind === "past_decision" ? ref.ref : ref.text;
+  if (find) params.set("find", find);
+  return `/memory?${params.toString()}`;
+}
+
+function approveLabel(options: string[]): string {
+  return (
+    options.find((option) =>
+      /^(approve|apply|run|yes|allow|proceed)$/i.test(option),
+    ) ||
+    options[0] ||
+    "Approve"
+  );
+}
+
+function DecisionDetail({
+  label,
+  reason,
+  memory,
+}: {
+  label: string;
+  reason: string;
+  memory: MemoryRef[];
+}) {
+  if (!label && !reason) return null;
+  return (
+    <div className="decision-detail">
+      <small>
+        {label && `Decided by ${label}`}
+        {label && reason && ": "}
+        {reason}
+      </small>
+      {memory.length > 0 && (
+        <ul className="decision-memory">
+          {memory.map((ref, index) => (
+            <li key={index}>
+              <Link to={memoryLink(ref)}>{memoryLabel(ref)}</Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// A decided card: who decided, why, and what it read - and, for a decision
+// north took, a way to overrule it. Overruling teaches memory so north decides
+// your way next time; it cannot undo what already happened, and says so.
+function DecisionRow({
+  card,
+  onOverrule,
+}: {
+  card: Approval;
+  onOverrule: (
+    decision: string,
+    chosen_option: string,
+    reason: string,
+  ) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  const northDecided = Boolean(card.decided_by) && card.decided_by !== "you";
+  const question = card.type === "question";
+  const flipped = card.status === "approved" ? "rejected" : "approved";
+  const submit = async () => {
+    setError("");
+    try {
+      if (question) await onOverrule("answered", answer.trim(), reason.trim());
+      else
+        await onOverrule(
+          flipped,
+          flipped === "approved" ? approveLabel(card.options) : "",
+          reason.trim(),
+        );
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const prior = card.overruled;
+  return (
+    <div className="decision-row">
+      <div className="table-row">
+        <div className="row-main">
+          <b>{card.title}</b>
+          <small>
+            {card.agent} · {timeAgo(card.created_at)}
+            {question && card.chosen_option && ` · "${card.chosen_option}"`}
+          </small>
+        </div>
+        <Status value={card.status} />
+      </div>
+      <DecisionDetail
+        label={card.decided_by_label}
+        reason={card.reason}
+        memory={card.memory_used || []}
+      />
+      {prior && (
+        <div className="decision-overruled">
+          <small>
+            You overruled north, which had {prior.status}
+            {prior.chosen_option && ` "${prior.chosen_option}"`}.
+          </small>
+          <DecisionDetail
+            label={prior.decided_by_label}
+            reason={prior.reason}
+            memory={prior.memory_used || []}
+          />
+        </div>
+      )}
+      {northDecided && !open && (
+        <button className="ghost-button" onClick={() => setOpen(true)}>
+          Overrule
+        </button>
+      )}
+      {open && (
+        <div className="overrule-form">
+          <p className="muted">
+            North will decide your way next time. What it already did, or
+            refused, stays done.
+          </p>
+          {question && (
+            <input
+              placeholder="Your answer"
+              value={answer}
+              onChange={(e) => setAnswer(e.target.value)}
+            />
+          )}
+          <input
+            placeholder="Why (optional)"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <div className="card-actions">
+            <button
+              className="primary-button"
+              disabled={question && !answer.trim()}
+              onClick={submit}
+            >
+              {question
+                ? "Answer instead"
+                : flipped === "approved"
+                  ? "Should have approved"
+                  : "Should have rejected"}
+            </button>
+            <button className="ghost-button" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+          </div>
+          {error && <ErrorNotice message={error} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Scrolls the memory a decision link points at into view.
+const reveal = (element: HTMLElement | null) =>
+  element?.scrollIntoView({ block: "center" });
 
 // Only what the agent-deletion prompt counts: the queued work an agent owns.
 interface Job {
@@ -732,7 +925,7 @@ interface ApprovalDecision {
 // What north replays instead of asking, once autonomy is turned up. Shown so it
 // can be checked before it is trusted, and forgotten one row at a time - a
 // decision that cannot be withdrawn is not consent.
-function ApprovalMemoryPanel() {
+function ApprovalMemoryPanel({ find = "" }: { find?: string }) {
   const resource = useResource<ApprovalDecision[]>(
     "/web/api/memory/approvals",
     10000,
@@ -760,13 +953,17 @@ function ApprovalMemoryPanel() {
       <p className="muted memory-note">
         Every time you approve or reject an action, north records it against a
         fingerprint of that action and replays your decision when a matching one
-        comes up. This is what autonomous mode runs on.
+        comes up. Safe and autonomous modes replay these before anything else.
       </p>
       {resource.loading ? (
         <Loading />
       ) : rows.length ? (
         rows.map((row) => (
-          <div className="memory-row" key={row.fingerprint}>
+          <div
+            className={`memory-row${row.fingerprint === find ? " memory-found" : ""}`}
+            key={row.fingerprint}
+            ref={row.fingerprint === find ? reveal : undefined}
+          >
             <div className="memory-main">
               <b>{row.signature}</b>
               <small>
@@ -1054,6 +1251,18 @@ export function Memory() {
     docs[0],
     (value) => typeof value === "string" && docs.includes(value),
   );
+  // A link from a decision opens the tab (and document) holding the memory it
+  // used, and marks the row.
+  const [params] = useSearchParams();
+  const find = params.get("find") || "";
+  useEffect(() => {
+    const wantedTab = params.get("tab");
+    if (wantedTab && MEMORY_TABS.some(([name]) => name === wantedTab))
+      setTab(wantedTab as MemoryTab);
+    const wantedDoc = params.get("doc");
+    if (wantedDoc && docs.includes(wantedDoc)) setDoc(wantedDoc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
   const resource = useResource<ContextDoc>(`/orchestrator/context/${doc}`);
   const facts = useResource<any[]>("/web/api/memory/facts", 10000);
   const [draft, setDraft] = useState<string | null>(null);
@@ -1233,7 +1442,11 @@ export function Memory() {
                 <Loading />
               ) : (
                 (facts.data || []).map((fact) => (
-                  <article className="fact-row" key={fact.id}>
+                  <article
+                    className={`fact-row${fact.content === find ? " memory-found" : ""}`}
+                    key={fact.id}
+                    ref={fact.content === find ? reveal : undefined}
+                  >
                     <div>
                       <b>{fact.content}</b>
                       <small>
@@ -1271,7 +1484,7 @@ export function Memory() {
       )}
 
       {tab === "episodes" && <EpisodesPanel />}
-      {tab === "approvals" && <ApprovalMemoryPanel />}
+      {tab === "approvals" && <ApprovalMemoryPanel find={find} />}
       {tab === "rules" && <SafeActionsPanel />}
       {onDocuments && <Bootstrap embedded />}
     </div>

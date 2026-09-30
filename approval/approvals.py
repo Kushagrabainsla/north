@@ -111,7 +111,7 @@ class Approvals:
             decision, chosen = ApprovalDecision.APPROVED, approve_option(list(request.options))
         else:
             decision, chosen = ApprovalDecision.REJECTED, ""
-        answer = Answer(decision, chosen, ruling.rule, ruling.memory_used)
+        answer = Answer(decision, chosen, ruling.rule, ruling.decided_by, ruling.memory_used)
         self._interaction.record_resolved(self._card(request, task_id), answer)
 
     @staticmethod

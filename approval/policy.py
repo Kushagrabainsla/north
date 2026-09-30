@@ -27,7 +27,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from approval.models import ApprovalDecision
+from approval.models import ApprovalDecision, DecidedBy, MemoryRef
 from approval.unattended import forbidden_reason
 from config.approval_mode import YES_ANSWER, ApprovalMode, approve_option
 
@@ -134,7 +134,8 @@ class Ruling:
 
     verdict: Verdict
     rule: str
-    memory_used: tuple[str, ...] = ()
+    decided_by: str = ""
+    memory_used: tuple[MemoryRef, ...] = ()
 
     @property
     def allowed(self) -> bool:
@@ -148,7 +149,8 @@ class Answer:
     decision: str
     chosen_option: str
     reason: str
-    memory_used: tuple[str, ...] = ()
+    decided_by: str
+    memory_used: tuple[MemoryRef, ...] = ()
 
 
 class Decider(Protocol):
@@ -185,24 +187,24 @@ class ApprovalPolicy:
         # 1. Reads nothing and changes nothing. True in every mode - this is what
         #    "ask" already means by "read-only actions run freely".
         if action.read_only or not action.mutating:
-            return Ruling(Verdict.ALLOW, "read-only")
+            return Ruling(Verdict.ALLOW, "read-only", DecidedBy.NORTH)
 
         # 1b. North writing its own notes. Asking about these would stall every
         #     unattended run that writes a handoff or a briefing, in every mode.
         if action.kind is ActionKind.FILE_EDIT and action.in_north_scratch:
-            return Ruling(Verdict.ALLOW, "north's own scratch space")
+            return Ruling(Verdict.ALLOW, "north's own scratch space", DecidedBy.NORTH)
 
         # 2. Modes that never ask. The operator has explicitly declined a
         #    hard-danger floor in both.
         if mode is ApprovalMode.YOLO:
-            return Ruling(Verdict.ALLOW, "yolo: yes to everything")
+            return Ruling(Verdict.ALLOW, "yes to everything", DecidedBy.YOLO)
         if mode is ApprovalMode.AUTONOMOUS:
             return await self._autonomous(action)
 
         # 3. A handful of catastrophic shapes are refused rather than asked
         #    about, below autonomous. Not a floor - autonomous passed above.
         if action.obviously_destructive:
-            return Ruling(Verdict.REFUSE, "recognised as catastrophic")
+            return Ruling(Verdict.REFUSE, "recognised as catastrophic", DecidedBy.NORTH)
 
         # 4. Work handed over for review is never auto-decided below autonomous.
         #    Checked before every learned tier: the fields are the thing a human
@@ -233,7 +235,7 @@ class ApprovalPolicy:
         mode = self.mode_provider()
         if mode is ApprovalMode.YOLO:
             chosen = approve_option(card.options) if card.options else YES_ANSWER
-            return Answer(ApprovalDecision.ANSWERED, chosen, "yolo: yes to everything")
+            return Answer(ApprovalDecision.ANSWERED, chosen, "yes to everything", DecidedBy.YOLO)
         if mode is ApprovalMode.AUTONOMOUS and self.decider is not None:
             return await self.decider.answer(card)
         return None
@@ -252,7 +254,7 @@ class ApprovalPolicy:
                 return recalled
         if self.decider is not None and (answer := await self.decider.rule(action)) is not None:
             verdict = Verdict.ALLOW if answer.decision == ApprovalDecision.APPROVED else Verdict.REFUSE
-            return Ruling(verdict, f"memory decider: {answer.reason}", answer.memory_used)
+            return Ruling(verdict, answer.reason, DecidedBy.MEMORY_DECIDER, answer.memory_used)
         return Ruling(Verdict.ASK, "the memory decider could not decide")
 
     def _safe_subset(self, action: Action) -> Ruling | None:
@@ -268,19 +270,19 @@ class ApprovalPolicy:
         if forbidden_reason(action):
             return None
         if action.kind is ActionKind.SHELL_COMMAND and self.unattended.approves_command(action.command):
-            return Ruling(Verdict.ALLOW, "safe list: test, lint or build command")
+            return Ruling(Verdict.ALLOW, "test, lint or build command", DecidedBy.SAFE_LIST)
         if action.kind is ActionKind.GIT and self.unattended.approves_git(action.operation, action.args):
-            return Ruling(Verdict.ALLOW, "safe list: local-only git")
+            return Ruling(Verdict.ALLOW, "local-only git", DecidedBy.SAFE_LIST)
         if action.kind is ActionKind.DEVICE and self.unattended.approves_device(action.operation):
-            return Ruling(Verdict.ALLOW, "safe list: reversible device toggle")
+            return Ruling(Verdict.ALLOW, "reversible device toggle", DecidedBy.SAFE_LIST)
         if self.unattended.approves_self_message(action.operation):
-            return Ruling(Verdict.ALLOW, "safe list: message to you")
+            return Ruling(Verdict.ALLOW, "message to you", DecidedBy.SAFE_LIST)
         if (
             action.kind is ActionKind.FILE_EDIT
             and action.path is not None
             and self.unattended.approves_edit(action.path, action.workspace or None)
         ):
-            return Ruling(Verdict.ALLOW, "safe list: edit inside the task workspace")
+            return Ruling(Verdict.ALLOW, "edit inside the task workspace", DecidedBy.SAFE_LIST)
         return None
 
     def _recall(self, action: Action) -> Ruling | None:
@@ -289,7 +291,7 @@ class ApprovalPolicy:
             return None
         recalled = self.approval_memory.recall(action.agent, action.describe())
         if recalled == "approved":
-            return Ruling(Verdict.ALLOW, "replay: you approved this action before")
+            return Ruling(Verdict.ALLOW, "you approved this action before", DecidedBy.REPLAY)
         if recalled == "rejected":
-            return Ruling(Verdict.REFUSE, "replay: you rejected this action before")
+            return Ruling(Verdict.REFUSE, "you rejected this action before", DecidedBy.REPLAY)
         return None
