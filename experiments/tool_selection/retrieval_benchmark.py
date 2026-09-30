@@ -149,9 +149,7 @@ async def dense_ranks(queries: list[str], documents: dict[str, str]) -> list[lis
 
 def _adaptive_k(prompt: str) -> int:
     """Choose a wider set from observable multi-step language only."""
-    multi_signal = bool(
-        re.search(r"\b(and|then|before|after|also)\b", prompt.lower())
-    )
+    multi_signal = bool(re.search(r"\b(and|then|before|after|also)\b", prompt.lower()))
     return 8 if multi_signal else 5
 
 
@@ -207,10 +205,7 @@ def evaluate_strategy(
 
 def render_report(results: list[StrategyResult], docs: dict[str, ToolDoc], cases: list[EvalCase]) -> str:
     full_chars = sum(doc.schema_chars for doc in docs.values())
-    one_line_catalog = "\n".join(
-        f"- {doc.name}: {doc.description.split('. ')[0].strip()}"
-        for doc in docs.values()
-    )
+    one_line_catalog = "\n".join(f"- {doc.name}: {doc.description.split('. ')[0].strip()}" for doc in docs.values())
     name_catalog = ", ".join(sorted(docs))
     lines = [
         "North tool-selection benchmark",

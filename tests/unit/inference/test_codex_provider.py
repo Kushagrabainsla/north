@@ -47,11 +47,13 @@ class _LineResponse:
 @pytest.mark.asyncio
 async def test_codex_stream_keepalives_do_not_reset_progress_watchdog(monkeypatch) -> None:
     monkeypatch.setattr("inference.providers.openai_codex.SSE_CHUNK_TIMEOUT_SECONDS", 0.1)
-    response = _LineResponse([
-        (0, 'data: {"type":"response.in_progress"}'),
-        (0.04, ': keepalive'),
-        (0.08, 'data: {"type":"response.in_progress"}'),
-    ])
+    response = _LineResponse(
+        [
+            (0, 'data: {"type":"response.in_progress"}'),
+            (0.04, ": keepalive"),
+            (0.08, 'data: {"type":"response.in_progress"}'),
+        ]
+    )
 
     with pytest.raises(InferenceError, match="stream stalled"):
         _ = [event async for event in _aiter_response_events(response)]
@@ -60,16 +62,20 @@ async def test_codex_stream_keepalives_do_not_reset_progress_watchdog(monkeypatc
 @pytest.mark.asyncio
 async def test_codex_stream_model_output_resets_progress_watchdog(monkeypatch) -> None:
     monkeypatch.setattr("inference.providers.openai_codex.SSE_CHUNK_TIMEOUT_SECONDS", 0.1)
-    response = _LineResponse([
-        (0, 'data: {"type":"response.created"}'),
-        (0.04, 'data: {"type":"response.output_text.delta","delta":"hi"}'),
-        (0.04, 'data: {"type":"response.completed"}'),
-    ])
+    response = _LineResponse(
+        [
+            (0, 'data: {"type":"response.created"}'),
+            (0.04, 'data: {"type":"response.output_text.delta","delta":"hi"}'),
+            (0.04, 'data: {"type":"response.completed"}'),
+        ]
+    )
 
     events = [event async for event in _aiter_response_events(response)]
 
     assert [event["type"] for event in events] == [
-        "response.created", "response.output_text.delta", "response.completed"
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
     ]
 
 

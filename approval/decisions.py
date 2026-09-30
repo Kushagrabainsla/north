@@ -93,6 +93,7 @@ def ensure_decisions_table(conn: Any) -> None:
         )
         conn.execute("DROP TABLE card_decisions")
 
+
 _FILTERED_SCHEMA = """
 CREATE TABLE IF NOT EXISTS filtered_candidates (
     id          TEXT NOT NULL PRIMARY KEY,

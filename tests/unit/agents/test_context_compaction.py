@@ -190,9 +190,7 @@ async def test_quick_task_uses_deterministic_reduction_without_model_call() -> N
                 {
                     "role": "assistant",
                     "content": "",
-                    "tool_calls": [
-                        {"id": f"call_{i}", "function": {"name": "read_file", "arguments": "{}"}}
-                    ],
+                    "tool_calls": [{"id": f"call_{i}", "function": {"name": "read_file", "arguments": "{}"}}],
                 },
                 {"role": "tool", "tool_call_id": f"call_{i}", "content": "noise\n" * 300},
             ]

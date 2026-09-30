@@ -115,8 +115,7 @@ def timezone_names() -> list[str]:
     hidden_prefixes = ("posix/", "right/", "SystemV/")
     hidden_names = {"Factory", "localtime", "posixrules"}
     return sorted(
-        name for name in available_timezones()
-        if name not in hidden_names and not name.startswith(hidden_prefixes)
+        name for name in available_timezones() if name not in hidden_names and not name.startswith(hidden_prefixes)
     )
 
 
@@ -167,11 +166,7 @@ def format_local(
     if value is None:
         return "-"
     zone = resolve_timezone(timezone)
-    dt = (
-        datetime.datetime.fromtimestamp(value, zone)
-        if isinstance(value, int | float)
-        else value.astimezone(zone)
-    )
+    dt = datetime.datetime.fromtimestamp(value, zone) if isinstance(value, int | float) else value.astimezone(zone)
     return dt.strftime(fmt)
 
 

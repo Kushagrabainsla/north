@@ -120,11 +120,7 @@ class _RedactingFormatter(logging.Formatter):
 def _redact_existing_handlers() -> None:
     """Wrap handlers already installed by servers or libraries."""
     loggers = [logging.getLogger()]
-    loggers.extend(
-        logger
-        for logger in logging.root.manager.loggerDict.values()
-        if isinstance(logger, logging.Logger)
-    )
+    loggers.extend(logger for logger in logging.root.manager.loggerDict.values() if isinstance(logger, logging.Logger))
     seen: set[int] = set()
     for logger in loggers:
         for handler in logger.handlers:

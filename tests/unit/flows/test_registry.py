@@ -260,9 +260,7 @@ def test_a_flow_without_a_system_action_keeps_the_fingerprint_it_was_activated_u
         "name": "f",
         "description": "d",
         "domains": ["general"],
-        "steps": [
-            {"name": "s", "skill": "", "instructions": "do it", "inputs": {}, "approval": "on_mutation"}
-        ],
+        "steps": [{"name": "s", "skill": "", "instructions": "do it", "inputs": {}, "approval": "on_mutation"}],
         "skills": {},
     }
     expected = hashlib.sha256(json.dumps(before, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

@@ -46,9 +46,7 @@ def _parse_steps(raw: Any, *, allow_actions: bool = False) -> tuple[tuple[FlowSt
         raw_approval = data.get("approval", "on_mutation")
         if isinstance(raw_approval, bool):
             if not legacy_tool:
-                raise FlowParseError(
-                    f"steps[{index}].approval must be one of {sorted(_APPROVALS)}, not a boolean"
-                )
+                raise FlowParseError(f"steps[{index}].approval must be one of {sorted(_APPROVALS)}, not a boolean")
             # Old flows used booleans before mutation-aware modes existed. A
             # false value cannot safely mean "never ask", so migrate it to the
             # per-mutation gate; true keeps the stronger whole-step gate.
@@ -64,8 +62,7 @@ def _parse_steps(raw: Any, *, allow_actions: bool = False) -> tuple[tuple[FlowSt
             raise FlowParseError(f"duplicate step name: {name}")
         if approval not in _APPROVALS:
             raise FlowParseError(
-                f"steps[{index}] has invalid approval {approval!r}; "
-                f"expected one of {sorted(_APPROVALS)}"
+                f"steps[{index}] has invalid approval {approval!r}; expected one of {sorted(_APPROVALS)}"
             )
         raw_inputs = data.get("inputs", data.get("params")) or {}
         if not isinstance(raw_inputs, dict):

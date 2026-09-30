@@ -36,8 +36,11 @@ def test_bm25_omits_unmatched_documents() -> None:
 
 
 def test_fusion_combines_rankings_and_boosts_explicit_identifiers() -> None:
-    assert reciprocal_rank_fusion(
-        ["web_search", "read_file"],
-        ["web_search", "read_file"],
-        exact_query="Use read_file first",
-    )[0] == "read_file"
+    assert (
+        reciprocal_rank_fusion(
+            ["web_search", "read_file"],
+            ["web_search", "read_file"],
+            exact_query="Use read_file first",
+        )[0]
+        == "read_file"
+    )

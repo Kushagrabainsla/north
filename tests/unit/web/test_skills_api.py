@@ -55,12 +55,14 @@ async def test_skill_api_lists_reads_updates_and_reloads(skill_registry: SkillRe
 async def test_skill_api_creates_a_structured_learned_skill(tmp_path) -> None:
     registry = SkillRegistry(tmp_path / "builtin", tmp_path / "skills")
     with bind_services(ApiServices(skill_registry=registry, north_home=tmp_path)):
-        result = await web_api.create_skill(web_api.SkillCreate(
-            name="review-job-match",
-            description="Use when reviewing whether a job matches the user.",
-            instructions="Compare the role to the resume and explain the strongest evidence.",
-            domains=["jobs", "review"],
-        ))
+        result = await web_api.create_skill(
+            web_api.SkillCreate(
+                name="review-job-match",
+                description="Use when reviewing whether a job matches the user.",
+                instructions="Compare the role to the resume and explain the strongest evidence.",
+                domains=["jobs", "review"],
+            )
+        )
 
     assert result["name"] == "review-job-match"
     assert result["source"] == "learned"

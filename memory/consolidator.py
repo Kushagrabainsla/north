@@ -220,8 +220,10 @@ class EpisodeConsolidator:
     def _extract_approval_feedback(rows: list[LedgerEntry]) -> list[str]:
         feedback: list[str] = []
         for entry in reversed(rows):
-            if entry.source != LedgerSource.APPROVAL or not entry.action or not entry.action.startswith(
-                _APPROVAL_ACTION_PREFIX
+            if (
+                entry.source != LedgerSource.APPROVAL
+                or not entry.action
+                or not entry.action.startswith(_APPROVAL_ACTION_PREFIX)
             ):
                 continue
             if not EpisodeConsolidator._is_learnable_approval(entry):

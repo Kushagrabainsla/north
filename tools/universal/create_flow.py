@@ -153,8 +153,7 @@ class CreateFlowTool(Tool):
             return ToolOutput(
                 success=False,
                 error=(
-                    "Flow steps reference only skills. Move agent and tool choices into the skill's "
-                    "execution contract."
+                    "Flow steps reference only skills. Move agent and tool choices into the skill's execution contract."
                 ),
             )
 
@@ -226,8 +225,7 @@ class CreateFlowTool(Tool):
             return ToolOutput(
                 success=False,
                 error=(
-                    "Flow steps reference only skills. Move agent and tool choices into the skill's "
-                    "execution contract."
+                    "Flow steps reference only skills. Move agent and tool choices into the skill's execution contract."
                 ),
             )
         name = _slug(raw_name)
@@ -266,11 +264,7 @@ class CreateFlowTool(Tool):
                     data=report.as_dict(),
                 )
             operation = "update" if path.exists() else "create"
-            mutation = (
-                self._self_edit_policy.begin(path, operation)
-                if self._self_edit_policy is not None
-                else None
-            )
+            mutation = self._self_edit_policy.begin(path, operation) if self._self_edit_policy is not None else None
             await asyncio.to_thread(_write_flow, directory, path, document)
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
@@ -361,10 +355,13 @@ class CreateFlowTool(Tool):
         if data.get("status") == "active" and data.get("test_run_id"):
             return f"Flow '{data.get('name')}' activated from successful test {data.get('test_run_id')}."
         if "flows" in data:
-            return "\n".join(
-                f"{flow['name']} - {flow['description']} ({len(flow.get('steps', []))} steps)"
-                for flow in data["flows"]
-            ) or "No flows registered."
+            return (
+                "\n".join(
+                    f"{flow['name']} - {flow['description']} ({len(flow.get('steps', []))} steps)"
+                    for flow in data["flows"]
+                )
+                or "No flows registered."
+            )
         verb = "updated" if data.get("updated") else "created"
         return (
             f"Flow candidate '{data.get('name')}' {verb} at {data.get('path')} "

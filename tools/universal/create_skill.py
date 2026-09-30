@@ -227,9 +227,7 @@ class CreateSkillTool(Tool):
         try:
             operation = "update" if skill_file.exists() else "create"
             mutation = (
-                self._self_edit_policy.begin(skill_file, operation)
-                if self._self_edit_policy is not None
-                else None
+                self._self_edit_policy.begin(skill_file, operation) if self._self_edit_policy is not None else None
             )
             # mkdir + write off-thread so the agent loop is never blocked on disk.
             await asyncio.to_thread(_write_skill_file, skill_dir, skill_file, document)
@@ -332,9 +330,7 @@ class CreateSkillTool(Tool):
             return ToolOutput(success=True, data={"name": name, "status": "active"})
         if skill.status != "candidate":
             return ToolOutput(success=False, error=f"Skill '{name}' is {skill.status}, not a candidate.")
-        if skill.execution is not None and (
-            contract_error := self._execution_error(skill.execution, skill.domains)
-        ):
+        if skill.execution is not None and (contract_error := self._execution_error(skill.execution, skill.domains)):
             return ToolOutput(success=False, error=contract_error)
 
         content = path.read_text(encoding="utf-8")
@@ -342,11 +338,7 @@ class CreateSkillTool(Tool):
         frontmatter["status"] = "active"
         document = f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n\n{body.strip()}\n"
         try:
-            mutation = (
-                self._self_edit_policy.begin(path, "update")
-                if self._self_edit_policy is not None
-                else None
-            )
+            mutation = self._self_edit_policy.begin(path, "update") if self._self_edit_policy is not None else None
             await asyncio.to_thread(_write_skill_file, skill.directory, path, document)
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
@@ -378,10 +370,10 @@ class CreateSkillTool(Tool):
 
     def format_output(self, data: dict[str, Any]) -> str:
         if "skills" in data:
-            return "\n".join(
-                f"{item['name']} - {item['description']} ({item['status']})"
-                for item in data["skills"]
-            ) or "No skills registered."
+            return (
+                "\n".join(f"{item['name']} - {item['description']} ({item['status']})" for item in data["skills"])
+                or "No skills registered."
+            )
         if "content" in data:
             return str(data["content"])
         if data.get("valid"):

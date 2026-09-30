@@ -73,10 +73,7 @@ class ScheduleTaskTool(Tool):
             "flow": {"type": "string", "description": "Name of the active flow to run"},
             "label": {
                 "type": "string",
-                "description": (
-                    "A short title for this schedule, 2-4 words, e.g. 'Morning stretch'. "
-                    "Shown in lists."
-                ),
+                "description": ("A short title for this schedule, 2-4 words, e.g. 'Morning stretch'. Shown in lists."),
             },
             "run_at": {"type": "string", "description": "Local ISO 8601 datetime for a one-shot run"},
             "hour": {"type": "integer", "description": "Hour (0-23), local, for a recurring schedule"},

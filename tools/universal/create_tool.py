@@ -144,8 +144,7 @@ class CreateToolTool(Tool):
             if not rows:
                 return "No tools found."
             return "\n".join(
-                f"[{r['type']} · {r.get('status', 'active')}] {r['name']} - {r['description']}"
-                for r in rows
+                f"[{r['type']} · {r.get('status', 'active')}] {r['name']} - {r['description']}" for r in rows
             )
 
         if action == "read":
@@ -456,6 +455,7 @@ class CreateToolTool(Tool):
 
 # ── Code safety ──────────────────────────────────────────────────────────────
 
+
 def _check_code_safety(code: str) -> tuple[bool, str]:
     """Validate syntax before a trusted, approval-gated learned tool is loaded.
 
@@ -536,6 +536,7 @@ def _read_tool(tool_name: str, learned_root: Path = _TOOLS_ROOT) -> ToolOutput:
             "content": path.read_text(encoding="utf-8"),
         },
     )
+
 
 def _candidate_root(learned_root: Path) -> Path:
     return learned_root / "candidates"

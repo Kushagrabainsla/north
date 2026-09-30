@@ -305,9 +305,7 @@ class ProducingAgent(FakeAgent):
     def __init__(self, tmp_path, *, writes: bool) -> None:
         super().__init__()
         self.target = tmp_path / "briefings" / f"{localnow().date().isoformat()}.md"
-        self.config = SimpleNamespace(
-            model_pool="reasoning", produces=[str(tmp_path / "briefings" / "{date}.md")]
-        )
+        self.config = SimpleNamespace(model_pool="reasoning", produces=[str(tmp_path / "briefings" / "{date}.md")])
         self._writes = writes
 
     async def run(self, payload):

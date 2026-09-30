@@ -138,12 +138,7 @@ def run_benchmark(path: Path = _CASES_PATH) -> dict[str, Any]:
     total = sum(metric["total"] for metric in metrics.values())
     passed = sum(metric["passed"] for metric in metrics.values())
     repository_types = sorted(
-        {
-            case["repository_type"]
-            for section in cases.values()
-            for case in section
-            if case["repository_type"] != "none"
-        }
+        {case["repository_type"] for section in cases.values() for case in section if case["repository_type"] != "none"}
     )
     return {
         "recorded_at": date.today().isoformat(),

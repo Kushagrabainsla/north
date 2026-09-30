@@ -150,8 +150,7 @@ def validate_flow_capabilities(
             # step can silently relax: a skill that says "ask before mutating"
             # must not become "never ask" just because a flow step said so.
             errors.append(
-                f"{prefix}: approval {step.approval!r} is below skill {step.skill!r}'s "
-                f"minimum {execution.approval!r}"
+                f"{prefix}: approval {step.approval!r} is below skill {step.skill!r}'s minimum {execution.approval!r}"
             )
 
         errors.extend(

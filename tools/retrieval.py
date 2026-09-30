@@ -53,9 +53,7 @@ def bm25_rank(query: str, documents: dict[str, str]) -> list[str]:
     query_tokens = _tokens(query)
     if not query_tokens or not tokenized:
         return []
-    document_frequency = Counter(
-        token for tokens in tokenized.values() for token in set(tokens)
-    )
+    document_frequency = Counter(token for tokens in tokenized.values() for token in set(tokens))
     count = len(tokenized)
     average_length = sum(map(len, tokenized.values())) / count
     scored: list[tuple[float, str]] = []
@@ -67,13 +65,9 @@ def bm25_rank(query: str, documents: dict[str, str]) -> list[str]:
             if not frequency:
                 continue
             inverse_frequency = math.log(
-                1
-                + (count - document_frequency[token] + 0.5)
-                / (document_frequency[token] + 0.5)
+                1 + (count - document_frequency[token] + 0.5) / (document_frequency[token] + 0.5)
             )
-            denominator = frequency + 1.5 * (
-                1 - 0.75 + 0.75 * len(tokens) / max(average_length, 1)
-            )
+            denominator = frequency + 1.5 * (1 - 0.75 + 0.75 * len(tokens) / max(average_length, 1))
             score += inverse_frequency * frequency * 2.5 / denominator
         if score > 0:
             scored.append((score, name))
@@ -90,7 +84,4 @@ def reciprocal_rank_fusion(*rankings: list[str], exact_query: str = "") -> list[
     query_identifiers = set(re.findall(r"[a-z][a-z0-9_]+", exact_query.lower()))
     for name in query_identifiers & set(scores):
         scores[name] += 1.0
-    return [
-        name
-        for name, _ in sorted(scores.items(), key=lambda item: (-item[1], item[0]))
-    ]
+    return [name for name, _ in sorted(scores.items(), key=lambda item: (-item[1], item[0]))]

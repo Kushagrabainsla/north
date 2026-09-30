@@ -45,9 +45,7 @@ def _object_schema(value: object, label: str) -> dict[str, object]:
     required = value.get("required", [])
     if not isinstance(properties, dict):
         raise ValueError(f"execution.{label}.properties must be a mapping")
-    if not isinstance(required, list) or any(
-        not isinstance(name, str) or name not in properties for name in required
-    ):
+    if not isinstance(required, list) or any(not isinstance(name, str) or name not in properties for name in required):
         raise ValueError(f"execution.{label}.required must name declared properties")
     return dict(value)
 
@@ -62,9 +60,7 @@ def parse_execution_contract(raw: object) -> SkillExecution | None:
     if not agent:
         raise ValueError("execution.agent is required")
     tools = raw.get("tools", [])
-    if not isinstance(tools, list) or any(
-        not isinstance(name, str) or not name.strip() for name in tools
-    ):
+    if not isinstance(tools, list) or any(not isinstance(name, str) or not name.strip() for name in tools):
         raise ValueError("execution.tools must be a list of tool names")
     approval = str(raw.get("approval") or "on_mutation").strip().lower()
     if approval not in _APPROVALS:

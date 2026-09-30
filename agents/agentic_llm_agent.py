@@ -452,10 +452,7 @@ class AgenticLLMAgent(LLMAgent):
         store = self._deps.running_task_store
         if store is None or not payload.task_id:
             return
-        mutated = any(
-            item[2] and self._is_mutating_call(item[0], tool_map)
-            for item in results
-        )
+        mutated = any(item[2] and self._is_mutating_call(item[0], tool_map) for item in results)
         if not mutated:
             return
         try:
@@ -1132,9 +1129,7 @@ class AgenticLLMAgent(LLMAgent):
                 )
             logger.warning("Sub-agent '%s' raised in task '%s': %s", agent_name, payload.task_id, exc, exc_info=True)
             if is_model_unavailable_error(exc):
-                await self._record_delegation_failure(
-                    payload, agent_name, str(exc), error_type="model_unavailable"
-                )
+                await self._record_delegation_failure(payload, agent_name, str(exc), error_type="model_unavailable")
                 raise
             return await self._delegation_failed(payload, agent_name, str(exc))
 

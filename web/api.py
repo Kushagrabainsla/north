@@ -476,10 +476,14 @@ async def create_conversation(body: ConversationCreate) -> dict[str, Any]:
     requested_workspace = body.workspace
     if requested_workspace is None:
         requested_workspace = getattr(settings, "north_workspace", "")
-    conversation = await current_services().require("conversation_store").create(
-        body.title,
-        _workspace_path(requested_workspace),
-        body.source,
+    conversation = (
+        await current_services()
+        .require("conversation_store")
+        .create(
+            body.title,
+            _workspace_path(requested_workspace),
+            body.source,
+        )
     )
     return _conversation_payload(conversation)
 
@@ -534,8 +538,7 @@ async def get_conversation(conversation_id: str) -> dict[str, Any]:
             derived_status = "active"
         if derived_status != conversation.goal_status:
             conversation = (
-                await store.update(conversation_id, goal_status=derived_status, touch_updated_at=False)
-                or conversation
+                await store.update(conversation_id, goal_status=derived_status, touch_updated_at=False) or conversation
             )
     return {**_conversation_payload(conversation), "turns": payloads}
 
@@ -883,8 +886,6 @@ async def restore_unattended_rules() -> dict[str, int]:
 class FactCreate(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
     category: str = Field(default="user", max_length=80)
-
-
 
 
 @router.post("/memory/facts", status_code=201)

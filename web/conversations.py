@@ -95,9 +95,7 @@ class ConversationStore:
                    ), '')
                    WHERE goal = ''"""
             )
-            conn.execute(
-                "UPDATE web_conversations SET goal_status='active' WHERE goal != '' AND goal_status='idle'"
-            )
+            conn.execute("UPDATE web_conversations SET goal_status='active' WHERE goal != '' AND goal_status='idle'")
             conn.execute(
                 """UPDATE web_conversations
                    SET title = SUBSTR(COALESCE((

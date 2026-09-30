@@ -1929,13 +1929,9 @@ class Orchestrator:
         scarcity = _has_model_scarcity(failures)
         if scarcity:
             blocked_agents = ", ".join(
-                str(failure)
-                for failure in failures
-                if getattr(failure, "error_type", None) == "model_unavailable"
+                str(failure) for failure in failures if getattr(failure, "error_type", None) == "model_unavailable"
             )
-            unavailable = RuntimeError(
-                f"{_MODEL_SCARCITY_MESSAGE}; blocked agents: {blocked_agents}"
-            )
+            unavailable = RuntimeError(f"{_MODEL_SCARCITY_MESSAGE}; blocked agents: {blocked_agents}")
             if await self._queue_for_model_recovery(task_id, unavailable):
                 return
             await self._record_task_needs_attention(

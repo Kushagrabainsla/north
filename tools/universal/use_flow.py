@@ -53,10 +53,7 @@ class UseFlowTool(Tool):
         lines = [f"# Flow: {data.get('name')}", "", str(data.get("description") or ""), "", "Steps:"]
         for index, step in enumerate(data.get("steps") or [], start=1):
             approval = step.get("approval", "on_mutation")
-            lines.append(
-                f"{index}. {step.get('name')} "
-                f"[skill={step.get('skill')}; approval={approval}]"
-            )
+            lines.append(f"{index}. {step.get('name')} [skill={step.get('skill')}; approval={approval}]")
             if step.get("instructions"):
                 lines.append(f"   {step['instructions']}")
         return "\n".join(lines)

@@ -156,9 +156,7 @@ class Agent(ABC):
             for name in dict.fromkeys(required_names):
                 skill = registry.get(name)
                 if not skill.available_to(self.domain):
-                    raise ValueError(
-                        f"Skill {name!r} is not active for agent {self.name!r} in domain {self.domain!r}"
-                    )
+                    raise ValueError(f"Skill {name!r} is not active for agent {self.name!r} in domain {self.domain!r}")
                 selected.append(skill)
             return selected
         selector = self._deps.skill_selector
@@ -262,14 +260,18 @@ class Agent(ABC):
     async def _emit_memory_recall(self, payload: AgentPayload, principal: Any, recalled: Any) -> None:
         """Record retrieval shape without persisting any recalled text."""
         telemetry_fn = getattr(recalled, "telemetry", None)
-        stats = telemetry_fn() if callable(telemetry_fn) else {
-            "source_categories": [],
-            "source_counts": {"facts": 0, "episodes": 0, "documents": 0},
-            "source_characters": {"facts": 0, "episodes": 0, "documents": 0},
-            "total_items": 0,
-            "total_characters": 0,
-            "estimated_tokens": 0,
-        }
+        stats = (
+            telemetry_fn()
+            if callable(telemetry_fn)
+            else {
+                "source_categories": [],
+                "source_counts": {"facts": 0, "episodes": 0, "documents": 0},
+                "source_characters": {"facts": 0, "episodes": 0, "documents": 0},
+                "total_items": 0,
+                "total_characters": 0,
+                "estimated_tokens": 0,
+            }
+        )
         fact_topics = getattr(principal, "allowed_fact_topics", None)
         episode_domains = getattr(principal, "allowed_domains", frozenset())
         data = {
@@ -319,17 +321,12 @@ class Agent(ABC):
         if payload.skills:
             required = []
             for skill in selected:
-                required.append(
-                    f"## Required skill: {skill.name}\n"
-                    f"{skill.description}\n\n"
-                    f"{skill.body.strip()}"
-                )
+                required.append(f"## Required skill: {skill.name}\n{skill.description}\n\n{skill.body.strip()}")
             sections.append(
                 "# Required flow procedures\n"
                 "Execute the procedures below for this flow step. They are the execution contract, "
                 "not optional suggestions. Follow the step's server-enforced mutation policy and do not "
-                "substitute a different procedure.\n\n"
-                + "\n\n".join(required)
+                "substitute a different procedure.\n\n" + "\n\n".join(required)
             )
             await self._emit_skill_selected(payload, selected)
             return "\n\n".join(sections)
@@ -458,8 +455,7 @@ class Agent(ABC):
                     logger.debug("Plan unavailable during tool selection for %s", payload.task_id, exc_info=True)
         if selected_skills:
             parts.append(
-                "Selected skills: "
-                + " ".join(f"{skill.name}: {skill.description}" for skill in selected_skills)
+                "Selected skills: " + " ".join(f"{skill.name}: {skill.description}" for skill in selected_skills)
             )
         return "\n".join(parts)
 

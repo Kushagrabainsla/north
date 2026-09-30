@@ -57,12 +57,8 @@ class SkillCreate(BaseModel):
     executor: str = "general"
     tools: list[str] = Field(default_factory=list)
     approval: str = Field(default="never", pattern="^(never|on_mutation|always)$")
-    inputs: dict[str, Any] = Field(
-        default_factory=lambda: {"type": "object", "properties": {}}
-    )
-    outputs: dict[str, Any] = Field(
-        default_factory=lambda: {"type": "object", "properties": {}}
-    )
+    inputs: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    outputs: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
     success_criteria: list[str] = Field(
         default_factory=lambda: ["The requested procedure completed and returned verifiable evidence."]
     )
@@ -241,18 +237,24 @@ async def create_skill(body: SkillCreate) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     _validate_execution_dependencies(execution_contract, body.domains)
-    document = "---\n" + yaml.safe_dump(
-        {
-            "name": name,
-            "description": description,
-            "source": SkillSource.LEARNED.value,
-            "version": "1.0.0",
-            "status": "candidate",
-            "domains": body.domains,
-            "execution": execution,
-        },
-        sort_keys=False,
-    ) + "---\n\n" + instructions + "\n"
+    document = (
+        "---\n"
+        + yaml.safe_dump(
+            {
+                "name": name,
+                "description": description,
+                "source": SkillSource.LEARNED.value,
+                "version": "1.0.0",
+                "status": "candidate",
+                "domains": body.domains,
+                "execution": execution,
+            },
+            sort_keys=False,
+        )
+        + "---\n\n"
+        + instructions
+        + "\n"
+    )
     target = learned_dir / name
     await asyncio.to_thread(target.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread((target / SKILL_FILENAME).write_text, document, encoding="utf-8")
@@ -545,8 +547,7 @@ def flow_run_view(run: FlowRun, total_steps: int | None = None) -> dict[str, Any
                 "tools_used": [str(tool) for tool in data.get("tools_used") or []],
                 # What the step left behind, named the way the Artifacts page names it.
                 "artifacts": [
-                    {"name": Path(path).name, "kind": Path(path).parent.name}
-                    for path in data.get("artifacts") or []
+                    {"name": Path(path).name, "kind": Path(path).parent.name} for path in data.get("artifacts") or []
                 ],
             }
         )

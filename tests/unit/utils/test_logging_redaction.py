@@ -21,10 +21,7 @@ def test_telegram_bot_token_is_removed_from_exception_url() -> None:
 
 
 def test_auth_headers_query_parameters_and_url_passwords_are_removed() -> None:
-    text = (
-        "Authorization: Bearer x "
-        "https://alice:hunter2@example.test/data?view=full&api_key=top-secret&limit=10"
-    )
+    text = "Authorization: Bearer x https://alice:hunter2@example.test/data?view=full&api_key=top-secret&limit=10"
 
     cleaned = redact(text)
 

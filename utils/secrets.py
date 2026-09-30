@@ -123,11 +123,12 @@ def redact(text: str) -> str:
     "the [redacted]", which still tells a person what the sentence was about
     while leaving nothing to steal.
     """
+
     def assignment_replacement(match: re.Match[str]) -> str:
         if REDACTED in match.group(0).lower():
             return match.group(0)
         quote = match.group("quote") or ""
-        return f'{match.group("prefix")}{quote}{REDACTED}{quote}'
+        return f"{match.group('prefix')}{quote}{REDACTED}{quote}"
 
     text = _PRIVATE_KEY_RE.sub(REDACTED, text)
     text = _TELEGRAM_BOT_URL_RE.sub(r"\1[redacted]", text)

@@ -147,8 +147,7 @@ class RunningTaskStore:
     def _mark_paused_sync(self, task_id: str) -> bool:
         with open_db_connection(self._db_path) as conn:
             cur = conn.execute(
-                "UPDATE running_tasks SET status = 'paused' "
-                "WHERE task_id = ? AND status IN ('running', 'retrying')",
+                "UPDATE running_tasks SET status = 'paused' WHERE task_id = ? AND status IN ('running', 'retrying')",
                 (task_id,),
             )
             return cur.rowcount > 0

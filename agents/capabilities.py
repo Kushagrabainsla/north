@@ -47,9 +47,7 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
                 names = ", ".join(t.name for t in sorted(tools, key=lambda x: x.name))
                 lines.append("\n### Available Tool Names")
                 lines.append(names)
-                lines.append(
-                    "Use `find_tools` when the needed tool is not currently loaded."
-                )
+                lines.append("Use `find_tools` when the needed tool is not currently loaded.")
         except Exception:
             pass
 
@@ -78,9 +76,7 @@ def build_platform_capabilities_summary(deps: AgentDependencies) -> str:
             if flows:
                 lines.append("\n### Reusable Flows")
                 for flow in sorted(flows, key=lambda item: item.name):
-                    lines.append(
-                        f"- **{flow.name}** ({flow.status}, {len(flow.steps)} steps): {flow.description}"
-                    )
+                    lines.append(f"- **{flow.name}** ({flow.status}, {len(flow.steps)} steps): {flow.description}")
         except Exception:
             pass
 

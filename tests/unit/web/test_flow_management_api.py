@@ -188,9 +188,7 @@ async def test_an_unknown_flow_is_a_404(env) -> None:
 
 
 async def test_a_single_run_at_a_set_time_is_queued_as_a_job_for_the_flow(env) -> None:
-    created = await web_api.create_flow_schedule(
-        "live", web_api.FlowScheduleCreate(run_at="2099-01-01T09:00")
-    )
+    created = await web_api.create_flow_schedule("live", web_api.FlowScheduleCreate(run_at="2099-01-01T09:00"))
 
     assert created["type"] == "one-shot"
     assert env.jobs.enqueued[0].payload["flow"] == "live"

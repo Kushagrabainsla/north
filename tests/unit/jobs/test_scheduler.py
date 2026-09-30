@@ -68,9 +68,7 @@ def test_fixed_interval_fires_from_its_creation_anchor() -> None:
     )
 
     assert next_firing(entry, anchor) == datetime(2026, 5, 22, 9, 5, tzinfo=UTC)
-    assert next_firing(entry, datetime(2026, 5, 22, 9, 7, tzinfo=UTC)) == datetime(
-        2026, 5, 22, 9, 10, tzinfo=UTC
-    )
+    assert next_firing(entry, datetime(2026, 5, 22, 9, 7, tzinfo=UTC)) == datetime(2026, 5, 22, 9, 10, tzinfo=UTC)
     assert entry.cadence == "every 5 minutes"
 
 

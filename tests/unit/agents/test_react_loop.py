@@ -65,10 +65,7 @@ def _load_agent(name: str, tmp_path: Path, router: MockInferenceRouter | None = 
 
 def test_outcome_status_marks_direct_questions_and_user_handoffs_as_waiting() -> None:
     assert _infer_outcome_status("Do you want me to continue?") == "waiting_for_user"
-    assert (
-        _infer_outcome_status("Once it is open, tell me and I will verify the connection.")
-        == "waiting_for_user"
-    )
+    assert _infer_outcome_status("Once it is open, tell me and I will verify the connection.") == "waiting_for_user"
     assert _infer_outcome_status("The requested report is ready.") == "response_ready"
 
 
@@ -232,9 +229,7 @@ async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path
     agent.deps.stream_manager = stream
     agent.deps.tool_registry.register(EvidenceTool())
 
-    result = await agent.run(
-        AgentPayload(task_id="quick-task", prompt="inspect", execution_profile="quick_readonly")
-    )
+    result = await agent.run(AgentPayload(task_id="quick-task", prompt="inspect", execution_profile="quick_readonly"))
 
     assert result.output == "finished with enough evidence"
     assert result.data["evidence_counts"] == {"gather_evidence": 3}
@@ -251,8 +246,7 @@ async def test_quick_profile_soft_budget_allows_needed_work_to_continue(tmp_path
         }
     ]
     assert any(
-        "Soft efficiency budget reached" in (message.get("content") or "")
-        for message in router.requests[-1].messages
+        "Soft efficiency budget reached" in (message.get("content") or "") for message in router.requests[-1].messages
     )
     assert "Do not create handoff artifacts" in router.requests[0].messages[0]["content"]
     manifests = [data for event, data in stream.events if event == "evidence_manifest"]
@@ -288,9 +282,7 @@ async def test_quick_evidence_manifest_keeps_locators_not_tool_content(tmp_path:
     await agent._record_quick_evidence(payload, [(call, "private tool output", True, [])], _tool_map())
 
     manifest = [data for event, data in stream.events if event == "evidence_manifest"][0]
-    assert manifest["references"] == [
-        {"tool": "read_file", "path": "src/router.py", "url": "https://example.com/docs"}
-    ]
+    assert manifest["references"] == [{"tool": "read_file", "path": "src/router.py", "url": "https://example.com/docs"}]
     assert "private" not in str(manifest)
     assert "secret" not in str(manifest)
 

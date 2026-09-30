@@ -37,7 +37,10 @@ def repository_identity(workspace: str) -> RepositoryIdentity | None:
     try:
         revision = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
-            capture_output=True, check=False, text=True, timeout=3,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
         )
         commit = revision.stdout.strip()
         invalid_hash = len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit.lower())
@@ -45,16 +48,25 @@ def repository_identity(workspace: str) -> RepositoryIdentity | None:
             return None
         status = subprocess.run(
             ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=normal"],
-            capture_output=True, check=False, text=True, timeout=3,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
         )
         root_result = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-            capture_output=True, check=False, text=True, timeout=3,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
         )
         canonical_root = str(Path(root_result.stdout.strip() or root).resolve())
         remote_result = subprocess.run(
             ["git", "-C", str(root), "remote", "get-url", "origin"],
-            capture_output=True, check=False, text=True, timeout=3,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
         )
         remote = remote_result.stdout.strip()
         return RepositoryIdentity(

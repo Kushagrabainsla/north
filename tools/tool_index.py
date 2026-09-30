@@ -130,10 +130,7 @@ class ToolIndex:
             q_embs = await self._embed_fn([query])
             if q_embs:
                 qvec = q_embs[0]
-                scored = [
-                    (name, cosine_similarity(qvec, embedding))
-                    for name, _, embedding in self._cache
-                ]
+                scored = [(name, cosine_similarity(qvec, embedding)) for name, _, embedding in self._cache]
                 scored.sort(key=lambda item: (-item[1], item[0]))
                 dense = [name for name, _ in scored]
         except Exception:
@@ -192,7 +189,5 @@ class ToolIndex:
 
     def _load_all_sync(self) -> list[tuple[str, str, str]]:
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute(
-                "SELECT name, description, embedding FROM tool_embeddings"
-            ).fetchall()
+            rows = conn.execute("SELECT name, description, embedding FROM tool_embeddings").fetchall()
         return [(r["name"], r["description"], r["embedding"]) for r in rows]

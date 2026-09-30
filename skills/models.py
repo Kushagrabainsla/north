@@ -41,12 +41,8 @@ class SkillExecution:
 
     agent: str
     tools: tuple[str, ...] = ()
-    inputs: dict[str, Any] = field(
-        default_factory=lambda: {"type": "object", "properties": {}}
-    )
-    outputs: dict[str, Any] = field(
-        default_factory=lambda: {"type": "object", "properties": {}}
-    )
+    inputs: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
+    outputs: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
     approval: str = "on_mutation"
     success_criteria: tuple[str, ...] = ()
 

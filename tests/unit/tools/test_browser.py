@@ -187,9 +187,7 @@ async def test_run_assert_unmet_exit_code_2():
     mock_proc.communicate = AsyncMock(return_value=(mock_stdout, mock_stderr))
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-        output = await tool.run(
-            ToolInput(params=_isolated(action="assert", assert_type="text", value="Welcome"))
-        )
+        output = await tool.run(ToolInput(params=_isolated(action="assert", assert_type="text", value="Welcome")))
         assert output.success is False
         assert output.data["held"] is False
         assert "Assertion unmet" in output.error
@@ -200,9 +198,7 @@ async def test_ssrf_blocking_for_private_ips():
     tool = BrowserTool(binary_cmd=["chrome-agent"])
 
     # Attempting to access private metadata IP
-    output = await tool.run(
-        ToolInput(params=_isolated(action="goto", url="http://169.254.169.254/latest/meta-data"))
-    )
+    output = await tool.run(ToolInput(params=_isolated(action="goto", url="http://169.254.169.254/latest/meta-data")))
     assert output.success is False
     assert "Security policy blocked navigation" in output.error
 
@@ -215,9 +211,7 @@ async def test_browser_requires_explicit_user_context_choice():
     assert not missing.success
     assert "Ask the user" in missing.error
 
-    isolated_with_profile = await tool.run(
-        ToolInput(params=_isolated(action="status", connect="9222"))
-    )
+    isolated_with_profile = await tool.run(ToolInput(params=_isolated(action="status", connect="9222")))
     assert not isolated_with_profile.success
     assert "isolated browser" in isolated_with_profile.error
 

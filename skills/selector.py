@@ -140,8 +140,7 @@ def _task_intents(task_text: str) -> frozenset[str]:
     if any(phrase in text for phrase in ("debug", "diagnos", "failing test", "test failure", "error", "bug")):
         detected.add(SkillIntent.DEBUG.value)
     if any(
-        phrase in text
-        for phrase in ("add a tool", "add new tool", "create a tool", "new capability", "create-tool")
+        phrase in text for phrase in ("add a tool", "add new tool", "create a tool", "new capability", "create-tool")
     ):
         detected.add(SkillIntent.CREATE_TOOL.value)
     if any(
@@ -157,13 +156,11 @@ def _task_intents(task_text: str) -> frozenset[str]:
     ):
         detected.add(SkillIntent.CREATE_FLOW.value)
     if any(
-        phrase in text
-        for phrase in ("add a skill", "build a skill", "create a skill", "new skill", "create-skill")
+        phrase in text for phrase in ("add a skill", "build a skill", "create a skill", "new skill", "create-skill")
     ):
         detected.add(SkillIntent.CREATE_SKILL.value)
     if any(
-        phrase in text
-        for phrase in ("add an agent", "build an agent", "create an agent", "new agent", "create-agent")
+        phrase in text for phrase in ("add an agent", "build an agent", "create an agent", "new agent", "create-agent")
     ):
         detected.add(SkillIntent.CREATE_AGENT.value)
     if any(
