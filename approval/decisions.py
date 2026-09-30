@@ -20,8 +20,9 @@ cannot be learned from. Chips defined per source, plus free text.
 flow that "you were asleep" means "you said no", which is how a filter learns to
 hide things you would have wanted.
 
-Stored in approval_memory.db beside the learned decisions and the safe-action
-rules - all three answer questions about how you decide.
+Stored in approval_memory.db, in the one ``decisions`` table every decision of
+yours goes to (#32). `ApprovalMemory` writes it and replays from it; this module
+reads the rows for prepared work - the ones with a ``card_source``.
 """
 
 from __future__ import annotations
@@ -39,21 +40,58 @@ from utils.secrets import redact
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS card_decisions (
-    card_id       TEXT NOT NULL PRIMARY KEY,
-    source        TEXT NOT NULL,
+# One row per decision: what was decided, by whom, and why. ``fingerprint`` is
+# the action's identity for replay ('' when the decision is not about an action);
+# ``card_source`` is what produced a prepared-work card ('' for a guard-rail).
+_DECISIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS decisions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id       TEXT NOT NULL DEFAULT '',
+    fingerprint   TEXT NOT NULL DEFAULT '',
     agent         TEXT NOT NULL,
+    signature     TEXT NOT NULL DEFAULT '',
     decision      TEXT NOT NULL,
+    chosen_option TEXT NOT NULL DEFAULT '',
     reason        TEXT NOT NULL DEFAULT '',
+    decided_by    TEXT NOT NULL DEFAULT 'you',
+    card_source   TEXT NOT NULL DEFAULT '',
     title         TEXT NOT NULL DEFAULT '',
     summary       TEXT NOT NULL DEFAULT '',
     edited_fields TEXT NOT NULL DEFAULT '[]',
-    decided_at    DATETIME NOT NULL
+    decided_at    TEXT NOT NULL
 )
 """
+_DECISIONS_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_decisions_fingerprint ON decisions(fingerprint)",
+    "CREATE INDEX IF NOT EXISTS idx_decisions_card_source ON decisions(card_source, decision)",
+)
 
-_INDEX = "CREATE INDEX IF NOT EXISTS idx_card_decisions_source ON card_decisions(source, decision)"
+
+def ensure_decisions_table(conn: Any) -> None:
+    """Create the one decisions table, moving rows in from the two it replaced.
+
+    `approval_decisions` (replay by action) and `card_decisions` (prepared work
+    and the reason for a rejection) recorded the same thing. Their rows are
+    copied across once and the old tables dropped.
+    """
+    conn.execute(_DECISIONS_SCHEMA)
+    for index in _DECISIONS_INDEXES:
+        conn.execute(index)
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "approval_decisions" in tables:
+        conn.execute(
+            "INSERT INTO decisions (fingerprint, agent, signature, decision, decided_at) "
+            "SELECT fingerprint, agent, signature, decision, updated_at FROM approval_decisions"
+        )
+        conn.execute("DROP TABLE approval_decisions")
+    if "card_decisions" in tables:
+        conn.execute(
+            "INSERT INTO decisions (card_id, card_source, agent, decision, reason, title, summary, "
+            "edited_fields, decided_at) "
+            "SELECT card_id, source, agent, decision, reason, title, summary, edited_fields, decided_at "
+            "FROM card_decisions"
+        )
+        conn.execute("DROP TABLE card_decisions")
 
 _FILTERED_SCHEMA = """
 CREATE TABLE IF NOT EXISTS filtered_candidates (
@@ -116,57 +154,28 @@ def card_summary(card: Card) -> str:
 
 
 class DecisionLog:
-    """Records how prepared work was decided, and reports how a source is doing."""
+    """Reports how prepared work was decided, and how each source is doing.
+
+    Reads only the rows with a ``card_source``: a guard-rail is a question about
+    one action in one task, not an example of what you want proposed, so it
+    would dilute the signal with data no flow can use. `ApprovalMemory.record`
+    writes every row.
+    """
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with open_db_connection(self._db_path) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute(_SCHEMA)
-            conn.execute(_INDEX)
+            ensure_decisions_table(conn)
             conn.execute(_FILTERED_SCHEMA)
-
-    def record(self, card: Card, decision: str, reason: str = "", edited_fields: list[str] | None = None) -> None:
-        """Log one decision. Only cards with a source: a guard-rail teaches nothing.
-
-        A guard-rail card is a question about one action in one task, not an
-        example of what you want proposed, so recording it would dilute the
-        signal with data that cannot inform any flow.
-        """
-        if not card.source:
-            return
-        try:
-            with open_db_connection(self._db_path) as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO card_decisions "
-                    "(card_id, source, agent, decision, reason, title, summary, edited_fields, decided_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        card.id,
-                        card.source,
-                        card.agent,
-                        decision,
-                        redact(reason),
-                        card.title,
-                        card_summary(card),
-                        json.dumps(edited_fields or []),
-                        datetime.now(UTC).isoformat(),
-                    ),
-                )
-        except Exception:
-            # Never fail a decision because logging it failed. The decision is
-            # what the user asked for; this is bookkeeping about it.
-            logger.warning("DecisionLog: could not record the decision for card %s", card.id, exc_info=True)
-
-    # ── Reading it back ──────────────────────────────────────────────────────
 
     def summaries(self, source: str, decision: str, limit: int = 200) -> list[str]:
         """What past items decided this way looked like, newest first."""
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT summary FROM card_decisions WHERE source = ? AND decision = ? AND summary != '' "
-                "ORDER BY decided_at DESC LIMIT ?",
+                "SELECT summary FROM decisions WHERE card_source = ? AND decision = ? AND summary != '' "
+                "ORDER BY id DESC LIMIT ?",
                 (source, decision, limit),
             ).fetchall()
         return [row["summary"] for row in rows]
@@ -175,8 +184,8 @@ class DecisionLog:
         """Why you said no, in your words - the input to rewriting a find prompt."""
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT reason FROM card_decisions WHERE source = ? AND decision = ? AND reason != '' "
-                "ORDER BY decided_at DESC LIMIT ?",
+                "SELECT reason FROM decisions WHERE card_source = ? AND decision = ? AND reason != '' "
+                "ORDER BY id DESC LIMIT ?",
                 (source, REJECTED, limit),
             ).fetchall()
         return [row["reason"] for row in rows]
@@ -184,7 +193,7 @@ class DecisionLog:
     def stats(self, source: str) -> SourceStats:
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT decision, COUNT(*) AS n FROM card_decisions WHERE source = ? GROUP BY decision",
+                "SELECT decision, COUNT(*) AS n FROM decisions WHERE card_source = ? GROUP BY decision",
                 (source,),
             ).fetchall()
         counts = {row["decision"]: row["n"] for row in rows}
@@ -200,8 +209,8 @@ class DecisionLog:
         """Every source's record. A flow you reject 90% of the time is wasting
         your attention, and nothing would currently notice."""
         with open_db_connection(self._db_path) as conn:
-            rows = conn.execute("SELECT DISTINCT source FROM card_decisions").fetchall()
-        return sorted((self.stats(row["source"]) for row in rows), key=lambda s: s.approve_rate)
+            rows = conn.execute("SELECT DISTINCT card_source FROM decisions WHERE card_source != ''").fetchall()
+        return sorted((self.stats(row["card_source"]) for row in rows), key=lambda s: s.approve_rate)
 
     def most_edited_fields(self, source: str, limit: int = 5) -> list[tuple[str, int]]:
         """Which fields you rewrite, and how often.
@@ -211,7 +220,7 @@ class DecisionLog:
         """
         with open_db_connection(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT edited_fields FROM card_decisions WHERE source = ? AND decision = ?",
+                "SELECT edited_fields FROM decisions WHERE card_source = ? AND decision = ?",
                 (source, APPROVED),
             ).fetchall()
         counts: dict[str, int] = {}

@@ -16,7 +16,6 @@ from agents import Agent, AgentPayload, AgentResult
 from agents.registry import AgentRegistry
 from approval import ApprovalDecision, Card, CardType, UserInteraction
 from approval.approval_memory import ApprovalMemory
-from approval.decisions import DecisionLog
 from approval.models import DecidedBy
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
@@ -204,7 +203,6 @@ class Orchestrator:
         idempotency_window_seconds: int = 60,
         critic: bool = False,
         approval_memory: ApprovalMemory | None = None,
-        decision_log: DecisionLog | None = None,
         plan_store: Any | None = None,
     ) -> None:
         self._ledger = ledger
@@ -246,7 +244,6 @@ class Orchestrator:
         self._idempotency = IdempotencyCache(idempotency_window_seconds) if idempotency_window_seconds > 0 else None
         self._critic = critic
         self._approval_memory = approval_memory
-        self._decision_log = decision_log
         # Maps task_id → running asyncio.Task so cancel_task() can stop it.
         self._active_tasks: dict[str, asyncio.Task] = {}
         # Makes the capacity check-then-register in submit_task atomic - without
@@ -632,11 +629,20 @@ class Orchestrator:
     ) -> None:
         """Record a decision of yours where north learns from it. The one path answers and overrules share."""
         edited = edited or []
-        # Log the decision as an example of the user's taste, before anything
-        # else. Only cards with a source: a guard-rail is a question about one
-        # action in one task, not evidence about what should be proposed.
-        if self._decision_log is not None and card.source:
-            self._decision_log.record(card, decision, reason=reason, edited_fields=edited)
+        # One row per decision, before anything else: replay reads it under the
+        # card's action key (what the policy recalls by), and flows learn your
+        # taste from it when the card is prepared work.
+        if self._approval_memory is not None:
+            action_key = card.action_key if card.type == CardType.APPROVAL else ""
+            self._approval_memory.record(
+                card.agent,
+                action_key,
+                decision,
+                card=card,
+                chosen_option=chosen_option,
+                reason=reason,
+                edited_fields=edited,
+            )
 
         # An answered question is a durable preference in the user's own words  -
         # record it from a *learnable* source (the extraction pipeline reads it),
@@ -659,10 +665,6 @@ class Orchestrator:
                 if card.message
                 else f"card_id={card.id}"
             )
-            # Learn from this human decision so auto mode can replay it later -
-            # under the card's action key, which is what the policy recalls by.
-            if self._approval_memory is not None and card.type == CardType.APPROVAL and card.action_key:
-                self._approval_memory.record(card.agent, card.action_key, decision)
         event = "approval_overruled" if overruled else "approval_responded"
         await self._journal.record(
             card.task_id,

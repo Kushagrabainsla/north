@@ -118,11 +118,13 @@ async def _noop(outcome) -> None:
 
 async def test_flow_stats_report_how_a_source_is_doing(tmp_path) -> None:
     """A flow you reject 90% of the time is wasting your attention."""
+    from approval.approval_memory import ApprovalMemory
     from approval.decisions import APPROVED, REJECTED, DecisionLog
 
     log = DecisionLog(tmp_path / "approval_memory.db")
-    log.record(_prepared(), APPROVED)
-    log.record(_prepared(), REJECTED, reason="too junior")
+    memory = ApprovalMemory(tmp_path / "approval_memory.db")
+    for card, decision, reason in ((_prepared(), APPROVED, ""), (_prepared(), REJECTED, "too junior")):
+        memory.record(card.agent, "", decision, card=card, reason=reason)
 
     with bind_services(ApiServices(decision_log=log)):
         stats = await web_api.flow_stats()

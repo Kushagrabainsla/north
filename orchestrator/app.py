@@ -406,7 +406,6 @@ def _build_orchestrator(
         idempotency_window_seconds=settings.idempotency_window_seconds,
         critic=settings.critic_enabled,
         approval_memory=approval_memory,
-        decision_log=deps.decision_log,
         plan_store=deps.plan_store,
     )
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from approval.approval_memory import ApprovalMemory
 from approval.decisions import APPROVED, REJECTED, UNANSWERED, DecisionLog, card_summary
 from approval.models import Card, CardField, CardType
 from approval.prefilter import RejectionFilter
@@ -21,6 +22,16 @@ from approval.prefilter import RejectionFilter
 @pytest.fixture
 def log(tmp_path) -> DecisionLog:
     return DecisionLog(tmp_path / "approval_memory.db")
+
+
+@pytest.fixture
+def memory(tmp_path) -> ApprovalMemory:
+    """Writes decisions into the table the log reads, as the orchestrator does (#32)."""
+    return ApprovalMemory(tmp_path / "approval_memory.db")
+
+
+def _decide(memory: ApprovalMemory, card: Card, decision: str, reason: str = "", edited_fields=None) -> None:
+    memory.record(card.agent, "", decision, card=card, reason=reason, edited_fields=edited_fields)
 
 
 def _card(title: str = "Staff Engineer at Acme", source: str = "job_applications", **kw) -> Card:
@@ -40,37 +51,38 @@ def _card(title: str = "Staff Engineer at Acme", source: str = "job_applications
 # ── Recording ────────────────────────────────────────────────────────────────
 
 
-def test_a_rejection_keeps_its_reason(log) -> None:
+def test_a_rejection_keeps_its_reason(log, memory) -> None:
     """Without one a rejection says only "no", which cannot be learned from."""
-    log.record(_card(), REJECTED, reason="Not senior enough")
+    _decide(memory, _card(), REJECTED, reason="Not senior enough")
     assert log.rejection_reasons("job_applications") == ["Not senior enough"]
 
 
-def test_a_guard_rail_decision_is_not_recorded(log) -> None:
+def test_a_guard_rail_decision_does_not_count_as_taste(log, memory) -> None:
     """A question about one action in one task is not evidence about taste.
 
-    Recording it would dilute the signal with data no flow can use.
+    It is recorded (replay reads it), but counting it would dilute the signal
+    with data no flow can use.
     """
-    log.record(Card.new(type=CardType.APPROVAL, agent="coder", title="Run it?", message="rm x"), REJECTED)
+    _decide(memory, Card.new(type=CardType.APPROVAL, agent="coder", title="Run it?", message="rm x"), REJECTED)
     assert log.all_stats() == []
 
 
-def test_a_secret_in_a_reason_does_not_reach_the_log(log) -> None:
-    log.record(_card(), REJECTED, reason="wrong account, api_key = sk_live_abcdef123456")
+def test_a_secret_in_a_reason_does_not_reach_the_log(log, memory) -> None:
+    _decide(memory, _card(), REJECTED, reason="wrong account, api_key = sk_live_abcdef123456")
     assert "sk_live_abcdef123456" not in log.rejection_reasons("job_applications")[0]
 
 
 # ── Approve rate ─────────────────────────────────────────────────────────────
 
 
-def test_approve_rate_counts_only_what_you_answered(log) -> None:
+def test_approve_rate_counts_only_what_you_answered(log, memory) -> None:
     """An expiry means nobody was there.
 
     Folding it in makes a flow look bad for being scheduled while you slept.
     """
-    log.record(_card("a"), APPROVED)
-    log.record(_card("b"), REJECTED)
-    log.record(_card("c"), UNANSWERED)
+    _decide(memory, _card("a"), APPROVED)
+    _decide(memory, _card("b"), REJECTED)
+    _decide(memory, _card("c"), UNANSWERED)
 
     stats = log.stats("job_applications")
 
@@ -80,26 +92,26 @@ def test_approve_rate_counts_only_what_you_answered(log) -> None:
     assert stats.unanswered == 1
 
 
-def test_a_source_with_nothing_answered_has_no_rate(log) -> None:
-    log.record(_card(), UNANSWERED)
+def test_a_source_with_nothing_answered_has_no_rate(log, memory) -> None:
+    _decide(memory, _card(), UNANSWERED)
     assert log.stats("job_applications").approve_rate == 0.0
 
 
-def test_the_worst_flow_is_reported_first(log) -> None:
+def test_the_worst_flow_is_reported_first(log, memory) -> None:
     """A flow you reject 90% of the time is the one worth acting on."""
-    log.record(_card("a", source="good"), APPROVED)
-    log.record(_card("b", source="good"), APPROVED)
-    log.record(_card("c", source="bad"), REJECTED)
-    log.record(_card("d", source="bad"), REJECTED)
+    _decide(memory, _card("a", source="good"), APPROVED)
+    _decide(memory, _card("b", source="good"), APPROVED)
+    _decide(memory, _card("c", source="bad"), REJECTED)
+    _decide(memory, _card("d", source="bad"), REJECTED)
 
     assert [s.source for s in log.all_stats()] == ["bad", "good"]
 
 
-def test_fields_you_always_rewrite_are_counted(log) -> None:
+def test_fields_you_always_rewrite_are_counted(log, memory) -> None:
     """Rewriting the cover letter every time is a correction to the draft prompt."""
     for n in range(3):
-        log.record(_card(f"job {n}"), APPROVED, edited_fields=["cover"])
-    log.record(_card("job 4"), APPROVED, edited_fields=["cover", "salary"])
+        _decide(memory, _card(f"job {n}"), APPROVED, edited_fields=["cover"])
+    _decide(memory, _card("job 4"), APPROVED, edited_fields=["cover", "salary"])
 
     assert log.most_edited_fields("job_applications")[0] == ("cover", 4)
 
@@ -118,16 +130,16 @@ class _Embedder:
         return [[1.0 if "junior" in t.lower() else 0.0, 1.0 if "staff" in t.lower() else 0.0, 0.1] for t in texts]
 
 
-async def _seed(log: DecisionLog, rejected: int = 6, approved: int = 4) -> None:
+async def _seed(memory: ApprovalMemory, rejected: int = 6, approved: int = 4) -> None:
     for n in range(rejected):
-        log.record(_card(f"Junior Developer at Co{n}"), REJECTED, reason="too junior")
+        _decide(memory, _card(f"Junior Developer at Co{n}"), REJECTED, reason="too junior")
     for n in range(approved):
-        log.record(_card(f"Staff Engineer at Co{n}"), APPROVED)
+        _decide(memory, _card(f"Staff Engineer at Co{n}"), APPROVED)
 
 
 @pytest.mark.asyncio
-async def test_a_candidate_like_your_rejections_is_filtered(log) -> None:
-    await _seed(log)
+async def test_a_candidate_like_your_rejections_is_filtered(log, memory) -> None:
+    await _seed(memory)
     filt = RejectionFilter(log, _Embedder())
 
     verdict = await filt.verdict("job_applications", "Junior Developer at NewCo")
@@ -137,24 +149,24 @@ async def test_a_candidate_like_your_rejections_is_filtered(log) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_candidate_like_your_approvals_is_kept(log) -> None:
-    await _seed(log)
+async def test_a_candidate_like_your_approvals_is_kept(log, memory) -> None:
+    await _seed(memory)
     filt = RejectionFilter(log, _Embedder())
 
     assert not (await filt.verdict("job_applications", "Staff Engineer at NewCo")).filtered
 
 
 @pytest.mark.asyncio
-async def test_nothing_is_filtered_before_there_is_evidence(log) -> None:
+async def test_nothing_is_filtered_before_there_is_evidence(log, memory) -> None:
     """Two rejections are a coincidence, not a pattern."""
-    log.record(_card("Junior Developer"), REJECTED)
+    _decide(memory, _card("Junior Developer"), REJECTED)
     filt = RejectionFilter(log, _Embedder())
 
     assert not (await filt.verdict("job_applications", "Junior Developer at NewCo")).filtered
 
 
 @pytest.mark.asyncio
-async def test_nothing_is_filtered_without_approvals_to_compare_against(log) -> None:
+async def test_nothing_is_filtered_without_approvals_to_compare_against(log, memory) -> None:
     """The threshold is a margin between two measurements, not an absolute score.
 
     An absolute cosine cutoff filters everything for a flow whose candidates all
@@ -162,26 +174,26 @@ async def test_nothing_is_filtered_without_approvals_to_compare_against(log) -> 
     recorded in memory/embeddings.py.
     """
     for n in range(8):
-        log.record(_card(f"Junior Developer {n}"), REJECTED)
+        _decide(memory, _card(f"Junior Developer {n}"), REJECTED)
     filt = RejectionFilter(log, _Embedder())
 
     assert not (await filt.verdict("job_applications", "Junior Developer at NewCo")).filtered
 
 
 @pytest.mark.asyncio
-async def test_an_embedding_failure_keeps_the_candidate(log) -> None:
+async def test_an_embedding_failure_keeps_the_candidate(log, memory) -> None:
     """Showing something unwanted costs seconds; hiding something wanted costs an opportunity."""
 
     async def _broken(texts):
         raise RuntimeError("no embedding model")
 
-    await _seed(log)
+    await _seed(memory)
     assert not (await RejectionFilter(log, _broken).verdict("job_applications", "Junior Developer")).filtered
 
 
 @pytest.mark.asyncio
-async def test_with_no_embeddings_at_all_nothing_is_filtered(log) -> None:
-    await _seed(log)
+async def test_with_no_embeddings_at_all_nothing_is_filtered(log, memory) -> None:
+    await _seed(memory)
     assert not (await RejectionFilter(log, None).verdict("job_applications", "Junior Developer")).filtered
 
 
@@ -189,9 +201,9 @@ async def test_with_no_embeddings_at_all_nothing_is_filtered(log) -> None:
 
 
 @pytest.mark.asyncio
-async def test_what_was_filtered_can_be_inspected(log) -> None:
+async def test_what_was_filtered_can_be_inspected(log, memory) -> None:
     """Auto-rejection is only acceptable if you can check what it threw away."""
-    await _seed(log)
+    await _seed(memory)
     filt = RejectionFilter(log, _Embedder())
 
     offered = await filt.should_offer("job_applications", "cand-1", "Junior Developer at NewCo")
@@ -202,8 +214,8 @@ async def test_what_was_filtered_can_be_inspected(log) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_wrong_auto_rejection_can_be_undone(log) -> None:
-    await _seed(log)
+async def test_a_wrong_auto_rejection_can_be_undone(log, memory) -> None:
+    await _seed(memory)
     await RejectionFilter(log, _Embedder()).should_offer("job_applications", "cand-1", "Junior Developer")
 
     assert log.unfilter("cand-1")
