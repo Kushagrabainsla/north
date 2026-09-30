@@ -67,6 +67,7 @@ All notable changes to north are documented here.
 - Every page spaces its blocks alike: 28px under the header, 18px between blocks, matching the gap panels already had side by side.
 
 ### Fixed
+- **A long scheduled run no longer gets a duplicate started beside it** (`jobs/sqlite_processor.py`, [#35](https://github.com/Kushagrabainsla/north/issues/35)). Every five minutes the job processor requeued any job RUNNING for over an hour, without checking that this process was still running it. The research briefing, which takes about an hour, was requeued while it ran: a second copy started, and when the server stopped it was left `running` forever. A job this process is still running is now never reaped, however long it takes; a job left RUNNING by a process that died is still requeued at startup, and the startup sweep marks any run cut off by a shutdown as failed.
 - **Telegram `/autonomy <mode>` changed nothing and said it had** (`gateways/telegram.py`). It sent `approval_mode`, a key the settings API ignores, then replied "✅ updated". It sends `autonomy` now and confirms the mode the API reports back.
 - **`north status` always showed the default dials** (`cli/main.py`). It read `strategy` and `approval_mode`, which the API does not return; it reads `power` and `autonomy`.
 - **The Safe actions panel said its rules were inactive in `safe` mode** (`web/api.py`). It checked for the old name `auto`, so the rules showed as inert in exactly the mode where they fire.

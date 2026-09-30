@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -273,6 +274,31 @@ async def test_reap_respects_lease(processor: SQLiteJobProcessor) -> None:
     # With a zero lease it is considered abandoned and requeued.
     assert await processor.reap_stale_running(0) == 1
     assert (await processor.get("j1")).status is JobStatus.PENDING
+
+
+async def test_a_job_still_running_here_is_never_reaped_however_long_it_takes(
+    processor: SQLiteJobProcessor,
+) -> None:
+    """#35: an hour-long flow run was requeued while it ran, and a second copy started beside it."""
+    await processor.enqueue(_job("slow"))
+    job = await processor.claim_next()
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(_: Job) -> None:
+        started.set()
+        await release.wait()
+
+    running = asyncio.create_task(processor._run_job(job, slow))
+    await started.wait()
+
+    # Past any lease: still not stale, because this process is running it.
+    assert await processor.reap_stale_running(0) == 0
+    assert (await processor.get("slow")).status is JobStatus.RUNNING
+
+    release.set()
+    await running
+    assert (await processor.get("slow")).status is JobStatus.COMPLETED
+    assert (await processor.get("slow")).retry_count == 0
 
 
 async def test_reap_surfaces_job_at_retry_ceiling(processor: SQLiteJobProcessor) -> None:

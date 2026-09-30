@@ -66,6 +66,8 @@ _TERMINAL_STATUSES = (
 # How often the poll loop requeues jobs stranded in RUNNING (their worker died),
 # and the lease past which a still-RUNNING job is considered abandoned. On
 # startup every RUNNING job is reaped immediately (its previous owner is gone).
+# A job this process is still running is never reaped, however long it takes:
+# requeueing it started a second copy beside the first (#35).
 _REAP_INTERVAL_SECONDS: int = 300
 _STALE_LEASE_SECONDS: int = 3600
 
@@ -174,6 +176,8 @@ class SQLiteJobProcessor(JobProcessor):
         # weak refs, so without this a dispatched job can be garbage-collected
         # mid-run and silently stay RUNNING forever (CODING_STYLE §10.5).
         self._running_jobs: set[asyncio.Task] = set()
+        # The ids of those jobs: alive here, so never stale however long they run.
+        self._live_job_ids: set[str] = set()
         self._wake_event = asyncio.Event()
 
     def _init_schema(self) -> None:
@@ -340,7 +344,10 @@ class SQLiteJobProcessor(JobProcessor):
         return [self._row_to_job(r) for r in rows]
 
     async def reap_stale_running(self, lease_seconds: int) -> int:
-        """Requeue jobs stuck in RUNNING past *lease_seconds* (0 = all RUNNING).
+        """Requeue jobs stuck in RUNNING past *lease_seconds* (0 = all RUNNING), except live ones.
+
+        A job this process is still running is skipped whatever its age: it is
+        slow, not stranded, and requeueing it would run it twice at once.
 
         A RUNNING job whose worker died never reaches a terminal state and, via
         has_active_job(), blocks its cron entry from ever scheduling again. Each
@@ -348,9 +355,9 @@ class SQLiteJobProcessor(JobProcessor):
         that keeps killing its worker eventually needs attention, not an endless retry).
         Returns the number of jobs reaped.
         """
-        return await asyncio.to_thread(self._reap_stale_running_sync, lease_seconds)
+        return await asyncio.to_thread(self._reap_stale_running_sync, lease_seconds, frozenset(self._live_job_ids))
 
-    def _reap_stale_running_sync(self, lease_seconds: int) -> int:
+    def _reap_stale_running_sync(self, lease_seconds: int, live: frozenset[str] = frozenset()) -> int:
         now = now_epoch()
         cutoff = now - lease_seconds
         requeued = 0
@@ -362,6 +369,8 @@ class SQLiteJobProcessor(JobProcessor):
                 (JobStatus.RUNNING.value, cutoff),
             ).fetchall()
             for row in rows:
+                if row["job_id"] in live:
+                    continue
                 if row["retry_count"] >= row["max_retries"]:
                     conn.execute(
                         "UPDATE job_queue SET status = ?, completed_epoch = ? WHERE job_id = ?",
@@ -431,6 +440,13 @@ class SQLiteJobProcessor(JobProcessor):
 
     async def _run_job(self, job: Job, on_job: Callable[[Job], Awaitable[Any]]) -> None:
         """Execute one job; mark completed, or schedule a retry / fail on error."""
+        self._live_job_ids.add(job.job_id)
+        try:
+            await self._run_job_to_end(job, on_job)
+        finally:
+            self._live_job_ids.discard(job.job_id)
+
+    async def _run_job_to_end(self, job: Job, on_job: Callable[[Job], Awaitable[Any]]) -> None:
         try:
             await on_job(job)
             await self.mark_completed(job.job_id)

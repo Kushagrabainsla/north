@@ -13,7 +13,7 @@ import pytest
 from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
-from orchestrator.model_scarcity import AgentFailure, is_model_scarcity
+from orchestrator.model_scarcity import AgentFailure, has_model_scarcity, is_model_scarcity
 from orchestrator.orchestrator import Orchestrator
 
 _PREAMBLE = "implement it"
@@ -78,6 +78,14 @@ def test_is_model_scarcity_requires_every_failure_to_be_model_unavailable():
     # Plain strings (no error_type) count as non-model, and empty is not scarcity.
     assert is_model_scarcity(["coder"]) is False
     assert is_model_scarcity([]) is False
+
+
+def test_has_model_scarcity_needs_only_one_blocked_agent():
+    """The "any" twin of is_model_scarcity: one agent waiting on a model queues the task (#42)."""
+    mixed = [AgentFailure("coder", "model_unavailable"), AgentFailure("reviewer", "logic_error")]
+    assert has_model_scarcity(mixed) is True
+    assert has_model_scarcity([AgentFailure("reviewer", "logic_error")]) is False
+    assert has_model_scarcity([]) is False
 
 
 # --------------------------------------------------------------- _finish_task
