@@ -17,11 +17,15 @@ from typing import TYPE_CHECKING, Any
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, UserInteraction
 from approval.models import ApprovalDecision, Card, CardType
 from approval.policy import Action, Answer, ApprovalPolicy, Verdict
+from approval.unattended import forbidden_reason
 from config.approval_mode import approve_option
 
 if TYPE_CHECKING:
+    from approval.effects import EffectLog
     from approval.policy import Ruling
 
+# Why an irreversible action is refused the second time in one task (see approval/effects.py).
+_ALREADY_DONE = "already done earlier in this task, and it reaches someone else or spends money, so it is not repeated"
 # Why a request is refused when there is nobody to ask it of.
 _NOBODY_TO_ASK = "no approval layer is bound to this tool instance, so nobody can be asked (fail closed)"
 
@@ -64,9 +68,15 @@ class Decision:
 class Approvals:
     """Rules on a `Request`; asks the user only when the policy says ASK."""
 
-    def __init__(self, policy: ApprovalPolicy, interaction: UserInteraction | None) -> None:
+    def __init__(
+        self,
+        policy: ApprovalPolicy,
+        interaction: UserInteraction | None,
+        effects: EffectLog | None = None,
+    ) -> None:
         self._policy = policy
         self._interaction = interaction
+        self._effects = effects
 
     @classmethod
     def unbound(cls) -> Approvals:
@@ -84,12 +94,25 @@ class Approvals:
 
     async def decide(self, request: Request, *, task_id: str | None) -> Decision:
         """Allow, refuse, or ask - and when asking, wait for the answer."""
+        if self._already_done(request.action, task_id):
+            return Decision(Verdict.REFUSE, _ALREADY_DONE)
         ruling = await self._policy.rule(request.action)
         if ruling.verdict is Verdict.ASK:
             return await self._ask(request, task_id)
         if _worth_recording(request.action):
             self._record(request, ruling, task_id)
         return Decision(ruling.verdict, ruling.rule)
+
+    def completed(self, request: Request, task_id: str | None) -> None:
+        """Note that *request* ran successfully, so an irreversible one is never repeated in this task."""
+        if self._effects is None or not task_id or not forbidden_reason(request.action):
+            return
+        self._effects.record(task_id, request.action.describe(), request.action.summary)
+
+    def _already_done(self, action: Action, task_id: str | None) -> bool:
+        if self._effects is None or not task_id or not forbidden_reason(action):
+            return False
+        return self._effects.done(task_id, action.describe())
 
     async def _ask(self, request: Request, task_id: str | None) -> Decision:
         if self._interaction is None:

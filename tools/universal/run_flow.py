@@ -8,13 +8,16 @@ from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal.flow_runner import FlowRunner
 
+_NEEDS_YOU = frozenset({"failed", "needs_approval", "rejected", "paused"})
+
 
 class RunFlowTool(Tool):
     name = "run_flow"
     is_mutating = True
     description = (
-        "Start or resume a named skill-based flow. The flow runs sequentially, persists checkpoints, "
-        "and pauses before steps that require approval. Test mode is evidence collection, not a dry run: "
+        "Start or resume a named skill-based flow. The flow runs sequentially and persists checkpoints; "
+        "a step that errors pauses the run there, and passing its run_id resumes it at that step. "
+        "Test mode is evidence collection, not a dry run: "
         "skills may execute real tools and keep the same approval boundaries, so use the smallest safe case."
     )
     parameters_schema = {
@@ -80,7 +83,9 @@ class RunFlowTool(Tool):
                 test_mode=test_mode,
                 trigger=trigger,
             )
-            return ToolOutput(success=run.status not in {"failed", "needs_approval", "rejected"}, data=_view(run))
+            # A paused run stopped on something only you can resolve - an error
+            # to look at, a card - so it is not a success. It waits, resumable.
+            return ToolOutput(success=run.status not in _NEEDS_YOU, data=_view(run))
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))
 

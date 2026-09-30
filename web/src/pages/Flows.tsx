@@ -410,18 +410,45 @@ const stepFallback = (step: FlowRunStep) =>
     : "No output recorded.";
 
 // One run's row, opening to what each step did. Used under "Recent runs" and in
-// a flow's own history, so a run reads the same wherever it is listed.
+// a flow's own history, so a run reads the same wherever it is listed. A paused
+// run - one that stopped on an error or a restart - can be resumed at the step
+// it stopped on, or discarded (#33).
 function RunRow({
   run,
   showFlow,
   open,
   onToggle,
+  onChanged,
 }: {
   run: FlowRunView;
   showFlow: boolean;
   open: boolean;
   onToggle: () => void;
+  onChanged: () => Promise<unknown>;
 }) {
+  const dialog = useDialog();
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const act = async (action: "resume" | "discard") => {
+    if (
+      action === "discard" &&
+      !(await dialog.confirm(
+        "The steps it finished stay on record; the rest will not run.",
+        { title: "Discard this paused run?", confirmLabel: "Discard", danger: true },
+      ))
+    )
+      return;
+    setBusy(true);
+    setActionError("");
+    try {
+      await post(`/web/api/flow-runs/${encodeURIComponent(run.run_id)}/${action}`, {});
+      await onChanged();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
   const how = triggerLabel(run.trigger);
   return (
     <div className="schedule-row run-row">
@@ -433,6 +460,7 @@ function RunRow({
             .join(" · ")}
         </small>
         {run.error && <small className="run-error">{run.error}</small>}
+        {actionError && <small className="run-error">{actionError}</small>}
         {open && (
           <dl className="run-details">
             {run.steps.length ? (
@@ -462,6 +490,25 @@ function RunRow({
       </div>
       <div className="schedule-actions">
         <Status value={run.status} />
+        {run.status === "paused" && (
+          <>
+            <button
+              className="ghost-button"
+              disabled={busy}
+              onClick={() => act("resume")}
+              title="Run it again from the step it stopped on"
+            >
+              Resume
+            </button>
+            <button
+              className="ghost-button danger-link"
+              disabled={busy}
+              onClick={() => act("discard")}
+            >
+              Discard
+            </button>
+          </>
+        )}
         <button
           className="ghost-button"
           aria-expanded={open}
@@ -1140,6 +1187,7 @@ export function Flows() {
                 showFlow
                 open={openRun === run.run_id}
                 onToggle={() => toggleRun(run.run_id)}
+                onChanged={() => Promise.all([runs.reload(), history.reload()])}
               />
             ))
         ) : (
@@ -1249,6 +1297,7 @@ export function Flows() {
                   showFlow={false}
                   open={openRun === run.run_id}
                   onToggle={() => toggleRun(run.run_id)}
+                  onChanged={() => Promise.all([runs.reload(), history.reload()])}
                 />
               ))
             ) : (

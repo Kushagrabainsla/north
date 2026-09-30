@@ -157,19 +157,36 @@ class FlowRunStore:
             )
             return cursor.rowcount
 
-    def fail_interrupted(self) -> int:
-        """Mark runs still recorded as running as failed; returns how many.
+    def pause_interrupted(self) -> int:
+        """Pause runs still recorded as running, at the step they were on; returns how many.
 
         Run at startup: nothing can be running before the process that would
-        run it exists, so a "running" run was cut off by the last shutdown.
-        Left alone it would read as in progress forever.
+        run it exists, so a "running" run was cut off by the last shutdown -
+        perhaps while a step waited on a card, which does not survive a restart.
+        It pauses like any other interrupted step (CODING_STYLE §13.5), so it can
+        be resumed there rather than read as failed or as in progress forever.
         """
         with sqlite3.connect(self._path) as connection:
             cursor = connection.execute(
-                "UPDATE flow_runs SET status = 'failed', error = ? WHERE status = 'running'",
-                ("North stopped while this run was in progress.",),
+                "UPDATE flow_runs SET status = 'paused', error = ?, updated_at = ? WHERE status = 'running'",
+                ("North stopped during this step. Resume to run it again.", _now()),
             )
             return cursor.rowcount
+
+    def discard(self, run_id: str) -> FlowRun:
+        """End a paused run without finishing it. Its finished steps' outputs stay on record."""
+        run = self.get(run_id)
+        if run is None:
+            raise KeyError(f"Unknown flow run: {run_id}")
+        if run.status != "paused":
+            raise ValueError(f"Only a paused run can be discarded; this one is {run.status}.")
+        return self.update(
+            run_id,
+            status="cancelled",
+            current_step=run.current_step,
+            outputs=run.outputs,
+            error=f"Discarded while paused: {run.error}" if run.error else "Discarded while paused.",
+        )
 
     def update(
         self,

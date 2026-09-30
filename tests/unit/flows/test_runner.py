@@ -325,7 +325,7 @@ steps:
 """
 
 
-async def test_a_scheduled_run_fails_when_the_agent_never_wrote_its_declared_file(tmp_path):
+async def test_a_scheduled_run_pauses_when_the_agent_never_wrote_its_declared_file(tmp_path):
     agent = ProducingAgent(tmp_path, writes=False)
     store = FlowRunStore(tmp_path / "runs.db")
     tool = RunFlowTool(FlowRunner(_flow(tmp_path, _ONE_STEP), FakeAgents(agent), _skills(tmp_path), store))
@@ -334,7 +334,7 @@ async def test_a_scheduled_run_fails_when_the_agent_never_wrote_its_declared_fil
 
     assert not out.success
     run = store.get(out.data["run_id"])
-    assert run.status == "failed"
+    assert run.status == "paused"
     assert "completed without writing" in run.error
     assert str(agent.target) in run.error
 
@@ -381,7 +381,7 @@ steps:
     assert store.get(out.data["run_id"]).trigger == "manual"
 
 
-async def test_runner_fails_when_skill_output_breaks_its_contract(tmp_path):
+async def test_runner_pauses_when_skill_output_breaks_its_contract(tmp_path):
     registry = _flow(
         tmp_path,
         """name: demo
@@ -411,7 +411,7 @@ steps:
 
     run = await runner.run("demo")
 
-    assert run.status == "failed"
+    assert run.status == "paused"
     assert "output.evidence is required" in (run.error or "")
 
 
@@ -497,7 +497,7 @@ async def test_a_system_action_step_runs_the_registered_job_with_no_agent(tmp_pa
     assert run.outputs[0]["agent"] == "system"
 
 
-async def test_a_system_action_that_is_not_registered_fails_the_run_by_name(tmp_path):
+async def test_a_system_action_that_is_not_registered_pauses_the_run_by_name(tmp_path):
     store = FlowRunStore(tmp_path / "runs.db")
     runner = FlowRunner(_builtin_flow(tmp_path, _CLEANUP_FLOW), FakeAgents(FakeAgent()), _skills(tmp_path), store)
 
@@ -507,7 +507,7 @@ async def test_a_system_action_that_is_not_registered_fails_the_run_by_name(tmp_
     assert "task_context_cleanup" in store.get(out.data["run_id"]).error
 
 
-async def test_a_system_action_that_raises_fails_the_run_with_its_message(tmp_path):
+async def test_a_system_action_that_raises_pauses_the_run_with_its_message(tmp_path):
     store = FlowRunStore(tmp_path / "runs.db")
     runner = FlowRunner(_builtin_flow(tmp_path, _CLEANUP_FLOW), FakeAgents(FakeAgent()), _skills(tmp_path), store)
 
@@ -520,3 +520,78 @@ async def test_a_system_action_that_raises_fails_the_run_with_its_message(tmp_pa
 
     assert not out.success
     assert "database is locked" in store.get(out.data["run_id"]).error
+
+
+class FlakyAgent(FakeAgent):
+    """Answers every step, except that the step named *breaks* fails the first time it runs."""
+
+    def __init__(self, breaks: str) -> None:
+        super().__init__()
+        self.breaks = breaks
+        self.failed_once = False
+
+    async def run(self, payload):
+        if f"step '{self.breaks}'" in payload.prompt and not self.failed_once:
+            self.failed_once = True
+            self.payloads.append(payload)
+            raise RuntimeError("no model could serve general")
+        return await super().run(payload)
+
+
+_THREE_STEPS = """name: demo
+description: Demo flow
+steps:
+  - name: gather
+    skill: review-item
+    instructions: Gather.
+    approval: never
+  - name: draft
+    skill: review-item
+    instructions: Draft.
+    approval: never
+  - name: check
+    skill: review-item
+    instructions: Check.
+    approval: never
+"""
+
+
+async def test_a_step_that_errors_pauses_the_run_there_with_earlier_outputs_kept(tmp_path):
+    """#33: the work of finished steps is not lost to one step's error."""
+    store = FlowRunStore(tmp_path / "runs.db")
+    agent = FlakyAgent(breaks="draft")
+    runner = FlowRunner(_flow(tmp_path, _THREE_STEPS), FakeAgents(agent), _skills(tmp_path), store)
+
+    run = await runner.run("demo")
+
+    assert (run.status, run.current_step) == ("paused", 1)
+    assert [item["step"] for item in run.outputs] == ["gather"]
+    assert "no model could serve general" in run.error
+
+
+async def test_resuming_runs_only_the_step_that_stopped_and_what_follows(tmp_path):
+    store = FlowRunStore(tmp_path / "runs.db")
+    agent = FlakyAgent(breaks="draft")
+    runner = FlowRunner(_flow(tmp_path, _THREE_STEPS), FakeAgents(agent), _skills(tmp_path), store)
+    paused = await runner.run("demo")
+
+    done = await runner.run("demo", run_id=paused.run_id)
+
+    assert done.status == "completed"
+    assert [item["step"] for item in done.outputs] == ["gather", "draft", "check"]
+    prompts = [payload.prompt for payload in agent.payloads]
+    assert sum("step 'gather'" in prompt for prompt in prompts) == 1, "a finished step is not run again"
+    resumed = next(p for p in prompts[2:] if "step 'draft'" in p)
+    assert "running again after it stopped with: Skill step 'draft' failed" in resumed
+    assert "running again" not in next(p for p in prompts if "step 'check'" in p)
+
+
+async def test_a_paused_scheduled_run_is_not_reported_as_a_success(tmp_path):
+    """So the scheduled job is left needing you, rather than quietly done."""
+    store = FlowRunStore(tmp_path / "runs.db")
+    runner = FlowRunner(_flow(tmp_path, _THREE_STEPS), FakeAgents(FlakyAgent("draft")), _skills(tmp_path), store)
+
+    out = await RunFlowTool(runner).run_scheduled("demo", "job-1")
+
+    assert not out.success
+    assert out.data["status"] == "paused"

@@ -175,3 +175,76 @@ def test_run_view_lists_the_files_a_step_wrote_and_drops_an_empty_answer(tmp_pat
 
     assert step["output"] == "" and step["summary"] == ""
     assert step["artifacts"] == [{"name": "2026-09-25.md", "kind": "news"}]
+
+
+class _RecordingRunner:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def run(self, name: str, **kwargs):
+        self.calls.append((name, kwargs))
+
+
+def _paused_run(store, flow_registry, *, fingerprint: str | None = None):
+    from flows.models import flow_fingerprint
+
+    run = store.create(
+        run_id="r1",
+        flow_name="job-review",
+        task_id="flow_r1",
+        flow_fingerprint=fingerprint if fingerprint is not None else flow_fingerprint(flow_registry.get("job-review")),
+        trigger="schedule",
+    )
+    store.update(run.run_id, status="paused", current_step=0, outputs=[], error="model down")
+    return run
+
+
+async def test_a_paused_run_resumes_as_itself_at_its_step(flow_registry, tmp_path) -> None:
+    """#33: Resume runs the same run id, so finished steps and its task's record carry over."""
+    import asyncio
+
+    from web import extensions
+
+    store, runner = _run_store(tmp_path), _RecordingRunner()
+    _paused_run(store, flow_registry)
+    with bind_services(ApiServices(flow_registry=flow_registry, flow_store=store, flow_runner=runner)):
+        out = await extensions.resume_flow_run("r1")
+        await asyncio.sleep(0)
+
+    assert out["resumed_at_step"] == 0
+    assert runner.calls == [
+        ("job-review", {"run_id": "r1", "task_id": "flow_r1", "test_mode": False, "trigger": "schedule"})
+    ]
+
+
+async def test_only_a_paused_unchanged_run_can_resume(flow_registry, tmp_path) -> None:
+    from fastapi import HTTPException
+
+    from web import extensions
+
+    store, runner = _run_store(tmp_path), _RecordingRunner()
+    _paused_run(store, flow_registry, fingerprint="an-older-version")
+    store.create(run_id="done", flow_name="job-review")
+    with bind_services(ApiServices(flow_registry=flow_registry, flow_store=store, flow_runner=runner)):
+        with pytest.raises(HTTPException) as changed:
+            await extensions.resume_flow_run("r1")
+        with pytest.raises(HTTPException) as running:
+            await extensions.resume_flow_run("done")
+        with pytest.raises(HTTPException) as missing:
+            await extensions.resume_flow_run("nope")
+
+    assert changed.value.status_code == 409 and "changed since this run started" in changed.value.detail
+    assert running.value.status_code == 409
+    assert missing.value.status_code == 404
+    assert runner.calls == []
+
+
+async def test_a_paused_run_can_be_discarded(flow_registry, tmp_path) -> None:
+    from web import extensions
+
+    store = _run_store(tmp_path)
+    _paused_run(store, flow_registry)
+    with bind_services(ApiServices(flow_registry=flow_registry, flow_store=store)):
+        out = await extensions.discard_flow_run("r1")
+
+    assert out["status"] == "cancelled"

@@ -28,6 +28,7 @@ from approval.batching import BatchingNotifier
 from approval.callback_server import app as callback_app
 from approval.decider import MemoryDecider
 from approval.decisions import DecisionLog
+from approval.effects import EffectLog
 from approval.interaction import UserInteraction
 from approval.policy import ApprovalPolicy
 from approval.telegram import TelegramNotifier
@@ -833,6 +834,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             policy=approval_policy,
             ledger=deps.ledger,
         ),
+        # What reached someone or spent money, per task, so a resumed step never repeats it.
+        effects=EffectLog(settings.north_home / "approval_memory.db"),
     )
     _step("loading skills")
     skill_registry, skill_selector = _build_skills(deps)
@@ -869,8 +872,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     tool_registry.register(create_skill_tool)
     tool_registry.register(UseFlowTool(flow_registry))
     flow_store = FlowRunStore(settings.north_home / "flow_runs.db")
-    if cut_off := flow_store.fail_interrupted():
-        logger.info("Marked %d flow run(s) interrupted by the last shutdown as failed", cut_off)
+    if cut_off := flow_store.pause_interrupted():
+        logger.info("Paused %d flow run(s) cut off by the last shutdown; they can be resumed", cut_off)
 
     _step("refreshing inference pools")
     await deps.inference_router.refresh_pools()

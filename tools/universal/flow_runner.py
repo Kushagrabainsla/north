@@ -29,6 +29,12 @@ class FlowRunner:
     the exact skill body as its execution contract and calls ordinary North tools
     through its existing tool loop. Those calls remain visible in the ledger and
     are guarded by the step's server-owned mutation policy.
+
+    A step that errors pauses the run at that step, with the error and every
+    earlier step's output (CODING_STYLE §13.5, #33). Running the same run id
+    again resumes it there: finished steps are not repeated, and the approval
+    layer refuses any action that already reached someone or spent money in
+    this run. Only a decision of yours ends a run early (``rejected``).
     """
 
     def __init__(
@@ -119,6 +125,9 @@ class FlowRunner:
             return run
 
         outputs = list(run.outputs)
+        # Only the step a paused run stopped on is told why it runs again.
+        resumed_error = run.error if run.status == "paused" else ""
+        resume_at = run.current_step
         for index in range(run.current_step, len(flow.steps)):
             step = flow.steps[index]
             if step.action:
@@ -126,7 +135,7 @@ class FlowRunner:
                 if handler is None:
                     return self._store.update(
                         run.run_id,
-                        status="failed",
+                        status="paused",
                         current_step=index,
                         outputs=outputs,
                         error=f"Step '{step.name}': system action '{step.action}' is not available.",
@@ -136,7 +145,7 @@ class FlowRunner:
                 except Exception as exc:
                     return self._store.update(
                         run.run_id,
-                        status="failed",
+                        status="paused",
                         current_step=index,
                         outputs=outputs,
                         error=f"Step '{step.name}' failed: {exc}",
@@ -216,6 +225,7 @@ class FlowRunner:
                             outputs,
                             success_criteria,
                             output_schema,
+                            resumed_error=resumed_error if index == resume_at else "",
                         ),
                         workspace=self._workspace,
                         # Configured by the operator (settings), so the server grants it.
@@ -232,7 +242,7 @@ class FlowRunner:
             except Exception as exc:
                 return self._store.update(
                     run.run_id,
-                    status="failed",
+                    status="paused",
                     current_step=index,
                     outputs=outputs,
                     error=f"Skill step '{step.name}' failed: {exc}",
@@ -260,7 +270,7 @@ class FlowRunner:
             if missing and run.trigger == "schedule":
                 return self._store.update(
                     run.run_id,
-                    status="failed",
+                    status="paused",
                     current_step=index,
                     outputs=outputs,
                     error=f"Skill step '{step.name}': {selected_agent_name} completed without writing: "
@@ -273,7 +283,7 @@ class FlowRunner:
             if output_errors:
                 return self._store.update(
                     run.run_id,
-                    status="failed",
+                    status="paused",
                     current_step=index,
                     outputs=outputs,
                     error=(
@@ -319,11 +329,21 @@ def _step_prompt(
     outputs: list[dict[str, Any]],
     success_criteria: tuple[str, ...],
     output_schema: dict[str, Any],
+    *,
+    resumed_error: str = "",
 ) -> str:
     previous = {item["step"]: item.get("data", {}) for item in outputs}
     criteria = "\n".join(f"- {item}" for item in success_criteria)
+    resumed = (
+        f"This step is running again after it stopped with: {resumed_error}\n"
+        "Check what it already did before acting. Anything that reached someone else or spent money "
+        "earlier in this run is refused if you try it again, so do not retry those.\n\n"
+        if resumed_error
+        else ""
+    )
     return (
         f"Execute flow '{flow_name}', step '{step.name}', using {step.skill or 'the inline procedure'}.\n\n"
+        f"{resumed}"
         f"Step instructions:\n{step.instructions}\n\n"
         f"Resolved inputs:\n{json.dumps(inputs, indent=2, default=str)}\n\n"
         f"Previous step outputs:\n{json.dumps(previous, indent=2, default=str)}\n\n"

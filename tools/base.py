@@ -75,10 +75,15 @@ class Tool(ABC):
         request = await self.describe(input)
         if request is None:
             return await self.run(input)
-        decision = await self._approvals().decide(request, task_id=input.params.get("task_id"))
+        approvals = self._approvals()
+        task_id = input.params.get("task_id")
+        decision = await approvals.decide(request, task_id=task_id)
         if not decision.allowed:
             return _refused(decision, request)
-        return await self.run(input.model_copy(update={"approved": request}))
+        output = await self.run(input.model_copy(update={"approved": request}))
+        if output.success:
+            approvals.completed(request, task_id)
+        return output
 
     def _approvals(self) -> Approvals:
         from approval.approvals import Approvals

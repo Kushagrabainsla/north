@@ -79,18 +79,36 @@ def test_store_upgrades_a_database_written_before_history_was_kept(tmp_path):
     assert [run.run_id for run in store.list_runs("demo")] == ["old"]
 
 
-def test_runs_left_running_by_a_shutdown_are_failed_and_finished_ones_are_untouched(tmp_path):
+def test_runs_left_running_by_a_shutdown_pause_at_their_step_and_finished_ones_are_untouched(tmp_path):
+    """#33: a cut-off run can be resumed where it stopped, instead of reading as failed (#35)."""
     store = FlowRunStore(tmp_path / "runs.db")
     store.create(run_id="cut-off", flow_name="demo")
+    store.update("cut-off", status="running", current_step=2, outputs=[{"step": "a"}, {"step": "b"}])
     store.create(run_id="done", flow_name="demo")
     store.create(run_id="waiting", flow_name="demo")
     _finish(store, "done")
     store.update("waiting", status="paused", current_step=0, outputs=[])
 
-    assert store.fail_interrupted() == 1
+    assert store.pause_interrupted() == 1
 
-    assert store.get("cut-off").status == "failed"
-    assert "stopped" in store.get("cut-off").error
+    cut_off = store.get("cut-off")
+    assert (cut_off.status, cut_off.current_step, len(cut_off.outputs)) == ("paused", 2, 2)
+    assert "stopped" in cut_off.error
     assert store.get("done").status == "completed"
     assert store.get("waiting").status == "paused"
-    assert store.fail_interrupted() == 0
+    assert store.pause_interrupted() == 0
+
+
+def test_a_paused_run_can_be_discarded_and_keeps_its_finished_steps(tmp_path):
+    import pytest
+
+    store = FlowRunStore(tmp_path / "runs.db")
+    store.create(run_id="r", flow_name="demo")
+    store.update("r", status="paused", current_step=1, outputs=[{"step": "a"}], error="model down")
+
+    discarded = store.discard("r")
+
+    assert discarded.status == "cancelled" and discarded.outputs == [{"step": "a"}]
+    assert "model down" in discarded.error
+    with pytest.raises(ValueError):
+        store.discard("r")

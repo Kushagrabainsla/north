@@ -761,15 +761,23 @@ async def start_flow_run(name: str, body: FlowRunRequest) -> dict[str, Any]:
         trigger=trigger,
     )
 
+    _drive_in_background(runner, store, name, run_id=run_id, task_id=task_id, test_mode=test_mode, trigger=trigger)
+    return {"run_id": run_id, "task_id": task_id, "status": "running", "trigger": trigger}
+
+
+def _drive_in_background(runner, store, name: str, **run: Any) -> None:
+    """Run a flow without holding the request; an unexpected error pauses the run where it was."""
+    run_id = run["run_id"]
+
     async def _drive() -> None:
         try:
-            await runner.run(name, run_id=run_id, task_id=task_id, test_mode=test_mode, trigger=trigger)
+            await runner.run(name, **run)
         except Exception as exc:
             current = store.get(run_id)
             if current is not None and current.status == "running":
                 store.update(
                     run_id,
-                    status="failed",
+                    status="paused",
                     current_step=current.current_step,
                     outputs=current.outputs,
                     error=str(exc),
@@ -777,7 +785,56 @@ async def start_flow_run(name: str, body: FlowRunRequest) -> dict[str, Any]:
             raise
 
     spawn(_drive(), name=f"flow_run:{run_id}")
-    return {"run_id": run_id, "task_id": task_id, "status": "running", "trigger": trigger}
+
+
+@router.post("/flow-runs/{run_id}/resume", status_code=202)
+async def resume_flow_run(run_id: str) -> dict[str, Any]:
+    """Run a paused run again from the step it stopped on (#33).
+
+    Finished steps are not repeated, and the approval layer refuses anything
+    that already reached someone or spent money in this run. A run whose flow
+    or skills changed since it started cannot resume: what it would run is not
+    what it ran, so it is discarded and started again instead.
+    """
+    services = current_services()
+    runner = services.require("flow_runner")
+    store = services.require("flow_store")
+    run = store.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No flow run with that id")
+    if run.status != "paused":
+        raise HTTPException(status_code=409, detail=f"Only a paused run can be resumed; this one is {run.status}.")
+    flow = _known_flow(run.flow_name)
+    skills = services.skill_registry
+    if run.flow_fingerprint and run.flow_fingerprint != flow_fingerprint(flow, skills.get if skills else None):
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{run.flow_name}' or one of its skills changed since this run started. "
+            "Discard it and start a new run.",
+        )
+    _drive_in_background(
+        runner,
+        store,
+        run.flow_name,
+        run_id=run.run_id,
+        task_id=run.task_id,
+        test_mode=run.test_mode,
+        trigger=run.trigger,
+    )
+    return {"run_id": run.run_id, "status": "running", "resumed_at_step": run.current_step}
+
+
+@router.post("/flow-runs/{run_id}/discard")
+async def discard_flow_run(run_id: str) -> dict[str, Any]:
+    """End a paused run without finishing it; the steps it finished stay on record."""
+    store = current_services().require("flow_store")
+    try:
+        run = store.discard(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No flow run with that id") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return flow_run_view(run)
 
 
 @router.post("/flow-definitions/{name}/activate")
