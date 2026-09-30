@@ -9,6 +9,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from utils.step_approval import approval_fingerprint_value
+
 # Every skill lives in its own folder as this file.
 SKILL_FILENAME = "SKILL.md"
 
@@ -114,7 +116,7 @@ def skill_fingerprint(skill: Skill) -> str:
                 "tools": list(skill.execution.tools),
                 "inputs": skill.execution.inputs,
                 "outputs": skill.execution.outputs,
-                "approval": skill.execution.approval,
+                "approval": approval_fingerprint_value(skill.execution.approval),
                 "success_criteria": list(skill.execution.success_criteria),
             }
             if skill.execution is not None

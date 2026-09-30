@@ -168,7 +168,7 @@ class FlowRunner:
             # different approval than the skill's default for this one use,
             # which is the entire reason FlowStep carries its own field.
             # Reading execution.approval here silently dropped every step's
-            # override - a step declaring "always" ran with whatever the
+            # override - a step declaring "before_step" ran with whatever the
             # skill's baseline happened to be instead.
             approval = step.approval
             success_criteria = (
@@ -176,7 +176,7 @@ class FlowRunner:
             )
             output_schema = execution.outputs if execution else {"type": "object", "properties": {}}
 
-            if approval == "always":
+            if approval == "before_step":
                 if self._interaction is None:
                     return self._store.update(
                         run.run_id,

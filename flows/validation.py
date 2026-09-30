@@ -7,7 +7,7 @@ from typing import Any
 
 from flows.models import flow_fingerprint
 
-_APPROVAL_RANK = {"never": 0, "on_mutation": 1, "always": 2}
+_APPROVAL_RANK = {"never": 0, "on_mutation": 1, "before_step": 2}
 
 
 @dataclass(frozen=True)

@@ -1684,7 +1684,7 @@ export function CapabilityModal({
 export interface SkillExecution {
   agent: string;
   tools: string[];
-  approval: "never" | "on_mutation" | "always";
+  approval: "never" | "on_mutation" | "before_step";
   inputs: {
     properties?: Record<string, { type?: string; enum?: unknown[] }>;
     required?: string[];
@@ -1717,7 +1717,7 @@ interface SkillCreateDraft {
   instructions: string;
   executor: string;
   tools: string[];
-  approval: "never" | "on_mutation" | "always";
+  approval: "never" | "on_mutation" | "before_step";
   inputs: string;
   outputs: string;
   successCriteria: string;
@@ -1958,7 +1958,7 @@ export function Skills() {
                 >
                   <option value="never">No mutations</option>
                   <option value="on_mutation">Ask before each mutation</option>
-                  <option value="always">Approve the whole step first</option>
+                  <option value="before_step">Ask once before the step</option>
                 </select>
               </label>
               <label className="skill-create-wide">

@@ -56,7 +56,7 @@ class SkillCreate(BaseModel):
     domains: list[str] = Field(default_factory=lambda: ["general"])
     executor: str = "general"
     tools: list[str] = Field(default_factory=list)
-    approval: str = Field(default="never", pattern="^(never|on_mutation|always)$")
+    approval: str = Field(default="never", pattern="^(never|on_mutation|before_step|always)$")
     inputs: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
     outputs: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
     success_criteria: list[str] = Field(

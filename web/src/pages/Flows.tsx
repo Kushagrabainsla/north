@@ -276,8 +276,8 @@ function FlowStepCard({
           </span>
           <span>
             <b>Approval</b>
-            {execution.approval === "always"
-              ? "Whole step"
+            {execution.approval === "before_step"
+              ? "Once, before the step"
               : execution.approval === "on_mutation"
                 ? "Before mutations"
                 : "None"}

@@ -183,7 +183,7 @@ steps:
 
     assert run.status == "completed"
     # Neither step restricts changes: each change the guarded step makes is put
-    # to the approval layer by Tool.execute, and "always" asked once up front.
+    # to the approval layer by Tool.execute, and "before_step" asked once up front.
     assert [payload.mutation_policy for payload in agent.payloads] == ["allow", "allow"]
 
 

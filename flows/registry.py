@@ -12,11 +12,11 @@ import yaml
 
 from flows.exceptions import FlowNotFoundError, FlowParseError
 from flows.models import FLOW_FILENAME, Flow, FlowSource, FlowStep
+from utils.step_approval import STEP_APPROVALS, parse_step_approval
 
 logger = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
-_APPROVALS = {"never", "always", "on_mutation"}
 
 
 def _as_mapping(value: Any, label: str) -> dict[str, Any]:
@@ -46,24 +46,25 @@ def _parse_steps(raw: Any, *, allow_actions: bool = False) -> tuple[tuple[FlowSt
         raw_approval = data.get("approval", "on_mutation")
         if isinstance(raw_approval, bool):
             if not legacy_tool:
-                raise FlowParseError(f"steps[{index}].approval must be one of {sorted(_APPROVALS)}, not a boolean")
+                raise FlowParseError(
+                    f"steps[{index}].approval must be one of {', '.join(STEP_APPROVALS)}, not a boolean"
+                )
             # Old flows used booleans before mutation-aware modes existed. A
             # false value cannot safely mean "never ask", so migrate it to the
             # per-mutation gate; true keeps the stronger whole-step gate.
-            approval = "always" if raw_approval else "on_mutation"
+            approval = "before_step" if raw_approval else "on_mutation"
             migrated_legacy_step = True
         else:
-            approval = str(raw_approval or "on_mutation").strip().lower()
+            try:
+                approval = parse_step_approval(raw_approval)
+            except ValueError as exc:
+                raise FlowParseError(f"steps[{index}].{exc}") from None
         if not name:
             raise FlowParseError(f"steps[{index}] is missing name")
         # A step may either reference a reusable skill or provide its own
         # inline instructions. The latter is executed by the general agent.
         if name in seen:
             raise FlowParseError(f"duplicate step name: {name}")
-        if approval not in _APPROVALS:
-            raise FlowParseError(
-                f"steps[{index}] has invalid approval {approval!r}; expected one of {sorted(_APPROVALS)}"
-            )
         raw_inputs = data.get("inputs", data.get("params")) or {}
         if not isinstance(raw_inputs, dict):
             raise FlowParseError(f"steps[{index}].inputs must be a mapping")

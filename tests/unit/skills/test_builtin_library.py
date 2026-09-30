@@ -112,17 +112,17 @@ def test_job_application_skills_split_drafting_from_submission() -> None:
     submit = _REGISTRY.get("submitting-an-approved-job-application")
 
     assert prepare.execution is not None
-    assert prepare.execution.approval == "always"
+    assert prepare.execution.approval == "before_step"
     assert {"browser", "read_file", "write_file"} == set(prepare.execution.tools)
     assert "never submits" in prepare.body.lower()
 
     assert submit.execution is not None
-    assert submit.execution.approval == "always"
+    assert submit.execution.approval == "before_step"
     assert submit.execution.tools == ("browser", "write_file")
     assert "exactly once" in submit.body.lower()
 
     queue = _REGISTRY.get("processing-a-job-application-queue")
     assert queue.execution is not None
-    assert queue.execution.approval == "always"
+    assert queue.execution.approval == "before_step"
     assert "request_approval" in queue.body
     assert "returned `response` values" in queue.body

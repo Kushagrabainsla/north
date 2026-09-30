@@ -267,3 +267,51 @@ def test_a_flow_without_a_system_action_keeps_the_fingerprint_it_was_activated_u
 
     assert flow_fingerprint(plain) == expected
     assert flow_fingerprint(with_action) != expected
+
+
+def _approval_flow(tmp_path: Path, approval: str) -> Flow:
+    _write_flow(
+        tmp_path,
+        "gate",
+        f"""name: gate
+description: A step that asks once
+steps:
+  - name: submit
+    skill: review-guidelines
+    instructions: Submit it.
+    approval: {approval}
+""",
+    )
+    return FlowRegistry(tmp_path).get("gate")
+
+
+def test_before_step_asks_once_before_the_step(tmp_path):
+    """#41: the setting says when it asks, not how often."""
+    assert _approval_flow(tmp_path, "before_step").steps[0].approval == "before_step"
+
+
+def test_the_old_name_always_still_loads_as_before_step(tmp_path):
+    assert _approval_flow(tmp_path, "always").steps[0].approval == "before_step"
+
+
+def test_an_unknown_approval_names_the_valid_ones():
+    import pytest
+
+    from utils.step_approval import parse_step_approval
+
+    with pytest.raises(ValueError, match="never, on_mutation, before_step"):
+        parse_step_approval("sometimes")
+
+
+def test_the_rename_keeps_a_tested_flow_tested(tmp_path):
+    """A flow's fingerprint is its test evidence; renaming the value must not void it."""
+    renamed = _approval_flow(tmp_path, "before_step")
+    step = renamed.steps[0]
+    before_the_rename = Flow(
+        name=renamed.name,
+        description=renamed.description,
+        steps=(FlowStep(name=step.name, skill=step.skill, instructions=step.instructions, approval="always"),),
+        directory=renamed.directory,
+    )
+
+    assert flow_fingerprint(renamed) == flow_fingerprint(before_the_rename)

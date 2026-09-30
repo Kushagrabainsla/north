@@ -7,7 +7,7 @@ execution:
   tools:
     - browser
     - write_file
-  approval: always
+  approval: before_step
   inputs:
     type: object
     properties:

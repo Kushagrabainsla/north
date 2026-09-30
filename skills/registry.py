@@ -16,6 +16,7 @@ from pathlib import Path
 from skills.exceptions import SkillNotFoundError, SkillParseError
 from skills.models import SKILL_FILENAME, Skill, SkillExecution, SkillIntent, SkillSource
 from skills.parser import parse_skill_document
+from utils.step_approval import parse_step_approval
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,6 @@ logger = logging.getLogger(__name__)
 # built-in is a review problem, not a load-time failure, and must never be
 # silently dropped (every shipped skill should be usable).
 MAX_BODY_CHARS = 8_000
-_APPROVALS = {"never", "on_mutation", "always"}
 
 
 # An absolute path rooted in somebody's home directory, on any platform. A
@@ -62,9 +62,10 @@ def parse_execution_contract(raw: object) -> SkillExecution | None:
     tools = raw.get("tools", [])
     if not isinstance(tools, list) or any(not isinstance(name, str) or not name.strip() for name in tools):
         raise ValueError("execution.tools must be a list of tool names")
-    approval = str(raw.get("approval") or "on_mutation").strip().lower()
-    if approval not in _APPROVALS:
-        raise ValueError(f"execution.approval must be one of {sorted(_APPROVALS)}")
+    try:
+        approval = parse_step_approval(raw.get("approval"))
+    except ValueError as exc:
+        raise ValueError(f"execution.{exc}") from None
     success_criteria = raw.get("success_criteria", [])
     if not isinstance(success_criteria, list) or any(
         not isinstance(item, str) or not item.strip() for item in success_criteria

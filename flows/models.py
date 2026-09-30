@@ -10,6 +10,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from utils.step_approval import approval_fingerprint_value
+
 FLOW_FILENAME = "FLOW.yaml"
 
 
@@ -87,7 +89,7 @@ def flow_fingerprint(
                 "skill": step.skill,
                 "instructions": step.instructions,
                 "inputs": step.inputs,
-                "approval": step.approval,
+                "approval": approval_fingerprint_value(step.approval),
                 # Only when set, so a flow with no system action keeps the
                 # fingerprint it was activated under.
                 **({"action": step.action} if step.action else {}),
