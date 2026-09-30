@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 InferenceCallSink = Callable[[str | None, dict[str, Any]], Awaitable[None]]
 
 _PLANNING_COMPONENTS = frozenset({"planner", "router", "north_star_checker"})
-_REVIEW_COMPONENTS = frozenset({"critic", "spec_critique", "judgement_filter"})
+_REVIEW_COMPONENTS = frozenset({"critic", "spec_critique", "approval_decider"})
 _SYNTHESIS_COMPONENTS = frozenset({"synthesizer"})
 _MEMORY_COMPONENTS = frozenset(
     {"embed", "extraction_pipeline", "episode_consolidator", "context_injector", "fact_supersede", "fact_glossary"}

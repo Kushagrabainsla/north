@@ -109,6 +109,11 @@ class Card(BaseModel):
     # the server when the card is raised; empty for a card that asks about no
     # action, which is then never learned from.
     action_key: str = ""
+    # Why north decided this card without you, and what it knew that led there -
+    # the facts and past decisions the memory decider read. Empty for a card you
+    # decided yourself.
+    reason: str = ""
+    memory_used: list[str] = Field(default_factory=list)
 
     @classmethod
     def new(

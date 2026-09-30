@@ -434,7 +434,7 @@ Two consequences worth keeping:
 
 - **Ask**: read-only runs; every mutating action asks.
 - **Safe** (was `auto`): read-only, safe mutating actions and exact replays of the user's past answers run; everything else asks.
-- **Autonomous**: never asks; a model given the user's memory as context always gives the answer that best fits the user. It uses the pinned model under manual routing and its own routing part under auto routing.
+- **Autonomous**: never asks; a model given the user's memory as context always gives the answer that best fits the user. It uses the pinned model under manual routing and its own routing part under auto routing. The deterministic tiers (read-only, north's notes, the safe list, exact replays) decide first; the model decides the rest. Only if the model fails (no model, an error, an unreadable reply) does a card wait for the user.
 - **YOLO**: never asks; every approval is yes and every question gets the affirmative answer.
 
 **Why:** each mode must mean one thing the user can predict.
@@ -519,7 +519,7 @@ approval/
   store.py            <- ApprovalStore (card registry, SQLite-backed)
   policy.py           <- ApprovalPolicy: the ONE decision point (see 7.4)
   unattended.py       <- UnattendedPolicy (the deterministic safe subset)
-  judgement_filter.py <- one tier of that decision: what the learned rules say
+  decider.py          <- MemoryDecider: how autonomous decides, from the user's memory
 
 agents/
   __init__.py

@@ -12,32 +12,26 @@ from pathlib import Path
 import pytest
 
 from approval.approval_memory import ApprovalMemory
-from approval.models import Card, CardType
-from approval.policy import Action, ActionKind, ApprovalPolicy, Verdict
+from approval.models import ApprovalDecision, Card, CardType
+from approval.policy import Action, ActionKind, Answer, ApprovalPolicy, Verdict
 from approval.unattended import UnattendedPolicy
 from config.approval_mode import ApprovalMode
+from tests.conftest import StubDecider, deciding
 
 MODES = tuple(ApprovalMode)
 
 
-def policy(mode: ApprovalMode, *, memory=None, advisor=None) -> ApprovalPolicy:
+def policy(mode: ApprovalMode, *, memory=None, decider=None) -> ApprovalPolicy:
     return ApprovalPolicy(
         mode_provider=lambda: mode,
         unattended=UnattendedPolicy(),
         approval_memory=memory,
-        question_advisor=advisor,
+        decider=decider if decider is not None else deciding(ApprovalDecision.APPROVED),
     )
 
 
 def shell(command: str, **kw) -> Action:
     return Action(agent="bash", kind=ActionKind.SHELL_COMMAND, summary=command, command=command, **kw)
-
-
-def advisor(decision: str | None, chosen: str = "the learned answer"):
-    async def _advise(card: Card) -> tuple[str | None, str]:
-        return decision, chosen
-
-    return _advise
 
 
 def question(*options: str) -> Card:
@@ -55,14 +49,61 @@ async def test_a_read_only_action_never_asks(mode: ApprovalMode) -> None:
     assert ruling.rule == "read-only"
 
 
-# ── 2. Autonomous allows everything ──────────────────────────────────────────
+# ── 2. Autonomous: the deterministic tiers, then the memory decider ─────────
 
 
-async def test_autonomous_allows_a_destructive_command() -> None:
-    """The operator declined a hard-danger floor: allow all means allow all."""
-    ruling = await policy(ApprovalMode.AUTONOMOUS).rule(shell("rm -rf ~/.north"))
+async def test_autonomous_lets_the_decider_approve_even_a_destructive_command() -> None:
+    """The operator declined a hard-danger floor: the decider has the last word."""
+    decider = deciding(ApprovalDecision.APPROVED, reason="you clean this cache weekly", used=("fact: cleans cache",))
+
+    ruling = await policy(ApprovalMode.AUTONOMOUS, decider=decider).rule(shell("rm -rf ~/.cache/north"))
 
     assert ruling.verdict is Verdict.ALLOW
+    assert ruling.rule == "memory decider: you clean this cache weekly"
+    assert ruling.memory_used == ("fact: cleans cache",)
+
+
+async def test_autonomous_refuses_what_the_decider_rejects() -> None:
+    decider = deciding(ApprovalDecision.REJECTED, reason="you never deploy on Fridays")
+
+    ruling = await policy(ApprovalMode.AUTONOMOUS, decider=decider).rule(shell("npm run deploy"))
+
+    assert ruling.verdict is Verdict.REFUSE
+    assert "never deploy on Fridays" in ruling.rule
+
+
+async def test_autonomous_asks_only_when_the_decider_cannot_decide() -> None:
+    ruling = await policy(ApprovalMode.AUTONOMOUS, decider=StubDecider(None)).rule(shell("npm run deploy"))
+
+    assert ruling.verdict is Verdict.ASK
+
+
+async def test_autonomous_asks_when_no_decider_is_wired() -> None:
+    bare = ApprovalPolicy(mode_provider=lambda: ApprovalMode.AUTONOMOUS, unattended=UnattendedPolicy())
+
+    assert (await bare.rule(shell("npm run deploy"))).verdict is Verdict.ASK
+
+
+async def test_autonomous_uses_the_safe_list_before_the_model() -> None:
+    decider = deciding(ApprovalDecision.REJECTED)
+
+    ruling = await policy(ApprovalMode.AUTONOMOUS, decider=decider).rule(shell("pytest tests/unit"))
+
+    assert ruling.verdict is Verdict.ALLOW
+    assert ruling.rule.startswith("safe list")
+    assert not decider.asked
+
+
+async def test_autonomous_replays_your_past_answer_before_the_model(tmp_path: Path) -> None:
+    memory = ApprovalMemory(tmp_path / "m.db")
+    action = shell("npm run deploy")
+    memory.record(action.agent, action.describe(), "rejected")
+    decider = deciding(ApprovalDecision.APPROVED)
+
+    ruling = await policy(ApprovalMode.AUTONOMOUS, memory=memory, decider=decider).rule(action)
+
+    assert ruling.verdict is Verdict.REFUSE
+    assert not decider.asked
 
 
 # ── 3. Work handed over for review is never auto-decided below autonomous ────
@@ -94,20 +135,27 @@ async def test_work_is_not_saved_by_a_learned_rule_either(tmp_path: Path) -> Non
     assert ruling.verdict is Verdict.ASK
 
 
-async def test_autonomous_still_submits_work() -> None:
-    submit = Action(agent="job", kind=ActionKind.OTHER, summary="Submit?", carries_work=True)
+async def test_autonomous_puts_work_to_the_decider_not_to_a_replay(tmp_path: Path) -> None:
+    """A replay does not read the fields, and the fields are what is being judged."""
+    memory = ApprovalMemory(tmp_path / "m.db")
+    submit = Action(agent="job", kind=ActionKind.OTHER, summary="Submit?", carries_work=True, details="Company: X")
+    memory.record(submit.agent, submit.describe(), "approved")
+    decider = deciding(ApprovalDecision.REJECTED, reason="you are not applying to X")
 
-    assert (await policy(ApprovalMode.AUTONOMOUS).rule(submit)).verdict is Verdict.ALLOW
+    ruling = await policy(ApprovalMode.AUTONOMOUS, memory=memory, decider=decider).rule(submit)
+
+    assert ruling.verdict is Verdict.REFUSE
+    assert decider.asked == [submit]
 
 
-# ── 4. The deterministic safe subset, in auto only ───────────────────────────
+# ── 4. The deterministic safe subset ───────────────────────────
 
 
 async def test_auto_allows_an_allowlisted_command() -> None:
     ruling = await policy(ApprovalMode.SAFE).rule(shell("pytest tests/unit"))
 
     assert ruling.verdict is Verdict.ALLOW
-    assert ruling.rule == "auto: safe command allowlist"
+    assert ruling.rule == "safe list: test, lint or build command"
 
 
 async def test_interactive_asks_for_the_same_command() -> None:
@@ -145,7 +193,7 @@ async def test_auto_allows_an_edit_inside_the_workspace_only(tmp_path: Path) -> 
     assert (await policy(ApprovalMode.SAFE).rule(edit(Path.home() / ".ssh" / "id_rsa"))).verdict is Verdict.ASK
 
 
-# ── 5. Learned decisions, in auto only ───────────────────────────────────────
+# ── 5. Your past answers, replayed in safe ───────────────────────────────────────
 
 
 async def test_auto_replays_a_prior_decision(tmp_path: Path) -> None:
@@ -179,32 +227,28 @@ async def test_interactive_never_replays_a_prior_decision(tmp_path: Path) -> Non
 
 
 async def test_yolo_answers_a_question_yes() -> None:
-    assert await policy(ApprovalMode.YOLO).answer(question("Proceed", "Stop")) == ("answered", "Proceed")
-    assert (await policy(ApprovalMode.YOLO).answer(question()))[1].startswith("Yes")
+    answered = await policy(ApprovalMode.YOLO).answer(question("Proceed", "Stop"))
+    assert (answered.decision, answered.chosen_option) == ("answered", "Proceed")
+    assert (await policy(ApprovalMode.YOLO).answer(question())).chosen_option.startswith("Yes")
 
 
-async def test_autonomous_lets_the_learned_rules_answer() -> None:
-    answered = await policy(ApprovalMode.AUTONOMOUS, advisor=advisor("answered", "Postgres")).answer(question())
+async def test_autonomous_lets_the_memory_decider_answer() -> None:
+    decided = Answer(ApprovalDecision.ANSWERED, "Postgres", "you use Postgres", ("fact: uses Postgres",))
 
-    assert answered == ("answered", "Postgres")
+    assert await policy(ApprovalMode.AUTONOMOUS, decider=StubDecider(decided)).answer(question()) == decided
 
 
 @pytest.mark.parametrize("mode", [ApprovalMode.ASK, ApprovalMode.SAFE])
 async def test_ask_and_safe_never_let_a_model_answer_for_you(mode: ApprovalMode) -> None:
     """The bug: the judgement tier answered questions in every mode, the strictest included."""
-    consulted = False
+    decider = deciding(ApprovalDecision.ANSWERED, "x")
 
-    async def spy(card: Card) -> tuple[str | None, str]:
-        nonlocal consulted
-        consulted = True
-        return "answered", "x"
-
-    assert await policy(mode, advisor=spy).answer(question()) is None
-    assert not consulted
+    assert await policy(mode, decider=decider).answer(question()) is None
+    assert not decider.asked
 
 
-async def test_an_abstaining_advisor_leaves_the_question_to_you() -> None:
-    assert await policy(ApprovalMode.AUTONOMOUS, advisor=advisor(None)).answer(question()) is None
+async def test_an_undecided_question_is_left_to_you() -> None:
+    assert await policy(ApprovalMode.AUTONOMOUS, decider=StubDecider(None)).answer(question()) is None
 
 
 async def test_yolo_says_yes_to_every_action() -> None:
@@ -251,15 +295,6 @@ async def test_every_ruling_names_its_rule(mode: ApprovalMode) -> None:
     """An auto-approval nobody can see is the same as one that never happened."""
     for action in (shell("ls", read_only=True, mutating=False), shell("pytest tests/unit"), shell("rm -rf /")):
         assert (await policy(mode).rule(action)).rule
-
-
-async def test_autonomous_ignores_a_prior_rejection(tmp_path: Path) -> None:
-    """Allow-all sits above every learned tier - replaying is auto's job, not its."""
-    memory = ApprovalMemory(tmp_path / "m.db")
-    action = shell("npm run deploy")
-    memory.record(action.agent, action.describe(), "rejected")
-
-    assert (await policy(ApprovalMode.AUTONOMOUS, memory=memory).rule(action)).verdict is Verdict.ALLOW
 
 
 async def test_the_mode_is_read_at_decision_time() -> None:

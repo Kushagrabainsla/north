@@ -18,7 +18,6 @@ from approval import ApprovalDecision, Card, CardType, UserInteraction
 from approval.approval_memory import ApprovalMemory
 from approval.decisions import DecisionLog
 from approval.store import ApprovalStore
-from config.approval_mode import ApprovalMode, resolve_approval_mode
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest, PoolPriority
@@ -1197,25 +1196,15 @@ class Orchestrator:
             task_id, deploy_prompt, [coder], workspace, context=context, model_pool=model_pool, edit_scope=edit_scope
         )
 
-    def _human_available(self) -> bool:
-        """True when a human can be asked (any mode except autonomous)."""
-        if self._north_settings is None:
-            return True
-        return resolve_approval_mode(self._north_settings) != ApprovalMode.AUTONOMOUS
-
     def _use_design_phase(self, plan: ExecutionPlan) -> bool:
         """True when a task should get the interactive clarify+design phase first.
 
-        Only for larger code kinds (feature/refactor) and only when a human is
-        available to discuss - autonomous runs skip it and let the conductor design
-        from the user's known preferences + best practices. Requires researcher +
-        architect registered.
+        Only for larger code kinds (feature/refactor). Its questions go through the
+        approval layer like any other, so in autonomous the memory decider answers
+        them. Requires researcher + architect registered.
         """
-        return (
-            plan.engineering_kind in DESIGN_KINDS
-            and self._human_available()
-            and {"researcher", "architect"} <= set(self._agent_registry.names())
-        )
+        agents = set(self._agent_registry.names())
+        return plan.engineering_kind in DESIGN_KINDS and {"researcher", "architect"} <= agents
 
     async def _run_design_phase(
         self,

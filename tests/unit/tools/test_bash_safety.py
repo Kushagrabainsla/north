@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests.conftest import bind_approvals, rejecting_store
+from tests.conftest import bind_approvals, deciding, rejecting_store
 from tools.models import ToolInput
 from tools.specialized.bash import BashTool, CommandSafetyInspector
 
@@ -95,9 +95,9 @@ class TestBashToolApprovalBypass:
     """
 
     @staticmethod
-    def _tool(*, mode=None, advisor=None, store=None) -> tuple[BashTool, MagicMock]:
+    def _tool(*, mode=None, decider=None, store=None) -> tuple[BashTool, MagicMock]:
         store = store or MagicMock()
-        return bind_approvals(BashTool(), mode, store=store, advisor=advisor), store
+        return bind_approvals(BashTool(), mode, store=store, decider=decider), store
 
     @staticmethod
     async def _allowed(tool: BashTool, command: str) -> bool:
@@ -132,17 +132,11 @@ class TestBashToolApprovalBypass:
     @pytest.mark.asyncio
     async def test_a_learned_rule_is_not_consulted_in_interactive(self) -> None:
         """The bug this replaced: the model tier ran in the default mode."""
-        consulted = False
-
-        async def advisor(action):
-            nonlocal consulted
-            consulted = True
-            return "approved", ""
-
-        tool, _ = self._tool(advisor=advisor, store=rejecting_store())
+        decider = deciding("approved")
+        tool, _ = self._tool(decider=decider, store=rejecting_store())
 
         assert not await self._allowed(tool, "npm run deploy")
-        assert not consulted
+        assert not decider.asked
 
     @pytest.mark.asyncio
     async def test_an_auto_approved_command_is_still_recorded(self) -> None:
@@ -218,7 +212,7 @@ class TestBashAllowDangerous:
         store.wait_for_decision = AsyncMock(return_value=resolved)
         from config.approval_mode import ApprovalMode
 
-        tool = bind_approvals(BashTool(), ApprovalMode.AUTONOMOUS, store=store)
+        tool = bind_approvals(BashTool(), ApprovalMode.YOLO, store=store)
         out = await tool.execute(ToolInput(params={"command": "rm -rf / --no-preserve-root"}))
         assert out.success is True  # not pre-blocked; reached execution
 
@@ -262,7 +256,7 @@ class TestBashAllowDangerous:
 
         from config.approval_mode import ApprovalMode
 
-        tool = bind_approvals(BashTool(), ApprovalMode.AUTONOMOUS, store=store)
+        tool = bind_approvals(BashTool(), ApprovalMode.YOLO, store=store)
         out = await tool.execute(ToolInput(params={"command": "sleep 100", "timeout": 1}))
 
         assert out.success is False

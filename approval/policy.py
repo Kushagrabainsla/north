@@ -21,11 +21,11 @@ indistinguishable from one that never happened.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from approval.models import ApprovalDecision
 from approval.unattended import forbidden_reason
@@ -105,6 +105,9 @@ class Action:
     # A file edit inside north's own scratch space (task handoff notes, personal
     # notes) rather than anywhere of the user's. See `tools._path.is_north_scratch`.
     in_north_scratch: bool = False
+    # What a person would read to judge the action - a card's filled-in fields.
+    # Shown to the memory decider; not part of the action's identity.
+    details: str = ""
 
     def describe(self) -> str:
         """A short, stable identity for this action, for learned decisions.
@@ -127,19 +130,37 @@ class Action:
 
 @dataclass(frozen=True)
 class Ruling:
-    """A verdict plus the rule that produced it."""
+    """A verdict plus the rule that produced it, and the memory it used, if any."""
 
     verdict: Verdict
     rule: str
+    memory_used: tuple[str, ...] = ()
 
     @property
     def allowed(self) -> bool:
         return self.verdict is Verdict.ALLOW
 
 
-# The learned judgement rules' answer to a question card. Returns
-# (decision, chosen_option) or (None, "") to abstain.
-QuestionAdvisor = Callable[["Card"], Awaitable[tuple[str | None, str]]]
+@dataclass(frozen=True)
+class Answer:
+    """A card decided without the user: the decision, the option taken, and why."""
+
+    decision: str
+    chosen_option: str
+    reason: str
+    memory_used: tuple[str, ...] = ()
+
+
+class Decider(Protocol):
+    """Decides for the user in Autonomous, from what north knows about them.
+
+    Returns None when it cannot decide - no model, an error, an unreadable
+    reply - and the card then waits for the user. See `approval/decider.py`.
+    """
+
+    async def rule(self, action: Action) -> Answer | None: ...
+
+    async def answer(self, card: Card) -> Answer | None: ...
 
 
 @dataclass
@@ -149,7 +170,7 @@ class ApprovalPolicy:
     mode_provider: Callable[[], ApprovalMode] = lambda: ApprovalMode.ASK
     unattended: UnattendedPolicy | None = None
     approval_memory: ApprovalMemory | None = None
-    question_advisor: QuestionAdvisor | None = field(default=None)
+    decider: Decider | None = None
 
     async def rule(self, action: Action) -> Ruling:
         """Decide whether *action* runs, asks, or is refused.
@@ -171,12 +192,12 @@ class ApprovalPolicy:
         if action.kind is ActionKind.FILE_EDIT and action.in_north_scratch:
             return Ruling(Verdict.ALLOW, "north's own scratch space")
 
-        # 2. Modes that never ask. The operator has made the mode the only
-        #    authority, and has explicitly declined a hard-danger floor.
+        # 2. Modes that never ask. The operator has explicitly declined a
+        #    hard-danger floor in both.
         if mode is ApprovalMode.YOLO:
             return Ruling(Verdict.ALLOW, "yolo: yes to everything")
         if mode is ApprovalMode.AUTONOMOUS:
-            return Ruling(Verdict.ALLOW, "autonomous: allow all")
+            return await self._autonomous(action)
 
         # 3. A handful of catastrophic shapes are refused rather than asked
         #    about, below autonomous. Not a floor - autonomous passed above.
@@ -203,21 +224,36 @@ class ApprovalPolicy:
 
         return Ruling(Verdict.ASK, "not covered by any rule")
 
-    async def answer(self, card: Card) -> tuple[str, str] | None:
-        """Answer a question card for the user, as ``(decision, chosen_option)``, or None to ask.
+    async def answer(self, card: Card) -> Answer | None:
+        """Answer a question card for the user, or None to ask.
 
-        YOLO gives the yes answer. Autonomous lets the learned judgement rules
-        answer when they are confident. Ask and Safe put every question to you:
-        no model answers in your place there.
+        YOLO gives the yes answer. Autonomous lets the memory decider answer.
+        Ask and Safe put every question to you: no model answers in your place.
         """
         mode = self.mode_provider()
         if mode is ApprovalMode.YOLO:
-            return ApprovalDecision.ANSWERED, approve_option(card.options) if card.options else YES_ANSWER
-        if mode is ApprovalMode.AUTONOMOUS and self.question_advisor is not None:
-            decision, chosen = await self.question_advisor(card)
-            if decision is not None:
-                return decision, chosen
+            chosen = approve_option(card.options) if card.options else YES_ANSWER
+            return Answer(ApprovalDecision.ANSWERED, chosen, "yolo: yes to everything")
+        if mode is ApprovalMode.AUTONOMOUS and self.decider is not None:
+            return await self.decider.answer(card)
         return None
+
+    async def _autonomous(self, action: Action) -> Ruling:
+        """Autonomous never asks: the deterministic tiers first, then the memory decider.
+
+        Prepared work skips the safe list and replays: its fields are what is
+        being judged, and neither tier reads them. Only a decider that cannot
+        decide leaves a card for the user.
+        """
+        if not action.carries_work:
+            if (safe := self._safe_subset(action)) is not None:
+                return safe
+            if (recalled := self._recall(action)) is not None:
+                return recalled
+        if self.decider is not None and (answer := await self.decider.rule(action)) is not None:
+            verdict = Verdict.ALLOW if answer.decision == ApprovalDecision.APPROVED else Verdict.REFUSE
+            return Ruling(verdict, f"memory decider: {answer.reason}", answer.memory_used)
+        return Ruling(Verdict.ASK, "the memory decider could not decide")
 
     def _safe_subset(self, action: Action) -> Ruling | None:
         """The deterministic allowlist, or None when it does not apply.
@@ -232,19 +268,19 @@ class ApprovalPolicy:
         if forbidden_reason(action):
             return None
         if action.kind is ActionKind.SHELL_COMMAND and self.unattended.approves_command(action.command):
-            return Ruling(Verdict.ALLOW, "auto: safe command allowlist")
+            return Ruling(Verdict.ALLOW, "safe list: test, lint or build command")
         if action.kind is ActionKind.GIT and self.unattended.approves_git(action.operation, action.args):
-            return Ruling(Verdict.ALLOW, "auto: local-only git")
+            return Ruling(Verdict.ALLOW, "safe list: local-only git")
         if action.kind is ActionKind.DEVICE and self.unattended.approves_device(action.operation):
-            return Ruling(Verdict.ALLOW, "auto: reversible device toggle")
+            return Ruling(Verdict.ALLOW, "safe list: reversible device toggle")
         if self.unattended.approves_self_message(action.operation):
-            return Ruling(Verdict.ALLOW, "auto: message to you")
+            return Ruling(Verdict.ALLOW, "safe list: message to you")
         if (
             action.kind is ActionKind.FILE_EDIT
             and action.path is not None
             and self.unattended.approves_edit(action.path, action.workspace or None)
         ):
-            return Ruling(Verdict.ALLOW, "auto: edit inside the task workspace")
+            return Ruling(Verdict.ALLOW, "safe list: edit inside the task workspace")
         return None
 
     def _recall(self, action: Action) -> Ruling | None:
@@ -253,7 +289,7 @@ class ApprovalPolicy:
             return None
         recalled = self.approval_memory.recall(action.agent, action.describe())
         if recalled == "approved":
-            return Ruling(Verdict.ALLOW, "auto: you approved this action before")
+            return Ruling(Verdict.ALLOW, "replay: you approved this action before")
         if recalled == "rejected":
-            return Ruling(Verdict.REFUSE, "auto: you rejected this action before")
+            return Ruling(Verdict.REFUSE, "replay: you rejected this action before")
         return None

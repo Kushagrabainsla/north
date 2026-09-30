@@ -26,9 +26,9 @@ from approval.approval_memory import ApprovalMemory
 from approval.approvals import Approvals
 from approval.batching import BatchingNotifier
 from approval.callback_server import app as callback_app
+from approval.decider import MemoryDecider
 from approval.decisions import DecisionLog
 from approval.interaction import UserInteraction
-from approval.judgement_filter import JudgementFilter
 from approval.policy import ApprovalPolicy
 from approval.telegram import TelegramNotifier
 from approval.tui import TUIAwareNotifier
@@ -805,7 +805,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     decision_log = DecisionLog(settings.north_home / "approval_memory.db")
     deps.decision_log = decision_log
     deps.unattended_rules = unattended_rules
-    judgement_filter = JudgementFilter(memory=deps.memory, inference_router=deps.cost_tracker)
     # The one decision point every tool, agent and the orchestrator share.
     # Reads the mode at decision time, so a runtime change via the settings
     # API takes effect immediately - no restart.
@@ -813,7 +812,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         mode_provider=lambda: deps.north_settings.autonomy,
         unattended=UnattendedPolicy.from_settings(settings, store=unattended_rules),
         approval_memory=approval_memory,
-        question_advisor=judgement_filter.check,
+        decider=MemoryDecider(deps.memory, deps.cost_tracker, approval_memory),
     )
     # The approval layer: the one object every tool, flow, agent and the
     # orchestrator asks through.

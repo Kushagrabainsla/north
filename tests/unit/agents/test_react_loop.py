@@ -1002,7 +1002,7 @@ async def test_execute_calls_ordered_preserves_causal_chunks(tmp_path: Path) -> 
     from config.approval_mode import ApprovalMode
     from tests.conftest import bind_approvals
 
-    tool_map = {"write_tool": bind_approvals(WriteTool(), ApprovalMode.AUTONOMOUS), "read_tool": ReadTool()}
+    tool_map = {"write_tool": bind_approvals(WriteTool(), ApprovalMode.YOLO), "read_tool": ReadTool()}
 
     calls = [
         ToolCall(name="write_tool", call_id="c1", params={}),

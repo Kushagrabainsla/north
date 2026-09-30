@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from config.approval_mode import ApprovalMode
-from tests.conftest import bind_approvals
+from tests.conftest import bind_approvals, deciding
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import gh_tool as gh_module
 from tools.specialized import git_tool as git_module
@@ -107,8 +107,8 @@ class TestGitGate:
         assert not fake_run_capture
 
     async def test_force_push_allowed_when_allow_dangerous(self, fake_run_capture) -> None:
-        """In autonomous mode (allow_dangerous), the force-push hard refusal is lifted."""
-        tool = bind_approvals(GitTool(), _AUTONOMOUS, store=_approving_store())
+        """Autonomous has no hard floor: the memory decider may approve a force push."""
+        tool = bind_approvals(GitTool(), _AUTONOMOUS, store=_approving_store(), decider=deciding("approved"))
         result = await tool.execute(ToolInput(params={"action": "push", "args": "origin main --force"}))
         assert result.success is True
         assert fake_run_capture  # it actually ran (after approval), not pre-blocked

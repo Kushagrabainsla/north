@@ -168,11 +168,34 @@ def test_deps(tmp_path: Path):
     return build_test_dependencies(tmp_path)
 
 
+class StubDecider:
+    """A memory decider with a fixed answer, which remembers what it was asked."""
+
+    def __init__(self, answer=None) -> None:
+        self._answer = answer
+        self.asked: list = []
+
+    async def rule(self, action):
+        self.asked.append(action)
+        return self._answer
+
+    async def answer(self, card):
+        self.asked.append(card)
+        return self._answer
+
+
+def deciding(decision: str, chosen: str = "", reason: str = "fits the user", used: tuple[str, ...] = ()):
+    """A `StubDecider` that always decides *decision*."""
+    from approval.policy import Answer
+
+    return StubDecider(Answer(decision, chosen, reason, used))
+
+
 def approval_policy(
     mode: ApprovalMode | None = None,
     *,
     memory=None,
-    advisor=None,
+    decider=None,
 ):
     """The real ApprovalPolicy, wired for a test.
 
@@ -185,7 +208,7 @@ def approval_policy(
         mode_provider=lambda: resolved,
         unattended=UnattendedPolicy(),
         approval_memory=memory,
-        question_advisor=advisor,
+        decider=decider,
     )
 
 
@@ -194,14 +217,14 @@ def approvals(
     *,
     store=None,
     memory=None,
-    advisor=None,
+    decider=None,
 ):
     """The real approval layer, wired for a test - see `bind_approvals`."""
     from approval.approvals import Approvals
     from approval.interaction import UserInteraction
     from approval.store import ApprovalStore
 
-    policy = approval_policy(mode, memory=memory, advisor=advisor)
+    policy = approval_policy(mode, memory=memory, decider=decider)
     return Approvals(policy, UserInteraction(store or ApprovalStore()))
 
 

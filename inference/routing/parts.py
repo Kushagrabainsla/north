@@ -85,7 +85,7 @@ COMPACT_SUFFIX = "compact"
 
 _CODING_PARTS = ("coder", "reviewer", "tester")
 _DESIGN_PARTS = ("architect", "spec_critique")
-_TINY_STRUCTURED_PARTS = ("critic", "north_star_checker", "judgement_filter")
+_TINY_STRUCTURED_PARTS = ("critic", "north_star_checker")
 _BACKGROUND_PARTS = ("extraction_pipeline", "episode_consolidator", "skill_distiller")
 _PROSE_PARTS = ("synthesizer", "context_injector")
 
@@ -113,6 +113,9 @@ DEFAULT_PART_PROFILES: dict[str, PartProfile] = {
         "planner", frozenset({STRUCTURED}), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR
     ),
     "synthesizer": PartProfile("synthesizer", frozenset(), 0, Order.CHEAPEST, quality_floor_percentile=_GATING_FLOOR),
+    # Decides for the user in autonomous mode. Small JSON, but it acts in their
+    # place, so it is ranked on judgement rather than drawn from the cheap group.
+    "approval_decider": PartProfile("approval_decider", frozenset({STRUCTURED}), 0, Order.INTELLIGENCE),
 }
 DEFAULT_PART_PROFILES.update(
     {

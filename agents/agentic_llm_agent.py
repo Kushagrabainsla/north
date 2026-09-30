@@ -946,17 +946,10 @@ class AgenticLLMAgent(LLMAgent):
         system_lines = []
         if payload.workspace:
             system_lines.append(f"- workspace: {payload.workspace}")
-        if self._is_autonomous():
-            system_lines.append(
-                "- interaction: AUTONOMOUS - no user is available to answer. Do NOT ask questions; "
-                "decide using the user's known preferences (see Context) and sound engineering "
-                "defaults, and note any key assumption in your final answer."
-            )
-        else:
-            system_lines.append(
-                "- interaction: INTERACTIVE - when a requirement or a design decision is genuinely "
-                "ambiguous, use ask_user to confirm with the user rather than guessing."
-            )
+        system_lines.append(
+            "- interaction: when a requirement or a design decision is genuinely ambiguous, use "
+            "ask_user rather than guessing. The approval mode decides who answers."
+        )
         system_context = "## System Context\n" + "\n".join(system_lines) + "\n\n" if system_lines else ""
 
         # Split context: recent conversation goes before the task so the model
@@ -1228,41 +1221,18 @@ class AgenticLLMAgent(LLMAgent):
         )
         return card
 
-    def _is_autonomous(self) -> bool:
-        """True when the live approval mode is autonomous (no human to ask)."""
-        from config.approval_mode import ApprovalMode
-
-        ns = getattr(self._deps, "north_settings", None)
-        return ns is not None and getattr(ns, "autonomy", None) == ApprovalMode.AUTONOMOUS
-
     async def _ask_user(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Ask the user a clarifying question mid-loop and block until they answer.
 
         The card is a QUESTION and the return carries the user's actual answer (free
         text or a chosen option) so the agent continues with it instead of assuming.
-        This is how an agent refuses to invent an unknown - it asks. A learned rule
-        may answer it automatically (see `ApprovalPolicy.answer`).
+        This is how an agent refuses to invent an unknown - it asks. In the modes
+        that answer for you, the approval layer answers it (`ApprovalPolicy.answer`).
         """
         question = str(params.get("question", "")).strip()
         if not question:
             return _failed_json("ask_user requires a non-empty 'question'.")
         options = [str(o) for o in params.get("options", []) if str(o).strip()]
-
-        # In autonomous mode no human is available to answer, and the operator has
-        # asked north to proceed on its own - so don't block on the question; tell
-        # the agent to decide with its best judgment (mirrors non-interactive CLIs).
-        if self._is_autonomous():
-            return json.dumps(
-                {
-                    "success": True,
-                    "answered": True,
-                    "answer": (
-                        "Autonomous mode is on and no user is available to answer. Proceed using "
-                        "your best judgment and reasonable defaults; state any assumption you make "
-                        "in your final answer, and do not ask again."
-                    ),
-                }
-            )
 
         card = await self._surface_card(
             payload,

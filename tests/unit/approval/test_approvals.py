@@ -11,9 +11,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from approval.approvals import Approvals, Request
+from approval.models import ApprovalDecision
 from approval.policy import Action, ActionKind
+from approval.store import ApprovalStore
 from config.approval_mode import ApprovalMode
-from tests.conftest import bind_approvals, rejecting_store
+from tests.conftest import StubDecider, bind_approvals, deciding, rejecting_store
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.specialized.north_config import NorthConfigTool
@@ -79,7 +81,7 @@ async def test_the_default_description_ignores_the_task_so_a_decision_replays() 
 @pytest.mark.asyncio
 async def test_an_approved_call_runs_and_is_recorded_when_allowed_unasked() -> None:
     store = MagicMock()
-    tool = bind_approvals(_Recorder(), ApprovalMode.AUTONOMOUS, store=store)
+    tool = bind_approvals(_Recorder(), ApprovalMode.YOLO, store=store)
 
     out = await tool.execute(ToolInput(params={"target": "x"}))
 
@@ -111,8 +113,36 @@ async def test_the_approved_request_reaches_run() -> None:
             seen.append(input.approved.prepared)
             return ToolOutput(success=True)
 
-    tool = bind_approvals(_Keeps(), ApprovalMode.AUTONOMOUS, store=MagicMock())
+    tool = bind_approvals(_Keeps(), ApprovalMode.YOLO, store=MagicMock())
 
     await tool.execute(ToolInput(params={}))
 
     assert seen == ["plan"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("decision", "runs"), [(ApprovalDecision.APPROVED, True), (ApprovalDecision.REJECTED, False)])
+async def test_autonomous_leaves_nothing_pending_and_keeps_every_reason(decision: str, runs: bool) -> None:
+    """#29: in autonomous no card is ever pending, and every decision has a stored reason."""
+    store = ApprovalStore()
+    decider = deciding(decision, reason="fits how you work", used=("fact: works in ~/src",))
+    tool = bind_approvals(_Recorder(), ApprovalMode.AUTONOMOUS, store=store, decider=decider)
+
+    await tool.execute(ToolInput(params={"target": "x"}))
+
+    assert tool.ran is runs
+    assert not store.pending()
+    [card] = store.all()
+    assert card.status == decision
+    assert card.reason == "memory decider: fits how you work"
+    assert card.memory_used == ["fact: works in ~/src"]
+
+
+@pytest.mark.asyncio
+async def test_autonomous_waits_for_you_only_when_the_decider_cannot_decide() -> None:
+    store = rejecting_store()
+    tool = bind_approvals(_Recorder(), ApprovalMode.AUTONOMOUS, store=store, decider=StubDecider(None))
+
+    await tool.execute(ToolInput(params={"target": "x"}))
+
+    store.wait_for_decision.assert_awaited_once()

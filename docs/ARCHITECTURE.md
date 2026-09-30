@@ -1179,26 +1179,33 @@ approval mode.
 Precedence, hardest evidence first. The first tier that matches wins, so a
 later, softer tier can never overturn an earlier, harder one:
 
-| # | Tier | interactive | auto | autonomous |
-|---|---|---|---|---|
-| 1 | Read-only / non-mutating | allow | allow | allow |
-| 1b | File edit in north's own scratch space (handoff, personal notes) | allow | allow | allow |
-| 2 | Allow-all | – | – | **allow** |
-| 3 | Recognised as catastrophic (`rm -rf /`, force-push) | refuse | refuse | (allowed by 2) |
-| 4 | **Card carries work for review** | **ask** | **ask** | (allowed by 2) |
-| 5 | Deterministic safe subset: allowlisted command, in-workspace edit, local git | ask | **allow** | – |
-| 6 | The user's own prior decision, replayed | ask | **allow / refuse** | – |
-| 7 | Learned judgement rules, via a model | ask | **allow / refuse** | – |
-| 8 | Anything else | ask | ask | – |
+| # | Tier | ask | safe | autonomous | yolo |
+|---|---|---|---|---|---|
+| 1 | Read-only / non-mutating | allow | allow | allow | allow |
+| 1b | File edit in north's own scratch space (handoff, personal notes) | allow | allow | allow | allow |
+| 2 | Yes to everything | – | – | – | **allow** |
+| 3 | Recognised as catastrophic (`rm -rf /`, force-push) | refuse | refuse | (tier 7 decides) | (allowed by 2) |
+| 4 | **Card carries work for review** | **ask** | **ask** | (tier 7 decides) | (allowed by 2) |
+| 5 | Deterministic safe subset: allowlisted command, in-workspace edit, local git | ask | **allow** | **allow** | – |
+| 6 | The user's own prior decision, replayed | ask | **allow / refuse** | **allow / refuse** | – |
+| 7 | The memory decider (a model given the user's memory) | – | – | **allow / refuse** | – |
+| 8 | Anything else | ask | ask | ask, only if tier 7 could not decide | – |
 
-Tier 7 is `judgement_filter.py`: it reads `judgement_rules.md` and asks a fast
-model whether an existing rule covers the situation at confidence 8/10 or above.
-It is consulted **last, and only in `auto` and above** - it previously ran in
-every mode, including `interactive`, which meant a model could decide to skip
-asking you.
+Tier 7 is `approval/decider.py`. In autonomous it reads the facts about you that
+match the request, your profile, `judgement_rules.md` and your past decisions for
+the same agent, and returns a decision with a one-line reason and the memory
+items it used. Both are stored on the card. Text an agent wrote is fenced as
+untrusted. It routes on its own `approval_decider` part, ranked on intelligence,
+so manual routing uses the pinned model. When it cannot decide (no model, an
+error, an unreadable reply) the card waits for you: the one case autonomous
+pauses. Prepared work (tier 4) skips tiers 5 and 6 and goes straight to it,
+because neither reads the fields.
 
-Tier 4 is why a card carrying prepared work is never auto-decided below
-`autonomous`: the fields exist precisely because a human is meant to read them.
+Questions follow the same modes through `ApprovalPolicy.answer()`: yolo gives
+the yes answer, autonomous asks the memory decider, ask and safe always ask you.
+
+Tier 4 is why a card carrying prepared work is never auto-decided in ask or
+safe: the fields exist precisely because a human is meant to read them.
 It is a property of the card, not a list of agent names - a list only protects
 what somebody remembered to add to it.
 

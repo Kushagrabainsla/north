@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 from approval.interaction import APPROVAL_DEFAULT_OPTIONS, CardEvent, UserInteraction
 from approval.models import ApprovalDecision, Card, CardType
-from approval.policy import Action, ApprovalPolicy, Verdict
+from approval.policy import Action, Answer, ApprovalPolicy, Verdict
+from config.approval_mode import approve_option
 
 if TYPE_CHECKING:
     from approval.policy import Ruling
@@ -86,7 +87,7 @@ class Approvals:
         ruling = await self._policy.rule(request.action)
         if ruling.verdict is Verdict.ASK:
             return await self._ask(request, task_id)
-        if ruling.allowed and _worth_recording(request.action):
+        if _worth_recording(request.action):
             self._record(request, ruling, task_id)
         return Decision(ruling.verdict, ruling.rule)
 
@@ -98,16 +99,20 @@ class Approvals:
         return Decision(verdict, "you decided", status=card.status)
 
     def _record(self, request: Request, ruling: Ruling, task_id: str | None) -> None:
-        """Leave a resolved card for an action that ran without asking.
+        """Leave a resolved card, with its reason, for an action decided without asking.
 
         An auto-approval nobody can see is indistinguishable from one that never
         happened, and that invisibility is most of why raising autonomy felt unsafe.
+        A refusal is recorded too: it is as much a decision taken for you.
         """
         if self._interaction is None:
             return
-        self._interaction.record_resolved(
-            self._card(request, task_id), ApprovalDecision.APPROVED, chosen_option=ruling.rule
-        )
+        if ruling.allowed:
+            decision, chosen = ApprovalDecision.APPROVED, approve_option(list(request.options))
+        else:
+            decision, chosen = ApprovalDecision.REJECTED, ""
+        answer = Answer(decision, chosen, ruling.rule, ruling.memory_used)
+        self._interaction.record_resolved(self._card(request, task_id), answer)
 
     @staticmethod
     def _card(request: Request, task_id: str | None) -> Card:

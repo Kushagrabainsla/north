@@ -22,8 +22,6 @@ MODE_READERS = {
     "gateways/telegram.py": "parses /autonomy with the API's parser and shows the YOLO badge; decides nothing",
     "cli/main.py": "--yolo sets the mode through the settings API; status shows the YOLO badge",
     "cli/tui.py": "shows the YOLO badge; decides nothing",
-    "agents/agentic_llm_agent.py": "until step 7: the memory decider answers questions in autonomous",
-    "orchestrator/orchestrator.py": "until step 7: the memory decider replaces _human_available",
 }
 # Modules outside approval/ that may build the card channel.
 INTERACTION_BUILDERS = {

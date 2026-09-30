@@ -309,8 +309,8 @@ async def test_agent_execute_call_threads_scope_to_tool(tmp_path: Path) -> None:
         AgentConfig(agent="researcher", domain="engineering"),
         deps,
     )
-    # Autonomous, so this asserts the scope and nothing else decides the write.
-    tool_map = {"write_file": bind_approvals(WriteFileTool(), ApprovalMode.AUTONOMOUS)}
+    # YOLO, so this asserts the scope and nothing else decides the write.
+    tool_map = {"write_file": bind_approvals(WriteFileTool(), ApprovalMode.YOLO)}
     guard = _guard(tmp_path, TaskEditScope(modules=("platform.config",)))
     payload = AgentPayload(task_id="t-prop", prompt="p", workspace=str(tmp_path), edit_scope=guard)
 

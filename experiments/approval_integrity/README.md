@@ -33,7 +33,8 @@ the real tool registry, the agent loop's own dispatch, the approval store and
 
 Every "before" failure is a finding from the review. The passing "before"
 cases guard against over-blocking: edits inside the folder in AUTO, north's own
-notes in interactive, and autonomous mode all still write.
+notes in interactive, and the allow-everything mode (autonomous then, yolo
+now) all still write.
 
 Cost: a write auto-approved in AUTO went from 0.18 ms to 0.53 ms median (it now
 leaves a resolved card behind and builds a diff).

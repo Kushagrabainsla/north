@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from orchestrator import orchestrator as orch_mod
@@ -158,13 +160,14 @@ def test_use_design_phase_only_for_feature_and_refactor():
     assert _orch(names=("coder", "reviewer"))._use_design_phase(_plan("feature")) is False
 
 
-def test_design_phase_skipped_in_autonomous_mode():
+@pytest.mark.parametrize("mode", ["ask", "autonomous", "yolo"])
+def test_design_phase_runs_whatever_the_mode(mode):
+    """Its questions go through the approval layer, which decides who answers them."""
     from config.approval_mode import ApprovalMode
 
     orch = _orch(names=("researcher", "architect", "coder", "reviewer"))
-    orch._north_settings = type("S", (), {"autonomy": ApprovalMode.AUTONOMOUS})()
-    assert orch._human_available() is False
-    assert orch._use_design_phase(_plan("feature")) is False
+    orch._north_settings = type("S", (), {"autonomy": ApprovalMode(mode)})()
+    assert orch._use_design_phase(_plan("feature")) is True
 
 
 async def test_run_design_phase_runs_researcher_then_architect(tmp_path, monkeypatch):

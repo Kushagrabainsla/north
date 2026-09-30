@@ -5,11 +5,9 @@ decision cards are registered in the `ApprovalStore`, while information cards
 go only to notification channels. For decisions it then blocks until the user
 responds - however long that takes (CODING_STYLE §13.5: a card never expires).
 
-Tools reach it through `Approvals`, which owns the one instance; agents and the
-Orchestrator still build their own until the autonomous decider lands (see
-tests/unit/architecture/test_approval_layer.py). The surface -> await -> resolve
-sequence exists exactly once (DRY / SRP). A missing dependency simply means that
-channel is skipped.
+Tools, flows, agents and the Orchestrator all reach the one instance through
+`Approvals`. The surface -> await -> resolve sequence exists exactly once
+(DRY / SRP). A missing dependency simply means that channel is skipped.
 
 See docs/CODING_STYLE.md Section 15.
 """
@@ -22,7 +20,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from approval.models import ApprovalDecision, Card, CardField, CardType
-from approval.policy import Action, ActionKind, Verdict
+from approval.policy import Action, ActionKind, Answer, Verdict
 from config.approval_mode import approve_option
 from ledger import LedgerEntry, LedgerSource, LedgerStatus
 
@@ -216,10 +214,10 @@ class UserInteraction:
         await self._surface(card, event)
         return await self._await(card)
 
-    def record_resolved(self, card: Card, decision: str, *, chosen_option: str = "") -> None:
-        """Store *card* already decided - an action north took, or answered, without asking."""
-        self._store.add(card)
-        self._store.resolve(card.id, decision, chosen_option=chosen_option)
+    def record_resolved(self, card: Card, answer: Answer) -> None:
+        """Store *card* already decided - an action north took, or answered, without asking - and why."""
+        self._store.add(card.model_copy(update={"reason": answer.reason, "memory_used": list(answer.memory_used)}))
+        self._store.resolve(card.id, answer.decision, chosen_option=answer.chosen_option)
 
     async def _await(self, card: Card) -> Card:
         """Wait for the user's answer, however long it takes (CODING_STYLE §13.5)."""
@@ -272,24 +270,30 @@ class UserInteraction:
             return None
         try:
             if card.type is CardType.APPROVAL:
-                decided = await self._rule_on(card)
+                answer = await self._rule_on(card)
             elif card.type is CardType.QUESTION:
-                decided = await self._policy.answer(card)
+                answer = await self._policy.answer(card)
             else:
-                decided = None
+                answer = None
         except Exception:
             logger.debug("ApprovalPolicy failed for card %s - surfacing it", card.id)
             return None
-        if decided is None:
+        if answer is None:
             return None
-        decision, chosen = decided
-        self.record_resolved(card, decision, chosen_option=chosen)
-        await self._audit(card, decision, chosen)
-        return card.model_copy(update={"status": decision, "chosen_option": chosen})
+        self.record_resolved(card, answer)
+        await self._audit(card, answer)
+        return card.model_copy(
+            update={
+                "status": answer.decision,
+                "chosen_option": answer.chosen_option,
+                "reason": answer.reason,
+                "memory_used": list(answer.memory_used),
+            }
+        )
 
-    async def _audit(self, card: Card, decision: str, chosen: str) -> None:
+    async def _audit(self, card: Card, answer: Answer) -> None:
         """Ledger a decision north took for you, exactly as a decision of yours is ledgered."""
-        logger.info("ApprovalPolicy: auto-%s card %s", decision, card.id)
+        logger.info("ApprovalPolicy: auto-%s card %s (%s)", answer.decision, card.id, answer.reason)
         if self._ledger is None:
             return
         await self._ledger.write(
@@ -297,21 +301,21 @@ class UserInteraction:
                 source=LedgerSource.APPROVAL,
                 task_id=card.task_id,
                 agent=card.agent,
-                action=f"auto_{decision}",
+                action=f"auto_{answer.decision}",
                 input=card.title,
-                output=chosen or decision,
+                output=f"{answer.chosen_option or answer.decision} - {answer.reason}",
                 status=LedgerStatus.COMPLETED,
             )
         )
 
-    async def _rule_on(self, card: Card) -> tuple[str, str] | None:
-        """The policy's ruling on a directly-raised approval card, as ``(decision, chosen_option)``."""
+    async def _rule_on(self, card: Card) -> Answer | None:
+        """The policy's ruling on a directly-raised approval card, or None to ask."""
         ruling = await self._policy.rule(_action_for(card))
         if ruling.verdict is Verdict.ASK:
             return None
         if ruling.allowed:
-            return ApprovalDecision.APPROVED, approve_option(card.options)
-        return ApprovalDecision.REJECTED, ""
+            return Answer(ApprovalDecision.APPROVED, approve_option(card.options), ruling.rule, ruling.memory_used)
+        return Answer(ApprovalDecision.REJECTED, "", ruling.rule, ruling.memory_used)
 
     async def _emit(self, card: Card, event: CardEvent) -> None:
         if self._stream is None or not card.task_id:
@@ -381,4 +385,13 @@ def _action_for(card: Card) -> Action:
         summary=card.title,
         command=card.message,
         carries_work=bool(card.fields),
+        details=_work_details(card),
     )
+
+
+def _work_details(card: Card) -> str:
+    """The filled-in fields and their source material, as the memory decider reads them."""
+    lines = [f"{field.label or field.name}: {field.value}" for field in card.fields]
+    if card.context:
+        lines.append(f"Source material:\n{card.context[:4000]}")
+    return "\n".join(lines)

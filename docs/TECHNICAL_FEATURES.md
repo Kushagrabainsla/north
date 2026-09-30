@@ -340,7 +340,7 @@ timeout - see ARCHITECTURE §9.8.
 | Layer | Class | Cost | Decision |
 |---|---|---|---|
 | 1. Local inspection | `CommandSafetyInspector` | Zero, local only | Auto-approve read-only commands (`git status`, `cat`, `ls`, `grep`, etc.) after metacharacter, recursive-grep, and sensitive-path screening |
-| 2. Learned rules | `JudgementFilter` | One LLM call against `judgement_rules.md` | Auto-approve/reject based on patterns the user has established through prior approvals |
+| 2. The approval mode | `ApprovalPolicy` | Zero for ask, safe and yolo; one LLM call in autonomous (`MemoryDecider`) | Safe list and replays of your past answers in safe and autonomous; the memory decider in autonomous; yes in yolo |
 | 3. Manual approval | `ApprovalStore` card | Human decision | Fallback for unknown or mutating commands |
 
 **Layer 1 - `CommandSafetyInspector`:**
@@ -365,15 +365,15 @@ class CommandSafetyInspector:
 
 This is **not a security boundary** - it's a developer-velocity optimisation. The list intentionally covers only commands that cannot mutate the filesystem, push to remotes, or spawn network requests.
 
-**Layer 2 - `JudgementFilter` (existing system):**
+**Layer 2 - `ApprovalPolicy`:**
 
-If the command is not instantly safe, `BashTool` forwards an approval card to `JudgementFilter.check()`. The filter compares the card against learned rules from `judgement_rules.md` (populated by the extraction pipeline from prior user approvals). If a matching rule exists, the command is auto-approved or auto-rejected with no human prompt.
+If the command is not instantly safe, `BashTool` describes it as an `Action` and `ApprovalPolicy` rules on it by mode (see ARCHITECTURE §9.4). In autonomous, what the safe list and your past answers do not cover goes to `MemoryDecider`, which decides from your facts, judgement rules and past decisions, and stores its reason on the card.
 
 **Layer 3 - Manual approval card:**
 
-If both Layer 1 and Layer 2 are inconclusive, a standard approval card is emitted and the coroutine suspends on `ApprovalStore.wait_for_decision()` until the user responds (see §11).
+If neither layer decides, a standard approval card is emitted and the coroutine suspends on `ApprovalStore.wait_for_decision()` until the user responds (see §11).
 
-**Dependency injection:** `JudgementFilter` is instantiated once during server startup in `orchestrator/app.py` and shared between the `Orchestrator` (for general approvals) and `BashTool` (for command-specific approvals). `CommandSafetyInspector` is a zero-dependency value object created internally by `BashTool.__init__()`.
+**Dependency injection:** `ApprovalPolicy` and its `MemoryDecider` are built once during server startup in `orchestrator/app.py` and shared by every tool, agent and the orchestrator. `CommandSafetyInspector` is a zero-dependency value object created internally by `BashTool.__init__()`.
 
 The same approval flow is shared by every gated tool (`BashTool`, `ShellTool`, `PatchFileTool`, `GitTool`, `GhTool`, `KasaTool`) through the one `UserInteraction` mediator (see Section 16), so the tools never drift.
 
@@ -408,7 +408,7 @@ The same approval flow is shared by every gated tool (`BashTool`, `ShellTool`, `
 
 **Why:** the surface-then-await sequence used to be reimplemented in three places, which let them drift. For example, one path decided "approved" by matching a button label while another used the card status. One mediator removes the duplication and gives every card the same behavior.
 
-**How:** for each card it applies the learned `JudgementFilter` (which can auto-resolve), registers the card in the `ApprovalStore`, emits the SSE event, fires the TUI-aware `Notifier`, and for decisions it blocks on `wait_for_decision`. The decision is read from the card's `status` (approved or rejected), never from a button label. A card never expires; `timeout_rejected` survives only on cards from before that rule. Each caller passes only the dependencies it has: the orchestrator wires a notifier and a ledger audit hook, while tools and agents pass the stream manager.
+**How:** for each card it asks `ApprovalPolicy` (which can resolve it, with a reason), registers the card in the `ApprovalStore`, emits the SSE event, fires the TUI-aware `Notifier`, and for decisions it blocks on `wait_for_decision`. The decision is read from the card's `status` (approved or rejected), never from a button label. A card never expires; `timeout_rejected` survives only on cards from before that rule. Each caller passes only the dependencies it has: the orchestrator wires a notifier and a ledger audit hook, while tools and agents pass the stream manager.
 
 ---
 

@@ -297,12 +297,12 @@ CASES: list[dict[str, Any]] = [
         "run": lambda t: _file_write(t, tool="patch_file", inside=True, mode=ApprovalMode.SAFE, model_widens=False),
     },
     {
-        "id": "write_outside_autonomous",
+        # The mode that allows everything. Autonomous used to be it; it now asks a
+        # model, so the allow-all case is yolo.
+        "id": "write_outside_yolo",
         "group": "file_writes",
         "expect": "written",
-        "run": lambda t: _file_write(
-            t, tool="write_file", inside=False, mode=ApprovalMode.AUTONOMOUS, model_widens=True
-        ),
+        "run": lambda t: _file_write(t, tool="write_file", inside=False, mode=ApprovalMode.YOLO, model_widens=True),
     },
     {"id": "write_north_notes_interactive", "group": "file_writes", "expect": "written", "run": _north_notes_write},
     # Fix 3: Telegram lets in the owner and nobody else, and never runs open.
