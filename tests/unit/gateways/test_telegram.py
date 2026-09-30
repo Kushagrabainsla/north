@@ -77,6 +77,8 @@ async def test_telegram_gateway_tracks_and_cleans_tasks(monkeypatch: pytest.Monk
     from config.settings import settings
 
     monkeypatch.setattr(settings, "telegram_bot_token", "dummy-token-12345")
+    # The gateway fails closed: with no allowlist it never starts polling.
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
 
     gw = TelegramGateway()
     gw._http = AsyncMock()  # type: ignore[method-assign]

@@ -61,6 +61,15 @@ def _isolated_north_home(tmp_path_factory, monkeypatch):
     # approval cards from it, and passed or failed depending on what was sitting
     # in that database.
     monkeypatch.setattr(settings, "north_home", home)
+    # Nor is the developer's ~/.north/.env any business of a test. `settings`
+    # read it at import, so a test passed locally on the developer's real
+    # Telegram allowlist and failed in CI, which has none - for every push
+    # from 459b413 on, unnoticed. Every setting starts from its default here,
+    # with only the process environment applied, exactly as in CI.
+    clean = type(settings)(_env_file=None)
+    for name in type(settings).model_fields:
+        if name != "north_home":
+            monkeypatch.setattr(settings, name, getattr(clean, name))
     _path._handoff_root.cache_clear()
     _path._resolved_blocked_prefixes.cache_clear()
     yield home
