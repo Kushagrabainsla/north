@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   lint:
-    name: Lint (ruff)
+    name: Lint + format (ruff)
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -38,6 +38,10 @@ jobs:
 
       - name: Lint
         run: uv run ruff check .
+
+      # Unformatted files make every later change carry unrelated formatting noise.
+      - name: Format
+        run: uv run ruff format --check .
 
   types:
     # Ruff and pytest both passed on a tree where a `str` was passed where a
