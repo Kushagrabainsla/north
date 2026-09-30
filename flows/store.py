@@ -146,8 +146,8 @@ class FlowRunStore:
     def prune(self, before: datetime) -> int:
         """Delete finished runs last touched before *before*; returns how many.
 
-        A run that is still running or paused is never pruned - a paused run
-        can be resumed, so its checkpoint is the only copy of its progress.
+        A run that is still running, paused or waiting is never pruned - it can
+        be resumed, so its checkpoint is the only copy of its progress.
         """
         with sqlite3.connect(self._path) as connection:
             cursor = connection.execute(
@@ -173,13 +173,23 @@ class FlowRunStore:
             )
             return cursor.rowcount
 
+    def waiting_run(self, flow_name: str) -> FlowRun | None:
+        """The run of *flow_name* waiting on a resource, if one is - there is at most one worth having."""
+        with sqlite3.connect(self._path) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT * FROM flow_runs WHERE flow_name = ? AND status = 'waiting' ORDER BY created_at LIMIT 1",
+                (flow_name,),
+            ).fetchone()
+        return _from_row(row) if row is not None else None
+
     def discard(self, run_id: str) -> FlowRun:
-        """End a paused run without finishing it. Its finished steps' outputs stay on record."""
+        """End a paused or waiting run without finishing it. Its finished steps' outputs stay on record."""
         run = self.get(run_id)
         if run is None:
             raise KeyError(f"Unknown flow run: {run_id}")
-        if run.status != "paused":
-            raise ValueError(f"Only a paused run can be discarded; this one is {run.status}.")
+        if run.status not in ("paused", "waiting"):
+            raise ValueError(f"Only a paused or waiting run can be discarded; this one is {run.status}.")
         return self.update(
             run_id,
             status="cancelled",

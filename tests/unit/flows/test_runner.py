@@ -595,3 +595,69 @@ async def test_a_paused_scheduled_run_is_not_reported_as_a_success(tmp_path):
 
     assert not out.success
     assert out.data["status"] == "paused"
+
+
+class OutOfModelsAgent(FakeAgent):
+    """Every model is cooling down until ``models_back`` is set."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.models_back = False
+
+    async def run(self, payload):
+        if not self.models_back:
+            from inference.exceptions import AllModelsRateLimitedError
+
+            self.payloads.append(payload)
+            raise AllModelsRateLimitedError(
+                "No model could serve general - 1 models / 1 endpoints: 1 cooling down (60s)"
+            )
+        return await super().run(payload)
+
+
+def _waiting_runner(tmp_path):
+    store = FlowRunStore(tmp_path / "runs.db")
+    agent = OutOfModelsAgent()
+    return FlowRunner(_flow(tmp_path, _THREE_STEPS), FakeAgents(agent), _skills(tmp_path), store), store, agent
+
+
+async def test_a_missing_model_makes_the_run_wait_not_pause(tmp_path):
+    """#34: no model is not an error to look at; the run waits for one."""
+    runner, _, _ = _waiting_runner(tmp_path)
+
+    run = await runner.run("demo")
+
+    assert (run.status, run.current_step) == ("waiting", 0)
+    assert run.error.startswith("Waiting for a model: No model could serve general")
+
+
+async def test_a_waiting_run_resumes_by_itself_once_it_has_waited(tmp_path):
+    import asyncio
+
+    runner, store, agent = _waiting_runner(tmp_path)
+    run = await runner.run("demo")
+
+    assert runner.resume_waiting(min_wait_seconds=3600) == [], "too soon to try again"
+
+    agent.models_back = True
+    assert runner.resume_waiting(min_wait_seconds=0) == [run.run_id]
+    assert runner.resume_waiting(min_wait_seconds=0) == [], "never started twice"
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    done = store.get(run.run_id)
+    assert done.status == "completed"
+    assert "running again after it stopped with: Waiting for a model" in agent.payloads[1].prompt
+
+
+async def test_a_schedule_does_not_start_a_second_run_while_one_waits(tmp_path):
+    runner, store, _ = _waiting_runner(tmp_path)
+    tool = RunFlowTool(runner)
+    first = await tool.run_scheduled("demo", "job-1")
+
+    second = await tool.run_scheduled("demo", "job-2")
+
+    assert first.success, "a waiting run resumes by itself, so its job is not left needing you"
+    assert second.data["run_id"] == first.data["run_id"]
+    assert "waiting" in second.data["note"]
+    assert len(store.list_runs("demo")) == 1

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from agents.models import AgentPayload
@@ -18,8 +19,25 @@ from flows.validation import (
     schema_errors,
     validate_flow_capabilities,
 )
+from inference.exceptions import missing_resource
 from utils.handoff import declared_artifact_paths, missing_artifact_paths
+from utils.tasks import spawn
 from utils.time import localnow
+
+# A run stopped at a step: ``paused`` needs you (an error to look at), ``waiting``
+# needs a resource and resumes by itself.
+STOPPED = frozenset({"paused", "waiting"})
+# How long a waiting run waits before it is tried again. Cooldowns usually end within a minute.
+WAITING_RETRY_SECONDS = 60.0
+
+
+def _status_for(exc: BaseException) -> str:
+    return "waiting" if missing_resource(exc) else "paused"
+
+
+def _waiting_note(exc: BaseException) -> str:
+    resource = missing_resource(exc)
+    return f"Waiting for {resource}: {exc}" if resource else ""
 
 
 class FlowRunner:
@@ -35,6 +53,10 @@ class FlowRunner:
     again resumes it there: finished steps are not repeated, and the approval
     layer refuses any action that already reached someone or spent money in
     this run. Only a decision of yours ends a run early (``rejected``).
+
+    A step stopped by a missing resource - no model, no network - is not an
+    error to look at: the run ``waiting`` resumes by itself once the resource
+    is back (`resume_waiting`, #34).
     """
 
     def __init__(
@@ -56,6 +78,58 @@ class FlowRunner:
         self._store = store
         self._interaction = interaction
         self._workspace = workspace
+        self._resuming: set[str] = set()
+
+    def resume_waiting(self, min_wait_seconds: float = WAITING_RETRY_SECONDS) -> list[str]:
+        """Start again every run waiting on a resource that has waited long enough; return their ids.
+
+        A cooldown usually ends within a minute, so a waiting run is tried again
+        once it has waited ``min_wait_seconds``. Trying costs nothing while the
+        resource is still missing: the model call fails before any tokens are
+        spent, and the run goes back to waiting. One run per flow at a time, in
+        the background, and never one that is already being resumed.
+        """
+        now = datetime.now(UTC)
+        started: list[str] = []
+        seen_flows: set[str] = set()
+        for run in self._store.list_runs(limit=200):
+            if run.status != "waiting" or run.run_id in self._resuming or run.flow_name in seen_flows:
+                continue
+            seen_flows.add(run.flow_name)
+            if (now - datetime.fromisoformat(run.updated_at)).total_seconds() < min_wait_seconds:
+                continue
+            self._resuming.add(run.run_id)
+            spawn(self._resume(run), name=f"flow_resume:{run.run_id}")
+            started.append(run.run_id)
+        return started
+
+    def waiting_run(self, flow_name: str) -> FlowRun | None:
+        """The run of *flow_name* waiting on a resource, if any."""
+        return self._store.waiting_run(flow_name)
+
+    async def _resume(self, run: FlowRun) -> None:
+        try:
+            await self.run(
+                run.flow_name,
+                run_id=run.run_id,
+                task_id=run.task_id,
+                test_mode=run.test_mode,
+                trigger=run.trigger,
+            )
+        except Exception as exc:
+            # The flow changed or was retired while the run waited: say so, and
+            # leave it for you rather than retrying something that cannot run.
+            current = self._store.get(run.run_id)
+            if current is not None and current.status in STOPPED | {"running"}:
+                self._store.update(
+                    run.run_id,
+                    status="paused",
+                    current_step=current.current_step,
+                    outputs=current.outputs,
+                    error=f"Could not resume: {exc}",
+                )
+        finally:
+            self._resuming.discard(run.run_id)
 
     def register_action(self, name: str, handler: Callable[[], Awaitable[str]]) -> None:
         """Make a maintenance job runnable as a built-in flow's step.
@@ -125,8 +199,8 @@ class FlowRunner:
             return run
 
         outputs = list(run.outputs)
-        # Only the step a paused run stopped on is told why it runs again.
-        resumed_error = run.error if run.status == "paused" else ""
+        # Only the step a paused or waiting run stopped on is told why it runs again.
+        resumed_error = run.error if run.status in STOPPED else ""
         resume_at = run.current_step
         for index in range(run.current_step, len(flow.steps)):
             step = flow.steps[index]
@@ -145,10 +219,10 @@ class FlowRunner:
                 except Exception as exc:
                     return self._store.update(
                         run.run_id,
-                        status="paused",
+                        status=_status_for(exc),
                         current_step=index,
                         outputs=outputs,
-                        error=f"Step '{step.name}' failed: {exc}",
+                        error=_waiting_note(exc) or f"Step '{step.name}' failed: {exc}",
                     )
                 outputs.append(
                     {
@@ -242,10 +316,10 @@ class FlowRunner:
             except Exception as exc:
                 return self._store.update(
                     run.run_id,
-                    status="paused",
+                    status=_status_for(exc),
                     current_step=index,
                     outputs=outputs,
-                    error=f"Skill step '{step.name}' failed: {exc}",
+                    error=_waiting_note(exc) or f"Skill step '{step.name}' failed: {exc}",
                 )
 
             if result.requires_approval or result.has_question:

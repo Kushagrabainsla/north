@@ -20,12 +20,13 @@ from approval.models import DecidedBy
 from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
+from inference.exceptions import missing_resource
 from inference.models import CompletionRequest, PoolPriority
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.commit import WorkCommitter
 from orchestrator.constants import (
     MAX_CONCURRENT_TASKS,
-    MAX_QUEUE_ATTEMPTS,
+    MAX_QUEUE_BACKOFF_SECONDS,
     NORTH_STAR_CONFIDENCE_THRESHOLD,
     POOL_REFRESH_COOLDOWN,
     QUEUE_POLL_INTERVAL_SECONDS,
@@ -398,7 +399,7 @@ class Orchestrator:
                         break
                     # If not explicitly woken by model recovery, enforce exponential backoff to prevent burning retries
                     if not wake_signaled and rt.attempt > 0:
-                        min_delay = min(poll_interval * (2 ** max(0, rt.attempt - 1)), 60.0)
+                        min_delay = min(poll_interval * (2 ** max(0, rt.attempt - 1)), MAX_QUEUE_BACKOFF_SECONDS)
                         elapsed = (now - rt.heartbeat_at).total_seconds()
                         if elapsed < min_delay:
                             continue
@@ -915,7 +916,7 @@ class Orchestrator:
 
     async def _report_task_failure(self, task_id: str, task_start: float, error: Exception) -> None:
         error_type = classify_error(error)
-        if error_type != "model_unavailable":
+        if not missing_resource(error):
             await self._mark_task_failed(task_id)
             logger.error("Task %s failed: %s", task_id, error, exc_info=True)
             await self._stream_manager.emit(task_id, "task_failed", {"error": str(error), "error_type": error_type})
@@ -926,10 +927,10 @@ class Orchestrator:
         if await self._queue_for_model_recovery(task_id, error):
             return
 
-        logger.error("Task %s needs attention after recovery attempts: %s", task_id, error)
+        logger.error("Task %s needs attention: nowhere to queue it while it waits: %s", task_id, error)
         await self._record_task_needs_attention(
             task_id,
-            f"{_MODEL_SCARCITY_MESSAGE}; recovery attempts exhausted",
+            f"{_MODEL_SCARCITY_MESSAGE}; no queue to wait in",
             error_type=error_type,
             duration_ms=int((time.monotonic() - task_start) * 1000),
         )
@@ -939,12 +940,14 @@ class Orchestrator:
             await self._task_context_store.update_task_status(task_id, "failed")
 
     async def _queue_for_model_recovery(self, task_id: str, error: Exception) -> bool:
-        """Queue the task to retry when models return. False once attempts run out."""
+        """Queue the task to run again when the model or network is back. False only without a queue.
+
+        A missing resource freezes work; it never uses up attempts (CODING_STYLE
+        §13.5, #34). The count is kept for the backoff between tries and for you.
+        """
         if self._running_task_store is None:
             return False
         attempt = await self._attempts_so_far(task_id) + 1
-        if attempt > MAX_QUEUE_ATTEMPTS:
-            return False
         logger.warning(
             "Task %s queued for model availability recovery (attempt %d): %s",
             task_id,
@@ -1936,7 +1939,7 @@ class Orchestrator:
                 return
             await self._record_task_needs_attention(
                 task_id,
-                f"{unavailable}; recovery attempts exhausted",
+                f"{unavailable}; no queue to wait in",
                 error_type="model_unavailable",
             )
             return

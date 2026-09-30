@@ -144,7 +144,8 @@ export interface UpcomingItem {
 }
 
 const RUNNING_RUN = new Set(["running"]);
-const WAITING_RUN = new Set(["paused"]);
+// Stopped at a step: paused needs you; waiting needs a model or the network and resumes by itself.
+const WAITING_RUN = new Set(["paused", "waiting"]);
 
 // One timeline of what flows will do next: what is running now, what a
 // schedule has already queued, one-off runs, and each live schedule's next

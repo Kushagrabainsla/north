@@ -253,6 +253,7 @@ async def test_an_active_flow_can_be_run_by_hand(env) -> None:
 
 async def test_a_run_that_blows_up_pauses_where_it_was_not_left_running(env, monkeypatch) -> None:
     """#33: an error pauses the run, resumable, rather than failing it or leaving it running."""
+
     async def explode(*args, **kwargs):
         raise RuntimeError("provider fell over")
 

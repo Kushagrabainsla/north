@@ -264,3 +264,35 @@ def is_model_unavailable_error(exc: BaseException) -> bool:
             return True
         current = current.__cause__ or current.__context__
     return False
+
+
+# Resources whose absence freezes work rather than failing it (CODING_STYLE §13.5,
+# #34). They come back by themselves - a cooldown ends, a provider recovers, the
+# network returns - so work waiting on them resumes rather than dying.
+_WAITING_FOR_A_MODEL = (
+    *_MODEL_UNAVAILABLE_EXCEPTIONS,
+    ModelRateLimitedError,
+    ProviderUnavailableError,
+)
+# Connection-level failures of the HTTP clients north uses, by name, so this
+# module does not import them.
+_NETWORK_ERROR_NAMES = frozenset({"ConnectError", "ConnectTimeout", "NetworkError", "ReadError", "RemoteProtocolError"})
+
+
+def missing_resource(exc: BaseException) -> str:
+    """What missing resource stopped this work ("a model", "the network"), or "" for a real failure.
+
+    Walks the cause chain like `is_model_unavailable_error`, so a wrapped error
+    is recognised. A pinned model the catalog does not know is not in here: that
+    is a setting to fix, not a resource that will come back.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _WAITING_FOR_A_MODEL):
+            return "a model"
+        if isinstance(current, ConnectionError) or type(current).__name__ in _NETWORK_ERROR_NAMES:
+            return "the network"
+        current = current.__cause__ or current.__context__
+    return ""

@@ -283,7 +283,7 @@ export function Tasks() {
     <section className="task-ledger-stats" aria-label="Task summary">
       <div><small>Active</small><strong>{active}</strong><span>in progress</span></div>
       <div><small>Needs approval</small><strong>{approvalsCount}</strong><span>waiting on you</span></div>
-      <div><small>Queued</small><strong>{queued}</strong><span>ready to start</span></div>
+      <div><small>Queued</small><strong>{queued}</strong><span>waiting to start, or for a model</span></div>
       <div><small>Completed this week</small><strong>{completedThisWeek}</strong><span>finished work</span></div>
     </section>
 

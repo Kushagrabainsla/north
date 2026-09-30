@@ -18,9 +18,10 @@ WORKTREE_ISOLATION_AGENTS: frozenset[str] = frozenset({"coder"})
 # the server from resuming into an infinite restart loop.
 MAX_RESUME_ATTEMPTS = 3
 
-# How many times a task queued due to model scarcity is retried as models recover
-# before it is surfaced for human attention.
-MAX_QUEUE_ATTEMPTS = 5
+# The longest a task waiting on a missing model or network waits between tries.
+# It never gives up (CODING_STYLE §13.5, #34); this only keeps a model that is
+# down all day from filling the ledger with a retry a minute.
+MAX_QUEUE_BACKOFF_SECONDS = 900.0
 
 # Poll interval for draining queued tasks when waiting for model recovery.
 QUEUE_POLL_INTERVAL_SECONDS = 3.0

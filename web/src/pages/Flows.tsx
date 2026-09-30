@@ -434,7 +434,7 @@ function RunRow({
       action === "discard" &&
       !(await dialog.confirm(
         "The steps it finished stay on record; the rest will not run.",
-        { title: "Discard this paused run?", confirmLabel: "Discard", danger: true },
+        { title: `Discard this ${run.status} run?`, confirmLabel: "Discard", danger: true },
       ))
     )
       return;
@@ -490,13 +490,17 @@ function RunRow({
       </div>
       <div className="schedule-actions">
         <Status value={run.status} />
-        {run.status === "paused" && (
+        {(run.status === "paused" || run.status === "waiting") && (
           <>
             <button
               className="ghost-button"
               disabled={busy}
               onClick={() => act("resume")}
-              title="Run it again from the step it stopped on"
+              title={
+                run.status === "waiting"
+                  ? "Try now, instead of waiting for north to retry it"
+                  : "Run it again from the step it stopped on"
+              }
             >
               Resume
             </button>

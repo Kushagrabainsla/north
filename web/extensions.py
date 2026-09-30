@@ -802,8 +802,10 @@ async def resume_flow_run(run_id: str) -> dict[str, Any]:
     run = store.get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="No flow run with that id")
-    if run.status != "paused":
-        raise HTTPException(status_code=409, detail=f"Only a paused run can be resumed; this one is {run.status}.")
+    if run.status not in ("paused", "waiting"):
+        raise HTTPException(
+            status_code=409, detail=f"Only a paused or waiting run can be resumed; this one is {run.status}."
+        )
     flow = _known_flow(run.flow_name)
     skills = services.skill_registry
     if run.flow_fingerprint and run.flow_fingerprint != flow_fingerprint(flow, skills.get if skills else None):

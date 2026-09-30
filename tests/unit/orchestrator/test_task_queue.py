@@ -12,7 +12,6 @@ from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from inference.exceptions import AllModelsRateLimitedError
 from ledger import LedgerEntry, LedgerSource, LedgerStatus
-from orchestrator.constants import MAX_QUEUE_ATTEMPTS
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
 from orchestrator.running_tasks import RunningTaskStore
@@ -148,24 +147,33 @@ async def test_agent_level_model_scarcity_queues_the_whole_task(running_task_sto
 
 
 @pytest.mark.asyncio
-async def test_task_exceeds_max_queue_attempts_needs_attention(running_task_store: RunningTaskStore) -> None:
+async def test_a_task_waiting_for_a_model_never_runs_out_of_attempts(running_task_store: RunningTaskStore) -> None:
+    """#34: a missing model freezes a task; it does not fail it after N tries."""
     orch = _orch(running_task_store)
     writes = _record_writes(orch)
 
     req = TaskRequest(prompt="write code", source=LedgerSource.PROMPT)
-    # Attempt count set to max
-    await running_task_store.mark_running("t1", req, attempt=MAX_QUEUE_ATTEMPTS)
+    await running_task_store.mark_running("t1", req, attempt=50)
 
     orch._stage_plan = AsyncMock(side_effect=AllModelsRateLimitedError("No models available"))
 
     await orch._process_task("t1", req)
 
-    # Should be cleared from running_task_store and surfaced for a person.
-    queued = await running_task_store.list_queued()
-    assert len(queued) == 0
+    assert (await running_task_store.get("t1")).status == "queued"
+    assert writes[-1].action == "task_queued"
 
-    assert writes[-1].action == "task_needs_attention"
-    assert "task_needs_attention" in _emitted_events(orch)
+
+@pytest.mark.asyncio
+async def test_a_task_waiting_for_the_network_is_queued_too(running_task_store: RunningTaskStore) -> None:
+    orch = _orch(running_task_store)
+    req = TaskRequest(prompt="write code", source=LedgerSource.PROMPT)
+    await running_task_store.mark_running("t1", req)
+
+    orch._stage_plan = AsyncMock(side_effect=ConnectionError("network is unreachable"))
+
+    await orch._process_task("t1", req)
+
+    assert (await running_task_store.get("t1")).status == "queued"
 
 
 @pytest.mark.asyncio

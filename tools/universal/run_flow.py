@@ -9,6 +9,7 @@ from tools.models import ToolInput, ToolOutput
 from tools.universal.flow_runner import FlowRunner
 
 _NEEDS_YOU = frozenset({"failed", "needs_approval", "rejected", "paused"})
+_ALREADY_WAITING = "An earlier run of this flow is waiting for a model or the network; it runs, late, when one returns."
 
 
 class RunFlowTool(Tool):
@@ -61,7 +62,14 @@ class RunFlowTool(Tool):
         Separate from ``run`` so a run is recorded as scheduled only when the
         scheduler started it: the trigger is not a parameter an agent could
         set on itself.
+
+        While an earlier run of the flow waits on a missing resource, no second
+        one starts (#34): it would only wait beside it. The waiting run runs,
+        late, when the resource returns.
         """
+        waiting = self._runner.waiting_run(name)
+        if waiting is not None:
+            return ToolOutput(success=True, data={**_view(waiting), "note": _ALREADY_WAITING})
         return await self._start(name, task_id=job_id, trigger="schedule")
 
     async def _start(
