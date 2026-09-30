@@ -5,7 +5,7 @@ See docs/CODING_STYLE.md Sections 5.3, 6.4, 9.7, 13.
 
 from __future__ import annotations
 
-from inference import CompletionRequest, InferenceRouter, PoolPriority
+from inference import CompletionRequest, InferenceRouter
 from memory import ContextDocument, MemoryGateway
 from orchestrator.exceptions import OrchestratorError
 from utils.prompts import load_prompt
@@ -55,7 +55,6 @@ class NorthStarChecker:
             response = await self._inference_router.complete(
                 CompletionRequest(
                     prompt=full_prompt,
-                    priority=PoolPriority.MEDIUM,
                     component="north_star_checker",
                     task_id=task_id,
                     json_mode=True,

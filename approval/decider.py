@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from approval.models import ApprovalDecision, Card, DecidedBy, MemoryKind, MemoryRef
 from approval.policy import Action, Answer
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from memory import ContextDocument
 from utils.prompts import load_prompt
 from utils.text import extract_json
@@ -126,7 +126,6 @@ class MemoryDecider:
             response = await self._inference_router.complete(
                 CompletionRequest(
                     prompt=prompt,
-                    priority=PoolPriority.HIGH,
                     component=COMPONENT,
                     task_id=subject.task_id,
                     json_mode=True,

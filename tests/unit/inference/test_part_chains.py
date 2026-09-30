@@ -22,13 +22,13 @@ class _NoChains(InferenceRouter):
     async def embed(self, request):  # pragma: no cover
         raise NotImplementedError
 
-    async def refresh_pools(self):  # pragma: no cover
+    async def refresh_catalog(self):  # pragma: no cover
         raise NotImplementedError
 
     async def transcribe(self, request):  # pragma: no cover
         raise NotImplementedError
 
-    def current_pools(self):
+    def models_by_capability(self):
         return {}
 
 

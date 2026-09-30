@@ -7,7 +7,7 @@ import pytest
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher, _completion_has_text, _toolcall_has_output
 from inference.exceptions import ProviderAuthError
-from inference.models import CompletionRequest, CompletionResponse, PoolPriority
+from inference.models import CompletionRequest, CompletionResponse
 from tests.unit.inference._catalog import publish_catalog
 
 
@@ -126,9 +126,7 @@ async def test_json_ignoring_model_is_skipped(tmp_path):
     )
     disp = _ready([bad, good], tmp_path)
 
-    resp = await disp.complete(
-        CompletionRequest(prompt="classify", priority=PoolPriority.HIGH, component="planner", json_mode=True)
-    )
+    resp = await disp.complete(CompletionRequest(prompt="classify", component="planner", json_mode=True))
     assert resp.text == '{"ok": true}'
     assert bad.calls == ["claude-opus-4-8"]  # tried the top model, found it invalid
     assert good.calls == ["gpt-oss-20b"]  # fell through to the JSON-honouring one
@@ -140,7 +138,7 @@ async def test_empty_completion_is_skipped(tmp_path):
     good = _FakeProvider("good-provider", "gpt-oss-20b", quality=0.5, responder=lambda m, r: _resp("hello", m))
     disp = _ready([empty, good], tmp_path)
 
-    resp = await disp.complete(CompletionRequest(prompt="hi", priority=PoolPriority.HIGH, component="planner"))
+    resp = await disp.complete(CompletionRequest(prompt="hi", component="planner"))
     assert resp.text == "hello"
 
 
@@ -159,7 +157,7 @@ async def test_provider_auth_error_opens_circuit_and_falls_through(tmp_path):
     b = _MultiModelProvider("groq", [("llama-3.1-8b-instant", 0.7)], lambda m, r: _resp(m, m))
     disp = _ready([a, b], tmp_path)
 
-    resp = await disp.complete(CompletionRequest(prompt="think", priority=PoolPriority.HIGH, component="planner"))
+    resp = await disp.complete(CompletionRequest(prompt="think", component="planner"))
 
     assert resp.model_used == "llama-3.1-8b-instant"
     assert a.calls == ["claude-opus-4-8"]

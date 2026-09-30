@@ -14,7 +14,6 @@ from inference.exceptions import ModelDegenerateError
 from inference.models import (
     CompletionRequest,
     CompletionResponse,
-    PoolPriority,
     ToolCall,
     ToolCallRequest,
     ToolCallResponse,
@@ -90,7 +89,6 @@ async def test_tool_failure_suspends_only_tool_capability(tmp_path) -> None:
     req = ToolCallRequest(
         messages=[{"role": "user", "content": "run tool"}],
         tools=[{"name": "test_tool"}],
-        priority=PoolPriority.HIGH,
         component="test",
     )
     resp = await dispatcher.complete_with_tools(req)
@@ -101,7 +99,7 @@ async def test_tool_failure_suspends_only_tool_capability(tmp_path) -> None:
     assert dispatcher._cooldowns.is_active(("gpt-5-flaky", "fake")) is False
 
     # 3. Plain completion still picks the flaky model - only its tool calling is suspended
-    comp_req = CompletionRequest(prompt="hello", priority=PoolPriority.HIGH, component="test")
+    comp_req = CompletionRequest(prompt="hello", component="test")
     comp_resp = await dispatcher.complete(comp_req)
     assert comp_resp.model_used == "gpt-5-flaky"
 

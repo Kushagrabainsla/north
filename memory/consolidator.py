@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from inference.base import InferenceRouter
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource
 from utils.prompts import load_prompt
@@ -244,7 +244,6 @@ class EpisodeConsolidator:
             response = await self._inference_router.complete(
                 CompletionRequest(
                     prompt=load_prompt("prompts/episode_summary.md").format(prompt=prompt, result=result[:3000]),
-                    priority=PoolPriority.LOW,
                     component="episode_consolidator",
                     task_id=None,  # task already finished; no live cost to attribute
                 )

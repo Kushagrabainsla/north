@@ -955,68 +955,37 @@ A 401 carrying a billing marker is an entitlement fact about the account, not an
 
 **Decision log (`inference/decisions.py`).** One row per selection in `models.db`: the part, the derived requirements, how many models were considered, every skip with its reason, the winner and the outcome. `north routing` prints it, reading `models.db` directly so it works with the server offline. Exhaustion reports itself - *"47 considered: 30 need billing, 12 rate-limited, 5 context too small"*, or the requirement nothing met - rather than a bare count. Retention follows the task-cleanup window.
 
-### 8.2.1 Model Pools (legacy, `NORTH_ROUTING=legacy`)
+### 8.2.1 Model Catalog Refresh
 
-The pre-facts router, kept for one release. Each provider exposes a `refresh()` method that fetches its live model list; `ModelDispatcher.refresh_pools()` calls every registered provider and rebuilds its internal registry. Pools refresh every 6 hours via a background task and once at startup (both routers share this refresh).
+Each provider exposes a `refresh()` method that fetches its live model list; `ModelDispatcher.refresh_catalog()` calls every registered provider concurrently and rebuilds the registry the chains are built from. It runs once at startup and then every `inference_pool_refresh_interval_seconds` in a background task.
 
-Models are assigned a continuous `base_quality` score (0–1) derived from their output price via `quality_from_cost()` in `inference/capability.py` - log-scale normalisation over the ~$0.000001–$0.015/token pricing range.  `current_pools()` then bins by threshold for the CLI display:
+**Refresh failure handling:** if one provider's refresh fails, `refresh_catalog()` logs a warning and keeps that provider's previously loaded models. The Orchestrator keeps accepting tasks in all cases.
 
-```
-reasoning pool:    base_quality ≥ 0.70  (most capable; frontier models)
-fast_cheap pool:   base_quality ≥ 0.40  (mid-tier)
-high_volume pool:  base_quality < 0.40  (cheapest)
-free_fallback:     cost_per_token == 0  (free models, any quality)
-```
+**Error-triggered refresh:** on a retryable agent failure, `_maybe_refresh_catalog_background()` in `orchestrator.py` schedules a background refresh, at most once a minute (`POOL_REFRESH_COOLDOWN` in `orchestrator/constants.py`), so a 404 from a retired model ID is followed by current IDs without hammering the providers' `/models` endpoints.
 
-A model can appear in both `free_fallback` and a quality tier.  Actual ranking within each pool blends `base_quality` with a live per-model EMA success rate (`_effective_quality()`).
-
-**Pool refresh failure handling:** if a provider's refresh call fails, `ModelDispatcher.refresh_pools()` logs a warning and retains the previously-loaded model registry for that provider. The Orchestrator continues accepting tasks in all cases.
-
-**Background refresh loop:** the pool refresh loop uses a loop-first pattern - the initial sleep is at the bottom of the loop, not the top - so it fires immediately on Orchestrator startup, then repeats every 6 hours. This guarantees that fresh model IDs are in place before the first real inference call, without a separate startup refresh step.
-
-**Error-triggered refresh:** on a retryable agent failure, `_maybe_refresh_pools_background()` in `orchestrator.py` schedules a background refresh subject to a 60-second cooldown (`POOL_REFRESH_COOLDOWN` in `orchestrator/constants.py`). A 404 from a retired model ID gets the pool updated so the next attempt uses current IDs, without hammering the provider `/models` endpoint on every failure.
+`ModelDispatcher.models_by_capability()` groups the registry by what a model can do (reasoning, tools, vision, embeddings, ...) for the System page and `north models`. It is display only; routing never reads it.
 
 ### 8.3 Inference Strategy
 
-The active strategy controls how models are ordered in the fallback chain for every call. Set via natural language ("switch to eco mode") or `POST /orchestrator/settings`. Persisted to `~/.north/settings.json`. Default: **cruise**.
-
-Under chain routing the dial reshapes a part's *ordering* and never its requirements: `eco` orders every part cheapest-first while keeping its quality floor, `cruise` uses each part's own profile, and `sport` orders every part on quality and drops the cheapest-first profiles. A part that needs tools still needs tools at every setting. Redesigning the dial itself is parked; the pool semantics below are what it means under `NORTH_ROUTING=legacy`.
+The power dial (eco, cruise, sport) reshapes each part's chain ordering and never its requirements. Set via natural language ("switch to eco mode") or `POST /orchestrator/settings`; persisted to `~/.north/settings.json`; default **cruise**.
 
 ```
-eco     Forces every call to the lowest-cost pool, regardless of the
-        caller's priority. Minimises cost; quality may vary on hard tasks.
-
-cruise  Respects the caller's priority (default). Candidates are then ranked
-        by that priority:
-          HIGH   -> effective_quality descending (best first)
-          MEDIUM -> free models first, then quality
-          LOW    -> cost ascending (cheapest first), then quality
-        effective_quality blends base quality with each model's live success rate.
-
-sport   Forces every call to the highest-quality pool, regardless of the
-        caller's priority. Maximises quality regardless of cost.
+eco     every part cheapest-first, keeping its quality floor
+cruise  each part's own profile (default)
+sport   every part ordered on quality; cheapest-first profiles are dropped
 ```
 
-The current strategy is shown in the terminal prompt (`[eco] ❯`, `[cruise] ❯`, `[sport] ❯`) and in the TUI status bar.
+A part that needs tools still needs tools at every setting. Under manual routing there is nothing to order: the one pinned model answers. The current strategy is shown in the TUI status bar.
 
-### 8.4 Priority Signals
+### 8.4 Parts, not priorities
 
-Every `CompletionRequest` carries a `PoolPriority` that `cruise` strategy uses to pick a starting tier. Components use priority as a signal of task complexity, not as a hard model assignment.
+A request says what it is through its `component` label (`coder`, `planner`, `approval_decider`, ...), and the router picks the model from that part's profile (`inference/routing/parts.py`) plus what the request itself needs (tools, JSON, context size). There is no per-call priority: `PoolPriority` and the pool router it steered were removed (b28c64d, #48).
 
-```
-orchestrator planning     -> HIGH (plan_all: classify + plan in one call)
-north star check          -> MEDIUM
-finance agent             -> HIGH (consequential domain)
-job agent                 -> HIGH (consequential domain)
-university agent          -> MEDIUM
-health agent              -> MEDIUM
-extraction pipeline       -> LOW (background job)
-synthesizer               -> LOW (text merging, not reasoning)
-```
+An agent's configured `model_pool`, and the pool the orchestrator's tiering assigns a task (`orchestrator/tiering.py`), are not sent to routing today. The router can take a `pool` as an ordering hint (`with_pool`), but wiring it in would put the coder on the cheapest model for bugfix and test tasks, so it waits on a decision (#48).
 
 ### 8.5 Automatic Fallback Chain
 
-Every `complete()` and `complete_with_tools()` call walks the ordered candidate list produced by `ModelDispatcher._candidates()` until one succeeds. Three exception classes handle failures in the chain:
+Every `complete()` and `complete_with_tools()` call walks its part's ordered chain until one model succeeds. Three exception classes handle failures in the chain:
 
 - `ModelRateLimitedError` - raised on HTTP 429, 404 (retired model), and 503. Applies a 60-second cooldown to the `(model_id, provider)` pair and silently advances to the next candidate.
 - `PaymentRequiredError` - raised on HTTP 402. Applies a 24-hour cooldown and advances.
@@ -1026,18 +995,11 @@ Any other exception (network failures, unexpected errors) records a failure in t
 
 The chain is exhausted only when every candidate has been tried or cooled down. Only then is `AllModelsRateLimitedError` raised to the caller.
 
-```
-sport strategy, any priority:
-  claude-opus -> gpt-4o -> claude-sonnet -> gpt-4o-mini -> claude-haiku
-  -> gemini-flash -> ... -> meta-llama:free -> qwen3-8b:free
-```
-
 Every inference call is logged to the Ledger with `source: inference_router`:
 
 ```
 source:     inference_router
 component:  finance_agent
-priority:   high
 model_used: anthropic/claude-sonnet
 tokens_in:  1240
 tokens_out: 380
@@ -1052,7 +1014,7 @@ Cost summary available via the CLI:
 north inference costs --period week
 north inference costs --period month
 north inference costs --agent finance
-north inference models           # show current pool state
+north inference models           # the models north can reach, by capability
 ```
 
 ### 8.6 JSON Mode

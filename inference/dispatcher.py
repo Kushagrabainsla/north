@@ -64,7 +64,7 @@ from inference.models import (
     EmbedRequest,
     EmbedResponse,
     ModelEntry,
-    ModelPool,
+    ModelGroup,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -220,7 +220,7 @@ class ModelDispatcher(InferenceRouter):
         self._context_windows: dict[str, int] = {}
         self._context_windows_normalised: dict[str, int] = {}
         # Provider catalogues are fetched over the network after construction, so
-        # until the first refresh_pools() returns an empty registry means "not
+        # until the first refresh_catalog() returns an empty registry means "not
         # loaded yet" rather than "no models available".
         self._catalog_refreshed: bool = False
         self._build_registry()
@@ -699,7 +699,7 @@ class ModelDispatcher(InferenceRouter):
             if hasattr(provider, "aclose"):
                 await provider.aclose()
 
-    async def refresh_pools(self) -> None:
+    async def refresh_catalog(self) -> None:
         """Concurrently fetch model lists from all providers and atomically rebuild registry."""
         results = await asyncio.gather(
             *(provider.refresh() for provider in self._providers),
@@ -792,7 +792,7 @@ class ModelDispatcher(InferenceRouter):
         pool_total = sum(1 for info, _ in self._registry.values() if info.supports(ModelCapability.COMPLETION))
         return {"checked": self._rate_limit_status.checked_count(), "pool_total": pool_total}
 
-    def current_pools(self) -> dict[str, ModelPool]:
+    def models_by_capability(self) -> dict[str, ModelGroup]:
         """Build a pool snapshot from the dispatcher's own registry across capability pools."""
         reasoning: list[ModelInfo] = []
         speed: list[ModelInfo] = []
@@ -828,15 +828,15 @@ class ModelDispatcher(InferenceRouter):
             ]
 
         return {
-            "reasoning": ModelPool(name="reasoning", models=_entries(reasoning)),
-            "speed": ModelPool(name="speed", models=_entries(speed)),
-            "tool_calling": ModelPool(name="tool_calling", models=_entries(tools)),
-            "vision": ModelPool(name="vision", models=_entries(vision)),
-            "audio": ModelPool(name="audio", models=_entries(audio)),
-            "embeddings": ModelPool(name="embeddings", models=_entries(embeddings)),
-            "fast_cheap": ModelPool(name="fast_cheap", models=_entries(speed)),
-            "high_volume": ModelPool(name="high_volume", models=_entries(low)),
-            "free_fallback": ModelPool(name="free_fallback", models=_entries(free)),
+            "reasoning": ModelGroup(name="reasoning", models=_entries(reasoning)),
+            "speed": ModelGroup(name="speed", models=_entries(speed)),
+            "tool_calling": ModelGroup(name="tool_calling", models=_entries(tools)),
+            "vision": ModelGroup(name="vision", models=_entries(vision)),
+            "audio": ModelGroup(name="audio", models=_entries(audio)),
+            "embeddings": ModelGroup(name="embeddings", models=_entries(embeddings)),
+            "fast_cheap": ModelGroup(name="fast_cheap", models=_entries(speed)),
+            "high_volume": ModelGroup(name="high_volume", models=_entries(low)),
+            "free_fallback": ModelGroup(name="free_fallback", models=_entries(free)),
         }
 
     def health_summary(self) -> dict[str, int | bool]:

@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from agents.tool_output_reduction import salient_excerpt
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from tools.output_spill import carries_handle, overflow_note, store_overflow, summary_note
 from utils.prompts import load_prompt
 
@@ -391,7 +391,6 @@ async def _summarise_one_result(
         resp = await inference_router.complete(
             CompletionRequest(
                 prompt=prompt,
-                priority=PoolPriority.LOW,
                 component=f"{component}:tool-summary",
                 task_id=task_id,
                 max_tokens=_TOOL_SUMMARY_MAX_TOKENS,
@@ -576,7 +575,6 @@ async def compact_if_needed(
             resp = await inference_router.complete(
                 CompletionRequest(
                     prompt=prompt,
-                    priority=PoolPriority.LOW,
                     component=f"{component}:compact",
                     task_id=task_id,
                     max_tokens=max_summary_tokens,

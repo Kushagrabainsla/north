@@ -17,7 +17,7 @@ _QUALITY_LOG_MIN = -6.0  # log10 of ~$0.000001/token floor
 _QUALITY_LOG_MAX = -1.82  # log10 of ~$0.015/token ceiling (frontier model)
 _FREE_MODEL_QUALITY = 0.35  # floor for free-tier models (cost_per_token == 0)
 
-# Pool tier thresholds used by ModelDispatcher.current_pools().
+# Tier thresholds used by ModelDispatcher.models_by_capability() (display only).
 _QUALITY_TIER_HIGH: float = 0.70
 _QUALITY_TIER_MEDIUM: float = 0.40
 

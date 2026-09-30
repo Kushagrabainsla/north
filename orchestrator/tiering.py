@@ -20,8 +20,8 @@ from __future__ import annotations
 from orchestrator.models import ExecutionMode, ExecutionPath, ExecutionPlan
 
 # The three pools a task can land in, cheapest first. These are canonical pool
-# names from `inference/models.py:POOL_NAMES`; `POOL_TO_PRIORITY` maps them onto
-# the PoolPriority the dispatcher ranks candidates by.
+# names from `inference/models.py:POOL_NAMES`. They are set on the agent payload
+# as `model_pool`, which does not reach routing today (see #48).
 CHEAP = "high_volume"
 MID = "speed"
 BEST = "reasoning"

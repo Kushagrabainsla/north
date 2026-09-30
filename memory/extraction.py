@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from inference.base import InferenceRouter
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from ledger.base import LedgerFilters, LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory.backup import snapshot_memory
@@ -256,7 +256,6 @@ class ExtractionPipeline:
         response = await self._inference_router.complete(
             CompletionRequest(
                 prompt=prompt,
-                priority=PoolPriority.LOW,
                 component="extraction_pipeline",
                 task_id=entry.task_id,
                 json_mode=True,
@@ -366,7 +365,6 @@ class ExtractionPipeline:
                 resp = await self._inference_router.complete(
                     CompletionRequest(
                         prompt=prompt,
-                        priority=PoolPriority.LOW,
                         component="extraction_pipeline:dedup",
                         task_id=task_id,
                         json_mode=True,
@@ -404,7 +402,6 @@ class ExtractionPipeline:
             resp = await self._inference_router.complete(
                 CompletionRequest(
                     prompt=prompt,
-                    priority=PoolPriority.LOW,
                     component="extraction_pipeline:trim",
                     task_id=task_id,
                     max_tokens=1024,

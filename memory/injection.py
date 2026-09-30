@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from inference.base import InferenceRouter
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from ledger.base import LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory.base import ContextStore
@@ -116,7 +116,6 @@ class ContextInjector:
         response = await self._inference_router.complete(
             CompletionRequest(
                 prompt=load_prompt("prompts/context_routing.md").format(content=text[:_MAX_CONTENT_CHARS]),
-                priority=PoolPriority.LOW,
                 component="context_injector",
                 json_mode=True,
             )

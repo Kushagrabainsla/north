@@ -30,7 +30,7 @@ from bootstrap.schema import (
 from bootstrap.survey import SurveyedFile, survey_files
 from inference.base import InferenceRouter
 from inference.exceptions import AllModelsRateLimitedError
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from memory.base import ContextStore
 from memory.facts import FactStore
 from memory.models import ContextDocument
@@ -629,7 +629,6 @@ async def _extract_unified(
         # work, not bulk throughput. On LOW this went to whatever was cheapest -
         # a 2.6B model that answered a schema-enforced request with prose - and
         # the whole run stored one fact from 25 files.
-        priority=PoolPriority.MEDIUM,
         component="bootstrap",
         max_tokens=_EXTRACTION_MAX_TOKENS,
         temperature=0.1,

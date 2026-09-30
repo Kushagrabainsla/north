@@ -18,17 +18,6 @@ SupersedeFn = Callable[[str, list[str]], Awaitable[list[int]]]
 GlossaryFn = Callable[[dict[str, list[str]]], Awaitable[dict[str, str]]]
 
 
-class PoolPriority(StrEnum):
-    """Priority signal that determines which model pool a call uses.
-
-    See README 8.3 for the mapping rules (consequential→HIGH, background→LOW).
-    """
-
-    HIGH = "high"  # reasoning pool
-    MEDIUM = "medium"  # fast_cheap pool
-    LOW = "low"  # high_volume pool
-
-
 class PoolName(StrEnum):
     REASONING = "reasoning"
     SPEED = "speed"
@@ -41,7 +30,7 @@ class PoolName(StrEnum):
     HIGH_VOLUME = "high_volume"
 
 
-# Canonical pool names. PoolPriority maps onto these one-to-one.
+# Canonical pool names: what an agent's `model_pool` and a request's `pool` may say.
 POOL_NAMES = (
     "reasoning",
     "speed",
@@ -54,20 +43,6 @@ POOL_NAMES = (
     "high_volume",
 )
 
-PRIORITY_TO_POOL: dict[PoolPriority, str] = {
-    PoolPriority.HIGH: "reasoning",
-    PoolPriority.MEDIUM: "speed",
-    PoolPriority.LOW: "high_volume",
-}
-
-# Reverse map: agent config.yaml uses pool names; the router takes priorities.
-POOL_TO_PRIORITY: dict[str, PoolPriority] = {
-    "reasoning": PoolPriority.HIGH,
-    "speed": PoolPriority.MEDIUM,
-    "fast_cheap": PoolPriority.MEDIUM,
-    "high_volume": PoolPriority.LOW,
-}
-
 
 class ModelEntry(BaseModel):
     """One model entry in a pool, carrying its router/provider alongside the model ID."""
@@ -76,8 +51,8 @@ class ModelEntry(BaseModel):
     provider: str
 
 
-class ModelPool(BaseModel):
-    """One pool of models. During routing the dispatcher picks randomly within each quality tier."""
+class ModelGroup(BaseModel):
+    """The models that can do one thing (reasoning, vision, embeddings), for display. Routing does not read it."""
 
     name: str
     models: list[ModelEntry]
@@ -87,7 +62,6 @@ class CompletionRequest(BaseModel):
     """Input to a chat-completion call."""
 
     prompt: str
-    priority: PoolPriority = PoolPriority.MEDIUM
     pool: str | None = None  # Explicit capability pool override (e.g. reasoning, speed, vision)
     component: str
     task_id: str | None = None
@@ -196,7 +170,6 @@ class ToolCallRequest(BaseModel):
 
     messages: list[dict]
     tools: list[dict]
-    priority: PoolPriority = PoolPriority.MEDIUM
     pool: str | None = None
     component: str
     task_id: str | None = None
@@ -269,7 +242,6 @@ class InferenceRecord(BaseModel):
     """One inference call. Written to the Ledger with source=inference_router."""
 
     component: str
-    priority: PoolPriority | None = None  # None for transcription
     model_used: str
     tokens_in: int = 0
     tokens_out: int = 0

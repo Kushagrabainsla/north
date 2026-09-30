@@ -25,8 +25,7 @@ from inference.models import (
     EmbedRequest,
     EmbedResponse,
     ModelEntry,
-    ModelPool,
-    PoolPriority,
+    ModelGroup,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -102,18 +101,15 @@ class MockInferenceRouter(InferenceRouter):
             cost_usd=0.0,
         )
 
-    async def get_model(self, priority: PoolPriority) -> str:
-        return f"mock-{priority.value}-model"
-
-    async def refresh_pools(self) -> None:
+    async def refresh_catalog(self) -> None:
         pass
 
-    def current_pools(self) -> dict[str, ModelPool]:
+    def models_by_capability(self) -> dict[str, ModelGroup]:
         return {
-            "reasoning": ModelPool(name="reasoning", models=[ModelEntry(id="mock-reasoning", provider="mock")]),
-            "fast_cheap": ModelPool(name="fast_cheap", models=[ModelEntry(id="mock-fast_cheap", provider="mock")]),
-            "high_volume": ModelPool(name="high_volume", models=[ModelEntry(id="mock-high_volume", provider="mock")]),
-            "free_fallback": ModelPool(name="free_fallback", models=[ModelEntry(id="mock-free", provider="mock")]),
+            "reasoning": ModelGroup(name="reasoning", models=[ModelEntry(id="mock-reasoning", provider="mock")]),
+            "fast_cheap": ModelGroup(name="fast_cheap", models=[ModelEntry(id="mock-fast_cheap", provider="mock")]),
+            "high_volume": ModelGroup(name="high_volume", models=[ModelEntry(id="mock-high_volume", provider="mock")]),
+            "free_fallback": ModelGroup(name="free_fallback", models=[ModelEntry(id="mock-free", provider="mock")]),
         }
 
     async def complete_with_tools(

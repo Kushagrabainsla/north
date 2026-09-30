@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from config.strategy import NorthSettings
 
 from agents import AgentRegistry
-from inference import CompletionRequest, InferenceRouter, PoolPriority
+from inference import CompletionRequest, InferenceRouter
 from orchestrator.exceptions import RoutingError
 from orchestrator.models import ExecutionMode, ExecutionPath, ExecutionPlan, IntentClassification
 from orchestrator.task_intent import is_repository_overview
@@ -531,7 +531,6 @@ class ExecutionPlanner:
                     self._inference_router.complete(
                         CompletionRequest(
                             prompt=full_prompt,
-                            priority=PoolPriority.MEDIUM,
                             component="planner",
                             task_id=task_id,
                             json_mode=True,

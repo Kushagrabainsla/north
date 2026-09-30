@@ -26,8 +26,7 @@ from inference.models import (
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
-    ModelPool,
-    PoolPriority,
+    ModelGroup,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -61,13 +60,10 @@ class _FakeRouter(InferenceRouter):
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:  # pragma: no cover
         raise NotImplementedError
 
-    async def get_model(self, priority: PoolPriority) -> str:  # pragma: no cover
+    async def refresh_catalog(self) -> None:  # pragma: no cover
         raise NotImplementedError
 
-    async def refresh_pools(self) -> None:  # pragma: no cover
-        raise NotImplementedError
-
-    def current_pools(self) -> dict[str, ModelPool]:  # pragma: no cover
+    def models_by_capability(self) -> dict[str, ModelGroup]:  # pragma: no cover
         raise NotImplementedError
 
     async def complete_with_tools(

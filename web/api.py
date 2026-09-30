@@ -409,7 +409,7 @@ async def _task_detail(task_id: str | None) -> dict[str, Any] | None:
     }
     provider_by_model: dict[str, str] = {}
     if current_services().inference_router is not None:
-        for pool in current_services().inference_router.current_pools().values():
+        for pool in current_services().inference_router.models_by_capability().values():
             for model in pool.models:
                 provider_by_model[model.id] = model.provider
     output = ""

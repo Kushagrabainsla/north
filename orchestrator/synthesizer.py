@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 
 from inference.base import InferenceRouter
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from memory import MemoryGateway
 from utils.prompts import load_prompt
 
@@ -63,7 +63,6 @@ class ResultSynthesizer:
             response = await self._inference_router.complete(
                 CompletionRequest(
                     prompt=full_prompt,
-                    priority=PoolPriority.LOW,
                     component="synthesizer",
                     task_id=task_id,
                 )

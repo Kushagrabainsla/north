@@ -534,7 +534,7 @@ async def _pool_refresh_loop(deps, orchestrator: Orchestrator | None = None) -> 
     while True:
         await asyncio.sleep(interval)
         try:
-            await deps.inference_router.refresh_pools()
+            await deps.inference_router.refresh_catalog()
             logger.info("Inference pool refreshed successfully")
             if orchestrator is not None:
                 orchestrator.notify_model_recovery()
@@ -892,7 +892,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("Paused %d flow run(s) cut off by the last shutdown; they can be resumed", cut_off)
 
     _step("refreshing inference pools")
-    await deps.inference_router.refresh_pools()
+    await deps.inference_router.refresh_catalog()
 
     # Built now so agents can hold the reference; populated in the background
     # below, once the server is already serving.

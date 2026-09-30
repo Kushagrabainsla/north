@@ -222,7 +222,7 @@ class TestContextVersusPayload:
             )
 
 
-class TestModelPool:
+class TestModelGroup:
     """`model_pool` is still in every agent config and in the create_agent tool."""
 
     @pytest.mark.asyncio

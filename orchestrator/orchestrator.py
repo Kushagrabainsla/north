@@ -21,7 +21,7 @@ from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.exceptions import missing_resource
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.commit import WorkCommitter
 from orchestrator.constants import (
@@ -1363,7 +1363,6 @@ class Orchestrator:
                 self._tracked_router.complete(
                     CompletionRequest(
                         prompt=critique_prompt,
-                        priority=PoolPriority.MEDIUM,
                         component="spec_critique",
                         task_id=task_id,
                         json_mode=True,
@@ -2130,7 +2129,7 @@ class Orchestrator:
             return []
         return await self._models_used_by(task_id, set(distinct_from))
 
-    def _maybe_refresh_pools_background(self) -> None:
+    def _maybe_refresh_catalog_background(self) -> None:
         if self._tracked_router is None:
             return
         now = time.monotonic()
@@ -2140,7 +2139,7 @@ class Orchestrator:
 
         async def _refresh() -> None:
             try:
-                await self._tracked_router.refresh_pools()  # type: ignore[union-attr]
+                await self._tracked_router.refresh_catalog()  # type: ignore[union-attr]
                 logger.info("Inference pool refreshed after agent failure")
             except Exception:
                 logger.warning("Post-failure inference pool refresh failed", exc_info=True)
@@ -2229,7 +2228,7 @@ class Orchestrator:
                     },
                 )
                 payload = payload.model_copy(update={"run_id": generate_id(), "attempt": payload.attempt + 1})
-                self._maybe_refresh_pools_background()
+                self._maybe_refresh_catalog_background()
 
     async def _handle_agent_result(
         self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload | None = None

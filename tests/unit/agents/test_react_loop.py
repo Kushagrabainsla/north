@@ -604,19 +604,6 @@ async def test_empty_tool_calls_list_breaks_loop(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Priority resolution
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("name", ["architect", "coder", "researcher", "reviewer"])
-def test_reasoning_pool_agents_resolve_high_priority(name: str, tmp_path: Path) -> None:
-    from inference.models import PoolPriority
-
-    agent = _load_agent(name, tmp_path)
-    assert agent._resolve_priority() == PoolPriority.HIGH
-
-
-# ---------------------------------------------------------------------------
 # System prompt caching
 # ---------------------------------------------------------------------------
 

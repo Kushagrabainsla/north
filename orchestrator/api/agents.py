@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, field_validator
 
 from agents.exceptions import AgentNotFoundError
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from jobs.models import JobStatus
 from orchestrator.api.deps import (
     _get_agent_registry,
@@ -133,7 +133,6 @@ async def create_agent(body: AgentCreateRequest) -> AgentCreateResponse:
     result = await router_obj.complete(
         CompletionRequest(
             prompt=prompt,
-            priority=PoolPriority.MEDIUM,
             component=f"agent_create:{body.name}",
         )
     )

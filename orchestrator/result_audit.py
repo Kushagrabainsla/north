@@ -26,7 +26,7 @@ from agents.base import Agent
 from agents.constants import CODE_MUTATING_TOOLS, CODE_VERIFY_TOOLS, ENGINEERING_AGENTS, NO_CODE_AGENTS
 from agents.models import AgentPayload, AgentResult
 from inference.cost_tracker import CostTracker
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from orchestrator.journal import TaskJournal
 from orchestrator.verification import evidence_sufficiency_violations, verify_claims
 from utils.ids import generate_id
@@ -234,7 +234,6 @@ class ResultAuditor:
             response = await self._tracked_router.complete(
                 CompletionRequest(
                     prompt=prompt,
-                    priority=PoolPriority.MEDIUM,
                     component="critic",
                     task_id=task_id,
                     json_mode=True,

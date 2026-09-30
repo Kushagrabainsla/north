@@ -14,7 +14,7 @@ from inference.auth import ApiKeyCredentialProvider
 from inference.codex_auth import CodexCredentialProvider, CodexToken, CodexTokenStore
 from inference.exceptions import InferenceError, ProviderAuthError
 from inference.factory import build_router
-from inference.models import CompletionRequest, PoolPriority, ToolCallRequest
+from inference.models import CompletionRequest, ToolCallRequest
 from inference.providers.openai_codex import OpenAICodexProvider, _aiter_response_events, _message_items
 from inference.registry import AuthKind, get_provider_definition
 
@@ -263,7 +263,7 @@ async def test_codex_completion_parses_sse_and_usage() -> None:
     provider = OpenAICodexProvider(ApiKeyCredentialProvider("test", "token"), client=client)
     response = await provider.complete(
         "codex-model",
-        CompletionRequest(prompt="hello", component="test", priority=PoolPriority.MEDIUM, run_id="run-1"),
+        CompletionRequest(prompt="hello", component="test", run_id="run-1"),
     )
 
     assert response.text == "Hello there"

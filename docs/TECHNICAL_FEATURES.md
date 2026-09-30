@@ -56,7 +56,7 @@ def quality_from_cost(cost_per_token: float) -> float:
     return max(0.0, min(normalised, 1.0))
 ```
 
-`current_pools()` bins models into named tiers for CLI display using fixed thresholds:
+`models_by_capability()` groups models into named tiers for display only (routing does not read it), using fixed thresholds:
 
 ```python
 # _QUALITY_TIER_HIGH = 0.70, _QUALITY_TIER_MEDIUM = 0.40  (inference/constants.py)
@@ -98,33 +98,33 @@ Actual candidate ranking within each strategy blends `base_quality` with a live 
 
 ## 4. Error-Triggered Pool Refresh with Cooldown
 
-**What:** on a retryable agent failure, `_maybe_refresh_pools_background()` schedules a background pool refresh, subject to a 60-second cooldown.
+**What:** on a retryable agent failure, `_maybe_refresh_catalog_background()` schedules a background pool refresh, subject to a 60-second cooldown.
 
 **Why:** a 404 from a retired model ID is a signal that the local pool cache is stale. Refreshing immediately means the next call uses current model IDs rather than continuing to hammer dead endpoints. The cooldown prevents a storm of refresh calls if many models fail in quick succession.
 
-**Pool refresh on startup + loop:** `orchestrator/app.py` calls `refresh_pools()` once explicitly during the lifespan startup before yielding to the server.  A background loop then sleeps for `inference_pool_refresh_interval_hours` (default 6 h) between subsequent refreshes:
+**Pool refresh on startup + loop:** `orchestrator/app.py` calls `refresh_catalog()` once explicitly during the lifespan startup before yielding to the server.  A background loop then sleeps for `inference_pool_refresh_interval_hours` (default 6 h) between subsequent refreshes:
 
 ```python
 # lifespan startup (orchestrator/app.py)
-await deps.inference_router.refresh_pools()   # immediate, before first request
+await deps.inference_router.refresh_catalog()   # immediate, before first request
 
 # background loop (_pool_refresh_loop)
 async def _pool_refresh_loop(deps) -> None:
     interval = settings.inference_pool_refresh_interval_hours * 3600
     while True:
         await asyncio.sleep(interval)         # sleep first, then refresh
-        await deps.inference_router.refresh_pools()
+        await deps.inference_router.refresh_catalog()
 ```
 
 **Error-triggered refresh** (with cooldown):
 
 ```python
-async def _maybe_refresh_pools_background(self) -> None:
+async def _maybe_refresh_catalog_background(self) -> None:
     now = time.monotonic()
     if now - self._last_pool_refresh_at < POOL_REFRESH_COOLDOWN:
         return
     self._last_pool_refresh_at = now
-    spawn(self._deps.inference_router.refresh_pools(), name="pool_refresh")
+    spawn(self._deps.inference_router.refresh_catalog(), name="pool_refresh")
 ```
 
 ---
@@ -172,7 +172,7 @@ replace old exchanges with:
   {"role": "assistant", "content": "Understood - I have the compacted context."}
 ```
 
-The summary call uses `PoolPriority.LOW` so it doesn't compete with the main agent call. Falls back to truncation-only if the summary call fails.
+The summary call is its own routing part (`<agent>:compact`), ranked cheapest-first, so it doesn't compete with the main agent call for the strongest model. Falls back to truncation-only if the summary call fails.
 
 **Context window table** (`_CONTEXT_WINDOW_TABLE`) maps model name fragments to their published window sizes, covering Gemini (1M), Claude (200K), GPT-4o (128K), Phi (16K), etc. Agents with heavy-output tools (`bash`, `git`, `patch_file`) get a larger summary token budget (1000 vs 512 tokens).
 

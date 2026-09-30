@@ -489,7 +489,7 @@ context/
 inference/
   __init__.py
   base.py            <- InferenceRouter (ABC)
-  models.py          <- ModelPool, PoolPriority, InferenceRecord, CostSummary
+  models.py          <- CompletionRequest, ModelGroup, InferenceRecord, CostSummary
   exceptions.py      <- AllModelsRateLimitedError, ContextTooLargeError, PoolRefreshError
   constants.py       <- quality tiers and tuning constants
   capability.py      <- ModelCapability, ModelInfo, quality_from_cost
@@ -1392,13 +1392,13 @@ north_settings.set_strategy(StrategyMode.ECO)
 
 ### 17.3 Inference Strategy
 
-Every `CompletionRequest` carries a `PoolPriority` signal. `ModelDispatcher` reads `NorthSettings.strategy` at call time to determine the model ordering:
+A request names its part through `component`; the router builds that part's chain from its profile (`inference/routing/parts.py`) and what the request needs. There is no per-call priority. `ModelDispatcher` reads the power dial at call time and applies it to the part's ordering:
 
-- `eco` - cheapest priced model first, free models at tail
-- `cruise` - tier matching `PoolPriority`, cross-tier fallback, free at tail (default)
-- `sport` - most expensive first, free models at tail
+- `eco` - every part cheapest-first, keeping its quality floor
+- `cruise` - each part's own profile (default)
+- `sport` - every part ordered on quality
 
-Changing strategy takes effect on the next inference call. No restart required.
+Changing strategy takes effect on the next inference call. No restart required. Under manual routing the pinned model answers every call.
 
 ### 17.5 Never Read os.environ Directly
 
@@ -1524,11 +1524,10 @@ class MockHttpClient:
         return MockResponse(json=SAMPLE_OPENROUTER_RESPONSE)
 
 @pytest.mark.asyncio
-async def test_router_selects_reasoning_pool_for_high_priority():
+async def test_router_refreshes_the_catalog_from_the_provider():
     router = build_router(openrouter_api_key="test")
-    await router.refresh_pools()
-    model = await router.get_model(PoolPriority.HIGH)
-    assert model in EXPECTED_REASONING_MODELS
+    await router.refresh_catalog()
+    assert "reasoning" in router.models_by_capability()
 ```
 
 ### 18.6 Test Naming

@@ -112,7 +112,7 @@ def test_capability_classification_across_modalities():
 
 @pytest.mark.asyncio
 async def test_concurrent_refresh_with_graceful_failure_retention(tmp_path):
-    """Verify refresh_pools runs concurrently and retains existing catalog if one provider fails."""
+    """Verify refresh_catalog runs concurrently and retains existing catalog if one provider fails."""
     m1 = _make_info("qwen3.6-27b", "groq", frozenset({ModelCapability.COMPLETION, ModelCapability.SPEED}))
     m2 = _make_info("gemini-2.5-flash", "gemini", frozenset({ModelCapability.COMPLETION, ModelCapability.SPEED}))
 
@@ -126,7 +126,7 @@ async def test_concurrent_refresh_with_graceful_failure_retention(tmp_path):
     assert ("gemini", "gemini-2.5-flash") in disp._registry
 
     # Refresh: p1 succeeds, p2 fails
-    await disp.refresh_pools()
+    await disp.refresh_catalog()
 
     assert p1.refresh_calls == 1
     assert p2.refresh_calls == 1
@@ -175,8 +175,8 @@ async def test_a_pool_name_now_only_orders_the_chain(tmp_path):
     assert speed.model_used == "groq-compound-mini"
 
 
-def test_current_pools_exposes_all_capability_pools(tmp_path):
-    """Verify current_pools() returns all capability pools for CLI and UI observability."""
+def test_models_by_capability_lists_every_capability(tmp_path):
+    """Verify models_by_capability() returns all capability pools for CLI and UI observability."""
     m1 = _make_info("opus", "zen", frozenset({ModelCapability.REASONING, ModelCapability.COMPLETION}), quality=0.95)
     m2 = _make_info(
         "flash",
@@ -190,7 +190,7 @@ def test_current_pools_exposes_all_capability_pools(tmp_path):
     p = _DummyProvider("test", {"opus": m1, "flash": m2, "whisper": m3, "embed": m4})
     disp = ModelDispatcher([p], cooldowns_path=tmp_path / "cooldowns.json")
 
-    pools = disp.current_pools()
+    pools = disp.models_by_capability()
     assert "reasoning" in pools
     assert "speed" in pools
     assert "tool_calling" in pools

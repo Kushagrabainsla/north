@@ -7,7 +7,7 @@ import pytest
 from inference.capability import ModelInfo
 from inference.dispatcher import ModelDispatcher
 from inference.exceptions import AllModelsRateLimitedError, ModelRateLimitedError
-from inference.models import CompletionRequest, CompletionResponse, PoolPriority
+from inference.models import CompletionRequest, CompletionResponse
 from tests.unit.inference._catalog import publish_catalog
 
 
@@ -59,7 +59,7 @@ class MockTransientRateLimitedProvider:
 async def test_dispatcher_auto_waits_for_short_rate_limit(tmp_path):
     provider = MockTransientRateLimitedProvider("openrouter", "stealth/ox-alpha", retry_after=0.1)
     dispatcher = _ready([provider], tmp_path)
-    req = CompletionRequest(prompt="hello", component="general", priority=PoolPriority.MEDIUM)
+    req = CompletionRequest(prompt="hello", component="general")
 
     # Dispatcher should catch the 0.1s rate limit, sleep briefly, and succeed on the second attempt
     resp = await dispatcher.complete(req)
@@ -71,7 +71,7 @@ async def test_dispatcher_auto_waits_for_short_rate_limit(tmp_path):
 async def test_dispatcher_raises_with_retry_after_when_exceeding_wait_cap(tmp_path):
     provider = MockTransientRateLimitedProvider("openrouter", "stealth/ox-alpha", retry_after=60.0)
     dispatcher = _ready([provider], tmp_path)
-    req = CompletionRequest(prompt="hello", component="general", priority=PoolPriority.MEDIUM)
+    req = CompletionRequest(prompt="hello", component="general")
 
     # 60s exceeds the 30s in-flight wait threshold, so it should raise
     # AllModelsRateLimitedError with retry_after attached

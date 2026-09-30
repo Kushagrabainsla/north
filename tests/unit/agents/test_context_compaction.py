@@ -17,8 +17,7 @@ from inference.models import (
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
-    ModelPool,
-    PoolPriority,
+    ModelGroup,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -44,13 +43,10 @@ class DummyRouter(InferenceRouter):
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         raise NotImplementedError
 
-    async def get_model(self, priority: PoolPriority) -> str:
-        return "test-model"
-
-    async def refresh_pools(self) -> None:
+    async def refresh_catalog(self) -> None:
         pass
 
-    def current_pools(self) -> dict[str, ModelPool]:
+    def models_by_capability(self) -> dict[str, ModelGroup]:
         return {}
 
     async def complete_with_tools(self, request: ToolCallRequest, token_callback=None) -> ToolCallResponse:

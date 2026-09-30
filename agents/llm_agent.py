@@ -11,11 +11,7 @@ from agents.base import Agent
 from agents.exceptions import AgentConfigError, AgentOutputParseError
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
 from agents.policy import load_policies, render_policies
-from inference.models import (
-    POOL_TO_PRIORITY,
-    CompletionRequest,
-    PoolPriority,
-)
+from inference.models import CompletionRequest
 from tools.base import Tool
 from utils.runtime_resources import policies_dir
 from utils.text import strip_code_fences
@@ -96,15 +92,6 @@ class LLMAgent(Agent):
             f"## Task\n{payload.prompt}\n"
         )
 
-    def _resolve_priority(self, pool_or_payload: str | AgentPayload | None = None) -> PoolPriority:
-        if isinstance(pool_or_payload, AgentPayload):
-            pool_name = pool_or_payload.model_pool
-        elif isinstance(pool_or_payload, str) and pool_or_payload:
-            pool_name = pool_or_payload
-        else:
-            pool_name = getattr(self._config, "model_pool", None) or "reasoning"
-        return POOL_TO_PRIORITY.get(pool_name, PoolPriority.HIGH)
-
     async def _execute(
         self,
         payload: AgentPayload,
@@ -118,7 +105,6 @@ class LLMAgent(Agent):
         response = await self._deps.inference_router.complete(
             CompletionRequest(
                 prompt=full_prompt,
-                priority=self._resolve_priority(payload),
                 component=self.name,
                 task_id=payload.task_id,
                 run_id=payload.run_id,

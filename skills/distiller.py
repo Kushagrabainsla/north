@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 from inference.base import InferenceRouter
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from memory.episodic import EpisodicStore
 from skills.models import SKILL_FILENAME, SkillSource
 from skills.registry import SkillRegistry, rejection_reason
@@ -139,7 +139,7 @@ class SkillDistiller:
         prompt = load_prompt("prompts/skill_distiller.md").format(count=len(summaries), summaries=listed)
         try:
             response = await self._inference_router.complete(
-                CompletionRequest(prompt=prompt, priority=PoolPriority.LOW, component="skill_distiller")
+                CompletionRequest(prompt=prompt, component="skill_distiller")
             )
         except Exception:
             logger.warning("SkillDistiller: distillation call failed", exc_info=True)

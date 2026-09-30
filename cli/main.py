@@ -1168,7 +1168,7 @@ def _print_cache_usage(period: str) -> None:
 @app.command("models")
 @inference_app.command("models")
 def inference_models() -> None:
-    """Show current model pool state and discovered models."""
+    """Show the models north can reach, grouped by what they can do."""
     response = _api("GET", "/orchestrator/inference/models")
     pools = response.json()
     _console.print()

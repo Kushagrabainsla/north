@@ -46,7 +46,7 @@ class ModelPoolOut(BaseModel):
 @router.get("/inference/models", response_model=dict[str, ModelPoolOut])
 async def inference_models() -> dict[str, ModelPoolOut]:
     """Current model pool state. A catalog view only - pools select nothing."""
-    pools = _get_inference_router().current_pools()
+    pools = _get_inference_router().models_by_capability()
     return {name: ModelPoolOut(name=pool.name, models=pool.models) for name, pool in pools.items()}
 
 
@@ -100,7 +100,7 @@ class ProviderModelsOut(BaseModel):
 async def inference_catalog() -> list[ProviderModelsOut]:
     """Reachable models, grouped by provider - what manual routing picks from."""
     by_provider: dict[str, set[str]] = {}
-    for pool in _get_inference_router().current_pools().values():
+    for pool in _get_inference_router().models_by_capability().values():
         for entry in pool.models:
             by_provider.setdefault(entry.provider, set()).add(entry.id)
     return [

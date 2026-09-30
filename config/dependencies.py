@@ -202,7 +202,7 @@ def _build_supersede_fn(cost_tracker: CostTracker) -> SupersedeFn:
         loses information that nothing else will put back. "Related" and "about
         the same topic" are not enough - the old claim has to now be false.
         """
-        from inference.models import CompletionRequest, PoolPriority
+        from inference.models import CompletionRequest
         from utils.text import extract_json
 
         numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(candidates))
@@ -210,7 +210,6 @@ def _build_supersede_fn(cost_tracker: CostTracker) -> SupersedeFn:
         response = await cost_tracker.complete(
             CompletionRequest(
                 prompt=prompt,
-                priority=PoolPriority.LOW,
                 component="fact_supersede",
                 json_mode=True,
             )
@@ -232,13 +231,13 @@ def _build_glossary_fn(cost_tracker: CostTracker) -> GlossaryFn:
         spliced into every fact using that name, so silence costs one unfindable
         fact while a guess corrupts many.
         """
-        from inference.models import CompletionRequest, PoolPriority
+        from inference.models import CompletionRequest
         from utils.text import extract_json
 
         blocks = "\n\n".join(f"{token}:\n" + "\n".join(f"  - {c}" for c in facts) for token, facts in context.items())
         prompt = load_prompt("prompts/fact_glossary.md").format(blocks=blocks)
         response = await cost_tracker.complete(
-            CompletionRequest(prompt=prompt, priority=PoolPriority.LOW, component="fact_glossary", json_mode=True)
+            CompletionRequest(prompt=prompt, component="fact_glossary", json_mode=True)
         )
         parsed = extract_json(response.text.strip())
         raw = parsed.get("glossary") if isinstance(parsed, dict) else None

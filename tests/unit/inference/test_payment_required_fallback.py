@@ -7,7 +7,7 @@ import pytest
 from inference.capability import ModelInfo
 from inference.dispatcher import ModelDispatcher
 from inference.exceptions import AllModelsRateLimitedError, InferenceError, PaymentRequiredError
-from inference.models import CompletionRequest, CompletionResponse, PoolPriority
+from inference.models import CompletionRequest, CompletionResponse
 from tests.unit.inference._catalog import publish_catalog
 
 
@@ -63,7 +63,7 @@ async def test_payment_required_does_not_mark_provider_down(tmp_path):
     )
 
     dispatcher = _dispatcher([provider], tmp_path)
-    req = CompletionRequest(prompt="test", component="test", priority=PoolPriority.HIGH)
+    req = CompletionRequest(prompt="test", component="test")
     resp = await dispatcher.complete(req)
     assert resp.text == "free success"
     assert resp.model_used == "openrouter/free-model"
@@ -96,7 +96,7 @@ async def test_generic_inference_error_recorded_as_status_error(tmp_path):
             raise InferenceError("upstream 500 from provider")
 
     dispatcher = _dispatcher([FlakyProvider()], tmp_path)
-    req = CompletionRequest(prompt="test", component="test", priority=PoolPriority.HIGH)
+    req = CompletionRequest(prompt="test", component="test")
     with pytest.raises(AllModelsRateLimitedError):
         await dispatcher.complete(req)
     status = dispatcher.rate_limit_status()
@@ -124,6 +124,6 @@ async def test_success_marks_model_checked(tmp_path):
             return CompletionResponse(text="ok", model_used=model_id, tokens_in=1, tokens_out=1, cost_usd=0.0)
 
     dispatcher = _dispatcher([OkProvider()], tmp_path)
-    req = CompletionRequest(prompt="test", component="test", priority=PoolPriority.HIGH)
+    req = CompletionRequest(prompt="test", component="test")
     await dispatcher.complete(req)
     assert dispatcher._rate_limit_status.checked_count() == 1

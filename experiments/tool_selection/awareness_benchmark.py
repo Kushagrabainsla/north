@@ -23,7 +23,7 @@ from experiments.tool_selection.retrieval_benchmark import (
     load_cases,
 )
 from inference.codex_auth import CodexCredentialProvider
-from inference.models import CompletionRequest, PoolPriority
+from inference.models import CompletionRequest
 from inference.provider import Provider
 from inference.providers.groq import GroqRouter
 from inference.providers.openai_codex import OpenAICodexProvider
@@ -138,7 +138,6 @@ async def run(provider_name: str, model: str, catalogs: tuple[str, ...]) -> list
                 model,
                 CompletionRequest(
                     prompt=build_prompt(kind, docs, cases),
-                    priority=PoolPriority.LOW,
                     component="tool_awareness_eval",
                     max_tokens=4_000,
                     temperature=0,

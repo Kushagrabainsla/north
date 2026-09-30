@@ -95,15 +95,15 @@ async def test_unknown_timezone_is_a_422(settings) -> None:
 async def test_the_catalog_is_grouped_by_provider(tmp_path) -> None:
     """What the manual picker offers: provider first, then that provider's models."""
     import orchestrator.api.inference as inference_api
-    from inference.models import ModelEntry, ModelPool
+    from inference.models import ModelEntry, ModelGroup
 
     class _Router:
-        def current_pools(self):
+        def models_by_capability(self):
             # The same model appears in several pools; the picker must list it once.
             entries = [ModelEntry(id="qwen3-32b", provider="groq"), ModelEntry(id="gpt-5.6-sol", provider="codex")]
             return {
-                "reasoning": ModelPool(name="reasoning", models=entries),
-                "speed": ModelPool(name="speed", models=[entries[0]]),
+                "reasoning": ModelGroup(name="reasoning", models=entries),
+                "speed": ModelGroup(name="speed", models=[entries[0]]),
             }
 
     with bind_services(ApiServices(inference_router=_Router())):

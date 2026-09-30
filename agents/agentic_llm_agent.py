@@ -819,11 +819,13 @@ class AgenticLLMAgent(LLMAgent):
         exclude_models: list[str] | None = None,
         model_pool: str | None = None,
     ) -> Any:
+        # `model_pool` is not sent: an agent's pool has never reached routing
+        # under the chain router, and sending it now would move the coder to the
+        # cheapest model for bugfix and test tasks (#48). Kept for that decision.
         return await self._deps.inference_router.complete_with_tools(
             ToolCallRequest(
                 messages=messages,
                 tools=tools,
-                priority=self._resolve_priority(model_pool),
                 component=self.name,
                 task_id=task_id,
                 run_id=(current.run_id if (current := current_execution()) is not None else None),

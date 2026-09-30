@@ -15,7 +15,7 @@ from approval.interaction import UserInteraction
 from approval.store import ApprovalStore
 from inference.capability import ModelCapability, ModelInfo
 from inference.dispatcher import ModelDispatcher
-from inference.models import CompletionRequest, CompletionResponse, PoolPriority, ToolCallResponse
+from inference.models import CompletionRequest, CompletionResponse, ToolCallResponse
 from ledger.models import LedgerEntry, LedgerSource
 from memory import FileContextStore
 from orchestrator.orchestrator import Orchestrator
@@ -82,9 +82,7 @@ async def test_exclude_models_skips_excluded(tmp_path):
     cat = _Catalog([_mi("model-a", 0.9), _mi("model-b", 0.5)], _resp)
     disp = _ready([cat], tmp_path)
     # model-a ranks first, but is excluded → model-b answers.
-    r = await disp.complete(
-        CompletionRequest(prompt="x", priority=PoolPriority.HIGH, component="reviewer", exclude_models=["model-a"])
-    )
+    r = await disp.complete(CompletionRequest(prompt="x", component="reviewer", exclude_models=["model-a"]))
     assert r.model_used == "model-b"
 
 
@@ -92,18 +90,14 @@ async def test_exclude_models_degrades_when_only_excluded_left(tmp_path):
     cat = _Catalog([_mi("only-model", 0.9)], _resp)
     disp = _ready([cat], tmp_path)
     # Excluding the only model must NOT block - it degrades to using it.
-    r = await disp.complete(
-        CompletionRequest(prompt="x", priority=PoolPriority.HIGH, component="reviewer", exclude_models=["only-model"])
-    )
+    r = await disp.complete(CompletionRequest(prompt="x", component="reviewer", exclude_models=["only-model"]))
     assert r.model_used == "only-model"
 
 
 async def test_exclude_models_is_case_insensitive(tmp_path):
     cat = _Catalog([_mi("Model-A", 0.9), _mi("model-b", 0.5)], _resp)
     disp = _ready([cat], tmp_path)
-    r = await disp.complete(
-        CompletionRequest(prompt="x", priority=PoolPriority.HIGH, component="reviewer", exclude_models=["model-a"])
-    )
+    r = await disp.complete(CompletionRequest(prompt="x", component="reviewer", exclude_models=["model-a"]))
     assert r.model_used == "model-b"
 
 

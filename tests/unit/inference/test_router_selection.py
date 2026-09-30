@@ -27,7 +27,6 @@ from inference.models import (
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
-    PoolPriority,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -106,7 +105,7 @@ async def test_the_highest_scoring_model_is_chosen(tmp_path):
     a = _Catalog("openrouter", [_mi("gpt-oss-20b", provider="openrouter", quality=0.4)], lambda m, r: _resp(m))
     b = _Catalog("opencode_zen", [_mi("claude-opus-4-8", provider="opencode_zen", quality=0.95)], lambda m, r: _resp(m))
     disp = _disp([a, b], tmp_path)
-    resp = await disp.complete(CompletionRequest(prompt="think", priority=PoolPriority.HIGH, component="coder"))
+    resp = await disp.complete(CompletionRequest(prompt="think", component="coder"))
     # claude-opus-4-8 (family tier 0.96) must beat gpt-oss-20b (0.42).
     assert resp.model_used == "claude-opus-4-8"
 
@@ -123,7 +122,7 @@ async def test_failure_falls_through_to_other_provider(tmp_path):
     a = _Catalog("opencode_zen", [_mi("claude-opus-4-8", provider="opencode_zen", quality=0.95)], a_responder)
     b = _Catalog("groq", [_mi("llama-3.1-8b-instant", provider="groq", quality=0.7)], lambda m, r: _resp(m))
     disp = _disp([a, b], tmp_path)
-    resp = await disp.complete(CompletionRequest(prompt="think", priority=PoolPriority.HIGH, component="coder"))
+    resp = await disp.complete(CompletionRequest(prompt="think", component="coder"))
     assert resp.model_used == "llama-3.1-8b-instant"
     # Provider A's broken model was attempted once, then abandoned.
     assert a.calls == ["claude-opus-4-8"]
@@ -139,12 +138,12 @@ async def test_rate_limited_model_is_cooldown_and_skipped(tmp_path):
     b = _Catalog("groq", [_mi("llama-3.1-8b-instant", provider="groq", quality=0.7)], lambda m, r: _resp(m))
     disp = _disp([a, b], tmp_path)
 
-    resp = await disp.complete(CompletionRequest(prompt="think", priority=PoolPriority.HIGH, component="coder"))
+    resp = await disp.complete(CompletionRequest(prompt="think", component="coder"))
     assert resp.model_used == "llama-3.1-8b-instant"
 
     # Immediately retry: A must be skipped (cooldown active), so B answers again
     # without even contacting A.
-    resp2 = await disp.complete(CompletionRequest(prompt="think", priority=PoolPriority.HIGH, component="coder"))
+    resp2 = await disp.complete(CompletionRequest(prompt="think", component="coder"))
     assert resp2.model_used == "llama-3.1-8b-instant"
     assert a.calls == ["claude-opus-4-8"]  # tried once, then cooled; never retried
 
@@ -162,7 +161,7 @@ async def test_price_breaks_a_tie_between_equal_models(tmp_path):
         lambda m, r: _resp(m),
     )
     disp = _disp([paid, free], tmp_path)
-    resp = await disp.complete(CompletionRequest(prompt="chat", priority=PoolPriority.MEDIUM, component="general"))
+    resp = await disp.complete(CompletionRequest(prompt="chat", component="general"))
     assert resp.model_used == "zen-free"
 
 
@@ -177,4 +176,4 @@ async def test_all_models_exhausted(tmp_path):
     b = _Catalog("groq", [_mi("groq-mid", provider="groq", quality=0.7)], boom)
     disp = _disp([a, b], tmp_path)
     with pytest.raises(AllModelsRateLimitedError):
-        await disp.complete(CompletionRequest(prompt="think", priority=PoolPriority.HIGH, component="coder"))
+        await disp.complete(CompletionRequest(prompt="think", component="coder"))

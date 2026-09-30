@@ -27,7 +27,7 @@ from inference.models import (
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
-    ModelPool,
+    ModelGroup,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -153,11 +153,11 @@ class CostTracker(InferenceRouter):
         await self._record_call(request, response, "transcription")
         return response
 
-    async def refresh_pools(self) -> None:
-        await self._inner.refresh_pools()
+    async def refresh_catalog(self) -> None:
+        await self._inner.refresh_catalog()
 
-    def current_pools(self) -> dict[str, ModelPool]:
-        return self._inner.current_pools()
+    def models_by_capability(self) -> dict[str, ModelGroup]:
+        return self._inner.models_by_capability()
 
     def part_chains(self, limit: int = 6) -> list[dict]:
         return self._inner.part_chains(limit)

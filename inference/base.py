@@ -10,7 +10,7 @@ from inference.models import (
     CompletionResponse,
     EmbedRequest,
     EmbedResponse,
-    ModelPool,
+    ModelGroup,
     ToolCallRequest,
     ToolCallResponse,
     TranscriptionRequest,
@@ -39,7 +39,7 @@ class InferenceRouter(ABC):
         """Run one audio-transcription call via the same provider."""
 
     @abstractmethod
-    async def refresh_pools(self) -> None:
+    async def refresh_catalog(self) -> None:
         """Re-fetch the model list from the provider and rebuild pools.
 
         Persists the result to the cache file on success. On failure, the
@@ -47,7 +47,7 @@ class InferenceRouter(ABC):
         """
 
     @abstractmethod
-    def current_pools(self) -> dict[str, ModelPool]:
+    def models_by_capability(self) -> dict[str, ModelGroup]:
         """Snapshot of the current pool state. Powers the `inference models` CLI."""
 
     @abstractmethod
@@ -89,5 +89,5 @@ class InferenceRouter(ABC):
 
     def health_summary(self) -> dict[str, int | bool]:
         """Return whether the router currently has at least one usable model."""
-        models = {(model.provider, model.id) for pool in self.current_pools().values() for model in pool.models}
+        models = {(model.provider, model.id) for pool in self.models_by_capability().values() for model in pool.models}
         return {"ready": bool(models), "models": len(models), "providers": len({p for p, _ in models})}

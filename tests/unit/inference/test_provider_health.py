@@ -57,7 +57,7 @@ async def test_model_404_does_not_degrade_provider(tmp_path) -> None:
     """Individual model 404s or 400s must cool down only that model without degrading provider."""
     from inference.capability import ModelCapability, ModelInfo
     from inference.exceptions import ModelNotFoundError
-    from inference.models import CompletionRequest, CompletionResponse, PoolPriority
+    from inference.models import CompletionRequest, CompletionResponse
 
     class MockProvider:
         name = "openrouter"
@@ -90,7 +90,7 @@ async def test_model_404_does_not_degrade_provider(tmp_path) -> None:
     disp = _ready([MockProvider()], tmp_path)
 
     # Provider should remain available and dispatch should reach working-model
-    resp = await disp.complete(CompletionRequest(prompt="hi", priority=PoolPriority.HIGH, component="test"))
+    resp = await disp.complete(CompletionRequest(prompt="hi", component="test"))
     assert resp.model_used == "llama-3.1-8b"
     assert resp.text == "hello"
     assert disp._provider_health.is_available("openrouter") is True
