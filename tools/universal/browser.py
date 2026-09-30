@@ -23,14 +23,18 @@ import signal
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.universal.browser_describe import describe_browser_call
 from utils.net import UnsafeUrlError, validate_public_url
+
+if TYPE_CHECKING:
+    from approval.approvals import Request as ApprovalRequest
 
 logger = logging.getLogger(__name__)
 
@@ -703,6 +707,16 @@ class BrowserTool(Tool):
         values = params or {}
         action = str(values.get("action") or "").strip().lower()
         return action in self._MUTATING_ACTIONS or bool(values.get("copy_cookies") or values.get("connect"))
+
+    async def describe(self, input: ToolInput) -> ApprovalRequest:
+        """Look at the page first, so the card says what the action lands on (`browser_describe`)."""
+        params = input.params or {}
+        try:
+            command = self._get_cmd()
+        except RuntimeError:
+            command = []  # nothing to look with; the card says north could not read the page
+        session = params.get("task_id", "") or params.get("session_id", "default")
+        return await describe_browser_call(params, [*command, "--json", "--browser", session], _run_chrome_agent)
 
     def _get_cmd(self) -> list[str]:
         if self._binary_cmd:

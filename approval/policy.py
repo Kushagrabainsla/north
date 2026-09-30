@@ -52,6 +52,8 @@ class ActionKind(StrEnum):
     GIT = "git"
     GITHUB = "github"
     DEVICE = "device"
+    BROWSER = "browser"
+    MCP = "mcp"
     TOOL_CHANGE = "tool_change"
     OTHER = "other"
 

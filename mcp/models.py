@@ -23,12 +23,27 @@ class McpConfigFile(BaseModel):
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict, alias="mcpServers")
 
 
+class McpToolAnnotations(BaseModel):
+    """What the server says a tool does (MCP tool annotations). Defaults are the spec's: assume the worst."""
+
+    model_config = {"populate_by_name": True}
+
+    title: str | None = None
+    read_only_hint: bool = Field(default=False, alias="readOnlyHint")
+    destructive_hint: bool = Field(default=True, alias="destructiveHint")
+    idempotent_hint: bool = Field(default=False, alias="idempotentHint")
+    open_world_hint: bool = Field(default=True, alias="openWorldHint")
+
+
 class McpToolDefinition(BaseModel):
     """Metadata describing a single tool exposed by an MCP server."""
+
+    model_config = {"populate_by_name": True}
 
     name: str
     description: str | None = None
     input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
+    annotations: McpToolAnnotations = Field(default_factory=McpToolAnnotations)
 
 
 class McpCallResult(BaseModel):
