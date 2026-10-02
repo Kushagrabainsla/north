@@ -125,6 +125,7 @@ class GhTool(Tool):
                 args=call.args,
                 mutating=call.action in _MUTATING_ACTIONS,
                 read_only=call.action not in _MUTATING_ACTIONS,
+                leaves_sandbox=call.action in _MUTATING_ACTIONS,
             ),
             title="GitHub Operation - Approval Required",
             message=f"```\n{' '.join(call.cmd)}\n```",

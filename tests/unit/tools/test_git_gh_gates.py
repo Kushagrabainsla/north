@@ -262,3 +262,24 @@ class TestRejectedApproval:
         assert result.success is False
         assert result.error == "Git operation rejected by user."
         assert result.failure_kind == "refused"
+
+
+class TestWhatLeavesTheSandbox:
+    """Autonomous approves these only when something you stated covers them (approval/decider.py)."""
+
+    @pytest.mark.parametrize(
+        ("action", "args", "leaves"),
+        [("push", "origin main", True), ("commit", "-m msg", False), ("add", ".", False), ("status", "", False)],
+    )
+    async def test_only_a_push_leaves_the_sandbox(self, fake_run_capture, action, args, leaves) -> None:
+        request = await GitTool().describe(ToolInput(params={"action": action, "args": args}))
+
+        if request is not None:  # a read-only call has nothing to ask about, so nothing to flag
+            assert request.action.leaves_sandbox is leaves
+
+    async def test_a_mutating_github_call_leaves_the_sandbox_and_a_read_does_not(self, fake_run_capture) -> None:
+        write = await GhTool().describe(ToolInput(params={"action": "pr_create", "args": "--title x"}))
+        read = await GhTool().describe(ToolInput(params={"action": "pr_list"}))
+
+        assert write.action.leaves_sandbox is True
+        assert read.action.leaves_sandbox is False
