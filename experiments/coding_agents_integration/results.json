@@ -1,0 +1,103 @@
+{
+  "G1_card": {
+    "agent": "coding:claude",
+    "blocking": true,
+    "task_id": "t-run",
+    "title": "Shell"
+  },
+  "G2_policy_table": {
+    "ask": {
+      "edit_in_worktree": "ask (not covered by any rule)",
+      "fetch_new_host": "ask (not covered by any rule)",
+      "git_push_as_git": "ask (not covered by any rule)",
+      "git_push_as_shell": "ask (not covered by any rule)",
+      "read_in_worktree": "allow (read-only)",
+      "shell_read_only": "allow (read-only)",
+      "shell_write": "ask (not covered by any rule)"
+    },
+    "autonomous, decider abstains": {
+      "edit_in_worktree": "allow (edit inside the task workspace)",
+      "fetch_new_host": "ask (the memory decider could not decide)",
+      "git_push_as_git": "ask (the memory decider could not decide)",
+      "git_push_as_shell": "ask (the memory decider could not decide)",
+      "read_in_worktree": "allow (read-only)",
+      "shell_read_only": "allow (read-only)",
+      "shell_write": "ask (the memory decider could not decide)"
+    },
+    "autonomous, decider approves": {
+      "edit_in_worktree": "allow (edit inside the task workspace)",
+      "fetch_new_host": "allow (stub decider)",
+      "git_push_as_git": "allow (stub decider)",
+      "git_push_as_shell": "allow (stub decider)",
+      "read_in_worktree": "allow (read-only)",
+      "shell_read_only": "allow (read-only)",
+      "shell_write": "allow (stub decider)"
+    },
+    "safe": {
+      "edit_in_worktree": "allow (edit inside the task workspace)",
+      "fetch_new_host": "ask (not covered by any rule)",
+      "git_push_as_git": "ask (not covered by any rule)",
+      "git_push_as_shell": "ask (not covered by any rule)",
+      "read_in_worktree": "allow (read-only)",
+      "shell_read_only": "allow (read-only)",
+      "shell_write": "ask (not covered by any rule)"
+    },
+    "yolo": {
+      "edit_in_worktree": "allow (yes to everything)",
+      "fetch_new_host": "allow (yes to everything)",
+      "git_push_as_git": "allow (yes to everything)",
+      "git_push_as_shell": "allow (yes to everything)",
+      "read_in_worktree": "allow (read-only)",
+      "shell_read_only": "allow (read-only)",
+      "shell_write": "allow (yes to everything)"
+    }
+  },
+  "H_latency_ms": {
+    "median": 37.2,
+    "p95": 52.2,
+    "runs": 15
+  },
+  "R1_recovery_rule": {
+    "after_side_effect": "failed with note",
+    "mid_run": "resumed"
+  },
+  "S1_slots": {
+    "cap": 10,
+    "working_with_named_card": 9
+  },
+  "S2_dashboard_attention": {
+    "fields": [
+      "action_key",
+      "agent",
+      "blocking",
+      "chosen_option",
+      "context",
+      "created_at",
+      "decided_by",
+      "fields",
+      "id",
+      "memory_used",
+      "message",
+      "options",
+      "overruled",
+      "reason",
+      "response",
+      "source",
+      "status",
+      "task_id",
+      "title",
+      "type"
+    ]
+  },
+  "S3_run": {
+    "provider_state_keys": [
+      "claude_code"
+    ],
+    "status": "running"
+  },
+  "T1_start_card": {
+    "message": "Run claude (edit) in /w: fix the bug",
+    "task_id": "t-run",
+    "title": "Coding Agent - Approval Required"
+  }
+}
