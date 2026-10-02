@@ -435,6 +435,7 @@ Two consequences worth keeping:
 - **Ask**: read-only runs; every mutating action asks.
 - **Safe** (was `auto`): read-only, safe mutating actions and exact replays of the user's past answers run; everything else asks.
 - **Autonomous**: never asks; a model given the user's memory as context always gives the answer that best fits the user. It uses the pinned model under manual routing and its own routing part under auto routing. The deterministic tiers (read-only, north's notes, the safe list, exact replays) decide first; the model decides the rest. Only if the model fails (no model, an error, an unreadable reply) does a card wait for the user.
+  Autonomous decides from memory only: an action that leaves the sandbox or the workspace (a push, a new host) is allowed only when a fact the user stated covers it. With no covering fact the model abstains and a card waits - it never guesses yes. Facts written by a worker, a repo or a tool never authorize anything.
 - **YOLO**: never asks; every approval is yes and every question gets the affirmative answer.
 
 **Why:** each mode must mean one thing the user can predict.
@@ -1778,6 +1779,7 @@ Do not add the following unless the spec explicitly requires it. If it feels nec
 - Abstract base classes beyond the interface map in Section 6.1
 - God classes - if a class is growing, split it
 - Premature optimization - profile first, optimize second
+- Anything Claude Code or Codex already does (agent loop, sandbox, edit tools, session storage). Run their CLIs, configure their own sandbox strictly, and own only policy, worktree and verify, memory handoff and audit.
 
 ---
 
