@@ -12,11 +12,21 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from utils.db import open_db_connection
 from utils.time import format_timestamp, utcnow
+
+
+class RunStatus(StrEnum):
+    """The states a run is in while it can still finish. Terminal ones are set by `complete` and `finish_with_error`."""
+
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    INTERRUPTED = "interrupted"  # its process died; it can resume
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_runs (
@@ -194,6 +204,21 @@ class AgentRunStore:
                 "UPDATE skill_usage SET outcome=?, completed_at=? WHERE run_id=?",
                 (status, format_timestamp(utcnow()), run_id),
             )
+
+    async def set_status(self, run_id: str, status: RunStatus) -> bool:
+        """Move a run that has not finished between its live states; False when it already finished.
+
+        A run that waits on a card, or whose process died, is still not done, so it
+        says so instead of reading `running`. A finished run is never brought back.
+        """
+        return await asyncio.to_thread(self._set_status_sync, run_id, RunStatus(status))
+
+    def _set_status_sync(self, run_id: str, status: RunStatus) -> bool:
+        with open_db_connection(self._db_path) as conn:
+            changed = conn.execute(
+                "UPDATE agent_runs SET status=? WHERE run_id=? AND completed_at IS NULL", (status.value, run_id)
+            )
+            return changed.rowcount == 1
 
     async def set_skills(self, run_id: str, skills: list[dict[str, str]]) -> None:
         await asyncio.to_thread(self._set_skills_sync, run_id, skills)

@@ -3,8 +3,10 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from agents.models import AgentPayload, AgentResult
-from orchestrator.agent_runs import AgentRunStore
+from orchestrator.agent_runs import AgentRunStore, RunStatus
 from orchestrator.stream import EventStreamManager
 from utils.execution_context import ExecutionIdentity, bind_execution
 from utils.tasks import drain
@@ -127,3 +129,44 @@ async def test_prune_removes_expired_run_internals_but_keeps_active_tasks(tmp_pa
     assert await store.get("active-run") is not None
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT count(*) FROM skill_usage WHERE run_id='expired-run'").fetchone()[0] == 0
+
+
+async def test_a_run_waiting_on_a_card_says_so_and_goes_back_to_running(tmp_path) -> None:
+    store = AgentRunStore(tmp_path / "tasks.db")
+    payload = AgentPayload(task_id="task-1", run_id="run-1", prompt="fix the bug")
+    await store.start(payload, "coding:claude")
+
+    assert await store.set_status("run-1", RunStatus.WAITING_APPROVAL)
+    assert (await store.get("run-1")).status == "waiting_approval"
+    assert await store.set_status("run-1", RunStatus.RUNNING)
+    assert (await store.get("run-1")).status == "running"
+
+
+async def test_an_interrupted_run_is_live_and_starting_it_again_resumes_it(tmp_path) -> None:
+    store = AgentRunStore(tmp_path / "tasks.db")
+    payload = AgentPayload(task_id="task-1", run_id="run-1", prompt="fix the bug")
+    await store.start(payload, "coding:claude")
+
+    await store.set_status("run-1", RunStatus.INTERRUPTED)
+    assert (await store.get("run-1")).status == "interrupted"
+    await store.start(payload, "coding:claude")
+
+    assert (await store.get("run-1")).status == "running"
+
+
+async def test_a_finished_run_cannot_be_set_back_to_a_live_state(tmp_path) -> None:
+    store = AgentRunStore(tmp_path / "tasks.db")
+    payload = AgentPayload(task_id="task-1", run_id="run-1", prompt="fix the bug")
+    await store.start(payload, "coding:claude")
+    await store.finish_with_error("run-1", "failed", "boom")
+
+    assert not await store.set_status("run-1", RunStatus.RUNNING)
+    assert (await store.get("run-1")).status == "failed"
+
+
+async def test_set_status_refuses_a_state_that_is_not_live(tmp_path) -> None:
+    store = AgentRunStore(tmp_path / "tasks.db")
+    await store.start(AgentPayload(task_id="task-1", run_id="run-1", prompt="x"), "coding:claude")
+
+    with pytest.raises(ValueError):
+        await store.set_status("run-1", "completed")  # type: ignore[arg-type]
