@@ -1,7 +1,9 @@
 # Coding agents: north delegates coding to Claude Code and Codex
 
 > **Status:** accepted 2026-10-02, implemented on `feature/coding-agents-delegate-to-vendor-clis`.
-> Evidence below comes from a lab run against `claude` 2.1.286 and `codex` 0.159.2.
+> Evidence comes from a lab run against `claude` 2.1.286 and `codex` 0.159.2, and from
+[`experiments/coding_agents_integration`](../../experiments/coding_agents_integration/README.md),
+which drives north's real classes.
 
 ## Problem
 
@@ -39,8 +41,11 @@ tools/specialized/coding_agent.py   the Tool agents call; describe() makes the s
 ```
 
 - Registered in `orchestrator/app.py` like `BashTool` (constructor args, so manual).
-- Run record lives in `agent_runs` (`provider_state` holds backend, session id, worktree, pid,
-  CLI version) and events in `agent_run_events`. No new tables.
+- A run is a child row in `agent_runs` and its events go to `agent_run_events`. No new tables.
+  `provider_state` is `{provider: [entries]}` and append-only, so a run records
+  `{"provider": "claude_code", "session_id", "worktree", "pid", "cli_version"}` and the latest
+  entry wins. Two small methods are added: `set_status` (a non-terminal `waiting_approval`) and
+  `mark_interrupted` (a dead run that can resume).
 - Worktrees reuse `GitWorktreeManager` and the workspace lock, passed in as a small interface.
 
 ## Backends
@@ -89,16 +94,20 @@ Codex treats as a refusal. `turn/interrupt` cancels; `thread/resume` recovers.
 ## Policy
 
 The gate builds an `Action` from facts (kind, command, path, workspace, read_only, mutating) and
-calls `Approvals.decide()`. Nothing else decides (CODING_STYLE 7.3).
+calls `Approvals.decide()`, passing the **owning task id** (the card is blocking and names it, which
+frees the concurrency slot and keeps the watchdog away). The workspace comes from the server-owned
+run record, never from the hook payload's `cwd`. Nothing else decides (CODING_STYLE 7.3).
 
 - Reads inside the worktree: allowed, no card.
-- Edits: policy decides; the card shows a diff.
+- Edits: policy decides. The existing rule "edit inside the task workspace" already allows them in
+  safe and autonomous; ask mode asks. The card shows a diff.
 - Shell commands: bash's existing command classifier decides.
 - Anything else: ask, or deny when nobody can be asked (the denial is recorded, not lost).
 - **Autonomous decides from memory only.** An action that leaves the sandbox or the workspace
   (a push, a new host) is allowed only when a fact the user stated covers it. With no covering
   fact the model abstains and a card waits. Facts written by a worker, a repo or a tool never
-  authorize anything. YOLO stays always-yes.
+  authorize anything. YOLO stays always-yes. Autonomous has no hard floor today, so this lives in the
+  decider (its prompt, plus a new `Action.leaves_sandbox` fact it keys on), not in the policy.
 
 ## Lifecycle
 
@@ -107,15 +116,32 @@ queued -> starting -> running <-> waiting_approval -> verifying -> applying -> d
                           \-> needs_attention | failed | cancelled
 ```
 
-1. Create the worktree, write the run record (with the session id), then start the process.
-2. Daemon restart: a run whose process is dead resumes with its session id, up to
-   `MAX_RESUME_ATTEMPTS`. If resume fails the job goes to `needs_attention`; it never silently
+1. Create the worktree, write the run record (with the session id), then start the process. The
+   tool first looks for a live coding run for the same task id, so a re-planned task that was
+   resumed continues the session instead of starting a second one.
+2. Daemon restart: north's recovery resumes a task killed mid-run (no side effect is recorded until
+   a mutating call succeeds) and fails one killed after apply-back, with a note. A run whose process
+   is dead resumes with its session id, up to `MAX_RESUME_ATTEMPTS`. If resume fails the job goes to `needs_attention`; it never silently
    starts fresh. Only processes north positively identifies as its own are ever killed.
 3. Rate limit, auth and billing errors freeze the run and resume it later (CODING_STYLE 13.5).
 4. After the agent ends, north runs the repo's verify command in the worktree and checks the
    agent's claims against what succeeded. "DONE" is never trusted.
 5. Apply-back is automatic only when verify passed and there is no conflict; otherwise the
    branch is kept.
+
+## Waits on the dashboard
+
+Every wait must be visible. Proved by the experiments, or marked to build:
+
+| Wait | Shown | State |
+|---|---|---|
+| Approval card (gate or start) | Dashboard `attention`, Approvals page | works |
+| Slot held by a waiting task | not held | works |
+| Run waiting for approval | run row says `waiting_approval` | build: `set_status` |
+| Job parked for a person | dashboard `jobs`, `needs_attention` | works |
+| Vendor rate limit or auth freeze | run event plus a paused state | build |
+| Apply-back conflict, branch kept | a non-blocking card | build |
+| Queued behind the concurrency cap | Tasks page "Queued" | works |
 
 ## What north sends the agent
 
@@ -137,6 +163,8 @@ queued -> starting -> running <-> waiting_approval -> verifying -> applying -> d
 
 ## Phases
 
+0. Close the four gaps the experiments found, each with its tests: `Action.leaves_sandbox`, run
+   `set_status`, run `mark_interrupted`, and the decider's abstain-without-a-fact rule.
 1. Claude `plan` mode: tool, run store, probe, events. No writes.
 2. Claude `edit` mode: worktree, gate, verify, apply-back, autonomous abstain rule.
 3. Codex backend on the same conformance suite.
@@ -146,8 +174,9 @@ queued -> starting -> running <-> waiting_approval -> verifying -> applying -> d
 
 ## Open risks
 
-- Integration with the real daemon and cards is unproven until phase 1.
-- A long approval wait must free north's concurrency slot; not yet checked.
+- Connection to cards, slots, dashboard, runs API and recovery is proved by
+  `experiments/coding_agents_integration` (20 pass, 4 expected gaps). Still unproven: a real
+  Claude Code process against the daemon, which is phase 1.
 - `~/.claude.json` is writable by the CLI; an agent could add an MCP server there.
 - North and the Codex worker share one ChatGPT plan quota.
 - Subscription terms are the vendors' call and can change.
