@@ -129,6 +129,7 @@ _CONFIG_KEYS = {
     "autonomous_mode": ("autonomous_mode", _bool_cast),
     # Sandboxing & Git
     "sandbox.enabled": ("sandbox_enabled", _bool_cast),
+    "sandbox.os": ("os_sandbox_enabled", _bool_cast),
     "worktree.enabled": ("worktree_isolation_enabled", _bool_cast),
     # Tuning
     "ledger.retention_days": ("task_cleanup_completed_days", int),

@@ -208,7 +208,12 @@ def _build_tool_registry(
         tool_registry.register(SearchCodeTool(code_index=deps.code_index))
     # Registered by hand for its sandbox setting; approval comes from the
     # registry like every other tool's.
-    tool_registry.register(BashTool(sandbox=SandboxConfig.from_settings(settings)))
+    tool_registry.register(
+        BashTool(
+            sandbox=SandboxConfig.from_settings(settings),
+            os_sandbox=settings.os_sandbox_enabled,
+        )
+    )
     return tool_registry, create_agent_tool
 
 

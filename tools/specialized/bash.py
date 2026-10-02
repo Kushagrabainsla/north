@@ -12,15 +12,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import re
 import signal
 from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from tools._path import references_sensitive_path
-from tools.base import Tool
+from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
+from tools.specialized import _seatbelt
 from tools.specialized._sandbox import (
     SandboxConfig,
     build_run_argv,
@@ -53,63 +52,18 @@ def _cap(text: str) -> str:
     return kept + f"\n[…{omitted} chars truncated]"
 
 
-# Any of these makes a command compound - chaining, substitution, redirection,
-# subshells, or placeholders. A safe-looking prefix then proves nothing about
-# what actually runs, so the command always goes to approval.
-_SHELL_METACHARS = re.compile(r"[;&|`$<>(){}\n]")
-
-
-class CommandSafetyInspector:
-    """Inspector responsible for checking if a command is instantly safe/read-only.
-
-    The prefix list is a convenience fast-path, not a security boundary - but it
-    must not be trivially escapable. Compound commands (shell metacharacters),
-    filesystem-traversal commands (`find` - it can walk arbitrary trees and run
-    actions), and reads of sensitive paths (~/.ssh, ~/.north, /etc, ...) all
-    fall through to the approval card.
-    """
-
-    def __init__(self) -> None:
-        self.instant_safe_prefixes = [
-            "git status",
-            "git diff",
-            "git log",
-            "git show",
-            "git branch",
-            "cat ",
-            "grep ",
-            "ls ",
-            "pwd",
-            "whoami",
-        ]
-
-    def is_instantly_safe(self, command: str) -> bool:
-        cleaned = command.strip()
-        if _SHELL_METACHARS.search(cleaned):
-            return False
-        lowered = cleaned.lower()
-        if not any(lowered.startswith(prefix) for prefix in self.instant_safe_prefixes):
-            return False
-        if lowered.startswith("grep ") and _grep_is_recursive(cleaned):
-            return False
-        return not references_sensitive_path(cleaned)
-
-
-def _grep_is_recursive(command: str) -> bool:
-    """True when a grep command walks a directory tree (-r/-R/--recursive)."""
-    for token in command.split()[1:]:
-        if token in ("--recursive", "--dereference-recursive"):
-            return True
-        if token.startswith("-") and not token.startswith("--") and ("r" in token or "R" in token):
-            return True
-    return False
+# A command that has to finish within this under the read-only profile to skip the card.
+_PROBE_TIMEOUT = 10
 
 
 class BashTool(Tool):
     """Runs a shell command and returns stdout, stderr, and return code.
 
-    Requires explicit user approval before executing any command - the approval
-    card shows the exact command string so the user sees precisely what will run.
+    A command that changes something needs approval before it executes - the card
+    shows the exact command string so the user sees precisely what will run. With
+    the OS sandbox on (macOS), a command is first tried where the kernel refuses
+    every write and the network; one that finishes there changed nothing and
+    needs no card, and an approved one runs with writes limited to its workspace.
     """
 
     name = "bash"
@@ -117,7 +71,7 @@ class BashTool(Tool):
     description = (
         "Run a shell command and return stdout/stderr/returncode."
         " Default timeout 30 s, pass timeout= (max 300) for longer commands."
-        " Every command requires user approval before it executes."
+        " Commands that only read run at once; anything that writes or uses the network needs approval."
     )
     parameters_schema = {
         "type": "object",
@@ -138,19 +92,20 @@ class BashTool(Tool):
         "required": ["command"],
     }
 
-    def __init__(self, sandbox: SandboxConfig | None = None) -> None:
-        self._safety_inspector = CommandSafetyInspector()
+    def __init__(self, sandbox: SandboxConfig | None = None, os_sandbox: bool = False) -> None:
         self._sandbox = sandbox or SandboxConfig()
+        # One sandbox layer only: Docker, when asked for, replaces Seatbelt.
+        self._os_sandbox = os_sandbox and not self._sandbox.enabled and _seatbelt.available()
 
-    def _action(self, command: str) -> Action:
+    def _action(self, command: str, *, read_only: bool = False) -> Action:
         """What this command is, as facts. What that *means* is the policy's call."""
         return Action(
             agent="bash",
             kind=ActionKind.SHELL_COMMAND,
             summary=command,
             command=command,
-            read_only=self._safety_inspector.is_instantly_safe(command),
-            mutating=not self._safety_inspector.is_instantly_safe(command),
+            read_only=read_only,
+            mutating=not read_only,
             obviously_destructive=any(hint in command for hint in _OBVIOUS_DESTRUCTIVE_HINTS),
         )
 
@@ -163,23 +118,44 @@ class BashTool(Tool):
         command = input.params.get("command")
         if not command:
             return None
+        proved = await self._prove_read_only(command, input.params.get("workspace") or None)
         return Request(
-            action=self._action(command),
+            action=self._action(command, read_only=proved is not None),
             title="Shell Command - Approval Required",
             message=f"```\n{command}\n```",
             declined="Command cancelled by user.",
+            prepared=proved,
         )
+
+    async def _prove_read_only(self, command: str, cwd: str | None) -> ToolOutput | None:
+        """Run *command* where the kernel refuses every write and the network.
+
+        Returns its output when it finished without being refused anything, which
+        proves it changed nothing - the output is then what `run` returns, so the
+        command runs once. Returns None when it was refused, failed to start or
+        took too long: it goes to approval, and runs again if approved.
+        """
+        if not self._os_sandbox:
+            return None
+        argv = _seatbelt.wrap(command, cwd, writable=False)
+        output = await self._spawn(argv, cwd, _PROBE_TIMEOUT, command=command)
+        if output.data is None or _seatbelt.denied(str(output.data.get("stderr", ""))):
+            return None
+        return output
 
     async def _resolve_execution(
         self, command: str, cwd: str | None
     ) -> tuple[list[str] | None, str | None, str | None]:
-        """Decide how to run *command*: (docker_argv, host_cwd, error).
+        """Decide how to run *command*: (argv, host_cwd, error).
 
-        - Sandbox off → (None, cwd, None): run on the host as before.
-        - Sandbox on + Docker available + a workspace to mount → (argv, None, None).
-        - Sandbox on but Docker missing or no workspace → (None, None, error): fail
+        - No sandbox → (None, cwd, None): run on the host as before.
+        - Docker on + available + a workspace to mount → (docker argv, None, None).
+        - Docker on but missing, or no workspace → (None, None, error): fail
           closed, because a requested security control must never silently degrade.
+        - OS sandbox on → (seatbelt argv, cwd, None): writes limited to the workspace.
         """
+        if self._os_sandbox:
+            return _seatbelt.wrap(command, cwd or os.getcwd(), writable=True), cwd, None
         if not self._sandbox.enabled:
             return None, cwd, None
         if not cwd:
@@ -196,6 +172,8 @@ class BashTool(Tool):
         command = input.params.get("command")
         if not command:
             return ToolOutput(success=False, error="Parameter 'command' is required.")
+        if isinstance(proved := prepared(input), ToolOutput):
+            return proved
 
         cwd = input.params.get("workspace") or None
         raw_timeout = input.params.get("timeout")
@@ -207,14 +185,18 @@ class BashTool(Tool):
         exec_argv, exec_cwd, sandbox_error = await self._resolve_execution(command, cwd)
         if sandbox_error is not None:
             return ToolOutput(success=False, error=sandbox_error)
+        return await self._spawn(exec_argv, exec_cwd, timeout, command=command)
 
+    async def _spawn(self, argv: list[str] | None, cwd: str | None, timeout: int, *, command: str) -> ToolOutput:
+        """Run *argv* - or *command* through the host shell when there is none - and collect its output."""
         use_new_session = hasattr(os, "setsid")
         try:
-            if exec_argv is not None:
+            if argv is not None:
                 proc = await asyncio.create_subprocess_exec(
-                    *exec_argv,
+                    *argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
                     start_new_session=use_new_session,
                 )
             else:
@@ -222,7 +204,7 @@ class BashTool(Tool):
                     command,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=exec_cwd,
+                    cwd=cwd,
                     start_new_session=use_new_session,
                 )
             try:
@@ -246,10 +228,8 @@ class BashTool(Tool):
         except Exception as exc:
             return ToolOutput(success=False, error=str(exc))
 
-        stdout = stdout_b.decode("utf-8", errors="replace")
-        stderr = stderr_b.decode("utf-8", errors="replace")
-        stdout = _cap(stdout)
-        stderr = _cap(stderr)
+        stdout = _cap(stdout_b.decode("utf-8", errors="replace"))
+        stderr = _cap(stderr_b.decode("utf-8", errors="replace"))
         success = proc.returncode == 0
         return ToolOutput(
             success=success,

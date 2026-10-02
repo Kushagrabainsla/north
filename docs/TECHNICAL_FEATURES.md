@@ -329,51 +329,22 @@ timeout - see ARCHITECTURE §9.8.
 
 ---
 
-## 13. Three-Layer BashTool Command Safety
+## 13. BashTool: The Kernel Decides What Runs Without a Card
 
-**What:** `BashTool._request_approval()` evaluates every shell command through three progressively heavier gates before execution. If an earlier gate produces a decision, later gates are skipped entirely.
+**What:** On macOS, `BashTool` runs under Seatbelt (`sandbox-exec`, `tools/specialized/_seatbelt.py`). A command is first tried under a **read-only profile**: every write, the network, and the credential directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.north`) are refused by the kernel. A command that finishes there without being refused anything changed nothing, so it runs with no card, and that one run is its result. A refused, failed-to-start or slow (over 10 s) command goes to approval, and if approved runs again under the **workspace profile**: writes only inside its workspace, the temp directories and the usual tool caches; credential directories still unreadable.
 
-**Why:** Without any bypass, every `git status` or `cat README.md` blocks on a manual approval card - adding 5–30 s of human latency to pure read-only operations. The three-layer design keeps developers in flow for safe commands while still gating anything risky.
+**Why:** The string fast path it replaced (`CommandSafetyInspector`: a list of safe prefixes and a metacharacter screen) was patched four times and still leaked, because a command's text does not say what it does. The kernel does not read the text.
 
-**Layers (evaluated in order):**
+**Limits:**
+- A command that swallows the error (`touch x 2>/dev/null; echo done`) exits 0 under the read-only profile, so its output is returned without a card; it still changed nothing.
+- The workspace profile does not limit the network. That waits on the egress proxy (#37 follow-up).
+- Only one sandbox layer may be active: Docker (`sandbox.enabled`), when on, replaces Seatbelt, and an agent started inside north must have its own sandbox off (a nested profile fails with `sandbox_apply: Operation not permitted`).
+- `sandbox-exec` is deprecated by Apple with no replacement.
+- Without Seatbelt (Linux, `sandbox.os` off) there is no read-only proof: every command is described as an `Action` and ruled on by `ApprovalPolicy` as before. A bubblewrap backend is not built yet.
 
-| Layer | Class | Cost | Decision |
-|---|---|---|---|
-| 1. Local inspection | `CommandSafetyInspector` | Zero, local only | Auto-approve read-only commands (`git status`, `cat`, `ls`, `grep`, etc.) after metacharacter, recursive-grep, and sensitive-path screening |
-| 2. The approval mode | `ApprovalPolicy` | Zero for ask, safe and yolo; one LLM call in autonomous (`MemoryDecider`) | Safe list and replays of your past answers in safe and autonomous; the memory decider in autonomous; yes in yolo |
-| 3. Manual approval | `ApprovalStore` card | Human decision | Fallback for unknown or mutating commands |
+**Approval:** `describe()` reports the read-only proof as `Action.read_only`; `ApprovalPolicy` rules on that fact in every mode (see ARCHITECTURE §9.4). Anything else follows the mode: the safe list and replays in safe and autonomous, `MemoryDecider` in autonomous, yes in yolo, a card in ask.
 
-**Layer 1 - `CommandSafetyInspector`:**
-
-```python
-class CommandSafetyInspector:
-    instant_safe_prefixes = [
-        "git status", "git diff", "git log", "git show", "git branch",
-        "cat ", "grep ", "ls ", "pwd", "whoami",
-    ]  # note: `find` is NOT here; it can walk trees and run actions
-
-    def is_instantly_safe(self, command: str) -> bool:
-        cleaned = command.strip()
-        if _SHELL_METACHARS.search(cleaned):           # ; & | ` $ < > ( ) { } newline
-            return False
-        if not any(cleaned.lower().startswith(p) for p in self.instant_safe_prefixes):
-            return False
-        if cleaned.lower().startswith("grep ") and _grep_is_recursive(cleaned):
-            return False
-        return not references_sensitive_path(cleaned)  # blocks ~/.ssh, /etc, and .. escapes
-```
-
-This is **not a security boundary** - it's a developer-velocity optimisation. The list intentionally covers only commands that cannot mutate the filesystem, push to remotes, or spawn network requests.
-
-**Layer 2 - `ApprovalPolicy`:**
-
-If the command is not instantly safe, `BashTool` describes it as an `Action` and `ApprovalPolicy` rules on it by mode (see ARCHITECTURE §9.4). In autonomous, what the safe list and your past answers do not cover goes to `MemoryDecider`, which decides from your facts, judgement rules and past decisions, and stores its reason on the card.
-
-**Layer 3 - Manual approval card:**
-
-If neither layer decides, a standard approval card is emitted and the coroutine suspends on `ApprovalStore.wait_for_decision()` until the user responds (see §11).
-
-**Dependency injection:** `ApprovalPolicy` and its `MemoryDecider` are built once during server startup in `orchestrator/app.py` and shared by every tool, agent and the orchestrator. `CommandSafetyInspector` is a zero-dependency value object created internally by `BashTool.__init__()`.
+**Setting:** `sandbox.os` (`os_sandbox_enabled`, default on).
 
 The same approval flow is shared by every gated tool (`BashTool`, `ShellTool`, `PatchFileTool`, `GitTool`, `GhTool`, `KasaTool`) through the one `UserInteraction` mediator (see Section 16), so the tools never drift.
 

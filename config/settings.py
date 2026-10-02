@@ -160,6 +160,10 @@ class Settings(BaseSettings):
     # only sees the workspace, with the network off and memory/CPU/PID limits. Off by
     # default; when enabled it FAILS CLOSED (refuses to run) if Docker is unavailable.
     sandbox_enabled: bool = False
+    # OS sandbox for the bash tool (macOS Seatbelt): a command that only reads runs
+    # without a card, and an approved one can write only inside its workspace. On
+    # by default; ignored when Docker is enabled (one sandbox layer) or unavailable.
+    os_sandbox_enabled: bool = True
     sandbox_image: str = "python:3.12-slim"
     sandbox_network_disabled: bool = True
     sandbox_memory: str = "512m"
