@@ -1323,6 +1323,14 @@ into context (`context/repo_instructions.py`). Honour them - they are the repo's
 
 ---
 
+### 16.4 Platform Support: macOS First, One Interface for All
+
+Build for macOS first. Anything that differs by OS (sandbox, notifications, service install) sits behind one interface that picks its implementation by platform; callers never branch on `sys.platform`. Linux and Windows add an implementation, not a change to callers.
+
+**Why:** the user runs macOS; other platforms come later and must not force a rewrite.
+
+**How to apply:** write the interface and the macOS implementation now; an unsupported platform gets a "not available" implementation that fails closed, not a stub that pretends.
+
 ## 17. Configuration
 
 ### 17.1 Single Settings Object

@@ -56,6 +56,22 @@ def denied(stderr: str) -> bool:
     return any(marker in lowered for marker in DENIAL_MARKERS)
 
 
+class Seatbelt:
+    """The macOS `OsSandbox` (see `_os_sandbox.py`)."""
+
+    @staticmethod
+    def available() -> bool:
+        return available()
+
+    @staticmethod
+    def wrap(command: str, workspace: str | None, *, writable: bool) -> list[str]:
+        return wrap(command, workspace, writable=writable)
+
+    @staticmethod
+    def denied(stderr: str) -> bool:
+        return denied(stderr)
+
+
 def _quote(path: str | Path) -> str:
     resolved = os.path.realpath(path)
     return '"' + resolved.replace("\\", "\\\\").replace('"', '\\"') + '"'

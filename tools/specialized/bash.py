@@ -19,7 +19,7 @@ from approval.approvals import Request
 from approval.policy import Action, ActionKind
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
-from tools.specialized import _seatbelt
+from tools.specialized import _os_sandbox
 from tools.specialized._sandbox import (
     SandboxConfig,
     build_run_argv,
@@ -95,7 +95,7 @@ class BashTool(Tool):
     def __init__(self, sandbox: SandboxConfig | None = None, os_sandbox: bool = False) -> None:
         self._sandbox = sandbox or SandboxConfig()
         # One sandbox layer only: Docker, when asked for, replaces Seatbelt.
-        self._os_sandbox = os_sandbox and not self._sandbox.enabled and _seatbelt.available()
+        self._os_sandbox = _os_sandbox.current() if os_sandbox and not self._sandbox.enabled else None
 
     def _action(self, command: str, *, read_only: bool = False) -> Action:
         """What this command is, as facts. What that *means* is the policy's call."""
@@ -137,9 +137,9 @@ class BashTool(Tool):
         """
         if not self._os_sandbox:
             return None
-        argv = _seatbelt.wrap(command, cwd, writable=False)
+        argv = self._os_sandbox.wrap(command, cwd, writable=False)
         output = await self._spawn(argv, cwd, _PROBE_TIMEOUT, command=command)
-        if output.data is None or _seatbelt.denied(str(output.data.get("stderr", ""))):
+        if output.data is None or self._os_sandbox.denied(str(output.data.get("stderr", ""))):
             return None
         return output
 
@@ -155,7 +155,7 @@ class BashTool(Tool):
         - OS sandbox on → (seatbelt argv, cwd, None): writes limited to the workspace.
         """
         if self._os_sandbox:
-            return _seatbelt.wrap(command, cwd or os.getcwd(), writable=True), cwd, None
+            return self._os_sandbox.wrap(command, cwd or os.getcwd(), writable=True), cwd, None
         if not self._sandbox.enabled:
             return None, cwd, None
         if not cwd:

@@ -331,7 +331,7 @@ timeout - see ARCHITECTURE §9.8.
 
 ## 13. BashTool: The Kernel Decides What Runs Without a Card
 
-**What:** On macOS, `BashTool` runs under Seatbelt (`sandbox-exec`, `tools/specialized/_seatbelt.py`). A command is first tried under a **read-only profile**: every write, the network, and the credential directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.north`) are refused by the kernel. A command that finishes there without being refused anything changed nothing, so it runs with no card, and that one run is its result. A refused, failed-to-start or slow (over 10 s) command goes to approval, and if approved runs again under the **workspace profile**: writes only inside its workspace, the temp directories and the usual tool caches; credential directories still unreadable.
+**What:** On macOS, `BashTool` runs under Seatbelt (`sandbox-exec`, `tools/specialized/_seatbelt.py`), chosen through `tools/specialized/_os_sandbox.py`, the one interface a Linux or Windows backend plugs into. A command is first tried under a **read-only profile**: every write, the network, and the credential directories (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config`, `~/.north`) are refused by the kernel. A command that finishes there without being refused anything changed nothing, so it runs with no card, and that one run is its result. A refused, failed-to-start or slow (over 10 s) command goes to approval, and if approved runs again under the **workspace profile**: writes only inside its workspace, the temp directories and the usual tool caches; credential directories still unreadable.
 
 **Why:** The string fast path it replaced (`CommandSafetyInspector`: a list of safe prefixes and a metacharacter screen) was patched four times and still leaked, because a command's text does not say what it does. The kernel does not read the text.
 
@@ -340,7 +340,7 @@ timeout - see ARCHITECTURE §9.8.
 - The workspace profile does not limit the network. That waits on the egress proxy (#37 follow-up).
 - Only one sandbox layer may be active: Docker (`sandbox.enabled`), when on, replaces Seatbelt, and an agent started inside north must have its own sandbox off (a nested profile fails with `sandbox_apply: Operation not permitted`).
 - `sandbox-exec` is deprecated by Apple with no replacement.
-- Without Seatbelt (Linux, `sandbox.os` off) there is no read-only proof: every command is described as an `Action` and ruled on by `ApprovalPolicy` as before. A bubblewrap backend is not built yet.
+- With no sandbox for the platform (today: anything but macOS) or `sandbox.os` off, there is no read-only proof: every command is described as an `Action` and ruled on by `ApprovalPolicy` as before. A bubblewrap backend is not built yet.
 
 **Approval:** `describe()` reports the read-only proof as `Action.read_only`; `ApprovalPolicy` rules on that fact in every mode (see ARCHITECTURE §9.4). Anything else follows the mode: the safe list and replays in safe and autonomous, `MemoryDecider` in autonomous, yes in yolo, a card in ask.
 

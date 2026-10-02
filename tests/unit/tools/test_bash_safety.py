@@ -8,7 +8,7 @@ import pytest
 
 from tests.conftest import approving_store, bind_approvals, deciding, rejecting_store
 from tools.models import ToolInput
-from tools.specialized import _seatbelt
+from tools.specialized import _os_sandbox
 from tools.specialized.bash import BashTool
 
 # ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ class TestBashApprovalOutcomes:
         assert result.error == "Command cancelled by user."
 
 
-@pytest.mark.skipif(not _seatbelt.available(), reason="needs macOS Seatbelt")
+@pytest.mark.skipif(_os_sandbox.current() is None, reason="needs macOS Seatbelt")
 class TestBashOsSandbox:
     """The kernel, not a reading of the command, decides what runs without a card."""
 
@@ -276,4 +276,10 @@ class TestBashOsSandbox:
     def test_docker_replaces_the_os_sandbox(self) -> None:
         from tools.specialized._sandbox import SandboxConfig
 
-        assert not BashTool(sandbox=SandboxConfig(enabled=True), os_sandbox=True)._os_sandbox
+        assert BashTool(sandbox=SandboxConfig(enabled=True), os_sandbox=True)._os_sandbox is None
+
+
+def test_a_platform_with_no_sandbox_asks_for_every_command(monkeypatch) -> None:
+    monkeypatch.setattr(_os_sandbox, "_IMPLEMENTATIONS", ())
+
+    assert BashTool(os_sandbox=True)._os_sandbox is None
