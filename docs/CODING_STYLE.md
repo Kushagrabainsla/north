@@ -1802,13 +1802,13 @@ No new library, framework, service, or CLI tool enters north without these four 
 
 One canonical tool per job. Adding `requests` next to `httpx`, or `unittest` next to `pytest`, is a regression even if the new one is good in isolation.
 
-### 23.4 Tests Are Currently Deferred
+### 23.4 Tests Ship With New Code
 
-Do not write tests when adding new functionality. The pytest harness and the existing test suite (~426 tests) stay in place; Section 18 stays in place as the convention for when this policy is lifted.
+New or changed functionality lands with its tests in the same change. See Section 18.
 
-**Why:** Build-speed during the pre-MVP phase, while module shape is still moving and the cost of keeping tests synchronized outweighs their value.
+**Why:** tests are what let the module shape move safely.
 
-**How to apply:** Skip writing test files for new modules. Skip updating tests during refactors unless an existing test breaks - then fix it. CHANGELOG entries no longer include "Tests under …" paragraphs.
+**How to apply:** add or update tests for every behaviour change; CHANGELOG entries need no "Tests under ..." paragraph.
 
 ### 23.5 Every Change Updates CHANGELOG.md
 
