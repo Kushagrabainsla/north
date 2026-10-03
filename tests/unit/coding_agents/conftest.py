@@ -91,6 +91,7 @@ class MemoryWorkspaces:
         self.created: list[WorkTree] = []
         self.finished: list[WorkTree] = []
         self.change_files = change_files
+        self.finish_error: Exception | None = None
 
     async def create(self, workspace: str, label: str) -> WorkTree:
         path = self._root / label
@@ -101,6 +102,8 @@ class MemoryWorkspaces:
 
     async def finish(self, tree: WorkTree) -> WorkChange | None:
         self.finished.append(tree)
+        if self.finish_error:
+            raise self.finish_error
         return WorkChange(tree, self.change_files) if self.change_files else None
 
     async def diff(self, tree: WorkTree) -> str:

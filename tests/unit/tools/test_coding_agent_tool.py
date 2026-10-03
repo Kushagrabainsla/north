@@ -45,6 +45,7 @@ class StubRunner:
         self.verification = verification
         self.landing = landing
         self.review = review
+        self.problem = ""
         self.calls: list[dict] = []
         self._outcome = outcome or RunOutcome(ok=True, text="Add subtract() to calc.py.", session_id="s", turns=3)
         self._raises = raises
@@ -62,6 +63,7 @@ class StubRunner:
             self.verification,
             self.landing,
             self.review,
+            self.problem,
         )
 
 
@@ -424,3 +426,19 @@ class TestBriefing:
         guidance = await self._guidance(FakeBriefing(raises=True))
 
         assert "(nothing relevant)" in guidance
+
+
+class TestChangesThatCouldNotBeSaved:
+    async def test_the_model_is_told_the_work_was_lost_track_of_not_that_nothing_changed(self) -> None:
+        problem = (
+            "the agent's isolated copy at /c was damaged (its .git link is gone), so its changes could not be saved."
+        )
+        runner = StubRunner(can_edit=True)
+        runner.problem = problem
+        tool = _tool(runner)
+
+        result = await tool.execute(_input(mode="edit"))
+
+        assert not result.success and result.error == problem
+        assert result.data["failure"] == "copy_damaged"
+        assert "no changes" not in result.error.lower()

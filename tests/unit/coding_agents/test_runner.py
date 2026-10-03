@@ -315,6 +315,35 @@ class TestEditRuns:
         (run_id, outcome), *_ = recorder.finished
         assert run_id == "run-9" and not outcome.ok, "the old run is closed, not left paused for ever"
 
+    async def test_changes_that_could_not_be_saved_are_reported_not_called_unchanged(self, tmp_path, recorder) -> None:
+        runner, _, workspaces, _ = self._setup(tmp_path, recorder)
+        workspaces.finish_error = CodingAgentError(
+            "the agent's isolated copy at /c was damaged (its .git link is gone)"
+        )
+
+        report = await self._edit(runner)
+
+        assert report.change is None and "was damaged" in report.problem
+        assert report.outcome.ok, "the agent itself finished; it is the saving that failed"
+        assert report.landing is None, "nothing is offered for landing"
+        event, data = next((e, d) for e, d in recorder.events if e == "copy_problem")
+        assert "damaged" in data["problem"]
+
+    async def test_an_unexpected_failure_to_save_is_reported_with_its_reason(self, tmp_path, recorder) -> None:
+        runner, _, workspaces, _ = self._setup(tmp_path, recorder)
+        workspaces.finish_error = RuntimeError("disk full")
+
+        report = await self._edit(runner)
+
+        assert report.problem == "could not save the changes: disk full"
+
+    async def test_no_changes_is_still_no_problem(self, tmp_path, recorder) -> None:
+        runner, *_ = self._setup(tmp_path, recorder, files=())
+
+        report = await self._edit(runner)
+
+        assert report.change is None and report.problem == ""
+
     async def test_cancelling_still_commits_the_partial_work_and_revokes_the_token(self, tmp_path, recorder) -> None:
         runner, backend, workspaces, sessions = self._setup(tmp_path, recorder)
         backend.hang = True

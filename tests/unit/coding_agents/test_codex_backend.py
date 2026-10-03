@@ -149,9 +149,12 @@ class TestHowItIsStarted:
         assert profile["default_permissions"] == "northworker"
         permissions = profile["permissions"]["northworker"]
         assert permissions["extends"] == ":workspace"
-        assert {"~/.north", "~/.ssh", "~/.claude", "/custom/north-home"} <= set(permissions["filesystem"])
-        assert "~/.codex" not in permissions["filesystem"], "it needs its own login"
-        assert set(permissions["filesystem"].values()) == {"deny"}
+        rules = permissions["filesystem"]
+        home = Path.home()
+        denied = {path for path, access in rules.items() if access == "deny"}
+        assert {str(home / ".north"), str(home / ".ssh"), str(home / ".claude"), "/custom/north-home"} <= denied
+        assert rules[str(home / ".codex")] == "write", "it needs its own login"
+        assert rules[str(workspace.resolve())] == "write"
 
     async def test_plan_mode_is_a_read_only_profile(self, make_fake_codex, workspace) -> None:
         await _run(CodexBackend(str(make_fake_codex())), _spec(workspace))

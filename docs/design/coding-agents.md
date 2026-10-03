@@ -76,6 +76,19 @@ What the lab measured, and what the code does because of it:
   `config` instead, with no launch flags: `{"default_permissions": "northworker", "permissions":
   {"northworker": {"extends": ":workspace", "filesystem": {"~/.north": "deny", ...}}}}`, plus
   `approvalPolicy: on-request`. A path built at runtime was unreadable under it and readable without.
+- **The home folder is closed by default** (`coding_agents/confinement.py`). A list of credential folders is
+  never complete: a planted file in `~/.config/<anything>` was copied into a repo by Codex, in north's
+  arm and in the raw one. So every entry of the home folder is denied except what a run needs (the
+  workspace, the agent's own `~/.codex`, toolchains, caches, `~/.gitconfig`), and the secret list is applied
+  last. The entries are listed one by one: a glob deny overrides a later open (it blocked Codex's own
+  binary), and denying the home folder itself makes git fail (`Invalid path`), so the folder stays
+  statable. A more specific entry wins over a broader one, which is what lets the workspace inside a
+  closed folder stay open. Costs: a path in the closed home is refused outright, with no card to approve;
+  a toolchain installed somewhere unlisted is unreadable (add it to `HOME_TOOLCHAINS`); the folder is listed
+  when the run starts. Claude already works this way by default (reads outside the working folder are blocked).
+- **A copy's `.git` link is read-only to the agent**, and north checks it before saving (`damage()`): a
+  deleted link, a link aimed at the real repository or a copy moved off its branch is reported as
+  `copy_damaged`, with the path, instead of "no changes".
 - **Plan mode is the `:read-only` profile.** Every write the agent attempts becomes an approval
   request, and plan mode declines them all; they are listed as refused. **Edit mode is `:workspace`:**
   an edit inside the copy needs no approval, and anything the sandbox refuses arrives as a request.
