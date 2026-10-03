@@ -11,9 +11,10 @@ from coding_agents.constants import DEFAULT_MAX_BUDGET_USD, DEFAULT_MAX_TURNS
 
 
 class Mode(StrEnum):
-    """What the agent may do. Only reading and planning exist so far."""
+    """What the agent may do."""
 
-    PLAN = "plan"
+    PLAN = "plan"  # read and answer; nothing can change
+    EDIT = "edit"  # change files in an isolated worktree, every action through the gate
 
 
 class EventKind(StrEnum):
@@ -38,6 +39,14 @@ class FailureKind(StrEnum):
 
 
 @dataclass(frozen=True)
+class GateAccess:
+    """Where the agent's hook asks north, and the token that says which run is asking."""
+
+    url: str
+    token: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class RunSpec:
     """Everything one run needs."""
 
@@ -50,6 +59,7 @@ class RunSpec:
     max_turns: int = DEFAULT_MAX_TURNS
     max_budget_usd: float = DEFAULT_MAX_BUDGET_USD
     model: str | None = None
+    gate: GateAccess | None = None  # required for EDIT: how the agent's hook reaches north
 
 
 @dataclass(frozen=True)
