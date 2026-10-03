@@ -44,8 +44,8 @@ tools/specialized/coding_agent.py   the Tool agents call; describe() makes the s
 - A run is a child row in `agent_runs` and its events go to `agent_run_events`. No new tables.
   `provider_state` is `{provider: [entries]}` and append-only, so a run records
   `{"provider": "claude_code", "session_id", "worktree", "pid", "cli_version"}` and the latest
-  entry wins. Two small methods are added: `set_status` (a non-terminal `waiting_approval`) and
-  `mark_interrupted` (a dead run that can resume).
+  entry wins. `AgentRunStore.set_status` (added in phase 0) moves a live run between `running`,
+  `waiting_for_approval` and `interrupted`; `start()` again resumes an interrupted one.
 - Worktrees reuse `GitWorktreeManager` and the workspace lock, passed in as a small interface.
 
 ## Backends
@@ -112,7 +112,7 @@ run record, never from the hook payload's `cwd`. Nothing else decides (CODING_ST
 ## Lifecycle
 
 ```
-queued -> starting -> running <-> waiting_approval -> verifying -> applying -> done
+queued -> starting -> running <-> waiting_for_approval -> verifying -> applying -> done
                           \-> needs_attention | failed | cancelled
 ```
 
@@ -137,7 +137,7 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 |---|---|---|
 | Approval card (gate or start) | Dashboard `attention`, Approvals page | works |
 | Slot held by a waiting task | not held | works |
-| Run waiting for approval | run row says `waiting_approval` | build: `set_status` |
+| Run waiting for approval | run row says `waiting_for_approval` | state done; the gate sets it in phase 1 |
 | Job parked for a person | dashboard `jobs`, `needs_attention` | works |
 | Vendor rate limit or auth freeze | run event plus a paused state | build |
 | Apply-back conflict, branch kept | a non-blocking card | build |
@@ -163,8 +163,9 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 
 ## Phases
 
-0. Close the four gaps the experiments found, each with its tests: `Action.leaves_sandbox`, run
-   `set_status`, run `mark_interrupted`, and the decider's abstain-without-a-fact rule.
+0. **Done.** Close the four gaps the experiments found, each with its tests: `Action.leaves_sandbox`
+   (set by `git push` and mutating `gh` calls), run `set_status`, and the decider's
+   abstain-without-a-fact rule. Episodes never cover an action.
 1. Claude `plan` mode: tool, run store, probe, events. No writes.
 2. Claude `edit` mode: worktree, gate, verify, apply-back, autonomous abstain rule.
 3. Codex backend on the same conformance suite.
@@ -180,3 +181,5 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 - `~/.claude.json` is writable by the CLI; an agent could add an MCP server there.
 - North and the Codex worker share one ChatGPT plan quota.
 - Subscription terms are the vendors' call and can change.
+- A recalled fact carries no origin; a fact extracted from a task's output could cover a push. Tracking
+  where a fact came from is a follow-up.

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agents.models import AgentPayload
 from approval.models import Card, CardType
 from approval.store import ApprovalStore
@@ -61,7 +59,7 @@ async def test_a_coding_run_is_readable_through_the_runs_api(booted_app) -> None
     await store.merge_provider_state(
         payload.run_id, {"provider": "claude_code", "session_id": "uuid-1", "worktree": "/work/repo-wt", "pid": 123}
     )
-    await store.record_event(payload.run_id, "t-run", "waiting_approval", {"summary": "make build"})
+    await store.record_event(payload.run_id, "t-run", "waiting_for_approval", {"summary": "make build"})
 
     with bind_services(services):
         listed = await runs_api.task_agent_runs("t-run")
@@ -69,13 +67,8 @@ async def test_a_coding_run_is_readable_through_the_runs_api(booted_app) -> None
 
     assert listed[0].agent == "coding:claude"
     assert listed[0].provider_state["claude_code"][-1]["session_id"] == "uuid-1"  # keyed by provider, append-only
-    assert [event["event"] for event in events] == ["waiting_approval"]
+    assert [event["event"] for event in events] == ["waiting_for_approval"]
     record("S3_run", {"status": listed[0].status, "provider_state_keys": sorted(listed[0].provider_state)})
-
-
-@pytest.mark.xfail(strict=True, reason="AgentRunStore has no way to set a non-terminal status such as waiting_approval")
-def test_a_run_can_say_it_is_waiting_for_approval() -> None:
-    assert hasattr(AgentRunStore, "set_status")
 
 
 async def test_a_job_parked_for_attention_shows_on_the_dashboard(booted_app) -> None:

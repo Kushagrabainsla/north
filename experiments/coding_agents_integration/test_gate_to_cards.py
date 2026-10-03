@@ -8,8 +8,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
-
 from approval.approvals import Approvals, Request
 from approval.interaction import UserInteraction
 from approval.models import ApprovalDecision
@@ -130,8 +128,3 @@ async def test_autonomous_has_no_hard_floor_today_so_the_memory_rule_must_live_i
     rule is therefore a decider change (prompt + a 'leaves the sandbox' fact on the Action), not a policy floor."""
     verdict, _ = await _verdict(ApprovalMode.AUTONOMOUS, REQUESTS["git_push_as_git"], _Decider(approves=True))
     assert verdict == "allow"
-
-
-@pytest.mark.xfail(strict=True, reason="Action has no 'leaves the sandbox' fact yet; the decider cannot key on it")
-def test_an_action_can_say_it_leaves_the_sandbox() -> None:
-    assert "leaves_sandbox" in Action.__dataclass_fields__

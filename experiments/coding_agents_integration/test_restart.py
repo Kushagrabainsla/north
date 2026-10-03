@@ -5,8 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
-
 from agents.models import AgentPayload
 from orchestrator.agent_runs import AgentRunStore
 from orchestrator.models import TaskRequest
@@ -56,9 +54,3 @@ async def test_a_resumed_task_can_find_its_live_coding_run_by_task_id(tmp_path) 
     live = [r for r in await store.list_for_task("t-run") if r.agent.startswith("coding:") and r.status == "running"]
 
     assert [r.provider_state["claude_code"][-1]["session_id"] for r in live] == ["uuid-1"]
-
-
-@pytest.mark.xfail(strict=True, reason="a run is only 'running' or terminal; nothing marks 'resumable after a crash'")
-async def test_a_dead_run_can_be_marked_resumable(tmp_path) -> None:
-    store = AgentRunStore(tmp_path / "runs.db")
-    assert hasattr(store, "mark_interrupted")

@@ -48,15 +48,20 @@ What these results fix in [`docs/design/coding-agents.md`](../../docs/design/cod
 | R1b | Does it re-run a task killed after a side effect? | no: failed with a note, which is the right rule after apply-back |
 | R2 | Can a resumed task find its live coding run? | yes, by task id and agent prefix |
 
-## Gaps the build must close
+## Gaps the build had to close
 
-Four tests are `xfail(strict=True)`. They assert what the design needs, fail today, and
-flip to a visible failure the day the product catches up, then move to `tests/`:
+The first run had four `xfail(strict=True)` tests that asserted what the design needs.
+Phase 0 closed all four, with their tests now in `tests/unit/`, and the experiments pass
+without any expected failure:
 
-1. `Action` has no "leaves the sandbox" fact for the decider to key on.
-2. `AgentRunStore` cannot set a non-terminal status such as `waiting_approval`.
-3. `AgentRunStore` cannot mark a dead run resumable.
-4. An approving model approves a push with no covering fact; the abstain rule is not built.
+1. `Action.leaves_sandbox` is a fact the decider keys on. `git push` and mutating `gh`
+   calls set it.
+2. `AgentRunStore.set_status` moves a live run between `running`, `waiting_for_approval`
+   and `interrupted`, and refuses to bring back a finished one.
+3. A dead run is `interrupted` and `start()` again resumes it (no separate method needed).
+4. The decider approves an action that leaves the sandbox only when the reply cites a
+   fact, past decision, rule or profile item. Citing nothing, or only an episode, makes
+   the card wait.
 
 ## Waits on the dashboard
 
@@ -64,7 +69,7 @@ flip to a visible failure the day the product catches up, then move to `tests/`:
 |---|---|---|
 | Approval card (gate or start card) | Dashboard `attention`, Approvals page | works (S2) |
 | Slot held by a waiting task | not held | works (S1) |
-| Run waiting for approval | run row stays `running` | gap 2 |
+| Run waiting for approval | run row says `waiting_for_approval` (the gate sets it in phase 1) | state works |
 | Job parked for a person | dashboard `jobs` as `needs_attention` | works (S4) |
 | Vendor rate limit or auth freeze | nothing yet | to build: run event plus a visible paused state |
 | Apply-back conflict, branch kept | nothing yet | to build: a non-blocking card (`waiting_for_you`) |
@@ -82,6 +87,8 @@ flip to a visible failure the day the product catches up, then move to `tests/`:
   (fail-open hooks, default-deny) was measured separately in the lab recorded in the design doc.
 - Deterministic checks. The dashboard is exercised through its API handlers, not rendered.
 - The decider uses a stub model and memory; whether a real model abstains is phase 2.
+- A recalled fact carries no "who wrote it". Episodes never cover an action, but a fact extracted
+  from a task's output could; tracking a fact's origin is a follow-up.
 - Codex's side (app-server requests) is not exercised here; it reuses the same `Approvals` path.
 - A long wait is simulated in seconds; the "cards never expire" rule is already covered by
   `tests/unit/approval/test_cards_never_expire.py`.

@@ -53,8 +53,8 @@
     }
   },
   "H_latency_ms": {
-    "median": 37.2,
-    "p95": 52.2,
+    "median": 38.1,
+    "p95": 40.1,
     "runs": 15
   },
   "R1_recovery_rule": {
