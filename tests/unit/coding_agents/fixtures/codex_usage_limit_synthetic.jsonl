@@ -1,0 +1,3 @@
+{"emit": {"method": "turn/started", "params": {"threadId": "THREAD-1", "turn": {"id": "TURN-1", "status": "inProgress"}}}}
+{"emit": {"method": "error", "params": {"error": {"message": "You have hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}, "willRetry": false, "threadId": "THREAD-1", "turnId": "TURN-1"}}}
+{"emit": {"method": "turn/completed", "params": {"threadId": "THREAD-1", "turn": {"id": "TURN-1", "status": "failed", "error": {"message": "You have hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}}}}}

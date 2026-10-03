@@ -31,6 +31,20 @@ def make_fake_claude(tmp_path: Path) -> Callable[..., Path]:
     return build
 
 
+@pytest.fixture
+def make_fake_codex(tmp_path: Path) -> Callable[..., Path]:
+    """Build a runnable fake `codex` in tmp_path, configured by keyword."""
+
+    def build(**config: Any) -> Path:
+        script = tmp_path / "codex"
+        shutil.copy(HERE / "fake_codex.py", script)
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        (tmp_path / "codex.json").write_text(json.dumps({"fixtures_dir": str(FIXTURES), **config}))
+        return script
+
+    return build
+
+
 class MemoryRecorder:
     """A `RunRecorder` that keeps everything in lists, for asserting on."""
 

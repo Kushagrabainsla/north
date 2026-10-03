@@ -148,6 +148,8 @@ class RunOutcome:
     denials: tuple[Denial, ...] = ()
     failure: FailureKind | None = None
     error: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 @dataclass(frozen=True)

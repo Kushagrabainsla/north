@@ -146,6 +146,11 @@ class CodingRunner:
             try:
                 if event.kind is EventKind.STARTED:
                     await self._recorder.remember(run_id, {"provider": backend.provider, **event.data})
+                elif event.kind is EventKind.INIT and event.data.get("session_id"):
+                    # An agent that picks its own session id (Codex's thread) says so as soon as it has one.
+                    await self._recorder.remember(
+                        run_id, {"provider": backend.provider, "session_id": event.data["session_id"]}
+                    )
                 await self._recorder.record(run_id, task_id, event.kind.value, event.data)
             except Exception:
                 logger.warning("could not record %s for coding run %s", event.kind, run_id, exc_info=True)
