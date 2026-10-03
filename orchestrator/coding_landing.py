@@ -9,7 +9,15 @@ from pathlib import Path
 from agents.workspace_lock import workspace_lock
 from approval.approvals import Approvals, Request
 from approval.policy import Action, ActionKind
-from coding_agents import Landing, LandingState, Verification, VerificationState, WorkChange
+from coding_agents import (
+    Landing,
+    LandingState,
+    Review,
+    ReviewVerdict,
+    Verification,
+    VerificationState,
+    WorkChange,
+)
 from orchestrator.worktree import GitWorktreeManager, Worktree
 
 AGENT = "coding_agent"
@@ -27,7 +35,9 @@ class LandingDesk:
         self._approvals = approvals
         self._lock = lock
 
-    async def land(self, change: WorkChange, verification: Verification, task_id: str) -> Landing:
+    async def land(
+        self, change: WorkChange, verification: Verification, task_id: str, review: Review | None = None
+    ) -> Landing:
         tree = change.tree
         manager = GitWorktreeManager(tree.base)
         copy = Worktree(base=tree.base, path=tree.path, branch=tree.branch, base_sha=tree.base_sha)
@@ -35,7 +45,7 @@ class LandingDesk:
         try:
             if verification.state is VerificationState.FAILED:
                 return Landing(LandingState.KEPT, "the tests failed, so it was not offered")
-            decision = await self._approvals.decide(_request(change, verification), task_id=task_id)
+            decision = await self._approvals.decide(_request(change, verification, review), task_id=task_id)
             if not decision.allowed:
                 if decision.status is None:  # refused outright, nobody was asked
                     return Landing(LandingState.KEPT, f"north's policy: {decision.reason}")
@@ -48,11 +58,13 @@ class LandingDesk:
             await manager.remove(copy, keep_branch=keep_branch)
 
 
-def _request(change: WorkChange, verification: Verification) -> Request:
+def _request(change: WorkChange, verification: Verification, review: Review | None = None) -> Request:
     """The change as facts for the policy and as a card for a person."""
     tree = change.tree
     files = "\n".join(f"- {f.path} (+{f.insertions} -{f.deletions})" for f in change.files[:20])
     tests = _tests_line(verification)
+    if review is not None:
+        tests += "\n" + _review_lines(review)
     action = Action(
         agent=AGENT,
         kind=ActionKind.OTHER,
@@ -71,6 +83,16 @@ def _request(change: WorkChange, verification: Verification) -> Request:
         f"(+{change.insertions} -{change.deletions})\n\n{files}\n\n{tests}",
         declined="Changes left on their branch.",
     )
+
+
+def _review_lines(review: Review) -> str:
+    """The other agent's read, marked as advice: it is another model's opinion, not a check."""
+    if review.verdict is ReviewVerdict.OK:
+        return (
+            f"Review by {review.reviewer} (another agent's opinion, not a check): no concerns. {review.summary}".strip()
+        )
+    head = "concerns" if review.verdict is ReviewVerdict.CONCERNS else "no clear verdict"
+    return f"Review by {review.reviewer} (another agent's opinion, not a check): {head}.\n{review.summary}".strip()
 
 
 def _tests_line(verification: Verification) -> str:

@@ -12,7 +12,7 @@ from approval.approvals import Approvals
 from approval.models import ApprovalDecision
 from approval.policy import ApprovalPolicy
 from approval.store import ApprovalStore
-from coding_agents import LandingState, Verification, VerificationState
+from coding_agents import LandingState, Review, ReviewVerdict, Verification, VerificationState
 from config.approval_mode import ApprovalMode
 from orchestrator.coding_landing import LandingDesk
 from orchestrator.coding_workspaces import GitWorkspaces
@@ -60,10 +60,10 @@ def _branches(repo: Path) -> str:
     return _git(["branch", "--list"], repo)
 
 
-async def _land(desk: LandingDesk, change, verification=PASSED, store=None, answer=None):
+async def _land(desk: LandingDesk, change, verification=PASSED, store=None, answer=None, review=None):
     if store is None:
-        return await desk.land(change, verification, "t1"), None
-    landing, card = await asyncio.gather(desk.land(change, verification, "t1"), _answer(store, answer))
+        return await desk.land(change, verification, "t1", review), None
+    landing, card = await asyncio.gather(desk.land(change, verification, "t1", review), _answer(store, answer))
     return landing, card
 
 
@@ -173,3 +173,43 @@ async def test_the_apply_waits_for_the_workspace_lock(repo) -> None:
     lock.release()
 
     assert (await landing).state is LandingState.APPLIED
+
+
+class TestTheOtherAgentsReview:
+    async def _card(self, repo, review):
+        change = await _change(repo)
+        store = ApprovalStore()
+        desk = LandingDesk(approvals(ApprovalMode.ASK, store=store))
+        _, card = await _land(desk, change, store=store, answer=ApprovalDecision.REJECTED, review=review)
+        return card
+
+    async def test_concerns_are_on_the_card_marked_as_an_opinion_not_a_check(self, repo) -> None:
+        review = Review("codex", ReviewVerdict.CONCERNS, "- calc.py: sub returns a + b")
+
+        card = await self._card(repo, review)
+
+        assert "Review by codex (another agent's opinion, not a check): concerns." in card.message
+        assert "sub returns a + b" in card.message
+
+    async def test_a_clean_review_says_so_without_calling_it_a_guarantee(self, repo) -> None:
+        card = await self._card(repo, Review("codex", ReviewVerdict.OK, "Checked add and sub."))
+
+        assert "no concerns" in card.message and "not a check" in card.message
+
+    async def test_an_unclear_review_is_not_presented_as_approval(self, repo) -> None:
+        card = await self._card(repo, Review("codex", ReviewVerdict.UNCLEAR, "the review could not be completed"))
+
+        assert "no clear verdict" in card.message and "no concerns" not in card.message
+
+    async def test_with_no_review_the_card_is_as_before(self, repo) -> None:
+        card = await self._card(repo, None)
+
+        assert "Review by" not in card.message
+
+    async def test_concerns_do_not_stop_an_approved_change_from_landing(self, repo) -> None:
+        change = await _change(repo)
+        review = Review("codex", ReviewVerdict.CONCERNS, "- something")
+
+        landing, _ = await _land(LandingDesk(approvals(ApprovalMode.YOLO)), change, review=review)
+
+        assert landing.state is LandingState.APPLIED, "advice informs the decision; it is not the decision"

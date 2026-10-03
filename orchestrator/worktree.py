@@ -184,6 +184,13 @@ class GitWorktreeManager:
             raise WorktreeError(f"git diff failed: {err.strip()}")
         return await self._apply_back(wt, patch, lock=lock)
 
+    async def diff_text(self, wt: Worktree) -> str:
+        """What *wt*'s branch tip changed against the commit it branched from, as a unified diff."""
+        code, out, err = await _run_git(["diff", "--no-color", wt.base_sha, "HEAD"], wt.path)
+        if code != 0:
+            raise WorktreeError(f"git diff failed: {err.strip()}")
+        return str(out)
+
     async def commit_changes(self, wt: Worktree) -> bool:
         """Commit everything changed in *wt* onto its branch; False when nothing changed.
 

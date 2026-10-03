@@ -74,3 +74,15 @@ async def test_copies_are_made_outside_the_temp_directory_by_default() -> None:
 
     assert not str(DEFAULT_ROOT).startswith(tempfile.gettempdir()), "an agent's sandbox may write to temp"
     assert DEFAULT_ROOT.is_relative_to(Path.home())
+
+
+async def test_the_diff_of_a_finished_change_is_readable_without_applying_it(repo, tmp_path) -> None:
+    workspaces = GitWorkspaces(tmp_path / "copies")
+    tree = await workspaces.create(str(repo), "coding-diff")
+    Path(tree.path, "calc.py").write_text("def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n")
+    await workspaces.finish(tree)
+
+    text = await workspaces.diff(tree)
+
+    assert "+def sub(a, b):" in text and "return a - b" in text
+    assert "sub" not in (repo / "calc.py").read_text()

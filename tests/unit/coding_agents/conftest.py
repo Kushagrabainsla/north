@@ -102,3 +102,6 @@ class MemoryWorkspaces:
     async def finish(self, tree: WorkTree) -> WorkChange | None:
         self.finished.append(tree)
         return WorkChange(tree, self.change_files) if self.change_files else None
+
+    async def diff(self, tree: WorkTree) -> str:
+        return "diff --git a/calc.py b/calc.py\n+def sub(a, b):\n+    return a - b\n"

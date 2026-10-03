@@ -20,6 +20,7 @@ from coding_agents import (
     LandingState,
     LiveRun,
     Mode,
+    ReviewVerdict,
     RunEvent,
     RunOutcome,
     RunSpec,
@@ -359,8 +360,9 @@ class ScriptedLander:
         self.calls: list = []
         self.hang = hang
 
-    async def land(self, change, verification, task_id):
+    async def land(self, change, verification, task_id, review=None):
         self.calls.append((change, verification, task_id))
+        self.review = review
         if self.hang:
             await asyncio.sleep(3600)
         return Landing(LandingState.APPLIED)
@@ -451,3 +453,128 @@ class TestVerifyAndLand:
         report = await self._edit(runner)
 
         assert report.change is not None and report.verification is None and report.landing is None
+
+
+class TestCrossReview:
+    """After an edit, the other agent reads the diff, read-only; the verdict is advice for whoever decides."""
+
+    def _setup(self, tmp_path, recorder, *, reviewer_text="VERDICT: CONCERNS\n- calc.py: sub returns a + b", **kw):
+        workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
+        author, reviewer = ScriptedBackend("claude"), ScriptedBackend("codex")
+        reviewer._outcome = RunOutcome(True, reviewer_text, "reviewer-thread")
+        for backend in (author, reviewer):
+            backend.recorder = recorder
+        verifier = kw.get("verifier") or ScriptedVerifier()
+        lander = ScriptedLander()
+        runner = CodingRunner(
+            {"claude": author, "codex": reviewer},
+            recorder,
+            workspaces=workspaces,
+            sessions=GateSessions(),
+            gate_url="http://x/gate",
+            verifier=verifier,
+            lander=lander,
+        )
+        return runner, author, reviewer, lander, workspaces
+
+    async def _edit(self, runner, **kw):
+        return await runner.run(
+            task_id="t1", task="add subtract", workspace="/repo", mode=Mode.EDIT, backend="claude", review=True, **kw
+        )
+
+    async def test_the_other_agent_reads_the_diff_read_only_in_the_copy_and_the_verdict_goes_to_the_lander(
+        self, tmp_path, recorder
+    ) -> None:
+        runner, author, reviewer, lander, workspaces = self._setup(tmp_path, recorder)
+
+        report = await self._edit(runner)
+
+        (spec,) = reviewer.specs
+        assert spec.mode is Mode.PLAN and spec.workspace == workspaces.created[0].path
+        assert "add subtract" in spec.task and "return a - b" in spec.task and "UNTRUSTED DIFF" in spec.task
+        assert "adversarial" in spec.guidance
+        assert report.review.reviewer == "codex" and report.review.verdict is ReviewVerdict.CONCERNS
+        assert "sub returns a + b" in report.review.summary
+        assert lander.review == report.review, "whoever decides sees it"
+        assert len(author.specs) == 1, "the author is not asked to review itself"
+
+    async def test_the_review_is_a_run_on_the_record_and_an_event_on_the_edit(self, tmp_path, recorder) -> None:
+        runner, *_ = self._setup(tmp_path, recorder)
+
+        await self._edit(runner)
+
+        assert {s.agent for s in recorder.started} == {"coding:claude", "coding:codex"}
+        assert ("review", {"reviewer": "codex", "verdict": "concerns"}) in recorder.events
+
+    async def test_a_review_never_resumes_an_earlier_plan_run_of_that_agent(self, tmp_path, recorder) -> None:
+        runner, _, reviewer, *_ = self._setup(tmp_path, recorder)
+        recorder.live = LiveRun("old-plan-run", "old-session")  # an unfinished plan run of the same task
+
+        await self._edit(runner)
+
+        assert all(not spec.resume for spec in reviewer.specs)
+        assert reviewer.specs[0].session_id != "old-session"
+
+    async def test_with_only_one_agent_installed_there_is_no_review_and_nothing_breaks(
+        self, tmp_path, recorder
+    ) -> None:
+        workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
+        solo = ScriptedBackend("claude")
+        runner = CodingRunner(
+            {"claude": solo},
+            recorder,
+            workspaces=workspaces,
+            sessions=GateSessions(),
+            gate_url="http://x",
+            verifier=ScriptedVerifier(),
+            lander=ScriptedLander(),
+        )
+
+        report = await self._edit(runner)
+
+        assert report.review is None and report.landing is not None
+
+    async def test_an_unavailable_second_agent_is_skipped(self, tmp_path, recorder) -> None:
+        runner, _, reviewer, *_ = self._setup(tmp_path, recorder)
+        reviewer._available = False
+
+        report = await self._edit(runner)
+
+        assert report.review is None and not reviewer.specs
+
+    async def test_a_change_whose_tests_failed_is_not_reviewed(self, tmp_path, recorder) -> None:
+        runner, _, reviewer, *_ = self._setup(tmp_path, recorder, verifier=ScriptedVerifier(VerificationState.FAILED))
+
+        report = await self._edit(runner)
+
+        assert report.review is None and not reviewer.specs
+
+    async def test_it_can_be_turned_off(self, tmp_path, recorder) -> None:
+        runner, _, reviewer, *_ = self._setup(tmp_path, recorder)
+
+        report = await runner.run(
+            task_id="t1", task="add subtract", workspace="/repo", mode=Mode.EDIT, backend="claude", review=False
+        )
+
+        assert report.review is None and not reviewer.specs
+
+    async def test_a_reviewer_that_could_not_finish_is_an_unclear_review_not_a_pass(self, tmp_path, recorder) -> None:
+        runner, _, reviewer, lander, _ = self._setup(tmp_path, recorder)
+        reviewer._outcome = RunOutcome(False, "", "s", failure=FailureKind.RESOURCE, error="usage limit")
+
+        report = await self._edit(runner)
+
+        assert report.review.verdict is ReviewVerdict.UNCLEAR and "usage limit" in report.review.summary
+        assert report.landing is not None, "advice never blocks the offer"
+
+    async def test_a_reviewer_that_gives_no_verdict_line_is_unclear(self, tmp_path, recorder) -> None:
+        runner, *_ = self._setup(tmp_path, recorder, reviewer_text="Looks fine to me.")
+
+        assert (await self._edit(runner)).review.verdict is ReviewVerdict.UNCLEAR
+
+    async def test_a_plan_run_is_never_reviewed(self, tmp_path, recorder) -> None:
+        runner, _, reviewer, *_ = self._setup(tmp_path, recorder)
+
+        await runner.run(task_id="t1", task="plan it", workspace="/repo", backend="claude", review=True)
+
+        assert not reviewer.specs

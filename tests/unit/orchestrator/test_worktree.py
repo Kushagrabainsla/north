@@ -265,3 +265,16 @@ async def test_apply_back_takes_the_lock_only_for_the_apply(manager: GitWorktree
 
     assert await manager.apply_back(wt, lock=lock) is True
     assert not lock.locked()
+
+
+async def test_diff_text_is_what_the_branch_changed_against_where_it_started(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    wt = await manager.create("diff")
+    (Path(wt.path) / "README.md").write_text("line1\nline2\nline3\nline4\n")
+    await manager.commit_changes(wt)
+
+    text = await manager.diff_text(wt)
+
+    assert "diff --git a/README.md b/README.md" in text and "+line4" in text
+    assert "\x1b[" not in text, "no colour codes: a model reads this"

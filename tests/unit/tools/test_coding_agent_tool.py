@@ -11,6 +11,8 @@ from coding_agents import (
     Landing,
     LandingState,
     Mode,
+    Review,
+    ReviewVerdict,
     RunOutcome,
     RunReport,
     Verification,
@@ -36,11 +38,13 @@ class StubRunner:
         change: WorkChange | None = None,
         verification: Verification | None = None,
         landing: Landing | None = None,
+        review: Review | None = None,
     ) -> None:
         self.can_edit = can_edit
         self.change = change
         self.verification = verification
         self.landing = landing
+        self.review = review
         self.calls: list[dict] = []
         self._outcome = outcome or RunOutcome(ok=True, text="Add subtract() to calc.py.", session_id="s", turns=3)
         self._raises = raises
@@ -57,6 +61,7 @@ class StubRunner:
             kwargs.get("mode", Mode.PLAN),
             self.verification,
             self.landing,
+            self.review,
         )
 
 
@@ -309,3 +314,46 @@ class TestWhatHappenedToTheChange:
         result = await tool.execute(_input(mode="edit"))
 
         assert result.data["verification"]["state"] == "passed" and result.data["landing"]["state"] == "applied"
+
+
+class TestTheOtherAgentsReview:
+    async def _text(self, review: Review | None, **extra) -> tuple[str, dict]:
+        tool = _tool(
+            StubRunner(
+                can_edit=True,
+                change=CHANGE,
+                verification=PASSED,
+                landing=Landing(LandingState.KEPT, "x"),
+                review=review,
+                **extra,
+            )
+        )
+        result = await tool.execute(_input(mode="edit"))
+        return tool.format_output(result.data), result.data
+
+    async def test_concerns_reach_the_model_marked_as_an_opinion(self) -> None:
+        text, data = await self._text(Review("codex", ReviewVerdict.CONCERNS, "- calc.py: sub returns a + b"))
+
+        assert "codex reviewed it (an opinion, not a check): CONCERNS." in text and "sub returns a + b" in text
+        assert data["review"] == {"reviewer": "codex", "verdict": "concerns", "summary": "- calc.py: sub returns a + b"}
+
+    async def test_a_clean_review_and_an_unclear_one_read_differently(self) -> None:
+        clean, _ = await self._text(Review("codex", ReviewVerdict.OK, "Checked both."))
+        unclear, _ = await self._text(Review("codex", ReviewVerdict.UNCLEAR, "could not finish"))
+
+        assert "no concerns" in clean and "no clear verdict" in unclear and "no concerns" not in unclear
+
+    async def test_with_no_review_nothing_is_said_about_one(self) -> None:
+        text, data = await self._text(None)
+
+        assert "reviewed it" not in text and "review" not in data
+
+    async def test_the_review_is_on_by_default_and_can_be_turned_off(self) -> None:
+        runner = StubRunner(can_edit=True, change=CHANGE)
+        tool = _tool(runner)
+
+        await tool.execute(_input(mode="edit"))
+        await tool.execute(_input(mode="edit", review=False))
+
+        assert [call["review"] for call in runner.calls] == [True, False]
+        assert tool.parameters_schema["properties"]["review"]["type"] == "boolean"

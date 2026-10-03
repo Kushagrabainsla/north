@@ -18,13 +18,17 @@ from coding_agents.models import (
     GateAccess,
     Landing,
     Mode,
+    Review,
+    ReviewVerdict,
     RunEvent,
     RunOutcome,
     RunSpec,
     Verification,
+    VerificationState,
     WorkChange,
     WorkTree,
 )
+from coding_agents.review import parse_review, review_guidance, review_task
 from utils.ids import generate_id
 
 logger = logging.getLogger(__name__)
@@ -41,6 +45,7 @@ class RunReport:
     mode: Mode = Mode.PLAN
     verification: Verification | None = None  # north's own run of the project's tests
     landing: Landing | None = None  # whether the change reached the working tree
+    review: Review | None = None  # the other agent's read of the change
 
 
 class CodingRunner:
@@ -87,13 +92,19 @@ class CodingRunner:
         guidance: str = "",
         backend: str | None = None,
         mode: Mode = Mode.PLAN,
+        review: bool = False,
+        fresh: bool = False,
     ) -> RunReport:
-        """Run *task* in *workspace*; a re-planned task that finds its own live run continues that session."""
+        """Run *task* in *workspace*; a re-planned task that finds its own live run continues that session.
+
+        *review* has the other coding agent, when there is one, read an edit's diff before it is offered.
+        *fresh* never resumes: a review must not continue some earlier plan run of the same agent.
+        """
         if mode is Mode.EDIT and not self.can_edit:
             raise CodingAgentError("edit runs are not set up here")
         chosen, version = await self._choose(backend)
         agent = AGENT_PREFIX + chosen.name
-        live = await self._live(task_id, agent, mode)
+        live = None if fresh else await self._live(task_id, agent, mode)
         run_id = live.run_id if live else generate_id()
         tree = await self._tree(live, workspace, run_id) if mode is Mode.EDIT else None
         spec = RunSpec(
@@ -108,11 +119,13 @@ class CodingRunner:
         await self._recorder.start(RunStart(run_id, task_id, agent, task, workspace))
         await self._recorder.remember(run_id, _state(chosen, spec, version, tree))
         outcome, change = await self._execute(chosen, spec, run_id, task_id, tree)
-        verification, landing = (None, None)
+        verification = landing = reviewed = None
         if change is not None and outcome.ok:
-            verification, landing = await self._land(run_id, task_id, change, spec.session_id)
+            verification, reviewed, landing = await self._land(
+                run_id, task_id, change, spec.session_id, task, chosen.name if review else None
+            )
         await self._recorder.finish(run_id, outcome)
-        return RunReport(run_id, chosen.name, outcome, change, mode, verification, landing)
+        return RunReport(run_id, chosen.name, outcome, change, mode, verification, landing, reviewed)
 
     async def _choose(self, wanted: str | None) -> tuple[CodingBackend, str]:
         """The backend asked for, or the first that can take a run; why none can, when none can."""
@@ -176,18 +189,26 @@ class CodingRunner:
         return outcome, await self._finish_tree(run_id, task_id, tree)
 
     async def _land(
-        self, run_id: str, task_id: str, change: WorkChange, session_id: str
-    ) -> tuple[Verification | None, Landing | None]:
-        """Test the change ourselves, then offer it. A failure here never hides the agent's outcome: the
-        copy and its branch are simply left as they are."""
+        self, run_id: str, task_id: str, change: WorkChange, session_id: str, task: str, reviewing_for: str | None
+    ) -> tuple[Verification | None, Review | None, Landing | None]:
+        """Test the change ourselves, have the other agent read it, then offer it. A failure here never hides
+        the agent's outcome: the copy and its branch are simply left as they are."""
         if self._verifier is None or self._lander is None:
-            return None, None
+            return None, None, None
+        reviewed = None
         try:
             verification = await self._verifier.verify(change.tree, task_id)
             await self._recorder.record(
                 run_id, task_id, "verification", {"state": verification.state.value, "command": verification.command}
             )
-            landing = await self._lander.land(change, verification, task_id)
+            # A change whose tests failed is not offered, so reading it would spend the user's quota for nothing.
+            if reviewing_for is not None and verification.state is not VerificationState.FAILED:
+                reviewed = await self._review(change, task, task_id, author=reviewing_for)
+                if reviewed is not None:
+                    await self._recorder.record(
+                        run_id, task_id, "review", {"reviewer": reviewed.reviewer, "verdict": reviewed.verdict.value}
+                    )
+            landing = await self._lander.land(change, verification, task_id, reviewed)
             await self._recorder.record(run_id, task_id, "landing", {"state": landing.state.value})
         except asyncio.CancelledError:
             cancelled = RunOutcome(False, "", session_id, failure=FailureKind.CANCELLED, error="Run cancelled.")
@@ -195,8 +216,37 @@ class CodingRunner:
             raise
         except Exception:
             logger.exception("could not test or land the changes of coding run %s; the branch is left as it is", run_id)
-            return None, None
-        return verification, landing
+            return None, None, None
+        return verification, reviewed, landing
+
+    async def _review(self, change: WorkChange, task: str, task_id: str, *, author: str) -> Review | None:
+        """The other agent's read of *change*, or None when there is no other agent or the diff cannot be had."""
+        other = await self._other_available(author)
+        if other is None or self._workspaces is None:
+            return None
+        try:
+            diff = await self._workspaces.diff(change.tree)
+            report = await self.run(
+                task_id=task_id,
+                task=review_task(task, diff),
+                workspace=change.tree.path,
+                guidance=review_guidance(),
+                backend=other,
+                mode=Mode.PLAN,
+                fresh=True,
+            )
+        except CodingAgentError:
+            return None
+        if not report.outcome.ok:
+            return Review(other, ReviewVerdict.UNCLEAR, f"the review could not be completed: {report.outcome.error}")
+        return parse_review(other, report.outcome.text)
+
+    async def _other_available(self, author: str) -> str | None:
+        """The first coding agent that is not *author* and can take a run now."""
+        for name, backend in self._backends.items():
+            if name != author and (await backend.probe()).available:
+                return name
+        return None
 
     async def _finish_tree(self, run_id: str, task_id: str, tree: WorkTree | None) -> WorkChange | None:
         """Commit what the agent changed, even when the run failed: partial work is still worth seeing."""

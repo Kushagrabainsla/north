@@ -111,6 +111,21 @@ class Verification:
     detail: str = ""  # the failing output's tail, or why it was skipped
 
 
+class ReviewVerdict(StrEnum):
+    OK = "ok"
+    CONCERNS = "concerns"
+    UNCLEAR = "unclear"  # the reviewer did not give a verdict north could read, or could not finish
+
+
+@dataclass(frozen=True)
+class Review:
+    """Another coding agent's read of the change. Advice, not a check: it never lands or blocks anything."""
+
+    reviewer: str
+    verdict: ReviewVerdict
+    summary: str
+
+
 class LandingState(StrEnum):
     APPLIED = "applied"  # the changes are in the working tree, uncommitted
     CONFLICT = "conflict"  # the same lines changed there; left on the branch
