@@ -81,7 +81,7 @@ class MemoryWorkspaces:
     async def create(self, workspace: str, label: str) -> WorkTree:
         path = self._root / label
         path.mkdir(parents=True)
-        tree = WorkTree(str(path), f"north/wt-{label}", "base123")
+        tree = WorkTree(str(path), f"north/wt-{label}", "base123", workspace)
         self.created.append(tree)
         return tree
 

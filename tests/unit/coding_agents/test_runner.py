@@ -240,7 +240,12 @@ class TestEditRuns:
 
         (state,) = backend.state_when_called.values()
         tree = workspaces.created[0]
-        assert (state["worktree"], state["branch"], state["base_sha"]) == (tree.path, tree.branch, "base123")
+        assert (state["worktree"], state["branch"], state["base_sha"], state["base"]) == (
+            tree.path,
+            tree.branch,
+            "base123",
+            "/repo",
+        )
         assert state["mode"] == "edit"
 
     async def test_a_failed_run_still_reports_the_work_it_got_through(self, tmp_path, recorder) -> None:
@@ -268,7 +273,7 @@ class TestEditRuns:
         runner, backend, workspaces, _ = self._setup(tmp_path, recorder)
         existing = tmp_path / "old-copy"
         existing.mkdir()
-        recorder.live = LiveRun("run-9", "sess-9", WorkTree(str(existing), "north/wt-old", "abc"))
+        recorder.live = LiveRun("run-9", "sess-9", WorkTree(str(existing), "north/wt-old", "abc", "/repo"))
 
         await self._edit(runner)
 
@@ -284,7 +289,7 @@ class TestEditRuns:
         self, tmp_path, recorder
     ) -> None:
         runner, backend, workspaces, _ = self._setup(tmp_path, recorder)
-        recorder.live = LiveRun("run-9", "sess-9", WorkTree(str(tmp_path / "vanished"), "north/wt-old", "abc"))
+        recorder.live = LiveRun("run-9", "sess-9", WorkTree(str(tmp_path / "vanished"), "north/wt-old", "abc", "/repo"))
 
         await self._edit(runner)
 

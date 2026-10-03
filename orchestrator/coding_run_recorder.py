@@ -56,6 +56,10 @@ class AgentRunRecorder:
     async def record(self, run_id: str, task_id: str, event: str, data: Mapping[str, Any]) -> None:
         await self._store.record_event(run_id, task_id, event, dict(data))
 
+    async def waiting(self, run_id: str, waiting: bool) -> None:
+        """Show the run as waiting for an approval, or running again."""
+        await self._store.set_status(run_id, RunStatus.WAITING_FOR_APPROVAL if waiting else RunStatus.RUNNING)
+
     async def finish(self, run_id: str, outcome: RunOutcome) -> None:
         if not outcome.ok:
             status = "cancelled" if outcome.failure is FailureKind.CANCELLED else "failed"
@@ -84,8 +88,8 @@ def _latest(provider_state: Mapping[str, Any], key: str) -> Any:
 
 
 def _worktree(provider_state: Mapping[str, Any]) -> WorkTree | None:
-    path, branch, base = (_latest(provider_state, key) for key in ("worktree", "branch", "base_sha"))
-    return WorkTree(str(path), str(branch), str(base)) if path and branch and base else None
+    path, branch, sha, base = (_latest(provider_state, key) for key in ("worktree", "branch", "base_sha", "base"))
+    return WorkTree(str(path), str(branch), str(sha), str(base)) if path and branch and sha and base else None
 
 
 def _pid_alive(pid: int) -> bool:

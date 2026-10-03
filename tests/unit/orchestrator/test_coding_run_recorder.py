@@ -133,9 +133,15 @@ class TestFindingARunToResume:
                 "worktree": "/tmp/wt",
                 "branch": "north/wt-x",
                 "base_sha": "abc",
+                "base": "/repo",
             },
         )
 
         live = await recorder.live_run("t1", AGENT, "edit")
 
-        assert (live.worktree.path, live.worktree.branch, live.worktree.base_sha) == ("/tmp/wt", "north/wt-x", "abc")
+        assert (live.worktree.path, live.worktree.branch, live.worktree.base_sha, live.worktree.base) == (
+            "/tmp/wt",
+            "north/wt-x",
+            "abc",
+            "/repo",
+        )
