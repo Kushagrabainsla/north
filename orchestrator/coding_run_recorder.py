@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from agents.models import AgentPayload, AgentResult
-from coding_agents import FailureKind, LiveRun, RunOutcome, RunStart
+from coding_agents import FailureKind, LiveRun, RunOutcome, RunStart, WorkTree
 from orchestrator.agent_runs import AgentRunStore, RunStatus
 from utils.execution_context import current_execution
 
@@ -25,16 +25,16 @@ class AgentRunRecorder:
         self._pid_alive = pid_alive or _pid_alive
         self._started_at: dict[str, float] = {}
 
-    async def live_run(self, task_id: str, agent: str) -> LiveRun | None:
-        """The newest unfinished run of *agent* for this task whose process is gone, if it left a session."""
+    async def live_run(self, task_id: str, agent: str, mode: str) -> LiveRun | None:
+        """The newest unfinished *mode* run of *agent* for this task whose process is gone, if it left a session."""
         for run in reversed(await self._store.list_for_task(task_id)):
-            if run.agent != agent or run.status not in _UNFINISHED:
+            if run.agent != agent or run.status not in _UNFINISHED or _latest(run.provider_state, "mode") != mode:
                 continue
             pid = _latest(run.provider_state, "pid")
             if run.status != RunStatus.INTERRUPTED and pid and self._pid_alive(int(pid)):
                 continue  # still running right now: a second run, not a resume
             session_id = _latest(run.provider_state, "session_id")
-            return LiveRun(run.run_id, str(session_id)) if session_id else None
+            return LiveRun(run.run_id, str(session_id), _worktree(run.provider_state)) if session_id else None
         return None
 
     async def start(self, run: RunStart) -> None:
@@ -55,6 +55,10 @@ class AgentRunRecorder:
 
     async def record(self, run_id: str, task_id: str, event: str, data: Mapping[str, Any]) -> None:
         await self._store.record_event(run_id, task_id, event, dict(data))
+
+    async def waiting(self, run_id: str, waiting: bool) -> None:
+        """Show the run as waiting for an approval, or running again."""
+        await self._store.set_status(run_id, RunStatus.WAITING_FOR_APPROVAL if waiting else RunStatus.RUNNING)
 
     async def finish(self, run_id: str, outcome: RunOutcome) -> None:
         if not outcome.ok:
@@ -81,6 +85,11 @@ def _latest(provider_state: Mapping[str, Any], key: str) -> Any:
             if entry.get(key):
                 return entry[key]
     return None
+
+
+def _worktree(provider_state: Mapping[str, Any]) -> WorkTree | None:
+    path, branch, sha, base = (_latest(provider_state, key) for key in ("worktree", "branch", "base_sha", "base"))
+    return WorkTree(str(path), str(branch), str(sha), str(base)) if path and branch and sha and base else None
 
 
 def _pid_alive(pid: int) -> bool:

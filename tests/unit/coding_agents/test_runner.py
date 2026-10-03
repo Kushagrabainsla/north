@@ -9,17 +9,22 @@ import pytest
 from coding_agents import (
     Availability,
     BackendUnavailableError,
+    CodingAgentError,
     CodingBackend,
     CodingRunner,
     EventKind,
     FailureKind,
+    FileDelta,
+    GateSessions,
     LiveRun,
+    Mode,
     RunEvent,
     RunOutcome,
     RunSpec,
+    WorkTree,
 )
 
-from .conftest import MemoryRecorder
+from .conftest import MemoryRecorder, MemoryWorkspaces
 
 
 class ScriptedBackend(CodingBackend):
@@ -34,6 +39,7 @@ class ScriptedBackend(CodingBackend):
         self.recorder: MemoryRecorder | None = None
         self.raises: Exception | None = None
         self.hang = False
+        self.during_run = None  # called with the spec while the agent is "running"
 
     async def probe(self) -> Availability:
         return Availability(self._available, "1.0.0", "" if self._available else f"{self.name} is missing")
@@ -42,6 +48,8 @@ class ScriptedBackend(CodingBackend):
         self.specs.append(spec)
         if self.recorder is not None:
             self.state_when_called = {run: dict(state) for run, state in self.recorder.state.items()}
+        if self.during_run:
+            self.during_run(spec)
         await on_event(RunEvent(EventKind.STARTED, {"pid": 4242}))
         await on_event(RunEvent(EventKind.TOOL_USE, {"tool": "Read", "summary": "calc.py"}))
         if self.raises:
@@ -175,3 +183,144 @@ async def test_cancelling_a_run_records_it_cancelled_and_lets_the_cancel_through
         await task
 
     assert recorder.finished[0][1].failure is FailureKind.CANCELLED
+
+
+_ONE_FILE = (FileDelta("calc.py", 4, 1),)
+
+
+class TestEditRuns:
+    GATE = "http://127.0.0.1:8000/orchestrator/coding/gate"
+
+    def _setup(self, tmp_path, recorder, *, files=_ONE_FILE):
+        workspaces = MemoryWorkspaces(tmp_path / "copies", files)
+        sessions = GateSessions()
+        backend = ScriptedBackend()
+        backend.recorder = recorder
+        runner = CodingRunner(
+            {"claude": backend}, recorder, workspaces=workspaces, sessions=sessions, gate_url=self.GATE
+        )
+        return runner, backend, workspaces, sessions
+
+    async def _edit(self, runner, **overrides):
+        return await runner.run(task_id="t1", task="add subtract", workspace="/repo", mode=Mode.EDIT, **overrides)
+
+    async def test_the_agent_works_in_a_fresh_copy_and_the_change_is_reported_not_applied(
+        self, tmp_path, recorder
+    ) -> None:
+        runner, backend, workspaces, _ = self._setup(tmp_path, recorder)
+
+        report = await self._edit(runner)
+
+        (tree,) = workspaces.created
+        assert backend.specs[0].workspace == tree.path and backend.specs[0].mode is Mode.EDIT
+        assert workspaces.finished == [tree]
+        assert (report.change.tree, report.change.insertions, report.change.deletions) == (tree, 4, 1)
+        assert ("changes", {"branch": tree.branch, "files": 1, "insertions": 4, "deletions": 1}) in recorder.events
+
+    async def test_the_agent_gets_a_token_for_this_run_that_stops_working_afterwards(self, tmp_path, recorder) -> None:
+        runner, backend, workspaces, sessions = self._setup(tmp_path, recorder)
+        seen = {}
+
+        def probe(spec: RunSpec) -> None:
+            seen["gate"] = spec.gate
+            seen["session"] = sessions.lookup(spec.gate.token)
+
+        backend.during_run = probe
+
+        await self._edit(runner)
+
+        assert seen["gate"].url == self.GATE
+        assert (seen["session"].task_id, seen["session"].worktree) == ("t1", workspaces.created[0].path)
+        assert sessions.lookup(seen["gate"].token) is None
+
+    async def test_the_copy_and_its_branch_are_saved_before_the_agent_starts(self, tmp_path, recorder) -> None:
+        runner, backend, workspaces, _ = self._setup(tmp_path, recorder)
+
+        await self._edit(runner)
+
+        (state,) = backend.state_when_called.values()
+        tree = workspaces.created[0]
+        assert (state["worktree"], state["branch"], state["base_sha"], state["base"]) == (
+            tree.path,
+            tree.branch,
+            "base123",
+            "/repo",
+        )
+        assert state["mode"] == "edit"
+
+    async def test_a_failed_run_still_reports_the_work_it_got_through(self, tmp_path, recorder) -> None:
+        runner, backend, _, _ = self._setup(tmp_path, recorder)
+        backend._outcome = RunOutcome(False, "", "s", failure=FailureKind.LIMIT, error="out of turns")
+
+        report = await self._edit(runner)
+
+        assert not report.outcome.ok and report.change is not None
+
+    async def test_when_nothing_changed_there_is_no_change(self, tmp_path, recorder) -> None:
+        runner, *_ = self._setup(tmp_path, recorder, files=())
+
+        assert (await self._edit(runner)).change is None
+
+    async def test_edit_is_refused_when_it_is_not_set_up(self, recorder) -> None:
+        runner = CodingRunner({"claude": ScriptedBackend()}, recorder)
+
+        with pytest.raises(CodingAgentError, match="not set up"):
+            await self._edit(runner)
+
+        assert recorder.calls == []
+
+    async def test_a_resumed_edit_run_goes_back_to_the_copy_it_already_has(self, tmp_path, recorder) -> None:
+        runner, backend, workspaces, _ = self._setup(tmp_path, recorder)
+        existing = tmp_path / "old-copy"
+        existing.mkdir()
+        recorder.live = LiveRun("run-9", "sess-9", WorkTree(str(existing), "north/wt-old", "abc", "/repo"))
+
+        await self._edit(runner)
+
+        assert not workspaces.created
+        assert (backend.specs[0].workspace, backend.specs[0].session_id, backend.specs[0].resume) == (
+            str(existing),
+            "sess-9",
+            True,
+        )
+        assert recorder.live_asked == ("t1", "coding:claude", "edit")
+
+    async def test_a_run_whose_copy_is_gone_starts_fresh_instead_of_resuming_into_nothing(
+        self, tmp_path, recorder
+    ) -> None:
+        runner, backend, workspaces, _ = self._setup(tmp_path, recorder)
+        recorder.live = LiveRun("run-9", "sess-9", WorkTree(str(tmp_path / "vanished"), "north/wt-old", "abc", "/repo"))
+
+        await self._edit(runner)
+
+        assert len(workspaces.created) == 1 and not backend.specs[0].resume
+        assert backend.specs[0].session_id != "sess-9"
+
+    async def test_cancelling_still_commits_the_partial_work_and_revokes_the_token(self, tmp_path, recorder) -> None:
+        runner, backend, workspaces, sessions = self._setup(tmp_path, recorder)
+        backend.hang = True
+        issued = {}
+        backend.during_run = lambda spec: issued.update(token=spec.gate.token)
+        task = asyncio.create_task(self._edit(runner))
+        while "record" not in recorder.calls:
+            await asyncio.sleep(0.01)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert workspaces.finished == workspaces.created
+        assert sessions.lookup(issued["token"]) is None
+        assert recorder.finished[0][1].failure is FailureKind.CANCELLED
+
+    async def test_a_failure_to_commit_does_not_hide_the_agents_outcome(self, tmp_path, recorder) -> None:
+        runner, _, workspaces, _ = self._setup(tmp_path, recorder)
+
+        async def broken(tree):
+            raise RuntimeError("git exploded")
+
+        workspaces.finish = broken  # type: ignore[method-assign]
+
+        report = await self._edit(runner)
+
+        assert report.outcome.ok and report.change is None

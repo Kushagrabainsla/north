@@ -14,13 +14,17 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import signal
+import sys
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from coding_agents.base import CodingBackend, EventSink
 from coding_agents.constants import (
+    HOOK_TIMEOUT_SECONDS,
     MAX_EVENT_TEXT_CHARS,
     MAX_STDERR_CHARS,
     MAX_TEXT_CHARS,
@@ -31,9 +35,22 @@ from coding_agents.constants import (
     TERMINATE_GRACE_SECONDS,
 )
 from coding_agents.environment import agent_environment
-from coding_agents.models import Availability, Denial, EventKind, FailureKind, RunEvent, RunOutcome, RunSpec
+from coding_agents.exceptions import CodingAgentError
+from coding_agents.gate import HOOKED_TOOLS
+from coding_agents.models import (
+    Availability,
+    Denial,
+    EventKind,
+    FailureKind,
+    Mode,
+    RunEvent,
+    RunOutcome,
+    RunSpec,
+)
 
 logger = logging.getLogger(__name__)
+
+_HOOK_SCRIPT = Path(__file__).with_name("hook.py")
 
 # `--permission-prompts none` arrived in this release; without it a denied call may wait for an answer.
 MINIMUM_VERSION = (2, 1, 259)
@@ -94,10 +111,12 @@ class ClaudeBackend(CodingBackend):
         return Availability(True, label)
 
     async def run(self, spec: RunSpec, on_event: EventSink) -> RunOutcome:
+        if spec.mode is Mode.EDIT and spec.gate is None:
+            raise CodingAgentError("an edit run needs the gate: nothing may change without it")
         process = await asyncio.create_subprocess_exec(
             *self._argv(spec),
             cwd=spec.workspace,
-            env=self._environment,
+            env=self._process_environment(spec),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -146,7 +165,7 @@ class ClaudeBackend(CodingBackend):
             "stream-json",
             "--verbose",
             "--permission-mode",
-            "plan",
+            "plan" if spec.mode is Mode.PLAN else "default",
             "--permission-prompts",
             "none",
             "--setting-sources",
@@ -155,7 +174,7 @@ class ClaudeBackend(CodingBackend):
             "--mcp-config",
             json.dumps({"mcpServers": {}}),
             "--settings",
-            json.dumps(self._settings()),
+            json.dumps(self._settings(spec)),
             "--max-turns",
             str(spec.max_turns),
             "--max-budget-usd",
@@ -169,17 +188,33 @@ class ClaudeBackend(CodingBackend):
             argv += ["--append-system-prompt", spec.guidance]
         return argv
 
-    def _settings(self) -> dict[str, Any]:
-        """The vendor sandbox, strict: no unsandboxed retry, no start without it, no network, no secrets."""
-        return {
+    def _process_environment(self, spec: RunSpec) -> dict[str, str]:
+        """What the agent starts with, plus where its hook asks north when it has one."""
+        if spec.gate is None:
+            return self._environment
+        return {**self._environment, "NORTH_GATE_URL": spec.gate.url, "NORTH_GATE_TOKEN": spec.gate.token}
+
+    def _settings(self, spec: RunSpec) -> dict[str, Any]:
+        """The vendor sandbox, strict, and for an edit run the hook that asks north before each action.
+
+        `autoAllowBashIfSandboxed` is off because on, a hook that fails lets a sandboxed command run
+        (measured): off, a broken hook means the command is denied.
+        """
+        settings: dict[str, Any] = {
             "sandbox": {
                 "enabled": True,
                 "allowUnsandboxedCommands": False,
                 "failIfUnavailable": True,
+                "autoAllowBashIfSandboxed": False,
                 "filesystem": {"denyRead": list(self._protected_paths)},
                 "network": {"strictAllowlist": True, "allowedDomains": []},
             }
         }
+        if spec.gate is not None:
+            command = f"{shlex.quote(sys.executable)} {shlex.quote(str(_HOOK_SCRIPT))}"
+            hook = {"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECONDS}
+            settings["hooks"] = {"PreToolUse": [{"matcher": HOOKED_TOOLS, "hooks": [hook]}]}
+        return settings
 
     async def _capture(self, *args: str) -> str:
         """What `claude <args>` printed, or nothing if it failed or took too long."""
@@ -283,19 +318,15 @@ def _outcome(stream: _Stream, *, exit_code: int, stderr: str, timed_out: bool) -
 
     errors = " ".join(str(error) for error in result.get("errors") or [])
     text = result["result"] if isinstance(result.get("result"), str) else stream.last_text
-    base = {
-        "text": text[:MAX_TEXT_CHARS],
-        "session_id": stream.session_id,
-        "cost_usd": float(result.get("total_cost_usd") or 0),
-        "turns": int(result.get("num_turns") or 0),
-        "denials": _denials(result),
-    }
+    answer = text[:MAX_TEXT_CHARS]
+    cost = float(result.get("total_cost_usd") or 0)
+    turns = int(result.get("num_turns") or 0)
+    denials = _denials(result)
     if not result.get("is_error") and result.get("subtype") == "success":
-        return RunOutcome(ok=True, **base)
+        return RunOutcome(True, answer, stream.session_id, cost, turns, denials)
     failure = _classify(result, errors, stream.retry_error)
-    return RunOutcome(
-        ok=False, failure=failure, error=(errors or text or str(result.get("subtype")))[:MAX_TEXT_CHARS], **base
-    )
+    error = (errors or text or str(result.get("subtype")))[:MAX_TEXT_CHARS]
+    return RunOutcome(False, answer, stream.session_id, cost, turns, denials, failure, error)
 
 
 def _classify(result: Mapping[str, Any], errors: str, retry_error: str) -> FailureKind:

@@ -51,6 +51,15 @@ class Worktree:
 
 
 @dataclass(frozen=True)
+class FileChange:
+    """One file's change in a worktree, against the commit it branched from."""
+
+    path: str
+    insertions: int
+    deletions: int
+
+
+@dataclass(frozen=True)
 class IntegrationResult:
     """Outcome of applying a worktree's changes back to the base working tree."""
 
@@ -146,16 +155,7 @@ class GitWorktreeManager:
         the changes can be merged by hand. *lock*, when given, is held only for the
         apply so isolated runs serialise just for that step.
         """
-        await _run_git(["add", "-A"], wt.path)
-        # `--quiet` exits 1 when there are staged changes to commit, 0 when clean.
-        code, _, _ = await _run_git(["diff", "--cached", "--quiet"], wt.path)
-        if code == 1:
-            c, _, err = await _run_git(
-                [*_COMMIT_CONFIG, "commit", "--no-verify", "-m", "north: isolated agent changes"],
-                wt.path,
-            )
-            if c != 0:
-                raise WorktreeError(f"git commit in worktree failed: {err.strip()}")
+        await self.commit_changes(wt)
 
         # Nothing actually diverged from base -> clean up, report no change.
         code, _, _ = await _run_git(["diff", "--quiet", wt.base_sha, "HEAD"], wt.path)
@@ -176,6 +176,36 @@ class GitWorktreeManager:
             branch=wt.branch,
             path=wt.path,
         )
+
+    async def commit_changes(self, wt: Worktree) -> bool:
+        """Commit everything changed in *wt* onto its branch; False when nothing changed.
+
+        Hooks are skipped: the worktree belongs to an agent, and a hook it planted must not run.
+        """
+        await _run_git(["add", "-A"], wt.path)
+        # `--quiet` exits 1 when there are staged changes to commit, 0 when clean.
+        code, _, _ = await _run_git(["diff", "--cached", "--quiet"], wt.path)
+        if code != 1:
+            return False
+        code, _, err = await _run_git(
+            [*_COMMIT_CONFIG, "commit", "--no-verify", "-m", "north: isolated agent changes"], wt.path
+        )
+        if code != 0:
+            raise WorktreeError(f"git commit in worktree failed: {err.strip()}")
+        return True
+
+    async def changes(self, wt: Worktree) -> tuple[FileChange, ...]:
+        """The files that differ between *wt*'s branch tip and the commit it branched from."""
+        code, out, _ = await _run_git(["diff", "--numstat", wt.base_sha, "HEAD"], wt.path)
+        if code != 0:
+            return ()
+        files = []
+        for line in out.splitlines():
+            added, deleted, path = line.split("\t", 2)  # a binary file shows "-" for both counts
+            files.append(
+                FileChange(path, int(added) if added.isdigit() else 0, int(deleted) if deleted.isdigit() else 0)
+            )
+        return tuple(files)
 
     async def _apply_back(self, wt: Worktree, patch: bytes, *, lock: asyncio.Lock | None) -> bool:
         """Apply *patch* onto the base working tree; return False on any conflict."""

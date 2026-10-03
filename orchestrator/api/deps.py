@@ -55,6 +55,8 @@ def configure(
     cron_store: UserCronStore | None = None,
     north_settings: NorthSettings | None = None,
     agent_run_store: AgentRunStore | None = None,
+    coding_sessions: object | None = None,
+    coding_gate: object | None = None,
 ) -> None:
     """Attach this app's wiring. Called once in the lifespan.
 
@@ -76,6 +78,8 @@ def configure(
         cron_store=cron_store,
         north_settings=north_settings,
         agent_run_store=agent_run_store,
+        coding_sessions=coding_sessions,
+        coding_gate=coding_gate,
     )
 
 

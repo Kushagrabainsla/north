@@ -36,7 +36,7 @@ from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
 from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import run_bootstrap_if_needed
-from coding_agents import CodingRunner, discover_backends
+from coding_agents import CodingRunner, Gate, GateSessions, discover_backends
 from config.dependencies import build_production_dependencies
 from config.security import load_secret
 from config.settings import settings
@@ -51,10 +51,12 @@ from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
 from memory.injection import ContextInjector
 from memory.models import ContextDocument
+from orchestrator.api import coding_gate_router, health_router, webhook_router
 from orchestrator.api import configure as configure_api
-from orchestrator.api import health_router, webhook_router
 from orchestrator.api import router as orchestrator_router
+from orchestrator.coding_gate import ApprovalJudge
 from orchestrator.coding_run_recorder import AgentRunRecorder
+from orchestrator.coding_workspaces import GitWorkspaces
 from orchestrator.constants import WATCHDOG_POLL_INTERVAL_SECONDS
 from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler
@@ -208,7 +210,21 @@ def _build_tool_registry(
     tool_registry.register(UpdatePlanTool(plan_store=deps.plan_store, stream_manager=deps.stream_manager))
     # The coding agents installed here (Claude Code), run read-only. Absent when none is installed.
     if coding_backends := discover_backends(protected_paths=[str(settings.north_home)]):
-        tool_registry.register(CodingAgentTool(CodingRunner(coding_backends, AgentRunRecorder(deps.agent_run_store))))
+        recorder = AgentRunRecorder(deps.agent_run_store)
+        if approvals is None:
+            runner = CodingRunner(coding_backends, recorder)
+        else:
+            # Edit runs: each action the agent takes is ruled on by the approval layer through its hook.
+            deps.coding_sessions = GateSessions()
+            deps.coding_gate = Gate(ApprovalJudge(approvals, recorder))
+            runner = CodingRunner(
+                coding_backends,
+                recorder,
+                workspaces=GitWorkspaces(),
+                sessions=deps.coding_sessions,
+                gate_url=f"{settings.north_orchestrator_url}/orchestrator/coding/gate",
+            )
+        tool_registry.register(CodingAgentTool(runner))
     # Semantic code search (#2) - only when embeddings are available.
     if deps.code_index is not None:
         tool_registry.register(SearchCodeTool(code_index=deps.code_index))
@@ -457,6 +473,8 @@ def _configure_routers(
         cron_store=deps.cron_store,
         north_settings=deps.north_settings,
         agent_run_store=deps.agent_run_store,
+        coding_sessions=getattr(deps, "coding_sessions", None),
+        coding_gate=getattr(deps, "coding_gate", None),
     )
     configure_web(
         app,
@@ -1100,6 +1118,7 @@ async def _task_capacity_handler(request: Request, exc: TaskCapacityError) -> JS
 app.include_router(health_router)
 app.include_router(orchestrator_router)
 app.include_router(webhook_router)
+app.include_router(coding_gate_router)
 app.include_router(web_session_router)
 app.include_router(web_api_router)
 

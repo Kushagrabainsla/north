@@ -11,6 +11,9 @@ RUN_TIMEOUT_SECONDS = 1800.0
 # How long a signalled agent gets to exit before it is killed.
 TERMINATE_GRACE_SECONDS = 5.0
 PROBE_TIMEOUT_SECONDS = 15.0
+# How long Claude Code waits for the gate to answer. An approval waits for a person and never expires
+# (CODING_STYLE 13.5), so this is a day, not a limit anyone meets.
+HOOK_TIMEOUT_SECONDS = 86_400
 # One stream-json line can hold a whole file the agent read.
 STREAM_LINE_LIMIT_BYTES = 32 * 1024 * 1024
 # What the agent said last, kept when a run ends without a final answer.

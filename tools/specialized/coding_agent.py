@@ -1,9 +1,10 @@
-"""CodingAgentTool - hand a coding question or plan to the user's installed coding agent.
+"""CodingAgentTool - hand a coding task to the user's installed coding agent.
 
 north does not write code itself (docs/design/coding-agents.md). This runs the user's own
-Claude Code, read-only: it reads the repository and answers, and cannot change anything. The
-run goes through the approval layer like any other action, and the folder it reads is the one
-the server granted the task, never one the model names.
+Claude Code. In plan mode it only reads and answers. In edit mode it changes files in an isolated
+copy of the repository, every action ruled on by the approval layer, and leaves the result on a
+branch; nothing is applied to the real working tree. The run itself goes through the approval
+layer too, and the folder is the one the server granted the task, never one the model names.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from coding_agents import BackendUnavailableError, CodingRunner, RunOutcome
+from coding_agents import CodingAgentError, CodingRunner, Mode, RunReport
 from context.repo_instructions import load_repo_instructions
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
@@ -32,6 +33,7 @@ class _Call:
     task: str
     workspace: str
     backend: str | None
+    mode: Mode
 
 
 class CodingAgentTool(Tool):
@@ -40,9 +42,11 @@ class CodingAgentTool(Tool):
     name = "coding_agent"
     is_mutating = True  # it starts a process and spends the user's agent quota, so the user's mode decides
     description = (
-        "Hand a coding question or a plan to the coding agent installed on this machine (Claude Code). "
-        "It reads the repository and answers; it cannot change anything. Give it the whole task with the "
-        "context it needs. Use it to investigate unfamiliar code, plan a change or review an approach."
+        "Hand a coding task to the coding agent installed on this machine (Claude Code). Give it the whole "
+        "task with the context it needs. mode 'plan' (the default) only reads the repository and answers: use "
+        "it to investigate unfamiliar code, plan a change or review an approach. mode 'edit' makes the change "
+        "in an isolated copy and leaves it on a new branch for the user to review; nothing is applied to the "
+        "working tree."
     )
 
     def __init__(
@@ -56,6 +60,11 @@ class CodingAgentTool(Tool):
             "type": "object",
             "properties": {
                 "task": {"type": "string", "description": "What to investigate or plan, with the context it needs"},
+                "mode": {
+                    "type": "string",
+                    "enum": [Mode.PLAN.value, *([Mode.EDIT.value] if runner.can_edit else [])],
+                    "description": "plan reads and answers (default); edit changes an isolated copy on a new branch",
+                },
                 "backend": {
                     "type": "string",
                     "enum": list(runner.names),
@@ -70,21 +79,29 @@ class CodingAgentTool(Tool):
         if isinstance(call, ToolOutput):
             return None
         who = call.backend or "the coding agent"
-        summary = f"Ask {who} (read-only) in {call.workspace}: {call.task[:_TITLE_CHARS]}"
+        editing = call.mode is Mode.EDIT
+        summary = f"Ask {who} ({'edit' if editing else 'read-only'}) in {call.workspace}: {call.task[:_TITLE_CHARS]}"
+        what = "to change an isolated copy of" if editing else "to read"
+        promise = (
+            "Every action it takes is checked first, and the result is left on a new branch; "
+            "nothing is applied to your working tree."
+            if editing
+            else "It cannot change anything."
+        )
         return Request(
             action=Action(
                 agent=self.name,
                 kind=ActionKind.OTHER,
                 summary=summary,
-                # The identity of the action for learned answers: which agent, in which folder.
-                operation="plan",
+                # The identity of the action for learned answers: which mode, which agent, which folder.
+                operation=call.mode.value,
                 args=call.backend or "",
                 path=Path(call.workspace),
                 workspace=call.workspace,
                 details=call.task,
             ),
             title="Coding Agent - Approval Required",
-            message=f"Ask **{who}** to read `{call.workspace}` (it cannot change anything):\n\n{call.task}",
+            message=f"Ask **{who}** {what} `{call.workspace}`. {promise}\n\n{call.task}",
             declined="Coding agent run rejected by user.",
             refused_hint="Answer from the files you can read yourself.",
             prepared=call,
@@ -94,7 +111,7 @@ class CodingAgentTool(Tool):
         call = prepared(input) or self._prepare(input)
         if isinstance(call, ToolOutput):
             return call
-        guidance = load_prompt("prompts/coding_agent_plan.md").format(
+        guidance = load_prompt(f"prompts/coding_agent_{call.mode.value}.md").format(
             repo_instructions=await self._instructions(call.workspace) or "(none)"
         )
         try:
@@ -104,13 +121,16 @@ class CodingAgentTool(Tool):
                 workspace=call.workspace,
                 guidance=guidance,
                 backend=call.backend,
+                mode=call.mode,
             )
-        except BackendUnavailableError as exc:
+        except CodingAgentError as exc:  # no usable agent, edit not set up, not a git repository
             return ToolOutput(success=False, error=str(exc))
-        return _output(report.run_id, report.backend, report.outcome)
+        return _output(report)
 
     def format_output(self, data: dict) -> str:
         text = str(data.get("answer") or "")
+        if data.get("mode") == Mode.EDIT.value:
+            text = _edit_summary(data) + ("\n\n" + text if text else "")
         denied = data.get("denied") or []
         if denied:
             tried = "; ".join(f"{item['tool']} {item['detail']}".strip() for item in denied[:5])
@@ -126,20 +146,51 @@ class CodingAgentTool(Tool):
         if not input.granted_workspace:
             return ToolOutput(success=False, error=_NO_FOLDER)
         backend = str(input.params.get("backend") or "").strip() or None
-        return _Call(task=task, workspace=str(Path(input.granted_workspace).resolve()), backend=backend)
+        try:
+            mode = Mode(str(input.params.get("mode") or Mode.PLAN.value))
+        except ValueError:
+            return ToolOutput(success=False, error="mode must be 'plan' or 'edit'.")
+        return _Call(task=task, workspace=str(Path(input.granted_workspace).resolve()), backend=backend, mode=mode)
 
 
-def _output(run_id: str, backend: str, outcome: RunOutcome) -> ToolOutput:
-    data = {
+def _output(report: RunReport) -> ToolOutput:
+    outcome = report.outcome
+    data: dict = {
         "answer": outcome.text,
-        "backend": backend,
-        "run_id": run_id,
+        "backend": report.backend,
+        "run_id": report.run_id,
         "session_id": outcome.session_id,
         "cost_usd": outcome.cost_usd,
         "turns": outcome.turns,
         "denied": [{"tool": denial.tool, "detail": denial.detail} for denial in outcome.denials],
     }
+    if report.change is not None:
+        change = report.change
+        data["mode"] = Mode.EDIT.value
+        data["change"] = {
+            "branch": change.tree.branch,
+            "path": change.tree.path,
+            "base_sha": change.tree.base_sha,
+            "files": [{"path": f.path, "insertions": f.insertions, "deletions": f.deletions} for f in change.files],
+            "insertions": change.insertions,
+            "deletions": change.deletions,
+        }
+    elif report.mode is Mode.EDIT:
+        data["mode"] = Mode.EDIT.value
     if outcome.ok:
         return ToolOutput(success=True, data=data)
     data["failure"] = outcome.failure.value if outcome.failure else "error"
     return ToolOutput(success=False, data=data, error=outcome.error or "The coding agent run failed.")
+
+
+def _edit_summary(data: dict) -> str:
+    change = data.get("change")
+    if not change:
+        return "The agent made no changes."
+    files = "\n".join(f"- {f['path']} (+{f['insertions']} -{f['deletions']})" for f in change["files"][:20])
+    return (
+        f"The agent's changes are on branch `{change['branch']}` in an isolated copy at `{change['path']}` "
+        f"({len(change['files'])} file(s), +{change['insertions']} -{change['deletions']}). "
+        "Nothing was applied to the working tree. To review: "
+        f"`git -C {change['path']} diff {change['base_sha']}..HEAD`.\n{files}"
+    )

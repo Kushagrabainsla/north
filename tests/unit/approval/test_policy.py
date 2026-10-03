@@ -333,3 +333,22 @@ async def test_only_file_edits_use_the_scratch_rule(tmp_path: Path) -> None:
     ruling = await policy(ApprovalMode.ASK).rule(shell("rm notes.md", in_north_scratch=True))
 
     assert ruling.verdict is Verdict.ASK
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_an_edit_inside_a_runs_isolated_copy_never_asks(mode: ApprovalMode, tmp_path: Path) -> None:
+    ruling = await policy(mode).rule(_edit(tmp_path / "wt" / "a.py", isolated=True))
+
+    assert ruling.verdict is Verdict.ALLOW and ruling.rule == "an edit inside the run's isolated copy"
+
+
+async def test_an_edit_that_is_not_in_the_isolated_copy_is_decided_as_before(tmp_path: Path) -> None:
+    ruling = await policy(ApprovalMode.ASK).rule(_edit(tmp_path / "a.py"))
+
+    assert ruling.verdict is Verdict.ASK
+
+
+async def test_only_file_edits_use_the_isolated_rule() -> None:
+    ruling = await policy(ApprovalMode.ASK).rule(shell("rm -rf build", isolated=True))
+
+    assert ruling.verdict is Verdict.ASK

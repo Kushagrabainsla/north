@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
-from coding_agents import ClaudeBackend, EventKind, FailureKind, RunEvent, RunSpec
+from coding_agents import ClaudeBackend, CodingAgentError, EventKind, FailureKind, Mode, RunEvent, RunSpec
+from coding_agents.models import GateAccess
 
 SESSION = "11111111-2222-4333-8444-555555555555"
 
@@ -116,6 +118,72 @@ class TestHowItIsCalled:
 
         assert "NORTH_SECRET" not in names and "OPENAI_API_KEY" not in names
         assert "HOME" in names and "PATH" in names
+
+
+class TestEditMode:
+    def _edit(self, workspace: Path) -> RunSpec:
+        return _spec(workspace, mode=Mode.EDIT, gate=GateAccess("http://127.0.0.1:8000/gate", "run-token-xyz"))
+
+    @staticmethod
+    def _settings(argv: list[str]) -> dict:
+        return json.loads(argv[argv.index("--settings") + 1])
+
+    async def test_it_runs_in_the_default_permission_mode_with_nothing_pre_allowed(
+        self, make_fake_claude, workspace
+    ) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), self._edit(workspace))
+        argv = _call(workspace)["argv"]
+
+        assert argv[argv.index("--permission-mode") + 1] == "default"
+        assert argv[argv.index("--permission-prompts") + 1] == "none"
+        for never in ("--allowedTools", "--dangerously-skip-permissions", "bypassPermissions", "acceptEdits"):
+            assert never not in argv
+
+    async def test_the_hook_asks_north_before_every_action_that_changes_something(
+        self, make_fake_claude, workspace
+    ) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), self._edit(workspace))
+        (entry,) = self._settings(_call(workspace)["argv"])["hooks"]["PreToolUse"]
+        (hook,) = entry["hooks"]
+
+        for tool in ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "mcp__.*"):
+            assert tool in entry["matcher"].split("|")
+        assert hook["type"] == "command" and hook["timeout"] >= 86_400
+        assert hook["command"].startswith(sys.executable) and hook["command"].endswith("hook.py")
+
+    async def test_a_sandboxed_command_is_not_auto_allowed_so_a_broken_hook_blocks_it(
+        self, make_fake_claude, workspace
+    ) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), self._edit(workspace))
+
+        assert self._settings(_call(workspace)["argv"])["sandbox"]["autoAllowBashIfSandboxed"] is False
+
+    async def test_the_token_reaches_the_hook_through_the_environment_not_the_command_line(
+        self, make_fake_claude, workspace
+    ) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), self._edit(workspace))
+        call = _call(workspace)
+
+        assert {"NORTH_GATE_URL", "NORTH_GATE_TOKEN"} <= set(call["env"])
+        assert "run-token-xyz" not in " ".join(call["argv"])
+
+    async def test_a_plan_run_has_no_hook_and_no_gate_environment(self, make_fake_claude, workspace) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace))
+        call = _call(workspace)
+
+        assert "hooks" not in self._settings(call["argv"])
+        assert "NORTH_GATE_TOKEN" not in call["env"]
+
+    async def test_an_edit_run_without_the_gate_is_refused_before_anything_starts(
+        self, make_fake_claude, workspace
+    ) -> None:
+        with pytest.raises(CodingAgentError, match="needs the gate"):
+            await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace, mode=Mode.EDIT))
+
+        assert not (workspace / ".fake_claude_call.json").exists()
+
+    def test_the_gate_token_does_not_appear_when_the_spec_is_printed(self) -> None:
+        assert "run-token-xyz" not in repr(GateAccess("http://x", "run-token-xyz"))
 
 
 class TestWhatItReports:

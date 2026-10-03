@@ -186,3 +186,45 @@ async def test_worktree_integrates_binary_file_cleanly(repo: Path, tmp_path: Pat
     assert res.applied is True
     assert res.changed is True
     assert (repo / "image.png").read_bytes() == binary_data
+
+
+async def test_commit_changes_puts_what_the_agent_did_on_the_branch_and_reports_it(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    wt = await manager.create("edit")
+    (Path(wt.path) / "README.md").write_text("line1\nline2\nline3\nline4\n")
+    (Path(wt.path) / "new.py").write_text("print('hi')\n")
+
+    assert await manager.commit_changes(wt) is True
+
+    changed = {change.path: (change.insertions, change.deletions) for change in await manager.changes(wt)}
+    assert changed == {"README.md": (1, 0), "new.py": (1, 0)}
+    log = _git(["log", "--oneline", f"{wt.base_sha}..{wt.branch}"], repo).stdout.strip().splitlines()
+    assert len(log) == 1 and "isolated agent changes" in log[0]
+    assert (repo / "README.md").read_text() == "line1\nline2\nline3\n", "the base tree is untouched"
+
+
+async def test_commit_changes_says_false_when_nothing_changed(manager: GitWorktreeManager) -> None:
+    wt = await manager.create("quiet")
+
+    assert await manager.commit_changes(wt) is False
+    assert await manager.changes(wt) == ()
+
+
+async def test_commit_changes_does_not_run_a_hook_the_agent_planted(manager: GitWorktreeManager, repo: Path) -> None:
+    wt = await manager.create("hooked")
+    hooks = repo / ".git" / "hooks"
+    (hooks / "pre-commit").write_text(f"#!/bin/sh\ntouch {repo}/HOOK_RAN\nexit 1\n")
+    (hooks / "pre-commit").chmod(0o755)
+    (Path(wt.path) / "a.txt").write_text("x\n")
+
+    assert await manager.commit_changes(wt) is True
+    assert not (repo / "HOOK_RAN").exists()
+
+
+async def test_a_binary_file_counts_as_changed_with_no_line_counts(manager: GitWorktreeManager) -> None:
+    wt = await manager.create("binary")
+    (Path(wt.path) / "image.bin").write_bytes(bytes(range(256)))
+    await manager.commit_changes(wt)
+
+    assert [(c.path, c.insertions, c.deletions) for c in await manager.changes(wt)] == [("image.bin", 0, 0)]

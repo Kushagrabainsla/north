@@ -24,8 +24,9 @@ from orchestrator.api import (  # noqa: F401  (importing registers each area's r
     task,
     transcription,
 )
+from orchestrator.api.coding_gate import coding_gate_router
 from orchestrator.api.deps import configure, health_router, router
 from orchestrator.api.health import health_check
 from orchestrator.api.webhooks import webhook_router
 
-__all__ = ["configure", "health_check", "health_router", "router", "webhook_router"]
+__all__ = ["coding_gate_router", "configure", "health_check", "health_router", "router", "webhook_router"]

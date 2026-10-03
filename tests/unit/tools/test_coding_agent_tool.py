@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from coding_agents import BackendUnavailableError, Denial, FailureKind, RunOutcome, RunReport
+from coding_agents import (
+    BackendUnavailableError,
+    CodingAgentError,
+    Denial,
+    FailureKind,
+    FileDelta,
+    Mode,
+    RunOutcome,
+    RunReport,
+    WorkChange,
+    WorkTree,
+)
 from config.approval_mode import ApprovalMode
 from tests.conftest import approving_store, bind_approvals, rejecting_store
 from tools.models import ToolInput
@@ -12,7 +23,16 @@ from tools.specialized.coding_agent import CodingAgentTool
 class StubRunner:
     names = ("claude",)
 
-    def __init__(self, outcome: RunOutcome | None = None, raises: Exception | None = None) -> None:
+    def __init__(
+        self,
+        outcome: RunOutcome | None = None,
+        raises: Exception | None = None,
+        *,
+        can_edit: bool = False,
+        change: WorkChange | None = None,
+    ) -> None:
+        self.can_edit = can_edit
+        self.change = change
         self.calls: list[dict] = []
         self._outcome = outcome or RunOutcome(ok=True, text="Add subtract() to calc.py.", session_id="s", turns=3)
         self._raises = raises
@@ -21,7 +41,7 @@ class StubRunner:
         self.calls.append(kwargs)
         if self._raises:
             raise self._raises
-        return RunReport("run-1", "claude", self._outcome)
+        return RunReport("run-1", "claude", self._outcome, self.change, kwargs.get("mode", Mode.PLAN))
 
 
 async def _instructions(workspace: str) -> str:
@@ -142,3 +162,82 @@ def test_the_agent_to_ask_is_limited_to_the_ones_installed() -> None:
 
     assert tool.parameters_schema["properties"]["backend"]["enum"] == ["claude"]
     assert tool.parameters_schema["required"] == ["task"]
+
+
+TREE = WorkTree("/tmp/north-worktrees/coding-abc", "north/wt-coding-abc", "abc123", "/repo")
+CHANGE = WorkChange(TREE, (FileDelta("calc.py", 4, 1), FileDelta("tests/test_calc.py", 9, 0)))
+
+
+class TestEditMode:
+    def _editor(self, **kw) -> tuple[CodingAgentTool, StubRunner]:
+        runner = StubRunner(can_edit=True, **kw)
+        return _tool(runner), runner
+
+    async def test_an_edit_run_asks_the_agent_to_edit_with_the_edit_instructions(self) -> None:
+        tool, runner = self._editor(change=CHANGE)
+
+        await tool.execute(_input(mode="edit"))
+
+        call = runner.calls[0]
+        assert call["mode"] is Mode.EDIT
+        assert "isolated copy" in call["guidance"] and "Do not run git commit" in call["guidance"]
+
+    async def test_the_default_is_still_plan(self) -> None:
+        tool, runner = self._editor()
+
+        await tool.execute(_input())
+
+        assert runner.calls[0]["mode"] is Mode.PLAN and "read-only" in runner.calls[0]["guidance"]
+
+    async def test_the_result_says_where_the_changes_are_and_that_nothing_was_applied(self) -> None:
+        tool, _ = self._editor(change=CHANGE)
+
+        result = await tool.execute(_input(mode="edit"))
+        text = tool.format_output(result.data)
+
+        assert result.success and result.data["change"]["branch"] == "north/wt-coding-abc"
+        assert "`north/wt-coding-abc`" in text and "Nothing was applied to the working tree" in text
+        assert "git -C /tmp/north-worktrees/coding-abc diff abc123..HEAD" in text
+        assert "calc.py (+4 -1)" in text and "(2 file(s), +13 -1)" in text
+
+    async def test_an_edit_that_changed_nothing_says_so(self) -> None:
+        tool, _ = self._editor(change=None)
+
+        result = await tool.execute(_input(mode="edit"))
+
+        assert "The agent made no changes." in tool.format_output(result.data)
+
+    async def test_the_card_says_the_result_goes_on_a_branch_and_is_not_applied(self) -> None:
+        tool, _ = self._editor()
+
+        request = await tool.describe(_input(mode="edit"))
+
+        assert "isolated copy" in request.message and "nothing is applied to your working tree" in request.message
+        assert request.action.operation == "edit"
+
+    async def test_a_plan_and_an_edit_are_remembered_separately(self) -> None:
+        tool, _ = self._editor()
+
+        plan = await tool.describe(_input())
+        edit = await tool.describe(_input(mode="edit"))
+
+        assert plan.action.describe() != edit.action.describe()
+
+    async def test_edit_is_not_offered_when_it_is_not_set_up(self) -> None:
+        assert CodingAgentTool(StubRunner(can_edit=False)).parameters_schema["properties"]["mode"]["enum"] == ["plan"]
+        assert CodingAgentTool(StubRunner(can_edit=True)).parameters_schema["properties"]["mode"]["enum"] == [
+            "plan",
+            "edit",
+        ]
+
+    async def test_asking_for_edit_where_it_is_not_set_up_is_an_error_not_a_crash(self) -> None:
+        runner = StubRunner(raises=CodingAgentError("edit runs are not set up here"))
+
+        result = await _tool(runner).execute(_input(mode="edit"))
+
+        assert not result.success and "not set up" in result.error
+
+    async def test_an_unknown_mode_is_refused(self) -> None:
+        result = await _tool(StubRunner()).execute(_input(mode="yolo"))
+
+        assert not result.success and "mode must be" in result.error

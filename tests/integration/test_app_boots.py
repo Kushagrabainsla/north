@@ -123,3 +123,5 @@ async def test_the_coding_agent_tool_is_in_the_catalog_and_gated_when_claude_is_
 
     assert tool.approvals is not None
     assert tool.mutates({"task": "plan a change"}) is True
+    services = services_of(booted_app)
+    assert services.coding_sessions is not None and services.coding_gate is not None, "the gate is wired for edit runs"

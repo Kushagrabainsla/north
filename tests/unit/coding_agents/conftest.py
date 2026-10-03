@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from coding_agents import LiveRun, RunOutcome, RunStart
+from coding_agents import LiveRun, RunOutcome, RunStart, WorkChange, WorkTree
 
 HERE = Path(__file__).parent
 FIXTURES = HERE / "fixtures"
@@ -36,13 +36,15 @@ class MemoryRecorder:
 
     def __init__(self, live: LiveRun | None = None) -> None:
         self.live = live
+        self.live_asked: tuple[str, str, str] | None = None
         self.calls: list[str] = []
         self.started: list[RunStart] = []
         self.state: dict[str, dict[str, Any]] = {}
         self.events: list[tuple[str, Mapping[str, Any]]] = []
         self.finished: list[tuple[str, RunOutcome]] = []
 
-    async def live_run(self, task_id: str, agent: str) -> LiveRun | None:
+    async def live_run(self, task_id: str, agent: str, mode: str) -> LiveRun | None:
+        self.live_asked = (task_id, agent, mode)
         return self.live
 
     async def start(self, run: RunStart) -> None:
@@ -65,3 +67,24 @@ class MemoryRecorder:
 @pytest.fixture
 def recorder() -> MemoryRecorder:
     return MemoryRecorder()
+
+
+class MemoryWorkspaces:
+    """A `Workspaces` that makes a real directory per copy and reports a scripted change."""
+
+    def __init__(self, root: Path, change_files: tuple = ()) -> None:
+        self._root = root
+        self.created: list[WorkTree] = []
+        self.finished: list[WorkTree] = []
+        self.change_files = change_files
+
+    async def create(self, workspace: str, label: str) -> WorkTree:
+        path = self._root / label
+        path.mkdir(parents=True)
+        tree = WorkTree(str(path), f"north/wt-{label}", "base123", workspace)
+        self.created.append(tree)
+        return tree
+
+    async def finish(self, tree: WorkTree) -> WorkChange | None:
+        self.finished.append(tree)
+        return WorkChange(tree, self.change_files) if self.change_files else None

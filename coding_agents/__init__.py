@@ -4,19 +4,24 @@ north does not write code. It runs the user's own agent, read-only for now, and 
 run. See docs/design/coding-agents.md.
 """
 
-from coding_agents.base import CodingBackend, EventSink, LiveRun, RunRecorder, RunStart
+from coding_agents.base import CodingBackend, EventSink, LiveRun, RunRecorder, RunStart, Workspaces
 from coding_agents.claude import ClaudeBackend
 from coding_agents.discovery import discover_backends
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
+from coding_agents.gate import Decision, Gate, GateSession, GateSessions, Judge, ToolRequest, Verdict
 from coding_agents.models import (
     Availability,
     Denial,
     EventKind,
     FailureKind,
+    FileDelta,
+    GateAccess,
     Mode,
     RunEvent,
     RunOutcome,
     RunSpec,
+    WorkChange,
+    WorkTree,
 )
 from coding_agents.runner import AGENT_PREFIX, CodingRunner, RunReport
 
@@ -28,10 +33,17 @@ __all__ = [
     "CodingAgentError",
     "CodingBackend",
     "CodingRunner",
+    "Decision",
     "Denial",
     "EventKind",
     "EventSink",
     "FailureKind",
+    "FileDelta",
+    "Gate",
+    "GateAccess",
+    "GateSession",
+    "GateSessions",
+    "Judge",
     "LiveRun",
     "Mode",
     "RunEvent",
@@ -40,5 +52,10 @@ __all__ = [
     "RunReport",
     "RunSpec",
     "RunStart",
+    "ToolRequest",
+    "Verdict",
+    "WorkChange",
+    "WorkTree",
+    "Workspaces",
     "discover_backends",
 ]
