@@ -43,8 +43,8 @@ tools/specialized/coding_agent.py   the Tool agents call; describe() makes the s
 - Registered in `orchestrator/app.py` like `BashTool` (constructor args, so manual).
 - A run is a child row in `agent_runs` and its events go to `agent_run_events`. No new tables.
   `provider_state` is `{provider: [entries]}` and append-only, so a run records
-  `{"provider": "claude_code", "session_id", "worktree", "pid", "cli_version"}` and the latest
-  entry wins. `AgentRunStore.set_status` (added in phase 0) moves a live run between `running`,
+  `{"provider": "claude_code", "session_id", "worktree", "pid", "cli_version"}` as entries; read them
+  merged in order, the latest value of each key wins. `AgentRunStore.set_status` (added in phase 0) moves a live run between `running`,
   `waiting_for_approval` and `interrupted`; `start()` again resumes an interrupted one.
 - Worktrees reuse `GitWorktreeManager` and the workspace lock, passed in as a small interface.
 

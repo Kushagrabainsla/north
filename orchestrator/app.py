@@ -36,6 +36,7 @@ from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
 from approval.unattended_rules import UnattendedRuleStore
 from bootstrap.onboarding import run_bootstrap_if_needed
+from coding_agents import CodingRunner, discover_backends
 from config.dependencies import build_production_dependencies
 from config.security import load_secret
 from config.settings import settings
@@ -53,6 +54,7 @@ from memory.models import ContextDocument
 from orchestrator.api import configure as configure_api
 from orchestrator.api import health_router, webhook_router
 from orchestrator.api import router as orchestrator_router
+from orchestrator.coding_run_recorder import AgentRunRecorder
 from orchestrator.constants import WATCHDOG_POLL_INTERVAL_SECONDS
 from orchestrator.exceptions import TaskCapacityError
 from orchestrator.failure_handler import FailureHandler
@@ -75,6 +77,7 @@ from tools.retrieval import tool_index_documents
 from tools.semantic.search_code import SearchCodeTool
 from tools.specialized._sandbox import SandboxConfig
 from tools.specialized.bash import BashTool
+from tools.specialized.coding_agent import CodingAgentTool
 from tools.tool_index import ToolIndex
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_agent import CreateAgentTool
@@ -203,6 +206,9 @@ def _build_tool_registry(
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))
     tool_registry.register(GetActiveSessionsTool(running_task_store=deps.running_task_store))
     tool_registry.register(UpdatePlanTool(plan_store=deps.plan_store, stream_manager=deps.stream_manager))
+    # The coding agents installed here (Claude Code), run read-only. Absent when none is installed.
+    if coding_backends := discover_backends(protected_paths=[str(settings.north_home)]):
+        tool_registry.register(CodingAgentTool(CodingRunner(coding_backends, AgentRunRecorder(deps.agent_run_store))))
     # Semantic code search (#2) - only when embeddings are available.
     if deps.code_index is not None:
         tool_registry.register(SearchCodeTool(code_index=deps.code_index))
