@@ -91,6 +91,15 @@ Codex treats as a refusal. `turn/interrupt` cancels; `thread/resume` recovers.
 - Codex's own sandbox inside another sandbox fails silently (the model said DONE, nothing was
   written). One sandbox only: the vendor's.
 
+### Plan mode, as built
+
+`--permission-mode plan` with nothing pre-allowed and `--permission-prompts none` needs no hook: in
+the lab the Read tool outside the working directory was refused and shell `cat` outside it was
+denied, and every refusal is listed in the result and shown to the model. The hook arrives with
+edit mode (phase 2). `claude` older than 2.1.259 is reported unavailable, since the flags above
+need it. A worker starts with only `HOME`, `PATH` and a few locale variables: no `NORTH_*` secrets
+and no other provider's key.
+
 ## Policy
 
 The gate builds an `Action` from facts (kind, command, path, workspace, read_only, mutating) and
@@ -166,7 +175,12 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 0. **Done.** Close the four gaps the experiments found, each with its tests: `Action.leaves_sandbox`
    (set by `git push` and mutating `gh` calls), run `set_status`, and the decider's
    abstain-without-a-fact rule. Episodes never cover an action.
-1. Claude `plan` mode: tool, run store, probe, events. No writes.
+1. **Done.** Claude `plan` mode: the `coding_agents` module, the `coding_agent` tool, the run store
+   adapter, probe and events. No writes. Proved against the real `claude` by `tests/live`
+   (`NORTH_LIVE_CLAUDE=1`): a plan answers from the repo and leaves it untouched, and a session
+   resumes with what it already read. The module sits in the `intelligence` layer so `tools` may
+   import it; the run store and, later, the approval gate reach it through protocols, wired in
+   `orchestrator/app.py`.
 2. Claude `edit` mode: worktree, gate, verify, apply-back, autonomous abstain rule.
 3. Codex backend on the same conformance suite.
 4. Recovery and freeze.
