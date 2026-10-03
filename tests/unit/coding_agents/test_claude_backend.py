@@ -214,6 +214,25 @@ class TestWhatItReports:
         assert any(e.kind is EventKind.TOOL_RESULT and e.data["is_error"] for e in events)
 
 
+class TestTokens:
+    def test_prompt_tokens_count_what_the_provider_served_from_its_cache(self) -> None:
+        from coding_agents.claude import _tokens
+
+        usage = {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 200,
+            "cache_read_input_tokens": 3000,
+            "output_tokens": 45,
+        }
+
+        assert _tokens({"usage": usage}) == (3210, 45)
+
+    def test_a_result_with_no_usage_counts_nothing(self) -> None:
+        from coding_agents.claude import _tokens
+
+        assert _tokens({}) == (0, 0) and _tokens({"usage": "garbage"}) == (0, 0)
+
+
 class TestWhyARunFails:
     @pytest.mark.parametrize(
         ("fixture", "exit_code", "failure"),
