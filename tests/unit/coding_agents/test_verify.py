@@ -77,6 +77,7 @@ async def test_the_command_is_found_in_the_real_repo_and_run_in_the_copy(tree) -
     [
         (ShellResult(None, refused=True), VerificationState.DECLINED, "did not let"),
         (ShellResult(127, "command not found"), VerificationState.SKIPPED, "not installed"),
+        (ShellResult(1, "/repo/.venv/bin/python: No module named pytest"), VerificationState.SKIPPED, "not installed"),
         (ShellResult(None, error="timed out after 300s"), VerificationState.SKIPPED, "timed out"),
     ],
 )

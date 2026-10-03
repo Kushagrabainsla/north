@@ -135,9 +135,31 @@ What the lab and the live tests (`tests/live`) measured, and the code now does:
   outside the copy are refused; overwriting `.git` is refused even in YOLO; and with the gate
   unreachable every change is blocked and listed as refused.
 
+### Landing, as built
+
+When an edit run finishes well and changed something, north does two things the agent cannot do for
+itself. **It runs the project's own tests**, in the agent's copy, through north's existing `bash` tool,
+so the command is ruled on by the approval layer and runs under the OS sandbox like any command north
+runs. The command comes from the project's markers (`detect_verify_command`), never from what the agent
+wrote, and is found in the real repository because that is where its virtualenv lives; `node_modules`
+is linked into the copy only while the tests run. A passing run, a failing run, a missing test runner
+(read from `No module named ...`, which exits 1 like a failing suite), a declined run and a project
+with no tests are five different results, and none of the last three is reported as a failure.
+
+**It offers the change to the user** (`orchestrator/coding_landing.py`), through `Approvals.decide()`,
+as one question per change: your mode and memory decide, so ask mode asks and autonomous reads your
+facts. A change whose tests failed is not offered at all. Agreed, it is applied under the workspace
+lock as **uncommitted changes in the working tree**, your history untouched, and the copy and branch
+are removed. Declined, refused, or in conflict (the same lines changed there meanwhile, so the apply
+is refused and nothing is overwritten), the copy is removed and the branch stays in your repository.
+
+Proved with the real `claude` (`tests/live`): a change that passes north's own run lands in the working
+tree; a change the agent broke on purpose, while it claims all tests pass, is not applied, and the
+real tree stays untouched.
+
 Known limits: the copy has no network, and the repo's installed dependencies (a virtualenv,
 `node_modules`) are not in it, so the agent often cannot run the tests. That is why north runs the
-verification itself in the next PR.
+verification itself.
 
 ## Policy
 
@@ -223,8 +245,10 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 2. Claude `edit` mode, in two PRs.
    - **2a. Done.** Worktree, the gate (hook, loopback route, judge), the approval mapping, and the
      result left on a branch. Nothing applied.
-   - **2b.** North runs the repo's verify command itself, applies back under the workspace lock
-     (keeping the branch on a conflict), and the optional cross-review by the other agent as a flow.
+   - **2b. Done.** North runs the repo's tests itself, offers the change through the approval layer,
+     and applies it under the workspace lock (keeping the branch on a conflict). The optional
+     cross-review by the other agent waits for the Codex backend: with only Claude there is no
+     "other agent" to ask.
 3. Codex backend on the same conformance suite.
 4. Recovery and freeze.
 5. North MCP recall server; cross-review as a flow.

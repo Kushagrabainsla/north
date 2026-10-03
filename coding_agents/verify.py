@@ -18,6 +18,8 @@ from coding_agents.models import Verification, VerificationState, WorkTree
 
 # What a shell prints when the program it was asked to run is not there.
 _COULD_NOT_RUN = frozenset({126, 127})
+# `python -m pytest` with no pytest exits 1 like a failing suite does; its message tells them apart.
+_RUNNER_MISSING = "No module named"
 
 
 class CommandVerifier:
@@ -41,7 +43,7 @@ class CommandVerifier:
             return Verification(VerificationState.DECLINED, command, "you did not let the tests run")
         if result.exit_code is None:
             return Verification(VerificationState.SKIPPED, command, f"it could not be run: {result.error}".strip())
-        if result.exit_code in _COULD_NOT_RUN:
+        if result.exit_code in _COULD_NOT_RUN or (result.exit_code != 0 and _RUNNER_MISSING in result.output):
             return Verification(VerificationState.SKIPPED, command, "its test runner is not installed")
         if result.exit_code == 0:
             return Verification(VerificationState.PASSED, command)
