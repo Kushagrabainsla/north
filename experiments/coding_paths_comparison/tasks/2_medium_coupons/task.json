@@ -1,0 +1,7 @@
+{
+  "id": "2_medium",
+  "level": "medium",
+  "kind": "feature",
+  "timeout_s": 900,
+  "prompt": "Add coupon support to the shopping cart in shop/cart.py. Cart gets apply_coupon(code). Codes: SAVE10 = 10% off the subtotal, SAVE25 = 25% off the subtotal, FIVEOFF = 500 cents off, TENOFF = 1000 cents off. Rules: a percent coupon (SAVE10, SAVE25) is taken off first, then a fixed coupon (FIVEOFF, TENOFF); at most one coupon of each type is active, and applying a second of the same type replaces the first; applying the code that is already active changes nothing; percent discounts round DOWN to whole cents; total_cents() never goes below 0; subtotal_cents() is unchanged by coupons. An unknown code raises CouponError, defined in shop/coupons.py, and leaves the cart as it was. Keep every existing test passing and add tests for the new behaviour."
+}

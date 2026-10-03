@@ -1,0 +1,7 @@
+{
+  "id": "1_easy",
+  "kind": "bugfix",
+  "timeout_s": 420,
+  "prompt": "In calc.py, average() raises ZeroDivisionError when given an empty list. Fix it so average([]) returns 0.0, without breaking the existing behaviour. Add a regression test.",
+  "level": "easy"
+}

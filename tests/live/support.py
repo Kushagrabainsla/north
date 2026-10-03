@@ -30,10 +30,13 @@ class _CountingJudge:
     def __init__(self, inner: ApprovalJudge) -> None:
         self._inner = inner
         self.asked: list[ToolRequest] = []
+        self.verdicts: list[tuple[str, str]] = []
 
     async def judge(self, session, request, *, inside_worktree):
         self.asked.append(request)
-        return await self._inner.judge(session, request, inside_worktree=inside_worktree)
+        verdict = await self._inner.judge(session, request, inside_worktree=inside_worktree)
+        self.verdicts.append((request.tool, str(verdict)))
+        return verdict
 
 
 @dataclass
@@ -66,10 +69,10 @@ class LiveGate:
             await self._serving
 
 
-async def start_gate(mode: ApprovalMode, answer: ApprovalDecision | None = None) -> LiveGate:
+async def start_gate(mode: ApprovalMode, answer: ApprovalDecision | None = None, decider=None) -> LiveGate:
     store = ApprovalStore()
     sessions = GateSessions()
-    layer = approvals(mode, store=store)
+    layer = approvals(mode, store=store, decider=decider)
     judge = _CountingJudge(ApprovalJudge(layer, _Statuses()))
     app = FastAPI()
     attach(app, ApiServices(coding_sessions=sessions, coding_gate=Gate(judge)))
