@@ -163,11 +163,7 @@ class GitWorktreeManager:
             await self.remove(wt, keep_branch=False)
             return IntegrationResult(applied=False, changed=False, conflicted=False, branch=wt.branch, path=wt.path)
 
-        code, patch, err = await _run_git(["diff", "--binary", wt.base_sha, "HEAD"], wt.path, binary=True)
-        if code != 0:
-            raise WorktreeError(f"git diff failed: {err.strip()}")
-
-        applied = await self._apply_back(wt, patch, lock=lock)
+        applied = await self.apply_back(wt, lock=lock)
         await self.remove(wt, keep_branch=not applied)
         return IntegrationResult(
             applied=applied,
@@ -176,6 +172,17 @@ class GitWorktreeManager:
             branch=wt.branch,
             path=wt.path,
         )
+
+    async def apply_back(self, wt: Worktree, *, lock: asyncio.Lock | None = None) -> bool:
+        """Apply what *wt*'s branch changed onto the base working tree, as uncommitted changes.
+
+        Returns False, with the base tree untouched, when the patch does not apply cleanly (the same lines
+        changed there). *lock*, when given, is held only for the apply. Removing the copy is the caller's.
+        """
+        code, patch, err = await _run_git(["diff", "--binary", wt.base_sha, "HEAD"], wt.path, binary=True)
+        if code != 0:
+            raise WorktreeError(f"git diff failed: {err.strip()}")
+        return await self._apply_back(wt, patch, lock=lock)
 
     async def commit_changes(self, wt: Worktree) -> bool:
         """Commit everything changed in *wt* onto its branch; False when nothing changed.
