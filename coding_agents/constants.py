@@ -14,6 +14,12 @@ PROBE_TIMEOUT_SECONDS = 15.0
 # How long Claude Code waits for the gate to answer. An approval waits for a person and never expires
 # (CODING_STYLE 13.5), so this is a day, not a limit anyone meets.
 HOOK_TIMEOUT_SECONDS = 86_400
+# The longest north lets a project's own tests run after an edit.
+VERIFY_TIMEOUT_SECONDS = 300
+# How much of a failing run's output is kept to show.
+MAX_VERIFY_OUTPUT_CHARS = 2_000
+# Dependency directories linked into a copy only while its tests run: the copy has none of its own.
+LINKED_DEPENDENCY_DIRS: tuple[str, ...] = ("node_modules",)
 # One stream-json line can hold a whole file the agent read.
 STREAM_LINE_LIMIT_BYTES = 32 * 1024 * 1024
 # What the agent said last, kept when a run ends without a final answer.

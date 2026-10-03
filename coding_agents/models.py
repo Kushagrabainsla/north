@@ -95,6 +95,35 @@ class WorkChange:
         return sum(file.deletions for file in self.files)
 
 
+class VerificationState(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"  # nothing to run, or it could not be run
+    DECLINED = "declined"  # the user would not let the tests run
+
+
+@dataclass(frozen=True)
+class Verification:
+    """What north found when it ran the project's own tests on the agent's changes, itself."""
+
+    state: VerificationState
+    command: str = ""
+    detail: str = ""  # the failing output's tail, or why it was skipped
+
+
+class LandingState(StrEnum):
+    APPLIED = "applied"  # the changes are in the working tree, uncommitted
+    CONFLICT = "conflict"  # the same lines changed there; left on the branch
+    DECLINED = "declined"  # the user kept it on the branch
+    KEPT = "kept"  # not offered: the tests failed, or north's policy refused
+
+
+@dataclass(frozen=True)
+class Landing:
+    state: LandingState
+    reason: str = ""
+
+
 @dataclass(frozen=True)
 class RunEvent:
     kind: EventKind

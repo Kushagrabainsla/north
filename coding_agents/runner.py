@@ -9,17 +9,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from coding_agents.base import CodingBackend, LiveRun, RunRecorder, RunStart, Workspaces
+from coding_agents.base import CodingBackend, Lander, LiveRun, RunRecorder, RunStart, Verifier, Workspaces
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
 from coding_agents.gate import GateSessions
 from coding_agents.models import (
     EventKind,
     FailureKind,
     GateAccess,
+    Landing,
     Mode,
     RunEvent,
     RunOutcome,
     RunSpec,
+    Verification,
     WorkChange,
     WorkTree,
 )
@@ -37,13 +39,16 @@ class RunReport:
     outcome: RunOutcome
     change: WorkChange | None = None  # what an edit run left on its branch
     mode: Mode = Mode.PLAN
+    verification: Verification | None = None  # north's own run of the project's tests
+    landing: Landing | None = None  # whether the change reached the working tree
 
 
 class CodingRunner:
     """Runs a task on an installed coding agent, and leaves the run on the record.
 
     An edit run also needs somewhere to work (`workspaces`), a way to tell the gate which run is asking
-    (`sessions`) and where the gate is (`gate_url`); without all three only planning is offered.
+    (`sessions`) and where the gate is (`gate_url`); without all three only planning is offered. With a
+    `verifier` and a `lander` as well, a finished edit is tested by north and then offered to the user.
     """
 
     def __init__(
@@ -54,12 +59,16 @@ class CodingRunner:
         workspaces: Workspaces | None = None,
         sessions: GateSessions | None = None,
         gate_url: str = "",
+        verifier: Verifier | None = None,
+        lander: Lander | None = None,
     ) -> None:
         self._backends = dict(backends)
         self._recorder = recorder
         self._workspaces = workspaces
         self._sessions = sessions
         self._gate_url = gate_url
+        self._verifier = verifier
+        self._lander = lander
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -99,8 +108,11 @@ class CodingRunner:
         await self._recorder.start(RunStart(run_id, task_id, agent, task, workspace))
         await self._recorder.remember(run_id, _state(chosen, spec, version, tree))
         outcome, change = await self._execute(chosen, spec, run_id, task_id, tree)
+        verification, landing = (None, None)
+        if change is not None and outcome.ok:
+            verification, landing = await self._land(run_id, task_id, change, spec.session_id)
         await self._recorder.finish(run_id, outcome)
-        return RunReport(run_id, chosen.name, outcome, change, mode)
+        return RunReport(run_id, chosen.name, outcome, change, mode, verification, landing)
 
     async def _choose(self, wanted: str | None) -> tuple[CodingBackend, str]:
         """The backend asked for, or the first that can take a run; why none can, when none can."""
@@ -157,6 +169,29 @@ class CodingRunner:
             if session and self._sessions:
                 self._sessions.revoke(session.token)
         return outcome, await self._finish_tree(run_id, task_id, tree)
+
+    async def _land(
+        self, run_id: str, task_id: str, change: WorkChange, session_id: str
+    ) -> tuple[Verification | None, Landing | None]:
+        """Test the change ourselves, then offer it. A failure here never hides the agent's outcome: the
+        copy and its branch are simply left as they are."""
+        if self._verifier is None or self._lander is None:
+            return None, None
+        try:
+            verification = await self._verifier.verify(change.tree, task_id)
+            await self._recorder.record(
+                run_id, task_id, "verification", {"state": verification.state.value, "command": verification.command}
+            )
+            landing = await self._lander.land(change, verification, task_id)
+            await self._recorder.record(run_id, task_id, "landing", {"state": landing.state.value})
+        except asyncio.CancelledError:
+            cancelled = RunOutcome(False, "", session_id, failure=FailureKind.CANCELLED, error="Run cancelled.")
+            await asyncio.shield(self._recorder.finish(run_id, cancelled))
+            raise
+        except Exception:
+            logger.exception("could not test or land the changes of coding run %s; the branch is left as it is", run_id)
+            return None, None
+        return verification, landing
 
     async def _finish_tree(self, run_id: str, task_id: str, tree: WorkTree | None) -> WorkChange | None:
         """Commit what the agent changed, even when the run failed: partial work is still worth seeing."""

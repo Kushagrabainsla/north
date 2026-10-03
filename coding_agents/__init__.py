@@ -4,7 +4,18 @@ north does not write code. It runs the user's own agent, read-only for now, and 
 run. See docs/design/coding-agents.md.
 """
 
-from coding_agents.base import CodingBackend, EventSink, LiveRun, RunRecorder, RunStart, Workspaces
+from coding_agents.base import (
+    CodingBackend,
+    EventSink,
+    Lander,
+    LiveRun,
+    RunRecorder,
+    RunStart,
+    Shell,
+    ShellResult,
+    Verifier,
+    Workspaces,
+)
 from coding_agents.claude import ClaudeBackend
 from coding_agents.discovery import discover_backends
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
@@ -16,14 +27,19 @@ from coding_agents.models import (
     FailureKind,
     FileDelta,
     GateAccess,
+    Landing,
+    LandingState,
     Mode,
     RunEvent,
     RunOutcome,
     RunSpec,
+    Verification,
+    VerificationState,
     WorkChange,
     WorkTree,
 )
 from coding_agents.runner import AGENT_PREFIX, CodingRunner, RunReport
+from coding_agents.verify import CommandVerifier
 
 __all__ = [
     "AGENT_PREFIX",
@@ -33,6 +49,7 @@ __all__ = [
     "CodingAgentError",
     "CodingBackend",
     "CodingRunner",
+    "CommandVerifier",
     "Decision",
     "Denial",
     "EventKind",
@@ -44,6 +61,9 @@ __all__ = [
     "GateSession",
     "GateSessions",
     "Judge",
+    "Lander",
+    "Landing",
+    "LandingState",
     "LiveRun",
     "Mode",
     "RunEvent",
@@ -52,7 +72,12 @@ __all__ = [
     "RunReport",
     "RunSpec",
     "RunStart",
+    "Shell",
+    "ShellResult",
     "ToolRequest",
+    "Verification",
+    "VerificationState",
+    "Verifier",
     "Verdict",
     "WorkChange",
     "WorkTree",

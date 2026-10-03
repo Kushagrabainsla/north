@@ -11,7 +11,16 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from coding_agents.models import Availability, RunEvent, RunOutcome, RunSpec, WorkChange, WorkTree
+from coding_agents.models import (
+    Availability,
+    Landing,
+    RunEvent,
+    RunOutcome,
+    RunSpec,
+    Verification,
+    WorkChange,
+    WorkTree,
+)
 
 EventSink = Callable[[RunEvent], Awaitable[None]]
 
@@ -62,6 +71,34 @@ class Workspaces(Protocol):
 
     async def finish(self, tree: WorkTree) -> WorkChange | None:
         """Commit what the agent changed onto the branch; None, and the copy removed, when nothing changed."""
+        ...
+
+
+@dataclass(frozen=True)
+class ShellResult:
+    """A command north ran. `refused` means the user would not let it run."""
+
+    exit_code: int | None
+    output: str = ""
+    refused: bool = False
+    error: str = ""
+
+
+class Shell(Protocol):
+    """Runs a command the way north runs any: ruled on by the approval layer, under the OS sandbox."""
+
+    async def run(self, command: str, workspace: str, *, task_id: str, timeout: int) -> ShellResult: ...
+
+
+class Verifier(Protocol):
+    async def verify(self, tree: WorkTree, task_id: str) -> Verification:
+        """Run the project's own tests on the agent's changes, in its copy."""
+        ...
+
+
+class Lander(Protocol):
+    async def land(self, change: WorkChange, verification: Verification, task_id: str) -> Landing:
+        """Offer the change to the user and, when they agree, apply it; always clean up the copy."""
         ...
 
 
