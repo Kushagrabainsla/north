@@ -8,9 +8,13 @@ from coding_agents import (
     Denial,
     FailureKind,
     FileDelta,
+    Landing,
+    LandingState,
     Mode,
     RunOutcome,
     RunReport,
+    Verification,
+    VerificationState,
     WorkChange,
     WorkTree,
 )
@@ -30,9 +34,13 @@ class StubRunner:
         *,
         can_edit: bool = False,
         change: WorkChange | None = None,
+        verification: Verification | None = None,
+        landing: Landing | None = None,
     ) -> None:
         self.can_edit = can_edit
         self.change = change
+        self.verification = verification
+        self.landing = landing
         self.calls: list[dict] = []
         self._outcome = outcome or RunOutcome(ok=True, text="Add subtract() to calc.py.", session_id="s", turns=3)
         self._raises = raises
@@ -41,7 +49,15 @@ class StubRunner:
         self.calls.append(kwargs)
         if self._raises:
             raise self._raises
-        return RunReport("run-1", "claude", self._outcome, self.change, kwargs.get("mode", Mode.PLAN))
+        return RunReport(
+            "run-1",
+            "claude",
+            self._outcome,
+            self.change,
+            kwargs.get("mode", Mode.PLAN),
+            self.verification,
+            self.landing,
+        )
 
 
 async def _instructions(workspace: str) -> str:
@@ -241,3 +257,55 @@ class TestEditMode:
         result = await _tool(StubRunner()).execute(_input(mode="yolo"))
 
         assert not result.success and "mode must be" in result.error
+
+
+PASSED = Verification(VerificationState.PASSED, "pytest -q")
+
+
+class TestWhatHappenedToTheChange:
+    async def _text(self, **kw) -> str:
+        tool = _tool(StubRunner(can_edit=True, change=CHANGE, **kw))
+        result = await tool.execute(_input(mode="edit"))
+        return tool.format_output(result.data)
+
+    async def test_an_applied_change_says_it_is_in_the_working_tree_uncommitted_and_what_the_tests_said(self) -> None:
+        text = await self._text(verification=PASSED, landing=Landing(LandingState.APPLIED))
+
+        assert "applied to your working tree as uncommitted changes" in text
+        assert "north ran the tests (`pytest -q`) on them: passed." in text and "calc.py (+4 -1)" in text
+        assert "NOT applied" not in text
+
+    async def test_a_conflict_says_why_and_where_the_branch_is_and_how_to_look(self) -> None:
+        text = await self._text(verification=PASSED, landing=Landing(LandingState.CONFLICT, "same lines"))
+
+        assert "NOT applied: the same lines changed in your working tree meanwhile" in text
+        assert "`north/wt-coding-abc`" in text and "git -C /repo diff abc123..north/wt-coding-abc" in text
+
+    async def test_a_declined_change_says_you_kept_it(self) -> None:
+        text = await self._text(verification=PASSED, landing=Landing(LandingState.DECLINED, "you kept it"))
+
+        assert "NOT applied: you chose to keep them on the branch" in text
+
+    async def test_failing_tests_are_shown_to_the_model_with_their_output(self) -> None:
+        failed = Verification(VerificationState.FAILED, "pytest -q", "FAILED test_calc.py::test_sub - assert 3 == 2")
+
+        text = await self._text(verification=failed, landing=Landing(LandingState.KEPT, "the tests failed"))
+
+        assert "NOT applied: the tests failed" in text
+        assert "tests (`pytest -q`) on them: FAILED." in text and "assert 3 == 2" in text
+
+    async def test_work_that_could_not_be_tested_says_so(self) -> None:
+        skipped = Verification(VerificationState.SKIPPED, detail="no test command was found for this project")
+
+        text = await self._text(verification=skipped, landing=Landing(LandingState.APPLIED))
+
+        assert "The tests were not run: no test command was found for this project." in text
+
+    async def test_the_structured_result_carries_both(self) -> None:
+        tool = _tool(
+            StubRunner(can_edit=True, change=CHANGE, verification=PASSED, landing=Landing(LandingState.APPLIED))
+        )
+
+        result = await tool.execute(_input(mode="edit"))
+
+        assert result.data["verification"]["state"] == "passed" and result.data["landing"]["state"] == "applied"

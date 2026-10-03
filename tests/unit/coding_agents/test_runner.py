@@ -16,11 +16,15 @@ from coding_agents import (
     FailureKind,
     FileDelta,
     GateSessions,
+    Landing,
+    LandingState,
     LiveRun,
     Mode,
     RunEvent,
     RunOutcome,
     RunSpec,
+    Verification,
+    VerificationState,
     WorkTree,
 )
 
@@ -324,3 +328,114 @@ class TestEditRuns:
         report = await self._edit(runner)
 
         assert report.outcome.ok and report.change is None
+
+
+class ScriptedVerifier:
+    def __init__(self, state: VerificationState = VerificationState.PASSED, raises: Exception | None = None) -> None:
+        self.state, self.raises = state, raises
+        self.calls: list = []
+
+    async def verify(self, tree, task_id):
+        self.calls.append((tree, task_id))
+        if self.raises:
+            raise self.raises
+        return Verification(self.state, "pytest -q")
+
+
+class ScriptedLander:
+    def __init__(self, hang: bool = False) -> None:
+        self.calls: list = []
+        self.hang = hang
+
+    async def land(self, change, verification, task_id):
+        self.calls.append((change, verification, task_id))
+        if self.hang:
+            await asyncio.sleep(3600)
+        return Landing(LandingState.APPLIED)
+
+
+class TestVerifyAndLand:
+    def _setup(self, tmp_path, recorder, *, files=_ONE_FILE, verifier=None, lander=None):
+        workspaces = MemoryWorkspaces(tmp_path / "copies", files)
+        backend = ScriptedBackend()
+        backend.recorder = recorder
+        verifier = verifier or ScriptedVerifier()
+        lander = lander or ScriptedLander()
+        runner = CodingRunner(
+            {"claude": backend},
+            recorder,
+            workspaces=workspaces,
+            sessions=GateSessions(),
+            gate_url="http://x/gate",
+            verifier=verifier,
+            lander=lander,
+        )
+        return runner, backend, verifier, lander
+
+    async def _edit(self, runner):
+        return await runner.run(task_id="t1", task="add subtract", workspace="/repo", mode=Mode.EDIT)
+
+    async def test_north_tests_the_change_then_offers_it_and_reports_both(self, tmp_path, recorder) -> None:
+        runner, _, verifier, lander = self._setup(tmp_path, recorder)
+
+        report = await self._edit(runner)
+
+        assert verifier.calls[0][1] == "t1"
+        change, verification, task_id = lander.calls[0]
+        assert (change, verification.state, task_id) == (report.change, VerificationState.PASSED, "t1")
+        assert (report.verification.state, report.landing.state) == (VerificationState.PASSED, LandingState.APPLIED)
+        names = [event for event, _ in recorder.events]
+        assert names.index("changes") < names.index("verification") < names.index("landing")
+
+    async def test_the_run_is_finished_only_after_the_change_has_been_landed(self, tmp_path, recorder) -> None:
+        runner, *_ = self._setup(tmp_path, recorder)
+
+        await self._edit(runner)
+
+        assert recorder.calls[-1] == "finish" and recorder.calls.index("finish") > recorder.calls.index("record")
+
+    async def test_nothing_is_tested_or_offered_when_the_agent_changed_nothing(self, tmp_path, recorder) -> None:
+        runner, _, verifier, lander = self._setup(tmp_path, recorder, files=())
+
+        report = await self._edit(runner)
+
+        assert not verifier.calls and not lander.calls and report.landing is None
+
+    async def test_nothing_is_tested_or_offered_when_the_run_did_not_finish(self, tmp_path, recorder) -> None:
+        runner, backend, verifier, lander = self._setup(tmp_path, recorder)
+        backend._outcome = RunOutcome(False, "", "s", failure=FailureKind.LIMIT, error="out of turns")
+
+        report = await self._edit(runner)
+
+        assert not verifier.calls and not lander.calls
+        assert report.change is not None, "the partial work is still reported, and left for a person to look at"
+
+    async def test_a_failure_to_test_does_not_hide_the_agents_outcome_or_the_branch(self, tmp_path, recorder) -> None:
+        runner, _, _, lander = self._setup(tmp_path, recorder, verifier=ScriptedVerifier(raises=RuntimeError("boom")))
+
+        report = await self._edit(runner)
+
+        assert report.outcome.ok and report.change is not None
+        assert report.verification is None and report.landing is None and not lander.calls
+
+    async def test_cancelling_while_the_change_is_offered_records_the_run_cancelled(self, tmp_path, recorder) -> None:
+        runner, *_ = self._setup(tmp_path, recorder, lander=ScriptedLander(hang=True))
+        task = asyncio.create_task(self._edit(runner))
+        while "verification" not in [event for event, _ in recorder.events]:
+            await asyncio.sleep(0.01)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert recorder.finished[0][1].failure is FailureKind.CANCELLED
+
+    async def test_without_a_verifier_and_lander_an_edit_behaves_as_before(self, tmp_path, recorder) -> None:
+        workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
+        runner = CodingRunner(
+            {"claude": ScriptedBackend()}, recorder, workspaces=workspaces, sessions=GateSessions(), gate_url="http://x"
+        )
+
+        report = await self._edit(runner)
+
+        assert report.change is not None and report.verification is None and report.landing is None

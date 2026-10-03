@@ -42,6 +42,7 @@ class LiveGate:
     store: ApprovalStore
     judge: _CountingJudge
     url: str
+    approvals: object = None
     cards: list = field(default_factory=list)
     _server: uvicorn.Server | None = None
     _serving: asyncio.Task | None = None
@@ -68,7 +69,8 @@ class LiveGate:
 async def start_gate(mode: ApprovalMode, answer: ApprovalDecision | None = None) -> LiveGate:
     store = ApprovalStore()
     sessions = GateSessions()
-    judge = _CountingJudge(ApprovalJudge(approvals(mode, store=store), _Statuses()))
+    layer = approvals(mode, store=store)
+    judge = _CountingJudge(ApprovalJudge(layer, _Statuses()))
     app = FastAPI()
     attach(app, ApiServices(coding_sessions=sessions, coding_gate=Gate(judge)))
     app.include_router(coding_gate_router)
@@ -79,7 +81,7 @@ async def start_gate(mode: ApprovalMode, answer: ApprovalDecision | None = None)
     serving = asyncio.create_task(server.serve())
     while not server.started:
         await asyncio.sleep(0.01)
-    gate = LiveGate(sessions, store, judge, f"http://127.0.0.1:{port}/orchestrator/coding/gate")
+    gate = LiveGate(sessions, store, judge, f"http://127.0.0.1:{port}/orchestrator/coding/gate", approvals=layer)
     gate._server, gate._serving = server, serving
     if answer is not None:
         gate._answering = asyncio.create_task(gate.answer_cards(answer))

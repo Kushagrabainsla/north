@@ -170,6 +170,7 @@ def _output(report: RunReport) -> ToolOutput:
         data["change"] = {
             "branch": change.tree.branch,
             "path": change.tree.path,
+            "base": change.tree.base,
             "base_sha": change.tree.base_sha,
             "files": [{"path": f.path, "insertions": f.insertions, "deletions": f.deletions} for f in change.files],
             "insertions": change.insertions,
@@ -177,6 +178,11 @@ def _output(report: RunReport) -> ToolOutput:
         }
     elif report.mode is Mode.EDIT:
         data["mode"] = Mode.EDIT.value
+    if report.verification is not None:
+        check = report.verification
+        data["verification"] = {"state": check.state.value, "command": check.command, "detail": check.detail}
+    if report.landing is not None:
+        data["landing"] = {"state": report.landing.state.value, "reason": report.landing.reason}
     if outcome.ok:
         return ToolOutput(success=True, data=data)
     data["failure"] = outcome.failure.value if outcome.failure else "error"
@@ -188,9 +194,37 @@ def _edit_summary(data: dict) -> str:
     if not change:
         return "The agent made no changes."
     files = "\n".join(f"- {f['path']} (+{f['insertions']} -{f['deletions']})" for f in change["files"][:20])
+    size = f"{len(change['files'])} file(s), +{change['insertions']} -{change['deletions']}"
+    tests = _tests_summary(data.get("verification"))
+    landing = data.get("landing")
+    if landing is None:  # not tested or offered: the copy is still there to look at
+        return (
+            f"The agent's changes are on branch `{change['branch']}` in an isolated copy at `{change['path']}` "
+            f"({size}). Nothing was applied to the working tree. To review: "
+            f"`git -C {change['path']} diff {change['base_sha']}..HEAD`.\n{files}"
+        )
+    if landing["state"] == "applied":
+        return (
+            f"The agent's changes were applied to your working tree as uncommitted changes ({size}). {tests}\n{files}"
+        )
+    why = {
+        "conflict": "the same lines changed in your working tree meanwhile",
+        "declined": "you chose to keep them on the branch",
+    }.get(landing["state"], landing["reason"])
     return (
-        f"The agent's changes are on branch `{change['branch']}` in an isolated copy at `{change['path']}` "
-        f"({len(change['files'])} file(s), +{change['insertions']} -{change['deletions']}). "
-        "Nothing was applied to the working tree. To review: "
-        f"`git -C {change['path']} diff {change['base_sha']}..HEAD`.\n{files}"
+        f"The agent's changes were NOT applied: {why}. {tests} They are on branch `{change['branch']}` "
+        f"in your repository ({size}). To review: "
+        f"`git -C {change['base']} diff {change['base_sha']}..{change['branch']}`.\n{files}"
     )
+
+
+def _tests_summary(verification: dict | None) -> str:
+    if verification is None:
+        return ""
+    command = f" (`{verification['command']}`)" if verification["command"] else ""
+    state = verification["state"]
+    if state == "passed":
+        return f"north ran the tests{command} on them: passed."
+    if state == "failed":
+        return f"north ran the tests{command} on them: FAILED.\n{verification['detail']}"
+    return f"The tests were not run{command}: {verification['detail']}."

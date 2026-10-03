@@ -228,3 +228,40 @@ async def test_a_binary_file_counts_as_changed_with_no_line_counts(manager: GitW
     await manager.commit_changes(wt)
 
     assert [(c.path, c.insertions, c.deletions) for c in await manager.changes(wt)] == [("image.bin", 0, 0)]
+
+
+async def test_apply_back_puts_the_change_in_the_real_tree_uncommitted(manager: GitWorktreeManager, repo: Path) -> None:
+    wt = await manager.create("apply")
+    (Path(wt.path) / "README.md").write_text("line1\nline2\nline3\nline4\n")
+    (Path(wt.path) / "new.py").write_text("print('hi')\n")
+    await manager.commit_changes(wt)
+
+    assert await manager.apply_back(wt) is True
+
+    assert (repo / "README.md").read_text() == "line1\nline2\nline3\nline4\n"
+    assert (repo / "new.py").read_text() == "print('hi')\n"
+    status = _git(["status", "--porcelain"], repo).stdout
+    assert " M README.md" in status and "?? new.py" in status, "applied as uncommitted changes, nothing committed"
+
+
+async def test_apply_back_refuses_a_conflict_and_leaves_the_real_tree_untouched(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    wt = await manager.create("conflict")
+    (Path(wt.path) / "README.md").write_text("line1\nCHANGED BY AGENT\nline3\n")
+    await manager.commit_changes(wt)
+    (repo / "README.md").write_text("line1\nCHANGED BY YOU\nline3\n")  # the same line, meanwhile
+
+    assert await manager.apply_back(wt) is False
+
+    assert (repo / "README.md").read_text() == "line1\nCHANGED BY YOU\nline3\n"
+
+
+async def test_apply_back_takes_the_lock_only_for_the_apply(manager: GitWorktreeManager, repo: Path) -> None:
+    wt = await manager.create("locked")
+    (Path(wt.path) / "a.txt").write_text("x\n")
+    await manager.commit_changes(wt)
+    lock = asyncio.Lock()
+
+    assert await manager.apply_back(wt, lock=lock) is True
+    assert not lock.locked()
