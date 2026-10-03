@@ -108,6 +108,19 @@ class Gate:
         return await self._judge.judge(session, request, inside_worktree=inside)
 
 
+def hook_response(verdict: Verdict) -> dict[str, Any]:
+    """What the hook prints for Claude Code (or, for a pass, the marker that makes it print nothing)."""
+    if verdict.decision is Decision.PASS:
+        return {"pass": True}
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": verdict.decision.value,
+            "permissionDecisionReason": verdict.reason,
+        }
+    }
+
+
 def parse_hook_payload(payload: Mapping[str, Any]) -> ToolRequest | None:
     """The tool call in a PreToolUse payload, or None when it is not one."""
     tool = payload.get("tool_name")

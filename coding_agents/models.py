@@ -76,6 +76,7 @@ class WorkTree:
     path: str
     branch: str
     base_sha: str
+    base: str  # the repository it was made from
 
 
 @dataclass(frozen=True)

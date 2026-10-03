@@ -36,6 +36,7 @@ class RunReport:
     backend: str
     outcome: RunOutcome
     change: WorkChange | None = None  # what an edit run left on its branch
+    mode: Mode = Mode.PLAN
 
 
 class CodingRunner:
@@ -99,7 +100,7 @@ class CodingRunner:
         await self._recorder.remember(run_id, _state(chosen, spec, version, tree))
         outcome, change = await self._execute(chosen, spec, run_id, task_id, tree)
         await self._recorder.finish(run_id, outcome)
-        return RunReport(run_id, chosen.name, outcome, change)
+        return RunReport(run_id, chosen.name, outcome, change, mode)
 
     async def _choose(self, wanted: str | None) -> tuple[CodingBackend, str]:
         """The backend asked for, or the first that can take a run; why none can, when none can."""
@@ -189,7 +190,7 @@ def _state(backend: CodingBackend, spec: RunSpec, version: str, tree: WorkTree |
         "resumed": spec.resume,
     }
     if tree:
-        state |= {"worktree": tree.path, "branch": tree.branch, "base_sha": tree.base_sha}
+        state |= {"worktree": tree.path, "branch": tree.branch, "base_sha": tree.base_sha, "base": tree.base}
     return state
 
 
