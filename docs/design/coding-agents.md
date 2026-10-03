@@ -96,9 +96,48 @@ Codex treats as a refusal. `turn/interrupt` cancels; `thread/resume` recovers.
 `--permission-mode plan` with nothing pre-allowed and `--permission-prompts none` needs no hook: in
 the lab the Read tool outside the working directory was refused and shell `cat` outside it was
 denied, and every refusal is listed in the result and shown to the model. The hook arrives with
-edit mode (phase 2). `claude` older than 2.1.259 is reported unavailable, since the flags above
+edit mode. `claude` older than 2.1.259 is reported unavailable, since the flags above
 need it. A worker starts with only `HOME`, `PATH` and a few locale variables: no `NORTH_*` secrets
 and no other provider's key.
+
+### Edit mode, as built
+
+An edit run works in an isolated git copy (`orchestrator/worktree.py`) on a throwaway branch and leaves
+the result on that branch; **nothing is applied to the real working tree** (that is the next PR). The
+agent runs in the default permission mode with nothing pre-allowed, so every action that changes
+something needs a decision, and the decision comes from a `PreToolUse` command hook
+(`coding_agents/hook.py`, standard library only) that posts to the daemon's loopback route
+(`orchestrator/api/coding_gate.py`). The route is not behind the API secret: it takes a per-run token
+that names one run and stops working when the run ends.
+
+The gate answers one of three things. ALLOW and DENY are explicit. PASS says nothing, so the agent's
+own rules decide; north passes only a single, plainly read-only shell command (`ls`, `git status`, ...),
+so a pass can never grant anything. Whatever is left goes to `Approvals.decide()` as an `Action`, so a
+coding agent is held to the same policy, memory and modes as any tool (`orchestrator/coding_gate.py`).
+A run waiting on a card shows `waiting_for_approval` on the dashboard, and the card names the task so
+the slot is freed.
+
+What the lab and the live tests (`tests/live`) measured, and the code now does:
+
+- `autoAllowBashIfSandboxed` is **off**. On, a broken hook let a sandboxed command run; off, the same
+  broken hook blocks it. The hook has a day-long timeout and exits 2 on any failure, the only exit
+  code that blocks.
+- The agent's file tools are not sandboxed, and an allow from the hook overrides their own check: with
+  an allow-all hook they wrote `~/x` and `../x`. The gate therefore resolves every file path itself
+  (relative to the run's own copy, following `..` and symlinks) and asks about, rather than allows,
+  anything outside it. Git's own files, including the `.git` pointer a linked copy has, are never
+  changed, in any mode.
+- An edit inside the run's copy asks nobody (`Action.isolated`): nothing real changes until a person
+  lands it, and the start card already covered it. A shell command is ruled on by the mode like any
+  other, and a wrong ALLOW on a write outside the copy was still stopped by the kernel sandbox.
+- Live, with a real `claude`: an edit lands on a branch while the real tree stays clean; a declined
+  command is denied while edits in the copy needed no card; absolute, `../` and traversal writes
+  outside the copy are refused; overwriting `.git` is refused even in YOLO; and with the gate
+  unreachable every change is blocked and listed as refused.
+
+Known limits: the copy has no network, and the repo's installed dependencies (a virtualenv,
+`node_modules`) are not in it, so the agent often cannot run the tests. That is why north runs the
+verification itself in the next PR.
 
 ## Policy
 
@@ -181,7 +220,11 @@ Every wait must be visible. Proved by the experiments, or marked to build:
    resumes with what it already read. The module sits in the `intelligence` layer so `tools` may
    import it; the run store and, later, the approval gate reach it through protocols, wired in
    `orchestrator/app.py`.
-2. Claude `edit` mode: worktree, gate, verify, apply-back, autonomous abstain rule.
+2. Claude `edit` mode, in two PRs.
+   - **2a. Done.** Worktree, the gate (hook, loopback route, judge), the approval mapping, and the
+     result left on a branch. Nothing applied.
+   - **2b.** North runs the repo's verify command itself, applies back under the workspace lock
+     (keeping the branch on a conflict), and the optional cross-review by the other agent as a flow.
 3. Codex backend on the same conformance suite.
 4. Recovery and freeze.
 5. North MCP recall server; cross-review as a flow.
@@ -190,8 +233,12 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 ## Open risks
 
 - Connection to cards, slots, dashboard, runs API and recovery is proved by
-  `experiments/coding_agents_integration` (20 pass, 4 expected gaps). Still unproven: a real
-  Claude Code process against the daemon, which is phase 1.
+  `experiments/coding_agents_integration`, and a real `claude` against the real route and approval layer
+  by `tests/live`. Still unproven: a whole task chosen and run by north's own planner.
+- A run waiting on a card holds its `claude` process open, and a daemon restart ends it; recovery
+  resumes the session in the same copy (phase 4).
+- Shell commands in an edit run are ruled on one at a time; under the ask mode a long task means many
+  cards, and under autonomous each goes to the memory decider.
 - `~/.claude.json` is writable by the CLI; an agent could add an MCP server there.
 - North and the Codex worker share one ChatGPT plan quota.
 - Subscription terms are the vendors' call and can change.

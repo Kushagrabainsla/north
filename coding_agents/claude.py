@@ -318,19 +318,15 @@ def _outcome(stream: _Stream, *, exit_code: int, stderr: str, timed_out: bool) -
 
     errors = " ".join(str(error) for error in result.get("errors") or [])
     text = result["result"] if isinstance(result.get("result"), str) else stream.last_text
-    base = {
-        "text": text[:MAX_TEXT_CHARS],
-        "session_id": stream.session_id,
-        "cost_usd": float(result.get("total_cost_usd") or 0),
-        "turns": int(result.get("num_turns") or 0),
-        "denials": _denials(result),
-    }
+    answer = text[:MAX_TEXT_CHARS]
+    cost = float(result.get("total_cost_usd") or 0)
+    turns = int(result.get("num_turns") or 0)
+    denials = _denials(result)
     if not result.get("is_error") and result.get("subtype") == "success":
-        return RunOutcome(ok=True, **base)
+        return RunOutcome(True, answer, stream.session_id, cost, turns, denials)
     failure = _classify(result, errors, stream.retry_error)
-    return RunOutcome(
-        ok=False, failure=failure, error=(errors or text or str(result.get("subtype")))[:MAX_TEXT_CHARS], **base
-    )
+    error = (errors or text or str(result.get("subtype")))[:MAX_TEXT_CHARS]
+    return RunOutcome(False, answer, stream.session_id, cost, turns, denials, failure, error)
 
 
 def _classify(result: Mapping[str, Any], errors: str, retry_error: str) -> FailureKind:

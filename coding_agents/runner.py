@@ -123,7 +123,9 @@ class CodingRunner:
 
     async def _tree(self, live: LiveRun | None, workspace: str, run_id: str) -> WorkTree:
         assert self._workspaces is not None
-        return live.worktree if live else await self._workspaces.create(workspace, f"coding-{run_id[:8]}")
+        if live and live.worktree:  # `_live` only returns an edit run that still has its copy
+            return live.worktree
+        return await self._workspaces.create(workspace, f"coding-{run_id[:8]}")
 
     async def _execute(
         self, backend: CodingBackend, spec: RunSpec, run_id: str, task_id: str, tree: WorkTree | None
