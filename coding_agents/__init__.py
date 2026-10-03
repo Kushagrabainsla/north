@@ -5,6 +5,7 @@ run. See docs/design/coding-agents.md.
 """
 
 from coding_agents.base import (
+    Briefing,
     CodingBackend,
     EventSink,
     Lander,
@@ -45,6 +46,7 @@ from coding_agents.runner import AGENT_PREFIX, CodingRunner, RunReport
 from coding_agents.verify import CommandVerifier
 
 __all__ = [
+    "Briefing",
     "AGENT_PREFIX",
     "Availability",
     "BackendUnavailableError",

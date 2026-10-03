@@ -280,7 +280,12 @@ Every wait must be visible. Proved by the experiments, or marked to build:
    deleted is closed as failed rather than left paused for ever. North does not re-call the agent by
    itself: the agent loop turns a tool's errors into results, so the model (or the person) decides
    when to try again.
-5. North MCP recall server; cross-review as a flow.
+5. **Done, as a briefing instead of a memory server.** At the start of a run north puts the user's
+   relevant facts, profile and up to two matching skills in the agent's guidance (episodes are left
+   out). A memory MCP server was dropped: the agent does not need to ask for what it can be told, and
+   a second door into memory is a second place to be misled. The block is marked as background that
+   never widens what the agent may do; only the approval layer authorizes. A failing briefing never
+   stops a run.
 6. Follow-up PR: delete `coder`, `architect`, `reviewer` and the edit tools.
 
 ## Open risks

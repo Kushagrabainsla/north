@@ -54,6 +54,7 @@ from memory.models import ContextDocument
 from orchestrator.api import coding_gate_router, health_router, webhook_router
 from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
+from orchestrator.coding_briefing import MemoryBriefing
 from orchestrator.coding_gate import ApprovalJudge
 from orchestrator.coding_landing import LandingDesk
 from orchestrator.coding_run_recorder import AgentRunRecorder
@@ -163,7 +164,9 @@ def _attach_embedding_index(deps) -> None:
     deps.context_store.attach_embedding_index(embedding_index)
 
 
-def _register_coding_agent(tool_registry: ToolRegistry, deps, approvals: Approvals | None) -> None:
+def _register_coding_agent(
+    tool_registry: ToolRegistry, deps, approvals: Approvals | None, skill_selector: SkillSelector | None = None
+) -> None:
     """The coding agents installed here (Claude Code), as one tool. Absent when none is installed.
 
     Without the approval layer only planning is offered. With it, edit runs get their copy, the gate that
@@ -186,7 +189,8 @@ def _register_coding_agent(tool_registry: ToolRegistry, deps, approvals: Approva
             verifier=CommandVerifier(detect_verify_command, BashShell(tool_registry)),
             lander=LandingDesk(approvals),
         )
-    tool_registry.register(CodingAgentTool(runner))
+    briefing = MemoryBriefing(deps.memory, skill_selector)
+    tool_registry.register(CodingAgentTool(runner, briefing=briefing))
     deps.coding_recorder = recorder
 
 
@@ -194,6 +198,7 @@ def _build_tool_registry(
     deps,
     approvals: Approvals | None = None,
     skill_registry: SkillRegistry | None = None,
+    skill_selector: SkillSelector | None = None,
 ) -> tuple[ToolRegistry, CreateAgentTool]:
     learned_tools_dir = settings.north_home / "learned" / "tools"
     learned_tools_dir.mkdir(parents=True, exist_ok=True)
@@ -238,7 +243,7 @@ def _build_tool_registry(
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))
     tool_registry.register(GetActiveSessionsTool(running_task_store=deps.running_task_store))
     tool_registry.register(UpdatePlanTool(plan_store=deps.plan_store, stream_manager=deps.stream_manager))
-    _register_coding_agent(tool_registry, deps, approvals)
+    _register_coding_agent(tool_registry, deps, approvals, skill_selector)
     # Semantic code search (#2) - only when embeddings are available.
     if deps.code_index is not None:
         tool_registry.register(SearchCodeTool(code_index=deps.code_index))
@@ -901,7 +906,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _step("loading flows")
     flow_registry = _build_flows()
     deps.approval_policy = approval_policy
-    tool_registry, create_agent_tool = _build_tool_registry(deps, approvals, skill_registry)
+    tool_registry, create_agent_tool = _build_tool_registry(deps, approvals, skill_registry, skill_selector)
     # Rebind the schedule tool after flows are loaded so scheduled flow names
     # are validated at creation time just like named skills.
     tool_registry.register(

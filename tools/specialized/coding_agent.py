@@ -9,17 +9,20 @@ layer too, and the folder is the one the server granted the task, never one the 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from coding_agents import CodingAgentError, CodingRunner, FailureKind, Mode, RunReport
+from coding_agents import Briefing, CodingAgentError, CodingRunner, FailureKind, Mode, RunReport
 from context.repo_instructions import load_repo_instructions
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from utils.prompts import load_prompt
+
+logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_CHARS = 30_000
 _TITLE_CHARS = 160
@@ -54,9 +57,11 @@ class CodingAgentTool(Tool):
         self,
         runner: CodingRunner,
         instructions: Callable[[str], Awaitable[str]] = load_repo_instructions,
+        briefing: Briefing | None = None,
     ) -> None:
         self._runner = runner
         self._instructions = instructions
+        self._briefing = briefing
         self.parameters_schema = {
             "type": "object",
             "properties": {
@@ -118,7 +123,8 @@ class CodingAgentTool(Tool):
         if isinstance(call, ToolOutput):
             return call
         guidance = load_prompt(f"prompts/coding_agent_{call.mode.value}.md").format(
-            repo_instructions=await self._instructions(call.workspace) or "(none)"
+            repo_instructions=await self._instructions(call.workspace) or "(none)",
+            north_context=await self._north_context(call) or "(nothing relevant)",
         )
         try:
             report = await self._runner.run(
@@ -133,6 +139,16 @@ class CodingAgentTool(Tool):
         except CodingAgentError as exc:  # no usable agent, edit not set up, not a git repository
             return ToolOutput(success=False, error=str(exc))
         return _output(report)
+
+    async def _north_context(self, call: _Call) -> str:
+        """The briefing for this task. It helps and never gates: if it cannot be had, the run goes without."""
+        if self._briefing is None:
+            return ""
+        try:
+            return await self._briefing.brief(call.task, call.workspace)
+        except Exception:
+            logger.warning("could not brief the coding agent; running it without north's context", exc_info=True)
+            return ""
 
     def format_output(self, data: dict) -> str:
         text = str(data.get("answer") or "")
