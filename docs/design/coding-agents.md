@@ -273,7 +273,12 @@ Every wait must be visible. Proved by the experiments, or marked to build:
      card, labelled an opinion. It is advice: it never blocks or allows a landing. Skipped when the
      tests failed, with one agent, or with `review: false`.
 4. Recovery and freeze.
-5. North MCP recall server; cross-review as a flow.
+5. **Done, as a briefing instead of a memory server.** At the start of a run north puts the user's
+   relevant facts, profile and up to two matching skills in the agent's guidance (episodes are left
+   out). A memory MCP server was dropped: the agent does not need to ask for what it can be told, and
+   a second door into memory is a second place to be misled. The block is marked as background that
+   never widens what the agent may do; only the approval layer authorizes. A failing briefing never
+   stops a run.
 6. Follow-up PR: delete `coder`, `architect`, `reviewer` and the edit tools.
 
 ## Open risks

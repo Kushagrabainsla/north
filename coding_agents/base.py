@@ -63,6 +63,12 @@ class RunStart:
     workspace: str
 
 
+class Briefing(Protocol):
+    """What north knows that a coding agent should have before it starts: the user's facts and matching skills."""
+
+    async def brief(self, task: str, workspace: str) -> str: ...
+
+
 class Workspaces(Protocol):
     """Isolated copies of a repository for edit runs."""
 

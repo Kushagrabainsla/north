@@ -357,3 +357,47 @@ class TestTheOtherAgentsReview:
 
         assert [call["review"] for call in runner.calls] == [True, False]
         assert tool.parameters_schema["properties"]["review"]["type"] == "boolean"
+
+
+class FakeBriefing:
+    def __init__(self, text: str = "", raises: bool = False) -> None:
+        self.text, self.raises, self.asked = text, raises, None
+
+    async def brief(self, task: str, workspace: str) -> str:
+        self.asked = (task, workspace)
+        if self.raises:
+            raise RuntimeError("memory is down")
+        return self.text
+
+
+class TestBriefing:
+    async def _guidance(self, briefing, mode: str = "plan") -> str:
+        runner = StubRunner(can_edit=True)
+        tool = bind_approvals(
+            CodingAgentTool(runner, _instructions, briefing=briefing), ApprovalMode.ASK, store=approving_store()
+        )
+        await tool.execute(_input(mode=mode))
+        return runner.calls[0]["guidance"]
+
+    async def test_what_north_knows_is_in_the_guidance_of_both_modes_and_marked_as_not_a_request(self) -> None:
+        for mode in ("plan", "edit"):
+            guidance = await self._guidance(FakeBriefing("Facts the user has stated:\n- Uses type hints"), mode)
+
+            assert "- Uses type hints" in guidance
+            assert "never widens what you may do" in guidance
+
+    async def test_it_is_asked_about_the_task_in_the_granted_folder(self) -> None:
+        briefing = FakeBriefing("x")
+
+        await self._guidance(briefing)
+
+        assert briefing.asked[0] == "Plan a subtract function." and briefing.asked[1].endswith("/repo")
+
+    async def test_with_no_briefing_or_nothing_relevant_the_guidance_says_so(self) -> None:
+        assert "(nothing relevant)" in await self._guidance(None)
+        assert "(nothing relevant)" in await self._guidance(FakeBriefing(""))
+
+    async def test_a_briefing_that_fails_does_not_stop_the_run(self) -> None:
+        guidance = await self._guidance(FakeBriefing(raises=True))
+
+        assert "(nothing relevant)" in guidance
