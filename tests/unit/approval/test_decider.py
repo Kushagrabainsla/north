@@ -193,3 +193,71 @@ async def test_an_unusable_reply_leaves_the_question_to_you(reply: object) -> No
     decider, _ = _decider(reply)
 
     assert await decider.answer(_question("Postgres", "SQLite")) is None
+
+
+def _push() -> Action:
+    return Action(
+        agent="coding:claude", kind=ActionKind.GIT, summary="push origin main", operation="push", leaves_sandbox=True
+    )
+
+
+_PUSH_FACT = "Pushing to this repo's main is fine"
+
+
+async def test_an_action_that_leaves_the_sandbox_is_approved_when_a_fact_you_stated_covers_it() -> None:
+    decider, _ = _decider(
+        {"decision": "approve", "reason": "you allow pushes here", "used": ["F1"]}, facts=(_PUSH_FACT,)
+    )
+
+    answer = await decider.rule(_push())
+
+    assert answer.decision == ApprovalDecision.APPROVED
+    assert answer.memory_used == (MemoryRef(kind=MemoryKind.FACT, text=_PUSH_FACT),)
+
+
+async def test_an_approval_citing_nothing_for_an_action_that_leaves_the_sandbox_is_a_guess_so_the_card_waits() -> None:
+    decider, _ = _decider({"decision": "approve", "reason": "looks fine", "used": []}, facts=())
+
+    assert await decider.rule(_push()) is None
+
+
+async def test_a_fact_the_model_did_not_cite_does_not_cover_the_action() -> None:
+    decider, _ = _decider({"decision": "approve", "reason": "looks fine", "used": []}, facts=(_PUSH_FACT,))
+
+    assert await decider.rule(_push()) is None
+
+
+async def test_a_consolidated_episode_never_covers_an_action_that_leaves_the_sandbox(monkeypatch) -> None:
+    memory = _Memory([])
+
+    async def recall(principal, query, *, fact_limit=15, episode_limit=3):
+        return MemoryContext(episodes=["An earlier task pushed to main"])
+
+    monkeypatch.setattr(memory, "recall", recall)
+    model = _Model({"decision": "approve", "reason": "it pushed before", "used": ["E1"]})
+
+    assert await MemoryDecider(memory, model, None).rule(_push()) is None
+
+
+async def test_the_model_may_abstain_and_a_rejection_needs_no_cover() -> None:
+    abstaining, _ = _decider({"decision": "abstain", "reason": "no fact about pushing", "used": []}, facts=())
+    rejecting, _ = _decider({"decision": "reject", "reason": "never push from here", "used": []}, facts=())
+
+    assert await abstaining.rule(_push()) is None
+    assert (await rejecting.rule(_push())).decision == ApprovalDecision.REJECTED
+
+
+async def test_an_action_that_stays_inside_the_sandbox_is_decided_as_before() -> None:
+    decider, _ = _decider({"decision": "approve", "reason": "fine", "used": []}, facts=())
+
+    answer = await decider.rule(_deploy())
+
+    assert answer.decision == ApprovalDecision.APPROVED
+
+
+async def test_the_prompt_says_which_action_leaves_the_sandbox() -> None:
+    decider, model = _decider({"decision": "abstain", "reason": "nothing covers it"}, facts=())
+
+    await decider.rule(_push())
+
+    assert "leaves the sandbox or the workspace" in model.requests[0].prompt

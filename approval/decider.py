@@ -19,6 +19,10 @@ part, so manual routing uses the pinned model like every other call.
 
 When it cannot decide - no model, an error, an unreadable reply - it returns
 None and the card waits for you. That is the one case Autonomous pauses.
+
+An action that leaves the sandbox (a push, a host it was not given) is the same:
+it is approved only when the reply cites something you stated - a fact, a past
+decision, your rules or your profile. Citing nothing is a guess, so the card waits.
 """
 
 from __future__ import annotations
@@ -53,6 +57,9 @@ _QUERY_CHARS = 1000
 
 _ACTION_DECISIONS = {"approve": ApprovalDecision.APPROVED, "reject": ApprovalDecision.REJECTED}
 _UNTRUSTED_TAG = re.compile(r"</?\s*untrusted\s*>", re.IGNORECASE)
+# What may cover an action that leaves the sandbox. An episode is north's own summary of a
+# past task, which an agent's output can shape, so it never authorizes one.
+_COVERING_KINDS = frozenset({MemoryKind.FACT, MemoryKind.PAST_DECISION, MemoryKind.JUDGEMENT_RULES, MemoryKind.PROFILE})
 
 
 @dataclass(frozen=True)
@@ -74,6 +81,7 @@ class _Subject:
     content: str
     options: tuple[str, ...]
     task_id: str = ""
+    leaves_sandbox: bool = False
 
 
 class MemoryDecider:
@@ -97,6 +105,7 @@ class MemoryDecider:
             facts=_action_facts(action),
             content=_action_content(action),
             options=("approve", "reject"),
+            leaves_sandbox=action.leaves_sandbox,
         )
         return await self._decide(subject)
 
@@ -136,6 +145,13 @@ class MemoryDecider:
             logger.warning("Memory decider: the model call failed - the card waits for you", exc_info=True)
             return None
         answer = _read_reply(reply, subject, items)
+        if answer is not None and _is_a_guess(answer, subject):
+            logger.info(
+                "Memory decider: nothing you stated covers this action from %s that leaves the sandbox - "
+                "the card waits for you",
+                subject.agent,
+            )
+            return None
         if answer is None:
             logger.warning(
                 "Memory decider: unreadable reply for a %s from %s - the card waits for you",
@@ -189,6 +205,7 @@ def _action_facts(action: Action) -> str:
         "recognised as one of a few catastrophic shapes": action.obviously_destructive,
         "sends something to a person other than you": action.reaches_third_party,
         "spends money": action.spends_money,
+        "leaves the sandbox or the workspace": action.leaves_sandbox,
         "is filled-in work for review": action.carries_work,
     }
     lines = [f"- kind: {action.kind.value}"]
@@ -232,6 +249,13 @@ def _read_reply(reply: Any, subject: _Subject, items: list[_Item]) -> Answer | N
     if subject.options:
         option = next((choice for choice in subject.options if choice.lower() == option.lower()), "")
     return Answer(ApprovalDecision.ANSWERED, option, reason, DecidedBy.MEMORY_DECIDER, used) if option else None
+
+
+def _is_a_guess(answer: Answer, subject: _Subject) -> bool:
+    """An approval for an action that leaves the sandbox, with nothing the user stated behind it."""
+    if not subject.leaves_sandbox or answer.decision != ApprovalDecision.APPROVED:
+        return False
+    return not any(ref.kind in _COVERING_KINDS for ref in answer.memory_used)
 
 
 def _cited(raw: Any) -> list[str]:

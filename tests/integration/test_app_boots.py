@@ -16,6 +16,8 @@ server does, and assert the wiring came out whole.
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from orchestrator.api_context import services_of
@@ -111,3 +113,13 @@ async def test_test_mode_does_not_launch_autonomous_workers(booted_app) -> None:
         }
     )
     assert not (settings.north_home / ".bootstrapped").exists()
+
+
+@pytest.mark.skipif(shutil.which("claude") is None, reason="no coding agent is installed here")
+@pytest.mark.asyncio
+async def test_the_coding_agent_tool_is_in_the_catalog_and_gated_when_claude_is_installed(booted_app) -> None:
+    """Built and registered is not the same as asked about: the tool must carry the approval layer."""
+    tool = services_of(booted_app).tool_registry.get("coding_agent")
+
+    assert tool.approvals is not None
+    assert tool.mutates({"task": "plan a change"}) is True

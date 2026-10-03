@@ -24,6 +24,7 @@ Architecture, safety-policy, approval, tool-mutation, and composition-root chang
 | `intelligence.memory` | `memory/` | Intelligence | user context and facts | Standard |
 | `intelligence.workspace_context` | `context/` | Intelligence | repo instructions, code intelligence | Standard |
 | `intelligence.skills` | `skills/` | Intelligence | skill discovery and format | Standard |
+| `intelligence.coding_agents` | `coding_agents/` | Intelligence | delegated coding runs on installed agents | Standard |
 | `application.orchestration` | `orchestrator/` | Application | task lifecycle and plans | Standard |
 | `application.agents` | `agents/` | Application | agents and delegation | Standard |
 | `application.approval` | `approval/` | Application | consent and safe actions | Protected |

@@ -277,6 +277,7 @@ class GitTool(Tool):
                 mutating=call.mutating,
                 read_only=not call.mutating,
                 obviously_destructive=call.action == "push" and any(_is_force_flag(t) for t in call.cmd[2:]),
+                leaves_sandbox=call.action == "push",
             ),
             title="Git Operation - Approval Required",
             message=f"```\n{' '.join(call.cmd)}\n```",

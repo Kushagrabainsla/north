@@ -83,6 +83,14 @@ modules:
     public_contracts: [workspace instructions, code index, LSP integration]
     validation: [tests/unit/context]
 
+  intelligence.coding_agents:
+    paths: [coding_agents/**]
+    layer: intelligence
+    owner: integrations
+    editable_by: [coder]
+    public_contracts: [CodingBackend, CodingRunner, RunRecorder, delegated coding runs]
+    validation: [tests/unit/coding_agents]
+
   intelligence.skills:
     paths: [skills/**]
     layer: intelligence

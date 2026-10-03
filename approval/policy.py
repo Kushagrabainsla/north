@@ -104,6 +104,10 @@ class Action:
     # do not yet.
     reaches_third_party: bool = False
     spends_money: bool = False
+    # Reaches past the sandbox and the workspace: a push, a host the agent was not
+    # given. In autonomous the memory decider approves these only when something
+    # the user stated covers them - with nothing, a card waits (approval/decider.py).
+    leaves_sandbox: bool = False
     # A file edit inside north's own scratch space (task handoff notes, personal
     # notes) rather than anywhere of the user's. See `tools._path.is_north_scratch`.
     in_north_scratch: bool = False
