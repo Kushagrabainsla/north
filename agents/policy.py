@@ -20,7 +20,7 @@ frontmatter declaring which agents they bind::
     ## Safety ...
 
     ---
-    applies_to: [coder, reviewer]   # only these agents
+    applies_to: [general, wellness]   # only these agents
     ---
     ## Clean code ...
 

@@ -30,7 +30,7 @@ modules:
     excludes: [config/dependencies.py]
     layer: platform
     owner: platform
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [NORTH_* environment variables, settings.toml]
     validation: [tests/unit/config, tests/unit/utils/test_security_*.py]
 
@@ -38,7 +38,7 @@ modules:
     paths: [ledger/**]
     layer: platform
     owner: platform
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [LedgerWriter, LedgerEntry, SQLite persistence]
     validation: [tests/unit/ledger]
 
@@ -46,7 +46,7 @@ modules:
     paths: [utils/**, exceptions.py]
     layer: platform
     owner: platform
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [shared utility functions]
     validation: [tests/unit/utils]
 
@@ -55,7 +55,7 @@ modules:
     excludes: [resources/policies/**]
     layer: platform
     owner: platform
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [bundled prompts and built-in skills]
     validation: [tests/unit/resources, tests/unit/architecture/test_packaging.py]
 
@@ -63,7 +63,7 @@ modules:
     paths: [inference/**]
     layer: intelligence
     owner: intelligence
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [InferenceRouter, provider authentication, model routing]
     validation: [tests/unit/inference]
 
@@ -71,7 +71,7 @@ modules:
     paths: [memory/**]
     layer: intelligence
     owner: intelligence
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [ContextStore, MemoryGateway, user data migrations]
     validation: [tests/unit/context/test_*store*.py, tests/unit/context/test_fact_store.py]
 
@@ -79,7 +79,7 @@ modules:
     paths: [context/**]
     layer: intelligence
     owner: intelligence
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [workspace instructions, code index, LSP integration]
     validation: [tests/unit/context]
 
@@ -87,7 +87,7 @@ modules:
     paths: [coding_agents/**]
     layer: intelligence
     owner: integrations
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [CodingBackend, CodingRunner, RunRecorder, delegated coding runs]
     validation: [tests/unit/coding_agents]
 
@@ -95,7 +95,7 @@ modules:
     paths: [skills/**]
     layer: intelligence
     owner: intelligence
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [SkillRegistry, skill file format]
     validation: [tests/unit/skills]
 
@@ -103,7 +103,7 @@ modules:
     paths: [flows/**]
     layer: intelligence
     owner: intelligence
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [FlowRegistry, declarative flow file format]
     validation: [tests/unit/flows]
 
@@ -112,7 +112,7 @@ modules:
     excludes: [orchestrator/app.py]
     layer: application
     owner: runtime
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [task lifecycle, execution plans, event stream]
     validation: [tests/unit/orchestrator, tests/integration/test_orchestrator.py]
 
@@ -120,7 +120,7 @@ modules:
     paths: [agents/**]
     layer: application
     owner: runtime
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [agent configuration, discovery, delegation]
     validation: [tests/unit/agents, tests/integration/agents]
 
@@ -128,7 +128,7 @@ modules:
     paths: [approval/**]
     layer: application
     owner: safety
-    editable_by: [coder]
+    editable_by: [coding_agent]
     protected: true
     public_contracts: [Approvals.decide (the one approval entry point), approval cards, unattended policy, decision persistence]
     validation: [tests/unit/approval, tests/unit/tools/test_*safety.py, tests/unit/tools/test_git_gh_gates.py]
@@ -137,7 +137,7 @@ modules:
     paths: [jobs/**, bootstrap/**]
     layer: application
     owner: runtime
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [scheduled jobs, cron data, onboarding]
     validation: [tests/unit/jobs, tests/unit/bootstrap]
 
@@ -145,7 +145,7 @@ modules:
     paths: [tools/**]
     layer: integrations
     owner: integrations
-    editable_by: [coder]
+    editable_by: [coding_agent]
     protected: true
     public_contracts: [tool discovery, tool schemas, Tool.execute and Tool.describe, mutation guards]
     validation: [tests/unit/tools]
@@ -154,7 +154,7 @@ modules:
     paths: [gateways/**, mcp/**]
     layer: integrations
     owner: integrations
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [Telegram and MCP integrations]
     validation: [tests/unit/gateways, tests/unit/mcp]
 
@@ -162,7 +162,7 @@ modules:
     paths: [cli/**]
     layer: interfaces
     owner: developer_experience
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [north command names and options]
     validation: [tests/unit/cli]
 
@@ -170,7 +170,7 @@ modules:
     paths: [web/api.py, web/extensions.py, web/artifacts.py, web/conversations.py, web/__init__.py, web/src/**, web/dist/**, web/index.html, web/package.json, web/package-lock.json, web/tsconfig*.json, web/vite.config.ts]
     layer: interfaces
     owner: developer_experience
-    editable_by: [coder]
+    editable_by: [coding_agent]
     public_contracts: [HTTP cockpit routes, browser UI]
     validation: [tests/unit/web, web:npm-test, web:npm-build]
 
@@ -178,7 +178,7 @@ modules:
     paths: [orchestrator/app.py, config/dependencies.py]
     layer: composition
     owner: platform
-    editable_by: [coder]
+    editable_by: [coding_agent]
     protected: true
     public_contracts: [server startup, dependency assembly]
     validation: [tests/integration/test_app_boots.py, tests/unit/orchestrator/test_health_api.py]
@@ -193,7 +193,7 @@ modules:
     validation: [architecture:manifest, architecture:markdown-links]
 
   safety_policy:
-    paths: [resources/policies/safety.md, resources/policies/clean-code.md, SECURITY.md]
+    paths: [resources/policies/safety.md, SECURITY.md]
     layer: composition
     owner: safety
     editable_by: []

@@ -35,18 +35,17 @@ def _registry_names() -> set[str]:
     return {tool.name for tool in registry.all_tools()} | _MANUALLY_REGISTERED
 
 
-def test_analysis_and_semantic_tools_are_discovered() -> None:
+def test_semantic_tools_are_discovered() -> None:
     registry = ToolRegistry(auto_register=True)
     names = {tool.name for tool in registry.all_tools()}
-    assert {"check_types", "search_symbols", "find_references"} <= names
+    assert {"search_symbols", "find_references"} <= names
 
 
 def test_coding_tools_are_universal() -> None:
-    """The coder prompt's verify-after-every-edit loop depends on these resolving
-    for the engineering agents."""
+    """Code navigation tools resolve for every agent."""
     registry = ToolRegistry(auto_register=True)
     available = {t.name for t in registry.available_tools(auto_reload=False)}
-    assert {"check_types", "search_symbols", "find_references", "read_file", "list_dir"} <= available
+    assert {"search_symbols", "find_references", "read_file", "list_dir"} <= available
 
 
 @pytest.mark.parametrize(

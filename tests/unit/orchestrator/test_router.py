@@ -62,89 +62,52 @@ async def test_execution_planner_workspace_context_in_prompt() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic engineering pipeline (#4)
+# Engineering tasks: one agent, the general agent, which delegates the coding
 # ---------------------------------------------------------------------------
 
 
-def _engineering_planner() -> ExecutionPlanner:
-    from orchestrator.models import ExecutionMode  # noqa: F401
-
+def _engineering_planner(*names: str) -> ExecutionPlanner:
     def _agent(name: str) -> MagicMock:
         a = MagicMock()
         a.name = name
-        a.domain = "engineering"
+        a.domain = "general"
         a.config.accepts = ""
         return a
 
+    agents = [_agent(n) for n in (names or ("general",))]
     reg = MagicMock()
-    reg.all.return_value = [_agent(n) for n in ("researcher", "architect", "coder", "reviewer")]
+    reg.all.return_value = agents
+    reg.names.return_value = [a.name for a in agents]
+    reg.for_domain.side_effect = lambda domain: [a for a in agents if a.domain == domain]
     return ExecutionPlanner(agent_registry=reg, inference_router=MagicMock(), tool_registry=None)
 
 
-def test_feature_runs_full_chain_in_order() -> None:
-    from orchestrator.models import ExecutionMode
+@pytest.mark.parametrize(
+    "kind", ["question", "research", "design", "bugfix", "debug", "test", "refactor", "feature", "deploy", "ship"]
+)
+def test_every_engineering_kind_is_one_general_agent_and_keeps_its_label(kind: str) -> None:
+    plan = _engineering_planner()._build_engineering_plan(kind, "t1")
 
-    plan = _engineering_planner()._build_engineering_plan("feature", 0.9, "t1")
-    assert plan.agents == ["researcher", "architect", "coder", "reviewer"]
-    assert plan.mode is ExecutionMode.HIERARCHICAL
-    assert plan.dependencies == {"architect": ["researcher"], "coder": ["architect"], "reviewer": ["coder"]}
-    # Sequential stages, one agent each.
-    assert plan.parallel_groups == [["researcher"], ["architect"], ["coder"], ["reviewer"]]
-
-
-def test_bugfix_runs_coder_then_reviewer() -> None:
-    plan = _engineering_planner()._build_engineering_plan("bugfix", 0.9, "t1")
-    assert plan.agents == ["coder", "reviewer"]
-    assert plan.dependencies == {"reviewer": ["coder"]}
-
-
-def test_debug_and_test_route_through_coder_reviewer() -> None:
-    # debug and test are conductor task-framings: coder→reviewer, and the plan
-    # carries the kind so the conductor and DoD can specialise.
-    for kind in ("debug", "test"):
-        plan = _engineering_planner()._build_engineering_plan(kind, 0.9, "t1")
-        assert plan.agents == ["coder", "reviewer"], kind
-        assert plan.engineering_kind == kind
-
-
-def test_deploy_is_single_coder_no_reviewer() -> None:
-    # Deploy/ship is a single git/gh-capable agent - no reviewer, and never escalated
-    # to the full chain even at low confidence (there is no new code to review).
-    for kind in ("deploy", "ship"):
-        plan = _engineering_planner()._build_engineering_plan(kind, 0.9, "t1")
-        assert plan.agents == ["coder"], kind
-        assert plan.engineering_kind == kind
-    assert _engineering_planner()._build_engineering_plan("deploy", 0.2, "t1").agents == ["coder"]
-
-
-def test_refactor_runs_architect_coder_reviewer() -> None:
-    plan = _engineering_planner()._build_engineering_plan("refactor", 0.9, "t1")
-    assert plan.agents == ["architect", "coder", "reviewer"]
-
-
-def test_research_ends_with_the_agent_that_found_the_answer() -> None:
-    """Investigation returns findings, so there is nothing for a design stage to do.
-
-    Pairing the two meant every "investigate X and summarise it" ran an architect
-    with nothing to design - 21s, no spec written - and made the run multi-agent,
-    which pulled in a synthesis pass on top.
-    """
-    plan = _engineering_planner()._build_engineering_plan("research", 0.9, "t1")
-    assert plan.agents == ["researcher"]
-
-
-def test_design_is_where_the_architect_belongs() -> None:
-    """A task that actually wants an approach decided still gets one."""
-    plan = _engineering_planner()._build_engineering_plan("design", 0.9, "t1")
-    assert plan.agents == ["researcher", "architect"]
-
-
-def test_question_is_single_researcher() -> None:
-    from orchestrator.models import ExecutionMode
-
-    plan = _engineering_planner()._build_engineering_plan("question", 0.9, "t1")
-    assert plan.agents == ["researcher"]
+    assert plan.agents == ["general"]
+    assert plan.parallel_groups == [["general"]] and plan.dependencies == {}
     assert plan.mode is ExecutionMode.SINGLE_AGENT
+    assert plan.engineering_kind == kind
+
+
+def test_north_has_no_agents_of_its_own_for_coding_any_more() -> None:
+    plan = _engineering_planner("general", "coder", "reviewer", "architect", "researcher")._build_engineering_plan(
+        "feature", "t1"
+    )
+
+    assert plan.agents == ["general"], "a stray registered agent is never planned in"
+
+
+def test_without_a_general_agent_the_task_falls_back_instead_of_naming_a_missing_agent() -> None:
+    planner = _engineering_planner("wellness")
+
+    plan = planner._build_engineering_plan("bugfix", "t1")
+
+    assert "general" not in plan.agents
 
 
 def test_repository_overview_uses_quick_readonly_profile() -> None:
@@ -156,8 +119,8 @@ def test_repository_overview_uses_quick_readonly_profile() -> None:
     )
     plan = ExecutionPlan(
         task_id="t1",
-        agents=["researcher"],
-        parallel_groups=[["researcher"]],
+        agents=["general"],
+        parallel_groups=[["general"]],
         dependencies={},
         mode=ExecutionMode.SINGLE_AGENT,
         engineering_kind="question",
@@ -191,8 +154,8 @@ def test_repository_overview_prompt_variants_use_quick_profile(prompt: str) -> N
     )
     plan = ExecutionPlan(
         task_id="t1",
-        agents=["researcher"],
-        parallel_groups=[["researcher"]],
+        agents=["general"],
+        parallel_groups=[["general"]],
         dependencies={},
         mode=ExecutionMode.SINGLE_AGENT,
         engineering_kind="question",
@@ -210,8 +173,8 @@ def test_repository_action_question_does_not_look_like_an_overview() -> None:
     )
     plan = ExecutionPlan(
         task_id="t1",
-        agents=["researcher"],
-        parallel_groups=[["researcher"]],
+        agents=["general"],
+        parallel_groups=[["general"]],
         dependencies={},
         mode=ExecutionMode.SINGLE_AGENT,
         engineering_kind="question",
@@ -253,8 +216,8 @@ def test_deep_or_mutating_repository_requests_keep_standard_profile(prompt: str)
     )
     plan = ExecutionPlan(
         task_id="t1",
-        agents=["researcher"],
-        parallel_groups=[["researcher"]],
+        agents=["general"],
+        parallel_groups=[["general"]],
         dependencies={},
         mode=ExecutionMode.SINGLE_AGENT,
         engineering_kind="research",
@@ -282,77 +245,43 @@ def test_low_confidence_or_multi_agent_overview_keeps_standard_profile() -> None
     assert _execution_profile("Give me an overview of this repository.", low_confidence, multi_agent) == "standard"
 
 
-def test_low_confidence_forces_full_chain() -> None:
-    # bugfix would be coder→reviewer, but low confidence broadens a *code* task
-    # to the full chain (a read-only kind is NOT broadened this way - see below).
-    plan = _engineering_planner()._build_engineering_plan("bugfix", 0.4, "t1")
-    assert plan.agents == ["researcher", "architect", "coder", "reviewer"]
-
-
-def test_low_confidence_no_code_kinds_never_add_coder() -> None:
-    # Regression: a low-confidence read-only kind must stay read-only. A vague
-    # "how does X work?" (question) or "investigate Y" (research) must never be
-    # escalated into a write task by adding the coder.
-    assert _engineering_planner()._build_engineering_plan("question", 0.4, "t1").agents == ["researcher"]
-    assert _engineering_planner()._build_engineering_plan("research", 0.4, "t1").agents == ["researcher"]
-    assert _engineering_planner()._build_engineering_plan("design", 0.4, "t1").agents == [
-        "researcher",
-        "architect",
-    ]
-
-
-def test_no_code_kinds_are_read_only_at_every_confidence() -> None:
-    for kind in ("question", "research", "design"):
-        for confidence in (0.95, 0.6, 0.59, 0.4, 0.05):
-            plan = _engineering_planner()._build_engineering_plan(kind, confidence, "t1")
-            assert "coder" not in plan.agents, f"{kind}@{confidence} leaked coder"
-            assert "reviewer" not in plan.agents, f"{kind}@{confidence} leaked reviewer"
-
-
-def test_unknown_kind_defaults_to_full_chain() -> None:
-    plan = _engineering_planner()._build_engineering_plan("", 0.9, "t1")
-    assert plan.agents == ["researcher", "architect", "coder", "reviewer"]
-
-
-def test_coder_is_always_followed_by_reviewer() -> None:
-    for kind in ("bugfix", "debug", "test", "refactor", "feature"):
-        plan = _engineering_planner()._build_engineering_plan(kind, 0.9, "t1")
-        assert "coder" in plan.agents, kind
-        assert "reviewer" in plan.agents
-        assert plan.agents.index("coder") < plan.agents.index("reviewer")
+def test_confidence_never_changes_the_shape_of_an_engineering_plan() -> None:
+    for kind in ("question", "bugfix", "feature", ""):
+        for confidence_free in (0.95, 0.4, 0.05):
+            plan = _engineering_planner()._build_engineering_plan(kind, "t1")
+            assert plan.agents == ["general"], f"{kind!r} @ {confidence_free}"
 
 
 @pytest.mark.asyncio
 async def test_plan_all_overrides_llm_agent_graph_for_engineering() -> None:
-    """For engineering, the deterministic table wins over whatever agents the LLM returns."""
-    from orchestrator.models import ExecutionMode
+    """For engineering, the fixed shape wins over whatever agents the LLM returns."""
 
     def _agent(name: str) -> MagicMock:
         a = MagicMock()
         a.name = name
-        a.domain = "engineering"
+        a.domain = "general"
         a.config.accepts = ""
         return a
 
     reg = MagicMock()
-    reg.all.return_value = [_agent(n) for n in ("researcher", "architect", "coder", "reviewer")]
-    reg.names.return_value = ["researcher", "architect", "coder", "reviewer"]
+    reg.all.return_value = [_agent("general"), _agent("wellness")]
+    reg.names.return_value = ["general", "wellness"]
 
     inference = MagicMock()
     resp = MagicMock(spec=CompletionResponse)
-    # LLM returns a bogus agent graph; only engineering_kind should matter.
+    # LLM returns a bogus agent graph; only the domain and engineering_kind should matter.
     resp.text = (
         '{"confidence": 0.9, "is_consequential": false, "domain": "engineering",'
         ' "engineering_kind": "bugfix", "reasoning": "x", "mode": "hierarchical",'
-        ' "agents": ["architect", "researcher"]}'
+        ' "agents": ["wellness", "general"]}'
     )
     inference.complete = AsyncMock(return_value=resp)
 
     planner = ExecutionPlanner(agent_registry=reg, inference_router=inference, tool_registry=None)
     _, plan = await planner.plan_all(prompt="fix the off-by-one in parser.py", task_id="t1")
 
-    assert plan.agents == ["coder", "reviewer"]  # from the table, not the LLM
-    assert plan.mode is ExecutionMode.HIERARCHICAL
+    assert plan.agents == ["general"]  # fixed here, not chosen by the LLM
+    assert plan.mode is ExecutionMode.SINGLE_AGENT and plan.engineering_kind == "bugfix"
 
 
 @pytest.mark.asyncio

@@ -144,40 +144,6 @@ async def test_get_task_reports_skipped_status():
     assert resp.status == "skipped"
 
 
-# --------------------------------------------------------------- conductor (Fix 3)
-
-
-@pytest.mark.asyncio
-async def test_reviewer_scarcity_blocks_the_whole_task_for_recovery():
-    orch = _orch()
-    _record_writes(orch)
-    # coder succeeds ([]), then the reviewer can't get any model (scarcity).
-    seq = [[], [AgentFailure("reviewer", "model_unavailable")]]
-
-    async def fake_group(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
-        return seq.pop(0)
-
-    orch._execute_agent_group = fake_group
-    failures = await orch._run_engineering_conductor("t1", "build x", "/ws", _PREAMBLE)
-    assert failures == ["reviewer"]
-    assert "waiting_for_model" in _emitted_events(orch)
-
-
-@pytest.mark.asyncio
-async def test_genuine_reviewer_failure_still_returns():
-    orch = _orch()
-    _record_writes(orch)
-    # coder ok, then a REAL reviewer failure (not scarcity) - unchanged behaviour.
-    seq = [[], [AgentFailure("reviewer", "logic_error")]]
-
-    async def fake_group(task_id, prompt, agents, workspace="", context="", allow_delegation=True, *args, **kwargs):
-        return seq.pop(0)
-
-    orch._execute_agent_group = fake_group
-    failures = await orch._run_engineering_conductor("t1", "build x", "/ws", _PREAMBLE)
-    assert failures == ["reviewer"]
-
-
 @pytest.mark.asyncio
 async def test_execute_agent_group_tags_real_exhaustion_as_model_unavailable():
     """The integration link the scripted tests assume: a real
@@ -193,7 +159,7 @@ async def test_execute_agent_group_tags_real_exhaustion_as_model_unavailable():
     async def boom(agent, payload):
         raise AllModelsRateLimitedError("No completion models are available")
 
-    orch._isolation.run = boom
+    orch._run_agent_with_retry = boom
     agent = type("A", (), {"name": "reviewer"})()
     failures = await orch._execute_agent_group("t1", "review it", [agent])
     assert failures == ["reviewer"]

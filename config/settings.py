@@ -126,36 +126,6 @@ class Settings(BaseSettings):
     planner_retry_delay_seconds: float = Field(default=6.0, ge=0.5)
     planner_retry_backoff_factor: float = Field(default=1.5, ge=1.0)
 
-    # Run mutating agents (see orchestrator.constants.WORKTREE_ISOLATION_AGENTS) in a
-    # dedicated git worktree when the workspace is a git repo, applying changes back
-    # on success. On by default, and scoped to the coder: an agent that writes code
-    # should not be doing it in the tree you are working in. A run that goes wrong
-    # is discarded with its worktree instead of needing to be undone, and two runs
-    # can never share a working tree. Falls back to editing in place when the
-    # workspace is not a git repo. Opt out with NORTH_WORKTREE_ISOLATION_ENABLED=0.
-    worktree_isolation_enabled: bool = True
-
-    # Where isolated worktrees are created. Empty = a "north-worktrees" dir under the
-    # system temp dir. Never place this inside a workspace or under ~/.north.
-    worktree_root: str = ""
-
-    # Best-of-N (#11): run this many independent coder attempts in parallel isolated
-    # worktrees and integrate only the best one. 1 = off (a single attempt, no change
-    # in behaviour). Requires worktree isolation + a git repo. Costs N× the coder's
-    # inference, so raise deliberately (e.g. 2-3) for high-stakes changes.
-    best_of_n: int = 1
-
-    # Optional shell command used to score each best-of-N candidate (exit 0 = pass).
-    # Run inside each candidate's worktree. Empty = score by diff size only.
-    best_of_n_test_command: str = ""
-
-    # Optional shell command the orchestrator runs itself after a conductor coding
-    # task, as an independent executable oracle feeding the Definition-of-Done (exit
-    # 0 = pass). Run once in the task workspace. Empty = auto-detect a safe, fixed
-    # test command (pytest -q / go test ./... / cargo test) from the project, or skip
-    # if none is detected. A failed run fails the DoD; a missing/errored run never does.
-    verify_command: str = ""
-
     # Sandboxed execution (#6): run bash-tool commands inside a Docker container that
     # only sees the workspace, with the network off and memory/CPU/PID limits. Off by
     # default; when enabled it FAILS CLOSED (refuses to run) if Docker is unavailable.

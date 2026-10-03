@@ -45,7 +45,7 @@ def test_agent_result_models_used_defaults_empty():
 
 async def test_single_model_is_captured(tmp_path: Path):
     # The default mock router answers with model_used="mock-model".
-    agent = _load_agent("coder", tmp_path)
+    agent = _load_agent("general", tmp_path)
     result = await agent.run(AgentPayload(task_id="t1", prompt="Implement x."))
     assert result.models_used == ["mock-model"]
 
@@ -74,7 +74,7 @@ async def test_models_used_dedups_and_preserves_order(tmp_path: Path):
                 await token_callback(text)
             return ToolCallResponse(type="message", content=text, calls=[], model_used="model-b")
 
-    agent = _load_agent("coder", tmp_path, MultiModelRouter())
+    agent = _load_agent("general", tmp_path, MultiModelRouter())
     result = await agent.run(AgentPayload(task_id="t2", prompt="Implement x."))
     assert result.models_used == ["model-a", "model-b"]
 
@@ -87,12 +87,12 @@ async def test_empty_model_used_is_ignored(tmp_path: Path):
                 await token_callback(text)
             return ToolCallResponse(type="message", content=text, calls=[], model_used="")
 
-    agent = _load_agent("reviewer", tmp_path, BlankModelRouter())
+    agent = _load_agent("general", tmp_path, BlankModelRouter())
     result = await agent.run(AgentPayload(task_id="t3", prompt="Review."))
     assert result.models_used == []
 
 
-@pytest.mark.parametrize("name", ["architect", "coder", "researcher", "reviewer"])
+@pytest.mark.parametrize("name", ["general"])
 async def test_all_engineering_agents_capture_models(name: str, tmp_path: Path):
     agent = _load_agent(name, tmp_path)
     result = await agent.run(AgentPayload(task_id="t1", prompt="do work"))

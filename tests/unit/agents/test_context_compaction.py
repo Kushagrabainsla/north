@@ -210,7 +210,6 @@ def test_file_context_for_summary_tracks_read_and_modified_paths() -> None:
             "role": "assistant",
             "tool_calls": [
                 {"function": {"name": "read_file", "arguments": '{"path":"src/a.py"}'}},
-                {"function": {"name": "patch_file", "arguments": '{"path":"src/a.py"}'}},
                 {"function": {"name": "write_file", "arguments": '{"path":"docs/notes.md"}'}},
             ],
         }
@@ -219,7 +218,7 @@ def test_file_context_for_summary_tracks_read_and_modified_paths() -> None:
     context = file_context_for_summary(messages)
 
     assert "Files read: src/a.py" in context
-    assert "Files modified: src/a.py, docs/notes.md" in context
+    assert "Files modified: docs/notes.md" in context
 
 
 @pytest.mark.asyncio
@@ -230,7 +229,7 @@ async def test_compaction_prompt_includes_file_context() -> None:
         {"role": "user", "content": "Task description"},
     ]
     for i in range(4):
-        name = "patch_file" if i == 0 else "read_file"
+        name = "write_file" if i == 0 else "read_file"
         messages.extend(
             [
                 {

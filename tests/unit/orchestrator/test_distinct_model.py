@@ -112,11 +112,11 @@ async def test_agent_threads_exclude_models_into_request(tmp_path):
             seen["exclude_models"] = request.exclude_models
             return ToolCallResponse(type="message", content="done", calls=[], model_used="mock-model")
 
-    config = AgentConfig.from_yaml(AGENTS_DIR / "reviewer" / "config.yaml")
+    config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
     import importlib
 
-    mod = importlib.import_module("agents.reviewer.agent")
-    agent = mod.ReviewerAgent(
+    mod = importlib.import_module("agents.general.agent")
+    agent = mod.GeneralAgent(
         config,
         AgentDependencies(
             context_store=FileContextStore(tmp_path / "ctx"),

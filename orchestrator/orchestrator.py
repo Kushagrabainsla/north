@@ -21,9 +21,7 @@ from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.exceptions import missing_resource
-from inference.models import CompletionRequest
 from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
-from orchestrator.commit import WorkCommitter
 from orchestrator.constants import (
     MAX_CONCURRENT_TASKS,
     MAX_QUEUE_BACKOFF_SECONDS,
@@ -31,25 +29,6 @@ from orchestrator.constants import (
     POOL_REFRESH_COOLDOWN,
     QUEUE_POLL_INTERVAL_SECONDS,
     STRATEGY_CMD_RE,
-)
-from orchestrator.engineering_prompts import (
-    CONDUCTOR_CODER_PREAMBLE,
-    CONDUCTOR_CODER_PREAMBLE_SPEC,
-    CONDUCTOR_CODER_PREAMBLES,
-    CONDUCTOR_FIX_PREAMBLE,
-    CONDUCTOR_MAX_FIX_ROUNDS,
-    CONDUCTOR_REVIEW_PROMPT,
-    CONDUCTOR_REVIEW_RETRY_PROMPT,
-    DEPLOY_KINDS,
-    DEPLOY_PREAMBLE,
-    DESIGN_ARCHITECT_PREAMBLE,
-    DESIGN_KINDS,
-    DESIGN_RESEARCH_PREAMBLE,
-    SPEC_CRITIQUE_INJECTION,
-    SPEC_CRITIQUE_TIMEOUT_S,
-    SPEC_MIN_CHARS,
-    clean_issues,
-    parse_spec_tasks,
 )
 from orchestrator.exceptions import (
     DeclaredArtifactMissingError,
@@ -61,7 +40,6 @@ from orchestrator.failure_handler import FailureHandler, classify_error
 from orchestrator.handoff_artifacts import primary_artifact_path
 from orchestrator.handoff_artifacts import read_artifact as _read_artifact
 from orchestrator.idempotency import IdempotencyCache, idempotency_key
-from orchestrator.isolation import AgentIsolation
 from orchestrator.journal import TaskJournal
 from orchestrator.model_attribution import models_used_by
 from orchestrator.model_scarcity import (
@@ -73,9 +51,6 @@ from orchestrator.model_scarcity import (
 from orchestrator.model_scarcity import (
     has_model_scarcity as _has_model_scarcity,
 )
-from orchestrator.model_scarcity import (
-    is_model_scarcity as _is_model_scarcity,
-)
 from orchestrator.models import (
     ExecutionMode,
     ExecutionPlan,
@@ -84,9 +59,7 @@ from orchestrator.models import (
     TaskResponse,
 )
 from orchestrator.north_star import NorthStarChecker
-from orchestrator.quality_gate import QualityGate
 from orchestrator.result_audit import ResultAuditor
-from orchestrator.review import read_review_result
 from orchestrator.router import ExecutionPlanner
 from orchestrator.running_tasks import RunningTaskStore
 from orchestrator.stream import EventStreamManager
@@ -96,9 +69,7 @@ from utils.edit_scope import EditAuthorizer
 from utils.handoff import declared_artifact_paths, ensure_handoff_dir, handoff_dir_for, missing_artifact_paths
 from utils.ids import generate_id, generate_task_id
 from utils.logging import bind_task_id
-from utils.prompts import load_prompt
 from utils.tasks import spawn
-from utils.text import extract_json
 from utils.time import format_timestamp, localnow, utcnow
 from utils.tools import (
     ToolDispatchRegistryPort,
@@ -120,19 +91,6 @@ def _declared_artifact_paths(agent: Agent, task_id: str, date: str) -> list[str]
     return declared_artifact_paths(agent.config.produces, task_id, date)
 
 
-# Engineering conductor (2e): coder→reviewer fix rounds allowed after the first
-# review before the bounded loop stops and the DoD gate takes over.
-# Coder framing per engineering_kind for the conductor loop. Kinds not listed use
-# the default preamble. Keeps test/debug as task-framings of the ONE coder loop
-# rather than separate write-agents (single continuous context wins for writes).
-# Deploy/ship flow (Group E): shipping already-completed work is a distinct,
-# human-gated flow - NOT a code-writing loop - so it runs a single agent with git/gh
-# tools and is never handled by the conductor or the code Definition-of-Done gate.
-# Interactive design phase (cockpit): for larger code kinds, when a human is available,
-# clarify + agree the design BEFORE the continuous coder implements it. Small/localized
-# kinds (bugfix/debug/test) skip it and let the conductor clarify only if truly stuck.
-# Pre-implementation spec critique (doubt-driven review): bounded + fail-open.
-# Per-candidate test-command timeout for best-of-N selection (#11).
 _BEST_OF_N_TEST_TIMEOUT: int = 300
 # Timeout for the orchestrator-run Definition-of-Done verification oracle (B2).
 # Safe, FIXED verification commands the orchestrator may auto-run as an executable
@@ -192,11 +150,6 @@ class Orchestrator:
         tool_input_factory: ToolInputFactory | None = None,
         default_workspace: str = "",
         extraction_pipeline: Any | None = None,
-        worktree_isolation: bool = False,
-        worktree_root: str = "",
-        best_of_n: int = 1,
-        best_of_n_test_command: str = "",
-        verify_command: str = "",
         running_task_store: RunningTaskStore | None = None,
         stuck_task_max_age_seconds: int = 86_400,
         self_repair: bool = True,
@@ -233,11 +186,6 @@ class Orchestrator:
         self._plan_store = plan_store
         self._default_workspace = default_workspace
         self._extraction_pipeline = extraction_pipeline
-        self._worktree_isolation = worktree_isolation
-        self._worktree_root = worktree_root
-        self._best_of_n = max(1, best_of_n)
-        self._best_of_n_test_command = best_of_n_test_command.strip()
-        self._verify_command = verify_command.strip()
         self._running_task_store = running_task_store
         self._stuck_task_max_age_seconds = stuck_task_max_age_seconds
         self._self_repair = self_repair
@@ -252,20 +200,6 @@ class Orchestrator:
         self._submit_lock = asyncio.Lock()
         self._last_pool_refresh_at: float = 0.0
         self._queue_wake_event = asyncio.Event()
-        # Isolated / best-of-N agent execution. Given the worktree settings, a
-        # place to report to, and one way to run an agent - it owns nothing else.
-        self._isolation = AgentIsolation(
-            enabled=worktree_isolation,
-            worktree_root=worktree_root,
-            best_of_n=self._best_of_n,
-            test_command=best_of_n_test_command,
-            stream_manager=stream_manager,
-            write_ledger=self._journal.write,
-            run_agent=self._run_agent_with_retry,
-        )
-        # Does the evidence say this is done? Runs the project's own tests and
-        # scores the recorded evidence against the Definition of Done.
-        self._quality_gate = QualityGate(ledger=ledger, journal=self._journal, verify_command=verify_command)
         # Does the answer match what the tools actually did? Cross-checks claims,
         # gives the agent one repair pass, and optionally runs the critic.
         self._auditor = ResultAuditor(
@@ -900,9 +834,7 @@ class Orchestrator:
             request.prompt,
             plan,
             request.workspace,
-            domain=classification.domain,
             context=request.context,
-            confidence=classification.confidence,
             edit_scope=request.edit_scope,
         )
 
@@ -1178,325 +1110,6 @@ class Orchestrator:
             )
         )
 
-    def _use_conductor(self, domain: str, plan: ExecutionPlan) -> bool:
-        """True when this task runs the code IMPLEMENT + VERIFY phases (the conductor).
-
-        Applies to any engineering task that actually involves writing code
-        (``coder`` in ``plan.agents``). The no-code kinds - ``question`` (researcher
-        only) and ``research`` (researcher → architect) - are read-only and are NOT
-        forced through the coder + Definition-of-Done gate. ``deploy``/``ship`` is a
-        separate flow (SHIP phase), not a coding loop.
-        """
-        if domain != "engineering":
-            return False
-        if plan.engineering_kind in DEPLOY_KINDS:
-            return False  # deploy/ship is a distinct human-gated flow, not a coding loop
-        if "coder" not in plan.agents:
-            return False
-        return {"coder", "reviewer"} <= set(self._agent_registry.names())
-
-    def _use_deploy_flow(self, domain: str, plan: ExecutionPlan) -> bool:
-        """True when this is an engineering deploy/ship task and the coder is available."""
-        return (
-            domain == "engineering"
-            and plan.engineering_kind in DEPLOY_KINDS
-            and "coder" in set(self._agent_registry.names())
-        )
-
-    async def _run_deploy_flow(
-        self,
-        task_id: str,
-        prompt: str,
-        workspace: str,
-        context: str = "",
-        edit_scope: EditAuthorizer | None = None,
-    ) -> list[str]:
-        """Ship already-completed work: a single git/gh-capable agent, human-gated.
-
-        Deploy is deliberately NOT the conductor and NOT gated by the code DoD - there
-        is no new code to review or verify. The agent runs with a shipping framing that
-        requires a semantic approval checkpoint before any external side effect (push /
-        PR) and a second explicit approval before any merge or production deploy.
-        """
-        coder = self._agent_registry.get("coder")
-        deploy_prompt = f"{DEPLOY_PREAMBLE}\n\n{prompt}"
-        return await self._execute_agent_group(
-            task_id, deploy_prompt, [coder], workspace, context=context, edit_scope=edit_scope
-        )
-
-    def _use_design_phase(self, plan: ExecutionPlan) -> bool:
-        """True when a task should get the interactive clarify+design phase first.
-
-        Only for larger code kinds (feature/refactor). Its questions go through the
-        approval layer like any other, so in autonomous the memory decider answers
-        them. Requires researcher + architect registered.
-        """
-        agents = set(self._agent_registry.names())
-        return plan.engineering_kind in DESIGN_KINDS and {"researcher", "architect"} <= agents
-
-    async def _run_design_phase(
-        self,
-        task_id: str,
-        prompt: str,
-        workspace: str,
-        context: str = "",
-        edit_scope: EditAuthorizer | None = None,
-    ) -> list[str]:
-        """Interactive clarify + design: researcher gathers context (clarifying scope
-        with the user if unclear), then the architect proposes and DISCUSSES a solution
-        with the user until aligned, writing the agreed spec. Returns failures (empty
-        on success). The conductor then implements the agreed spec."""
-        researcher = self._agent_registry.get("researcher")
-        architect = self._agent_registry.get("architect")
-        await self._stream_manager.emit(task_id, "design_phase", {"step": "research"})
-        r_fail = await self._execute_agent_group(
-            task_id,
-            f"{DESIGN_RESEARCH_PREAMBLE}\n\n{prompt}",
-            [researcher],
-            workspace,
-            context=context,
-            edit_scope=edit_scope,
-        )
-        if r_fail:
-            return r_fail
-        research = await asyncio.to_thread(
-            _read_artifact, self._primary_artifact_path("researcher", task_id), _HANDOFF_ARTIFACT_MAX_CHARS
-        )
-        design_ctx = f"{context}\n\n## Research context\n{research}" if research else context
-        await self._stream_manager.emit(task_id, "design_phase", {"step": "design"})
-        a_fail = await self._execute_agent_group(
-            task_id,
-            f"{DESIGN_ARCHITECT_PREAMBLE}\n\n{prompt}",
-            [architect],
-            workspace,
-            context=design_ctx,
-            edit_scope=edit_scope,
-        )
-        if a_fail:
-            return a_fail
-        # A "successful" architect that wrote no usable spec must not send the coder to
-        # implement a phantom file - treat a missing/trivial spec as a design failure.
-        spec = await asyncio.to_thread(_read_artifact, Path(self._spec_path(task_id)), _HANDOFF_ARTIFACT_MAX_CHARS)
-        if not spec or len(spec.strip()) < SPEC_MIN_CHARS:
-            await self._warn_missing_handoff_artifact(task_id, "architect")
-            return ["architect"]
-        return []
-
-    def _spec_path(self, task_id: str) -> str:
-        """Path to the architect's agreed design spec for this task."""
-        return f"{handoff_dir_for(task_id)}/architecture/spec.md"
-
-    def _coder_preamble_for_kind(self, kind: str) -> str:
-        """The coder's framing for a code kind (debug = reproduce-first, test =
-        tests-only); the default principal-engineer framing for anything else."""
-        return CONDUCTOR_CODER_PREAMBLES.get(kind.strip().lower(), CONDUCTOR_CODER_PREAMBLE)
-
-    def _coder_preamble_for_agreed_spec(self, task_id: str, critique: list[str] | None = None) -> str:
-        """The coder's framing when a design was agreed with the user: implement that
-        spec as-is rather than redesign. Any pre-implementation critique concerns are
-        appended as a bounded, within-spec checklist (never a licence to redesign)."""
-        preamble = CONDUCTOR_CODER_PREAMBLE_SPEC.format(spec_path=self._spec_path(task_id))
-        if critique:
-            issues = "\n".join(f"- {concern}" for concern in critique)
-            preamble += SPEC_CRITIQUE_INJECTION.format(issues=issues)
-        return preamble
-
-    async def _seed_plan_from_spec(self, task_id: str) -> int:
-        """Seed the plan store from the agreed spec's ``## Tasks`` checklist.
-
-        The coder then starts from - and resumes on - the agreed checklist (north's
-        STATE equivalent, via the existing plan_store) rather than re-deriving it.
-        Returns the number of tasks seeded; 0 when unavailable or none parse.
-        """
-        if self._plan_store is None:
-            return 0
-        spec = await asyncio.to_thread(_read_artifact, Path(self._spec_path(task_id)), _HANDOFF_ARTIFACT_MAX_CHARS)
-        if not spec:
-            return 0
-        tasks = parse_spec_tasks(spec)
-        if not tasks:
-            return 0
-        self._plan_store.set_plan(task_id, [{"content": task, "status": "pending"} for task in tasks])
-        await self._stream_manager.emit(task_id, "plan_seeded", {"tasks": len(tasks)})
-        return len(tasks)
-
-    async def _rubber_duck_spec(self, task_id: str, prompt: str, workspace: str) -> list[str]:
-        """Independent, fresh-context critique of the agreed spec before implementation.
-
-        A one-shot, timeout-bounded, fail-open review that runs on a DIFFERENT model
-        than the architect (a genuine second opinion): it surfaces concrete flaws for
-        the coder to resolve, never blocks the pipeline, and records whether it was
-        truly independent. Returns the concerns (empty on skip/error).
-        """
-        if self._tracked_router is None:
-            return []
-        spec = await asyncio.to_thread(_read_artifact, Path(self._spec_path(task_id)), _HANDOFF_ARTIFACT_MAX_CHARS)
-        if not spec or len(spec.strip()) < SPEC_MIN_CHARS:
-            return []  # too little to critique; a truly absent spec is caught in _run_design_phase
-        research = await asyncio.to_thread(
-            _read_artifact, self._primary_artifact_path("researcher", task_id), _HANDOFF_ARTIFACT_MAX_CHARS
-        )
-        exclude = await self._models_used_by(task_id, {"architect"})
-        critique_prompt = load_prompt("prompts/spec_critique.md").format(
-            prompt=prompt[:1500], research=(research or "(none)")[:2000], spec=spec[:_HANDOFF_ARTIFACT_MAX_CHARS]
-        )
-        try:
-            response = await asyncio.wait_for(
-                self._tracked_router.complete(
-                    CompletionRequest(
-                        prompt=critique_prompt,
-                        component="spec_critique",
-                        task_id=task_id,
-                        json_mode=True,
-                        max_tokens=800,
-                        temperature=0.2,
-                        exclude_models=exclude,
-                    )
-                ),
-                timeout=SPEC_CRITIQUE_TIMEOUT_S,
-            )
-            verdict = extract_json(response.text)
-        except Exception:
-            logger.debug("spec critique skipped (error/timeout) for task %s", task_id, exc_info=True)
-            return []
-        issues = clean_issues(verdict.get("issues") if isinstance(verdict, dict) else None)
-        independent = bool(exclude) and response.model_used not in exclude
-        await self._journal.record(
-            task_id,
-            "spec_critique",
-            agent="spec_critic",
-            output="; ".join(issues) if issues else "spec sound",
-            agent_output={
-                "model_used": response.model_used,
-                "independent": independent,
-                "issue_count": len(issues),
-            },
-            payload={"issues": issues, "model": response.model_used, "independent": independent},
-        )
-        return issues
-
-    async def _commit_coder_work(self, task_id: str, prompt: str, workspace: str, *, round_label: str = "") -> None:
-        """Branch and commit whatever the coder changed. Never raises.
-
-        Committing is bookkeeping, so it must not be able to fail a task whose
-        change was already applied and verified - the work is on disk either way.
-        """
-        if self._tool_registry is None:
-            return
-        if self._tool_input_factory is None:
-            return
-        try:
-            git_tool = self._tool_registry.get("git")
-        except Exception:
-            return
-        summary = " ".join(prompt.split())[:60]
-        verb = f"fix ({round_label})" if round_label else "implement"
-        try:
-            branch = await WorkCommitter(git_tool, tool_input_factory=self._tool_input_factory).commit(
-                workspace=workspace,
-                task_id=task_id,
-                message=f"{verb}: {summary} (task {task_id})",
-            )
-        except Exception:
-            logger.warning("Could not commit the coder's work for %s", task_id, exc_info=True)
-            return
-        if branch:
-            await self._journal.record(
-                task_id,
-                "work_committed",
-                output=f"Committed the change on {branch}.",
-                payload={"branch": branch},
-            )
-
-    async def _run_engineering_conductor(
-        self,
-        task_id: str,
-        prompt: str,
-        workspace: str,
-        coder_preamble: str,
-        context: str = "",
-        edit_scope: EditAuthorizer | None = None,
-    ) -> list[str]:
-        """The IMPLEMENT + VERIFY phase: one continuous coder (framed by
-        ``coder_preamble``), then an independent different-model reviewer with a
-        bounded coder-fix loop.
-
-        The orchestrator (not the model) deterministically runs the reviewer, reads
-        its structured verdict, and sends the coder back once per must-fix round up
-        to a cap. The Definition-of-Done gate (evaluated after this returns) is the
-        final backstop.
-        """
-        coder = self._agent_registry.get("coder")
-        reviewer = self._agent_registry.get("reviewer")
-
-        coder_prompt = f"{coder_preamble}\n\n{prompt}"
-        failures = await self._execute_agent_group(
-            task_id, coder_prompt, [coder], workspace, context=context, edit_scope=edit_scope
-        )
-        if failures:
-            return failures  # coder failed - nothing to review
-
-        # Record the work before it is reviewed. The coder used to do this itself,
-        # at a cost of roughly six model turns spent on steps that need no
-        # judgement at all - branch, stage each file, commit.
-        await self._commit_coder_work(task_id, prompt, workspace)
-
-        review_prompt = f"{prompt}\n\n{CONDUCTOR_REVIEW_PROMPT}"
-        for fix_round in range(CONDUCTOR_MAX_FIX_ROUNDS + 1):
-            review_failures = await self._execute_agent_group(
-                task_id,
-                review_prompt,
-                [reviewer],
-                workspace,
-                context=context,
-                allow_delegation=False,
-                edit_scope=edit_scope,
-            )
-            if review_failures:
-                if _is_model_scarcity(review_failures):
-                    # A missing independent review means the whole task has not met
-                    # its completion contract. Hand the same task to the recovery
-                    # queue instead of accepting partially verified work.
-                    await self._stream_manager.emit(
-                        task_id, "waiting_for_model", {"agent": "reviewer", "reason": _MODEL_SCARCITY_MESSAGE}
-                    )
-                    return review_failures
-                return review_failures  # a genuine reviewer failure - unchanged
-
-            review = read_review_result(task_id)
-            if review is not None and review.passed:
-                return []  # verified pass - done
-
-            if review is None:
-                # The reviewer did not emit the required structured verdict. Do NOT
-                # treat that as done - retry the reviewer (demanding the JSON) if
-                # budget remains; otherwise stop and let the DoD gate flag the
-                # unverified result honestly.
-                await self._stream_manager.emit(task_id, "conductor_review_missing_verdict", {})
-                if fix_round >= CONDUCTOR_MAX_FIX_ROUNDS:
-                    return []
-                review_prompt = f"{prompt}\n\n{CONDUCTOR_REVIEW_RETRY_PROMPT}"
-                continue  # re-run the reviewer; nothing structured for the coder to fix yet
-
-            # review present and FAILED with must-fix items.
-            if fix_round >= CONDUCTOR_MAX_FIX_ROUNDS:
-                await self._stream_manager.emit(task_id, "conductor_review_unresolved", {"must_fix": review.must_fix})
-                return []
-
-            items = "\n".join(f"- {m}" for m in review.must_fix) or "(see the review report)"
-            await self._stream_manager.emit(task_id, "conductor_fix_round", {"round": fix_round + 1})
-            fix_prompt = f"{prompt}\n\n{CONDUCTOR_FIX_PREAMBLE.format(items=items[:_HANDOFF_ARTIFACT_MAX_CHARS])}"
-            fix_failures = await self._execute_agent_group(
-                task_id, fix_prompt, [coder], workspace, context=context, edit_scope=edit_scope
-            )
-            if fix_failures:
-                return fix_failures  # coder fix failed
-            # Each round is recorded as it lands. Committing only after the first
-            # coder run left everything a fix round changed uncommitted, which is
-            # the half that matters most - it is what the reviewer asked for.
-            await self._commit_coder_work(task_id, prompt, workspace, round_label=f"fix round {fix_round + 1}")
-        return []
-
     async def _execute_hierarchical_groups(
         self,
         task_id: str,
@@ -1685,27 +1298,14 @@ class Orchestrator:
         prompt: str,
         plan: ExecutionPlan,
         workspace: str = "",
-        domain: str = "general",
         context: str = "",
-        confidence: float = 1.0,
         edit_scope: EditAuthorizer | None = None,
     ) -> None:
         """Stage 4: execute the task, then optionally synthesize.
 
-        Engineering work is ONE pipeline with optional phases, chosen by task kind +
-        mode (there is no separate "conductor"/"classic" toggle - the conductor IS
-        the code path):
-
-          UNDERSTAND  - researcher gathers context (a `question` ends here).
-          DESIGN      - architect agrees a spec with the user (`_run_design_phase`);
-                        only for feature/refactor when a human is available.
-          IMPLEMENT + VERIFY - continuous coder + independent different-model reviewer
-                        + Definition-of-Done gate (`_run_engineering_conductor`); for
-                        every code kind (bugfix/debug/test/feature/refactor).
-          SHIP        - branch/commit/PR, human-gated (`_run_deploy_flow`); `deploy`/`ship`.
-
-        No-code kinds (question/research) and non-engineering domains run the generic
-        sequential/parallel executors. Only code kinds get the DoD gate.
+        Coding is not a pipeline of north's own agents: a code task goes to the general agent, which hands
+        the coding to the user's installed coding agents (`coding_agent`). Everything runs through the
+        generic sequential or parallel executors.
         """
         if not workspace:
             workspace = self._default_workspace
@@ -1717,45 +1317,7 @@ class Orchestrator:
 
         await self._stream_manager.emit(task_id, "executing", {"agents": plan.agents})
 
-        use_conductor = self._use_conductor(domain, plan)
-        use_deploy = self._use_deploy_flow(domain, plan)
-        use_design = use_conductor and self._use_design_phase(plan)
-        if use_deploy:
-            all_failures = await self._run_deploy_flow(
-                task_id, prompt, workspace, context=context, edit_scope=edit_scope
-            )
-        elif use_design:
-            # Cockpit: clarify + agree the design with the user first, an independent
-            # different-model critique stress-tests the spec, then the continuous coder
-            # implements the AGREED spec (resolving the critique within its scope).
-            design_failures = await self._run_design_phase(
-                task_id, prompt, workspace, context=context, edit_scope=edit_scope
-            )
-            if design_failures:
-                all_failures = design_failures  # design blocked (incl. no usable spec) - don't implement
-            else:
-                # Seed the coder's plan from the agreed spec's tasks (resumable state),
-                # then stress-test the spec with an independent critique.
-                await self._seed_plan_from_spec(task_id)
-                spec_critique = await self._rubber_duck_spec(task_id, prompt, workspace)
-                all_failures = await self._run_engineering_conductor(
-                    task_id,
-                    prompt,
-                    workspace,
-                    self._coder_preamble_for_agreed_spec(task_id, spec_critique),
-                    context=context,
-                    edit_scope=edit_scope,
-                )
-        elif use_conductor:
-            all_failures = await self._run_engineering_conductor(
-                task_id,
-                prompt,
-                workspace,
-                self._coder_preamble_for_kind(plan.engineering_kind),
-                context=context,
-                edit_scope=edit_scope,
-            )
-        elif plan.mode == ExecutionMode.HIERARCHICAL:
+        if plan.mode == ExecutionMode.HIERARCHICAL:
             all_failures = await self._execute_hierarchical_groups(
                 task_id, prompt, plan, workspace, context=context, edit_scope=edit_scope
             )
@@ -1767,46 +1329,11 @@ class Orchestrator:
         if all_failures:
             await self._report_execution_failures(task_id, all_failures)
 
-        # Definition-of-Done gate: ENFORCED only on the conductor (code-change) path -
-        # a task whose recorded evidence doesn't clear the bar (a code change was
-        # applied + an independent, different-model review passed) finishes
-        # completed-with-failures with the reasons surfaced, so it is never reported
-        # as a clean success it didn't earn. Non-code engineering kinds (question/
-        # research) run the classic path and are not gated by a code DoD. Fails open.
-        dod_unmet_reasons: list[str] | None = None
-        if use_conductor:
-            # Independent executable oracle: the orchestrator runs the project's
-            # verification command itself (not the model's word) and feeds the result
-            # into the DoD. Only runs when a code change was applied (else there is
-            # nothing to verify), and only for real coding tasks (this branch).
-            auto_verify = await self._quality_gate.run_verification(task_id, workspace) if not all_failures else None
-            dod = await self._quality_gate.evaluate(task_id, domain, plan.engineering_kind, auto_verify)
-            if dod is not None and not dod.passed:
-                dod_unmet_reasons = dod.reasons
-                await self._quality_gate.report_unmet(task_id, dod.reasons)
-            # The conductor's own coder/reviewer output is streamed live; a synthesis
-            # over plan.agents (which may name researcher/architect that never ran)
-            # would summarise empty outputs, so it is skipped here.
-        elif use_deploy:
-            # Deploy streams the agent's shipping report live; there is no new code to
-            # verify (no DoD) and a single-agent synthesis would just be redundant.
-            pass
-        else:
-            await self._maybe_synthesize(task_id, plan.agents, plan.mode, failures=all_failures)
+        await self._maybe_synthesize(task_id, plan.agents, plan.mode, failures=all_failures)
 
         # Episodes are written by the background EpisodeConsolidator (single writer)
         # from the ledger, covering success, failure, and cancellation uniformly.
-        if use_deploy:
-            total_agents = 1
-        elif use_design:
-            total_agents = 4  # researcher + architect (design) + coder + reviewer
-        elif use_conductor:
-            total_agents = 2  # coder + reviewer
-        else:
-            total_agents = len(plan.agents)
-        await self._finish_task(
-            task_id, failures=all_failures, total_agents=total_agents, dod_unmet_reasons=dod_unmet_reasons
-        )
+        await self._finish_task(task_id, failures=all_failures, total_agents=len(plan.agents))
 
     async def _execute_single_tool(
         self,
@@ -1821,7 +1348,7 @@ class Orchestrator:
 
         ``edit_scope`` is the task's server-owned :class:`EditAuthorizer`. It is
         stamped onto ``ToolInput.edit_scope`` (never ``params``) so a mutating tool
-        dispatched directly - e.g. a routed ``rename_symbol`` or ``write_file`` -
+        dispatched directly - e.g. a routed ``write_file`` -
         enforces the same scope it would inside an agent. ``None`` (the default)
         leaves edits unrestricted, preserving prior behavior.
         """
@@ -1892,12 +1419,11 @@ class Orchestrator:
         skip_extraction: bool = False,
         failures: list[str] | None = None,
         total_agents: int = 0,
-        dod_unmet_reasons: list[str] | None = None,
     ) -> None:
         """Write the terminal ledger entry and emit done events.
 
         Model scarcity queues the entire task. Otherwise every-agent failure ends
-        FAILED; partial failures or an unmet Definition of Done use a distinct
+        FAILED; partial failures use a distinct
         terminal action so the history never presents them as clean success.
         """
         failures = failures or []
@@ -1916,23 +1442,16 @@ class Orchestrator:
             )
             return
         all_failed = total_agents > 0 and len(failures) >= total_agents
-        dod_failed = bool(dod_unmet_reasons)
         task_cost_usd = self._tracked_router.pop_task_cost(task_id) if self._tracked_router else 0.0
         if all_failed:
             action, status, err = "task_failed", LedgerStatus.FAILED, "agent_failure"
-        elif failures or dod_failed:
-            action, status, err = (
-                "task_completed_with_failures",
-                LedgerStatus.COMPLETED,
-                "dod_unmet" if dod_failed else None,
-            )
+        elif failures:
+            action, status, err = "task_completed_with_failures", LedgerStatus.COMPLETED, None
         else:
             action, status, err = "task_completed", LedgerStatus.COMPLETED, None
         output_parts: list[str] = []
         if failures:
             output_parts.append(f"Failed agents: {', '.join(failures)}")
-        if dod_failed:
-            output_parts.append(f"Definition of Done not met: {'; '.join(dod_unmet_reasons)}")
         await self._journal.write(
             LedgerEntry.new(
                 source=LedgerSource.SYSTEM,
@@ -1961,7 +1480,6 @@ class Orchestrator:
                 {
                     "cost_usd": task_cost_usd,
                     "failed_agents": [str(f) for f in failures],
-                    "dod_unmet": dod_unmet_reasons or [],
                 },
             )
         await self._stream_manager.emit_done(task_id)
@@ -2048,7 +1566,7 @@ class Orchestrator:
             for agent in agents
         ]
         results = await asyncio.gather(
-            *[self._isolation.run(agent, p) for agent, p in zip(agents, payloads, strict=False)],
+            *[self._run_agent_with_retry(agent, p) for agent, p in zip(agents, payloads, strict=False)],
             return_exceptions=True,
         )
 

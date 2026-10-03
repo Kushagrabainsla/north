@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -25,7 +26,6 @@ from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory import FileContextStore, LocalMemoryGateway
 from memory.extraction import ExtractionPipeline
 from orchestrator.failure_handler import FailureHandler
-from orchestrator.isolation import AgentIsolation
 from orchestrator.journal import TaskJournal
 from orchestrator.models import TaskRequest
 from orchestrator.orchestrator import Orchestrator
@@ -720,187 +720,6 @@ async def test_resume_task_declines_when_already_active(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Worktree isolation for the coder (end-to-end through the orchestrator)
-# ---------------------------------------------------------------------------
-
-
-def _init_git_repo(path: Path) -> None:
-    import subprocess
-
-    path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.name", "test"], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=path, check=True)
-    (path / "seed.txt").write_text("seed\n")
-    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=path, check=True)
-
-
-def _north_branches(path: Path) -> list[str]:
-    import subprocess
-
-    out = subprocess.run(["git", "branch", "--list", "north/*"], cwd=path, capture_output=True, text=True).stdout
-    return [line.strip().lstrip("* ").strip() for line in out.splitlines() if line.strip()]
-
-
-class _FileWritingCoder:
-    """Minimal stand-in agent that writes one file into its (isolated) workspace."""
-
-    name = "coder"
-
-    def __init__(self, filename: str, content: str) -> None:
-        self._filename = filename
-        self._content = content
-
-    async def run(self, payload: AgentPayload) -> AgentResult:
-        (Path(payload.workspace) / self._filename).write_text(self._content)
-        return AgentResult(output="done", summary=f"wrote {self._filename}", successful_tools=["write_file"])
-
-
-def _isolating_orchestrator(tmp_path: Path, best_of_n: int = 1):
-    """An orchestrator whose isolation collaborator is wired for worktree runs.
-
-    Rebuilt rather than poked: AgentIsolation takes its settings at construction,
-    exactly as the orchestrator wires it in production.
-    """
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    orch._isolation = AgentIsolation(
-        enabled=True,
-        worktree_root=str(tmp_path / "worktrees"),
-        best_of_n=best_of_n,
-        test_command="",
-        stream_manager=orch._stream_manager,
-        write_ledger=orch._journal.write,
-        run_agent=orch._run_agent_with_retry,
-    )
-    return orch, ledger
-
-
-@pytest.mark.asyncio
-async def test_isolated_coder_applies_changes_back(tmp_path):
-    repo = tmp_path / "repo"
-    _init_git_repo(repo)
-    orch, _ = _isolating_orchestrator(tmp_path)
-    payload = AgentPayload(task_id="t1", prompt="add feature", workspace=str(repo))
-
-    result = await orch._isolation.run(_FileWritingCoder("feature.py", "x = 1\n"), payload)
-
-    assert result.summary == "wrote feature.py"
-    assert (repo / "feature.py").read_text() == "x = 1\n"  # applied back to base tree
-    assert _north_branches(repo) == []  # worktree branch cleaned up
-
-
-@pytest.mark.asyncio
-async def test_isolated_coder_does_not_touch_base_until_integrate(tmp_path):
-    """The coder's writes go to the worktree, not the base tree, during the run."""
-    repo = tmp_path / "repo"
-    _init_git_repo(repo)
-    orch, _ = _isolating_orchestrator(tmp_path)
-    payload = AgentPayload(task_id="t1", prompt="x", workspace=str(repo))
-
-    seen: dict[str, bool] = {}
-
-    class _Probe(_FileWritingCoder):
-        async def run(self, payload: AgentPayload) -> AgentResult:
-            # While running, our workspace is NOT the base repo.
-            seen["isolated"] = Path(payload.workspace) != repo
-            seen["base_clean"] = not (repo / "feature.py").exists()
-            return await super().run(payload)
-
-    await orch._isolation.run(_Probe("feature.py", "1\n"), payload)
-
-    assert seen == {"isolated": True, "base_clean": True}
-    assert (repo / "feature.py").exists()  # applied on completion
-
-
-@pytest.mark.asyncio
-async def test_two_isolated_coders_disjoint_both_apply(tmp_path):
-    repo = tmp_path / "repo"
-    _init_git_repo(repo)
-    orch, _ = _isolating_orchestrator(tmp_path)
-    payload = AgentPayload(task_id="t1", prompt="parallel", workspace=str(repo))
-
-    await asyncio.gather(
-        orch._isolation.run(_FileWritingCoder("a.py", "A\n"), payload),
-        orch._isolation.run(_FileWritingCoder("b.py", "B\n"), payload),
-    )
-
-    assert (repo / "a.py").read_text() == "A\n"
-    assert (repo / "b.py").read_text() == "B\n"
-    assert _north_branches(repo) == []
-
-
-@pytest.mark.asyncio
-async def test_two_isolated_coders_conflict_retains_branch(tmp_path):
-    import subprocess
-
-    repo = tmp_path / "repo"
-    _init_git_repo(repo)
-    orch, ledger = _isolating_orchestrator(tmp_path)
-    payload = AgentPayload(task_id="t1", prompt="collide", workspace=str(repo))
-
-    await asyncio.gather(
-        orch._isolation.run(_FileWritingCoder("collide.txt", "FROM_A\n"), payload),
-        orch._isolation.run(_FileWritingCoder("collide.txt", "FROM_B\n"), payload),
-    )
-
-    # Exactly one landed; the other was retained on a branch and logged as a conflict.
-    assert (repo / "collide.txt").read_text() in {"FROM_A\n", "FROM_B\n"}
-    assert len(_north_branches(repo)) == 1
-    actions = [e.action for e in await ledger.query(LedgerFilters(task_id="t1"))]
-    assert "worktree_conflict" in actions
-
-    for branch in _north_branches(repo):
-        subprocess.run(["git", "branch", "-D", branch], cwd=repo, capture_output=True)
-
-
-class _UniqueFileCoder:
-    """Coder stand-in that writes a distinct file per attempt and counts its runs."""
-
-    name = "coder"
-
-    def __init__(self) -> None:
-        self.runs = 0
-
-    async def run(self, payload: AgentPayload) -> AgentResult:
-        self.runs += 1
-        fname = f"cand_{Path(payload.workspace).name}.py"
-        (Path(payload.workspace) / fname).write_text("x = 1\n")
-        return AgentResult(output="done", summary=f"wrote {fname}", successful_tools=["write_file"])
-
-
-@pytest.mark.asyncio
-async def test_best_of_n_integrates_exactly_one_candidate(tmp_path):
-    repo = tmp_path / "repo"
-    _init_git_repo(repo)
-    orch, _ = _isolating_orchestrator(tmp_path, best_of_n=3)
-    coder = _UniqueFileCoder()
-    payload = AgentPayload(task_id="t1", prompt="add feature", workspace=str(repo))
-
-    result = await orch._isolation.run(coder, payload)
-
-    assert coder.runs == 3  # all three candidates ran
-    landed = list(repo.glob("cand_*.py"))
-    assert len(landed) == 1  # exactly one winner integrated; losers discarded
-    assert result.summary.startswith("wrote cand_")
-    assert _north_branches(repo) == []  # every worktree branch cleaned up
-
-
-@pytest.mark.asyncio
-async def test_best_of_n_disabled_runs_single_attempt(tmp_path):
-    repo = tmp_path / "repo"
-    _init_git_repo(repo)
-    orch, _ = _isolating_orchestrator(tmp_path, best_of_n=1)
-    coder = _UniqueFileCoder()
-    payload = AgentPayload(task_id="t1", prompt="add feature", workspace=str(repo))
-
-    await orch._isolation.run(coder, payload)
-
-    assert coder.runs == 1  # N=1 is the ordinary single-worktree path
-    assert len(list(repo.glob("cand_*.py"))) == 1
-
-
-# ---------------------------------------------------------------------------
 # RunningTaskStore lifecycle through the real pipeline (crash-recovery substrate)
 # ---------------------------------------------------------------------------
 
@@ -1249,34 +1068,42 @@ async def test_single_tool_no_side_effect_when_readonly(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _declare_handoff_artifact(orch, monkeypatch) -> None:
+    """Make `notes_agent` an agent that declares one produced file, whatever agents are installed."""
+    config = SimpleNamespace(produces=["{handoff_dir}/notes/summary.md"])
+    monkeypatch.setattr(orch._agent_registry, "get", lambda name: SimpleNamespace(config=config))
+
+
 @pytest.mark.asyncio
 async def test_handoff_injects_real_artifact(tmp_path, monkeypatch):
     orch, _, _ = _make_orchestrator(tmp_path)
     monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(tmp_path / "hand" / tid))
+    _declare_handoff_artifact(orch, monkeypatch)
 
-    spec = tmp_path / "hand" / "t1" / "architecture" / "spec.md"
+    spec = tmp_path / "hand" / "t1" / "notes" / "summary.md"
     spec.parent.mkdir(parents=True)
     spec.write_text("# Spec\nUse a ring buffer keyed by session id.\n")
 
-    snippets, missing = await orch._collect_handoff_artifacts("t1", ["architect"])
+    snippets, missing = await orch._collect_handoff_artifacts("t1", ["notes_agent"])
 
     assert missing == []
     assert len(snippets) == 1
     assert "ring buffer keyed by session id" in snippets[0]  # real file content, not a summary
-    assert "spec.md" in snippets[0]
+    assert "summary.md" in snippets[0]
 
 
 @pytest.mark.asyncio
 async def test_handoff_flags_missing_artifact(tmp_path, monkeypatch):
     orch, ledger, _ = _make_orchestrator(tmp_path)
     monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(tmp_path / "hand" / tid))
+    _declare_handoff_artifact(orch, monkeypatch)
 
-    # No spec.md written.
-    snippets, missing = await orch._collect_handoff_artifacts("t1", ["architect"])
+    # No summary.md written.
+    snippets, missing = await orch._collect_handoff_artifacts("t1", ["notes_agent"])
     assert snippets == []
-    assert missing == ["architect"]
+    assert missing == ["notes_agent"]
 
-    await orch._warn_missing_handoff_artifact("t1", "architect")
+    await orch._warn_missing_handoff_artifact("t1", "notes_agent")
     actions = [e.action for e in await ledger.query(LedgerFilters(task_id="t1"))]
     assert "handoff_artifact_missing" in actions
 
@@ -1285,14 +1112,15 @@ async def test_handoff_flags_missing_artifact(tmp_path, monkeypatch):
 async def test_handoff_empty_artifact_counts_as_missing(tmp_path, monkeypatch):
     orch, _, _ = _make_orchestrator(tmp_path)
     monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(tmp_path / "hand" / tid))
+    _declare_handoff_artifact(orch, monkeypatch)
 
-    spec = tmp_path / "hand" / "t1" / "architecture" / "spec.md"
+    spec = tmp_path / "hand" / "t1" / "notes" / "summary.md"
     spec.parent.mkdir(parents=True)
     spec.write_text("   \n")  # whitespace only
 
-    snippets, missing = await orch._collect_handoff_artifacts("t1", ["architect"])
+    snippets, missing = await orch._collect_handoff_artifacts("t1", ["notes_agent"])
     assert snippets == []
-    assert missing == ["architect"]
+    assert missing == ["notes_agent"]
 
 
 # ---------------------------------------------------------------------------
@@ -1412,228 +1240,12 @@ async def test_respond_approval_does_not_learn_a_card_about_no_action(tmp_path):
     assert mem.all_decisions() == []
 
 
-class _NamedAgent:
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-
-def _tool_result(tools: list[str]) -> AgentResult:
-    return AgentResult(output="x", summary="x", successful_tools=tools)
-
-
-def test_evidence_gate_flags_unverified_code_change(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path)
-    v = auditor._with_evidence_gate_violations(_NamedAgent("coder"), _tool_result(["patch_file"]), [])
-    assert any("verify" in x for x in v)
-
-
-def test_evidence_gate_flags_attempted_but_denied_edit(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path)
-    # Attempted patch_file (in tools_used) but it never succeeded (not in successful_tools):
-    # e.g. the approval was denied - no change was applied, so "done" is false.
-    result = AgentResult(
-        output="fixed it",
-        summary="x",
-        successful_tools=["read_file"],
-        tools_used=["read_file", "patch_file"],
-    )
-    v = auditor._with_evidence_gate_violations(_NamedAgent("coder"), result, [])
-    assert any("did not succeed" in x for x in v)
-
-
-def test_evidence_gate_ok_when_edit_succeeded_and_verified(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path)
-    result = AgentResult(
-        output="x", summary="x", successful_tools=["patch_file", "bash"], tools_used=["patch_file", "bash"]
-    )
-    assert auditor._with_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
-
-
-def test_evidence_gate_ok_when_typechecked(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path)
-    result = _tool_result(["patch_file", "check_types"])
-    assert auditor._with_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
-
-
-def test_evidence_gate_ok_when_tested(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path)
-    assert auditor._with_evidence_gate_violations(_NamedAgent("coder"), _tool_result(["write_file", "bash"]), []) == []
-
-
-def test_evidence_gate_ignores_readonly(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path)
-    result = _tool_result(["read_file", "search_files"])
-    assert auditor._with_evidence_gate_violations(_NamedAgent("coder"), result, []) == []
-
-
-def test_evidence_gate_only_applies_to_engineering(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path)
-    assert auditor._with_evidence_gate_violations(_NamedAgent("general"), _tool_result(["patch_file"]), []) == []
-
-
-class _UnverifiedThenVerifiesCoder:
-    name = "coder"
-
-    async def run(self, payload: AgentPayload) -> AgentResult:
-        if "[correction required]" in payload.prompt:
-            return AgentResult(
-                output="Ran check_types - clean.", summary="verified", successful_tools=["patch_file", "check_types"]
-            )
-        return AgentResult(output="Fixed the bug.", summary="fixed", successful_tools=["patch_file"])
-
-
-@pytest.mark.asyncio
-async def test_evidence_gate_triggers_self_repair_to_verify(tmp_path):
-    auditor, _, _ = _make_auditor(tmp_path)
-    result = AgentResult(output="Fixed the bug.", summary="fixed", successful_tools=["patch_file"])
-
-    await auditor.verify_claims(
-        "t1", _UnverifiedThenVerifiesCoder(), result, AgentPayload(task_id="t1", prompt="fix bug")
-    )
-
-    assert "Unverified" not in result.output  # gate forced a verification pass
-    assert "check_types" in (result.successful_tools or [])
-
-
 # ---------------------------------------------------------------------------
 # Pre-implementation spec critique (Workstream B)
 # ---------------------------------------------------------------------------
 
 
-class _SpecCriticRouter:
-    """Stand-in router returning a fixed critique verdict and model_used."""
-
-    def __init__(self, text: str, model_used: str = "critic-model") -> None:
-        self._text = text
-        self._model = model_used
-        self.calls = 0
-
-    async def complete(self, request):  # noqa: ANN001
-        from types import SimpleNamespace
-
-        self.calls += 1
-        return SimpleNamespace(text=self._text, model_used=self._model, cost_usd=0.0, tokens_in=0, tokens_out=0)
-
-
 _GOOD_SPEC = "# Spec\n\n" + ("This is a sufficiently detailed agreed design spec. " * 8)
-
-
-def _write_spec(base: Path, task_id: str, text: str) -> None:
-    spec_dir = base / task_id / "architecture"
-    spec_dir.mkdir(parents=True, exist_ok=True)
-    (spec_dir / "spec.md").write_text(text, encoding="utf-8")
-
-
-async def _seed_architect_model(ledger, task_id: str, model: str) -> None:
-    await ledger.write(
-        LedgerEntry.new(
-            source=LedgerSource.AGENT,
-            task_id=task_id,
-            agent="architect",
-            action="agent_completed",
-            output="wrote spec",
-            status=LedgerStatus.COMPLETED,
-            model_used=model,
-        )
-    )
-
-
-@pytest.mark.asyncio
-async def test_spec_critique_filters_issues_and_marks_independent(tmp_path, monkeypatch):
-    base = tmp_path / "hand"
-    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    await _seed_architect_model(ledger, "t1", "architect-model")
-    _write_spec(base, "t1", _GOOD_SPEC)
-    orch._tracked_router = _SpecCriticRouter(
-        '{"issues": ["short", "Concrete: the empty-input path is unhandled and divides by zero"], "sound": false}',
-        model_used="different-model",
-    )
-
-    issues = await orch._rubber_duck_spec("t1", "build X", str(tmp_path))
-
-    assert len(issues) == 1  # the vague "short" issue was dropped
-    assert "empty-input" in issues[0]
-    crit = next(e for e in await ledger.query(LedgerFilters(task_id="t1")) if e.action == "spec_critique")
-    assert crit.agent_output.get("independent") is True
-
-
-@pytest.mark.asyncio
-async def test_spec_critique_same_model_not_independent(tmp_path, monkeypatch):
-    base = tmp_path / "hand"
-    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
-    orch, ledger, _ = _make_orchestrator(tmp_path)
-    await _seed_architect_model(ledger, "t1", "only-model")
-    _write_spec(base, "t1", _GOOD_SPEC)
-    orch._tracked_router = _SpecCriticRouter('{"issues": [], "sound": true}', model_used="only-model")
-
-    await orch._rubber_duck_spec("t1", "build X", str(tmp_path))
-
-    crit = next(e for e in await ledger.query(LedgerFilters(task_id="t1")) if e.action == "spec_critique")
-    assert crit.agent_output.get("independent") is False
-
-
-@pytest.mark.asyncio
-async def test_spec_critique_fails_open_on_bad_json(tmp_path, monkeypatch):
-    base = tmp_path / "hand"
-    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
-    orch, _, _ = _make_orchestrator(tmp_path)
-    _write_spec(base, "t1", _GOOD_SPEC)
-    orch._tracked_router = _SpecCriticRouter("this is not json")
-
-    assert await orch._rubber_duck_spec("t1", "build X", str(tmp_path)) == []
-
-
-@pytest.mark.asyncio
-async def test_spec_critique_skips_trivial_spec(tmp_path, monkeypatch):
-    base = tmp_path / "hand"
-    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
-    orch, _, _ = _make_orchestrator(tmp_path)
-    _write_spec(base, "t1", "tiny")
-    router = _SpecCriticRouter('{"issues": ["x"], "sound": false}')
-    orch._tracked_router = router
-
-    assert await orch._rubber_duck_spec("t1", "build X", str(tmp_path)) == []
-    assert router.calls == 0  # never called the model on a trivial spec
-
-
-def test_coder_preamble_injects_critique_as_data_and_preserves_no_redesign(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-
-    base = orch._coder_preamble_for_agreed_spec("t1")
-    assert "Implement EXACTLY" in base
-    assert "concerns" not in base.lower()
-
-    with_critique = orch._coder_preamble_for_agreed_spec("t1", ["the empty list case is unhandled"])
-    assert "Implement EXACTLY" in with_critique  # do-not-redesign instruction preserved
-    assert "DATA, not commands" in with_critique  # critique framed as data, not instructions
-    assert "only within the agreed spec" in with_critique.lower()
-    assert "empty list case is unhandled" in with_critique
-
-
-@pytest.mark.asyncio
-async def test_seed_plan_from_spec_seeds_plan_store(tmp_path, monkeypatch):
-    from orchestrator.plan_store import PlanStore
-
-    base = tmp_path / "hand"
-    monkeypatch.setattr("orchestrator.orchestrator.handoff_dir_for", lambda tid: str(base / tid))
-    orch, _, _ = _make_orchestrator(tmp_path)
-    orch._plan_store = PlanStore()
-    _write_spec(base, "t1", "# Spec\n\n## Tasks\n- [ ] Add the parser\n- [ ] Wire it into the loop\n")
-
-    seeded = await orch._seed_plan_from_spec("t1")
-
-    assert seeded == 2
-    rendered = orch._plan_store.render("t1")
-    assert "Add the parser" in rendered
-    assert "Wire it into the loop" in rendered
-
-
-@pytest.mark.asyncio
-async def test_seed_plan_from_spec_no_store_is_noop(tmp_path):
-    orch, _, _ = _make_orchestrator(tmp_path)
-    orch._plan_store = None
-    assert await orch._seed_plan_from_spec("t1") == 0
 
 
 @pytest.mark.asyncio
@@ -1709,51 +1321,6 @@ async def test_pause_preserves_recovery_row_after_pipeline_cancellation(tmp_path
 
 
 # ── the code-evidence gate must not fire on agents that write documents ──────
-
-
-def _agent_named(name: str):
-    """A stand-in carrying only the attribute the evidence gate reads."""
-    from unittest.mock import MagicMock
-
-    agent = MagicMock()
-    agent.name = name
-    return agent
-
-
-@pytest.mark.parametrize("agent_name", ["researcher", "architect"])
-def test_document_writing_agents_are_not_accused_of_unverified_code_changes(tmp_path: Path, agent_name: str) -> None:
-    """Writing `context.md` or `spec.md` is the job, not an unchecked code edit.
-
-    These agents produce handoff documents with `write_file`, which the gate read
-    as a code change - so every research task ended with "modified code but ran
-    no check_types or test to verify the change" appended to a correct answer.
-    """
-    auditor, _ledger, _stream = _make_auditor(tmp_path)
-    result = AgentResult(
-        output="Here are the findings.",
-        summary="findings",
-        tools_used=["read_file", "write_file"],
-        successful_tools=["read_file", "write_file"],
-    )
-
-    violations = auditor._with_evidence_gate_violations(_agent_named(agent_name), result, [])
-
-    assert violations == [], f"{agent_name} writes documents, not code"
-
-
-def test_the_coder_is_still_held_to_the_evidence_gate(tmp_path: Path) -> None:
-    """The gate exists for the agent that actually edits code."""
-    auditor, _ledger, _stream = _make_auditor(tmp_path)
-    result = AgentResult(
-        output="Fixed it.",
-        summary="fixed",
-        tools_used=["patch_file"],
-        successful_tools=["patch_file"],
-    )
-
-    violations = auditor._with_evidence_gate_violations(_agent_named("coder"), result, [])
-
-    assert violations and "ran no check_types" in violations[0]
 
 
 # ── a run that finished with failures is not an exemplar ─────────────────────

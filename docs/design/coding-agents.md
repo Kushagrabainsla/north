@@ -299,7 +299,14 @@ Every wait must be visible. Proved by the experiments, or marked to build:
    a second door into memory is a second place to be misled. The block is marked as background that
    never widens what the agent may do; only the approval layer authorizes. A failing briefing never
    stops a run.
-6. Follow-up PR: delete `coder`, `architect`, `reviewer` and the edit tools.
+6. **Done.** The in-house coder is deleted: the `coder`, `architect`, `reviewer` and `researcher` agents; the
+   engineering pipeline in the orchestrator (understand, design with the user, the coder-reviewer loop with
+   the Definition-of-Done gate, best-of-N, worktree isolation, the ship flow); `patch_file`, `rename_symbol`,
+   `check_types`, `lint`; the engineering evidence gate in the result auditor; and the clean-code policy
+   that bound the coder. Code tasks now go to the `general` agent, which hands them to the installed agents
+   with the built-in skill `delegating-coding-to-the-installed-agents`; committing and PRs are the approval-gated
+   `git` and `gh` tools. Still to do: a deterministic review spec (rounds, style, reviewer, fix between
+   rounds) so "review it five times" is guaranteed by code, not by a model's counting.
 
 ## Open risks
 

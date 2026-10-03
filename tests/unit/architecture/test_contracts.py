@@ -59,7 +59,6 @@ def _production_paths() -> set[str]:
     paths: set[str] = {
         "exceptions.py",
         "resources/policies/safety.md",
-        "resources/policies/clean-code.md",
         "SECURITY.md",
     }
     for directory in PRODUCTION_ROOTS:

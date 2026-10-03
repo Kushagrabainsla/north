@@ -2,14 +2,11 @@
 
 An agent narrates what it did - "created the file", "the tests pass". The model
 has no way of knowing whether that is true; it writes what a successful answer
-sounds like. Three checks stand between that narration and the recorded result:
+sounds like. Two checks stand between that narration and the recorded result:
 
 1. **Claims vs evidence.** Completion claims in the answer are cross-checked
    against the tools that actually succeeded (`orchestrator/verification.py`).
-2. **The engineering evidence gate.** Code that changed with nothing run to
-   check it, or an edit that was attempted and never landed, is a false "done"
-   no matter how the answer is worded.
-3. **Self-repair.** Before anything is flagged, the agent gets one pass to
+2. **Self-repair.** Before anything is flagged, the agent gets one pass to
    either do the work or drop the claim.
 
 Everything here is non-fatal and fails open: a violation annotates the answer
@@ -23,7 +20,6 @@ import asyncio
 import logging
 
 from agents.base import Agent
-from agents.constants import CODE_MUTATING_TOOLS, CODE_VERIFY_TOOLS, ENGINEERING_AGENTS, NO_CODE_AGENTS
 from agents.models import AgentPayload, AgentResult
 from inference.cost_tracker import CostTracker
 from inference.models import CompletionRequest
@@ -100,7 +96,6 @@ class ResultAuditor:
                     outcome_status=_outcome_status(result),
                 )
             )
-        violations = self._with_evidence_gate_violations(agent, result, violations)
         if not violations:
             return
 
@@ -126,28 +121,6 @@ class ResultAuditor:
             error_type="unverified_claims",
             payload={"agent": agent.name, "violations": violations},
         )
-
-    def _with_evidence_gate_violations(self, agent: Agent, result: AgentResult, violations: list[str]) -> list[str]:
-        """Add the engineering evidence gate's findings to *violations*.
-
-        Code that changed but was never checked is unverified. Code that was
-        *attempted* and did not land (e.g. the approval was denied) means no change
-        was applied at all, so a "done" claim is simply false. Either routes the
-        answer through self-repair rather than being accepted.
-        """
-        if agent.name not in ENGINEERING_AGENTS or agent.name in NO_CODE_AGENTS:
-            return violations
-        succeeded = set(result.successful_tools or [])
-        attempted = set(result.tools_used or [])
-        if (attempted & CODE_MUTATING_TOOLS) and not (succeeded & CODE_MUTATING_TOOLS):
-            return [
-                *violations,
-                "attempted to modify code but the edit did not succeed (it may have been "
-                "denied or failed) - no change was applied",
-            ]
-        if (succeeded & CODE_MUTATING_TOOLS) and not (succeeded & CODE_VERIFY_TOOLS):
-            return [*violations, "modified code but ran no check_types or test to verify the change"]
-        return violations
 
     async def _attempt_self_repair(
         self, task_id: str, agent: Agent, result: AgentResult, payload: AgentPayload, violations: list[str]
@@ -197,7 +170,6 @@ class ResultAuditor:
                 outcome_status=_outcome_status(repaired),
             )
         )
-        remaining = self._with_evidence_gate_violations(agent, repaired, remaining)
         if len(remaining) >= len(violations):
             return violations  # no improvement - keep the original answer
 

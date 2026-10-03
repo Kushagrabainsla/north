@@ -14,7 +14,7 @@ patched at the symptom:
 - **"Inside the task's folder" is measured against what the server granted,
   never the model's `workspace` argument.** `AgentPayload.granted_workspace`
   and `ToolInput.granted_workspace` carry it; delegation can only narrow it.
-  `write_file` goes through the same gate as `patch_file`. North's own
+  `write_file` goes through the approval gate. North's own
   scratch space (handoff and personal notes) is allowed in every mode, so
   unattended runs do not stall on a card.
 - **The Telegram gateway fails closed.** It does not start without a valid,

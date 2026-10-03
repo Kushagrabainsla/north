@@ -20,7 +20,6 @@ from typing import Any
 from agents.capabilities import build_platform_capabilities_summary
 from agents.constants import (
     _TOOL_RESULT_MIN_FIELD_CHARS,
-    ENGINEERING_AGENTS,
     MAX_DELEGATION_DEPTH,
     MAX_TOOL_RESULT_CHARS,
 )
@@ -700,7 +699,7 @@ class AgenticLLMAgent(LLMAgent):
             {"role": "user", "content": user_text},
         ]
         tool_map = {t.name: t for t, _ in scored_tools}
-        # Agents with bash/git/patch_file produce larger tool outputs; give their
+        # Agents with bash/git produce larger tool outputs; give their
         # compaction summaries more room to preserve file paths and error messages.
         compact_tokens = COMPACT_TOKENS_HEAVY if tool_map.keys() & HEAVY_OUTPUT_TOOLS else COMPACT_TOKENS_DEFAULT
         return messages, tool_map, compact_tokens
@@ -1026,14 +1025,6 @@ class AgenticLLMAgent(LLMAgent):
         try:
             agent = registry.get(agent_name)
         except Exception:
-            if agent_name in ENGINEERING_AGENTS:
-                return await self._delegation_failed(
-                    payload,
-                    agent_name,
-                    f"Engineering agent '{agent_name}' not found. "
-                    "Cannot fall back to general for engineering tasks. "
-                    "Ensure the agent is registered and retry.",
-                )
             try:
                 agent = registry.get("general")
             except Exception:
@@ -1044,18 +1035,8 @@ class AgenticLLMAgent(LLMAgent):
         # An explicit workspace in the delegation params wins; otherwise the
         # sub-agent inherits the parent's. The delegate_task schema nests
         # metadata under "context", so accept a workspace from either place.
-        # Engineering agents that write real source must have a project
-        # directory - warn loudly when it is missing so a coder writing into
-        # the handoff scratch dir is detectable.
         context = params.get("context") if isinstance(params.get("context"), dict) else {}
         workspace = str(params.get("workspace") or context.get("workspace") or payload.workspace or "")
-        if not workspace and agent_name in ENGINEERING_AGENTS:
-            logger.warning(
-                "Delegating to engineering agent '%s' in task '%s' with an empty "
-                "workspace - source code may land in the handoff scratch directory.",
-                agent_name,
-                payload.task_id,
-            )
 
         sub_payload = AgentPayload(
             task_id=payload.task_id,

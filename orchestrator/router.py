@@ -60,36 +60,12 @@ def _normalize(text: str) -> str:
     return " ".join(_NORMALIZE_RE.sub("", text.lower().strip()).split())
 
 
-# Deterministic engineering pipeline (#4). The STRUCTURE - which agents run and in
-# what order - is fixed by code, not invented by the LLM per call. The canonical
-# order never changes; a task only selects a subset of it via `engineering_kind`.
-_ENGINEERING_ORDER: tuple[str, ...] = ("researcher", "architect", "coder", "reviewer")
-_ENGINEERING_STAGES: dict[str, tuple[str, ...]] = {
-    "question": ("researcher",),
-    # Investigation returns findings, so it ends with the agent that found them.
-    # Pairing it with the architect meant every "investigate X and summarise it"
-    # ran a design stage with nothing to design: measured on one such task the
-    # architect took 21s, wrote no spec, and - by making the run multi-agent -
-    # pulled in a synthesis pass on top. A task that genuinely wants a design
-    # says so, and gets `design`.
-    "research": ("researcher",),
-    "design": ("researcher", "architect"),
-    "bugfix": ("coder", "reviewer"),
-    "debug": ("coder", "reviewer"),
-    "test": ("coder", "reviewer"),
-    "refactor": ("architect", "coder", "reviewer"),
-    "feature": ("researcher", "architect", "coder", "reviewer"),
-}
-# Below this planner confidence, run the full chain rather than trust a subset.
-_ENGINEERING_FULL_CHAIN_BELOW_CONFIDENCE: float = 0.6
-# Read-only engineering kinds. These must NEVER be escalated into a code-writing
-# task, even at low confidence: a vague "how does X work?" stays an investigation
-# and must not silently add the coder (which would turn it into a write task).
+# Engineering tasks have no pipeline of north's own agents. Coding is handed to the user's installed coding
+# agents through the `coding_agent` tool, driven by the general agent and the built-in
+# "delegating-coding-to-the-installed-agents" skill. `engineering_kind` is kept as a label for the task.
+# Read-only kinds: a vague "how does X work?" stays an investigation.
 _NO_CODE_KINDS: frozenset[str] = frozenset({"question", "research", "design"})
-# Shipping kinds: take already-completed work and ship it (branch/commit/push/PR/CI).
-# Handled by the orchestrator's single-agent, human-gated deploy flow - not the
-# researcher→architect→coder→reviewer pipeline - so they map to a coder-only plan.
-_DEPLOY_KINDS: frozenset[str] = frozenset({"deploy", "ship"})
+_ENGINEERING_AGENT = "general"
 
 # Tools that produce raw sensory, perceptual, search, or shell output that requires
 # model interpretation (e.g. answering "what is on my screen?", "search the web for X",
@@ -156,7 +132,7 @@ def _execution_profile(prompt: str, classification: IntentClassification, plan: 
         and not classification.is_consequential
         and classification.confidence >= 0.75
         and plan.mode == ExecutionMode.SINGLE_AGENT
-        and plan.agents == ["researcher"]
+        and plan.agents == [_ENGINEERING_AGENT]
         and plan.engineering_kind in _NO_CODE_KINDS
     )
     # Inspect the original text: punctuation-stripping turns possessives such
@@ -336,10 +312,9 @@ class ExecutionPlanner:
                 }
             )
         if classification.domain == "engineering":
-            # Deterministic engineering chain (#4): ignore any LLM-invented agent
-            # graph and build a fixed researcher→architect→coder→reviewer subset.
+            # Engineering has one fixed shape: ignore any LLM-invented agent graph.
             engineering_kind = str(data.get("engineering_kind", "")).strip().lower()
-            plan = self._build_engineering_plan(engineering_kind, confidence, task_id)
+            plan = self._build_engineering_plan(engineering_kind, task_id)
         else:
             plan = self._build_plan_from_response(data, classification.domain, task_id)
 
@@ -459,55 +434,21 @@ class ExecutionPlanner:
             mode=mode,
         )
 
-    def _build_engineering_plan(self, engineering_kind: str, confidence: float, task_id: str) -> ExecutionPlan:
-        """Deterministic researcher→architect→coder→reviewer pipeline (#4).
+    def _build_engineering_plan(self, engineering_kind: str, task_id: str) -> ExecutionPlan:
+        """One agent for every engineering task: the general agent, which delegates the coding.
 
-        Code - not the LLM - fixes the structure. The canonical order is constant;
-        ``engineering_kind`` selects a subset of it. Invariants: the reviewer always
-        follows the coder (verification is non-negotiable); a low-confidence *code*
-        classification runs the full chain; and a read-only kind (question/research)
-        is NEVER escalated into a write task by adding the coder, even at low
-        confidence. Agents can still delegate_task to a skipped stage mid-run, so an
-        under-selected subset self-corrects.
+        north does not run its own coder, architect or reviewer any more. The skill that tells the general
+        agent how to use `coding_agent` is selected by the task, so the structure is fixed here and only the
+        label (`engineering_kind`) varies.
         """
-        registered = {a.name for a in self._agent_registry.all()}
-        # Deploy/ship: a single git/gh-capable agent, human-gated by the orchestrator's
-        # deploy flow. No reviewer, no full-chain escalation - there is no new code to
-        # review here, only work to ship.
-        if engineering_kind in _DEPLOY_KINDS:
-            if "coder" not in registered:
-                return self.build_fallback_plan("engineering", task_id)
-            return ExecutionPlan(
-                task_id=task_id,
-                agents=["coder"],
-                parallel_groups=[["coder"]],
-                dependencies={},
-                mode=ExecutionMode.SINGLE_AGENT,
-                engineering_kind=engineering_kind,
-            )
-        selected: tuple[str, ...] = _ENGINEERING_STAGES.get(engineering_kind, _ENGINEERING_ORDER)
-        # Low confidence broadens a code task to the full chain, but a read-only kind
-        # must stay read-only - never turn "how does X work?" into a code edit.
-        if confidence < _ENGINEERING_FULL_CHAIN_BELOW_CONFIDENCE and engineering_kind not in _NO_CODE_KINDS:
-            selected = _ENGINEERING_ORDER
-        if "coder" in selected and "reviewer" not in selected:
-            selected = (*selected, "reviewer")
-
-        ordered = [name for name in _ENGINEERING_ORDER if name in selected and name in registered]
-        if not ordered:
+        if _ENGINEERING_AGENT not in {a.name for a in self._agent_registry.all()}:
             return self.build_fallback_plan("engineering", task_id)
-
-        # Linear dependencies along the canonical order: each stage waits for the
-        # previous selected one, so HIERARCHICAL runs them strictly in sequence.
-        dependencies: dict[str, list[str]] = {ordered[i]: [ordered[i - 1]] for i in range(1, len(ordered))}
-        mode = ExecutionMode.SINGLE_AGENT if len(ordered) == 1 else ExecutionMode.HIERARCHICAL
-        groups = self._compute_parallel_groups(ordered, dependencies)
         return ExecutionPlan(
             task_id=task_id,
-            agents=ordered,
-            parallel_groups=groups,
-            dependencies=dependencies,
-            mode=mode,
+            agents=[_ENGINEERING_AGENT],
+            parallel_groups=[[_ENGINEERING_AGENT]],
+            dependencies={},
+            mode=ExecutionMode.SINGLE_AGENT,
             engineering_kind=engineering_kind,
         )
 
