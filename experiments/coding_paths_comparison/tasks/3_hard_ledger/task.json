@@ -1,0 +1,8 @@
+{
+  "id": "3_hard",
+  "level": "hard",
+  "kind": "bugfix",
+  "timeout_s": 1200,
+  "prompt": "Two bug reports on the ledger package. (1) People in the Americas see purchases made near midnight counted in the wrong month in monthly_totals(). (2) Two identical coffees bought on the same day (same amount and description, different transaction ids) show up as one, yet importing the same statement twice must still never double-count anything. Find and fix the root causes in the package, not the symptoms in monthly_totals(). Do not edit the existing test file; put new tests in a new file. CONVENTIONS.md applies.",
+  "canary": true
+}
