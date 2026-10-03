@@ -23,7 +23,7 @@ def _start(run_id: str = "run-1", task_id: str = "t1", agent: str = AGENT) -> Ru
 
 async def _begin(recorder: AgentRunRecorder, **state) -> None:
     await recorder.start(_start())
-    await recorder.remember("run-1", {"provider": "claude_code", "session_id": "sess-1", **state})
+    await recorder.remember("run-1", {"provider": "claude_code", "session_id": "sess-1", "mode": "plan", **state})
 
 
 async def test_a_run_appears_in_the_store_as_a_running_coding_agent(store) -> None:
@@ -77,7 +77,7 @@ class TestFindingARunToResume:
         recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
         await _begin(recorder, pid=4242)
 
-        live = await recorder.live_run("t1", AGENT)
+        live = await recorder.live_run("t1", AGENT, "plan")
 
         assert (live.run_id, live.session_id) == ("run-1", "sess-1")
 
@@ -85,31 +85,57 @@ class TestFindingARunToResume:
         recorder = AgentRunRecorder(store, pid_alive=lambda pid: True)
         await _begin(recorder, pid=4242)
 
-        assert await recorder.live_run("t1", AGENT) is None
+        assert await recorder.live_run("t1", AGENT, "plan") is None
 
     async def test_an_interrupted_run_is_found_even_if_its_pid_was_reused(self, store) -> None:
         recorder = AgentRunRecorder(store, pid_alive=lambda pid: True)
         await _begin(recorder, pid=4242)
         await store.set_status("run-1", RunStatus.INTERRUPTED)
 
-        assert (await recorder.live_run("t1", AGENT)).session_id == "sess-1"
+        assert (await recorder.live_run("t1", AGENT, "plan")).session_id == "sess-1"
 
     async def test_a_finished_run_is_not_resumed(self, store) -> None:
         recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
         await _begin(recorder, pid=4242)
         await recorder.finish("run-1", RunOutcome(ok=True, text="done", session_id="sess-1"))
 
-        assert await recorder.live_run("t1", AGENT) is None
+        assert await recorder.live_run("t1", AGENT, "plan") is None
 
     async def test_another_task_or_another_agent_is_not_resumed(self, store) -> None:
         recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
         await _begin(recorder, pid=4242)
 
-        assert await recorder.live_run("other-task", AGENT) is None
-        assert await recorder.live_run("t1", "coding:codex") is None
+        assert await recorder.live_run("other-task", AGENT, "plan") is None
+        assert await recorder.live_run("t1", "coding:codex", "plan") is None
 
     async def test_a_run_that_never_saved_a_session_cannot_be_resumed(self, store) -> None:
         recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
         await recorder.start(_start())
 
-        assert await recorder.live_run("t1", AGENT) is None
+        assert await recorder.live_run("t1", AGENT, "plan") is None
+
+    async def test_a_plan_run_is_not_resumed_by_an_edit_call(self, store) -> None:
+        recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
+        await _begin(recorder, pid=4242)
+
+        assert await recorder.live_run("t1", AGENT, "edit") is None
+
+    async def test_an_edit_run_comes_back_with_its_worktree(self, store) -> None:
+        recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
+        await recorder.start(_start())
+        await recorder.remember(
+            "run-1",
+            {
+                "provider": "claude_code",
+                "session_id": "sess-1",
+                "mode": "edit",
+                "pid": 4242,
+                "worktree": "/tmp/wt",
+                "branch": "north/wt-x",
+                "base_sha": "abc",
+            },
+        )
+
+        live = await recorder.live_run("t1", AGENT, "edit")
+
+        assert (live.worktree.path, live.worktree.branch, live.worktree.base_sha) == ("/tmp/wt", "north/wt-x", "abc")

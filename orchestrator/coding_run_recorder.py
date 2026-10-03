@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from agents.models import AgentPayload, AgentResult
-from coding_agents import FailureKind, LiveRun, RunOutcome, RunStart
+from coding_agents import FailureKind, LiveRun, RunOutcome, RunStart, WorkTree
 from orchestrator.agent_runs import AgentRunStore, RunStatus
 from utils.execution_context import current_execution
 
@@ -25,16 +25,16 @@ class AgentRunRecorder:
         self._pid_alive = pid_alive or _pid_alive
         self._started_at: dict[str, float] = {}
 
-    async def live_run(self, task_id: str, agent: str) -> LiveRun | None:
-        """The newest unfinished run of *agent* for this task whose process is gone, if it left a session."""
+    async def live_run(self, task_id: str, agent: str, mode: str) -> LiveRun | None:
+        """The newest unfinished *mode* run of *agent* for this task whose process is gone, if it left a session."""
         for run in reversed(await self._store.list_for_task(task_id)):
-            if run.agent != agent or run.status not in _UNFINISHED:
+            if run.agent != agent or run.status not in _UNFINISHED or _latest(run.provider_state, "mode") != mode:
                 continue
             pid = _latest(run.provider_state, "pid")
             if run.status != RunStatus.INTERRUPTED and pid and self._pid_alive(int(pid)):
                 continue  # still running right now: a second run, not a resume
             session_id = _latest(run.provider_state, "session_id")
-            return LiveRun(run.run_id, str(session_id)) if session_id else None
+            return LiveRun(run.run_id, str(session_id), _worktree(run.provider_state)) if session_id else None
         return None
 
     async def start(self, run: RunStart) -> None:
@@ -81,6 +81,11 @@ def _latest(provider_state: Mapping[str, Any], key: str) -> Any:
             if entry.get(key):
                 return entry[key]
     return None
+
+
+def _worktree(provider_state: Mapping[str, Any]) -> WorkTree | None:
+    path, branch, base = (_latest(provider_state, key) for key in ("worktree", "branch", "base_sha"))
+    return WorkTree(str(path), str(branch), str(base)) if path and branch and base else None
 
 
 def _pid_alive(pid: int) -> bool:

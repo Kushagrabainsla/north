@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from coding_agents.models import Availability, RunEvent, RunOutcome, RunSpec
+from coding_agents.models import Availability, RunEvent, RunOutcome, RunSpec, WorkChange, WorkTree
 
 EventSink = Callable[[RunEvent], Awaitable[None]]
 
@@ -41,6 +41,7 @@ class LiveRun:
 
     run_id: str
     session_id: str
+    worktree: WorkTree | None = None  # an edit run continues in the copy it already has
 
 
 @dataclass(frozen=True)
@@ -52,10 +53,22 @@ class RunStart:
     workspace: str
 
 
+class Workspaces(Protocol):
+    """Isolated copies of a repository for edit runs."""
+
+    async def create(self, workspace: str, label: str) -> WorkTree:
+        """A fresh copy on a throwaway branch; raises `CodingAgentError` when *workspace* is not a git repository."""
+        ...
+
+    async def finish(self, tree: WorkTree) -> WorkChange | None:
+        """Commit what the agent changed onto the branch; None, and the copy removed, when nothing changed."""
+        ...
+
+
 class RunRecorder(Protocol):
     """Where a run is written down, so it can be seen on the dashboard and resumed."""
 
-    async def live_run(self, task_id: str, agent: str) -> LiveRun | None: ...
+    async def live_run(self, task_id: str, agent: str, mode: str) -> LiveRun | None: ...
 
     async def start(self, run: RunStart) -> None: ...
 

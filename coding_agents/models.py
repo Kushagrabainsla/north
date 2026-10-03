@@ -63,6 +63,38 @@ class RunSpec:
 
 
 @dataclass(frozen=True)
+class FileDelta:
+    path: str
+    insertions: int
+    deletions: int
+
+
+@dataclass(frozen=True)
+class WorkTree:
+    """An isolated copy of a repository on a throwaway branch."""
+
+    path: str
+    branch: str
+    base_sha: str
+
+
+@dataclass(frozen=True)
+class WorkChange:
+    """What an edit run left on its branch. Nothing here has been applied to the real tree."""
+
+    tree: WorkTree
+    files: tuple[FileDelta, ...]
+
+    @property
+    def insertions(self) -> int:
+        return sum(file.insertions for file in self.files)
+
+    @property
+    def deletions(self) -> int:
+        return sum(file.deletions for file in self.files)
+
+
+@dataclass(frozen=True)
 class RunEvent:
     kind: EventKind
     data: Mapping[str, Any] = field(default_factory=dict)
