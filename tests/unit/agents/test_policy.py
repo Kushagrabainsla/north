@@ -1,8 +1,7 @@
 """Tests for the policy primitive: authoritative, always-on operating rules.
 
 Covers the loader (fail-closed on any malformed built-in policy), agent matching,
-rendering, and the real shipped policies (safety binds every agent; clean-code binds
-only coder+reviewer).
+rendering, and the real shipped policies (safety binds every agent).
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ def test_render_concatenates_matching_bodies_and_is_empty_when_none() -> None:
     ]
     coder_block = render_policies(policies, "coder")
     assert "SAFETY" in coder_block and "CLEAN" in coder_block
-    # A non-code agent gets safety only, never clean-code.
+    # An agent the second policy does not name gets safety only.
     finance_block = render_policies(policies, "finance")
     assert "SAFETY" in finance_block and "CLEAN" not in finance_block
     # Nothing matching => empty string (appends cleanly to a prompt).
@@ -111,10 +110,8 @@ def test_shipped_policies_bind_the_right_agents() -> None:
     policies = load_policies(_REAL_POLICIES_DIR)
     by_name = {p.name: p for p in policies}
     assert "safety" in by_name and by_name["safety"].applies_to is None  # every agent
-    assert by_name["clean-code"].applies_to == frozenset({"coder", "reviewer"})
+    assert "clean-code" not in by_name, "the in-house coder it bound is gone"
 
-    # Safety reaches every agent; clean-code only the two code agents.
-    for agent in ("coder", "reviewer", "finance", "general", "researcher"):
+    # Safety reaches every agent.
+    for agent in ("general", "finance", "wellness"):
         assert "non-negotiable" in render_policies(policies, agent)
-    assert "Clean code" in render_policies(policies, "coder")
-    assert "Clean code" not in render_policies(policies, "finance")

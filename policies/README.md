@@ -5,7 +5,7 @@ A policy is north's fourth capability primitive - see the taxonomy in
 `docs/ARCHITECTURE.md` §2.1 (tool / skill / policy / agent).
 
 A **policy** binds; a **skill** advises. Use a policy for a cross-cutting rule that
-must *always* hold (safety, clean-code); use a skill for procedural knowledge that
+must *always* hold (safety); use a skill for procedural knowledge that
 is only *sometimes* relevant.
 
 ## Format
@@ -14,7 +14,7 @@ Each policy is a markdown file with YAML frontmatter:
 
 ```md
 ---
-applies_to: "*"                 # every agent, OR a list: [coder, reviewer]
+applies_to: "*"                 # every agent, OR a list: [general, wellness]
 ---
 ## Title
 The authoritative rule text...
@@ -41,5 +41,3 @@ that can be enforced in code.
 
 - `safety.md` (`*`) - report tool failures honestly, never fabricate, confirm
   before irreversible/external actions.
-- `clean-code.md` (`coder`, `reviewer`) - the clean-code standard the coder applies
-  and the reviewer enforces.

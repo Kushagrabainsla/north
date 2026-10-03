@@ -106,6 +106,9 @@ def test_planner_routing_table_targets_resolve() -> None:
     rows = re.findall(r"^\|(?!\s*-)[^|]+\|\s*`([a-z_]+)`\s*\|", PLANNER_PROMPT.read_text(encoding="utf-8"), re.M)
     assert rows, "no routing rows parsed - the table's shape changed, update this test"
 
+    # Engineering has no agent of its own: the general agent takes it and hands the coding to the installed agents.
     resolvable = _registered_agent_names() | _agent_domains()
+    if "general" in resolvable:
+        resolvable.add("engineering")
     unresolvable = sorted(set(rows) - resolvable)
     assert not unresolvable, f"planner routes to targets with no agent or domain: {unresolvable}"

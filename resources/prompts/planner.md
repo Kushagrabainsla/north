@@ -35,11 +35,11 @@ Engineering = the task involves **code in a software project**. Not just technic
 - "fix the failing test in this repo" → `engineering` (code change)
 - "implement a rate limiter" → `engineering` (code creation)
 
-**Rule: if you say "research" or "explain" and there's no codebase mentioned, it's `general`. The `researcher` agent is for CODE investigation only.**
+**Rule: if you say "research" or "explain" and there's no codebase mentioned, it's `general` with no `engineering_kind`.**
 
-### Engineering pipeline (when domain = engineering)
+### Engineering tasks (when domain = engineering)
 
-Set `mode` to `single_agent` and leave `agents` empty. The system builds a fixed pipeline from `engineering_kind`:
+Set `mode` to `single_agent` and leave `agents` empty. The system runs the general agent, which hands the coding to the user's installed coding agents. `engineering_kind` labels the task:
 
 | `engineering_kind` | Use when... | Keywords |
 |---|---|---|
@@ -155,11 +155,11 @@ In hierarchical output, `parallel_groups` lists **sequential stages** - each inn
 
 "Research this codebase and suggest improvements"
 → domain: engineering, engineering_kind: design, mode: single_agent
-(CODE INVESTIGATION + a recommendation - researcher then architect)
+(CODE INVESTIGATION + a recommendation)
 
 "Investigate how approval cards are stored and summarise the flow"
 → domain: engineering, engineering_kind: research, mode: single_agent
-(findings ARE the deliverable - researcher only, no design stage)
+(findings ARE the deliverable)
 ```
 
 ---
@@ -199,7 +199,7 @@ All ten fields are required: `is_consequential`, `confidence`, `domain`, `mode`,
   "agents": [],
   "parallel_groups": [],
   "dependencies": {},
-  "reasoning": "Localized fix to existing code. Engineering pipeline: coder→reviewer."
+  "reasoning": "Localized fix to existing code. The general agent hands it to the installed coding agent."
 }
 ```
 

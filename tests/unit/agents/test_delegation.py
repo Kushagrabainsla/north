@@ -99,17 +99,6 @@ async def test_one_below_depth_limit_succeeds(tmp_path: Path) -> None:
     assert result["success"] is True
 
 
-async def test_registry_aliases_tester_to_reviewer(tmp_path: Path) -> None:
-    """The legacy 'tester' name must resolve to the reviewer agent (back-compat)."""
-    from agents.registry import AgentRegistry
-
-    deps = _make_deps(tmp_path)
-    registry = AgentRegistry(agents_dir=AGENTS_DIR, deps=deps)
-    aliased = registry.get("tester")
-    assert aliased.name == "reviewer"
-    assert registry.get("reviewer") is aliased
-
-
 # ---------------------------------------------------------------------------
 # Missing registry
 # ---------------------------------------------------------------------------
@@ -155,40 +144,6 @@ async def test_empty_task_param_returns_failure(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Engineering agent fallback prevention
 # ---------------------------------------------------------------------------
-
-
-async def test_missing_engineering_agent_does_not_fall_back_to_general(
-    tmp_path: Path,
-) -> None:
-    """When an engineering agent is missing, must NOT silently fall back to 'general'."""
-    import unittest.mock as mock
-
-    from agents.registry import AgentRegistry
-
-    deps = _make_deps(tmp_path)
-    registry = AgentRegistry(agents_dir=AGENTS_DIR, deps=deps)
-    original_get = registry.get
-
-    def _patched_get(name: str):
-        if name == "coder":
-            raise KeyError("coder not registered")
-        return original_get(name)
-
-    with mock.patch.object(registry, "get", side_effect=_patched_get):
-        deps.agent_registry = registry
-        config = AgentConfig.from_yaml(AGENTS_DIR / "general" / "config.yaml")
-        agent = GeneralAgent(config, deps)
-
-        result_str = await agent._delegate_task(
-            _payload(),
-            {"agent": "coder", "task": "implement something"},
-        )
-
-    result = json.loads(result_str)
-    assert result["success"] is False
-    error = result["error"].lower()
-    # Must mention the engineering agent and refuse the fallback
-    assert "coder" in error or "engineering agent" in error
 
 
 # ---------------------------------------------------------------------------

@@ -92,22 +92,6 @@ def test_server_command_for_unknown_suffix_is_none():
 
 
 @_needs_pyright
-def test_real_rename_updates_definition_and_references(tmp_path: Path):
-    (tmp_path / "pyrightconfig.json").write_text("{}", encoding="utf-8")
-    src = tmp_path / "calc.py"
-    src.write_text(
-        "def add(a, b):\n    return a + b\n\n\ndef use():\n    return add(1, 2)\n",
-        encoding="utf-8",
-    )
-    files, edits, changed = L.rename_symbol(tmp_path, src, "add", "plus")
-    assert files == 1
-    after = src.read_text(encoding="utf-8")
-    assert "def plus(a, b):" in after
-    assert "return plus(1, 2)" in after
-    assert "add(" not in after
-
-
-@_needs_pyright
 def test_real_find_references(tmp_path: Path):
     (tmp_path / "pyrightconfig.json").write_text("{}", encoding="utf-8")
     src = tmp_path / "calc.py"

@@ -3,8 +3,7 @@
 Stage 2 gives a task a server-owned :class:`~architecture.scopes.TaskEditScope`.
 These tests exercise the *runtime* half: the scope, bound into a
 :class:`~architecture.scopes.ScopeGuard`, is carried on ``ToolInput.edit_scope``
-(never in the model-controlled ``params``) and is consulted by WriteFileTool and
-PatchFileTool before any bytes are written.
+(never in the model-controlled ``params``) and is consulted by WriteFileTool before any bytes are written.
 
 The guard is bound to a temporary workspace whose subdirectories mirror the real
 module layout (``config/`` → ``platform.config``, ``agents/`` → ``application.agents``,
@@ -24,7 +23,6 @@ from config.approval_mode import ApprovalMode
 from orchestrator.models import TaskRequest
 from tests.conftest import bind_approvals
 from tools.models import ToolInput
-from tools.specialized.patch_file import PatchFileTool
 from tools.universal.write_file import WriteFileTool
 
 
@@ -34,21 +32,6 @@ def _seed(workspace: Path, relative: str, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
-
-
-def _mark_read(task_id: str, workspace: Path, relative: str) -> None:
-    """Record the read using the same resolved path the tool will compute.
-
-    PatchFileTool checks ``was_read(task_id, str(resolve_path(...)))``; on macOS a
-    tmp path can be a symlink whose resolved form differs from the raw string, so
-    recording the raw path would spuriously fail the read-precondition.
-    """
-    from tools._path import resolve_path
-    from tools._read_tracker import record_read
-
-    resolved = resolve_path(relative, str(workspace))
-    assert resolved is not None
-    record_read(task_id, str(resolved))
 
 
 def _guard(workspace: Path, scope: TaskEditScope) -> ScopeGuard:
@@ -147,119 +130,6 @@ async def test_write_scope_ignores_model_supplied_params(tmp_path: Path) -> None
 
 
 # --------------------------------------------------------------------------- #
-# PatchFileTool                                                               #
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.asyncio
-async def test_patch_permitted_edit_within_scope(tmp_path: Path) -> None:
-    _seed(tmp_path, "config/settings.py", "VALUE = 1\n")
-    guard = _guard(tmp_path, TaskEditScope(modules=("platform.config",)))
-    task_id = "task-permit"
-    _mark_read(task_id, tmp_path, "config/settings.py")
-    out = await PatchFileTool().run(
-        ToolInput(
-            params={
-                "path": "config/settings.py",
-                "old_string": "VALUE = 1",
-                "new_string": "VALUE = 2",
-                "workspace": str(tmp_path),
-                "task_id": task_id,
-            },
-            edit_scope=guard,
-        )
-    )
-    assert out.success, out.error
-    assert (tmp_path / "config/settings.py").read_text() == "VALUE = 2\n"
-
-
-@pytest.mark.asyncio
-async def test_patch_denied_cross_module_edit_before_mutation(tmp_path: Path) -> None:
-    original = "x = 1\n"
-    _seed(tmp_path, "agents/models.py", original)
-    guard = _guard(tmp_path, TaskEditScope(modules=("platform.config",)))
-    out = await PatchFileTool().run(
-        ToolInput(
-            params={
-                "path": "agents/models.py",
-                "old_string": "x = 1",
-                "new_string": "x = 2",
-                "workspace": str(tmp_path),
-                "task_id": "task-deny",
-            },
-            edit_scope=guard,
-        )
-    )
-    assert not out.success
-    assert out.failure_kind == "refused"
-    assert "outside this task's permitted modules and paths" in (out.error or "")
-    assert (tmp_path / "agents/models.py").read_text() == original  # unchanged
-
-
-@pytest.mark.asyncio
-async def test_patch_protected_path_requires_explicit_authorization(tmp_path: Path) -> None:
-    _seed(tmp_path, "architecture/scopes.py", "x = 1\n")
-    task_id = "task-protected"
-    _mark_read(task_id, tmp_path, "architecture/scopes.py")
-
-    unauthorized = _guard(tmp_path, TaskEditScope(modules=("architecture",)))
-    out = await PatchFileTool().run(
-        ToolInput(
-            params={
-                "path": "architecture/scopes.py",
-                "old_string": "x = 1",
-                "new_string": "x = 2",
-                "workspace": str(tmp_path),
-                "task_id": task_id,
-            },
-            edit_scope=unauthorized,
-        )
-    )
-    assert not out.success
-    assert "requires explicit user authorization" in (out.error or "")
-    assert (tmp_path / "architecture/scopes.py").read_text() == "x = 1\n"
-
-    authorized = _guard(
-        tmp_path,
-        TaskEditScope(modules=("architecture",), authorized_paths=("architecture/scopes.py",)),
-    )
-    out = await PatchFileTool().run(
-        ToolInput(
-            params={
-                "path": "architecture/scopes.py",
-                "old_string": "x = 1",
-                "new_string": "x = 2",
-                "workspace": str(tmp_path),
-                "task_id": task_id,
-            },
-            edit_scope=authorized,
-        )
-    )
-    assert out.success, out.error
-    assert (tmp_path / "architecture/scopes.py").read_text() == "x = 2\n"
-
-
-@pytest.mark.asyncio
-async def test_patch_no_scope_preserves_unrestricted_behavior(tmp_path: Path) -> None:
-    _seed(tmp_path, "agents/models.py", "x = 1\n")
-    task_id = "task-none"
-    _mark_read(task_id, tmp_path, "agents/models.py")
-    out = await PatchFileTool().run(
-        ToolInput(
-            params={
-                "path": "agents/models.py",
-                "old_string": "x = 1",
-                "new_string": "x = 2",
-                "workspace": str(tmp_path),
-                "task_id": task_id,
-            }
-        )
-    )
-    assert out.success, out.error
-    assert (tmp_path / "agents/models.py").read_text() == "x = 2\n"
-
-
-# --------------------------------------------------------------------------- #
 # Server-owned propagation                                                    #
 # --------------------------------------------------------------------------- #
 
@@ -290,8 +160,8 @@ async def test_agent_execute_call_threads_scope_to_tool(tmp_path: Path) -> None:
     WriteFileTool through the agent's own dispatch path and blocks the write."""
     from unittest.mock import MagicMock
 
+    from agents.general.agent import GeneralAgent
     from agents.models import AgentDependencies
-    from agents.researcher.agent import ResearcherAgent
     from inference.models import ToolCall
     from memory import FileContextStore
     from tools.confidence import ConfidenceTracker
@@ -305,7 +175,7 @@ async def test_agent_execute_call_threads_scope_to_tool(tmp_path: Path) -> None:
     )
     from agents.models import AgentConfig
 
-    agent = ResearcherAgent(
+    agent = GeneralAgent(
         AgentConfig(agent="researcher", domain="engineering"),
         deps,
     )

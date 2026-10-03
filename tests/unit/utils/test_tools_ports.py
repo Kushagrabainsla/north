@@ -51,7 +51,7 @@ class TestPortsAreTypeOnlyForOrchestration:
     """The orchestration modules must not import from ``tools``.
 
     Includes the runtime dispatch core: with the Stage 4 boundary in place, the
-    orchestrator and the work committer construct and invoke tools through
+    orchestrator constructs and invokes tools through
     composition-injected platform ports (``ToolInputFactory``,
     ``ToolDispatchRegistryPort``) and the platform ``ToolNotFoundError`` contract,
     so they no longer reach into ``integrations.tools`` at all.
@@ -62,7 +62,6 @@ class TestPortsAreTypeOnlyForOrchestration:
         "orchestrator/api_context.py",
         "orchestrator/api/deps.py",
         "orchestrator/orchestrator.py",
-        "orchestrator/commit.py",
     )
 
     def _imports_tools(self, relative: str) -> bool:

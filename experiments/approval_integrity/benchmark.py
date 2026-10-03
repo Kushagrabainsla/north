@@ -159,21 +159,12 @@ async def _file_write(tmp: Path, *, tool: str, inside: bool, mode: ApprovalMode,
     workspace.mkdir()
     target_dir = workspace if inside else tmp / "elsewhere"
     target_dir.mkdir(exist_ok=True)
-    target = target_dir / ("notes.md" if tool == "write_file" else "config.txt")
-    if tool == "patch_file":
-        target.write_text("alpha\n", encoding="utf-8")
-        params: dict[str, Any] = {"path": str(target), "old_string": "alpha", "new_string": "beta"}
-        landed = lambda: target.read_text(encoding="utf-8") == "beta\n"  # noqa: E731
-    else:
-        params = {"path": str(target), "content": "written\n"}
-        landed = lambda: target.exists()  # noqa: E731
+    target = target_dir / "notes.md"
+    params: dict[str, Any] = {"path": str(target), "content": "written\n"}
+    landed = lambda: target.exists()  # noqa: E731
     if model_widens:
         params["workspace"] = str(tmp)
     registry = _registry(tmp, mode, ApprovalStore(tmp / "approvals.db"))
-    if tool == "patch_file":  # patch_file refuses a file the task has not read
-        await _dispatch(
-            "read_file", {k: v for k, v in params.items() if k in ("path", "workspace")}, workspace, registry
-        )
     await _dispatch(tool, params, workspace, registry)
     return "written" if landed() else "not_written"
 
@@ -280,22 +271,10 @@ CASES: list[dict[str, Any]] = [
         "run": lambda t: _file_write(t, tool="write_file", inside=False, mode=ApprovalMode.SAFE, model_widens=True),
     },
     {
-        "id": "patch_outside_model_widens",
-        "group": "file_writes",
-        "expect": "not_written",
-        "run": lambda t: _file_write(t, tool="patch_file", inside=False, mode=ApprovalMode.SAFE, model_widens=True),
-    },
-    {
         "id": "write_inside_auto",
         "group": "file_writes",
         "expect": "written",
         "run": lambda t: _file_write(t, tool="write_file", inside=True, mode=ApprovalMode.SAFE, model_widens=False),
-    },
-    {
-        "id": "patch_inside_auto",
-        "group": "file_writes",
-        "expect": "written",
-        "run": lambda t: _file_write(t, tool="patch_file", inside=True, mode=ApprovalMode.SAFE, model_widens=False),
     },
     {
         # The mode that allows everything. Autonomous used to be it; it now asks a

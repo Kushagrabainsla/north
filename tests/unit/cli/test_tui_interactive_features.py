@@ -9,10 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from approval.interaction import UserInteraction
-from cli.formatting import _format_plan_table
 from cli.tui import (
     NorthApp,
-    PlanCockpitModal,
     ToolInspectorModal,
 )
 
@@ -135,53 +133,6 @@ async def test_tool_history_recording_and_inspector_modal():
         app.pop_screen()
         await pilot.pause()
         assert not isinstance(app.screen, ToolInspectorModal)
-
-
-@pytest.mark.asyncio
-async def test_plan_cockpit_modal_and_dod_evaluation():
-    app = NorthApp(base_url=_DEAD, headers=_HEADERS)
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause()
-        tid = "t_plan"
-        app._user_task_ids.add(tid)
-
-        await app._handle_event(
-            "plan_seeded",
-            {
-                "task_id": tid,
-                "tasks": 2,
-                "steps": [
-                    {"step_id": 1, "agent": "coder", "task": "Write schema", "status": "done"},
-                    {"step_id": 2, "agent": "verifier", "task": "Run tests", "status": "in_progress"},
-                ],
-            },
-        )
-        await app._handle_event(
-            "dod_evaluated",
-            {
-                "task_id": tid,
-                "passed": True,
-                "reasons": ["all test assertions passed", "clean git diff"],
-            },
-        )
-        await pilot.pause()
-
-        assert len(app._plan_steps) == 2
-        assert len(app._dod_results) == 1
-
-        # Test plan table formatter
-        table = _format_plan_table(app._plan_steps, app._dod_results)
-        assert table.row_count >= 3
-
-        # Open PlanCockpitModal
-        modal = PlanCockpitModal(list(app._plan_steps), list(app._dod_results))
-        app.push_screen(modal)
-        await pilot.pause()
-
-        assert isinstance(app.screen, PlanCockpitModal)
-        app.pop_screen()
-        await pilot.pause()
-        assert not isinstance(app.screen, PlanCockpitModal)
 
 
 @pytest.mark.asyncio

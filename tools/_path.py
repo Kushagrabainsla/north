@@ -27,8 +27,7 @@ from utils.edit_scope import EditAuthorizer
 # The pure filesystem-traversal exclusion set now lives in the platform layer
 # (``utils.filesystem``). It is re-exported here so existing ``tools._path``
 # importers (search_files, glob, context.repo_map) keep working unchanged and so
-# the file-walking tools and the orchestrator commit path share one source of
-# truth for what to prune.
+# the file-walking tools share one source of truth for what to prune.
 from utils.filesystem import (
     PRUNED_DIRS,  # noqa: F401  (re-exported for tools._path compatibility)
 )

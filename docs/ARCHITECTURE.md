@@ -546,8 +546,8 @@ scoping each task's rows. Earlier versions used one file per task.
 **The interface is write-and-collect, not request-response.**
 
 ```python
-await task_context.write(task_id, agent="coder", key="output", value=..., status="completed")
-await task_context.update_agent_status(task_id, "reviewer", "failed")
+await task_context.write(task_id, agent="general", key="output", value=..., status="completed")
+await task_context.update_agent_status(task_id, "news_briefing", "failed")
 everything = await task_context.get_all(task_id)   # {agent: {key: value}}
 ```
 
@@ -738,24 +738,24 @@ Each agent is a self-contained folder dropped into `/agents`. The Orchestrator s
 
 ```
 /agents
-  /coder
+  /general
     agent.py              <- core logic (usually a thin AgenticLLMAgent/LLMAgent subclass)
     config.yaml           <- declaration: agent, domain, accepted keywords
     prompts/
       system.md           <- system prompt defining the agent's expertise
-  /architect/  /reviewer/  /researcher/  /general/  /home/  /news_briefing/
-  /health/  /job/  /finance/  /university/
+  /home/  /news_briefing/  /wellness/
+  (no coding agents of its own: code tasks go to the general agent, which hands them to the installed
+   Claude Code / Codex through `coding_agent`; see docs/design/coding-agents.md)
 ```
 
 **config.yaml example:**
 ```yaml
-agent: coder
-domain: engineering
+agent: general
+domain: general
 accepts:                   # routing keywords matched against the prompt
-  - "code"
-  - "implement"
-  - "fix"
-  - "debug"
+  - "question"
+  - "plan"
+  - "research"
 output_format: structured_json
 version: 1.0.0
 class_name: CoderAgent     # the Agent subclass in agent.py
@@ -1547,10 +1547,7 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
     tasks.db             <- shared Task Context Object store (task_id column per task)
                             cleaned up per Section 6.6 cleanup policy
     {task_id}/           <- per-task handoff directory (internal agent scratch)
-      research/          <-   researcher: context.md, references.json
-      architecture/      <-   architect: spec.md, decision_log.md
-      implementation/    <-   coder: implementation_notes.md (code itself goes to the workspace)
-      qa/                <-   reviewer: review_report_v{N}.md
+      news/              <-   news_briefing: {date}.md (and any other declared artifact)
   context/
     user.md
     judgement_rules.md

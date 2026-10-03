@@ -41,18 +41,3 @@ class TestToolsPathReExportsSameObject:
         from tools import _path
 
         assert _path.PRUNED_DIRS is PRUNED_DIRS
-
-
-class TestCommitUsesSamePlatformObject:
-    """The orchestrator commit path shares the one platform constant."""
-
-    def test_commit_pruned_dirs_is_identical(self) -> None:
-        from orchestrator import commit
-
-        assert commit.PRUNED_DIRS is PRUNED_DIRS
-
-    def test_commit_and_tools_path_agree(self) -> None:
-        from orchestrator import commit
-        from tools import _path
-
-        assert commit.PRUNED_DIRS is _path.PRUNED_DIRS

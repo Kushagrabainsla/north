@@ -291,50 +291,6 @@ def goto_definition(root: Path, target: Path, line: int, char: int) -> list[tupl
     return out
 
 
-def rename_symbol(
-    root: Path,
-    target: Path,
-    symbol: str,
-    new_name: str,
-    authorize: Callable[[Path], str | None] | None = None,
-) -> tuple[int, int, list[str]]:
-    """Rename *symbol* (defined in *target*) project-wide. Returns (files, edits, changed_rel_paths).
-
-    Applies the language server's WorkspaceEdit to disk. Raises LspUnavailable when
-    no server exists for the language, or LspError when the rename can't be resolved.
-
-    When *authorize* is supplied, every file the WorkspaceEdit would touch is
-    checked before any bytes are written; a single refusal aborts the whole rename
-    atomically with :class:`RenameScopeRefused` and nothing is modified. ``None``
-    (the default) preserves the prior, unrestricted behavior for public callers.
-    """
-    cmd = server_command_for(target.suffix)
-    if cmd is None:
-        raise LspUnavailable(f"no language server for {target.suffix}")
-    text = target.read_text(encoding="utf-8", errors="replace")
-    pos = _name_position(text, symbol) if target.suffix.lower() == ".py" else None
-    if pos is None:
-        raise LspError(f"could not locate a definition of {symbol!r} in {target.name}")
-    line, char = pos
-
-    conn = _Connection(cmd)
-    try:
-        _open(conn, root, target, text)
-        edit = conn.request(
-            "textDocument/rename",
-            {
-                "textDocument": {"uri": _uri(target)},
-                "position": {"line": line, "character": char},
-                "newName": new_name,
-            },
-        )
-    finally:
-        conn.close()
-    if not edit:
-        raise LspError("the language server refused the rename (no edit produced)")
-    return _apply_workspace_edit(root, edit, authorize)
-
-
 def _apply_workspace_edit(
     root: Path,
     edit: dict[str, Any],

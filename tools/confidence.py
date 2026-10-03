@@ -31,8 +31,6 @@ RELIABLE_TOOLS = frozenset(
         "schedule_task",
         "fetch_url",
         "git",
-        "patch_file",
-        "check_types",
         "search_symbols",
         "find_references",
     }

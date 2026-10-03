@@ -35,7 +35,6 @@ _TOOLS_ROOT = Path(__file__).parent
 # constrain which agents can use a tool.
 _TOOL_DIRS: tuple[tuple[str, str], ...] = (
     ("universal", "tools.universal"),
-    ("analysis", "tools.analysis"),
     ("semantic", "tools.semantic"),
     ("specialized", "tools.specialized"),
 )

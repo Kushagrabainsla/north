@@ -47,8 +47,8 @@ def evaluate_routing(cases: list[dict[str, Any]]) -> tuple[dict[str, Any], list[
         )
         plan = ExecutionPlan(
             task_id=case["id"],
-            agents=["researcher"],
-            parallel_groups=[["researcher"]],
+            agents=["general"],
+            parallel_groups=[["general"]],
             dependencies={},
             mode=ExecutionMode.SINGLE_AGENT,
             engineering_kind=case["engineering_kind"],

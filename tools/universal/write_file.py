@@ -1,6 +1,6 @@
 """WriteFileTool - write or overwrite a file in the workspace.
 
-Gated exactly like patch_file: the tool reports what it is about to write and
+Gated through the approval layer: the tool reports what it is about to write and
 where, and `approval/policy.py` decides whether that runs, asks, or is refused.
 It used to write without asking at all, which made it the one way to change a
 file that no mode, allowlist, or card ever saw.
@@ -17,10 +17,10 @@ from typing import Any
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
+from tools._diff import unified_diff
 from tools._path import is_north_scratch, resolve_path, scope_refusal
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
-from tools.specialized.patch_file import unified_diff
 from utils.text import normalize_dashes, should_normalize_prose
 
 
@@ -41,9 +41,8 @@ class WriteFileTool(Tool):
         "Create a new file, or completely OVERWRITE an existing one, with the given "
         "content (parent directories are created automatically). This replaces the whole "
         "file - it does not append or merge - so always pass the ENTIRE intended content, "
-        "never a fragment. Use it for brand-new files or a deliberate full rewrite; to "
-        "change part of an existing file, prefer patch_file, which edits in place without "
-        "clobbering the rest. The path must be inside the workspace."
+        "never a fragment. Use it for brand-new files or a deliberate full rewrite. To change "
+        "code in a repository, hand the work to coding_agent instead. The path must be inside the workspace."
     )
     parameters_schema = {
         "type": "object",

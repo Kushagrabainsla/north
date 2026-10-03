@@ -7,12 +7,6 @@ import re
 # Prevents runaway webhook integrations or buggy clients from burning API credits.
 MAX_CONCURRENT_TASKS = 10
 
-# Agents whose runs are isolated in a dedicated git worktree when
-# settings.worktree_isolation_enabled is on and the workspace is a git repo.
-# Scoped to the coder - the agent that mutates source - so concurrent runs never
-# share a working tree.
-WORKTREE_ISOLATION_AGENTS: frozenset[str] = frozenset({"coder"})
-
 # How many times an interrupted task may be re-run on startup before it is
 # treated as a poison pill and marked FAILED. Guards against a task that crashes
 # the server from resuming into an infinite restart loop.

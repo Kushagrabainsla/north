@@ -72,9 +72,7 @@ Pass ARTIFACT + CONTRACT only. **Do NOT pass the CLAIM.** Handing the reviewer y
 
 **How to invoke in north:**
 
-For the coder agent: use `delegate_task(agent="researcher", ...)` to get a fresh-context investigation of whether your approach is sound. The researcher carries no prior reasoning bias.
-
-For the architect agent: use `delegate_task(agent="architect", ...)` to challenge a design decision with fresh context.
+For a code decision: call `coding_agent` with `mode: plan` (and the other `backend` than the one that proposed the approach) to get a fresh-context, read-only investigation of whether it is sound. It carries none of your prior reasoning.
 
 In the orchestrator loop: the `critic` setting (when enabled) triggers a pre-implementation doubt cycle automatically.
 
@@ -100,7 +98,7 @@ Stop when:
 
 1. **CLAIM** - Name the decision in 2-3 lines: what you believe and why it matters. If you can't write it that compactly, you have a vibe, not a decision.
 2. **EXTRACT** - Isolate the smallest reviewable unit: the diff/function (not the whole file), the proposal in 3-5 sentences, plus the constraints it must satisfy. Strip your reasoning.
-3. **DOUBT** - Invoke adversarial review with fresh context. Pass ARTIFACT + CONTRACT only (never the CLAIM). Use `delegate_task(agent="researcher")` for a fresh-context investigation.
+3. **DOUBT** - Invoke adversarial review with fresh context. Pass ARTIFACT + CONTRACT only (never the CLAIM). For a code decision, use `coding_agent` with `mode: plan` for a fresh-context investigation.
 4. **RECONCILE** - Classify every finding: Bug (fix before proceeding), Assumption (document and proceed), Nit (note, don't block), False Positive (discard with explanation).
 5. **STOP** - All findings classified, 3 cycles max on same claim, or user says proceed.
 
