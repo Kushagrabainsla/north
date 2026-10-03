@@ -170,3 +170,27 @@ async def test_set_status_refuses_a_state_that_is_not_live(tmp_path) -> None:
 
     with pytest.raises(ValueError):
         await store.set_status("run-1", "completed")  # type: ignore[arg-type]
+
+
+async def test_pausing_keeps_a_run_unfinished_with_its_reason_and_never_revives_a_finished_one(tmp_path) -> None:
+    store = AgentRunStore(tmp_path / "tasks.db")
+    payload = AgentPayload(task_id="task-1", run_id="run-1", prompt="fix the bug")
+    await store.start(payload, "coding:claude")
+
+    assert await store.pause("run-1", "usage limit")
+    run = await store.get("run-1")
+    assert (run.status, run.error, run.completed_at) == ("paused", "usage limit", None)
+
+    await store.finish_with_error("run-1", "failed", "gave up")
+    assert not await store.pause("run-1", "again")
+    assert (await store.get("run-1")).status == "failed"
+
+
+async def test_unfinished_runs_are_listed_by_agent_prefix(tmp_path) -> None:
+    store = AgentRunStore(tmp_path / "tasks.db")
+    await store.start(AgentPayload(task_id="t", run_id="a", prompt="p"), "coding:claude")
+    await store.start(AgentPayload(task_id="t", run_id="b", prompt="p"), "coder")
+    await store.start(AgentPayload(task_id="t", run_id="c", prompt="p"), "coding:codex")
+    await store.finish_with_error("c", "failed", "x")
+
+    assert [run.run_id for run in await store.list_unfinished("coding:")] == ["a"]

@@ -312,6 +312,8 @@ class TestEditRuns:
 
         assert len(workspaces.created) == 1 and not backend.specs[0].resume
         assert backend.specs[0].session_id != "sess-9"
+        (run_id, outcome), *_ = recorder.finished
+        assert run_id == "run-9" and not outcome.ok, "the old run is closed, not left paused for ever"
 
     async def test_cancelling_still_commits_the_partial_work_and_revokes_the_token(self, tmp_path, recorder) -> None:
         runner, backend, workspaces, sessions = self._setup(tmp_path, recorder)
