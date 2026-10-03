@@ -72,7 +72,7 @@ async def test_the_tokens_an_agent_used_reach_the_run_record(store) -> None:
 
 @pytest.mark.parametrize(
     ("failure", "status"),
-    [(FailureKind.ERROR, "failed"), (FailureKind.RESOURCE, "failed"), (FailureKind.CANCELLED, "cancelled")],
+    [(FailureKind.ERROR, "failed"), (FailureKind.CONFIG, "failed"), (FailureKind.CANCELLED, "cancelled")],
 )
 async def test_a_run_that_did_not_finish_says_how_it_ended(store, failure, status) -> None:
     recorder = AgentRunRecorder(store)
@@ -157,3 +157,84 @@ class TestFindingARunToResume:
             "abc",
             "/repo",
         )
+
+
+class TestAMissingResourceFreezesTheRun:
+    @pytest.mark.parametrize("failure", [FailureKind.RESOURCE, FailureKind.AUTH])
+    async def test_a_limit_or_a_logout_pauses_the_run_instead_of_failing_it(self, store, failure) -> None:
+        recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
+        await _begin(recorder, pid=4242)
+
+        await recorder.finish("run-1", RunOutcome(False, "", "sess-1", failure=failure, error="usage limit reached"))
+
+        run = await store.get("run-1")
+        assert (run.status, run.completed_at, run.error) == ("paused", None, "usage limit reached")
+
+    @pytest.mark.parametrize("failure", [FailureKind.ERROR, FailureKind.CONFIG, FailureKind.LIMIT])
+    async def test_a_real_failure_still_fails(self, store, failure) -> None:
+        recorder = AgentRunRecorder(store)
+        await _begin(recorder, pid=4242)
+
+        await recorder.finish("run-1", RunOutcome(False, "", "sess-1", failure=failure, error="boom"))
+
+        assert (await store.get("run-1")).status == "failed"
+
+    async def test_a_paused_run_is_resumed_even_if_its_pid_was_reused(self, store) -> None:
+        recorder = AgentRunRecorder(store, pid_alive=lambda pid: True)
+        await _begin(recorder, pid=4242)
+        await recorder.finish("run-1", RunOutcome(False, "", "sess-1", failure=FailureKind.RESOURCE, error="limit"))
+
+        assert (await recorder.live_run("t1", AGENT, "plan")).run_id == "run-1"
+
+    async def test_resuming_it_clears_the_pause_and_it_can_then_finish(self, store) -> None:
+        recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
+        await _begin(recorder, pid=4242)
+        await recorder.finish("run-1", RunOutcome(False, "", "sess-1", failure=FailureKind.RESOURCE, error="limit"))
+
+        await recorder.start(_start())
+        await recorder.finish("run-1", RunOutcome(ok=True, text="done", session_id="sess-1"))
+
+        run = await store.get("run-1")
+        assert (run.status, run.error) == ("completed", None)
+
+
+class TestAfterARestart:
+    async def _run(self, store, run_id, agent=AGENT, pid=4242, status=None) -> None:
+        recorder = AgentRunRecorder(store)
+        await recorder.start(_start(run_id=run_id, agent=agent))
+        await recorder.remember(run_id, {"provider": "claude_code", "session_id": "s", "mode": "plan", "pid": pid})
+        if status:
+            await store.set_status(run_id, status)
+
+    async def test_a_run_whose_process_died_with_the_daemon_is_marked_interrupted(self, store) -> None:
+        await self._run(store, "dead")
+        await self._run(store, "waiting", status=RunStatus.WAITING_FOR_APPROVAL)
+
+        marked = await AgentRunRecorder(store, pid_alive=lambda pid: False).reconcile()
+
+        assert marked == 2
+        assert {(await store.get(r)).status for r in ("dead", "waiting")} == {"interrupted"}
+
+    async def test_a_run_whose_process_is_still_alive_is_left_alone(self, store) -> None:
+        await self._run(store, "alive")
+
+        assert await AgentRunRecorder(store, pid_alive=lambda pid: True).reconcile() == 0
+        assert (await store.get("alive")).status == "running"
+
+    async def test_paused_finished_and_other_agents_runs_are_left_alone(self, store) -> None:
+        recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
+        await self._run(store, "paused", status=RunStatus.PAUSED)
+        await self._run(store, "done")
+        await recorder.finish("done", RunOutcome(ok=True, text="x", session_id="s"))
+        await self._run(store, "other", agent="coder")
+
+        assert await recorder.reconcile() == 0
+        assert [(await store.get(r)).status for r in ("paused", "done", "other")] == ["paused", "completed", "running"]
+
+    async def test_an_interrupted_run_is_then_resumable(self, store) -> None:
+        await self._run(store, "run-1")
+        recorder = AgentRunRecorder(store, pid_alive=lambda pid: False)
+
+        await recorder.reconcile()
+
+        assert (await recorder.live_run("t1", AGENT, "plan")).session_id == "s"

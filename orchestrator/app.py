@@ -191,6 +191,7 @@ def _register_coding_agent(
         )
     briefing = MemoryBriefing(deps.memory, skill_selector)
     tool_registry.register(CodingAgentTool(runner, briefing=briefing))
+    deps.coding_recorder = recorder
 
 
 def _build_tool_registry(
@@ -1017,6 +1018,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     context_injector = _build_context_injector(deps)
 
     if settings.autonomous_background_tasks_active:
+        if getattr(deps, "coding_recorder", None) is not None:
+            _step("marking coding runs that died with the last daemon")
+            await deps.coding_recorder.reconcile()
         _step("running startup recovery sweep")
         await recover_interrupted_tasks(
             deps,

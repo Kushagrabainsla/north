@@ -225,7 +225,7 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 | Slot held by a waiting task | not held | works |
 | Run waiting for approval | run row says `waiting_for_approval` | state done; the gate sets it in phase 1 |
 | Job parked for a person | dashboard `jobs`, `needs_attention` | works |
-| Vendor rate limit or auth freeze | run event plus a paused state | build |
+| Vendor rate limit or auth freeze | run event plus a `paused` run | works |
 | Apply-back conflict, branch kept | a non-blocking card | build |
 | Queued behind the concurrency cap | Tasks page "Queued" | works |
 
@@ -272,7 +272,14 @@ Every wait must be visible. Proved by the experiments, or marked to build:
      (`VERDICT: OK|CONCERNS`; no readable verdict is UNCLEAR, never a pass) rides on the landing
      card, labelled an opinion. It is advice: it never blocks or allows a landing. Skipped when the
      tests failed, with one agent, or with `review: false`.
-4. Recovery and freeze.
+4. **Done.** Recovery and freeze. A usage limit, an outage or a logged-out agent PAUSES the run
+   (status `paused`, reason kept, session and copy kept) instead of failing it; the tool tells the model
+   to call again with the same task, which resumes the session. At startup, coding runs that say
+   `running` or `waiting_for_approval` but whose process is gone are marked `interrupted`, so the
+   dashboard stays truthful and the task's own recovery resumes them. A paused run whose copy was
+   deleted is closed as failed rather than left paused for ever. North does not re-call the agent by
+   itself: the agent loop turns a tool's errors into results, so the model (or the person) decides
+   when to try again.
 5. **Done, as a briefing instead of a memory server.** At the start of a run north puts the user's
    relevant facts, profile and up to two matching skills in the agent's guidance (episodes are left
    out). A memory MCP server was dropped: the agent does not need to ask for what it can be told, and
@@ -287,7 +294,7 @@ Every wait must be visible. Proved by the experiments, or marked to build:
   `experiments/coding_agents_integration`, and a real `claude` against the real route and approval layer
   by `tests/live`. Still unproven: a whole task chosen and run by north's own planner.
 - A run waiting on a card holds its `claude` process open, and a daemon restart ends it; recovery
-  resumes the session in the same copy (phase 4).
+  resumes the session in the same copy (phase 4, done).
 - Shell commands in an edit run are ruled on one at a time; under the ask mode a long task means many
   cards, and under autonomous each goes to the memory decider.
 - `~/.claude.json` is writable by the CLI; an agent could add an MCP server there.

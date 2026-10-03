@@ -8,13 +8,17 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from agents.models import AgentPayload, AgentResult
-from coding_agents import FailureKind, LiveRun, RunOutcome, RunStart, WorkTree
+from coding_agents import AGENT_PREFIX, FailureKind, LiveRun, RunOutcome, RunStart, WorkTree
 from orchestrator.agent_runs import AgentRunStore, RunStatus
 from utils.execution_context import current_execution
 
 # Runs that have not finished: the ones a re-planned task may pick back up.
 _UNFINISHED = frozenset(status.value for status in RunStatus)
 _SUMMARY_CHARS = 300
+# Only these can still have a process; a paused or interrupted run has none, whatever a recycled pid says.
+_MAY_BE_ALIVE = frozenset({RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL})
+# Missing resources freeze work; they do not fail it (CODING_STYLE 13.5).
+_FROZEN_BY = frozenset({FailureKind.RESOURCE, FailureKind.AUTH})
 
 
 class AgentRunRecorder:
@@ -31,7 +35,7 @@ class AgentRunRecorder:
             if run.agent != agent or run.status not in _UNFINISHED or _latest(run.provider_state, "mode") != mode:
                 continue
             pid = _latest(run.provider_state, "pid")
-            if run.status != RunStatus.INTERRUPTED and pid and self._pid_alive(int(pid)):
+            if run.status in _MAY_BE_ALIVE and pid and self._pid_alive(int(pid)):
                 continue  # still running right now: a second run, not a resume
             session_id = _latest(run.provider_state, "session_id")
             return LiveRun(run.run_id, str(session_id), _worktree(run.provider_state)) if session_id else None
@@ -60,7 +64,27 @@ class AgentRunRecorder:
         """Show the run as waiting for an approval, or running again."""
         await self._store.set_status(run_id, RunStatus.WAITING_FOR_APPROVAL if waiting else RunStatus.RUNNING)
 
+    async def reconcile(self) -> int:
+        """After a restart, mark coding runs that say they are running but whose process is gone as interrupted.
+
+        Without this a dead run reads as running on the dashboard for ever. Only a process that is really gone
+        counts: one still alive is left alone, so a resume never starts a second agent beside it.
+        """
+        marked = 0
+        for run in await self._store.list_unfinished(AGENT_PREFIX):
+            if run.status not in (RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL):
+                continue
+            pid = _latest(run.provider_state, "pid")
+            if pid and self._pid_alive(int(pid)):
+                continue
+            marked += await self._store.set_status(run.run_id, RunStatus.INTERRUPTED)
+        return marked
+
     async def finish(self, run_id: str, outcome: RunOutcome) -> None:
+        if outcome.failure in _FROZEN_BY:
+            # A rate limit or a logged-out agent is not a failed task: keep the run, and the session, to resume.
+            await self._store.pause(run_id, outcome.error)
+            return
         if not outcome.ok:
             status = "cancelled" if outcome.failure is FailureKind.CANCELLED else "failed"
             await self._store.finish_with_error(run_id, status, outcome.error)

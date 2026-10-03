@@ -16,7 +16,7 @@ from pathlib import Path
 
 from approval.approvals import Request
 from approval.policy import Action, ActionKind
-from coding_agents import Briefing, CodingAgentError, CodingRunner, Mode, RunReport
+from coding_agents import Briefing, CodingAgentError, CodingRunner, FailureKind, Mode, RunReport
 from context.repo_instructions import load_repo_instructions
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
@@ -179,6 +179,16 @@ class CodingAgentTool(Tool):
         )
 
 
+# These stop a run without failing the task: the session and the copy are kept for a later call.
+_PAUSED_NOTE = {
+    FailureKind.RESOURCE: "The run is PAUSED, not failed: this is the agent's usage limit or an outage. "
+    "Its progress is kept. Tell the user, and call coding_agent again with the same task later to continue it.",
+    FailureKind.AUTH: "The run is PAUSED, not failed: the agent is not logged in. "
+    "Its progress is kept. Ask the user to log in to it, then call coding_agent again with the same task.",
+}
+_PAUSED_FAILURES = frozenset(_PAUSED_NOTE)
+
+
 def _output(report: RunReport) -> ToolOutput:
     outcome = report.outcome
     data: dict = {
@@ -218,7 +228,10 @@ def _output(report: RunReport) -> ToolOutput:
     if outcome.ok:
         return ToolOutput(success=True, data=data)
     data["failure"] = outcome.failure.value if outcome.failure else "error"
-    return ToolOutput(success=False, data=data, error=outcome.error or "The coding agent run failed.")
+    error = outcome.error or "The coding agent run failed."
+    if outcome.failure in _PAUSED_FAILURES:
+        error = f"{error} {_PAUSED_NOTE[outcome.failure]}"
+    return ToolOutput(success=False, data=data, error=error)
 
 
 def _edit_summary(data: dict) -> str:
