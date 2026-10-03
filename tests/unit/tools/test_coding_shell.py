@@ -5,6 +5,7 @@ from __future__ import annotations
 from coding_agents import ShellResult
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.registry import ToolRegistry
 from tools.specialized.coding_shell import BashShell
 
 
@@ -23,7 +24,9 @@ class StubBash(Tool):
 
 def _shell(output: ToolOutput) -> tuple[BashShell, StubBash]:
     bash = StubBash(output)
-    return BashShell(bash), bash
+    registry = ToolRegistry()
+    registry.register(bash)
+    return BashShell(registry), bash
 
 
 async def test_it_runs_the_command_in_the_copy_for_the_task_with_the_time_limit() -> None:

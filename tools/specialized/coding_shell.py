@@ -7,21 +7,21 @@ north runs for an agent; this only turns the tool's output into what the coding 
 from __future__ import annotations
 
 from coding_agents import ShellResult
-from tools.base import Tool
 from tools.models import ToolInput
+from tools.registry import ToolRegistry
 
 # The exit code `timeout(1)` uses, so a hung test suite reads as a failing one, not a skipped one.
 _TIMED_OUT = 124
 
 
 class BashShell:
-    """Runs a command through the registered `bash` tool."""
+    """Runs a command through the registered `bash` tool, looked up when it runs: it is registered after this."""
 
-    def __init__(self, bash: Tool) -> None:
-        self._bash = bash
+    def __init__(self, tools: ToolRegistry) -> None:
+        self._tools = tools
 
     async def run(self, command: str, workspace: str, *, task_id: str, timeout: int) -> ShellResult:
-        output = await self._bash.execute(
+        output = await self._tools.get("bash").execute(
             ToolInput(
                 params={"command": command, "workspace": workspace, "timeout": timeout, "task_id": task_id},
                 granted_workspace=workspace,
