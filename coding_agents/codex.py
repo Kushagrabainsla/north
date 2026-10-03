@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -22,6 +23,7 @@ from typing import Any
 
 from coding_agents.appserver import AppServer, AppServerError
 from coding_agents.base import CodingBackend, EventSink
+from coding_agents.confinement import codex_filesystem, profile
 from coding_agents.constants import (
     MAX_EVENT_TEXT_CHARS,
     MAX_TEXT_CHARS,
@@ -197,11 +199,16 @@ class CodexBackend(CodingBackend):
 
     def _profile(self, spec: RunSpec) -> dict[str, Any]:
         base = ":read-only" if spec.mode is Mode.PLAN else ":workspace"
-        deny = dict.fromkeys(self._protected_paths, "deny")
-        return {
-            "default_permissions": _PROFILE,
-            "permissions": {_PROFILE: {"extends": base, "filesystem": deny}},
-        }
+        return profile(
+            base, _PROFILE, codex_filesystem(spec.workspace, spec.mode, self._protected_paths, self._own_dirs())
+        )
+
+    def _own_dirs(self) -> list[str]:
+        """Where the installed `codex` lives, so its sandbox helper can still start inside a closed home."""
+        found = shutil.which(self._command, path=self._environment.get("PATH"))
+        if found is None:
+            return []
+        return sorted({str(Path(found).parent), str(Path(os.path.realpath(found)).parent)})
 
     async def _approval(
         self, server: AppServer, spec: RunSpec, run: _Run, message: Mapping[str, Any], on_event: EventSink

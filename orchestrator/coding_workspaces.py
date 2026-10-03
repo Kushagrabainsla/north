@@ -42,6 +42,11 @@ class GitWorkspaces:
         manager = GitWorktreeManager(tree.base)
         copy = Worktree(base=tree.base, path=tree.path, branch=tree.branch, base_sha=tree.base_sha)
         try:
+            if reason := await manager.damage(copy):
+                raise CodingAgentError(
+                    f"the agent's isolated copy at {tree.path} was damaged ({reason}), so its changes could not be "
+                    "saved. Its files are still there."
+                )
             if not await manager.commit_changes(copy):
                 await manager.remove(copy, keep_branch=False)
                 return None

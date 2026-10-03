@@ -46,6 +46,7 @@ class RunReport:
     verification: Verification | None = None  # north's own run of the project's tests
     landing: Landing | None = None  # whether the change reached the working tree
     review: Review | None = None  # the other agent's read of the change
+    problem: str = ""  # why the copy's changes could not be saved, when they could not
 
 
 class CodingRunner:
@@ -118,14 +119,14 @@ class CodingRunner:
         # Written before the process starts, so a crash can still find the session and the copy.
         await self._recorder.start(RunStart(run_id, task_id, agent, task, workspace))
         await self._recorder.remember(run_id, _state(chosen, spec, version, tree))
-        outcome, change = await self._execute(chosen, spec, run_id, task_id, tree)
+        outcome, change, problem = await self._execute(chosen, spec, run_id, task_id, tree)
         verification = landing = reviewed = None
         if change is not None and outcome.ok:
             verification, reviewed, landing = await self._land(
                 run_id, task_id, change, spec.session_id, task, chosen.name if review else None
             )
         await self._recorder.finish(run_id, outcome)
-        return RunReport(run_id, chosen.name, outcome, change, mode, verification, landing, reviewed)
+        return RunReport(run_id, chosen.name, outcome, change, mode, verification, landing, reviewed, problem)
 
     async def _choose(self, wanted: str | None) -> tuple[CodingBackend, str]:
         """The backend asked for, or the first that can take a run; why none can, when none can."""
@@ -157,7 +158,7 @@ class CodingRunner:
 
     async def _execute(
         self, backend: CodingBackend, spec: RunSpec, run_id: str, task_id: str, tree: WorkTree | None
-    ) -> tuple[RunOutcome, WorkChange | None]:
+    ) -> tuple[RunOutcome, WorkChange | None, str]:
         async def sink(event: RunEvent) -> None:
             try:
                 if event.kind is EventKind.STARTED:
@@ -189,7 +190,8 @@ class CodingRunner:
         finally:
             if session and self._sessions:
                 self._sessions.revoke(session.token)
-        return outcome, await self._finish_tree(run_id, task_id, tree)
+        change, problem = await self._finish_tree(run_id, task_id, tree)
+        return outcome, change, problem
 
     async def _land(
         self, run_id: str, task_id: str, change: WorkChange, session_id: str, task: str, reviewing_for: str | None
@@ -251,15 +253,21 @@ class CodingRunner:
                 return name
         return None
 
-    async def _finish_tree(self, run_id: str, task_id: str, tree: WorkTree | None) -> WorkChange | None:
-        """Commit what the agent changed, even when the run failed: partial work is still worth seeing."""
+    async def _finish_tree(self, run_id: str, task_id: str, tree: WorkTree | None) -> tuple[WorkChange | None, str]:
+        """Commit what the agent changed, even when the run failed: partial work is still worth seeing.
+
+        Returns the change, and why it could not be saved when it could not: "no changes" and "changes that
+        could not be saved" are different things to tell the user.
+        """
         if tree is None or self._workspaces is None:
-            return None
+            return None, ""
         try:
             change = await self._workspaces.finish(tree)
-        except Exception:
+        except Exception as exc:
             logger.exception("could not commit the changes of coding run %s; the copy is left as it is", run_id)
-            return None
+            problem = str(exc) if isinstance(exc, CodingAgentError) else f"could not save the changes: {exc}"
+            await self._recorder.record(run_id, task_id, "copy_problem", {"problem": problem, "path": tree.path})
+            return None, problem
         if change is not None:
             await self._recorder.record(
                 run_id,
@@ -272,7 +280,7 @@ class CodingRunner:
                     "deletions": change.deletions,
                 },
             )
-        return change
+        return change, ""
 
 
 def _state(backend: CodingBackend, spec: RunSpec, version: str, tree: WorkTree | None) -> dict[str, object]:

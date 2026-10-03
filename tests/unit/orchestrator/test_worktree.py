@@ -278,3 +278,31 @@ async def test_diff_text_is_what_the_branch_changed_against_where_it_started(
 
     assert "diff --git a/README.md b/README.md" in text and "+line4" in text
     assert "\x1b[" not in text, "no colour codes: a model reads this"
+
+
+class TestADamagedCopy:
+    async def test_an_untouched_copy_is_intact(self, manager: GitWorktreeManager) -> None:
+        wt = await manager.create("fine")
+
+        assert await manager.damage(wt) == ""
+
+    async def test_a_copy_whose_git_link_was_deleted_is_damaged(self, manager: GitWorktreeManager) -> None:
+        wt = await manager.create("deleted")
+        (Path(wt.path) / ".git").unlink()
+
+        assert "gone" in await manager.damage(wt)
+
+    async def test_a_link_aimed_at_the_real_repository_is_damaged(
+        self, manager: GitWorktreeManager, repo: Path
+    ) -> None:
+        """Left alone, the next commit would land on the user's own branch."""
+        wt = await manager.create("repointed")
+        (Path(wt.path) / ".git").write_text(f"gitdir: {repo / '.git'}\n")
+
+        assert "no longer on its branch" in await manager.damage(wt), "it would be on the user's branch, not its own"
+
+    async def test_a_copy_moved_off_its_branch_is_damaged(self, manager: GitWorktreeManager) -> None:
+        wt = await manager.create("moved")
+        subprocess.run(["git", "checkout", "-q", "-b", "elsewhere"], cwd=wt.path, check=True)
+
+        assert "no longer on its branch" in await manager.damage(wt)

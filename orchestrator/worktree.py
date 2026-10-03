@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -190,6 +191,23 @@ class GitWorktreeManager:
         if code != 0:
             raise WorktreeError(f"git diff failed: {err.strip()}")
         return str(out)
+
+    async def damage(self, wt: Worktree) -> str:
+        """Why *wt* can no longer be trusted to commit onto its own branch, or "" when it is intact.
+
+        An agent can delete or repoint a copy's `.git` link. Without the link nothing can be committed, and
+        pointing it at the real repository would aim a commit there.
+        """
+        if not (Path(wt.path) / ".git").is_file():
+            return "its .git link is gone"
+        code, here, _ = await _run_git(["rev-parse", "--path-format=absolute", "--git-common-dir"], wt.path)
+        base_code, there, _ = await _run_git(["rev-parse", "--path-format=absolute", "--git-common-dir"], self._base)
+        if code != 0 or base_code != 0 or os.path.realpath(here.strip()) != os.path.realpath(there.strip()):
+            return "its .git link no longer leads to north's repository"
+        code, branch, _ = await _run_git(["symbolic-ref", "--short", "HEAD"], wt.path)
+        if code != 0 or branch.strip() != wt.branch:
+            return f"it is no longer on its branch {wt.branch}"
+        return ""
 
     async def commit_changes(self, wt: Worktree) -> bool:
         """Commit everything changed in *wt* onto its branch; False when nothing changed.

@@ -86,3 +86,19 @@ async def test_the_diff_of_a_finished_change_is_readable_without_applying_it(rep
 
     assert "+def sub(a, b):" in text and "return a - b" in text
     assert "sub" not in (repo / "calc.py").read_text()
+
+
+async def test_a_copy_whose_git_link_was_deleted_is_reported_not_called_unchanged(repo, tmp_path) -> None:
+    """The silent case: the agent edits, then deletes `.git`; north used to say "no changes" and leak the copy."""
+    workspaces = GitWorkspaces(tmp_path / "copies")
+    tree = await workspaces.create(str(repo), "damaged")
+    Path(tree.path, "calc.py").write_text("x = 2  # the agent's edit\n")
+    (Path(tree.path) / ".git").unlink()
+
+    with pytest.raises(CodingAgentError) as excinfo:
+        await workspaces.finish(tree)
+
+    assert tree.path in str(excinfo.value) and "damaged" in str(excinfo.value)
+    assert Path(tree.path, "calc.py").read_text() == "x = 2  # the agent's edit\n", (
+        "the work is left where it can be found"
+    )

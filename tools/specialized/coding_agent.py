@@ -225,6 +225,10 @@ def _output(report: RunReport) -> ToolOutput:
         }
     if report.landing is not None:
         data["landing"] = {"state": report.landing.state.value, "reason": report.landing.reason}
+    if report.problem:  # the agent finished, but what it did could not be saved: that is not "no changes"
+        data["problem"] = report.problem
+        data["failure"] = "copy_damaged"
+        return ToolOutput(success=False, data=data, error=report.problem)
     if outcome.ok:
         return ToolOutput(success=True, data=data)
     data["failure"] = outcome.failure.value if outcome.failure else "error"
