@@ -143,6 +143,9 @@ class CodingRunner:
         """An earlier run of this task to continue. An edit run is only continued in the copy it still has."""
         live = await self._recorder.live_run(task_id, agent, mode.value)
         if live is not None and mode is Mode.EDIT and not (live.worktree and Path(live.worktree.path).is_dir()):
+            # Its copy is gone, so it can never resume; leaving it unfinished would show it paused for ever.
+            gone = RunOutcome(False, "", live.session_id, failure=FailureKind.ERROR, error="its isolated copy is gone")
+            await self._recorder.finish(live.run_id, gone)
             return None
         return live
 

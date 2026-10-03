@@ -357,3 +357,26 @@ class TestTheOtherAgentsReview:
 
         assert [call["review"] for call in runner.calls] == [True, False]
         assert tool.parameters_schema["properties"]["review"]["type"] == "boolean"
+
+
+class TestAPausedRun:
+    async def _fail(self, failure: FailureKind, error: str):
+        runner = StubRunner(RunOutcome(False, "", "s", failure=failure, error=error))
+        return await _tool(runner).execute(_input())
+
+    async def test_a_usage_limit_tells_the_model_it_is_paused_and_how_to_continue(self) -> None:
+        result = await self._fail(FailureKind.RESOURCE, "usage limit reached")
+
+        assert not result.success and result.data["failure"] == "resource"
+        assert "usage limit reached" in result.error and "PAUSED, not failed" in result.error
+        assert "call coding_agent again with the same task" in result.error
+
+    async def test_a_logged_out_agent_asks_for_a_login_first(self) -> None:
+        result = await self._fail(FailureKind.AUTH, "not logged in")
+
+        assert "PAUSED, not failed" in result.error and "log in" in result.error
+
+    async def test_a_real_failure_is_not_called_paused(self) -> None:
+        result = await self._fail(FailureKind.ERROR, "boom")
+
+        assert result.error == "boom"

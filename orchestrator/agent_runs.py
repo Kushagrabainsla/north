@@ -26,6 +26,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
     INTERRUPTED = "interrupted"  # its process died; it can resume
+    PAUSED = "paused"  # the vendor's limit or login stopped it; it resumes when the person calls again
 
 
 _SCHEMA = """
@@ -219,6 +220,32 @@ class AgentRunStore:
                 "UPDATE agent_runs SET status=? WHERE run_id=? AND completed_at IS NULL", (status.value, run_id)
             )
             return changed.rowcount == 1
+
+    async def pause(self, run_id: str, reason: str) -> bool:
+        """Freeze a run that a missing resource stopped: not done, not failed, and the reason is kept."""
+        return await asyncio.to_thread(self._pause_sync, run_id, reason)
+
+    def _pause_sync(self, run_id: str, reason: str) -> bool:
+        with open_db_connection(self._db_path) as conn:
+            changed = conn.execute(
+                "UPDATE agent_runs SET status=?, error=? WHERE run_id=? AND completed_at IS NULL",
+                (RunStatus.PAUSED.value, reason[:8_000], run_id),
+            )
+            return changed.rowcount == 1
+
+    async def list_unfinished(self, agent_prefix: str) -> list[AgentRun]:
+        """Runs of agents starting with *agent_prefix* that have not finished, oldest first."""
+        rows = await asyncio.to_thread(self._list_unfinished_sync, agent_prefix)
+        return [self._to_run(row) for row in rows]
+
+    def _list_unfinished_sync(self, agent_prefix: str) -> list[sqlite3.Row]:
+        with open_db_connection(self._db_path) as conn:
+            return list(
+                conn.execute(
+                    "SELECT * FROM agent_runs WHERE completed_at IS NULL AND agent LIKE ? ORDER BY started_at",
+                    (agent_prefix.replace("%", "") + "%",),
+                )
+            )
 
     async def set_skills(self, run_id: str, skills: list[dict[str, str]]) -> None:
         await asyncio.to_thread(self._set_skills_sync, run_id, skills)
