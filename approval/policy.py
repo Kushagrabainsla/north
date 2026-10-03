@@ -111,6 +111,9 @@ class Action:
     # A file edit inside north's own scratch space (task handoff notes, personal
     # notes) rather than anywhere of the user's. See `tools._path.is_north_scratch`.
     in_north_scratch: bool = False
+    # A file edit inside the throwaway copy a coding run was approved to work in. Nothing
+    # real changes until a person lands the result, so the start card already covered it.
+    isolated: bool = False
     # What a person would read to judge the action - a card's filled-in fields.
     # Shown to the memory decider; not part of the action's identity.
     details: str = ""
@@ -199,6 +202,10 @@ class ApprovalPolicy:
         #     unattended run that writes a handoff or a briefing, in every mode.
         if action.kind is ActionKind.FILE_EDIT and action.in_north_scratch:
             return Ruling(Verdict.ALLOW, "north's own scratch space", DecidedBy.NORTH)
+
+        # 1c. An edit inside the isolated copy a coding run was approved to work in, in every mode.
+        if action.kind is ActionKind.FILE_EDIT and action.isolated:
+            return Ruling(Verdict.ALLOW, "an edit inside the run's isolated copy", DecidedBy.NORTH)
 
         # 2. Modes that never ask. The operator has explicitly declined a
         #    hard-danger floor in both.
