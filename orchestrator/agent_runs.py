@@ -24,7 +24,7 @@ class RunStatus(StrEnum):
     """The states a run is in while it can still finish. Terminal ones are set by `complete` and `finish_with_error`."""
 
     RUNNING = "running"
-    WAITING_APPROVAL = "waiting_approval"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     INTERRUPTED = "interrupted"  # its process died; it can resume
 
 

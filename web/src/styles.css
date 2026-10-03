@@ -140,7 +140,7 @@ a { color: inherit; text-decoration: none; }
 .status-completed, .status-approved, .status-answered { color: var(--accent); background: var(--accent-soft); }
 .status-pending, .status-running, .status-queued, .status-retrying { color: var(--blue); background: rgba(118,185,255,.12); }
 .status-failed, .status-rejected, .status-cancelled, .status-needs_attention { color: var(--red); background: rgba(255,119,119,.12); }
-.status-paused, .status-waiting { color: var(--amber); background: rgba(255,201,105,.12); }
+.status-paused, .status-waiting, .status-interrupted { color: var(--amber); background: rgba(255,201,105,.12); }
 .status-yolo { margin-left: 6px; color: var(--red); background: rgba(255,119,119,.12); }
 .conversation-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .conversation-card { padding: 12px; background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 9px; min-width: 0; }

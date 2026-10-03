@@ -136,8 +136,8 @@ async def test_a_run_waiting_on_a_card_says_so_and_goes_back_to_running(tmp_path
     payload = AgentPayload(task_id="task-1", run_id="run-1", prompt="fix the bug")
     await store.start(payload, "coding:claude")
 
-    assert await store.set_status("run-1", RunStatus.WAITING_APPROVAL)
-    assert (await store.get("run-1")).status == "waiting_approval"
+    assert await store.set_status("run-1", RunStatus.WAITING_FOR_APPROVAL)
+    assert (await store.get("run-1")).status == "waiting_for_approval"
     assert await store.set_status("run-1", RunStatus.RUNNING)
     assert (await store.get("run-1")).status == "running"
 
