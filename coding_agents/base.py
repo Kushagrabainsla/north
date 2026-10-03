@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from coding_agents.models import (
     Availability,
     Landing,
+    Review,
     RunEvent,
     RunOutcome,
     RunSpec,
@@ -73,6 +74,10 @@ class Workspaces(Protocol):
         """Commit what the agent changed onto the branch; None, and the copy removed, when nothing changed."""
         ...
 
+    async def diff(self, tree: WorkTree) -> str:
+        """What the branch changed, as a unified diff against the commit it was made from."""
+        ...
+
 
 @dataclass(frozen=True)
 class ShellResult:
@@ -97,7 +102,9 @@ class Verifier(Protocol):
 
 
 class Lander(Protocol):
-    async def land(self, change: WorkChange, verification: Verification, task_id: str) -> Landing:
+    async def land(
+        self, change: WorkChange, verification: Verification, task_id: str, review: Review | None = None
+    ) -> Landing:
         """Offer the change to the user and, when they agree, apply it; always clean up the copy."""
         ...
 

@@ -30,6 +30,13 @@ class GitWorkspaces:
             raise CodingAgentError(str(exc)) from exc
         return WorkTree(tree.path, tree.branch, tree.base_sha, tree.base)
 
+    async def diff(self, tree: WorkTree) -> str:
+        manager = GitWorktreeManager(tree.base)
+        try:
+            return await manager.diff_text(Worktree(tree.base, tree.path, tree.branch, tree.base_sha))
+        except WorktreeError as exc:
+            raise CodingAgentError(str(exc)) from exc
+
     async def finish(self, tree: WorkTree) -> WorkChange | None:
         """Commit what the agent changed; when it changed nothing, remove the copy and its branch."""
         manager = GitWorktreeManager(tree.base)

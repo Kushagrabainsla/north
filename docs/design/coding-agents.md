@@ -266,7 +266,12 @@ Every wait must be visible. Proved by the experiments, or marked to build:
      cross-review by the other agent waits for the Codex backend: with only Claude there is no
      "other agent" to ask.
 3. **Done.** Codex backend (app-server, a permissions profile, approvals through the gate), with the
-   same tests as Claude's. Cross-review by the other agent is now possible and comes next.
+   same tests as Claude's.
+   - **Cross-review. Done.** After the tests pass, the other agent reads the diff, read-only, in a
+     fresh plan run. The diff goes in the prompt inside a fence it cannot close. The verdict
+     (`VERDICT: OK|CONCERNS`; no readable verdict is UNCLEAR, never a pass) rides on the landing
+     card, labelled an opinion. It is advice: it never blocks or allows a landing. Skipped when the
+     tests failed, with one agent, or with `review: false`.
 4. Recovery and freeze.
 5. North MCP recall server; cross-review as a flow.
 6. Follow-up PR: delete `coder`, `architect`, `reviewer` and the edit tools.

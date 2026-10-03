@@ -34,6 +34,7 @@ class _Call:
     workspace: str
     backend: str | None
     mode: Mode
+    review: bool
 
 
 class CodingAgentTool(Tool):
@@ -64,6 +65,11 @@ class CodingAgentTool(Tool):
                     "type": "string",
                     "enum": [Mode.PLAN.value, *([Mode.EDIT.value] if runner.can_edit else [])],
                     "description": "plan reads and answers (default); edit changes an isolated copy on a new branch",
+                },
+                "review": {
+                    "type": "boolean",
+                    "description": "edit only: have the other coding agent, if installed, read the change first "
+                    "(default true)",
                 },
                 "backend": {
                     "type": "string",
@@ -122,6 +128,7 @@ class CodingAgentTool(Tool):
                 guidance=guidance,
                 backend=call.backend,
                 mode=call.mode,
+                review=call.review,
             )
         except CodingAgentError as exc:  # no usable agent, edit not set up, not a git repository
             return ToolOutput(success=False, error=str(exc))
@@ -150,7 +157,10 @@ class CodingAgentTool(Tool):
             mode = Mode(str(input.params.get("mode") or Mode.PLAN.value))
         except ValueError:
             return ToolOutput(success=False, error="mode must be 'plan' or 'edit'.")
-        return _Call(task=task, workspace=str(Path(input.granted_workspace).resolve()), backend=backend, mode=mode)
+        review = input.params.get("review", True) is not False
+        return _Call(
+            task=task, workspace=str(Path(input.granted_workspace).resolve()), backend=backend, mode=mode, review=review
+        )
 
 
 def _output(report: RunReport) -> ToolOutput:
@@ -181,6 +191,12 @@ def _output(report: RunReport) -> ToolOutput:
     if report.verification is not None:
         check = report.verification
         data["verification"] = {"state": check.state.value, "command": check.command, "detail": check.detail}
+    if report.review is not None:
+        data["review"] = {
+            "reviewer": report.review.reviewer,
+            "verdict": report.review.verdict.value,
+            "summary": report.review.summary,
+        }
     if report.landing is not None:
         data["landing"] = {"state": report.landing.state.value, "reason": report.landing.reason}
     if outcome.ok:
@@ -196,6 +212,8 @@ def _edit_summary(data: dict) -> str:
     files = "\n".join(f"- {f['path']} (+{f['insertions']} -{f['deletions']})" for f in change["files"][:20])
     size = f"{len(change['files'])} file(s), +{change['insertions']} -{change['deletions']}"
     tests = _tests_summary(data.get("verification"))
+    if data.get("review"):
+        tests = f"{tests} {_review_summary(data['review'])}".strip()
     landing = data.get("landing")
     if landing is None:  # not tested or offered: the copy is still there to look at
         return (
@@ -216,6 +234,16 @@ def _edit_summary(data: dict) -> str:
         f"in your repository ({size}). To review: "
         f"`git -C {change['base']} diff {change['base_sha']}..{change['branch']}`.\n{files}"
     )
+
+
+def _review_summary(review: dict) -> str:
+    """The other agent's read, marked as an opinion so the model does not take it for a test result."""
+    who = f"{review['reviewer']} reviewed it (an opinion, not a check)"
+    if review["verdict"] == "ok":
+        return f"{who}: no concerns. {review['summary']}".strip()
+    if review["verdict"] == "concerns":
+        return f"{who}: CONCERNS.\n{review['summary']}"
+    return f"{who}: no clear verdict.\n{review['summary']}".strip()
 
 
 def _tests_summary(verification: dict | None) -> str:
