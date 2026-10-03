@@ -66,30 +66,46 @@ tools/specialized/coding_agent.py   the Tool agents call; describe() makes the s
 
 The shim exits 2 on any error and posts to the daemon with a per-run token, never north's secret.
 
-### Codex
+### Codex, as built
 
-`codex app-server` over stdio. `initialize`, `thread/start` with `approvalPolicy: on-request` and
-`sandbox: workspace-write`. North answers `item/commandExecution/requestApproval`,
-`item/fileChange/requestApproval` and `item/permissions/requestApproval` with `accept`, `decline`
-(the turn continues) or `cancel` (stop). Any other server request gets a JSON-RPC error, which
-Codex treats as a refusal. `turn/interrupt` cancels; `thread/resume` recovers.
+`codex app-server` over stdio, speaking JSON-RPC (`coding_agents/appserver.py`, `coding_agents/codex.py`).
+What the lab measured, and what the code does because of it:
 
-- Lab: inside write runs with no card; outside write asks and decline blocks; network is
-  blocked silently. The sandbox is the boundary and the gate sees only escape attempts.
+- **No `sandbox` in `thread/start`.** An explicit sandbox overrides the permissions profile, and the
+  deny-read then silently does nothing (files were readable). The profile goes in `thread/start`'s
+  `config` instead, with no launch flags: `{"default_permissions": "northworker", "permissions":
+  {"northworker": {"extends": ":workspace", "filesystem": {"~/.north": "deny", ...}}}}`, plus
+  `approvalPolicy: on-request`. A path built at runtime was unreadable under it and readable without.
+- **Plan mode is the `:read-only` profile.** Every write the agent attempts becomes an approval
+  request, and plan mode declines them all; they are listed as refused. **Edit mode is `:workspace`:**
+  an edit inside the copy needs no approval, and anything the sandbox refuses arrives as a request.
+- **Approvals go to the gate, over the route and token the Claude hook uses**, as hook-shaped payloads
+  (Bash for a command; Write per file for a file change). The file-change request names only an item id,
+  so north reads the files from the item announced just before it. Only an explicit ALLOW is accepted: a
+  pass means "the agent's own rules decide", and a Codex request is the agent saying its own rules need
+  an answer, so a pass, a denial and an unreachable gate all decline. An unknown kind of request gets an
+  error, which Codex reads as a refusal.
+- **The session is Codex's thread id**, not an id north makes up. The backend reports it as soon as it
+  has one and the runner saves it, so `thread/resume` (which works in a new process) asks for a thread
+  that exists. A thread that is gone is reported as lost, never started over.
+- **The probe checks the protocol**, not just the version: `codex app-server generate-json-schema` must
+  still list the methods north uses, or the backend is unavailable with a reason.
+- Codex reports tokens but no dollar cost, so the run records tokens. It has no turn or budget cap to
+  pass, so only the time limit bounds a Codex run. A failure is an `error` notification and then a
+  failed turn; `codexErrorInfo` and the nested HTTP status say whether it is a limit, a login, a bad
+  setting or a resource that will come back.
+- **The agent's copies live outside the temp directory** (`~/.cache/north/coding-worktrees`). Both
+  agents' sandboxes let a command write to temp, so a copy there could be changed by another run's
+  commands; in the cache directory a run's sandbox can write only to its own. Found when a live test's
+  "outside" folder, in temp, was writable by design.
 - `untrusted` asks for every command and patch (including `sort -o`, `git diff --output`,
-  `find -exec`); kept as a strict option.
-- `on-request` with an external sandbox asked nothing. Never use that pair.
-- `codex app-server generate-json-schema` at probe time checks the methods north needs; a
-  missing one marks the backend unavailable instead of guessing.
-- **Secrets:** under plain `workspace-write` an agent can read north's `secret.key` and the
-  Codex login token (lab: readable). A permission profile fixes it:
-  `-c 'default_permissions="northworker"' -c 'permissions={northworker={extends=":workspace", filesystem={"~/.north"="deny"}}}'`.
-  A path built at runtime was unreadable under the profile and readable without it, so the
-  sandbox enforces it. Claude gets the same through `sandbox.filesystem.denyRead`. North passes
-  both on every run, plus `~/.ssh`, `~/.aws`, `~/.gnupg`; whether `thread/start`'s `config`
-  param accepts the profile is still to be checked.
-- Codex's own sandbox inside another sandbox fails silently (the model said DONE, nothing was
-  written). One sandbox only: the vendor's.
+  `find -exec`); kept in mind as a strict option. `on-request` with an external sandbox asked
+  nothing, and Codex's own sandbox inside another fails silently: one sandbox only, the vendor's.
+
+Live, with a real `codex`: a plan answers from the repo and changes nothing; a thread resumes in a new
+process with what it read; an edit lands on a branch with the real tree clean; a write outside the copy
+reaches the gate and is refused; north's own directory is unreadable; and a change that passes north's
+own test run lands in the working tree.
 
 ### Plan mode, as built
 
@@ -249,7 +265,8 @@ Every wait must be visible. Proved by the experiments, or marked to build:
      and applies it under the workspace lock (keeping the branch on a conflict). The optional
      cross-review by the other agent waits for the Codex backend: with only Claude there is no
      "other agent" to ask.
-3. Codex backend on the same conformance suite.
+3. **Done.** Codex backend (app-server, a permissions profile, approvals through the gate), with the
+   same tests as Claude's. Cross-review by the other agent is now possible and comes next.
 4. Recovery and freeze.
 5. North MCP recall server; cross-review as a flow.
 6. Follow-up PR: delete `coder`, `architect`, `reviewer` and the edit tools.

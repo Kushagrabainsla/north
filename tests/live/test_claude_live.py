@@ -19,6 +19,9 @@ from coding_agents import ClaudeBackend, CodingRunner, LiveRun
 from orchestrator.agent_runs import AgentRunStore
 from orchestrator.coding_run_recorder import AgentRunRecorder
 from tests.conftest import approving_store, bind_approvals
+from tests.live.helpers import head as _head
+from tests.live.helpers import status as _status
+from tests.live.helpers import workspaces
 from tests.unit.coding_agents.conftest import MemoryRecorder
 from tools.models import ToolInput
 from tools.specialized.coding_agent import CodingAgentTool
@@ -27,23 +30,6 @@ pytestmark = pytest.mark.skipif(
     os.environ.get("NORTH_LIVE_CLAUDE") != "1" or shutil.which("claude") is None,
     reason="set NORTH_LIVE_CLAUDE=1 with claude installed to run against the real CLI",
 )
-
-
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    directory = tmp_path / "repo"
-    directory.mkdir()
-    (directory / "calc.py").write_text("def add(a, b):\n    return a + b\n")
-    (directory / "CLAUDE.md").write_text("Use type hints.\n")
-    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
-    subprocess.run([*git, "init", "-q"], cwd=directory, check=True)
-    subprocess.run([*git, "add", "."], cwd=directory, check=True)
-    subprocess.run([*git, "commit", "-qm", "init"], cwd=directory, check=True)
-    return directory
-
-
-def _status(repo: Path) -> str:
-    return subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
 
 
 async def test_a_plan_run_answers_from_the_repo_and_changes_nothing(repo, tmp_path) -> None:
@@ -98,45 +84,17 @@ async def test_a_session_resumes_with_what_it_already_read(repo) -> None:
 # ── Edit mode: the real hook, the real daemon route, the real approval layer ──────────────────────────
 
 
-def _head(repo: Path, ref: str, path: str) -> str:
-    return subprocess.run(["git", "show", f"{ref}:{path}"], cwd=repo, capture_output=True, text=True).stdout
-
-
 async def _edit(repo: Path, gate, task: str, *, gate_url: str | None = None, recorder=None):
     from coding_agents import Mode
-    from orchestrator.coding_workspaces import GitWorkspaces
 
     runner = CodingRunner(
         {"claude": ClaudeBackend()},
         recorder or MemoryRecorder(),
-        workspaces=GitWorkspaces(),
+        workspaces=workspaces(),
         sessions=gate.sessions,
         gate_url=gate_url or gate.url,
     )
     return await runner.run(task_id="t-edit", task=task, workspace=str(repo), mode=Mode.EDIT)
-
-
-@pytest.fixture
-async def yolo_gate():
-    from approval.models import ApprovalDecision  # noqa: F401
-    from config.approval_mode import ApprovalMode
-    from tests.live.support import start_gate
-
-    gate = await start_gate(ApprovalMode.YOLO)
-    yield gate
-    await gate.stop()
-
-
-@pytest.fixture
-async def asking_gate():
-    """Ask mode, and every card that appears is rejected."""
-    from approval.models import ApprovalDecision
-    from config.approval_mode import ApprovalMode
-    from tests.live.support import start_gate
-
-    gate = await start_gate(ApprovalMode.ASK, answer=ApprovalDecision.REJECTED)
-    yield gate
-    await gate.stop()
 
 
 async def test_an_edit_lands_on_a_branch_and_the_real_tree_is_untouched(repo, yolo_gate) -> None:
@@ -219,33 +177,10 @@ async def test_with_the_gate_unreachable_nothing_changes(repo, yolo_gate) -> Non
 # ── Landing: north tests the change itself, then offers it ─────────────────────────────────────────────
 
 
-@pytest.fixture
-def pytest_repo(tmp_path: Path) -> Path:
-    """A tiny project whose own tests north can run: a base repo whose `.venv` runs this suite's Python."""
-    import sys
-
-    directory = tmp_path / "proj"
-    (directory / "src").mkdir(parents=True)
-    (directory / "pyproject.toml").write_text("[tool.pytest.ini_options]\npythonpath = ['src']\n")
-    (directory / "src" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
-    (directory / "test_calc.py").write_text("from calc import add\n\ndef test_add():\n    assert add(1, 2) == 3\n")
-    (directory / ".gitignore").write_text(".venv/\n__pycache__/\n.pytest_cache/\n")
-    (directory / ".venv" / "bin").mkdir(parents=True)
-    python = directory / ".venv" / "bin" / "python"
-    python.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n')  # a symlink would look like a bare virtualenv
-    python.chmod(0o755)
-    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
-    subprocess.run([*git, "init", "-q"], cwd=directory, check=True)
-    subprocess.run([*git, "add", "."], cwd=directory, check=True)
-    subprocess.run([*git, "commit", "-qm", "init"], cwd=directory, check=True)
-    return directory
-
-
 async def _land_run(repo: Path, gate, task: str):
     """An edit run with north's own verifier and the landing desk, the real bash tool running the tests."""
     from coding_agents import CommandVerifier, Mode
     from orchestrator.coding_landing import LandingDesk
-    from orchestrator.coding_workspaces import GitWorkspaces
     from orchestrator.verify_command import detect_verify_command
     from tools.registry import ToolRegistry
     from tools.specialized.bash import BashTool
@@ -256,7 +191,7 @@ async def _land_run(repo: Path, gate, task: str):
     runner = CodingRunner(
         {"claude": ClaudeBackend()},
         MemoryRecorder(),
-        workspaces=GitWorkspaces(),
+        workspaces=workspaces(),
         sessions=gate.sessions,
         gate_url=gate.url,
         verifier=CommandVerifier(detect_verify_command, BashShell(registry)),
@@ -265,9 +200,9 @@ async def _land_run(repo: Path, gate, task: str):
     return await runner.run(task_id="t-land", task=task, workspace=str(repo), mode=Mode.EDIT)
 
 
-async def test_a_change_that_passes_north_s_own_tests_lands_in_the_working_tree(pytest_repo, yolo_gate) -> None:
+async def test_a_change_that_passes_north_s_own_tests_lands_in_the_working_tree(project, yolo_gate) -> None:
     report = await _land_run(
-        pytest_repo,
+        project,
         yolo_gate,
         "Add a function subtract(a, b) returning a - b to src/calc.py, and a test for it in test_calc.py. "
         "Use the Edit and Write tools. Do not run anything.",
@@ -276,21 +211,21 @@ async def test_a_change_that_passes_north_s_own_tests_lands_in_the_working_tree(
     assert report.outcome.ok, report.outcome.error
     assert report.verification.state.value == "passed", report.verification
     assert report.landing.state.value == "applied", report.landing
-    assert "def subtract" in (pytest_repo / "src" / "calc.py").read_text(), "it is in the real working tree"
-    status = _status(pytest_repo)
+    assert "def subtract" in (project / "src" / "calc.py").read_text(), "it is in the real working tree"
+    status = _status(project)
     assert "src/calc.py" in status and "test_calc.py" in status, "as uncommitted changes"
     assert not Path(report.change.tree.path).exists()
     assert (
         report.change.tree.branch
-        not in subprocess.run(["git", "branch", "--list"], cwd=pytest_repo, capture_output=True, text=True).stdout
+        not in subprocess.run(["git", "branch", "--list"], cwd=project, capture_output=True, text=True).stdout
     )
 
 
 async def test_a_change_that_fails_north_s_own_tests_is_not_applied_whatever_the_agent_claims(
-    pytest_repo, yolo_gate
+    project, yolo_gate
 ) -> None:
     report = await _land_run(
-        pytest_repo,
+        project,
         yolo_gate,
         "Change add in src/calc.py so it returns a + b + 1 (the existing test must now fail). Use the Edit tool "
         "only and do not run anything. Then say in your final message that all tests pass.",
@@ -298,6 +233,6 @@ async def test_a_change_that_fails_north_s_own_tests_is_not_applied_whatever_the
 
     assert report.verification.state.value == "failed", report.verification
     assert report.landing.state.value == "kept"
-    assert "a + b + 1" not in (pytest_repo / "src" / "calc.py").read_text(), "the real tree is untouched"
-    assert _status(pytest_repo) == ""
+    assert "a + b + 1" not in (project / "src" / "calc.py").read_text(), "the real tree is untouched"
+    assert _status(project) == ""
     assert "failed" in report.verification.detail.lower()

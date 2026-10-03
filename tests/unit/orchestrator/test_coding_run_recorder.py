@@ -58,6 +58,18 @@ async def test_a_finished_plan_completes_the_run_with_its_answer_and_cost(store)
     assert (run.status, run.output, run.cost_usd) == ("completed", "the plan", 0.12)
 
 
+async def test_the_tokens_an_agent_used_reach_the_run_record(store) -> None:
+    recorder = AgentRunRecorder(store)
+    await _begin(recorder)
+
+    await recorder.finish(
+        "run-1", RunOutcome(ok=True, text="done", session_id="sess-1", tokens_in=58_262, tokens_out=338)
+    )
+
+    run = await store.get("run-1")
+    assert (run.tokens_in, run.tokens_out) == (58_262, 338)
+
+
 @pytest.mark.parametrize(
     ("failure", "status"),
     [(FailureKind.ERROR, "failed"), (FailureKind.RESOURCE, "failed"), (FailureKind.CANCELLED, "cancelled")],

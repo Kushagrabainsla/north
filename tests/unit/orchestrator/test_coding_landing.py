@@ -40,7 +40,7 @@ def repo(tmp_path: Path) -> Path:
 
 async def _change(repo: Path, new_text: str = "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n"):
     """An agent's finished edit: a copy with a committed change."""
-    workspaces = GitWorkspaces()
+    workspaces = GitWorkspaces(repo.parent / "copies")
     tree = await workspaces.create(str(repo), "coding-land")
     Path(tree.path, "calc.py").write_text(new_text)
     return await workspaces.finish(tree)

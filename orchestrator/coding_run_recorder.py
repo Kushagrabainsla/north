@@ -73,6 +73,8 @@ class AgentRunRecorder:
                 summary=outcome.text[:_SUMMARY_CHARS],
                 run_id=run_id,
                 cost_usd=outcome.cost_usd,
+                tokens_in=outcome.tokens_in,
+                tokens_out=outcome.tokens_out,
                 duration_ms=int(elapsed * 1000),
             ),
         )

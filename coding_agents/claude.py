@@ -12,11 +12,9 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import re
 import shlex
 import shutil
-import signal
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -26,13 +24,11 @@ from coding_agents.base import CodingBackend, EventSink
 from coding_agents.constants import (
     HOOK_TIMEOUT_SECONDS,
     MAX_EVENT_TEXT_CHARS,
-    MAX_STDERR_CHARS,
     MAX_TEXT_CHARS,
     PROBE_TIMEOUT_SECONDS,
     RUN_TIMEOUT_SECONDS,
     SECRET_PATHS,
     STREAM_LINE_LIMIT_BYTES,
-    TERMINATE_GRACE_SECONDS,
 )
 from coding_agents.environment import agent_environment
 from coding_agents.exceptions import CodingAgentError
@@ -47,6 +43,7 @@ from coding_agents.models import (
     RunOutcome,
     RunSpec,
 )
+from coding_agents.process import stop, tail
 
 logger = logging.getLogger(__name__)
 
@@ -134,14 +131,14 @@ class ClaudeBackend(CodingBackend):
         except TimeoutError:
             timed_out = True
         finally:
-            await _stop(process)
+            await stop(process)
         return _outcome(stream, exit_code=exit_code, stderr=stderr, timed_out=timed_out)
 
     async def _drive(
         self, process: asyncio.subprocess.Process, spec: RunSpec, stream: _Stream, on_event: EventSink
     ) -> tuple[int, str]:
         assert process.stdin is not None and process.stdout is not None and process.stderr is not None
-        stderr_tail = asyncio.create_task(_tail(process.stderr))
+        stderr_tail = asyncio.create_task(tail(process.stderr))
         try:
             with contextlib.suppress(BrokenPipeError, ConnectionResetError):
                 process.stdin.write(spec.task.encode())
@@ -322,11 +319,25 @@ def _outcome(stream: _Stream, *, exit_code: int, stderr: str, timed_out: bool) -
     cost = float(result.get("total_cost_usd") or 0)
     turns = int(result.get("num_turns") or 0)
     denials = _denials(result)
+    tokens_in, tokens_out = _tokens(result)
     if not result.get("is_error") and result.get("subtype") == "success":
-        return RunOutcome(True, answer, stream.session_id, cost, turns, denials)
+        return RunOutcome(
+            True, answer, stream.session_id, cost, turns, denials, tokens_in=tokens_in, tokens_out=tokens_out
+        )
     failure = _classify(result, errors, stream.retry_error)
     error = (errors or text or str(result.get("subtype")))[:MAX_TEXT_CHARS]
-    return RunOutcome(False, answer, stream.session_id, cost, turns, denials, failure, error)
+    return RunOutcome(
+        False,
+        answer,
+        stream.session_id,
+        cost,
+        turns,
+        denials,
+        failure,
+        error,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+    )
 
 
 def _classify(result: Mapping[str, Any], errors: str, retry_error: str) -> FailureKind:
@@ -350,6 +361,17 @@ def _failed(stream: _Stream, failure: FailureKind, error: str) -> RunOutcome:
     )
 
 
+def _tokens(result: Mapping[str, Any]) -> tuple[int, int]:
+    """Prompt and completion tokens, counting what the provider served from its cache as prompt."""
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        return 0, 0
+    prompt = sum(
+        int(usage.get(key) or 0) for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+    )
+    return prompt, int(usage.get("output_tokens") or 0)
+
+
 def _denials(result: Mapping[str, Any]) -> tuple[Denial, ...]:
     denials = []
     for item in result.get("permission_denials") or []:
@@ -363,25 +385,3 @@ def _logged_in(status_json: str) -> bool:
         return bool(json.loads(status_json).get("loggedIn"))
     except (ValueError, AttributeError):
         return False
-
-
-async def _tail(reader: asyncio.StreamReader) -> str:
-    """The last of what a process wrote to stderr; read to the end so it never blocks on a full pipe."""
-    tail = ""
-    while chunk := await reader.read(4096):
-        tail = (tail + chunk.decode(errors="replace"))[-MAX_STDERR_CHARS:]
-    return tail
-
-
-async def _stop(process: asyncio.subprocess.Process) -> None:
-    """End the agent and everything in its process group, if it is still running."""
-    if process.returncode is not None:
-        return
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGTERM)
-    try:
-        await asyncio.wait_for(process.wait(), TERMINATE_GRACE_SECONDS)
-    except TimeoutError:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        await process.wait()

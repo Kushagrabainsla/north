@@ -56,6 +56,8 @@ class ScriptedBackend(CodingBackend):
             self.during_run(spec)
         await on_event(RunEvent(EventKind.STARTED, {"pid": 4242}))
         await on_event(RunEvent(EventKind.TOOL_USE, {"tool": "Read", "summary": "calc.py"}))
+        for event in getattr(self, "extra_events", []):
+            await on_event(event)
         if self.raises:
             raise self.raises
         if self.hang:
@@ -91,6 +93,16 @@ async def test_the_session_id_is_saved_before_the_agent_can_crash_with_it(record
     (state,) = backend.state_when_called.values()
     assert state["provider"] == "scripted" and state["session_id"] == backend.specs[0].session_id
     assert state["cli_version"] == "1.0.0" and state["resumed"] is False
+
+
+async def test_an_agent_that_picks_its_own_session_id_has_it_saved_as_soon_as_it_says_so(recorder) -> None:
+    backend = ScriptedBackend()
+    backend.extra_events = [RunEvent(EventKind.INIT, {"session_id": "agents-own-thread"})]
+
+    await _run(_runner(recorder, backend))
+
+    (state,) = recorder.state.values()
+    assert state["session_id"] == "agents-own-thread", "so a resume asks for the thread that really exists"
 
 
 async def test_the_process_id_and_events_are_recorded_as_they_happen(recorder) -> None:

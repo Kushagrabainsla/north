@@ -17,6 +17,7 @@ from coding_agents.base import (
     Workspaces,
 )
 from coding_agents.claude import ClaudeBackend
+from coding_agents.codex import CodexBackend
 from coding_agents.discovery import discover_backends
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
 from coding_agents.gate import Decision, Gate, GateSession, GateSessions, Judge, ToolRequest, Verdict
@@ -46,6 +47,7 @@ __all__ = [
     "Availability",
     "BackendUnavailableError",
     "ClaudeBackend",
+    "CodexBackend",
     "CodingAgentError",
     "CodingBackend",
     "CodingRunner",
