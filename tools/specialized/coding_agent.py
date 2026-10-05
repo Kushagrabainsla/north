@@ -44,6 +44,7 @@ class CodingAgentTool(Tool):
     """Ask the installed coding agent to investigate or plan, read-only."""
 
     name = "coding_agent"
+    locks_workspace_itself = True  # its landing step takes the workspace lock; see `Tool.locks_workspace_itself`
     is_mutating = True  # it starts a process and spends the user's agent quota, so the user's mode decides
     description = (
         "Hand a coding task to the coding agent installed on this machine (Claude Code). Give it the whole "

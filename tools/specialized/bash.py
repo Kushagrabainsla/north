@@ -130,16 +130,24 @@ class BashTool(Tool):
     async def _prove_read_only(self, command: str, cwd: str | None) -> ToolOutput | None:
         """Run *command* where the kernel refuses every write and the network.
 
-        Returns its output when it finished without being refused anything, which
-        proves it changed nothing - the output is then what `run` returns, so the
-        command runs once. Returns None when it was refused, failed to start or
-        took too long: it goes to approval, and runs again if approved.
+        Returns its output when it finished successfully without being refused
+        anything, which proves it changed nothing - the output is then what `run`
+        returns, so the command runs once. Returns None when it was refused, failed
+        or took too long: it goes to approval, and runs again if approved.
+
+        A command that merely *failed* proves nothing. The sandbox's refusal does
+        not always say so: pytest, refused its scratch file, reports "No usable
+        temporary directory found", which no marker recognises, and its failed
+        probe was then returned as the command's real result without the command
+        ever running where it could write.
         """
         if not self._os_sandbox:
             return None
         argv = self._os_sandbox.wrap(command, cwd, writable=False)
         output = await self._spawn(argv, cwd, _PROBE_TIMEOUT, command=command)
-        if output.data is None or self._os_sandbox.denied(str(output.data.get("stderr", ""))):
+        if output.data is None or output.data.get("returncode") != 0:
+            return None
+        if self._os_sandbox.denied(f"{output.data.get('stderr', '')}\n{output.data.get('stdout', '')}"):
             return None
         return output
 

@@ -243,6 +243,36 @@ class TestBashOsSandbox:
             assert out.failure_kind == "refused", command
         assert not (tmp_path / "made.txt").exists()
 
+    NEEDS_A_SCRATCH_FILE = "python3 -c \"import tempfile; tempfile.NamedTemporaryFile().write(b'x'); print('done')\""
+
+    @pytest.mark.asyncio
+    async def test_a_command_that_failed_in_the_read_only_probe_is_not_taken_as_read_only(self, tmp_path) -> None:
+        """Its failure (here: no scratch file) says nothing about whether it would change anything."""
+        tool = self._tool()  # a rejecting store: asked, and the answer is no
+
+        out = await tool.execute(ToolInput(params={"command": self.NEEDS_A_SCRATCH_FILE, "workspace": str(tmp_path)}))
+
+        assert out.failure_kind == "refused", (
+            "it went to approval instead of passing its failed probe off as the result"
+        )
+
+    @pytest.mark.asyncio
+    async def test_once_approved_that_command_runs_where_it_may_write_and_succeeds(self, tmp_path) -> None:
+        tool = bind_approvals(BashTool(os_sandbox=True), store=approving_store())
+
+        out = await tool.execute(ToolInput(params={"command": self.NEEDS_A_SCRATCH_FILE, "workspace": str(tmp_path)}))
+
+        assert out.success and out.data["stdout"].strip() == "done"
+
+    @pytest.mark.asyncio
+    async def test_a_read_only_command_that_succeeds_still_runs_once_without_asking(self, tmp_path) -> None:
+        (tmp_path / "a.txt").write_text("hello")
+        tool = self._tool()
+
+        out = await tool.execute(ToolInput(params={"command": "cat a.txt", "workspace": str(tmp_path)}))
+
+        assert out.success and out.data["stdout"] == "hello"
+
     @pytest.mark.asyncio
     async def test_a_credential_directory_is_unreadable_even_to_an_approved_command(self, tmp_path) -> None:
         tool = bind_approvals(BashTool(os_sandbox=True), store=approving_store())
