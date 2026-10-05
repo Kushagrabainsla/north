@@ -992,6 +992,50 @@ async def test_execute_calls_ordered_preserves_causal_chunks(tmp_path: Path) -> 
     assert execution_order == ["write", "read"]
 
 
+async def test_a_tool_that_takes_the_workspace_lock_itself_is_not_run_under_it(tmp_path: Path) -> None:
+    """`coding_agent` lands a change under the workspace lock; the loop holding it too waited for itself for ever."""
+    import asyncio
+
+    from agents.workspace_lock import workspace_lock
+    from config.approval_mode import ApprovalMode
+    from tests.conftest import bind_approvals
+    from tools.base import Tool
+    from tools.models import ToolOutput
+
+    class LandsItself(Tool):
+        name = "lands_itself"
+        is_mutating = True
+        locks_workspace_itself = True
+        description = "Takes the lock for its own step."
+        parameters_schema = {"type": "object", "properties": {}}
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            async with workspace_lock(str(tmp_path)):
+                return ToolOutput(success=True, data={"landed": True})
+
+    class HoldsItsLock(LandsItself):
+        name = "holds_its_lock"
+        locks_workspace_itself = False  # an ordinary mutating tool: the loop serializes it under the lock
+
+    agent = _load_agent("general", tmp_path)
+    payload = AgentPayload(prompt="test", task_id="t1", workspace=str(tmp_path))
+    tool_map = {"lands_itself": bind_approvals(LandsItself(), ApprovalMode.YOLO)}
+
+    results = await asyncio.wait_for(
+        agent._execute_calls_ordered([ToolCall(name="lands_itself", call_id="c1", params={})], payload, tool_map), 5
+    )
+
+    assert results[0][2] is True, "it ran and landed"
+
+    # The ordinary case is still serialized under the lock, which is why the flag exists.
+    ordinary = {"holds_its_lock": bind_approvals(HoldsItsLock(), ApprovalMode.YOLO)}
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            agent._execute_calls_ordered([ToolCall(name="holds_its_lock", call_id="c2", params={})], payload, ordinary),
+            1,
+        )
+
+
 async def test_append_tool_call_exchange_contiguous_tool_roles_with_visuals(tmp_path: Path) -> None:
     """All role='tool' messages must precede any visual user messages for OpenAI protocol compliance."""
     agent = _load_agent("general", tmp_path)

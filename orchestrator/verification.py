@@ -45,6 +45,8 @@ _EXTERNAL_RESEARCH_RE = re.compile(
 )
 _REPO_STRUCTURE_TOOLS = frozenset({"list_dir", "glob"})
 _REPO_CONTENT_TOOLS = frozenset({"read_file", "search_files", "search_code"})
+# The installed coding agent read the repository itself: that is the inspection, whatever north's own tools saw.
+_CODING_AGENT = "coding_agent"
 _WEB_EVIDENCE_TOOLS = frozenset({"web_search", "fetch_url"})
 
 _CAPABILITY_REQUESTS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
@@ -119,7 +121,7 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
             r"|\b(?:briefing|digest|report|summary|file|script|document|doc)\s+(?:is\s+|was\s+)?(?:saved|written|compiled|generated|created|produced|stored|built)\b",
             re.IGNORECASE,
         ),
-        frozenset({"write_file", "patch_file", "create_tool"}),
+        frozenset({"write_file", "create_tool", "coding_agent"}),
     ),
     (
         "running a check, test, or verification",
@@ -133,7 +135,7 @@ _RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
             r"|\bi\s+verified\b|\bverified\s+(?:that|the|it|by)\b",
             re.IGNORECASE,
         ),
-        frozenset({"bash", "check_types"}),
+        frozenset({"bash", "coding_agent"}),
     ),
     (
         "committing or pushing changes",
@@ -255,7 +257,7 @@ def evidence_sufficiency_violations(
     violations: list[str] = []
 
     asks_for_overview = is_repository_overview(task, repository_context=repository_context)
-    if asks_for_overview:
+    if asks_for_overview and _CODING_AGENT not in succeeded:
         if not (succeeded & _REPO_STRUCTURE_TOOLS):
             violations.append("repository overview used no successful structure inspection (`list_dir` or `glob`)")
         if not (succeeded & _REPO_CONTENT_TOOLS):

@@ -21,7 +21,7 @@ def test_file_claim_with_write_evidence_ok() -> None:
 
 
 def test_file_claim_with_patch_evidence_ok() -> None:
-    assert verify_claims("I updated the module user.py.", ["patch_file"]) == []
+    assert verify_claims("I updated the module user.py.", ["write_file"]) == []
 
 
 def test_test_pass_claim_without_bash_flagged() -> None:
@@ -86,6 +86,14 @@ def test_repository_overview_requires_structure_and_source_evidence() -> None:
     assert evidence_sufficiency_violations(task, ["list_dir"], {"list_dir": 1})
     assert evidence_sufficiency_violations(task, ["read_file"], {"read_file": 2})
     assert evidence_sufficiency_violations(task, ["list_dir", "read_file"], {"list_dir": 1, "read_file": 1}) == []
+
+
+def test_a_successful_coding_agent_run_is_the_repository_inspection() -> None:
+    """north hands code questions to the installed agents; their reading is the evidence, not north's file tools."""
+    task = "Give me an overview of this repository"
+
+    assert evidence_sufficiency_violations(task, ["coding_agent"]) == []
+    assert evidence_sufficiency_violations(task, ["use_skill"]), "without it the overview is still unevidenced"
 
 
 def test_terse_overview_is_treated_as_repository_work_in_engineering_context() -> None:
@@ -181,7 +189,7 @@ def test_fixed_file_claim_without_evidence_flagged() -> None:
 
 
 def test_implemented_claim_with_evidence_ok() -> None:
-    assert verify_claims("I implemented the cache in store.py.", ["patch_file"]) == []
+    assert verify_claims("I implemented the cache in store.py.", ["write_file"]) == []
 
 
 def test_refactored_claim_without_evidence_flagged() -> None:
@@ -194,8 +202,16 @@ def test_typecheck_claim_without_evidence_flagged() -> None:
     assert any("running a check, test, or verification" in v for v in violations)
 
 
-def test_typecheck_claim_with_check_types_ok() -> None:
-    assert verify_claims("No type errors.", ["check_types"]) == []
+def test_typecheck_claim_with_a_shell_run_ok() -> None:
+    assert verify_claims("No type errors.", ["bash"]) == []
+
+
+def test_a_change_made_and_tested_through_the_coding_agent_is_evidenced_by_it() -> None:
+    """north's `coding_agent` makes the edit and runs the project's tests itself: that is the evidence."""
+    said = "I fixed average() in calc.py, added a regression test, and the tests pass."
+
+    assert verify_claims(said, ["coding_agent"]) == []
+    assert len(verify_claims(said, ["use_skill"])) == 2, "without it both claims are unevidenced"
 
 
 def test_verified_claim_without_evidence_flagged() -> None:

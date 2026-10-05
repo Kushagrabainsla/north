@@ -35,6 +35,10 @@ class Tool(ABC):
     # so two edits to the same file can't race (lost update). Default False;
     # mutating tools opt in (OCP - no central switch-on-name).
     is_mutating: bool = False
+    # A mutating tool that takes the workspace lock itself for the one step that needs it (the landing step of
+    # `coding_agent`). The agent loop must not hold that lock around such a tool: the lock is not re-entrant, so
+    # the tool would wait for the loop that is waiting for it.
+    locks_workspace_itself: bool = False
     # Override in subclasses with an OpenAI-compatible JSON Schema for the
     # function parameters.  The default accepts any key/value object.
     parameters_schema: dict = {

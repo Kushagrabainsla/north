@@ -420,10 +420,11 @@ class AgenticLLMAgent(LLMAgent):
             else:
                 # Mutating calls execute sequentially under the workspace lock
                 for index, call in chunk:
-                    if call.name == "delegate_task":
+                    if call.name == "delegate_task" or _locks_workspace_itself(tool_map.get(call.name)):
                         # Never hold the workspace lock across delegation - the
                         # sub-agent acquires it for its own mutations and would
-                        # deadlock against its parent.
+                        # deadlock against its parent. A tool that takes the lock
+                        # itself (`coding_agent`, when it lands a change) is the same.
                         res = await self._safe_execute_call(call, payload, tool_map)
                     else:
                         async with workspace_lock(payload.workspace):
@@ -1345,6 +1346,10 @@ class _TokenRelay:
     async def reset(self) -> None:
         self._splitter = ReasoningStreamSplitter()
         await self._stream_manager.emit(self._task_id, "stream_reset", {})
+
+
+def _locks_workspace_itself(tool: Tool | None) -> bool:
+    return bool(tool and tool.locks_workspace_itself)
 
 
 def _failed_call(call: ToolCall, exc: BaseException) -> tuple[ToolCall, str, bool, list[tuple[str, str]]]:
