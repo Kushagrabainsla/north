@@ -4,6 +4,7 @@ north does not write code. It runs the user's own agent, read-only for now, and 
 run. See docs/design/coding-agents.md.
 """
 
+from coding_agents.ask import Asker, Question, Reply
 from coding_agents.base import (
     Briefing,
     CodingBackend,
@@ -23,6 +24,7 @@ from coding_agents.discovery import discover_backends
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
 from coding_agents.gate import Decision, Gate, GateSession, GateSessions, Judge, ToolRequest, Verdict
 from coding_agents.models import (
+    AskAccess,
     Availability,
     Denial,
     EventKind,
@@ -46,6 +48,10 @@ from coding_agents.runner import AGENT_PREFIX, CodingRunner, RunReport
 from coding_agents.verify import CommandVerifier
 
 __all__ = [
+    "AskAccess",
+    "Asker",
+    "Question",
+    "Reply",
     "Briefing",
     "AGENT_PREFIX",
     "Availability",

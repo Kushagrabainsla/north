@@ -20,6 +20,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from coding_agents.ask import CLAUDE_TOOL, SERVER
 from coding_agents.base import CodingBackend, EventSink
 from coding_agents.constants import (
     HOOK_TIMEOUT_SECONDS,
@@ -72,6 +73,14 @@ _RETRY_FAILURES: dict[str, FailureKind] = {
     "model_not_found": FailureKind.CONFIG,
     "invalid_request": FailureKind.CONFIG,
 }
+
+
+def _mcp_servers(spec: RunSpec) -> dict[str, Any]:
+    """No MCP server at all, unless the run may ask north: then north's own, and only that."""
+    if spec.ask is None:
+        return {"mcpServers": {}}
+    header = {"Authorization": "Bearer ${NORTH_ASK_TOKEN}"}
+    return {"mcpServers": {SERVER: {"type": "http", "url": spec.ask.url, "headers": header}}}
 
 
 class ClaudeBackend(CodingBackend):
@@ -169,7 +178,7 @@ class ClaudeBackend(CodingBackend):
             "user",
             "--strict-mcp-config",
             "--mcp-config",
-            json.dumps({"mcpServers": {}}),
+            json.dumps(_mcp_servers(spec)),
             "--settings",
             json.dumps(self._settings(spec)),
             "--max-turns",
@@ -179,6 +188,9 @@ class ClaudeBackend(CodingBackend):
             "--resume" if spec.resume else "--session-id",
             spec.session_id,
         ]
+        if spec.ask is not None:
+            # Exactly one tool is allowed by name: the door back to north. Everything else stays default-deny.
+            argv += ["--allowedTools", CLAUDE_TOOL]
         if spec.model:
             argv += ["--model", spec.model]
         if spec.guidance:
@@ -187,9 +199,12 @@ class ClaudeBackend(CodingBackend):
 
     def _process_environment(self, spec: RunSpec) -> dict[str, str]:
         """What the agent starts with, plus where its hook asks north when it has one."""
-        if spec.gate is None:
-            return self._environment
-        return {**self._environment, "NORTH_GATE_URL": spec.gate.url, "NORTH_GATE_TOKEN": spec.gate.token}
+        environment = dict(self._environment)
+        if spec.gate is not None:
+            environment |= {"NORTH_GATE_URL": spec.gate.url, "NORTH_GATE_TOKEN": spec.gate.token}
+        if spec.ask is not None:
+            environment["NORTH_ASK_TOKEN"] = spec.ask.token  # the MCP header names it; it never sits in argv
+        return environment
 
     def _settings(self, spec: RunSpec) -> dict[str, Any]:
         """The vendor sandbox, strict, and for an edit run the hook that asks north before each action.

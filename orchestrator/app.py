@@ -51,9 +51,10 @@ from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
 from memory.injection import ContextInjector
 from memory.models import ContextDocument
-from orchestrator.api import coding_gate_router, health_router, webhook_router
+from orchestrator.api import coding_ask_router, coding_gate_router, health_router, webhook_router
 from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
+from orchestrator.coding_ask import ApprovalsAsker
 from orchestrator.coding_briefing import MemoryBriefing
 from orchestrator.coding_gate import ApprovalJudge
 from orchestrator.coding_landing import LandingDesk
@@ -180,12 +181,16 @@ def _register_coding_agent(
     if approvals is not None:
         deps.coding_sessions = GateSessions()
         deps.coding_gate = Gate(ApprovalJudge(approvals, recorder))
+        base = f"{settings.north_orchestrator_url}/orchestrator/coding"
+        if approvals.interaction is not None:  # without a way to ask the user, an agent is not offered the door
+            deps.coding_asker = ApprovalsAsker(approvals.interaction, recorder)
         runner = CodingRunner(
             backends,
             recorder,
             workspaces=GitWorkspaces(),
             sessions=deps.coding_sessions,
-            gate_url=f"{settings.north_orchestrator_url}/orchestrator/coding/gate",
+            gate_url=f"{base}/gate",
+            ask_url=f"{base}/ask" if getattr(deps, "coding_asker", None) is not None else "",
             verifier=CommandVerifier(detect_verify_command, BashShell(tool_registry)),
             lander=LandingDesk(approvals),
         )
@@ -489,6 +494,7 @@ def _configure_routers(
         agent_run_store=deps.agent_run_store,
         coding_sessions=getattr(deps, "coding_sessions", None),
         coding_gate=getattr(deps, "coding_gate", None),
+        coding_asker=getattr(deps, "coding_asker", None),
     )
     configure_web(
         app,
@@ -1136,6 +1142,7 @@ app.include_router(health_router)
 app.include_router(orchestrator_router)
 app.include_router(webhook_router)
 app.include_router(coding_gate_router)
+app.include_router(coding_ask_router)
 app.include_router(web_session_router)
 app.include_router(web_api_router)
 

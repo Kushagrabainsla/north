@@ -45,7 +45,9 @@ def save() -> None:
     """Write the call log atomically: the backend may stop this process mid-write, and a reader must never
     see a half-written file."""
     temporary = Path(".fake_codex_calls.json.tmp")
-    temporary.write_text(json.dumps({"messages": received, "env": env, "cwd": os.getcwd(), "pid": os.getpid()}))
+    temporary.write_text(
+        json.dumps({"messages": received, "argv": args, "env": env, "cwd": os.getcwd(), "pid": os.getpid()})
+    )
     os.replace(temporary, ".fake_codex_calls.json")
 
 

@@ -49,6 +49,7 @@ class GateSession:
     run_id: str
     task_id: str
     worktree: str
+    editing: bool = True  # a read-only run holds a token too (to ask north) but has no gate
 
 
 class GateSessions:
@@ -57,8 +58,8 @@ class GateSessions:
     def __init__(self) -> None:
         self._sessions: dict[str, GateSession] = {}
 
-    def issue(self, run_id: str, task_id: str, worktree: str) -> GateSession:
-        session = GateSession(secrets.token_urlsafe(32), run_id, task_id, worktree)
+    def issue(self, run_id: str, task_id: str, worktree: str, *, editing: bool = True) -> GateSession:
+        session = GateSession(secrets.token_urlsafe(32), run_id, task_id, worktree, editing)
         self._sessions[session.token] = session
         return session
 
@@ -83,6 +84,8 @@ FILE_TOOLS: Mapping[str, str] = {
     "NotebookEdit": "notebook_path",
 }
 # The tools the hook is asked about. Any other tool that needs approval is denied by default.
+# The one MCP tool a run may call (`coding_agents/ask.py`). Spelled here too so the gate need not import it.
+CLAUDE_ASK_TOOL = "mcp__north__ask_north"
 HOOKED_TOOLS = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|mcp__.*"
 
 
@@ -93,9 +96,13 @@ class Gate:
         self._judge = judge
 
     async def decide(self, session: GateSession, payload: Mapping[str, Any]) -> Verdict:
+        if not session.editing:
+            return Verdict(Decision.DENY, "this run is read-only, so it has no gate to ask")
         request = parse_hook_payload(payload)
         if request is None:
             return Verdict(Decision.DENY, "north could not read this tool call")
+        if request.tool == CLAUDE_ASK_TOOL:
+            return Verdict(Decision.PASS, "north's own door: the one tool the agent is allowed")
         if request.tool == "Bash" and is_plainly_read_only(request.command):
             return Verdict(Decision.PASS, "a read-only command")
         inside = False

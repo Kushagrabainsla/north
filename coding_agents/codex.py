@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from coding_agents.appserver import AppServer, AppServerError
+from coding_agents.ask import SERVER, TOOL
 from coding_agents.base import CodingBackend, EventSink
 from coding_agents.confinement import codex_filesystem, profile
 from coding_agents.constants import (
@@ -199,9 +200,19 @@ class CodexBackend(CodingBackend):
 
     def _profile(self, spec: RunSpec) -> dict[str, Any]:
         base = ":read-only" if spec.mode is Mode.PLAN else ":workspace"
-        return profile(
-            base, _PROFILE, codex_filesystem(spec.workspace, spec.mode, self._protected_paths, self._own_dirs())
-        )
+        filesystem = codex_filesystem(spec.workspace, spec.mode, self._protected_paths, self._own_dirs())
+        config = profile(base, _PROFILE, filesystem)
+        if spec.ask is not None:
+            # north's own door, and nothing else. The one tool is approved here because an unattended Codex
+            # would otherwise refuse it ("requires approval, but approval policy is never").
+            config["mcp_servers"] = {
+                SERVER: {
+                    "url": spec.ask.url,
+                    "http_headers": {"Authorization": f"Bearer {spec.ask.token}"},
+                    "tools": {TOOL: {"approval_mode": "approve"}},
+                }
+            }
+        return config
 
     def _own_dirs(self) -> list[str]:
         """Where the installed `codex` lives, so its sandbox helper can still start inside a closed home."""

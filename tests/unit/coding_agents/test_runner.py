@@ -609,3 +609,88 @@ class TestCrossReview:
         await runner.run(task_id="t1", task="plan it", workspace="/repo", backend="claude", review=True)
 
         assert not reviewer.specs
+
+
+class TestAskingNorth:
+    """A run may ask north a question through `ask_north`, on a token that names it and dies with it."""
+
+    ASK = "http://x/orchestrator/coding/ask"
+
+    def _setup(self, tmp_path, recorder, *, ask_url: str = ASK, with_sessions: bool = True):
+        workspaces = MemoryWorkspaces(tmp_path / "copies", _ONE_FILE)
+        author, reviewer = ScriptedBackend("claude"), ScriptedBackend("codex")
+        for backend in (author, reviewer):
+            backend.recorder = recorder
+        reviewer._outcome = RunOutcome(True, "VERDICT: OK", "r")
+        sessions = GateSessions() if with_sessions else None
+        runner = CodingRunner(
+            {"claude": author, "codex": reviewer},
+            recorder,
+            workspaces=workspaces,
+            sessions=sessions,
+            gate_url="http://x/gate",
+            ask_url=ask_url,
+            verifier=ScriptedVerifier(),
+            lander=ScriptedLander(),
+        )
+        return runner, author, reviewer, sessions
+
+    async def test_a_plan_run_may_ask_on_a_read_only_token(self, tmp_path, recorder) -> None:
+        runner, author, _, sessions = self._setup(tmp_path, recorder)
+        seen = {}
+
+        def during(spec) -> None:
+            seen["session"] = sessions.lookup(spec.ask.token)
+            seen["ask"], seen["gate"] = spec.ask, spec.gate
+
+        author.during_run = during
+        await runner.run(task_id="t1", task="how does it work", workspace="/repo", backend="claude")
+
+        assert seen["ask"].url == self.ASK and seen["gate"] is None, "a plan run has a door but no gate"
+        assert seen["session"].task_id == "t1" and seen["session"].editing is False
+
+    async def test_an_edit_run_asks_and_is_gated_on_one_token_that_can_edit(self, tmp_path, recorder) -> None:
+        runner, author, _, sessions = self._setup(tmp_path, recorder)
+        seen = {}
+
+        def during(spec) -> None:
+            seen["same"] = spec.ask.token == spec.gate.token
+            seen["editing"] = sessions.lookup(spec.gate.token).editing
+
+        author.during_run = during
+        await runner.run(task_id="t1", task="add subtract", workspace="/repo", mode=Mode.EDIT, backend="claude")
+
+        assert seen == {"same": True, "editing": True}
+
+    async def test_the_token_stops_working_when_the_run_ends(self, tmp_path, recorder) -> None:
+        runner, author, _, sessions = self._setup(tmp_path, recorder)
+        tokens = []
+        author.during_run = lambda spec: tokens.append(spec.ask.token)
+
+        await runner.run(task_id="t1", task="how does it work", workspace="/repo", backend="claude")
+
+        assert tokens and sessions.lookup(tokens[0]) is None
+
+    async def test_a_reviewer_is_not_offered_the_door(self, tmp_path, recorder) -> None:
+        runner, author, reviewer, _ = self._setup(tmp_path, recorder)
+
+        await runner.run(
+            task_id="t1", task="add subtract", workspace="/repo", mode=Mode.EDIT, backend="claude", review=True
+        )
+
+        assert author.specs[0].ask is not None
+        assert reviewer.specs and reviewer.specs[0].ask is None, "a reviewer reports; it does not ask the user"
+
+    async def test_without_an_ask_url_no_run_is_offered_the_door(self, tmp_path, recorder) -> None:
+        runner, author, _, _ = self._setup(tmp_path, recorder, ask_url="")
+
+        await runner.run(task_id="t1", task="how does it work", workspace="/repo", backend="claude")
+
+        assert author.specs[0].ask is None
+
+    async def test_without_sessions_there_is_nothing_to_hold_a_token(self, tmp_path, recorder) -> None:
+        runner, author, _, _ = self._setup(tmp_path, recorder, with_sessions=False)
+
+        await runner.run(task_id="t1", task="how does it work", workspace="/repo", backend="claude")
+
+        assert author.specs[0].ask is None

@@ -248,7 +248,7 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 |---|---|
 | Skills | Already `SKILL.md` folders; Claude loads them from a directory flag. |
 | Context | A prompt file chosen for the task (north's engineering-domain scoping applies). |
-| Memory | A read-only loopback MCP server with a per-run token, tool list filtered by policy. |
+| Memory and questions | One loopback MCP tool, `ask_north`, with a per-run token. north answers; the agent never reads the store. |
 | Schedules | Stay north's: north starts the run. |
 
 ## Proof
@@ -299,6 +299,20 @@ Every wait must be visible. Proved by the experiments, or marked to build:
    a second door into memory is a second place to be misled. The block is marked as background that
    never widens what the agent may do; only the approval layer authorizes. A failing briefing never
    stops a run.
+7. **Done (v1). Ask north.** A coding agent that needs a decision, a preference or a fact about the user calls
+   the `ask_north` tool instead of guessing. north serves it as a small MCP server on loopback
+   (`/orchestrator/coding/ask`, `coding_agents/ask.py`), reached with the run's own token (the gate's token,
+   which dies with the run). It is the only MCP server a run may have: Claude Code gets it through
+   `--mcp-config` with `--strict-mcp-config` and exactly one tool allowed by name; Codex gets it in the
+   thread's `config` with that one tool approved. The question becomes a question card in the same
+   approval layer as everything else: ask and safe mode show it to the user (the run waits, other work is not
+   held up, cards never expire), autonomous mode lets the memory decider answer from what north knows, yolo
+   says yes. The answer is labelled for the agent with who gave it, and every ask is recorded on the run.
+   Limits: 20 questions per run, 2,000 characters per question, a reviewer is never offered the door, and a
+   read-only run's token has no gate. Measured with the real agents: Claude Code's plan mode refuses a
+   non-read-only MCP tool with no way to ask, so the tool declares `readOnlyHint`; Codex refuses an
+   unapproved MCP call when unattended, so its approval is set in the config. Step 2, not built: things north
+   does for the agent (a screenshot, a page fetched outside its sandbox), each approval-gated.
 6. **Done.** The in-house coder is deleted: the `coder`, `architect`, `reviewer` and `researcher` agents; the
    engineering pipeline in the orchestrator (understand, design with the user, the coder-reviewer loop with
    the Definition-of-Done gate, best-of-N, worktree isolation, the ship flow); `patch_file`, `rename_symbol`,
@@ -318,6 +332,9 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 - Shell commands in an edit run are ruled on one at a time; under the ask mode a long task means many
   cards, and under autonomous each goes to the memory decider.
 - `~/.claude.json` is writable by the CLI; an agent could add an MCP server there.
+- A hostile repository can try to make an agent ask north for something private. The answer comes through the approval
+  layer, the decider is told the answer leaves for an outside vendor and must not include secrets, every ask is
+  recorded, and the number of asks is capped; it is still a door, and the deciding model can be talked round.
 - North and the Codex worker share one ChatGPT plan quota.
 - Subscription terms are the vendors' call and can change.
 - A recalled fact carries no origin; a fact extracted from a task's output could cover a push. Tracking

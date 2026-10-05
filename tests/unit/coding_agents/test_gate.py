@@ -193,3 +193,28 @@ class TestSessions:
         sessions.revoke(first.token)
         assert sessions.lookup(first.token) is None and sessions.lookup(second.token) == second
         assert sessions.lookup("guess") is None
+
+
+class TestAskingNorth:
+    async def test_the_ask_tool_is_passed_so_the_vendors_own_one_allowed_tool_rule_applies(self, worktree) -> None:
+        judge = RecordingJudge()
+        session = GateSessions().issue("run-1", "t1", str(worktree))
+
+        verdict = await Gate(judge).decide(session, _payload("mcp__north__ask_north", question="tabs?"))
+
+        assert verdict.decision is Decision.PASS and not judge.calls
+
+    async def test_any_other_mcp_tool_still_goes_to_the_judge(self, worktree) -> None:
+        judge = RecordingJudge(Verdict(Decision.DENY, "no"))
+        session = GateSessions().issue("run-1", "t1", str(worktree))
+
+        verdict = await Gate(judge).decide(session, _payload("mcp__other__thing"))
+
+        assert verdict.decision is Decision.DENY and judge.calls
+
+    async def test_a_read_only_runs_token_has_no_gate_at_all(self, worktree) -> None:
+        session = GateSessions().issue("run-1", "t1", str(worktree), editing=False)
+
+        verdict = await Gate(RecordingJudge()).decide(session, _payload("Write", file_path="x.py"))
+
+        assert verdict.decision is Decision.DENY and "read-only" in verdict.reason
