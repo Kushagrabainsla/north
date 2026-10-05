@@ -57,6 +57,7 @@ def configure(
     agent_run_store: AgentRunStore | None = None,
     coding_sessions: object | None = None,
     coding_gate: object | None = None,
+    coding_asker: object | None = None,
 ) -> None:
     """Attach this app's wiring. Called once in the lifespan.
 
@@ -80,6 +81,7 @@ def configure(
         agent_run_store=agent_run_store,
         coding_sessions=coding_sessions,
         coding_gate=coding_gate,
+        coding_asker=coding_asker,
     )
 
 

@@ -13,6 +13,7 @@ from coding_agents.base import CodingBackend, Lander, LiveRun, RunRecorder, RunS
 from coding_agents.exceptions import BackendUnavailableError, CodingAgentError
 from coding_agents.gate import GateSessions
 from coding_agents.models import (
+    AskAccess,
     EventKind,
     FailureKind,
     GateAccess,
@@ -65,6 +66,7 @@ class CodingRunner:
         workspaces: Workspaces | None = None,
         sessions: GateSessions | None = None,
         gate_url: str = "",
+        ask_url: str = "",
         verifier: Verifier | None = None,
         lander: Lander | None = None,
     ) -> None:
@@ -73,6 +75,7 @@ class CodingRunner:
         self._workspaces = workspaces
         self._sessions = sessions
         self._gate_url = gate_url
+        self._ask_url = ask_url
         self._verifier = verifier
         self._lander = lander
 
@@ -95,11 +98,13 @@ class CodingRunner:
         mode: Mode = Mode.PLAN,
         review: bool = False,
         fresh: bool = False,
+        asking: bool = True,
     ) -> RunReport:
         """Run *task* in *workspace*; a re-planned task that finds its own live run continues that session.
 
         *review* has the other coding agent, when there is one, read an edit's diff before it is offered.
         *fresh* never resumes: a review must not continue some earlier plan run of the same agent.
+        *asking* lets the agent ask north a question (`ask_north`), when north is set up to answer.
         """
         if mode is Mode.EDIT and not self.can_edit:
             raise CodingAgentError("edit runs are not set up here")
@@ -119,7 +124,7 @@ class CodingRunner:
         # Written before the process starts, so a crash can still find the session and the copy.
         await self._recorder.start(RunStart(run_id, task_id, agent, task, workspace))
         await self._recorder.remember(run_id, _state(chosen, spec, version, tree))
-        outcome, change, problem = await self._execute(chosen, spec, run_id, task_id, tree)
+        outcome, change, problem = await self._execute(chosen, spec, run_id, task_id, tree, asking)
         verification = landing = reviewed = None
         if change is not None and outcome.ok:
             verification, reviewed, landing = await self._land(
@@ -157,7 +162,7 @@ class CodingRunner:
         return await self._workspaces.create(workspace, f"coding-{run_id[:8]}")
 
     async def _execute(
-        self, backend: CodingBackend, spec: RunSpec, run_id: str, task_id: str, tree: WorkTree | None
+        self, backend: CodingBackend, spec: RunSpec, run_id: str, task_id: str, tree: WorkTree | None, asking: bool
     ) -> tuple[RunOutcome, WorkChange | None, str]:
         async def sink(event: RunEvent) -> None:
             try:
@@ -172,9 +177,13 @@ class CodingRunner:
             except Exception:
                 logger.warning("could not record %s for coding run %s", event.kind, run_id, exc_info=True)
 
-        session = self._sessions.issue(run_id, task_id, tree.path) if tree and self._sessions else None
-        if session:
+        session = None
+        if self._sessions is not None and (tree or (asking and self._ask_url)):
+            session = self._sessions.issue(run_id, task_id, tree.path if tree else spec.workspace, editing=bool(tree))
+        if session and tree:
             spec = _with_gate(spec, GateAccess(self._gate_url, session.token))
+        if session and asking and self._ask_url:
+            spec = replace(spec, ask=AskAccess(self._ask_url, session.token))
         try:
             outcome = await backend.run(spec, sink)
         except asyncio.CancelledError:
@@ -239,6 +248,7 @@ class CodingRunner:
                 backend=other,
                 mode=Mode.PLAN,
                 fresh=True,
+                asking=False,  # a reviewer reads and reports; it is not the user's to ask
             )
         except CodingAgentError:
             return None

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from coding_agents import ClaudeBackend, CodingAgentError, EventKind, FailureKind, Mode, RunEvent, RunSpec
-from coding_agents.models import GateAccess
+from coding_agents.models import AskAccess, GateAccess
 
 SESSION = "11111111-2222-4333-8444-555555555555"
 
@@ -299,3 +299,45 @@ def _alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+class TestAskingNorth:
+    ASK = AskAccess("http://127.0.0.1:8000/orchestrator/coding/ask", "ask-token-xyz")
+
+    @staticmethod
+    def _value(argv: list[str], flag: str) -> str:
+        return argv[argv.index(flag) + 1]
+
+    async def test_a_run_that_may_ask_gets_north_as_its_only_mcp_server(self, make_fake_claude, workspace) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace, ask=self.ASK))
+        argv = _call(workspace)["argv"]
+
+        servers = json.loads(self._value(argv, "--mcp-config"))["mcpServers"]
+        assert "--strict-mcp-config" in argv, "no other server may start"
+        assert list(servers) == ["north"] and servers["north"]["type"] == "http"
+        assert servers["north"]["url"] == self.ASK.url
+
+    async def test_exactly_one_tool_is_allowed_by_name(self, make_fake_claude, workspace) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace, ask=self.ASK))
+        argv = _call(workspace)["argv"]
+
+        assert self._value(argv, "--allowedTools") == "mcp__north__ask_north"
+        assert argv.count("--allowedTools") == 1 and "--dangerously-skip-permissions" not in argv
+
+    async def test_the_token_travels_in_the_environment_never_on_the_command_line(
+        self, make_fake_claude, workspace
+    ) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace, ask=self.ASK))
+        call = _call(workspace)
+
+        assert "NORTH_ASK_TOKEN" in call["env"]
+        assert self.ASK.token not in " ".join(call["argv"])
+        header = json.loads(self._value(call["argv"], "--mcp-config"))["mcpServers"]["north"]["headers"]
+        assert header == {"Authorization": "Bearer ${NORTH_ASK_TOKEN}"}
+
+    async def test_without_the_door_nothing_changes(self, make_fake_claude, workspace) -> None:
+        await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace))
+        call = _call(workspace)
+
+        assert json.loads(self._value(call["argv"], "--mcp-config")) == {"mcpServers": {}}
+        assert "--allowedTools" not in call["argv"] and "NORTH_ASK_TOKEN" not in call["env"]

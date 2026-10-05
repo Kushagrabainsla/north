@@ -47,6 +47,14 @@ class GateAccess:
 
 
 @dataclass(frozen=True)
+class AskAccess:
+    """Where the agent reaches `ask_north`, and the token that says which run is asking."""
+
+    url: str
+    token: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class RunSpec:
     """Everything one run needs."""
 
@@ -60,6 +68,7 @@ class RunSpec:
     max_budget_usd: float = DEFAULT_MAX_BUDGET_USD
     model: str | None = None
     gate: GateAccess | None = None  # required for EDIT: how the agent's hook reaches north
+    ask: AskAccess | None = None  # how the agent asks north a question, when it may
 
 
 @dataclass(frozen=True)

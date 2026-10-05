@@ -79,6 +79,7 @@ class ApiServices:
     # The coding-agent gate: the tokens of the runs in flight, and the gate their hooks ask.
     coding_sessions: Any | None = None
     coding_gate: Any | None = None
+    coding_asker: Any | None = None
     skill_registry: Any | None = None
     flow_registry: Any | None = None
     # Flow run history, and the runner behind "run now" / "test" on the Flows
