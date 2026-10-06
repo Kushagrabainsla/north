@@ -350,14 +350,14 @@ class TestTheOtherAgentsReview:
 
         assert "reviewed it" not in text and "review" not in data
 
-    async def test_the_review_is_on_by_default_and_can_be_turned_off(self) -> None:
+    async def test_the_review_is_off_unless_asked_for(self) -> None:
         runner = StubRunner(can_edit=True, change=CHANGE)
         tool = _tool(runner)
 
         await tool.execute(_input(mode="edit"))
-        await tool.execute(_input(mode="edit", review=False))
+        await tool.execute(_input(mode="edit", review=True))
 
-        assert [call["review"] for call in runner.calls] == [True, False]
+        assert [call["review"] for call in runner.calls] == [False, True]
         assert tool.parameters_schema["properties"]["review"]["type"] == "boolean"
 
 

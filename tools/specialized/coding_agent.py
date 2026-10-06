@@ -74,8 +74,8 @@ class CodingAgentTool(Tool):
                 },
                 "review": {
                     "type": "boolean",
-                    "description": "edit only: have the other coding agent, if installed, read the change first "
-                    "(default true)",
+                    "description": "edit only: have the other coding agent, if installed, read the change first. "
+                    "Off unless the user asks for a review (default false)",
                 },
                 "backend": {
                     "type": "string",
@@ -174,7 +174,7 @@ class CodingAgentTool(Tool):
             mode = Mode(str(input.params.get("mode") or Mode.PLAN.value))
         except ValueError:
             return ToolOutput(success=False, error="mode must be 'plan' or 'edit'.")
-        review = input.params.get("review", True) is not False
+        review = input.params.get("review", False) is True
         return _Call(
             task=task, workspace=str(Path(input.granted_workspace).resolve()), backend=backend, mode=mode, review=review
         )

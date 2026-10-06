@@ -10,6 +10,7 @@ an action lives in the approval layer and arrives through `Judge`.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import shlex
 from collections.abc import Mapping
@@ -164,6 +165,8 @@ def _touches_git_dir(target: Path, worktree: str) -> bool:
     return ".git" in parts
 
 
+# Sending error output somewhere harmless is not a write.
+_STDERR_ONLY = re.compile(r"\s+2>(?:&1|/dev/null)\s*$")
 _SHELL_SYNTAX = frozenset(";&|<>`$\n\\(){}")
 _READ_ONLY_PROGRAMS = frozenset(
     {"ls", "pwd", "cat", "head", "tail", "wc", "grep", "rg", "tree", "stat", "file", "which"}
@@ -174,8 +177,38 @@ _WRITING_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete", "--
 
 
 def is_plainly_read_only(command: str) -> bool:
-    """True only for a single, simple, read-only command. Anything doubtful is False, which only means
-    "ask": the vendor still has the last word on whether a passed command runs."""
+    """True only for read-only commands, alone or chained with `&&`, `||`, `;` or `|`. Anything doubtful is
+    False, which only means "ask": the vendor still has the last word on whether a passed command runs."""
+    parts = _chained(command)
+    return parts is not None and all(_is_one_read_only(part) for part in parts)
+
+
+def _chained(command: str) -> list[str] | None:
+    """The simple commands a line is made of, split at an unquoted `&&`, `||`, `;` or `|`; None when it is empty
+    or has an empty part."""
+    parts, current, quote, i = [], "", "", 0
+    while i < len(command):
+        char = command[i]
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif command.startswith(("&&", "||"), i):
+            parts.append(current)
+            current, i = "", i + 2
+            continue
+        elif char in ";|":
+            parts.append(current)
+            current, i = "", i + 1
+            continue
+        current += char
+        i += 1
+    parts.append(current)
+    return None if any(not part.strip() for part in parts) else parts
+
+
+def _is_one_read_only(command: str) -> bool:
+    command = _STDERR_ONLY.sub("", command.strip())
     if not command.strip() or any(char in _SHELL_SYNTAX for char in command):
         return False
     try:

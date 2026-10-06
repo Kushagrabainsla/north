@@ -16,6 +16,9 @@ def test_allowed_test_commands_approved():
 def test_trailing_stderr_redirect_allowed():
     p = UnattendedPolicy()
     assert p.approves_command("pytest --tb=short -q --cov=. --cov-report=term-missing 2>&1") is True
+    assert p.approves_command("pytest -q 2>&1 | tail -15") is True
+    assert p.approves_command("pytest -q | sh") is False
+    assert p.approves_command("pytest -q | tail -n 5 > out.txt") is False
 
 
 def test_chaining_and_substitution_rejected():
