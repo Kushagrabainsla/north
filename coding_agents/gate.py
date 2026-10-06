@@ -86,6 +86,7 @@ FILE_TOOLS: Mapping[str, str] = {
 # The tools the hook is asked about. Any other tool that needs approval is denied by default.
 # The one MCP tool a run may call (`coding_agents/ask.py`). Spelled here too so the gate need not import it.
 CLAUDE_ASK_TOOL = "mcp__north__ask_north"
+CLAUDE_FETCH_TOOL = "mcp__north__fetch_url"
 HOOKED_TOOLS = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|mcp__.*"
 
 
@@ -101,8 +102,8 @@ class Gate:
         request = parse_hook_payload(payload)
         if request is None:
             return Verdict(Decision.DENY, "north could not read this tool call")
-        if request.tool == CLAUDE_ASK_TOOL:
-            return Verdict(Decision.PASS, "north's own door: the one tool the agent is allowed")
+        if request.tool in (CLAUDE_ASK_TOOL, CLAUDE_FETCH_TOOL):
+            return Verdict(Decision.PASS, "north's own door: it asks the user itself before it acts")
         if request.tool == "Bash" and is_plainly_read_only(request.command):
             return Verdict(Decision.PASS, "a read-only command")
         inside = False

@@ -317,11 +317,11 @@ class TestAskingNorth:
         assert list(servers) == ["north"] and servers["north"]["type"] == "http"
         assert servers["north"]["url"] == self.ASK.url
 
-    async def test_exactly_one_tool_is_allowed_by_name(self, make_fake_claude, workspace) -> None:
+    async def test_exactly_north_s_two_tools_are_allowed_by_name(self, make_fake_claude, workspace) -> None:
         await _run(ClaudeBackend(str(make_fake_claude())), _spec(workspace, ask=self.ASK))
         argv = _call(workspace)["argv"]
 
-        assert self._value(argv, "--allowedTools") == "mcp__north__ask_north"
+        assert self._value(argv, "--allowedTools") == "mcp__north__ask_north,mcp__north__fetch_url"
         assert argv.count("--allowedTools") == 1 and "--dangerously-skip-permissions" not in argv
 
     async def test_the_token_travels_in_the_environment_never_on_the_command_line(

@@ -365,7 +365,7 @@ class TestAskingNorth:
         await _run(CodexBackend(str(make_fake_codex())), _spec(workspace, **spec))
         return _sent(workspace, "thread/start")[0]["params"]["config"]
 
-    async def test_a_run_that_may_ask_gets_north_as_its_only_mcp_server_with_that_one_tool_approved(
+    async def test_a_run_that_may_ask_gets_north_as_its_only_mcp_server_with_its_two_tools_approved(
         self, make_fake_codex, workspace
     ) -> None:
         config = await self._config(make_fake_codex, workspace, ask=self.ASK)
@@ -374,7 +374,10 @@ class TestAskingNorth:
         server = config["mcp_servers"]["north"]
         assert server["url"] == self.ASK.url
         assert server["http_headers"] == {"Authorization": "Bearer ask-token-xyz"}
-        assert server["tools"] == {"ask_north": {"approval_mode": "approve"}}
+        assert server["tools"] == {
+            "ask_north": {"approval_mode": "approve"},
+            "fetch_url": {"approval_mode": "approve"},
+        }
 
     async def test_the_token_is_in_the_config_message_not_the_environment_or_the_command_line(
         self, make_fake_codex, workspace

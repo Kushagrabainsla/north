@@ -56,6 +56,7 @@ from orchestrator.api import configure as configure_api
 from orchestrator.api import router as orchestrator_router
 from orchestrator.coding_ask import ApprovalsAsker
 from orchestrator.coding_briefing import MemoryBriefing
+from orchestrator.coding_fetch import ApprovalsFetcher, Page
 from orchestrator.coding_gate import ApprovalJudge
 from orchestrator.coding_landing import LandingDesk
 from orchestrator.coding_run_recorder import AgentRunRecorder
@@ -91,6 +92,7 @@ from tools.universal.create_agent import CreateAgentTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_skill import CreateSkillTool
 from tools.universal.create_tool import CreateToolTool
+from tools.universal.fetch_url import FetchUrlTool
 from tools.universal.flow_runner import FlowRunner
 from tools.universal.get_active_sessions import GetActiveSessionsTool
 from tools.universal.get_task_status import GetTaskStatusTool
@@ -165,6 +167,13 @@ def _attach_embedding_index(deps) -> None:
     deps.context_store.attach_embedding_index(embedding_index)
 
 
+async def _fetch_page(url: str) -> Page:
+    """north's own guarded page fetch (private addresses refused, size capped), for a coding agent."""
+    output = await FetchUrlTool().execute(ToolInput(params={"url": url}))
+    data = output.data or {}
+    return Page(url=str(data.get("url", "")), text=str(data.get("content", "")), error=output.error or "")
+
+
 def _register_coding_agent(
     tool_registry: ToolRegistry, deps, approvals: Approvals | None, skill_selector: SkillSelector | None = None
 ) -> None:
@@ -184,6 +193,7 @@ def _register_coding_agent(
         base = f"{settings.north_orchestrator_url}/orchestrator/coding"
         if approvals.interaction is not None:  # without a way to ask the user, an agent is not offered the door
             deps.coding_asker = ApprovalsAsker(approvals.interaction, recorder)
+            deps.coding_fetcher = ApprovalsFetcher(approvals, recorder, _fetch_page)
         runner = CodingRunner(
             backends,
             recorder,
@@ -495,6 +505,7 @@ def _configure_routers(
         coding_sessions=getattr(deps, "coding_sessions", None),
         coding_gate=getattr(deps, "coding_gate", None),
         coding_asker=getattr(deps, "coding_asker", None),
+        coding_fetcher=getattr(deps, "coding_fetcher", None),
     )
     configure_web(
         app,
