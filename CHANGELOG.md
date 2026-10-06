@@ -4,7 +4,7 @@ All notable changes to north are documented here.
 
 ## [Unreleased]
 ### Changed
-- **A coding agent's change is no longer reviewed by the other agent unless you ask** (`tools/specialized/coding_agent.py`, the delegating skill). The review used to run after every edit. It now runs only when you ask for one (`review: true`), because most small changes did not need it and it added minutes.
+- **The review happens once, after everything is done, not after every edit** (`tools/specialized/coding_agent.py`, the delegating skill). An edit call no longer reviews its own change by default (`review: true` still does). Instead north's general agent has the other coding agent read the whole finished result once, at the end, so a task with several edit rounds is reviewed once, not after each. Asking for a different review process still works as before.
 - **Fewer cards in safe mode for plainly read-only work** (`coding_agents/gate.py`, `approval/unattended.py`). A coding agent's command that is only several read-only commands chained with `&&`, `;`, `||` or `|` (for example `git ls-files && cat calc.py && ls`, or `ls -a 2>/dev/null | head`) no longer raises a card, and a test command piped into `tail` or `head` (`pytest -q 2>&1 | tail -15`) counts as the test command. Anything with a redirect to a file, a substitution, a loop, or a command that is not read-only still asks, and a chain with one such part asks as a whole.
 
 ### Added
