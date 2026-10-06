@@ -169,7 +169,7 @@ def _touches_git_dir(target: Path, worktree: str) -> bool:
 _STDERR_ONLY = re.compile(r"\s+2>(?:&1|/dev/null)\s*$")
 _SHELL_SYNTAX = frozenset(";&|<>`$\n\\(){}")
 _READ_ONLY_PROGRAMS = frozenset(
-    {"ls", "pwd", "cat", "head", "tail", "wc", "grep", "rg", "tree", "stat", "file", "which"}
+    {"ls", "pwd", "cat", "head", "tail", "wc", "grep", "rg", "tree", "stat", "file", "which", "echo", "cd"}
 )
 _READ_ONLY_GIT = frozenset({"status", "log", "diff", "show", "ls-files", "rev-parse", "blame"})
 # Flags that make an otherwise read-only program write or run something.

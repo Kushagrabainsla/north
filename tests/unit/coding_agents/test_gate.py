@@ -104,6 +104,8 @@ class TestWhatIsPlainlyReadOnly:
             "ls -a; ls .venv/bin 2>/dev/null | head",
             "which -a pytest python python3 2>&1",
             "grep -rn TODO src | head -5",
+            "cd /tmp/repo && git status --short && cat calc.py",
+            "cat a.py; echo ---; cat b.py",
         ],
     )
     def test_these_are_passed_to_the_vendor(self, command) -> None:
@@ -136,6 +138,8 @@ class TestWhatIsPlainlyReadOnly:
             "ls && ",
             "cat a || rm b",
             "ls 2>out.txt",
+            "echo hi > notes.txt",
+            "cd /tmp && rm -rf x",
             "git ls-files | xargs rm",
             "for f in $(ls); do cat $f; done",
         ],
