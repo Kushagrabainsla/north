@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -104,6 +105,19 @@ def _slug(label: str) -> str:
     return (safe or "agent")[:32]
 
 
+_MAX_UNTRACKED_BYTES = 5_000_000
+
+
+def _copy_untracked(base: Path, copy: Path, name: str) -> None:
+    """One untracked file of the user's into the copy, unless it is inside a `.git` or too big to carry."""
+    source = base / name
+    if ".git" in Path(name).parts or (not source.is_symlink() and source.stat().st_size > _MAX_UNTRACKED_BYTES):
+        return
+    target = copy / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target, follow_symlinks=False)
+
+
 class GitWorktreeManager:
     """Creates isolated worktrees for a base workspace and integrates them back."""
 
@@ -145,7 +159,42 @@ class GitWorktreeManager:
         code, _, err = await _run_git(["worktree", "add", "-b", branch, path, base_sha], self._base)
         if code != 0:
             raise WorktreeError(f"git worktree add failed: {err.strip()}")
+        base_sha = await self._seed(path, base_sha)
         return Worktree(base=self._base, path=path, branch=branch, base_sha=base_sha)
+
+    async def _seed(self, path: str, base_sha: str) -> str:
+        """Start the copy from what the user's working tree holds now, not only from the last commit.
+
+        A change an earlier run applied is uncommitted there. Without it a later run on the same task would
+        be working on code that no longer matches, and could not see the fix it was asked to build on. What is
+        carried over is committed as the copy's first commit, and that commit is the base the agent's own work
+        is measured and applied against, so only the agent's edits ever go back.
+        """
+        code, patch, err = await _run_git(["diff", "--binary", "HEAD"], self._base, binary=True)
+        if code != 0:
+            raise WorktreeError(f"git diff failed: {err.strip()}")
+        code, listed, err = await _run_git(["ls-files", "--others", "--exclude-standard", "-z"], self._base)
+        if code != 0:
+            raise WorktreeError(f"git ls-files failed: {err.strip()}")
+        untracked = [name for name in listed.split("\0") if name]
+        if not patch.strip() and not untracked:
+            return base_sha
+        if patch.strip():
+            code, _, err = await _run_git(["apply", "--binary", "--whitespace=nowarn"], path, input_data=patch)
+            if code != 0:
+                raise WorktreeError(f"your uncommitted changes could not be carried into the copy: {err.strip()}")
+        for name in untracked:
+            await asyncio.to_thread(_copy_untracked, Path(self._base), Path(path), name)
+        await _run_git(["add", "-A"], path)
+        code, _, err = await _run_git(
+            [*_COMMIT_CONFIG, "commit", "--no-verify", "--allow-empty", "-m", "north: your uncommitted changes"], path
+        )
+        if code != 0:
+            raise WorktreeError(f"git commit in worktree failed: {err.strip()}")
+        code, sha, err = await _run_git(["rev-parse", "HEAD"], path)
+        if code != 0:
+            raise WorktreeError(f"cannot resolve the copy's start: {err.strip()}")
+        return sha.strip()
 
     async def integrate(self, wt: Worktree, *, lock: asyncio.Lock | None = None) -> IntegrationResult:
         """Commit the worktree's changes and apply them back onto the base tree.

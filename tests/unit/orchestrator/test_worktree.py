@@ -306,3 +306,66 @@ class TestADamagedCopy:
         subprocess.run(["git", "checkout", "-q", "-b", "elsewhere"], cwd=wt.path, check=True)
 
         assert "no longer on its branch" in await manager.damage(wt)
+
+
+class TestACopyStartsFromTheUsersWorkingTree:
+    """A change an earlier run applied is uncommitted; the next copy must start from it."""
+
+    async def test_it_carries_uncommitted_edits_and_untracked_files(
+        self, manager: GitWorktreeManager, repo: Path
+    ) -> None:
+        (repo / "README.md").write_text("line1\nedited by an earlier run\nline3\n")
+        (repo / "notes.txt").write_text("a new file\n")
+
+        wt = await manager.create("second")
+
+        assert (Path(wt.path) / "README.md").read_text() == "line1\nedited by an earlier run\nline3\n"
+        assert (Path(wt.path) / "notes.txt").read_text() == "a new file\n"
+
+    async def test_the_base_is_the_carried_state_so_only_the_agents_own_edits_count(
+        self, manager: GitWorktreeManager, repo: Path
+    ) -> None:
+        (repo / "README.md").write_text("line1\nedited by an earlier run\nline3\n")
+        wt = await manager.create("second")
+        (Path(wt.path) / "README.md").write_text("line1\nedited by an earlier run\nline3\nline4\n")
+        (Path(wt.path) / "new.py").write_text("x = 1\n")
+        await manager.commit_changes(wt)
+
+        changed = {c.path: (c.insertions, c.deletions) for c in await manager.changes(wt)}
+
+        assert changed == {"README.md": (1, 0), "new.py": (1, 0)}
+        assert "edited by an earlier run" in (await manager.diff_text(wt))  # shown as context, never as a change
+        assert "+edited by an earlier run" not in await manager.diff_text(wt)
+
+    async def test_applying_back_puts_only_the_agents_edits_onto_the_tree_that_already_has_the_first_change(
+        self, manager: GitWorktreeManager, repo: Path
+    ) -> None:
+        (repo / "README.md").write_text("line1\nedited by an earlier run\nline3\n")
+        wt = await manager.create("second")
+        (Path(wt.path) / "README.md").write_text("line1\nedited by an earlier run\nline3\nline4\n")
+        await manager.commit_changes(wt)
+
+        assert await manager.apply_back(wt)
+
+        assert (repo / "README.md").read_text() == "line1\nedited by an earlier run\nline3\nline4\n"
+        await manager.remove(wt, keep_branch=False)
+
+    async def test_a_clean_tree_is_not_given_an_extra_commit(self, manager: GitWorktreeManager, repo: Path) -> None:
+        head = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+        wt = await manager.create("clean")
+
+        assert wt.base_sha == head
+
+    async def test_the_users_ignored_files_and_git_dir_stay_behind(
+        self, manager: GitWorktreeManager, repo: Path
+    ) -> None:
+        (repo / ".gitignore").write_text("secret.env\n")
+        _git(["add", "-A"], repo)
+        _git(["commit", "-q", "-m", "ignore"], repo)
+        (repo / "secret.env").write_text("TOKEN=1\n")
+        (repo / "keep.txt").write_text("x\n")
+
+        wt = await manager.create("ignored")
+
+        assert not (Path(wt.path) / "secret.env").exists() and (Path(wt.path) / "keep.txt").exists()
