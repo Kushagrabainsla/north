@@ -53,6 +53,8 @@ if TYPE_CHECKING:
 # ``2>&1`` (merge stderr into stdout) is stripped before this check.
 _DANGEROUS = re.compile(r"[;&|`$<>(){}\n]")
 _TRAILING_STDERR_REDIRECT = re.compile(r"\s+2>&1\s*$")
+# `| tail -15` only trims what a command already printed.
+_TRAILING_TRIM = re.compile(r"\s*\|\s*(?:tail|head)(?:\s+-n?\s*\d+)?\s*$")
 
 # Even for a safe git action, these argument flags are destructive.
 _GIT_DANGEROUS_ARGS: frozenset[str] = frozenset({"-f", "--force", "-D", "--delete", "--hard"})
@@ -170,7 +172,7 @@ class UnattendedPolicy:
 
     def approves_command(self, command: str) -> bool:
         """True when *command* matches an enabled command rule, with no chaining."""
-        cleaned = _TRAILING_STDERR_REDIRECT.sub("", command.strip())
+        cleaned = _TRAILING_STDERR_REDIRECT.sub("", _TRAILING_TRIM.sub("", command.strip()))
         if not cleaned or _DANGEROUS.search(cleaned):
             return False
         for pattern in (*self._patterns(KIND_COMMAND), *self.extra_commands):

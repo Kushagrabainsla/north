@@ -99,6 +99,11 @@ class TestWhatIsPlainlyReadOnly:
             "find . -name '*.py'",
             "tree -L 2",
             "wc -l a.py",
+            "git ls-files && cat calc.py && ls",
+            "cat pyproject.toml; cat .gitignore",
+            "ls -a; ls .venv/bin 2>/dev/null | head",
+            "which -a pytest python python3 2>&1",
+            "grep -rn TODO src | head -5",
         ],
     )
     def test_these_are_passed_to_the_vendor(self, command) -> None:
@@ -126,6 +131,13 @@ class TestWhatIsPlainlyReadOnly:
             "cat a\nrm b",
             "ls $HOME",
             "grep 'unterminated",
+            "ls &",
+            "ls ||",
+            "ls && ",
+            "cat a || rm b",
+            "ls 2>out.txt",
+            "git ls-files | xargs rm",
+            "for f in $(ls); do cat $f; done",
         ],
     )
     def test_anything_that_could_write_or_chain_is_not(self, command) -> None:
