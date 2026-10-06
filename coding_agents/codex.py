@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from coding_agents.appserver import AppServer, AppServerError
-from coding_agents.ask import SERVER, TOOL
+from coding_agents.ask import FETCH_TOOL, SERVER, TOOL
 from coding_agents.base import CodingBackend, EventSink
 from coding_agents.confinement import codex_filesystem, profile
 from coding_agents.constants import (
@@ -203,13 +203,13 @@ class CodexBackend(CodingBackend):
         filesystem = codex_filesystem(spec.workspace, spec.mode, self._protected_paths, self._own_dirs())
         config = profile(base, _PROFILE, filesystem)
         if spec.ask is not None:
-            # north's own door, and nothing else. The one tool is approved here because an unattended Codex
+            # north's own door, and nothing else. Its two tools are approved here because an unattended Codex
             # would otherwise refuse it ("requires approval, but approval policy is never").
             config["mcp_servers"] = {
                 SERVER: {
                     "url": spec.ask.url,
                     "http_headers": {"Authorization": f"Bearer {spec.ask.token}"},
-                    "tools": {TOOL: {"approval_mode": "approve"}},
+                    "tools": {name: {"approval_mode": "approve"} for name in (TOOL, FETCH_TOOL)},
                 }
             }
         return config

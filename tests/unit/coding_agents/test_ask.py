@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from coding_agents.ask import (
+    CLAUDE_FETCH_TOOL,
     CLAUDE_TOOL,
+    FETCH_TOOL,
     MAX_OPTIONS,
     MAX_QUESTION_CHARS,
     TOOL,
@@ -15,8 +17,18 @@ from coding_agents.ask import (
     render,
 )
 from coding_agents.gate import CLAUDE_ASK_TOOL, GateSession
+from coding_agents.gate import CLAUDE_FETCH_TOOL as GATE_FETCH_TOOL
 
 SESSION = GateSession("tok", "run-1", "t1", "/wt")
+
+
+class FakeFetcher:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    async def fetch(self, session: GateSession, url: str) -> Reply:
+        self.urls.append(url)
+        return Reply("page text")
 
 
 class FakeAsker:
@@ -35,6 +47,7 @@ def _call(arguments, name: str = TOOL, ident: int = 7) -> dict:
 
 def test_the_gate_and_the_protocol_spell_the_one_allowed_tool_the_same_way() -> None:
     assert CLAUDE_TOOL == CLAUDE_ASK_TOOL == "mcp__north__ask_north"
+    assert CLAUDE_FETCH_TOOL == GATE_FETCH_TOOL == "mcp__north__fetch_url"
 
 
 class TestHandshake:
@@ -162,3 +175,36 @@ class TestAskingAQuestion:
 def test_render_names_who_answered_only_when_it_knows() -> None:
     assert render(Reply("spaces")) == "Answer: spaces"
     assert render(Reply("spaces", by="The user")) == "The user answered: spaces"
+
+
+class TestFetchingAPage:
+    async def test_without_a_fetcher_the_tool_is_not_offered_and_not_callable(self) -> None:
+        listed = await handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, SESSION, FakeAsker())
+        called = await handle(_call({"url": "https://x.io"}, name=FETCH_TOOL), SESSION, FakeAsker())
+
+        assert [t["name"] for t in listed["result"]["tools"]] == [TOOL]
+        assert called["error"]["code"] == -32602
+
+    async def test_with_a_fetcher_both_tools_are_offered_and_the_fetch_one_says_it_reaches_out(self) -> None:
+        reply = await handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, SESSION, FakeAsker(), FakeFetcher())
+
+        tools = {t["name"]: t for t in reply["result"]["tools"]}
+        assert set(tools) == {TOOL, FETCH_TOOL}
+        assert tools[FETCH_TOOL]["annotations"]["readOnlyHint"] is True
+        assert tools[FETCH_TOOL]["annotations"]["openWorldHint"] is True
+
+    async def test_a_fetch_reaches_the_fetcher_not_the_asker(self) -> None:
+        asker, fetcher = FakeAsker(), FakeFetcher()
+
+        reply = await handle(_call({"url": " https://x.io/a "}, name=FETCH_TOOL), SESSION, asker, fetcher)
+
+        assert fetcher.urls == ["https://x.io/a"] and asker.asked == []
+        assert reply["result"] == {"content": [{"type": "text", "text": "page text"}], "isError": False}
+
+    @pytest.mark.parametrize("arguments", [None, {}, {"url": ""}, {"url": "file:///etc/passwd"}, {"url": "ftp://x.io"}])
+    async def test_a_url_that_is_not_http_is_refused_before_anyone_is_asked(self, arguments) -> None:
+        fetcher = FakeFetcher()
+
+        reply = await handle(_call(arguments, name=FETCH_TOOL), SESSION, FakeAsker(), fetcher)
+
+        assert reply["result"]["isError"] is True and fetcher.urls == []

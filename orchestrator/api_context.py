@@ -80,6 +80,7 @@ class ApiServices:
     coding_sessions: Any | None = None
     coding_gate: Any | None = None
     coding_asker: Any | None = None
+    coding_fetcher: Any | None = None
     skill_registry: Any | None = None
     flow_registry: Any | None = None
     # Flow run history, and the runner behind "run now" / "test" on the Flows

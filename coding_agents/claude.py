@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from coding_agents.ask import CLAUDE_TOOL, SERVER
+from coding_agents.ask import CLAUDE_FETCH_TOOL, CLAUDE_TOOL, SERVER
 from coding_agents.base import CodingBackend, EventSink
 from coding_agents.constants import (
     HOOK_TIMEOUT_SECONDS,
@@ -189,8 +189,9 @@ class ClaudeBackend(CodingBackend):
             spec.session_id,
         ]
         if spec.ask is not None:
-            # Exactly one tool is allowed by name: the door back to north. Everything else stays default-deny.
-            argv += ["--allowedTools", CLAUDE_TOOL]
+            # Two tools are allowed by name: the door back to north, and the page fetch it does for the agent.
+            # Everything else stays default-deny.
+            argv += ["--allowedTools", f"{CLAUDE_TOOL},{CLAUDE_FETCH_TOOL}"]
         if spec.model:
             argv += ["--model", spec.model]
         if spec.guidance:

@@ -17,6 +17,7 @@ from config.approval_mode import ApprovalMode
 from orchestrator.api import coding_ask_router, coding_gate_router
 from orchestrator.api_context import ApiServices, attach
 from orchestrator.coding_ask import ApprovalsAsker
+from orchestrator.coding_fetch import ApprovalsFetcher
 from orchestrator.coding_gate import ApprovalJudge
 from tests.conftest import approval_policy, approvals
 
@@ -86,7 +87,7 @@ class LiveGate:
             await self._serving
 
 
-async def start_gate(mode: ApprovalMode, answer: ApprovalDecision | None = None, decider=None) -> LiveGate:
+async def start_gate(mode: ApprovalMode, answer: ApprovalDecision | None = None, decider=None, pages=None) -> LiveGate:
     store = ApprovalStore()
     sessions = GateSessions()
     layer = approvals(mode, store=store, decider=decider)
@@ -96,7 +97,10 @@ async def start_gate(mode: ApprovalMode, answer: ApprovalDecision | None = None,
     # The interaction carries the policy, as in production: that is what lets autonomous mode answer a question.
     interaction = UserInteraction(store, policy=approval_policy(mode, decider=decider))
     asker = ApprovalsAsker(interaction, ask_log)
-    attach(app, ApiServices(coding_sessions=sessions, coding_gate=Gate(judge), coding_asker=asker))
+    fetcher = ApprovalsFetcher(layer, ask_log, pages)
+    attach(
+        app, ApiServices(coding_sessions=sessions, coding_gate=Gate(judge), coding_asker=asker, coding_fetcher=fetcher)
+    )
     app.include_router(coding_gate_router)
     app.include_router(coding_ask_router)
     with socket.socket() as sock:

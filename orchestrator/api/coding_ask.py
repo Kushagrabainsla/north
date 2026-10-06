@@ -36,5 +36,5 @@ async def coding_ask(request: Request, authorization: str = Header(default="")) 
             {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "the body is not JSON"}},
             status_code=400,
         )
-    reply = await handle(message, session, services.require("coding_asker"))
+    reply = await handle(message, session, services.require("coding_asker"), getattr(services, "coding_fetcher", None))
     return Response(status_code=202) if reply is None else JSONResponse(reply)

@@ -311,8 +311,9 @@ Every wait must be visible. Proved by the experiments, or marked to build:
    Limits: 20 questions per run, 2,000 characters per question, a reviewer is never offered the door, and a
    read-only run's token has no gate. Measured with the real agents: Claude Code's plan mode refuses a
    non-read-only MCP tool with no way to ask, so the tool declares `readOnlyHint`; Codex refuses an
-   unapproved MCP call when unattended, so its approval is set in the config. Step 2, not built: things north
-   does for the agent (a screenshot, a page fetched outside its sandbox), each approval-gated.
+   unapproved MCP call when unattended, so its approval is set in the config. Step 2, built: `fetch_url`, a page north fetches for the agent (`orchestrator/coding_fetch.py`). It is ruled on like
+   any action that reaches outside, with the exact URL on the card, fetched with north's private-address guard, and
+   returned labelled as untrusted web text. Not built: a screenshot (always asks), anything that writes.
 6. **Done.** The in-house coder is deleted: the `coder`, `architect`, `reviewer` and `researcher` agents; the
    engineering pipeline in the orchestrator (understand, design with the user, the coder-reviewer loop with
    the Definition-of-Done gate, best-of-N, worktree isolation, the ship flow); `patch_file`, `rename_symbol`,
