@@ -53,6 +53,7 @@ from tools.base import Tool
 from tools.models import ToolInput
 from tools.output_spill import overflow_note, store_overflow
 from tools.retrieval import tool_index_documents
+from tools.universal.offered_before import OFFERED_SCOPE
 from utils.edit_scope import narrow_workspace
 from utils.execution_context import current_execution
 from utils.tasks import spawn
@@ -842,7 +843,12 @@ class AgenticLLMAgent(LLMAgent):
             return call, result_str, success, []
         if call.name == "request_approval" and params.get("wait") is False:
             card = await self._hand_over_card(payload, params)
-            result_str = json.dumps({"left_for_user": True, "card_id": card.id, "decision": card.status})
+            if card is None:
+                result_str = json.dumps(
+                    {"left_for_user": False, "already_offered": True, "note": "Offered before; no card was made."}
+                )
+            else:
+                result_str = json.dumps({"left_for_user": True, "card_id": card.id, "decision": card.status})
             return call, result_str, True, []
         if call.name == "request_approval":
             card = await self._request_approval_card(payload, params)
@@ -1197,12 +1203,15 @@ class AgenticLLMAgent(LLMAgent):
         )
         return card
 
-    async def _hand_over_card(self, payload: AgentPayload, params: dict[str, Any]) -> Card:
+    async def _hand_over_card(self, payload: AgentPayload, params: dict[str, Any]) -> Card | None:
         """Leave finished work for the user without waiting: `request_approval` with ``wait: false``.
 
         A blocking card holds the run until the user answers, so a run preparing five applications waited on
         each in turn. The card outlives the task and the user decides whenever. `UserInteraction.hand_over`
         existed for this, but no agent could reach it.
+
+        With `item_keys` the item is offered once: None when any key was offered before. Keeping that list
+        was left to the agent, which wrote it somewhere else, or not at all, run after run.
         """
         interaction = self._deps.interaction
         if interaction is None:
@@ -1213,7 +1222,12 @@ class AgenticLLMAgent(LLMAgent):
         raw_fields = params.get("fields") or []
         if not isinstance(raw_fields, list) or len(raw_fields) > 100:
             raise ValueError("request_approval fields must be a list of at most 100 items")
-        return await interaction.hand_over(
+        keys = [str(key) for key in params.get("item_keys") or [] if str(key).strip()]
+        offered = self._deps.offered_store if keys else None
+        scope = OFFERED_SCOPE  # one memory for everything left for the user, whichever flow found it
+        if offered is not None and await asyncio.to_thread(offered.seen, scope, *keys):
+            return None
+        card = await interaction.hand_over(
             task_id=payload.task_id,
             agent=self.name,
             source=f"agent:{self.name}",
@@ -1223,6 +1237,9 @@ class AgenticLLMAgent(LLMAgent):
             context=str(params.get("context") or "")[:50_000],
             options=list(params.get("options", list(APPROVAL_DEFAULT_OPTIONS))),
         )
+        if offered is not None:
+            await asyncio.to_thread(offered.remember, scope, *keys)
+        return card
 
     async def _ask_user(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Ask the user a clarifying question mid-loop and block until they answer.

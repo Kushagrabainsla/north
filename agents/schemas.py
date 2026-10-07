@@ -172,6 +172,14 @@ REQUEST_APPROVAL_SCHEMA: dict = {
                     "type": "string",
                     "description": "Read-only source material the user needs to judge the proposed fields.",
                 },
+                "item_keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "With wait false: what the item is, e.g. its address and 'company | role'. North offers "
+                        "an item once; if any key was offered before, no card is made and you are told so."
+                    ),
+                },
                 "wait": {
                     "type": "boolean",
                     "description": (

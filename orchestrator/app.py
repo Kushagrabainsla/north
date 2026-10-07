@@ -45,6 +45,7 @@ from gateways.telegram import TelegramGateway
 from jobs.exceptions import JobCancelled, JobNeedsAttention
 from jobs.models import Job
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
+from jobs.seen import SeenStore
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from mcp.manager import McpManager
 from memory.consolidator import EpisodeConsolidator
@@ -98,6 +99,7 @@ from tools.universal.flow_runner import FlowRunner
 from tools.universal.get_active_sessions import GetActiveSessionsTool
 from tools.universal.get_task_status import GetTaskStatusTool
 from tools.universal.list_schedules import ListSchedulesTool
+from tools.universal.offered_before import OfferedBeforeTool
 from tools.universal.query_metrics import QueryMetricsTool
 from tools.universal.run_flow import RunFlowTool
 from tools.universal.schedule_task import ScheduleTaskTool
@@ -256,6 +258,8 @@ def _build_tool_registry(
     )
     tool_registry.register(create_agent_tool)
     tool_registry.register(QueryMetricsTool(ledger=deps.ledger))
+    deps.offered_store = SeenStore(settings.north_home / "jobs.db")  # shared with the agents: one memory
+    tool_registry.register(OfferedBeforeTool(deps.offered_store))
     tool_registry.register(GetTaskStatusTool(ledger=deps.ledger))
     tool_registry.register(GetActiveSessionsTool(running_task_store=deps.running_task_store))
     tool_registry.register(UpdatePlanTool(plan_store=deps.plan_store, stream_manager=deps.stream_manager))
@@ -392,6 +396,7 @@ def _build_agent_deps(deps, tool_registry: ToolRegistry, interaction: UserIntera
         plan_store=deps.plan_store,
         north_settings=deps.north_settings,
         agent_run_store=deps.agent_run_store,
+        offered_store=deps.offered_store,
     )
 
 

@@ -538,3 +538,52 @@ async def test_request_approval_with_wait_false_leaves_the_work_and_returns_at_o
     assert success and json.loads(result)["left_for_user"] is True
     assert card.blocking is False and card.outlives_task
     assert card.fields[0].value == "jane@example.com"
+
+
+async def test_an_item_left_for_the_user_is_offered_once(tmp_path: Path) -> None:
+    """Keeping the already-offered list was left to the agent, which lost it run after run."""
+    from approval.store import ApprovalStore
+    from inference.models import ToolCall
+    from jobs.seen import SeenStore
+
+    store = ApprovalStore()
+    agent = _make_agent(tmp_path, interaction=UserInteraction(store), offered_store=SeenStore(tmp_path / "jobs.db"))
+
+    def offer(*keys: str) -> ToolCall:
+        return ToolCall(
+            name="request_approval",
+            call_id="c",
+            params={"wait": False, "title": "Acme - Engineer: ready for you", "item_keys": list(keys)},
+        )
+
+    async def run(call: ToolCall) -> dict:
+        _, result, _, _ = await agent._execute_call(call, _payload(), {})
+        return json.loads(result)
+
+    first = await run(offer("https://jobs.example.com/view/42/?utm_source=alert", "Acme | Engineer"))
+    same_link_new_tracking = await run(offer("https://www.jobs.example.com/view/42?utm_campaign=x"))
+    cross_posted = await run(offer("https://other-board.example.com/9", "acme |  engineer"))
+    different_job = await run(offer("https://jobs.example.com/view/43/", "Acme | Designer"))
+
+    assert first["left_for_user"] is True
+    assert same_link_new_tracking["already_offered"] is True
+    assert cross_posted["already_offered"] is True
+    assert different_job["left_for_user"] is True
+    assert len(store.pending()) == 2
+
+
+async def test_offered_before_tells_the_agent_before_it_does_the_work(tmp_path: Path) -> None:
+    """The card refuses a repeat, but only after the form was filled; the check comes first."""
+    from jobs.seen import SeenStore
+    from tools.models import ToolInput
+    from tools.universal.offered_before import OFFERED_SCOPE, OfferedBeforeTool
+
+    offered = SeenStore(tmp_path / "jobs.db")
+    offered.remember(OFFERED_SCOPE, "https://jobs.example.com/view/42/", "Acme | Engineer")
+    tool = OfferedBeforeTool(offered)
+
+    seen = await tool.run(ToolInput(params={"item_keys": ["https://jobs.example.com/view/42?utm_source=x"]}))
+    new = await tool.run(ToolInput(params={"item_keys": ["https://jobs.example.com/view/43/", "Acme | Designer"]}))
+
+    assert seen.data == {"offered": True} and new.data == {"offered": False}
+    assert not tool.mutates({"item_keys": ["x"]}), "a read, never a card"

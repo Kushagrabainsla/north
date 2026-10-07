@@ -25,7 +25,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.live.jobs.fake_world import JOBS, SECRET_TOKEN, Board, board_app, inbox_json, write_resume
+from tests.live.jobs.fake_world import SECRET_TOKEN, Board, board_app, inbox_json, write_resume
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("NORTH_LIVE_JOBS") != "1" or shutil.which("chrome-agent") is None,
@@ -177,9 +177,7 @@ async def test_a_job_alert_becomes_filled_applications_the_user_submits(north) -
     assert not [v for v in values if re.fullmatch(r"\$?\s?\d{2,3}[,.]?\d{3}(\s?(USD|/yr))?", v.strip())], (
         f"a salary was invented: {values}"
     )
-    [seen_file] = list(home.parent.rglob("seen.json"))  # wherever this run's "~/.north" pointed
-    seen = seen_file.read_text(encoding="utf-8")
-    assert all(job.job_id in seen for job in JOBS), seen
+    assert not asked, f"with the browser rules on, drafting should not stop to ask: {asked}"
 
     again, _ = await _run_test_flow(client)
     after = [

@@ -213,6 +213,9 @@ class AgentDependencies:
     # Both are optional so non-engineering setups and tests need not wire them.
     skill_registry: Any | None = field(default=None)
     skill_selector: Any | None = field(default=None)
+    # What north has already offered the user (`jobs.seen.SeenStore`). When set, work left with
+    # `request_approval(wait=False, item_keys=...)` is offered once: the same item is not offered again.
+    offered_store: Any | None = field(default=None)
     # Declarative processes already known to North. Exposed to the capability
     # summary so a fresh session can reuse a flow instead of recreating it.
     flow_registry: Any | None = field(default=None)
