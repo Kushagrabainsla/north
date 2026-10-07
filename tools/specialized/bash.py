@@ -20,6 +20,7 @@ from approval.policy import Action, ActionKind
 from tools.base import Tool, prepared
 from tools.models import ToolInput, ToolOutput
 from tools.specialized import _os_sandbox
+from tools.specialized._egress import EgressProxy
 from tools.specialized._sandbox import (
     SandboxConfig,
     build_run_argv,
@@ -72,6 +73,8 @@ class BashTool(Tool):
         "Run a shell command and return stdout/stderr/returncode."
         " Default timeout 30 s, pass timeout= (max 300) for longer commands."
         " Commands that only read run at once; anything that writes or uses the network needs approval."
+        " Approved commands reach only allowed hosts (package registries, code hosts);"
+        " a 403 on CONNECT means the host is not allowed."
     )
     parameters_schema = {
         "type": "object",
@@ -92,10 +95,16 @@ class BashTool(Tool):
         "required": ["command"],
     }
 
-    def __init__(self, sandbox: SandboxConfig | None = None, os_sandbox: bool = False) -> None:
+    def __init__(
+        self,
+        sandbox: SandboxConfig | None = None,
+        os_sandbox: bool = False,
+        allowed_domains: tuple[str, ...] | None = None,
+    ) -> None:
         self._sandbox = sandbox or SandboxConfig()
         # One sandbox layer only: Docker, when asked for, replaces Seatbelt.
         self._os_sandbox = _os_sandbox.current() if os_sandbox and not self._sandbox.enabled else None
+        self._egress = EgressProxy(allowed_domains) if allowed_domains is not None else EgressProxy()
 
     def _action(self, command: str, *, read_only: bool = False) -> Action:
         """What this command is, as facts. What that *means* is the policy's call."""
@@ -163,7 +172,8 @@ class BashTool(Tool):
         - OS sandbox on → (seatbelt argv, cwd, None): writes limited to the workspace.
         """
         if self._os_sandbox:
-            return self._os_sandbox.wrap(command, cwd or os.getcwd(), writable=True), cwd, None
+            port = await self._egress.start()
+            return self._os_sandbox.wrap(command, cwd or os.getcwd(), writable=True, proxy_port=port), cwd, None
         if not self._sandbox.enabled:
             return None, cwd, None
         if not cwd:
@@ -175,6 +185,9 @@ class BashTool(Tool):
                 "Sandboxed execution is enabled but Docker is unavailable - refusing to run on the host.",
             )
         return build_run_argv(command, cwd, self._sandbox), None, None
+
+    async def aclose(self) -> None:
+        await self._egress.stop()
 
     async def run(self, input: ToolInput) -> ToolOutput:
         command = input.params.get("command")

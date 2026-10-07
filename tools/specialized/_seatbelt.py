@@ -8,7 +8,9 @@ touch. Two profiles:
   nothing, so it needs no card.
 - **workspace** - writes limited to the workspace and the temp and cache
   directories tools need; credential directories stay unreadable. Used for
-  commands you approved.
+  commands you approved. Given an egress proxy port, the network is closed too,
+  except loopback (a project's own tests start local servers) - and the proxy
+  on loopback is the only way out (see `_egress.py`).
 
 `sandbox-exec` is deprecated by Apple with no replacement; it is what Claude
 Code and Codex use on macOS. Only one sandbox layer may be active: a command
@@ -64,8 +66,8 @@ class Seatbelt:
         return available()
 
     @staticmethod
-    def wrap(command: str, workspace: str | None, *, writable: bool) -> list[str]:
-        return wrap(command, workspace, writable=writable)
+    def wrap(command: str, workspace: str | None, *, writable: bool, proxy_port: int | None = None) -> list[str]:
+        return wrap(command, workspace, writable=writable, proxy_port=proxy_port)
 
     @staticmethod
     def denied(stderr: str) -> bool:
@@ -85,7 +87,7 @@ def _secret_dirs() -> list[str]:
     return paths
 
 
-def profile(workspace: str | None, *, writable: bool) -> str:
+def profile(workspace: str | None, *, writable: bool, proxy_port: int | None = None) -> str:
     """The Seatbelt profile for a command run in *workspace*.
 
     Later rules win, so each profile denies broadly and then allows narrowly.
@@ -106,9 +108,27 @@ def profile(workspace: str | None, *, writable: bool) -> str:
     rules.append("(deny file-read* " + " ".join(f"(subpath {_quote(p)})" for p in _secret_dirs()) + ")")
     if not writable:
         rules.append("(deny network*)")
+    elif proxy_port is not None:
+        # No unix sockets: the DNS resolver and the Docker socket are both one.
+        # Outbound and inbound stay separate rules: `local ip "localhost:*"` on
+        # `network*` also matches an outbound connection to anywhere.
+        rules.append("(deny network*)")
+        rules.append('(allow network-outbound (remote ip "localhost:*"))')
+        rules.append('(allow network-bind network-inbound (local ip "localhost:*"))')
     return "\n".join(rules)
 
 
-def wrap(command: str, workspace: str | None, *, writable: bool) -> list[str]:
+def _proxy_env(proxy_port: int) -> list[str]:
+    """Point every program that honours the usual variables at the egress proxy."""
+    url = f"http://127.0.0.1:{proxy_port}"
+    names = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+    no_proxy = "localhost,127.0.0.1,::1"
+    return [*(f"{name}={url}" for name in names), f"NO_PROXY={no_proxy}", f"no_proxy={no_proxy}"]
+
+
+def wrap(command: str, workspace: str | None, *, writable: bool, proxy_port: int | None = None) -> list[str]:
     """The argv that runs *command* under the chosen profile."""
-    return [_SANDBOX_EXEC, "-p", profile(workspace, writable=writable), "/bin/sh", "-c", command]
+    argv = [_SANDBOX_EXEC, "-p", profile(workspace, writable=writable, proxy_port=proxy_port)]
+    if writable and proxy_port is not None:
+        argv += ["/usr/bin/env", *_proxy_env(proxy_port)]
+    return [*argv, "/bin/sh", "-c", command]

@@ -4,7 +4,7 @@ Callers ask `current()` and never branch on the platform (CODING_STYLE §16.4).
 macOS has Seatbelt. A platform with no implementation returns None, and the
 caller falls back to asking for every command - it fails closed, it does not
 pretend to be sandboxed. Add Linux (bubblewrap) by writing a class with these
-three methods and listing it in `_IMPLEMENTATIONS`.
+three methods (`available`, `wrap`, `denied`) and listing it in `_IMPLEMENTATIONS`.
 """
 
 from __future__ import annotations
@@ -21,8 +21,11 @@ class OsSandbox(Protocol):
         ...
 
     @staticmethod
-    def wrap(command: str, workspace: str | None, *, writable: bool) -> list[str]:
-        """The argv that runs *command* read-only, or writing only inside *workspace*."""
+    def wrap(command: str, workspace: str | None, *, writable: bool, proxy_port: int | None = None) -> list[str]:
+        """The argv that runs *command* read-only, or writing only inside *workspace*.
+
+        It never reaches the network, except - when *writable* and given a
+        *proxy_port* - the egress proxy on loopback, which the command is pointed at."""
         ...
 
     @staticmethod

@@ -50,6 +50,13 @@ def _resolve_host_ips(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6A
     return ips
 
 
+def is_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True for a publicly routable address - not loopback, private, link-local, multicast or reserved."""
+    return not (
+        ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    )
+
+
 def validate_public_url(url: str) -> None:
     """Raise UnsafeUrlError unless *url* is http(s) to a publicly routable host.
 
@@ -64,14 +71,7 @@ def validate_public_url(url: str) -> None:
     if not host:
         raise UnsafeUrlError("URL has no hostname.")
     for ip in _resolve_host_ips(host):
-        if (
-            ip.is_loopback
-            or ip.is_private
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
+        if not is_public_ip(ip):
             raise UnsafeUrlError(f"URL host {host!r} resolves to non-public address {ip} - blocked.")
 
 

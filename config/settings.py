@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     # without a card, and an approved one can write only inside its workspace. On
     # by default; ignored when Docker is enabled (one sandbox layer) or unavailable.
     os_sandbox_enabled: bool = True
+    # Domains an approved command may reach, through north's egress proxy, and their
+    # subdomains. Empty means the built-in list (package registries and code hosts).
+    sandbox_allowed_domains: list[str] = []
     sandbox_image: str = "python:3.12-slim"
     sandbox_network_disabled: bool = True
     sandbox_memory: str = "512m"

@@ -268,6 +268,7 @@ def _build_tool_registry(
         BashTool(
             sandbox=SandboxConfig.from_settings(settings),
             os_sandbox=settings.os_sandbox_enabled,
+            allowed_domains=tuple(settings.sandbox_allowed_domains) or None,
         )
     )
     return tool_registry, create_agent_tool
