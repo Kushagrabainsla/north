@@ -306,6 +306,11 @@ describe("flowActions", () => {
     });
   });
 
+  it("offers activation again when an active flow changed and its new version passed a test", () => {
+    // The server returns a tested run for an active flow only when it changed since activation.
+    expect(flowActions("active", "learned", "run-2").activate).toBe(true);
+  });
+
   it("only runs or schedules a built-in flow, which ships tested", () => {
     expect(flowActions("active", "builtin", "")).toEqual({
       test: false,

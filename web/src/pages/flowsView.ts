@@ -242,8 +242,12 @@ export const flowActions = (
 ): FlowActions => ({
   test: source !== "builtin" && (status === "candidate" || status === "active"),
   run: status === "active",
+  // The server offers a tested run only when the flow needs activating: a
+  // candidate, or an active flow changed since it was activated.
   activate:
-    source !== "builtin" && status === "candidate" && Boolean(testedRunId),
+    source !== "builtin" &&
+    (status === "candidate" || status === "active") &&
+    Boolean(testedRunId),
   schedule: status === "active",
 });
 

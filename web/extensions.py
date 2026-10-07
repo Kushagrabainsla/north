@@ -499,11 +499,23 @@ async def list_flows() -> list[dict[str, Any]]:
     ]
 
 
+def _changed_since_activation(flow) -> bool:
+    """An active flow whose definition or skills changed after it was activated.
+
+    The scheduler refuses to run it until it is tested and activated again, the same check
+    `FlowRunner.run` makes. Its status still says "active", which hid the Activate button.
+    """
+    if flow.status != "active" or not flow.activation_fingerprint:
+        return False
+    skills = current_services().skill_registry
+    return flow.activation_fingerprint != flow_fingerprint(flow, skills.get if skills is not None else None)
+
+
 def _tested_run_id(flow) -> str:
-    """The latest completed test-mode run of this exact flow definition, or ""."""
+    """The latest completed test-mode run of this exact flow definition, when it needs activating, or ""."""
     services = current_services()
     store = services.flow_store
-    if store is None or flow.status != "candidate":
+    if store is None or not (flow.status == "candidate" or _changed_since_activation(flow)):
         return ""
     skills = services.skill_registry
     fingerprint = flow_fingerprint(flow, skills.get if skills is not None else None)
@@ -888,6 +900,7 @@ async def get_flow(name: str) -> dict[str, Any]:
         # The test run that proves this exact candidate works, when there is one:
         # activation is offered only against it.
         "tested_run_id": await asyncio.to_thread(_tested_run_id, flow),
+        "changed_since_activation": await asyncio.to_thread(_changed_since_activation, flow),
         "domains": sorted(flow.domains),
         "steps": [
             {

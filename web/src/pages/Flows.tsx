@@ -56,6 +56,7 @@ interface FlowDetail {
   domains: string[];
   source: string;
   tested_run_id: string;
+  changed_since_activation?: boolean;
   steps: FlowStepDraft[];
 }
 interface FlowDraft {
@@ -434,14 +435,21 @@ function RunRow({
       action === "discard" &&
       !(await dialog.confirm(
         "The steps it finished stay on record; the rest will not run.",
-        { title: `Discard this ${run.status} run?`, confirmLabel: "Discard", danger: true },
+        {
+          title: `Discard this ${run.status} run?`,
+          confirmLabel: "Discard",
+          danger: true,
+        },
       ))
     )
       return;
     setBusy(true);
     setActionError("");
     try {
-      await post(`/web/api/flow-runs/${encodeURIComponent(run.run_id)}/${action}`, {});
+      await post(
+        `/web/api/flow-runs/${encodeURIComponent(run.run_id)}/${action}`,
+        {},
+      );
       await onChanged();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -741,6 +749,7 @@ export function Flows() {
     selected ? 4000 : 0,
   );
   const [testedRun, setTestedRun] = useState("");
+  const [changedSinceActivation, setChangedSinceActivation] = useState(false);
   // Whether a candidate has a passing test is the server's call, made against
   // the exact definition. Ask again whenever a run of this flow changes state,
   // so "Activate" appears the moment a test finishes rather than on reopening.
@@ -752,7 +761,9 @@ export function Flows() {
     let current = true;
     api<FlowDetail>(`/web/api/flow-definitions/${encodeURIComponent(selected)}`)
       .then((detail) => {
-        if (current) setTestedRun(detail.tested_run_id || "");
+        if (!current) return;
+        setTestedRun(detail.tested_run_id || "");
+        setChangedSinceActivation(Boolean(detail.changed_since_activation));
       })
       .catch(() => undefined);
     return () => {
@@ -782,6 +793,7 @@ export function Flows() {
       );
       setDraft(draftFromDetail(detail));
       setTestedRun(detail.tested_run_id || "");
+      setChangedSinceActivation(Boolean(detail.changed_since_activation));
     } catch (error) {
       setSelected(null);
       setMessage(error instanceof Error ? error.message : String(error));
@@ -832,6 +844,7 @@ export function Flows() {
       );
       setDraft(draftFromDetail(detail));
       setTestedRun("");
+      setChangedSinceActivation(false);
       setMessage("Flow activated. It can now be scheduled and run.");
       await flows.reload();
     } catch (error) {
@@ -863,6 +876,7 @@ export function Flows() {
       );
       setDraft(draftFromDetail(detail));
       setTestedRun(detail.tested_run_id || "");
+      setChangedSinceActivation(Boolean(detail.changed_since_activation));
       setMessage("Flow saved as a candidate. Test it before activation.");
       await flows.reload();
     } catch (error) {
@@ -1254,6 +1268,12 @@ export function Flows() {
         }
       >
         {message && <div className="notice flow-modal-notice">{message}</div>}
+        {changedSinceActivation && (
+          <div className="notice flow-modal-notice">
+            This flow changed after it was activated, so its schedule will not
+            run it. Test it, then activate it again.
+          </div>
+        )}
         <div className="segmented flow-tabs">
           {(
             [
@@ -1301,7 +1321,9 @@ export function Flows() {
                   showFlow={false}
                   open={openRun === run.run_id}
                   onToggle={() => toggleRun(run.run_id)}
-                  onChanged={() => Promise.all([runs.reload(), history.reload()])}
+                  onChanged={() =>
+                    Promise.all([runs.reload(), history.reload()])
+                  }
                 />
               ))
             ) : (

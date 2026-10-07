@@ -317,6 +317,33 @@ async def test_a_flow_whose_skill_changed_after_activation_cannot_be_scheduled_o
     assert running.value.status_code == 422
 
 
+async def test_an_active_flow_whose_skill_changed_is_offered_activation_again_after_a_test(env) -> None:
+    """It still said "active", so the page offered no Activate button, while its schedule refused to run it."""
+    path = env.skills.get("review-item").directory / "SKILL.md"
+    path.write_text(path.read_text(encoding="utf-8") + "\nAlso check the footer.\n", encoding="utf-8")
+    env.skills.reload()
+
+    before = await web_api.get_flow("live")
+    started = await web_api.start_flow_run("live", web_api.FlowRunRequest(mode="test"))
+    await drain()
+    tested = await web_api.get_flow("live")
+    activated = await web_api.activate_flow("live", web_api.FlowActivation(test_run_id=started["run_id"]))
+
+    assert before["changed_since_activation"] is True and before["tested_run_id"] == ""
+    assert tested["tested_run_id"] == started["run_id"]
+    assert activated["changed_since_activation"] is False
+    scheduled = await web_api.create_flow_schedule("live", web_api.FlowScheduleCreate(hour=7))
+    assert scheduled["flow"] == "live"
+
+
+async def test_an_unchanged_active_flow_is_not_offered_activation(env) -> None:
+    started = await web_api.start_flow_run("live", web_api.FlowRunRequest(mode="test"))
+    await drain()
+
+    detail = await web_api.get_flow("live")
+    assert started["run_id"] and detail["tested_run_id"] == "" and detail["changed_since_activation"] is False
+
+
 def test_the_management_routes_are_mounted_where_the_page_calls_them() -> None:
     routes = {(route.path, method) for route in web_api.router.routes for method in getattr(route, "methods", ())}
 
