@@ -840,6 +840,10 @@ class AgenticLLMAgent(LLMAgent):
             result_str = await self._delegate_task(payload, params)
             success = json.loads(result_str).get("success", False)
             return call, result_str, success, []
+        if call.name == "request_approval" and params.get("wait") is False:
+            card = await self._hand_over_card(payload, params)
+            result_str = json.dumps({"left_for_user": True, "card_id": card.id, "decision": card.status})
+            return call, result_str, True, []
         if call.name == "request_approval":
             card = await self._request_approval_card(payload, params)
             result_str = json.dumps(
@@ -1192,6 +1196,33 @@ class AgenticLLMAgent(LLMAgent):
             context=str(params.get("context") or "")[:50_000],
         )
         return card
+
+    async def _hand_over_card(self, payload: AgentPayload, params: dict[str, Any]) -> Card:
+        """Leave finished work for the user without waiting: `request_approval` with ``wait: false``.
+
+        A blocking card holds the run until the user answers, so a run preparing five applications waited on
+        each in turn. The card outlives the task and the user decides whenever. `UserInteraction.hand_over`
+        existed for this, but no agent could reach it.
+        """
+        interaction = self._deps.interaction
+        if interaction is None:
+            raise RuntimeError(
+                f"Agent '{self.name}' needs the approval layer's interaction to leave work for the user, "
+                "but none was injected into AgentDependencies. Wire it at startup."
+            )
+        raw_fields = params.get("fields") or []
+        if not isinstance(raw_fields, list) or len(raw_fields) > 100:
+            raise ValueError("request_approval fields must be a list of at most 100 items")
+        return await interaction.hand_over(
+            task_id=payload.task_id,
+            agent=self.name,
+            source=f"agent:{self.name}",
+            title=str(params.get("title") or f"{self.name.title()} - Ready for you")[:160],
+            message=str(params.get("message", "Ready for your review.")),
+            fields=[CardField.model_validate(item) for item in raw_fields],
+            context=str(params.get("context") or "")[:50_000],
+            options=list(params.get("options", list(APPROVAL_DEFAULT_OPTIONS))),
+        )
 
     async def _ask_user(self, payload: AgentPayload, params: dict[str, Any]) -> str:
         """Ask the user a clarifying question mid-loop and block until they answer.

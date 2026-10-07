@@ -228,3 +228,74 @@ async def test_reads_never_needed_a_rule(store) -> None:
     action = Action(agent="general", kind=ActionKind.OTHER, summary="look something up", mutating=False)
 
     assert (await _policy(store).rule(action)).verdict is Verdict.ALLOW
+
+
+# ── Browser: opening pages and filling fields, never a click ─────────────────
+
+
+def _browser(operation: str, label: str = '"Email"', **flags) -> Action:
+    return Action(
+        agent="browser",
+        kind=ActionKind.BROWSER,
+        summary=f"browser {operation} {label} on jobs.example.com",
+        operation=operation,
+        command="jobs.example.com",
+        args=label,
+        mutating=True,
+        **flags,
+    )
+
+
+def _switch_on_browser(store) -> None:
+    for rule in store.all():
+        if rule.kind == "browser":
+            store.update(rule.id, enabled=True)
+
+
+async def test_browser_rules_ship_switched_off(store) -> None:
+    """A page can read a field as it is typed: filling forms on their own is the user's trade to make."""
+    assert {r.pattern for r in store.all() if r.kind == "browser"} == {"goto", "fill", "type", "select"}
+    assert store.patterns("browser") == ()
+    assert (await _policy(store).rule(_browser("fill"))).verdict is Verdict.ASK
+
+
+async def test_switched_on_a_form_is_filled_without_asking(store) -> None:
+    """A drafted application stopped at every field: eleven cards for two jobs in one run."""
+    _switch_on_browser(store)
+
+    for operation in ("goto", "fill", "type", "select"):
+        assert (await _policy(store).rule(_browser(operation))).verdict is Verdict.ALLOW, operation
+
+
+async def test_a_click_or_key_press_always_asks_whatever_the_table_says(store) -> None:
+    _switch_on_browser(store)
+    with pytest.raises(ValueError, match="always asks"):
+        store.add("browser", "click")
+    from utils.db import open_db_connection
+
+    with open_db_connection(store._db_path) as conn:  # a row written behind the store's back
+        conn.execute(
+            "INSERT INTO unattended_rules (id, kind, pattern, enabled, source, note, created_at, updated_at) "
+            "VALUES ('browser:click', 'browser', 'click', 1, 'user', '', '', '')"
+        )
+    store._invalidate()
+
+    assert (await _policy(store).rule(_browser("click", '"Submit application"'))).verdict is Verdict.ASK
+    assert (await _policy(store).rule(_browser("press", '"Enter"'))).verdict is Verdict.ASK
+
+
+async def test_a_fill_that_sends_is_still_asked_about(store) -> None:
+    _switch_on_browser(store)
+
+    assert (await _policy(store).rule(_browser("fill", reaches_third_party=True))).verdict is Verdict.ASK
+
+
+def test_restoring_defaults_never_switches_browser_filling_on(store) -> None:
+    for rule in store.all():
+        if rule.kind == "browser":
+            store.delete(rule.id)
+
+    store.restore_builtins()
+
+    assert {r.pattern for r in store.all() if r.kind == "browser"} == {"goto", "fill", "type", "select"}
+    assert store.patterns("browser") == ()

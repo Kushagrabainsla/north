@@ -288,6 +288,8 @@ class ApprovalPolicy:
             return Ruling(Verdict.ALLOW, "local-only git", DecidedBy.SAFE_LIST)
         if action.kind is ActionKind.DEVICE and self.unattended.approves_device(action.operation):
             return Ruling(Verdict.ALLOW, "reversible device toggle", DecidedBy.SAFE_LIST)
+        if action.kind is ActionKind.BROWSER and self.unattended.approves_browser(action.operation):
+            return Ruling(Verdict.ALLOW, "opening a page or filling a field, no click", DecidedBy.SAFE_LIST)
         if self.unattended.approves_self_message(action.operation):
             return Ruling(Verdict.ALLOW, "message to you", DecidedBy.SAFE_LIST)
         if (

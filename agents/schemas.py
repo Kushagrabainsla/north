@@ -172,6 +172,14 @@ REQUEST_APPROVAL_SCHEMA: dict = {
                     "type": "string",
                     "description": "Read-only source material the user needs to judge the proposed fields.",
                 },
+                "wait": {
+                    "type": "boolean",
+                    "description": (
+                        "Default true: stop until the user decides. false: the work is finished and only "
+                        "needs the user's eye (a drafted application, a prepared reply), so leave it for them "
+                        "and carry on at once; nothing here waits on the decision."
+                    ),
+                },
             },
             "required": ["message"],
         },

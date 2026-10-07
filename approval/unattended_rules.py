@@ -67,7 +67,12 @@ KIND_COMMAND = "command"
 KIND_GIT = "git"
 KIND_DEVICE = "device"
 KIND_SELF_MESSAGE = "self_message"
-KINDS: tuple[str, ...] = (KIND_COMMAND, KIND_GIT, KIND_DEVICE, KIND_SELF_MESSAGE)
+KIND_BROWSER = "browser"
+KINDS: tuple[str, ...] = (KIND_COMMAND, KIND_GIT, KIND_DEVICE, KIND_SELF_MESSAGE, KIND_BROWSER)
+
+# The only browser actions a rule may name: opening a page and editing a field. A click or a key press can
+# submit, send or buy, so no row - shipped or yours - may allow one (`add` refuses it, the matcher ignores it).
+BROWSER_EDIT_ACTIONS: frozenset[str] = frozenset({"goto", "fill", "type", "select"})
 
 # What north ships with. Matched as a whole first token or a two-token prefix;
 # a bare interpreter (e.g. `python -c ...`) is deliberately not included.
@@ -113,12 +118,20 @@ _BUILTIN_DEVICE: tuple[str, ...] = ("on", "off", "toggle", "set_brightness")
 # alert. Never a message to anyone else; see the hard rules in unattended.py.
 _BUILTIN_SELF_MESSAGE: tuple[str, ...] = ("notify_user", "send_self_message")
 
+# Opening pages and filling fields, so a run that drafts a form does not stop at every field. Shipped
+# switched off: a page can read a field as it is typed, before anything is submitted, so filling a form on an
+# unknown site can hand it your details. You turn these on when the trade is yours to make.
+_BUILTIN_BROWSER: tuple[str, ...] = ("goto", "fill", "type", "select")
+
 _BUILTINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (KIND_COMMAND, _BUILTIN_COMMANDS),
     (KIND_GIT, _BUILTIN_GIT),
     (KIND_DEVICE, _BUILTIN_DEVICE),
     (KIND_SELF_MESSAGE, _BUILTIN_SELF_MESSAGE),
+    (KIND_BROWSER, _BUILTIN_BROWSER),
 )
+# Shipped rules that start, and are restored, switched off.
+_SHIPPED_OFF: frozenset[str] = frozenset({KIND_BROWSER})
 
 
 def rule_id(kind: str, pattern: str) -> str:
@@ -217,8 +230,8 @@ class UnattendedRuleStore:
                 conn.execute(
                     "INSERT OR IGNORE INTO unattended_rules "
                     "(id, kind, pattern, enabled, source, note, created_at, updated_at) "
-                    "VALUES (?, ?, ?, 1, 'builtin', '', ?, ?)",
-                    (rid, kind, pattern, now, now),
+                    "VALUES (?, ?, ?, ?, 'builtin', '', ?, ?)",
+                    (rid, kind, pattern, 0 if kind in _SHIPPED_OFF else 1, now, now),
                 )
                 conn.execute("INSERT OR IGNORE INTO unattended_rules_seeded (id) VALUES (?)", (rid,))
 
@@ -273,6 +286,11 @@ class UnattendedRuleStore:
         pattern = pattern.strip()
         if not pattern:
             raise ValueError("a rule needs a pattern")
+        if kind == KIND_BROWSER and pattern not in BROWSER_EDIT_ACTIONS:
+            raise ValueError(
+                f"a browser rule may only open pages or edit fields ({', '.join(sorted(BROWSER_EDIT_ACTIONS))}); "
+                "a click or key press can submit, send or buy, so it always asks"
+            )
         now = _now()
         rid = rule_id(kind, pattern)
         with open_db_connection(self._db_path) as conn:
@@ -334,6 +352,8 @@ class UnattendedRuleStore:
     def restore_builtins(self) -> int:
         """Re-enable every shipped rule, re-adding any that were deleted.
 
+        Rules shipped switched off (`_SHIPPED_OFF`) are re-added if deleted, but never switched on here.
+
         The "restore defaults" the built-in schedules page already offers.
         Returns how many rules changed.
         """
@@ -343,6 +363,15 @@ class UnattendedRuleStore:
             for kind, patterns in _BUILTINS:
                 for pattern in patterns:
                     rid = rule_id(kind, pattern)
+                    if kind in _SHIPPED_OFF:
+                        cursor = conn.execute(
+                            "INSERT OR IGNORE INTO unattended_rules "
+                            "(id, kind, pattern, enabled, source, note, created_at, updated_at) "
+                            "VALUES (?, ?, ?, 0, 'builtin', '', ?, ?)",
+                            (rid, kind, pattern, now, now),
+                        )
+                        changed += cursor.rowcount or 0
+                        continue
                     cursor = conn.execute(
                         "INSERT INTO unattended_rules "
                         "(id, kind, pattern, enabled, source, note, created_at, updated_at) "

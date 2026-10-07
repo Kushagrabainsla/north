@@ -1015,6 +1015,7 @@ const KIND_LABELS: Record<string, string> = {
   git: "Git actions",
   device: "Device toggles",
   self_message: "Messages to you",
+  browser: "Browser: pages and fields",
 };
 
 const KIND_HELP: Record<string, string> = {
@@ -1025,6 +1026,8 @@ const KIND_HELP: Record<string, string> = {
     "Trivially reversible physical actions, where the undo is another toggle.",
   self_message:
     "Messages addressed to you. A message to anyone else is never auto-approved.",
+  browser:
+    "Opening pages and filling fields, so a drafted form does not stop at every field. Off until you turn it on: a page can read what is typed before anything is submitted. A click or key press always asks.",
 };
 
 // The safe-action list north runs in `safe` mode without asking. It used to be a
@@ -2658,7 +2661,9 @@ export function SettingsPage() {
   const routing = resource.data?.routing || "auto";
   const autonomy = resource.data?.autonomy;
   const autonomyOptions = resource.data?.autonomy_options || [];
-  const currentMode = autonomyOptions.find((option) => option.value === autonomy);
+  const currentMode = autonomyOptions.find(
+    (option) => option.value === autonomy,
+  );
   const manual = routing === "manual";
   // Manual routing needs a model, and the server refuses the switch without one.
   // So choosing "manual" with nothing stored opens the picker and waits: the

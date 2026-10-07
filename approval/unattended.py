@@ -37,6 +37,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from approval.unattended_rules import (
+    BROWSER_EDIT_ACTIONS,
+    KIND_BROWSER,
     KIND_COMMAND,
     KIND_DEVICE,
     KIND_GIT,
@@ -120,6 +122,11 @@ def forbidden_reason(action: Action) -> str:
         return "sending something to another person is never auto-approved"
     if getattr(action, "spends_money", False):
         return "spending money is never auto-approved"
+    if action.kind == "browser":  # ActionKind.BROWSER; policy imports this module
+        # The browser declares both flags from the page itself (what the element is, whether it is in a
+        # form, whether the page is a checkout). The word list read field labels instead: every
+        # application's "Email" field looked like sending an email.
+        return ""
     haystack = f"{action.operation} {action.command} {action.summary}"
     if _mentions(haystack, _OUTBOUND_WORDS):
         return "this looks like it sends something to another person"
@@ -201,6 +208,17 @@ class UnattendedPolicy:
         if verb not in self._patterns(KIND_DEVICE):
             return False
         self._fired(KIND_DEVICE, verb)
+        return True
+
+    def approves_browser(self, operation: str) -> bool:
+        """True for opening a page or editing a field, when you switched that rule on.
+
+        Never a click or a key press, whatever the table holds: those can submit, send or buy.
+        """
+        verb = operation.strip().lower()
+        if verb not in BROWSER_EDIT_ACTIONS or verb not in self._patterns(KIND_BROWSER):
+            return False
+        self._fired(KIND_BROWSER, verb)
         return True
 
     def approves_self_message(self, operation: str) -> bool:

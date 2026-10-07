@@ -12,10 +12,20 @@ import sys
 TOOLS = [
     {
         "name": "search_gmail_messages",
-        "description": "Search the inbox.",
+        "description": "Search the inbox. Returns message ids.",
         "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         "annotations": {"readOnlyHint": True, "destructiveHint": False},
-    }
+    },
+    {
+        "name": "get_gmail_message_content",
+        "description": "Read one message by id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"message_id": {"type": "string"}},
+            "required": ["message_id"],
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+    },
 ]
 
 
@@ -27,7 +37,12 @@ def _answer(request: dict) -> dict:
         return {"tools": TOOLS}
     if method == "tools/call":
         messages = json.loads(os.environ.get("FAKE_MCP_MESSAGES", "[]"))
-        text = "\n\n".join(f"Message ID: {m['id']}\n{m['body']}" for m in messages) or "No messages."
+        params = request.get("params", {})
+        if params.get("name") == "get_gmail_message_content":
+            wanted = params.get("arguments", {}).get("message_id")
+            text = next((m["body"] for m in messages if m["id"] == wanted), f"No message {wanted}.")
+        else:
+            text = "\n\n".join(f"Message ID: {m['id']}\n{m['body']}" for m in messages) or "No messages."
         return {"content": [{"type": "text", "text": text}], "isError": False}
     return {}
 

@@ -512,3 +512,29 @@ async def test_delegation_grants_nothing_when_nothing_was_granted(tmp_path: Path
     sub = await _delegate_capturing(tmp_path, parent, {"workspace": str(tmp_path)})
 
     assert sub.granted_workspace == ""
+
+
+async def test_request_approval_with_wait_false_leaves_the_work_and_returns_at_once(tmp_path: Path) -> None:
+    """A run preparing five applications waited on each card in turn; prepared work is left, not waited on."""
+    from approval.store import ApprovalStore
+    from inference.models import ToolCall
+
+    store = ApprovalStore()
+    agent = _make_agent(tmp_path, interaction=UserInteraction(store))
+    call = ToolCall(
+        name="request_approval",
+        call_id="c1",
+        params={
+            "wait": False,
+            "title": "Acme - Software Engineer: ready to submit",
+            "message": "Filled in; the tab is open for you to submit.",
+            "fields": [{"name": "email", "label": "Email", "type": "text", "value": "jane@example.com"}],
+        },
+    )
+
+    _, result, success, _ = await asyncio.wait_for(agent._execute_call(call, _payload(), {}), timeout=2)
+
+    [card] = store.pending()
+    assert success and json.loads(result)["left_for_user"] is True
+    assert card.blocking is False and card.outlives_task
+    assert card.fields[0].value == "jane@example.com"
