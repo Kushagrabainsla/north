@@ -333,7 +333,7 @@ class CreateFlowTool(Tool):
             data["status"] = "active"
             data["activation_fingerprint"] = fingerprint
             document = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-            mutation = self._self_edit_policy.begin(path, "update") if self._self_edit_policy is not None else None
+            mutation = self._self_edit_policy.begin(path, "activate") if self._self_edit_policy is not None else None
             await asyncio.to_thread(_write_flow, flow.directory, path, document)
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)

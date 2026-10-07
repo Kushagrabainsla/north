@@ -17,7 +17,8 @@ async def _ask(port: int, request: bytes) -> bytes:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write(request)
     await writer.drain()
-    reply = await asyncio.wait_for(reader.read(65536), timeout=5)
+    # Read to the end: the proxy closes after replying, and a reply can arrive in more than one piece.
+    reply = await asyncio.wait_for(reader.read(), timeout=5)
     writer.close()
     return reply
 

@@ -4,6 +4,12 @@ The model may propose a mutation, but it cannot decide whether the target is
 editable.  This policy keeps the consent boundary, sandbox definition, ledger,
 inference, configuration, and credentials outside North's self-edit surface.
 All other updates require an authorship record created by this module.
+
+Activation is not an update of the content: it marks a skill or flow you have
+validated and confirmed as live. It is allowed on any existing file outside the
+frozen paths, including one you wrote, and journaled like an update. Without it
+nothing edited on the dashboard could ever be activated again, because the
+dashboard's edit is yours, not North's, and so never in the authorship record.
 """
 
 from __future__ import annotations
@@ -66,6 +72,8 @@ class SelfEditPolicy:
             if not self._owned(resolved):
                 return f"Path `{relative}` was not created by North."
             return None
+        if operation == "activate":
+            return None if resolved.is_file() else f"Path `{relative}` does not exist."
         return f"Unsupported self-edit operation: {operation!r}."
 
     def begin(self, path: Path, operation: str) -> Mutation:
@@ -74,7 +82,7 @@ class SelfEditPolicy:
             raise PermissionError(refusal)
         mutation_id = uuid.uuid4().hex
         before_image: str | None = None
-        if operation == "update":
+        if operation in ("update", "activate"):
             before_image = str(self._snapshots / mutation_id)
             shutil.copy2(path, before_image)
         return Mutation(mutation_id, str(path.resolve()), operation, before_image)
@@ -108,7 +116,11 @@ class SelfEditPolicy:
         return False
 
     def _owned(self, path: Path) -> bool:
-        return any(record.get("path") == str(path.resolve()) for record in self._read_registry())
+        # An activation is journaled but authors nothing: it must not make your file North's to rewrite.
+        return any(
+            record.get("path") == str(path.resolve()) and record.get("operation") != "activate"
+            for record in self._read_registry()
+        )
 
     def _read_registry(self) -> list[dict[str, object]]:
         if not self._registry.exists():

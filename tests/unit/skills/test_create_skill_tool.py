@@ -129,3 +129,79 @@ async def test_creates_skill_with_flow_execution_contract(tmp_path):
     assert execution is not None
     assert execution.agent == "general"
     assert execution.inputs["required"] == ["item"]
+
+
+async def test_a_skill_you_edited_by_hand_can_be_validated_and_activated(tmp_path):
+    """With the self-edit policy on, as the server runs it.
+
+    A skill edited on the dashboard is a candidate North never authored. Activation went through the
+    policy's "update", which refuses files North did not create, so it could never be activated again.
+    """
+    from policies.self_edit import SelfEditPolicy
+
+    builtin, learned = tmp_path / "builtin", tmp_path / "learned"
+    builtin.mkdir()
+    (learned / "deploy-docker").mkdir(parents=True)
+    (learned / "deploy-docker" / "SKILL.md").write_text(
+        "---\nname: deploy-docker\ndescription: Use when deploying a Docker container.\nsource: learned\n"
+        "status: candidate\ndomains:\n- general\n---\n\n1. Build the image.\n2. Run the container.\n\n"
+        "## Done when\nThe service is healthy.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(builtin, learned)
+    policy = SelfEditPolicy(learned, tmp_path / "mutations")
+    tool = CreateSkillTool(registry, learned, skill_selector=_Selector(), self_edit_policy=policy)
+
+    validated = await tool.run(
+        ToolInput(
+            params={
+                "action": "validate",
+                "name": "deploy-docker",
+                "positive_prompts": ["Deploy this Docker service"],
+                "negative_prompts": ["Review this Python function"],
+            }
+        )
+    )
+    activated = await tool.run(
+        ToolInput(params={"action": "activate", "name": "deploy-docker", "user_confirmed": True})
+    )
+    rewritten = await tool.run(
+        ToolInput(
+            params={
+                "action": "update",
+                "name": "deploy-docker",
+                "description": "Use when deploying anything.",
+                "instructions": "Do whatever.\n\n## Done when\nDone.",
+            }
+        )
+    )
+
+    assert validated.success and activated.success, activated.error
+    assert registry.get("deploy-docker").status == "active"
+    assert not rewritten.success, "North still may not rewrite what you wrote"
+
+
+async def test_no_card_for_a_call_that_will_be_refused_anyway(tmp_path):
+    """Four refused updates to a skill North did not write cost the user four approvals."""
+    from policies.self_edit import SelfEditPolicy
+
+    builtin, learned = tmp_path / "builtin", tmp_path / "learned"
+    builtin.mkdir()
+    (learned / "mine").mkdir(parents=True)
+    (learned / "mine" / "SKILL.md").write_text(
+        "---\nname: mine\ndescription: Use when doing my thing.\nsource: learned\nstatus: candidate\n"
+        "domains:\n- general\n---\n\nDo it.\n\n## Done when\nDone.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(builtin, learned)
+    tool = CreateSkillTool(
+        registry, learned, skill_selector=_Selector(), self_edit_policy=SelfEditPolicy(learned, tmp_path / "m")
+    )
+    update = {"action": "update", "name": "mine", "description": "Use when x.", "instructions": "y"}
+
+    assert await tool.describe(ToolInput(params=update)) is None
+    assert await tool.describe(ToolInput(params={"action": "activate", "name": "mine", "user_confirmed": True})) is None
+    assert await tool.describe(ToolInput(params={"action": "activate", "name": "mine"})) is None
+    assert not (await tool.execute(ToolInput(params=update))).success
+    new = {"action": "create", "name": "fresh", "description": "Use when fresh.", "instructions": "z"}
+    assert await tool.describe(ToolInput(params=new)) is not None, "a write that can happen is still asked about"

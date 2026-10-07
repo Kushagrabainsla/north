@@ -131,6 +131,36 @@ class CreateSkillTool(Tool):
             "activate",
         }
 
+    async def describe(self, input: ToolInput):
+        """No card for a call this tool will refuse anyway: asking first only wastes your approval.
+
+        A write the self-edit policy forbids, or an activation that was never validated or confirmed, is
+        refused by `run` without changing anything. Asking you about it first produced four cards for four
+        refused updates to a skill North had not written.
+        """
+        if self._will_refuse(input.params):
+            return None
+        return await super().describe(input)
+
+    def _will_refuse(self, params: dict[str, Any]) -> bool:
+        action = str(params.get("action") or "create").strip().lower()
+        name = _slug(str(params.get("name") or "").strip())
+        if not name:
+            return False
+        path = self._learned_dir / name / SKILL_FILENAME
+        if action == "activate":
+            if params.get("user_confirmed") is not True:
+                return True
+            try:
+                return self._validated.get(name) != _skill_fingerprint(
+                    self._registry.get(name).directory / SKILL_FILENAME
+                )
+            except Exception:
+                return True
+        if action in {"create", "update"} and self._self_edit_policy is not None:
+            return self._self_edit_policy.authorize(path, "update" if path.exists() else "create") is not None
+        return False
+
     async def run(self, input: ToolInput) -> ToolOutput:
         action = str(input.params.get("action") or "create").strip().lower()
         if action == "list":
@@ -338,7 +368,7 @@ class CreateSkillTool(Tool):
         frontmatter["status"] = "active"
         document = f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n\n{body.strip()}\n"
         try:
-            mutation = self._self_edit_policy.begin(path, "update") if self._self_edit_policy is not None else None
+            mutation = self._self_edit_policy.begin(path, "activate") if self._self_edit_policy is not None else None
             await asyncio.to_thread(_write_skill_file, skill.directory, path, document)
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
