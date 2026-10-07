@@ -10,7 +10,7 @@ description: "Use when preparing a finished change set for review or release - c
 - You are finalizing work for a PR or a release and need clean history + a version decision.
 
 ## Do NOT use for
-- Mid-implementation work, or the mechanics of opening a PR (north's deploy flow handles that).
+- Mid-implementation work.
 
 ## Procedure
 1. Group the work into focused commits with imperative messages that say what and why.

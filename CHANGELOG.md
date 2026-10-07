@@ -3,7 +3,14 @@
 All notable changes to north are documented here.
 
 ## [Unreleased]
+### Added
+- **An approved shell command reaches only allowed hosts** (`tools/specialized/_egress.py`, `tools/specialized/_seatbelt.py`, `tools/specialized/bash.py`). Under the OS sandbox an approved command used to have the whole network. Now the kernel lets it reach only loopback, and north's egress proxy on loopback is the one way out: it checks the host against an allowlist (package registries and code hosts by default, `sandbox_allowed_domains` to change it), resolves the name once, refuses non-public addresses, and connects to the address it checked, so DNS rebinding cannot redirect it. Only ports 80 and 443. pip, git, npm and curl work unchanged; a program that ignores the proxy cannot connect at all. Loopback stays open, so a project's own tests that start local servers still run.
+- **A nightly smoke run** (`scripts/smoke.sh`, `scripts/install_smoke_schedule.sh`). Lint, the whole suite and the live Claude and Codex tests, every night at 03:30 (on wake if the Mac was asleep), with a dated report in `~/.north/smoke` and a macOS notification when anything fails.
+
 ### Fixed
+- **A correct change is no longer sent back over style** (`resources/prompts/coding_agent_review.md`). The reviewer was never told what CONCERNS means, so a correct change drew it for missing type hints or a missing test, and the author was sent back to "fix" it. CONCERNS is now for a change that is wrong (task not done, a bug, a breakage, unsafe); style, naming, conventions and missing tests come back as notes under OK. Found by the first nightly smoke run.
+- **The live test of writes outside the copy tests north again** (`tests/live/test_claude_live.py`). Claude now declines a task that reads as an attack before calling any tool, so the test's traversal-path prompt never reached north's gate. It now asks for an ordinary backup outside the repo, which does reach the gate and is refused; path spellings stay covered by the gate's unit tests.
+- The git-workflow skill no longer sends the model to a "deploy flow" for opening a PR; north has none.
 - **A second coding round now starts from the first round's change** (`orchestrator/worktree.py`). An edit copy used to start from the last commit, so when one task needed more than one round (a fix, then a follow-up), the second agent could not see the first one's applied change, asked where it was, and rewrote or conflicted with it, leaving extra branches. The copy now starts from your working tree as it is: uncommitted edits and new files are carried in (not ignored files, not anything inside `.git`, nothing over 5 MB), and only what the agent changes after that is measured, tested and applied back. Found by running a real safe-mode task end to end.
 - The delegating skill no longer loops: a final review's style, naming or extra-test notes go in the report instead of another edit round; a real bug gets one.
 

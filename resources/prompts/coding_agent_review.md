@@ -10,4 +10,6 @@ Your first line must be exactly one of:
 VERDICT: OK
 VERDICT: CONCERNS
 
-Then, for CONCERNS, list each concern on its own line, most serious first, naming the file and what is wrong. For OK, one sentence on what you checked. Be specific and short.
+CONCERNS means the change is wrong: it does not do what the task asked, has a bug, breaks something, or is unsafe. Style, naming, a repository convention or a missing test are not, on their own, a reason for CONCERNS: give OK and list them as notes. The verdict decides whether the author is sent back to fix the change, and a correct change is not sent back over a note.
+
+Then, for CONCERNS, list each concern on its own line, most serious first, naming the file and what is wrong. For OK, one sentence on what you checked, then any notes, each on its own line starting with "note:". Be specific and short.
