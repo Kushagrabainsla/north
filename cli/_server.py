@@ -213,7 +213,13 @@ def _start_server_process(
 
     settings.north_home.mkdir(parents=True, exist_ok=True)
     (settings.north_home / "workspace.txt").write_text(resolved_workspace, encoding="utf-8")
-    server_env = {**os.environ, "NORTH_NORTH_WORKSPACE": resolved_workspace}
+    server_env = {
+        **os.environ,
+        "NORTH_NORTH_WORKSPACE": resolved_workspace,
+        # Where a coding agent's hook reaches this server. It was always port 8000,
+        # so on any other port every action the agent took was refused.
+        "NORTH_NORTH_ORCHESTRATOR_URL": f"http://127.0.0.1:{port}",
+    }
     # The child gets its own dup of the fd, so closing the parent's copy on the
     # way out of the with-block leaves the server's logging intact.
     with open(settings.north_home / "north.log", "a", encoding="utf-8") as log_file:

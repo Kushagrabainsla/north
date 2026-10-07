@@ -251,3 +251,32 @@ async def test_a_plain_card_still_announces_no_edits() -> None:
 
     _, _, payload = orch._stream_manager.emit.call_args[0]
     assert payload["edited_fields"] == []
+
+
+# ── A Telegram button sends the option it shows, not a decision ─────────────
+
+
+@pytest.mark.parametrize(
+    ("reply", "status", "option"),
+    [("Approve", "approved", "Approve"), ("Reject", "rejected", "Reject"), ("approve", "approved", "Approve")],
+)
+async def test_an_option_label_is_read_as_the_decision_it_means(reply: str, status: str, option: str) -> None:
+    """A tap on Telegram's Approve button was stored as status "Approve" - which is not "approved", so a yes."""
+    store = ApprovalStore()
+    orch = _orchestrator(store)
+    _pending_card(store)
+
+    await orch.respond_approval(card_id="card-1", decision=reply, chosen_option="")
+
+    assert store.get("card-1").status == status
+    assert store.get("card-1").chosen_option == option
+
+
+async def test_a_reply_that_is_neither_a_decision_nor_an_option_is_refused() -> None:
+    store = ApprovalStore()
+    orch = _orchestrator(store)
+    _pending_card(store)
+
+    with pytest.raises(ValueError):
+        await orch.respond_approval(card_id="card-1", decision="Maybe", chosen_option="")
+    assert store.get("card-1").status == "pending"

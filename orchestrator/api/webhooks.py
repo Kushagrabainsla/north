@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config.security import verify_secret
 from ledger.models import LedgerSource
 from orchestrator.api.deps import _get_orchestrator
+from orchestrator.api_context import bind_request_services
 from orchestrator.models import TaskRequest
 
 #
@@ -20,6 +21,9 @@ webhook_router = APIRouter(
     tags=["webhooks"],
     # No verify_request_secret dependency - we validate manually below to give
     # a clear 401 rather than the generic 403 from the cookie-based mechanism.
+    # The services are still bound: without it every submission was a 500, and
+    # Telegram, which submits through here, silently stopped working.
+    dependencies=[Depends(bind_request_services)],
 )
 
 

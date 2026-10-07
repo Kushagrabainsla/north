@@ -519,6 +519,7 @@ class Orchestrator:
             raise LookupError(f"Unknown approval card {card_id!r}.")
         if card.status != "pending":
             raise ValueError(f"Approval card {card_id!r} is already resolved ({card.status}).")
+        decision, chosen_option = _decision_from_reply(card, decision, chosen_option)
 
         if not self._approval_store.resolve(
             card_id, decision, chosen_option=chosen_option, values=values, decided_by=DecidedBy.YOU
@@ -1785,3 +1786,25 @@ class Orchestrator:
                 title=f"{agent.name.capitalize()} - Done",
                 message=result.summary,
             )
+
+
+_DECISIONS = frozenset(ApprovalDecision)
+_NO_WORDS = frozenset({"reject", "deny", "no", "decline", "cancel", "skip", "keep on branch"})
+
+
+def _decision_from_reply(card: Card, decision: str, chosen_option: str) -> tuple[str, str]:
+    """The decision a reply means, as one of `ApprovalDecision`, and the option it chose.
+
+    The web UI sends a decision ("approved") and the option. A Telegram button sends only the option it
+    shows ("Approve"), and stored as the decision that read as "not approved": a tap on Approve was a no.
+    An option of the card is read here; anything else is refused rather than stored.
+    """
+    if decision in _DECISIONS:
+        return decision, chosen_option
+    option = next((o for o in card.options if o.lower() == decision.strip().lower()), None)
+    if option is None:
+        raise ValueError(f"{decision!r} is not a decision or an option of card {card.id!r}.")
+    if card.type is CardType.QUESTION:
+        return ApprovalDecision.ANSWERED, option
+    no = option.lower() in _NO_WORDS
+    return (ApprovalDecision.REJECTED if no else ApprovalDecision.APPROVED), option

@@ -325,3 +325,39 @@ async def test_decisions_shows_who_decided_why_and_the_memory_used(monkeypatch: 
     assert "Deploy" in reply and "Waiting" not in reply
     assert "by the memory decider" in reply and "it is Friday" in reply
     assert "Fact: no deploys on Fridays" in reply
+
+
+@pytest.mark.asyncio
+async def test_a_task_north_could_not_start_is_reported_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 500 from the server used to raise out of the message handler, and the user heard nothing."""
+    import httpx
+
+    monkeypatch.setattr("gateways.telegram.settings.telegram_allowed_chat_ids", "42")
+    gw = TelegramGateway()
+    gw._http = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+    gw._send_chat_action = AsyncMock()  # type: ignore[method-assign]
+    gw._send_message = AsyncMock()  # type: ignore[method-assign]
+
+    await gw._process_message({"chat": {"id": 42}, "from": {"id": 42}, "message_id": 1, "text": "do a thing"})
+
+    [call] = gw._send_message.await_args_list
+    assert "could not start" in call.args[1]
+
+
+@pytest.mark.asyncio
+async def test_the_answer_reaches_the_chat_however_long_the_task_takes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gateway gave up after 90 polls; a coding task waiting on a card to land never finished by then."""
+    gw = TelegramGateway()
+    running = [[{"action": "agent_started", "status": "running"}]] * 300
+    done = [[{"action": "task_completed", "output": "landed"}]]
+    gw._ledger_entries = AsyncMock(side_effect=running + done)  # type: ignore[method-assign]
+    gaps: list[float] = []
+
+    async def no_wait(seconds: float) -> None:
+        gaps.append(seconds)
+
+    monkeypatch.setattr("gateways.telegram.asyncio.sleep", no_wait)
+
+    assert await gw._get_task_result("t-long") == "landed"
+    assert gw._ledger_entries.await_count == 301
+    assert gaps[0] == 1.0 and max(gaps) == 15.0, "it checks less often as the task goes on"

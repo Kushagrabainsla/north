@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -33,8 +34,14 @@ from gateways.telegram_api import (
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 2.0  # seconds between long-poll requests
-_TASK_POLL_INTERVAL = 1.0  # seconds between checking task status
-_TASK_POLL_MAX_ATTEMPTS = 90  # 90 × 1s = 90s max wait for task completion
+# How the gateway waits for a task's answer. It used to give up after 90 s, which a
+# coding task (an agent's edits, north's test run, a card to land it) never beat, so
+# the answer never reached the chat. A task can wait on a card as long as the user
+# takes, so the wait follows the task, checking less often as it goes on.
+_TASK_POLL_INTERVAL = 1.0  # first gap between checks, in seconds
+_TASK_POLL_MAX_INTERVAL = 15.0  # the gap grows to this
+_TASK_POLL_BACKOFF = 1.5
+_TASK_WAIT_LIMIT_S = 24 * 3600  # past a day, say so and stop holding the chat
 _MAX_RETRIES = 3
 
 _MAX_LISTED_TASKS = 5
@@ -319,14 +326,17 @@ class TelegramGateway:
             )
             resp.raise_for_status()
             return resp.json()
-        except httpx.RequestError as exc:
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             logger.error("Failed to submit task to north: %s", exc)
             return None
 
     async def _get_task_result(self, task_id: str, chat_id: int | None = None) -> str | None:
         """Poll the ledger for the completed agent's output, sending interactive approval cards if needed."""
         prompted_cards: set[str] = set()
-        for poll in range(_TASK_POLL_MAX_ATTEMPTS):
+        deadline = time.monotonic() + _TASK_WAIT_LIMIT_S
+        interval = _TASK_POLL_INTERVAL
+        poll = 0
+        while time.monotonic() < deadline:
             try:
                 entries = await self._ledger_entries(task_id)
             except _TaskNotFound:
@@ -342,15 +352,12 @@ class TelegramGateway:
             output = _finished_output(entries, task_id, poll)
             if output is not None:
                 return output
-            await asyncio.sleep(_TASK_POLL_INTERVAL)
+            await asyncio.sleep(interval)
+            interval = min(interval * _TASK_POLL_BACKOFF, _TASK_POLL_MAX_INTERVAL)
+            poll += 1
 
-        logger.error(
-            "Task %s timed out after %d polls (%ds)",
-            task_id,
-            _TASK_POLL_MAX_ATTEMPTS,
-            _TASK_POLL_MAX_ATTEMPTS,
-        )
-        return "Response timed out — check north for details."
+        logger.error("Task %s still had no answer after %ds", task_id, _TASK_WAIT_LIMIT_S)
+        return f"Task `{task_id}` is still running after a day. Its result will be in north when it finishes."
 
     async def _ledger_entries(self, task_id: str) -> list[dict]:
         """This task's ledger entries; empty when the orchestrator cannot be reached."""
@@ -603,7 +610,7 @@ class TelegramGateway:
 
         result = await self._submit_task(text)
         if result is None:
-            await self._reply(chat, "❌ Failed to connect to north.")
+            await self._reply(chat, "❌ north could not start this task. Check `north status` or north.log.")
             return
         task_id = result.get("task_id", "")
         if not task_id:
