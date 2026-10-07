@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config.security import verify_secret
@@ -13,7 +15,9 @@ from orchestrator.models import TaskRequest
 #
 # External services (GitHub, calendar, email) POST here to trigger agent tasks.
 # Authentication: pass the shared north secret in the X-Webhook-Secret header.
-# Body (JSON): { "prompt": "...", "context": "..." }
+# Body (JSON): { "prompt": "...", "context": "...", "workspace": "..." }
+# `workspace` is optional: the folder the task works in, checked here like the
+# dashboard's picker; without it the task uses the server's default.
 # The source name becomes a prompt prefix so the classifier can route correctly.
 
 webhook_router = APIRouter(
@@ -55,8 +59,25 @@ async def receive_webhook(source: str, request: Request) -> dict:
         prompt=f"[webhook:{source}] {prompt}",
         source=LedgerSource.WEBHOOK,
         context=context,
+        workspace=_workspace(str(body.get("workspace") or "")),
     )
 
     orch = _get_orchestrator()
     result = await orch.submit_task(task_req)
     return {"task_id": result.task_id, "status": result.status, "source": source}
+
+
+def _workspace(value: str) -> str:
+    """The folder a submitted task works in, checked as the dashboard's picker checks it.
+
+    Protected paths inside it (~/.ssh, ~/.north, ...) stay closed: the tools refuse them whatever the workspace.
+    """
+    if not value.strip():
+        return ""
+    try:
+        path = Path(value).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=422, detail=f"Workspace {value!r} does not exist.") from None
+    if not path.is_dir():
+        raise HTTPException(status_code=422, detail=f"Workspace {value!r} is not a folder.")
+    return str(path)

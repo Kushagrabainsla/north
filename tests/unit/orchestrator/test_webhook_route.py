@@ -55,3 +55,26 @@ async def test_a_submission_without_the_secret_is_refused_and_starts_nothing(cli
 
     assert response.status_code == 401
     assert orchestrator.submitted == []
+
+
+async def test_a_submission_can_name_its_workspace(client, orchestrator, tmp_path) -> None:
+    response = await client.post(
+        "/orchestrator/webhooks/telegram",
+        json={"prompt": "hello", "workspace": str(tmp_path)},
+        headers={"X-Webhook-Secret": load_secret()},
+    )
+
+    assert response.status_code == 202
+    assert orchestrator.submitted[0].workspace == str(tmp_path.resolve())
+
+
+@pytest.mark.parametrize("bad", ["/no/such/folder", __file__])
+async def test_a_workspace_that_is_not_a_folder_is_refused_and_starts_nothing(client, orchestrator, bad) -> None:
+    response = await client.post(
+        "/orchestrator/webhooks/telegram",
+        json={"prompt": "hello", "workspace": bad},
+        headers={"X-Webhook-Secret": load_secret()},
+    )
+
+    assert response.status_code == 422
+    assert orchestrator.submitted == []

@@ -361,3 +361,63 @@ async def test_the_answer_reaches_the_chat_however_long_the_task_takes(monkeypat
     assert await gw._get_task_result("t-long") == "landed"
     assert gw._ledger_entries.await_count == 301
     assert gaps[0] == 1.0 and max(gaps) == 15.0, "it checks less often as the task goes on"
+
+
+# ── /workspace: the folder tasks from Telegram work in ───────────────────────
+
+
+def _chat_gateway(monkeypatch: pytest.MonkeyPatch) -> TelegramGateway:
+    monkeypatch.setattr("gateways.telegram.settings.telegram_allowed_chat_ids", "42")
+    gw = TelegramGateway()
+    gw._send_chat_action = AsyncMock()  # type: ignore[method-assign]
+    gw._send_message = AsyncMock()  # type: ignore[method-assign]
+    return gw
+
+
+async def _say(gw: TelegramGateway, text: str) -> str:
+    gw._send_message.reset_mock()
+    await gw._process_message({"chat": {"id": 42}, "from": {"id": 42}, "message_id": 1, "text": text})
+    return gw._send_message.await_args_list[-1].args[1]
+
+
+@pytest.mark.asyncio
+async def test_workspace_switches_the_folder_and_the_next_task_carries_it(monkeypatch, tmp_path) -> None:
+    import httpx
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    gw = _chat_gateway(monkeypatch)
+    sent: list[dict] = []
+
+    def server(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/webhooks/telegram"):
+            sent.append(__import__("json").loads(request.content))
+            return httpx.Response(202, json={"task_id": "t1", "status": "queued"})
+        return httpx.Response(200, json=[{"action": "task_completed", "output": "done"}])
+
+    gw._http = httpx.AsyncClient(transport=httpx.MockTransport(server))
+
+    reply = await _say(gw, f"/workspace {repo}")
+    assert str(repo.resolve()) in reply and "not a git" not in reply
+    await _say(gw, "fix the bug")
+
+    assert sent == [{"prompt": "fix the bug", "workspace": str(repo.resolve())}]
+
+
+@pytest.mark.asyncio
+async def test_the_choice_survives_a_restart_and_reset_returns_to_the_default(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("gateways.telegram.settings.north_workspace", "/srv/default")
+    await _say(_chat_gateway(monkeypatch), f"/workspace {tmp_path}")
+
+    restarted = _chat_gateway(monkeypatch)
+    assert str(tmp_path.resolve()) in await _say(restarted, "/workspace")
+    assert "/srv/default" in await _say(restarted, "/workspace reset")
+    assert "/srv/default" in await _say(restarted, "/workspace")
+
+
+@pytest.mark.asyncio
+async def test_a_folder_that_does_not_exist_is_refused_and_a_plain_folder_is_flagged(monkeypatch, tmp_path) -> None:
+    gw = _chat_gateway(monkeypatch)
+
+    assert "does not exist" in await _say(gw, f"/workspace {tmp_path / 'nope'}")
+    assert "not a git repository" in await _say(gw, f"/workspace {tmp_path}")

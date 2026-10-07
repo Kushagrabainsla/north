@@ -34,7 +34,9 @@ Every provider can be added or changed later on the dashboard under **System →
 
 Only the ids on that list can use the bot. With no list, the bot does not start.
 
-In the chat, send any message or voice note to run a task. Commands: `/status`, `/cancel`, `/autonomy [mode]`, `/decisions`, `/limits`, `/help`.
+In the chat, send any message or voice note to run a task. Commands: `/status`, `/cancel`, `/autonomy [mode]`, `/decisions`, `/limits`, `/workspace [path|reset]`, `/help`.
+
+Tasks from Telegram work in the folder `/workspace` chose, or the server's default if none was chosen. A coding task needs that folder to be a git repository: `/workspace ~/code/my-repo`, then ask for the change.
 
 ## Commands
 

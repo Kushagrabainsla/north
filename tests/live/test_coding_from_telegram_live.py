@@ -1,9 +1,9 @@
 """A coding task sent from Telegram, end to end, against the real server and the real coding agent.
 
-The path a user actually takes: a message in Telegram reaches the gateway, the gateway submits it to the
-running server, the planner routes it to the general agent, which hands it to the installed coding agent in
-edit mode; north runs the project's own tests on the change and asks, on Telegram, whether to land it. A tap
-on Approve and the change is in the working tree.
+The path a user actually takes: north is started outside the repository, `/workspace` in the chat picks it, a
+message reaches the gateway, the gateway submits it to the running server, the planner routes it to the general
+agent, which hands it to the installed coding agent in edit mode; north runs the project's own tests on the
+change and asks, on Telegram, whether to land it. A tap on Approve and the change is in the working tree.
 
 Only the two ends are stand-ins. Telegram's API is a recorder with a user who taps Approve on every card, and
 north's own model is scripted (route to the general agent, call `coding_agent`, report what it returned), so
@@ -125,7 +125,10 @@ async def server(monkeypatch, project: Path, request):
     from config.settings import settings
 
     monkeypatch.setattr(settings, "north_env", "test")
-    monkeypatch.setattr(settings, "north_workspace", str(project))
+    # Started the way the user starts it: somewhere that is not the repository. The chat picks it with /workspace.
+    home = project.parent / "home"
+    home.mkdir()
+    monkeypatch.setattr(settings, "north_workspace", str(home))
     monkeypatch.setattr(settings, "telegram_bot_token", "test-token")
     monkeypatch.setattr(settings, "telegram_allowed_chat_ids", str(CHAT))
     scripted = ScriptedNorth(request.param)
@@ -185,6 +188,10 @@ def _git(project: Path, *args: str) -> str:
 )
 async def test_a_coding_task_from_telegram_lands_after_one_tap(server: RecordedTelegram, project: Path) -> None:
     telegram = server
+    await telegram._process_message(
+        {"chat": {"id": CHAT}, "from": {"id": CHAT}, "message_id": 0, "text": f"/workspace {project}"}
+    )
+    assert f"now work in `{project.resolve()}`" in telegram.sent[-1]["text"], telegram.sent[-1]["text"]
     try:
         await asyncio.wait_for(
             telegram._process_message({"chat": {"id": CHAT}, "from": {"id": CHAT}, "message_id": 1, "text": TASK}),

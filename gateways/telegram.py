@@ -15,6 +15,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
@@ -316,12 +317,15 @@ class TelegramGateway:
                 await asyncio.wait_for(stop_event.wait(), timeout=4.0)
 
     async def _submit_task(self, text: str) -> dict | None:
-        """Submit a prompt to north via the webhook endpoint."""
+        """Submit a prompt to north via the webhook endpoint, in the folder `/workspace` chose."""
         url = f"{self._orchestrator_base}/orchestrator/webhooks/telegram"
+        body = {"prompt": text}
+        if workspace := _chosen_workspace():
+            body["workspace"] = workspace
         try:
             resp = await self._http.post(
                 url,
-                json={"prompt": text},
+                json=body,
                 headers=_headers(),
             )
             resp.raise_for_status()
@@ -517,8 +521,33 @@ class TelegramGateway:
             f"  • `/autonomy` — View or set approval mode (`/autonomy {'|'.join(ApprovalMode)}`)\n"
             "  • `/decisions` — Recent decisions: who decided, why, and the memory it used\n"
             "  • `/limits` — Show provider/model rate-limit & cooldown status\n"
+            "  • `/workspace` — The folder tasks work in (`/workspace <path>` to switch, `/workspace reset`)\n"
             "  • `/help` — Show this command reference",
         )
+
+    async def _command_workspace(self, chat: _Reply, args: list[str]) -> None:
+        """Show or choose the folder tasks from this chat work in, as the dashboard's picker does for a chat."""
+        if not args:
+            chosen = _chosen_workspace()
+            where = f"`{chosen}`" if chosen else f"the server's default, `{settings.north_workspace or 'none'}`"
+            await self._reply(chat, f"📁 Tasks from Telegram work in {where}.\nSwitch with `/workspace <path>`.")
+            return
+        if args == ["reset"]:
+            _workspace_file().unlink(missing_ok=True)
+            await self._reply(chat, f"📁 Back to the server's default, `{settings.north_workspace or 'none'}`.")
+            return
+        raw = " ".join(args)
+        try:
+            path = Path(raw).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError):
+            await self._reply(chat, f"❌ `{raw}` does not exist.")
+            return
+        if not path.is_dir():
+            await self._reply(chat, f"❌ `{raw}` is not a folder.")
+            return
+        _workspace_file().write_text(str(path), encoding="utf-8")
+        note = "" if _in_git_repo(path) else "\nIt is not a git repository, so coding tasks cannot run there."
+        await self._reply(chat, f"📁 Tasks from Telegram now work in `{path}`.{note}")
 
     async def _command_limits(self, chat: _Reply, args: list[str]) -> None:
         await self._send_limits(chat.chat_id, reply_to=chat.message_id)
@@ -693,6 +722,23 @@ class TelegramGateway:
 
 # Every slash command the gateway answers. Anything else is left to north itself
 # to read as an ordinary message.
+def _workspace_file() -> Path:
+    """Where `/workspace` keeps its choice, so a restart does not lose it."""
+    return settings.north_home / "telegram_workspace.txt"
+
+
+def _chosen_workspace() -> str:
+    """The folder `/workspace` chose, or "" for the server's default."""
+    try:
+        return _workspace_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _in_git_repo(path: Path) -> bool:
+    return any((folder / ".git").exists() for folder in (path, *path.parents))
+
+
 _COMMAND_HANDLERS: dict[str, Callable[[TelegramGateway, _Reply, list[str]], Awaitable[None]]] = {
     "/start": TelegramGateway._command_help,
     "/help": TelegramGateway._command_help,
@@ -702,4 +748,5 @@ _COMMAND_HANDLERS: dict[str, Callable[[TelegramGateway, _Reply, list[str]], Awai
     "/stop": TelegramGateway._command_cancel,
     "/autonomy": TelegramGateway._command_autonomy,
     "/decisions": TelegramGateway._command_decisions,
+    "/workspace": TelegramGateway._command_workspace,
 }
