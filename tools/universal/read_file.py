@@ -12,6 +12,7 @@ from typing import Any
 from tools._path import resolve_path
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from utils.documents import pdf_text
 
 _MAX_LINES = 10_000
 
@@ -25,8 +26,8 @@ class ReadFileTool(Tool):
         "Use it to inspect code, config, or documentation before editing, or whenever "
         "you need the exact current content. For a large file, pass start_line and/or "
         "end_line (1-based, inclusive) to read just a slice instead of the whole thing. "
-        "Reads UTF-8 text only - binary files, missing files, and paths outside the "
-        "workspace return a clear error rather than empty content."
+        "Reads UTF-8 text, and the text of a PDF (a resume, a paper); other binary files, "
+        "missing files, and paths outside the workspace return a clear error rather than empty content."
     )
     parameters_schema = {
         "type": "object",
@@ -86,10 +87,18 @@ def _read_sync(path: Path, start_line: int | None, end_line: int | None) -> Tool
         return ToolOutput(success=False, error=f"File not found: {path}", failure_kind="not_found")
     if not path.is_file():
         return ToolOutput(success=False, error=f"Not a file: {path}")
-    try:
-        content = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return ToolOutput(success=False, error=f"Binary file cannot be read as text: {path}")
+    if path.suffix.lower() == ".pdf":
+        try:
+            content = pdf_text(path.read_bytes())
+        except Exception as exc:
+            return ToolOutput(success=False, error=f"Could not read the PDF {path}: {exc}")
+        if not content:
+            return ToolOutput(success=False, error=f"The PDF {path} has no text layer (a scan?), so it cannot be read.")
+    else:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return ToolOutput(success=False, error=f"Binary file cannot be read as text: {path}")
 
     lines = content.splitlines()
     total = len(lines)

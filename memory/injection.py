@@ -11,6 +11,7 @@ from ledger.base import LedgerWriter
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
 from memory.base import ContextStore
 from memory.models import ContextDocument
+from utils.documents import docx_text, pdf_text
 from utils.ids import generate_id
 from utils.prompts import load_prompt
 from utils.tasks import spawn
@@ -59,9 +60,9 @@ class ContextInjector:
         """Ingest a file. PDF and docx are parsed; everything else decoded as UTF-8."""
         lower = filename.lower()
         if lower.endswith(".pdf"):
-            text = await asyncio.to_thread(_extract_pdf, content)
+            text = await asyncio.to_thread(pdf_text, content)
         elif lower.endswith(".docx"):
-            text = await asyncio.to_thread(_extract_docx, content)
+            text = await asyncio.to_thread(docx_text, content)
         else:
             text = content.decode("utf-8", errors="replace")
         return await self._ingest(text, source_hint=f"file:{filename}", task_id=task_id)
@@ -130,23 +131,3 @@ class ContextInjector:
             return ContextDocument.USER, text[:_MAX_CONTENT_CHARS]
         except (ValueError, KeyError, TypeError):
             return ContextDocument.USER, text[:_MAX_CONTENT_CHARS]
-
-
-def _extract_pdf(content: bytes) -> str:
-    import io
-
-    from pypdf import PdfReader  # type: ignore[import-untyped]
-
-    reader = PdfReader(io.BytesIO(content))
-    pages = [page.extract_text() or "" for page in reader.pages]
-    return "\n".join(pages).strip()
-
-
-def _extract_docx(content: bytes) -> str:
-    import io
-
-    from docx import Document  # type: ignore[import-untyped]
-
-    doc = Document(io.BytesIO(content))
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    return "\n".join(paragraphs).strip()

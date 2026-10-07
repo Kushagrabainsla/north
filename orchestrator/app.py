@@ -46,6 +46,7 @@ from jobs.exceptions import JobCancelled, JobNeedsAttention
 from jobs.models import Job
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
 from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from mcp.manager import McpManager
 from memory.consolidator import EpisodeConsolidator
 from memory.embeddings import EmbeddingIndex
 from memory.extraction import ExtractionPipeline
@@ -827,6 +828,21 @@ def _launch_background_tasks(
     return tasks
 
 
+async def _start_mcp_servers(tool_registry: ToolRegistry) -> McpManager:
+    """Start the MCP servers the user configured and offer their tools like any other.
+
+    Only `~/.north/mcp.json`, the user's own file: an `mcp.json` inside a workspace (a cloned repository)
+    is not loaded, because starting a server runs whatever command that file names. The manager existed
+    for months but nothing started it, so a configured server was never loaded. A server that fails to
+    start is logged and skipped; it does not stop north.
+    """
+    manager = McpManager(workspace_root=None)
+    await manager.start_all()
+    if registered := manager.register_tools(tool_registry):
+        logger.info("Registered %d MCP tool(s)", registered)
+    return manager
+
+
 async def _shutdown(
     deps,
     callback_server: uvicorn.Server,
@@ -842,6 +858,8 @@ async def _shutdown(
     await drain()
     if tool_registry is not None:
         await tool_registry.aclose()
+    if (mcp_manager := getattr(deps, "mcp_manager", None)) is not None:
+        await mcp_manager.close_all()
     await deps.cost_tracker.aclose()
 
 
@@ -948,6 +966,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     tool_registry.register(create_skill_tool)
     tool_registry.register(UseFlowTool(flow_registry))
+    _step("starting MCP servers")
+    deps.mcp_manager = await _start_mcp_servers(tool_registry)
     flow_store = FlowRunStore(settings.north_home / "flow_runs.db")
     if cut_off := flow_store.pause_interrupted():
         logger.info("Paused %d flow run(s) cut off by the last shutdown; they can be resumed", cut_off)

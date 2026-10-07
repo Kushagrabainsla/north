@@ -90,6 +90,28 @@ async def test_the_connection_goes_to_the_address_that_was_checked(proxy, monkey
 
 
 @pytest.mark.asyncio
+async def test_when_the_first_checked_address_is_unreachable_the_next_is_tried(proxy, monkeypatch) -> None:
+    """A name answering IPv6 first, on a network with no IPv6 route, could not be reached at all."""
+
+    async def two(self, host, port, **kw):
+        return [(30, 1, 6, "", ("2606:2800:220:1::1", port, 0, 0)), (2, 1, 6, "", ("93.184.216.34", port))]
+
+    tried: list[str] = []
+
+    async def fake_open(host, port, **kw):
+        tried.append(host)
+        if ":" in host:
+            raise OSError("no route to host")
+        return "reader", "writer"
+
+    monkeypatch.setattr(asyncio.get_running_loop().__class__, "getaddrinfo", two)
+    monkeypatch.setattr(_egress.asyncio, "open_connection", fake_open)
+
+    assert await proxy._connect("example.test", 443) == ("reader", "writer")
+    assert tried == ["2606:2800:220:1::1", "93.184.216.34"]
+
+
+@pytest.mark.asyncio
 async def test_an_allowed_host_is_tunnelled_and_proxied(monkeypatch) -> None:
     async def upstream(reader, writer):
         data = await reader.read(1024)

@@ -82,10 +82,19 @@ class EgressProxy:
         if not self.allows(host):
             raise EgressDenied(f"{host} is not on north's allowed list")
         infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
+        addresses = list(dict.fromkeys(ipaddress.ip_address(info[4][0]) for info in infos))
         if not addresses or not all(is_public_ip(ip) for ip in addresses):
             raise EgressDenied(f"{host} resolves to a non-public address")
-        return await asyncio.open_connection(str(addresses[0]), port)
+        # Every address was checked above; try them in order. Only the first was tried before, so a
+        # name answering IPv6 first on a network without IPv6 could not be reached at all.
+        last: OSError | None = None
+        for address in addresses:
+            try:
+                return await asyncio.open_connection(str(address), port)
+            except OSError as exc:
+                last = exc
+        assert last is not None
+        raise last
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         upstream: asyncio.StreamWriter | None = None
