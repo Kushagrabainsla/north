@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -421,3 +422,48 @@ async def test_a_folder_that_does_not_exist_is_refused_and_a_plain_folder_is_fla
 
     assert "does not exist" in await _say(gw, f"/workspace {tmp_path / 'nope'}")
     assert "not a git repository" in await _say(gw, f"/workspace {tmp_path}")
+
+
+# ── A restart does not leave a chat waiting forever ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_chat_still_hears_how_its_task_ended_after_north_restarts(monkeypatch) -> None:
+    """The wait lived in memory, so a task cut off by a restart was never answered in the chat."""
+    import httpx
+
+    task_state = {"entries": [{"action": "agent_started", "status": "running"}]}
+
+    def server(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/webhooks/telegram"):
+            return httpx.Response(202, json={"task_id": "t-cut", "status": "queued"})
+        return httpx.Response(200, json=task_state["entries"])
+
+    real_sleep = asyncio.sleep
+
+    async def no_wait(seconds: float) -> None:
+        await real_sleep(0)
+
+    monkeypatch.setattr("gateways.telegram.asyncio.sleep", no_wait)
+    before = _chat_gateway(monkeypatch)
+    before._http = httpx.AsyncClient(transport=httpx.MockTransport(server))
+    running = asyncio.create_task(
+        before._process_message({"chat": {"id": 42}, "from": {"id": 42}, "message_id": 7, "text": "long job"})
+    )
+    while not before._pending:
+        await asyncio.sleep(0)
+    running.cancel()  # the daemon stops
+    with contextlib.suppress(asyncio.CancelledError):
+        await running
+    assert before._send_message.await_count == 0, "nothing was said before the restart"
+
+    task_state["entries"] = [{"action": "task_failed", "status": "failed", "output": "interrupted by a restart"}]
+    after = _chat_gateway(monkeypatch)
+    after._http = httpx.AsyncClient(transport=httpx.MockTransport(server))
+
+    assert after.resume_waits() == 1
+    await asyncio.gather(*after._tasks)
+
+    [call] = after._send_message.await_args_list
+    assert call.args[0] == 42 and "interrupted by a restart" in call.args[1]
+    assert after.resume_waits() == 0, "answered once, then forgotten"

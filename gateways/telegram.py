@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -646,6 +647,15 @@ class TelegramGateway:
             await self._reply(chat, "❌ North did not return a task ID.")
             return
 
+        _remember_wait(chat, text, task_id)
+        await self._answer(chat, text, task_id)
+
+    async def _answer(self, chat: _Reply, text: str, task_id: str) -> None:
+        """Wait for the task and reply with what it produced, then forget the wait.
+
+        Forgotten only once the reply is sent: a wait cut short by a shutdown stays saved, and
+        `resume_waits` picks it up when the gateway starts again.
+        """
         pending_key = (chat.chat_id, chat.message_id)
         self._pending[pending_key] = {
             "message_id": chat.message_id,
@@ -661,6 +671,19 @@ class TelegramGateway:
             await self._reply(chat, within_telegram_limit(output))
         else:
             await self._reply(chat, f"✅ Task submitted (ID: `{task_id}`). Check north for results.")
+        _forget_wait(chat)
+
+    def resume_waits(self) -> int:
+        """Go back to waiting on the tasks a restart cut off, so their chats still hear how they ended."""
+        waits = _saved_waits()
+        for wait in waits.values():
+            chat = _Reply(chat_id=int(wait["chat_id"]), message_id=int(wait["message_id"]))
+            task = asyncio.create_task(self._answer(chat, str(wait.get("text", "")), str(wait["task_id"])))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+        if waits:
+            logger.info("Telegram gateway resumed waiting on %d task(s) from before a restart", len(waits))
+        return len(waits)
 
     async def _await_result_while_typing(self, task_id: str, chat_id: int) -> str | None:
         """Wait for a task's output, holding the typing indicator up while it runs."""
@@ -688,6 +711,7 @@ class TelegramGateway:
             return
 
         await self.start()
+        self.resume_waits()
         logger.info("Telegram gateway polling loop started")
 
         while self._running:
@@ -733,6 +757,43 @@ def _chosen_workspace() -> str:
         return _workspace_file().read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def _waits_file() -> Path:
+    """The chats waiting on a task's answer, kept on disk so a restart does not leave them hanging."""
+    return settings.north_home / "telegram_waits.json"
+
+
+def _saved_waits() -> dict[str, dict]:
+    try:
+        waits = json.loads(_waits_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return waits if isinstance(waits, dict) else {}
+
+
+def _write_waits(waits: dict[str, dict]) -> None:
+    path = _waits_file()
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(waits), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _remember_wait(chat: _Reply, text: str, task_id: str) -> None:
+    waits = _saved_waits()
+    waits[f"{chat.chat_id}:{chat.message_id}"] = {
+        "chat_id": chat.chat_id,
+        "message_id": chat.message_id,
+        "text": text,
+        "task_id": task_id,
+    }
+    _write_waits(waits)
+
+
+def _forget_wait(chat: _Reply) -> None:
+    waits = _saved_waits()
+    if waits.pop(f"{chat.chat_id}:{chat.message_id}", None) is not None:
+        _write_waits(waits)
 
 
 def _in_git_repo(path: Path) -> bool:
