@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from agents.models import AgentPayload
@@ -23,6 +25,8 @@ from inference.exceptions import missing_resource
 from utils.handoff import declared_artifact_paths, missing_artifact_paths
 from utils.tasks import spawn
 from utils.time import localnow
+
+logger = logging.getLogger(__name__)
 
 # A run stopped at a step: ``paused`` needs you (an error to look at), ``waiting``
 # needs a resource and resumes by itself.
@@ -141,6 +145,49 @@ class FlowRunner:
         self._actions[name] = handler
 
     async def run(
+        self,
+        flow_name: str,
+        *,
+        run_id: str | None = None,
+        task_id: str = "",
+        agent: str = "general",
+        inputs: dict[str, Any] | None = None,
+        test_mode: bool = False,
+        trigger: str = "",
+    ) -> FlowRun:
+        run = await self._execute(
+            flow_name,
+            run_id=run_id,
+            task_id=task_id,
+            agent=agent,
+            inputs=inputs,
+            test_mode=test_mode,
+            trigger=trigger,
+        )
+        if run.trigger == "schedule" and not run.test_mode:
+            await self._deliver(run)
+        return run
+
+    async def _deliver(self, run: FlowRun) -> None:
+        """Tell the user how a scheduled run ended: what it produced, or why it stopped.
+
+        A schedule runs while nobody is watching, so its result has to be brought to the user. Scheduled
+        briefings were written to a file every morning and never sent anywhere. A run that is waiting
+        resumes by itself and says nothing yet.
+        """
+        if self._interaction is None or run.status not in _ENDED:
+            return
+        if run.status == "completed":
+            title, message = f"{run.flow_name} is ready", _produced(run)
+        else:
+            title = f"{run.flow_name} stopped"
+            message = f"{run.error or 'It did not finish.'}\n\nResume it on the Flows page."
+        try:
+            await self._interaction.inform(task_id=run.task_id or None, agent="flow", title=title, message=message)
+        except Exception:
+            logger.warning("Could not tell the user how scheduled flow %s ended", run.flow_name, exc_info=True)
+
+    async def _execute(
         self,
         flow_name: str,
         *,
@@ -393,6 +440,35 @@ class FlowRunner:
             current_step=len(flow.steps),
             outputs=outputs,
         )
+
+
+_ENDED = frozenset({"completed", "failed", "paused", "rejected"})
+_MAX_DELIVERED_CHARS = 3_500  # Telegram takes 4,096 per message, with the card's own lines around it
+
+
+def _produced(run: FlowRun) -> str:
+    """What a finished run made, for the user: the last file it wrote, else its last step's summary."""
+    files: list[str] = []
+    for item in run.outputs:
+        data = item.get("data") or {}
+        files.extend(str(path) for path in data.get("artifacts") or [])
+        named = (data.get("result") or {}).get("file")
+        if isinstance(named, str) and named:
+            files.append(named)
+    for path in reversed(files):
+        try:
+            text = Path(path).expanduser().read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if text:
+            if len(text) > _MAX_DELIVERED_CHARS:
+                text = text[:_MAX_DELIVERED_CHARS].rstrip() + "\n\n[cut short]"
+            return f"{text}\n\n_Saved at {path}_"
+    last = (run.outputs[-1].get("data") or {}) if run.outputs else {}
+    summary = str(last.get("summary") or last.get("output") or "").strip()
+    if summary and summary not in ("{}", "[]"):
+        return summary
+    return "Finished. The Flows page shows what it did."
 
 
 def _step_prompt(

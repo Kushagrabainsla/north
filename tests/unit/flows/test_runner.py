@@ -661,3 +661,93 @@ async def test_a_schedule_does_not_start_a_second_run_while_one_waits(tmp_path):
     assert second.data["run_id"] == first.data["run_id"]
     assert "waiting" in second.data["note"]
     assert len(store.list_runs("demo")) == 1
+
+
+# ── A scheduled run brings its result to the user ────────────────────────────
+
+
+class RecordingInteraction:
+    def __init__(self) -> None:
+        self.informed: list[dict] = []
+
+    async def inform(self, **card) -> None:
+        self.informed.append(card)
+
+
+class BriefingAgent(FakeAgent):
+    """Writes a briefing and names the file it wrote, as a briefing skill does."""
+
+    def __init__(self, folder, *, fail: bool = False) -> None:
+        super().__init__()
+        self._folder = folder
+        self._fail = fail
+
+    async def run(self, payload):
+        if self._fail:
+            raise RuntimeError("the search tool broke")
+        path = self._folder / "2026-10-07.md"
+        path.write_text("# Reading list\n\n- PWM: Personalized World Models (arXiv:2610.04920)\n", encoding="utf-8")
+        return AgentResult(output="{}", summary="{}", data={"file": str(path)}, tools_used=["write_file"])
+
+
+_ONE_STEP = """name: demo
+description: Demo flow
+steps:
+  - name: brief
+    skill: review-item
+    instructions: Compile the briefing.
+    approval: never
+"""
+
+
+async def test_a_scheduled_run_sends_the_user_what_it_wrote(tmp_path):
+    interaction = RecordingInteraction()
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(BriefingAgent(tmp_path)),
+        _skills(tmp_path),
+        FlowRunStore(tmp_path / "runs.db"),
+        interaction,
+    )
+
+    run = await runner.run("demo", trigger="schedule")
+
+    assert run.status == "completed"
+    [card] = interaction.informed
+    assert card["title"] == "demo is ready"
+    assert "PWM: Personalized World Models" in card["message"]
+    assert str(tmp_path / "2026-10-07.md") in card["message"]
+
+
+async def test_a_scheduled_run_that_stops_says_why(tmp_path):
+    interaction = RecordingInteraction()
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(BriefingAgent(tmp_path, fail=True)),
+        _skills(tmp_path),
+        FlowRunStore(tmp_path / "runs.db"),
+        interaction,
+    )
+
+    run = await runner.run("demo", trigger="schedule")
+
+    assert run.status == "paused"
+    [card] = interaction.informed
+    assert card["title"] == "demo stopped" and "the search tool broke" in card["message"]
+
+
+async def test_a_run_started_by_hand_is_not_announced(tmp_path):
+    """Someone who started it is watching it; only a schedule runs while nobody is."""
+    interaction = RecordingInteraction()
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(BriefingAgent(tmp_path)),
+        _skills(tmp_path),
+        FlowRunStore(tmp_path / "runs.db"),
+        interaction,
+    )
+
+    await runner.run("demo", trigger="manual")
+    await runner.run("demo", trigger="schedule", test_mode=True)
+
+    assert interaction.informed == []
