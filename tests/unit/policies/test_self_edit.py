@@ -88,3 +88,19 @@ def _user_file(root: Path) -> Path:
     path = root / "user.md"
     path.write_text("user", encoding="utf-8")
     return path
+
+
+def test_user_update_is_only_for_opted_in_managed_documents(tmp_path: Path):
+    root = tmp_path / "flows"
+    path = root / "custom" / "FLOW.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("user")
+    default = SelfEditPolicy(root, tmp_path / "journal")
+    assert default.authorize(path, "user_update")
+    policy = SelfEditPolicy(root, tmp_path / "journal", user_document="FLOW.yaml")
+    assert policy.authorize(path, "user_update") is None
+    assert policy.authorize(root / "custom" / "code.py", "user_update")
+    assert policy.authorize(root / "credentials" / "FLOW.yaml", "user_update")
+    escaped = root / "escape"
+    escaped.symlink_to(tmp_path / "outside", target_is_directory=True)
+    assert policy.authorize(escaped / "FLOW.yaml", "user_update")

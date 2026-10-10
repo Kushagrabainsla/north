@@ -27,7 +27,7 @@ from orchestrator.journal import TaskJournal
 from orchestrator.verification import evidence_sufficiency_violations, verify_claims
 from utils.ids import generate_id
 from utils.prompts import load_prompt
-from utils.text import extract_json, extract_markdown_section
+from utils.text import extract_json, extract_markdown_section, is_explanatory_request
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ class ResultAuditor:
             result.successful_tools,
             workspace,
             evidence_actions=_evidence_actions(result),
+            task=payload.prompt if payload is not None else "",
         )
         if payload is not None:
             violations.extend(
@@ -159,6 +160,7 @@ class ResultAuditor:
             repaired.successful_tools,
             payload.workspace,
             evidence_actions=_evidence_actions(repaired),
+            task=payload.prompt,
         )
         remaining.extend(
             evidence_sufficiency_violations(
@@ -271,5 +273,9 @@ def _outcome_status(result: AgentResult) -> str:
 
 def _evidence_task(payload: AgentPayload) -> str:
     """Include a durable session goal when a short follow-up continues earlier work."""
+    # A session's original create request is context for "How is it triggered?",
+    # not a new instruction to recreate the capability on that turn.
+    if is_explanatory_request(payload.prompt):
+        return payload.prompt
     goal = extract_markdown_section(payload.context, "Active session goal")
     return f"{payload.prompt}\n\n{goal}" if goal else payload.prompt

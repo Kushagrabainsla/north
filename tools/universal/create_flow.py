@@ -16,6 +16,7 @@ from flows.validation import validate_flow_capabilities
 from policies.self_edit import SelfEditPolicy
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.universal._procedure_edit import begin_edit, describe_user_edit
 
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
 
@@ -37,9 +38,13 @@ class CreateFlowTool(Tool):
     is_mutating = True
     description = (
         "Create and validate a reusable declarative flow. New flows are candidates, not active promises. "
-        "Before creating one, use the authoring-a-north-flow skill, reuse existing capabilities, provide "
-        "an executable active skill, instructions, inputs, and approval mode for every step; then validate "
-        "the candidate, test it, and only then activate it. Agents and tools belong to skill contracts."
+        "Before creating one, use the authoring-a-north-flow skill, resolve missing setup choices with ask_user "
+        "including explicit manual-only, one-time, or recurring timing (never assume), reuse capabilities, take "
+        "the timezone only from North settings (never ask for it or declare a timezone input), and provide "
+        "an executable skill, instructions, inputs, and approval mode for every step; then validate "
+        "the candidate, test it, and only then activate it. Candidate skills may run in test mode only. "
+        "Agents and tools belong to skill contracts. Schedules are separate: collecting timing does not "
+        "install a schedule or authorize activation; use schedule_task only after testing and confirmation."
     )
     parameters_schema = {
         "type": "object",
@@ -99,6 +104,13 @@ class CreateFlowTool(Tool):
             "activate",
         }
 
+    async def describe(self, input: ToolInput):
+        request = await super().describe(input)
+        if str(input.params.get("action") or "").strip().lower() == "update":
+            path = self._learned_dir / _slug(str(input.params.get("name") or "")) / FLOW_FILENAME
+            return describe_user_edit(self._self_edit_policy, path, input, request)
+        return request
+
     async def run(self, input: ToolInput) -> ToolOutput:
         action = str(input.params.get("action") or "").strip().lower()
         if action == "list":
@@ -124,6 +136,7 @@ class CreateFlowTool(Tool):
                 skill_registry=self._skill_registry,
                 agent_registry=self._agent_registry,
                 tool_registry=self._tool_registry,
+                allow_candidate_skills=flow.status == "candidate",
             )
             return ToolOutput(
                 success=report.valid,
@@ -185,6 +198,7 @@ class CreateFlowTool(Tool):
                 skill_registry=self._skill_registry,
                 agent_registry=self._agent_registry,
                 tool_registry=self._tool_registry,
+                allow_candidate_skills=True,
             )
             if not report.valid:
                 return ToolOutput(
@@ -256,6 +270,7 @@ class CreateFlowTool(Tool):
                 skill_registry=self._skill_registry,
                 agent_registry=self._agent_registry,
                 tool_registry=self._tool_registry,
+                allow_candidate_skills=True,
             )
             if not report.valid:
                 return ToolOutput(
@@ -264,7 +279,7 @@ class CreateFlowTool(Tool):
                     data=report.as_dict(),
                 )
             operation = "update" if path.exists() else "create"
-            mutation = self._self_edit_policy.begin(path, operation) if self._self_edit_policy is not None else None
+            mutation = begin_edit(self._self_edit_policy, path, operation, input) if self._self_edit_policy else None
             await asyncio.to_thread(_write_flow, directory, path, document)
             if mutation is not None:
                 self._self_edit_policy.commit(mutation)
@@ -357,10 +372,14 @@ class CreateFlowTool(Tool):
         if "flows" in data:
             return (
                 "\n".join(
-                    f"{flow['name']} - {flow['description']} ({len(flow.get('steps', []))} steps)"
+                    f"{flow['name']} - {flow['description']} ({flow['steps']} steps; {flow['status']})"
                     for flow in data["flows"]
                 )
                 or "No flows registered."
+            )
+        if isinstance(data.get("steps"), list):
+            return f"Flow '{data['name']}' ({data['status']}; {len(data['steps'])} steps):\n" + yaml.safe_dump(
+                data, sort_keys=False, allow_unicode=True
             )
         verb = "updated" if data.get("updated") else "created"
         return (

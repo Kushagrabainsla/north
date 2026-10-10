@@ -3,6 +3,7 @@ import { MessageSquare, Sun, File, ChevronRight } from "lucide-react";
 import { Empty, ErrorNotice, formatDateTime, HealthIndicator, Loading, PageHeader, Panel, Status, timeAgo, YoloBadge } from "../components";
 import { useResource } from "../hooks";
 import type { DashboardData } from "../types";
+import { SetupReminder } from "./Setup";
 
 export function Dashboard() {
   const { data, error, loading, reload } = useResource<DashboardData>("/web/api/dashboard", 10000);
@@ -14,6 +15,7 @@ export function Dashboard() {
   return <div className="page dashboard-page">
     <PageHeader eyebrow="Live cockpit" title="Everything, at a glance" subtitle="The complete state of North. Live, local, and under your control."
       actions={<button className="ghost-button" onClick={reload}>Refresh</button>} />
+    <SetupReminder/>
     <div className="cockpit-grid">
       <Panel title="System" label="Status" to="/system" className="system-panel">
         <div className="hero-status"><HealthIndicator variant="panel"/><div><p>Power {data.system.power} · {data.system.autonomy}<YoloBadge mode={data.system.autonomy}/></p></div></div>

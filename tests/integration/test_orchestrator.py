@@ -867,6 +867,66 @@ async def test_no_self_repair_when_disabled(tmp_path):
     assert "Unverified claims" in result.output
 
 
+@pytest.mark.asyncio
+async def test_trigger_question_does_not_inherit_the_original_flow_creation_requirement(tmp_path):
+    auditor, ledger, _ = _make_auditor(tmp_path)
+    agent = _StubbornClaimAgent()
+    result = AgentResult(
+        output="The candidate flow is not activated; you can trigger an approved test manually.",
+        summary="Existing flow trigger explained",
+        successful_tools=["create_flow"],
+        data={"evidence_actions": {"create_flow:read": 1}},
+    )
+    payload = AgentPayload(
+        task_id="t1",
+        prompt="How is it triggered?",
+        context="## Active session goal\nCreate a North flow that applies for jobs.\n",
+    )
+
+    await auditor.verify_claims("t1", agent, result, payload)
+
+    assert agent.runs == 0
+    assert "Unverified claims" not in result.output
+    assert not await ledger.query(LedgerFilters(task_id="t1"))
+
+
+@pytest.mark.asyncio
+async def test_action_followup_still_inherits_the_original_flow_creation_requirement(tmp_path):
+    auditor, _, _ = _make_auditor(tmp_path, self_repair=False)
+    result = AgentResult(
+        output="Done.",
+        summary="done",
+        successful_tools=["create_flow"],
+        data={"evidence_actions": {"create_flow:list": 1}},
+    )
+    payload = AgentPayload(
+        task_id="t1",
+        prompt="Go ahead",
+        context="## Active session goal\nCreate a North flow that applies for jobs.\n",
+    )
+
+    await auditor.verify_claims("t1", _StubbornClaimAgent(), result, payload)
+
+    assert "Unverified claims" in result.output
+
+
+@pytest.mark.asyncio
+async def test_history_answer_does_not_trigger_a_spurious_repair(tmp_path):
+    auditor, ledger, _ = _make_auditor(tmp_path)
+    agent = _StubbornClaimAgent()
+    result = AgentResult(
+        output="Last month we ran tests and built the pilot.", summary="history", successful_tools=["read_file", "git"]
+    )
+
+    await auditor.verify_claims(
+        "t1", agent, result, AgentPayload(task_id="t1", prompt="Tell me what all did we do for the last month or 2")
+    )
+
+    assert agent.runs == 0
+    assert "Unverified claims" not in result.output
+    assert not await ledger.query(LedgerFilters(task_id="t1"))
+
+
 # ---------------------------------------------------------------------------
 # Submission idempotency (#4)
 # ---------------------------------------------------------------------------

@@ -14,6 +14,14 @@ class _Selector:
         return [skill for skill in candidates or [] if skill.name == "deploy-docker"]
 
 
+def test_authoring_schema_exposes_exact_contract_fields_and_fixed_intents():
+    properties = CreateSkillTool.parameters_schema["properties"]
+    contract = properties["execution"]
+    assert set(contract["required"]) == {"agent", "tools", "approval", "inputs", "outputs", "success_criteria"}
+    assert contract["additionalProperties"] is False
+    assert "review" in properties["intents"]["items"]["enum"]
+
+
 async def test_creates_and_reloads_skill(tmp_path):
     builtin_dir = tmp_path / "builtin"
     learned_dir = tmp_path / "learned"
@@ -52,6 +60,52 @@ async def test_missing_params_errors(tmp_path):
     out = await tool.run(ToolInput(params={"name": "test"}))
     assert not out.success
     assert "description" in out.error
+
+
+async def test_user_skill_update_requires_fresh_approval_and_does_not_grant_ownership(tmp_path):
+    from config.approval_mode import ApprovalMode
+    from policies.self_edit import SelfEditPolicy
+    from tests.conftest import approving_store, bind_approvals, rejecting_store
+
+    learned = tmp_path / "learned"
+    registry = SkillRegistry(tmp_path / "builtin", learned)
+    tool = CreateSkillTool(registry, learned)
+    created = await tool.run(
+        ToolInput(
+            params={
+                "name": "mine",
+                "description": "Use when reviewing my documents.",
+                "instructions": "1. Read the input.\n2. Return a review.",
+            }
+        )
+    )
+    assert created.success
+    path = learned / "mine" / "SKILL.md"
+    original = path.read_text()
+    policy = SelfEditPolicy(learned, tmp_path / "mutations", user_document="SKILL.md")
+    tool._self_edit_policy = policy
+    call = ToolInput(
+        params={
+            "action": "update",
+            "name": "mine",
+            "description": "Use when reviewing my documents.",
+            "instructions": "1. Read the input.\n2. Return a concise review.",
+        }
+    )
+    assert not (await tool.run(call)).success
+    assert (await tool.describe(call)).requires_confirmation
+    rejected = rejecting_store()
+    bind_approvals(tool, ApprovalMode.YOLO, store=rejected)
+    assert not (await tool.execute(call)).success
+    rejected.wait_for_decision.assert_awaited_once()
+    assert path.read_text() == original
+    approved = approving_store()
+    bind_approvals(tool, ApprovalMode.YOLO, store=approved)
+    assert (await tool.execute(call)).success
+    approved.wait_for_decision.assert_awaited_once()
+    assert policy.authorize(path, "update")
+    assert policy.revert(policy._read_registry()[-1]["id"])
+    assert path.read_text() == original
 
 
 async def test_skill_requires_selection_tests_and_confirmation_before_activation(tmp_path):

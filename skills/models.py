@@ -35,6 +35,7 @@ class SkillIntent(StrEnum):
     CREATE_SCHEDULE = "create-schedule"
     REVIEW = "review"
     RESEARCH = "research"
+    SUMMARIZE = "summarize"
 
 
 @dataclass(frozen=True)

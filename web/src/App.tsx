@@ -6,6 +6,7 @@ import { Agents, Approvals, Artifacts, Insights, Memory, SettingsPage, Skills, S
 import { Flows } from "./pages/Flows";
 import { Tasks } from "./pages/Tasks";
 import { DialogProvider } from "./dialog";
+import { Setup } from "./pages/Setup";
 
 /** Keeps the task when a bookmarked /work/<id> is followed to its new home. */
 function WorkRedirect() {
@@ -47,6 +48,7 @@ export function App() {
     <Route path="/insights" element={<Navigate to="/system" replace/>}/>
     <Route path="/system" element={<SystemPage/>}/>
     <Route path="/settings" element={<SettingsPage/>}/>
+    <Route path="/setup" element={<Setup/>}/>
     <Route path="*" element={<Navigate to="/" replace/>}/>
   </Route></Routes></DialogProvider>;
 }

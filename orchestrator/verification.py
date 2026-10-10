@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from orchestrator.task_intent import is_repository_overview
+from utils.text import is_activity_summary, is_explanatory_request
 
 # Words that frame a claim verb as an intention, plan, or hypothetical rather
 # than a completed action: "I should create the file", "let's write a test",
@@ -35,6 +36,16 @@ _NON_COMPLETION_RE = re.compile(
 
 # How far back to look for a non-completion marker governing a claim verb.
 _GOVERNING_WINDOW_CHARS = 40
+_CURRENT_EXECUTION = re.compile(
+    r"\b(?:now|just|today|currently|this\s+(?:run|session|turn|chat)|"
+    r"i\s+(?:have\s+)?(?:ran|executed|tested|verified))\b",
+    re.IGNORECASE,
+)
+_PAST_EXECUTION = re.compile(
+    r"\b(?:ran|executed|tested|verified|passed|previously|earlier|"
+    r"last\s+(?:week|month|year)|at\s+the\s+time)\b",
+    re.IGNORECASE,
+)
 
 _EXTERNAL_RESEARCH_RE = re.compile(
     r"\b(?:research|investigate|look\s*up|search|compare)\b[^\n]{0,100}"
@@ -180,7 +191,7 @@ def _verify_path_existence(output: str, workspace: str | None = None) -> list[st
     return violations
 
 
-def _has_completion_claim(output: str, pattern: re.Pattern[str]) -> bool:
+def _has_completion_claim(output: str, pattern: re.Pattern[str], *, historical: bool = False) -> bool:
     """True if *output* asserts the claim as a completed action.
 
     A match governed by an intent/hypothetical marker (a plan, a suggestion, a
@@ -189,8 +200,15 @@ def _has_completion_claim(output: str, pattern: re.Pattern[str]) -> bool:
     """
     for m in pattern.finditer(output):
         window = output[max(0, m.start() - _GOVERNING_WINDOW_CHARS) : m.start()]
-        if not _NON_COMPLETION_RE.search(window):
-            return True
+        if _NON_COMPLETION_RE.search(window):
+            continue
+        if historical:
+            start = max(output.rfind("\n", 0, m.start()), output.rfind(". ", 0, m.start())) + 1
+            end = re.search(r"[.!?](?:\s|$)|\n", output[m.end() :])
+            sentence = output[start : m.end() + end.start() if end else len(output)]
+            if _PAST_EXECUTION.search(sentence) and not _CURRENT_EXECUTION.search(sentence):
+                continue
+        return True
     return False
 
 
@@ -200,6 +218,7 @@ def verify_claims(
     workspace: str | None = None,
     *,
     evidence_actions: dict[str, int] | None = None,
+    task: str = "",
 ) -> list[str]:
     """Return violations: claims in *output* unsupported by tool evidence or physical reality.
 
@@ -209,6 +228,9 @@ def verify_claims(
     if not output:
         return []
     succeeded = set(successful_tools)
+    # A source-backed retrospective reports old experiments; it does not claim
+    # this run executed them. Fresh execution and all mutation claims still gate.
+    historical = is_activity_summary(task) and bool(succeeded & (_REPO_CONTENT_TOOLS | {"git"}))
     violations: list[str] = []
 
     # 1. Deterministic physical path check: verify claimed output files exist on disk
@@ -218,7 +240,9 @@ def verify_claims(
 
     # 2. Evidence gate checks against recorded tool executions
     for label, pattern, required in _RULES:
-        if not (required & succeeded) and _has_completion_claim(output, pattern):
+        if not (required & succeeded) and _has_completion_claim(
+            output, pattern, historical=historical and label == "running a check, test, or verification"
+        ):
             tool_list = " or ".join(f"`{t}`" for t in sorted(required))
             msg = f"output describes {label} but no successful {tool_list} call was recorded"
             if msg not in violations:
@@ -275,7 +299,7 @@ def evidence_sufficiency_violations(
     # Waiting and blocked answers are honest intermediate states. Any other
     # answer to an explicit capability-authoring request must include evidence
     # of the actual create/update action, not merely list/read discovery.
-    if outcome_status not in {"waiting_for_user", "blocked"}:
+    if outcome_status not in {"waiting_for_user", "blocked"} and not is_explanatory_request(task):
         actions = {name for name, count in (evidence_actions or {}).items() if count > 0}
         for label, pattern, required in _CAPABILITY_REQUESTS:
             if pattern.search(task) and not (required & actions):

@@ -16,6 +16,7 @@ from inference.models import EmbedFn
 from skills.models import Skill, SkillIntent
 from skills.registry import SkillRegistry
 from utils.math import cosine_similarity
+from utils.text import is_activity_summary
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,8 @@ class SkillSelector:
         if not skills:
             return []
         skills = _intent_compatible(task_text, skills)
+        if not skills:
+            return []
         try:
             embeddings = await self._skill_embeddings(skills)
             query = await self._embed_fn([task_text])
@@ -126,17 +129,24 @@ def _retrieval_key(skill: Skill) -> str:
 
 
 def _intent_compatible(task_text: str, skills: list[Skill]) -> list[Skill]:
-    """Prefer explicitly compatible skills, preserving semantic fallback."""
+    """Known intent must match; unknown intent retains semantic discovery."""
     intents = _task_intents(task_text)
     if not intents:
         return skills
     compatible = [skill for skill in skills if skill.intents & intents]
-    return compatible or skills
+    if compatible or SkillIntent.SUMMARIZE.value in intents:
+        return compatible
+    # Older/learned skills without intent metadata retain semantic discovery for
+    # action tasks only when no explicitly compatible procedure exists. Never
+    # fall back to skills that declare a conflicting intent.
+    return [skill for skill in skills if not skill.intents]
 
 
 def _task_intents(task_text: str) -> frozenset[str]:
     text = task_text.lower()
     detected: set[str] = set()
+    if is_activity_summary(task_text):
+        return frozenset({SkillIntent.SUMMARIZE.value})
     if any(phrase in text for phrase in ("debug", "diagnos", "failing test", "test failure", "error", "bug")):
         detected.add(SkillIntent.DEBUG.value)
     if any(

@@ -27,7 +27,7 @@ execution:
         type: object
       max_jobs:
         type: integer
-    required: [browser_context, context_confirmed, source_url, resume_path, max_jobs]
+    required: [source_url, resume_path, max_jobs]
     additionalProperties: false
   outputs:
     type: object
@@ -60,8 +60,8 @@ execution:
 > This procedure discovers matching jobs and prepares truthful drafts. It never submits an application.
 
 ## Procedure
-1. Validate the inputs. Refuse `max_jobs` below 1 or above 10. Require the user to choose the browser context after the existing-browser privacy warning; for an existing browser, require `connect`.
-2. Preflight the browser. For existing context, call `browser` with `action="preflight"` and require `verified: true`. Navigate to `source_url` and deterministically verify that the expected account is logged in. If either check fails, return a blocker instead of claiming readiness.
+1. Validate the inputs. Refuse `max_jobs` below 1 or above 10. Call `browser:list_profiles` and choose an enabled profile by task context and saved purpose; ask through the central approval policy if unclear. Pass `profile_id` per tool call, never bind it to this flow. Legacy browser-context inputs remain optional for older flows with no saved profiles; never use them to override a saved profile.
+2. Preflight the chosen profile with `action="preflight"` and require `profile_verified: true`. Navigate to `source_url` and deterministically verify the expected account. Reuse an existing login; if help is needed, use `ask_user` with `requires_user_action=true`, following the same mode policy, then verify state before continuing. Connection success is not login evidence.
 3. Read the resume from `resume_path` and use only facts present there or in `preferences`. Never invent experience, dates, credentials, compensation, work authorization, demographic answers, or legal attestations.
 4. Load the durable processed-job index from the user's North data store. Create it if absent. Use the site's stable job ID or canonical URL as the deduplication key.
 5. Inspect and collect at most `max_jobs` relevant, currently open roles. Skip duplicates, missing descriptions, obvious mismatches, and applications that require unknown factual or legal answers.

@@ -223,6 +223,9 @@ def _build_tool_registry(
     # Every tool the registry holds gets `approvals`, so every call that changes
     # something is decided in one place - see Tool.execute.
     tool_registry = ToolRegistry(auto_register=True, learned_dir=learned_tools_dir, approvals=approvals)
+    from tools.universal.browser import BrowserTool
+
+    tool_registry.register(BrowserTool(north_settings=deps.north_settings))
     mutation_root = settings.north_home / "mutations"
     source_edit_policy = SelfEditPolicy(learned_tools_dir, mutation_root)
     agent_edit_policy = SelfEditPolicy(settings.north_home / "agents", mutation_root)
@@ -965,7 +968,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     create_skill_tool = CreateSkillTool(
         skill_registry,
         learned_dir=settings.north_home / "skills",
-        self_edit_policy=SelfEditPolicy(settings.north_home / "skills", settings.north_home / "mutations"),
+        self_edit_policy=SelfEditPolicy(
+            settings.north_home / "skills", settings.north_home / "mutations", user_document="SKILL.md"
+        ),
         skill_selector=skill_selector,
         tool_registry=tool_registry,
     )
@@ -1000,7 +1005,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CreateFlowTool(
             flow_registry,
             learned_dir=settings.north_home / "flows",
-            self_edit_policy=SelfEditPolicy(settings.north_home / "flows", settings.north_home / "mutations"),
+            self_edit_policy=SelfEditPolicy(
+                settings.north_home / "flows", settings.north_home / "mutations", user_document="FLOW.yaml"
+            ),
             skill_registry=skill_registry,
             agent_registry=agent_registry,
             tool_registry=tool_registry,

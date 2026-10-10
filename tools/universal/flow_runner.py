@@ -207,6 +207,7 @@ class FlowRunner:
             skill_registry=self._skills,
             agent_registry=self._agents,
             tool_registry=self._tools,
+            allow_candidate_skills=test_mode,
         )
         if not report.valid:
             raise ValueError("Flow is not executable: " + "; ".join(report.errors))
@@ -288,9 +289,21 @@ class FlowRunner:
                 )
                 run = self._store.update(run.run_id, status="running", current_step=index + 1, outputs=outputs)
                 continue
-            step_inputs = _resolve_inputs(step.inputs, run.inputs, outputs)
             skill = self._skills.get(step.skill) if step.skill else None
             execution = skill.execution if skill else None
+            try:
+                step_inputs = _resolve_inputs(step.inputs, run.inputs, outputs)
+                input_errors = schema_errors(step_inputs, execution.inputs, path="inputs") if execution else []
+                if input_errors:
+                    raise ValueError("; ".join(input_errors))
+            except ValueError as exc:
+                return self._store.update(
+                    run.run_id,
+                    status="paused",
+                    current_step=index,
+                    outputs=outputs,
+                    error=f"Step '{step.name}' needs valid inputs: {exc}",
+                )
             selected_agent_name = execution.agent if execution else "general"
             allowed_tools = resolve_execution_tools(execution, step.inputs) if execution else ()
             # The step's own approval, never the skill's declared baseline
@@ -338,6 +351,7 @@ class FlowRunner:
                 selected_agent = self._agents.get(selected_agent_name)
                 result = await selected_agent.run(
                     AgentPayload(
+                        allow_candidate_skills=test_mode,
                         task_id=step_task_id,
                         prompt=_step_prompt(
                             flow.name,
@@ -537,7 +551,7 @@ def _resolve_inputs(
             current: Any = values
             for part in value[2:-1].split("."):
                 if not isinstance(current, dict) or part not in current:
-                    return value
+                    raise ValueError(f"Missing input reference {value}")
                 current = current[part]
             return current
         if isinstance(value, dict):

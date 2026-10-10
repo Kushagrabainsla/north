@@ -8,13 +8,19 @@ import pytest
 
 from skills.exceptions import SkillNotFoundError
 from skills.models import SkillSource
-from skills.registry import MAX_BODY_CHARS, SkillRegistry
+from skills.registry import MAX_BODY_CHARS, SkillRegistry, parse_execution_contract
 
 
 def _write_skill(base: Path, name: str, text: str) -> None:
     directory = base / name
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize("field", ["input_schema", "output_schema", "minimum_approval", "toolz"])
+def test_unknown_execution_fields_cannot_silently_drop_contract_checks(field):
+    with pytest.raises(ValueError, match="Unknown execution fields"):
+        parse_execution_contract({"agent": "general", "tools": [], "success_criteria": ["Reviewed"], field: {}})
 
 
 def test_loads_valid_skill(tmp_path):

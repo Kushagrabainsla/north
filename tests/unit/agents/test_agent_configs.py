@@ -71,3 +71,32 @@ def test_system_prompt_exists_and_is_not_trivial(name: str) -> None:
 def test_agents_do_not_own_tool_allowlists(name: str) -> None:
     """Tools are selected from one global catalog at task time."""
     assert not (AGENTS_DIR / name / "tools.yaml").exists()
+
+
+def test_general_prompt_requires_flow_intake_before_creation() -> None:
+    prompt = (AGENTS_DIR / "general" / "prompts" / "system.md").read_text(encoding="utf-8")
+    assert "resolve all missing setup choices with `ask_user`" in prompt
+    assert "manual only, one-time, or recurring" in prompt
+    assert "before `create_flow:create`" in prompt
+    assert "never silently assume manual use or invent a schedule" in prompt
+    assert "Collecting schedule details does not authorize testing, activation, or installation" in prompt
+    assert "Timezone is not a flow input or question" in prompt
+    assert "configured in North settings" in prompt
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "agents/general/prompts/system.md",
+        "resources/builtin-skills/browser-research-and-extraction/SKILL.md",
+        "resources/builtin-skills/authoring-a-north-flow/SKILL.md",
+    ],
+)
+def test_browser_prompts_select_profile_and_reuse_existing_login(relative_path: str) -> None:
+    prompt = (AGENTS_DIR.parent / relative_path).read_text(encoding="utf-8")
+    assert "which browser profile" in prompt
+    assert "already signed in" in prompt
+    assert "Never silently switch" in prompt
+    assert "read or export passwords" in prompt
+    assert "requires_user_action=true" in prompt
+    assert "inspect and assert" in prompt

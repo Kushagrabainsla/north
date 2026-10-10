@@ -16,6 +16,7 @@ import pytest
 from agents.agentic_llm_agent import AgenticLLMAgent
 from agents.general.agent import GeneralAgent
 from agents.models import AgentConfig, AgentDependencies, AgentPayload
+from agents.schemas import ASK_USER_SCHEMA
 from approval.interaction import UserInteraction
 from approval.models import ApprovalDecision
 from approval.store import ApprovalStore
@@ -24,6 +25,7 @@ from memory import FileContextStore
 from tests.conftest import MockInferenceRouter, StubDecider, approval_policy, deciding
 from tools.confidence import ConfidenceTracker
 from tools.registry import ToolRegistry
+from utils.db import open_db_connection
 
 AGENTS_DIR = Path(__file__).parent.parent.parent.parent / "agents"
 
@@ -93,3 +95,80 @@ async def test_ask_user_requires_a_question(tmp_path: Path) -> None:
     agent = _agent(tmp_path, ApprovalMode.AUTONOMOUS, StubDecider(None), ApprovalStore())
     out = json.loads(await _ask(agent, question="  "))
     assert out["success"] is False
+
+
+def test_ask_user_schema_supports_a_real_user_action() -> None:
+    properties = ASK_USER_SCHEMA["function"]["parameters"]["properties"]
+    assert properties["requires_user_action"]["type"] == "boolean"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [ApprovalMode.ASK, ApprovalMode.SAFE])
+async def test_login_handoff_waits_when_central_mode_requires_person(tmp_path: Path, mode: ApprovalMode) -> None:
+    store = ApprovalStore(tmp_path / "approvals.db")
+    decider = deciding(ApprovalDecision.ANSWERED, "Done")
+    agent = _agent(tmp_path, mode, decider, store)
+    asking = asyncio.create_task(
+        agent._ask_user(
+            AgentPayload(task_id="login-task", prompt="Draft an application"),
+            {
+                "question": "Complete sign-in in your University profile, then choose Done.",
+                "options": ["Done"],
+                "requires_user_action": True,
+            },
+        )
+    )
+    try:
+        await asyncio.sleep(0)
+        assert not asking.done(), "The AI cannot complete a physical login on the user's behalf."
+        assert not decider.asked
+        [card] = store.pending()
+        assert card.task_id == "login-task"
+        assert card.requires_user_action
+        assert store.tasks_waiting_on_you() == {"login-task"}
+        with open_db_connection(tmp_path / "approvals.db") as conn:
+            assert conn.execute("SELECT status FROM approval_cards WHERE id = ?", (card.id,)).fetchone()[0] == "pending"
+
+        store.resolve(card.id, ApprovalDecision.ANSWERED, chosen_option="Done")
+        answer = json.loads(await asyncio.wait_for(asking, timeout=1))
+        assert answer == {"success": True, "answered": True, "answer": "Done"}
+        assert not store.tasks_waiting_on_you()
+    finally:
+        if not asking.done():
+            asking.cancel()
+        await asyncio.gather(asking, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [ApprovalMode.AUTONOMOUS, ApprovalMode.YOLO])
+async def test_login_handoff_uses_the_same_mode_policy_as_other_questions(tmp_path: Path, mode: ApprovalMode) -> None:
+    store = ApprovalStore()
+    decider = deciding(ApprovalDecision.ANSWERED, "Done")
+    agent = _agent(tmp_path, mode, decider, store)
+    out = json.loads(
+        await agent._ask_user(
+            AgentPayload(task_id="t1", prompt="p"),
+            {"question": "Continue after login?", "options": ["Done"], "requires_user_action": True},
+        )
+    )
+    assert out["success"]
+    [card] = store.all()
+    assert card.requires_user_action
+    assert card.decided_by == ("memory_decider" if mode is ApprovalMode.AUTONOMOUS else "yolo")
+    assert not store.pending()
+
+
+@pytest.mark.asyncio
+async def test_user_action_flag_rejects_non_boolean_values(tmp_path: Path) -> None:
+    store = ApprovalStore()
+    decider = deciding(ApprovalDecision.ANSWERED, "Done")
+    agent = _agent(tmp_path, ApprovalMode.AUTONOMOUS, decider, store)
+    answer = json.loads(
+        await agent._ask_user(
+            AgentPayload(task_id="t1", prompt="p"),
+            {"question": "Finish login?", "requires_user_action": "true"},
+        )
+    )
+    assert not answer["success"]
+    assert not decider.asked
+    assert not store.all()

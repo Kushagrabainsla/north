@@ -29,6 +29,10 @@ Thumbs.db
 .vscode/
 *.swp
 
+# local design and agent tooling
+.kiro/
+design-explorations/
+
 # web client dependencies and generated TypeScript metadata
 web/node_modules/
 web/*.tsbuildinfo

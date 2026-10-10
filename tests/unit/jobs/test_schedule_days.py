@@ -24,6 +24,30 @@ FRIDAY = datetime(2026, 5, 22, 6, 0, tzinfo=UTC)
 SATURDAY = datetime(2026, 5, 23, 6, 0, tzinfo=UTC)
 
 
+def test_flow_schedule_follows_settings_across_dst_instead_of_its_stored_zone(monkeypatch) -> None:
+    import utils.time as time_utils
+
+    monkeypatch.setattr(time_utils, "_configured_timezone_name", "America/Los_Angeles")
+    flow = CronEntry(name="flow", agent="general", task="review", flow="review", hour=9, minute=0, tz="UTC")
+    assert next_firing(flow, datetime(2026, 3, 7, tzinfo=UTC)).astimezone(UTC) == datetime(
+        2026, 3, 7, 17, 0, tzinfo=UTC
+    )
+    assert next_firing(flow, datetime(2026, 3, 8, tzinfo=UTC)).astimezone(UTC) == datetime(
+        2026, 3, 8, 16, 0, tzinfo=UTC
+    )
+
+
+def test_legacy_non_flow_schedule_keeps_its_stored_zone(monkeypatch) -> None:
+    import utils.time as time_utils
+
+    monkeypatch.setattr(time_utils, "_configured_timezone_name", "Asia/Kolkata")
+    legacy = CronEntry(name="legacy", agent="general", task="review", hour=9, minute=0, tz="UTC")
+    assert legacy.zone_name == "UTC"
+    assert next_firing(legacy, datetime(2030, 1, 1, tzinfo=UTC)).astimezone(UTC) == datetime(
+        2030, 1, 1, 9, 0, tzinfo=UTC
+    )
+
+
 def entry(**kwargs) -> CronEntry:
     fields = {"name": "x", "agent": "general", "task": "t", "hour": 9, "minute": 30, "tz": "UTC"}
     return CronEntry(**{**fields, **kwargs})

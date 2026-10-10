@@ -15,19 +15,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
 import shutil
 import signal
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from config.browser_connection import active_cdp_endpoint
+from config.browser_connection import cdp_http_base as _cdp_http_base
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal.browser_describe import describe_browser_call
@@ -35,6 +38,7 @@ from utils.net import UnsafeUrlError, validate_public_url
 
 if TYPE_CHECKING:
     from approval.approvals import Request as ApprovalRequest
+    from config.strategy import NorthSettings
 
 logger = logging.getLogger(__name__)
 
@@ -155,9 +159,6 @@ def _extract_args(params: dict[str, Any]) -> list[str]:
 
 
 def _read_args(params: dict[str, Any]) -> list[str]:
-    url = params.get("url", "").strip()
-    if url:
-        return ["goto", url, "--inspect", "read"]
     return ["read"]
 
 
@@ -247,35 +248,24 @@ def _assert_args(params: dict[str, Any]) -> list[str]:
 
 
 def _wait_args(params: dict[str, Any]) -> list[str]:
-    return ["wait", params.get("condition", "network-idle")]
+    condition = params.get("condition", "network-idle")
+    if condition not in {"text", "url", "selector", "network-idle"}:
+        raise ValueError("Unknown browser wait condition.")
+    args = ["wait", condition]
+    if condition != "network-idle":
+        pattern = str(params.get("pattern") or "").strip()
+        if not pattern:
+            raise ValueError("Text, URL and selector waits require pattern.")
+        args.append(pattern)
+    return args
 
 
 def _close_args(params: dict[str, Any]) -> list[str]:
-    return ["close", "--purge"]
+    return ["close"]
 
 
 def _status_args(params: dict[str, Any]) -> list[str]:
     return ["status"]
-
-
-def _cdp_http_base(connect: str) -> str:
-    """Normalize a user-provided CDP port/URL to a loopback HTTP base URL."""
-    raw = connect.strip()
-    if not raw:
-        raise ValueError("Existing-browser access requires a CDP connection endpoint.")
-    if raw.isdigit():
-        raw = f"http://127.0.0.1:{raw}"
-    elif "://" not in raw:
-        raw = f"http://{raw}"
-    parsed = urlparse(raw)
-    if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.hostname:
-        raise ValueError("CDP endpoint must be a port or an http(s)/ws(s) URL.")
-    if parsed.hostname.lower() not in _LOOPBACK_HOSTNAMES:
-        raise ValueError("CDP connections are restricted to this machine (localhost only).")
-    scheme = "https" if parsed.scheme in {"https", "wss"} else "http"
-    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-    port = f":{parsed.port}" if parsed.port else ""
-    return f"{scheme}://{host}{port}"
 
 
 def _read_cdp_json(url: str, timeout: int) -> Any:
@@ -313,6 +303,7 @@ def _probe_cdp_endpoint(connect: str, timeout: int) -> ToolOutput:
                 "endpoint": base,
                 "browser": str(version.get("Browser") or "Chrome"),
                 "protocol_version": str(version.get("Protocol-Version") or "unknown"),
+                "connection_id": hashlib.sha256(str(version["webSocketDebuggerUrl"]).encode()).hexdigest(),
                 "target_count": target_count,
             },
         )
@@ -551,9 +542,27 @@ class BrowserTool(Tool):
         "For an ordinary article, documentation page or any URL you only need to READ, use "
         "fetch_url instead - it is one request against this tool's whole browser, so reach "
         "for a browser only after text has failed or the task needs hands. "
-        "Before the first browser action, ask whether to use an isolated browser or the user's existing "
-        "browser over CDP. Explain that existing-browser access can expose logged-in sessions, cookies, "
-        "open tabs, and extensions. Do not infer that choice. "
+        "Call list_profiles to see saved names and purposes. Select profile_id for each tool call from "
+        "the current task context and configured purposes; profiles belong to tool calls, not flows. "
+        "If the choice is missing or ambiguous, ask which browser profile to use (for example Personal, "
+        "University, Work, or an isolated North browser), unless the user already explicitly chose for "
+        "this task. Choosing 'existing browser' alone does not identify a profile. Explain that "
+        "existing-browser access can expose logged-in sessions, cookies, open tabs, and extensions; "
+        "route questions through ask_user and actions through the ordinary approval layer; the mode "
+        "decides who answers. Resolve the chosen context through the supported connection and preflight: "
+        "a profile name alone is not a verified connection. Never silently switch profiles or copy "
+        "cookies as a fallback. Check the expected account on the target site; if already signed in, "
+        "reuse that session without asking the user to log in again. Saved passwords alone do not "
+        "prove an active login. Ask for user sign-in help only when the site requires it, such as "
+        "an expired session, MFA, or password-manager unlock. Do not read or export passwords or "
+        "request them in chat. If connection setup fails, report that blocker rather than presenting "
+        "it as a login problem. "
+        "When the person must log in, complete MFA, unlock, or take over, stop browser interaction and "
+        "call ask_user with requires_user_action=true as its own call; explain the exact help needed "
+        "and offer 'Done'. The same mode policy answers this request; an answer alone is not proof of "
+        "login. After the answer, then inspect and assert the expected account "
+        "or state before continuing the original task in the same profile. Do not end the task as "
+        "completed or failed merely because it is waiting, and do not repeat completed external actions. "
         "Actions:\n"
         "  - 'goto' (or 'navigate'): Navigate to URL. Supports --stealth, --copy-cookies, --connect.\n"
         "  - 'extract': Discover and extract structured lists/tables as JSON records (saves 80% tokens).\n"
@@ -576,6 +585,7 @@ class BrowserTool(Tool):
             "action": {
                 "type": "string",
                 "enum": [
+                    "list_profiles",
                     "goto",
                     "navigate",
                     "inspect",
@@ -603,6 +613,19 @@ class BrowserTool(Tool):
             "url": {
                 "type": "string",
                 "description": "URL to navigate to (required for goto/navigate/read).",
+            },
+            "profile_id": {
+                "type": "string",
+                "description": "Saved profile ID from list_profiles. Select per tool call, never bind it to a flow.",
+            },
+            "condition": {
+                "type": "string",
+                "enum": ["text", "url", "selector", "network-idle"],
+                "description": "Condition for action='wait'. Default: network-idle.",
+            },
+            "pattern": {
+                "type": "string",
+                "description": "Text, URL or CSS selector to wait for; required unless network-idle.",
             },
             "uid": {
                 "type": "string",
@@ -696,21 +719,177 @@ class BrowserTool(Tool):
                 "default": 30,
             },
         },
-        "required": ["action", "browser_context", "context_confirmed"],
+        "required": ["action"],
     }
 
-    def __init__(self, binary_cmd: list[str] | None = None) -> None:
+    def __init__(self, binary_cmd: list[str] | None = None, north_settings: NorthSettings | None = None) -> None:
         self._binary_cmd = binary_cmd
+        self._north_settings = north_settings
+        self._verified_bindings: dict[tuple[str, str], tuple[str, str]] = {}
+
+    def _profiles(self):
+        return self._north_settings.browser_profiles if self._north_settings is not None else []
+
+    def _resolve_profile(self, params: dict) -> tuple[dict, Any]:
+        values = dict(params)
+        profile_id = values.get("profile_id")
+        profiles = self._profiles()
+        if not profile_id:
+            if profiles:
+                raise ValueError("Select profile_id from list_profiles for this browser call; ask_user if unclear.")
+            return values, None  # legacy contexts keep their current validation
+        profile = next((profile for profile in profiles if profile.id == profile_id and profile.enabled), None)
+        if profile is None:
+            raise ValueError("Browser profile is missing or disabled. Select an enabled profile from list_profiles.")
+        if any(key in values for key in ("connect", "copy_cookies", "browser_context", "context_confirmed", "headed")):
+            raise ValueError("A saved profile cannot be overridden by raw connection/context/cookie parameters.")
+        values.update(browser_context=profile.context, context_confirmed=True, headed=profile.headed)
+        if profile.context == "existing":
+            values["connect"] = profile.connect or active_cdp_endpoint(Path(profile.data_directory))
+        return values, profile
+
+    @staticmethod
+    def _session_args(params: dict, session: str) -> list[str]:
+        prefix = ["--json"]
+        if session:
+            prefix.extend(["--browser", session])
+        if params.get("connect"):
+            prefix.extend(["--connect", str(params["connect"])])
+        if params.get("headed") and not params.get("connect"):
+            prefix.append("--headed")
+        if params.get("page"):
+            prefix.extend(["--page", str(params["page"])])
+        return prefix
+
+    def _prefix(self, params: dict, session: str) -> list[str]:
+        return [*self._get_cmd(), *self._session_args(params, session)]
+
+    async def _verify_profile(self, profile, params: dict, timeout: int) -> ToolOutput:
+        endpoint = str(params["connect"])
+        if urlparse(endpoint).scheme in {"ws", "wss"}:
+            # Chrome's built-in remote debugging may expose only WebSocket CDP,
+            # not /json/version. Let chrome-agent perform its native handshake;
+            # only the actual profile-path result below is readiness evidence.
+            base = _cdp_http_base(endpoint)
+            connection_data = {
+                "action": "preflight",
+                "endpoint": base,
+                "connection_id": hashlib.sha256(endpoint.encode()).hexdigest(),
+            }
+        else:
+            connection = await asyncio.to_thread(_probe_cdp_endpoint, endpoint, timeout)
+            if not connection.success:
+                return connection
+            connection_data = connection.data
+        prefix = self._prefix({**params, "page": "north-profile-check"}, profile.browser_name)
+        navigation = await _run_chrome_agent([*prefix, "goto", "chrome://version"], timeout)
+        if not _tool_output_for("goto", navigation).success:
+            return ToolOutput(success=False, error="Could not open the browser profile identity check.")
+        result = await _run_chrome_agent(
+            [*prefix, "eval", 'document.getElementById("profile_path").textContent'], timeout
+        )
+        identity = _tool_output_for("eval", result)
+        if not identity.success:
+            return ToolOutput(success=False, error="Could not verify the connected browser profile.")
+        actual = identity.data.get("result", "")
+        if not isinstance(actual, str):
+            actual = ""
+        expected = profile.expected_path if profile.context == "existing" else profile.managed_directory / "Default"
+        if not actual or Path(actual).resolve() != expected.resolve():
+            return ToolOutput(
+                success=False,
+                error=(
+                    f"Connection reached a different profile than {profile.name}. Select the intended profile in "
+                    "Chrome and retry. North will not use another account or copy cookies."
+                ),
+            )
+        key = (str(params.get("task_id") or "default"), profile.id)
+        self._verified_bindings[key] = (profile.model_dump_json(), connection_data["connection_id"])
+        return ToolOutput(
+            success=True,
+            data={
+                **connection_data,
+                "verified": True,
+                "profile_id": profile.id,
+                "profile_verified": True,
+                "login_verified": False,
+            },
+        )
 
     def mutates(self, params: dict[str, Any] | None = None) -> bool:
         """Classify writes and sensitive existing-browser attachment per call."""
         values = params or {}
+        if values.get("action") == "list_profiles":
+            return False
+        if values.get("profile_id"):
+            # Reads can attach to a personal session or launch a managed window.
+            # The existing central policy decides, not a separate profile policy.
+            return True
         action = str(values.get("action") or "").strip().lower()
         return action in self._MUTATING_ACTIONS or bool(values.get("copy_cookies") or values.get("connect"))
 
     async def describe(self, input: ToolInput) -> ApprovalRequest:
         """Look at the page first, so the card says what the action lands on (`browser_describe`)."""
         params = input.params or {}
+        if params.get("profile_id"):
+            from approval.approvals import Request
+            from approval.policy import Action, ActionKind
+
+            # No connection, private page read, or profile fallback before the
+            # central policy has ruled on this call.
+            profile = next((p for p in self._profiles() if p.id == params["profile_id"]), None)
+            binding_config = {"browser_profile": profile.model_dump_json() if profile else None}
+            config_id = hashlib.sha256(str(binding_config["browser_profile"]).encode()).hexdigest()
+            label = profile.name if profile else str(params["profile_id"])
+            action = str(params.get("action") or "")
+            binding = self._verified_bindings.get((str(params.get("task_id") or "default"), str(params["profile_id"])))
+            if (
+                profile
+                and binding
+                and binding[0] == profile.model_dump_json()
+                and action not in {"goto", "navigate", "preflight", "status", "close"}
+            ):
+                try:
+                    resolved, _ = self._resolve_profile(params)
+                    endpoint = resolved.get("connect") or active_cdp_endpoint(profile.managed_directory)
+                    connection = await self._verify_profile(profile, {**resolved, "connect": endpoint}, 5)
+                    if connection.success and binding == (profile.model_dump_json(), connection.data["connection_id"]):
+                        resolved["page"] = f"task-{str(params.get('task_id') or 'default')}"
+                        request = await describe_browser_call(
+                            resolved,
+                            self._prefix({**resolved, "connect": endpoint}, profile.browser_name),
+                            _run_chrome_agent,
+                        )
+                        return replace(
+                            request,
+                            title=f"Browser: {label}",
+                            message=f"Profile: {label}\n{request.message}",
+                            prepared=binding_config,
+                            action=replace(
+                                request.action,
+                                summary=f"{label}: {request.action.summary}",
+                                args=f"profile={profile.id}:{config_id}; {request.action.args}",
+                            ),
+                        )
+                except (ValueError, OSError, RuntimeError):
+                    pass  # no page peek on an unverified/restarted connection
+            return Request(
+                action=Action(
+                    agent="browser",
+                    kind=ActionKind.BROWSER,
+                    operation=action,
+                    summary=f"{action} using browser profile {label}",
+                    args=json.dumps(
+                        {**{k: v for k, v in params.items() if k != "task_id"}, "profile_config": config_id},
+                        sort_keys=True,
+                    ),
+                    reaches_third_party=action in {"click", "dblclick", "press", "eval"},
+                ),
+                title=f"Browser: {label}",
+                prepared=binding_config,
+                message=f"Use {label} for {action}. Existing profiles expose sessions, cookies, tabs and extensions. "
+                "Connection and profile identity will be checked before the requested action.",
+            )
         try:
             command = self._get_cmd()
         except RuntimeError:
@@ -735,10 +914,9 @@ class BrowserTool(Tool):
         if build_action_args is None:
             raise ValueError(f"Unknown action '{action}'.")
 
-        args: list[str] = ["--json"]
-        if task_id:
-            args.extend(["--browser", task_id])
-        args.extend(build_action_args(params))
+        args = self._session_args(params, task_id)
+        action_params = {key: value for key, value in params.items() if key != "connect"}
+        args.extend(build_action_args(action_params))
         return args
 
     def format_output(self, data: dict[str, Any]) -> str:
@@ -756,17 +934,33 @@ class BrowserTool(Tool):
     async def run(self, input: ToolInput) -> ToolOutput:
         params = input.params or {}
         action = params.get("action", "") or ("goto" if params.get("url") else "")
+        if action == "list_profiles":
+            return ToolOutput(success=True, data={"profiles": [p.catalog_entry() for p in self._profiles()]})
         if not action:
             return ToolOutput(success=False, error="Parameter 'action' is required.")
+        try:
+            params, profile = self._resolve_profile(params)
+        except ValueError as exc:
+            return ToolOutput(success=False, error=str(exc))
+
+        if profile is not None and input.approved is not None:
+            approved_config = input.approved.prepared
+            if (
+                not isinstance(approved_config, dict)
+                or approved_config.get("browser_profile") != profile.model_dump_json()
+            ):
+                return ToolOutput(
+                    success=False, error="Browser profile changed while awaiting approval. Retry the call."
+                )
 
         browser_context = str(params.get("browser_context") or "").strip().lower()
         if params.get("context_confirmed") is not True or browser_context not in {"isolated", "existing"}:
             return ToolOutput(
                 success=False,
                 error=(
-                    "Browser context is not confirmed. Ask the user to choose an isolated browser or their "
-                    "existing browser through CDP, explaining that existing-browser access can expose logged-in "
-                    "sessions, cookies, open tabs, and extensions. Then pass browser_context and "
+                    "Browser context is not confirmed. Ask the user which browser profile to use: an isolated browser "
+                    "or a specific existing profile through CDP, explaining that existing-browser access can expose "
+                    "logged-in sessions, cookies, open tabs, and extensions. Then pass browser_context and "
                     "context_confirmed=true."
                 ),
             )
@@ -786,14 +980,22 @@ class BrowserTool(Tool):
         # browsers; it does not prove that a supplied CDP endpoint is reachable.
         # Perform the DevTools handshake ourselves before claiming attachment.
         if browser_context == "existing" and params.get("connect"):
-            preflight = await asyncio.to_thread(
-                _probe_cdp_endpoint,
-                str(params["connect"]),
-                int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)),
-            )
-            if not preflight.success or action in {"preflight", "status"}:
-                return preflight
-        elif action == "preflight":
+            if profile is not None:
+                try:
+                    preflight = await self._verify_profile(profile, params, int(params.get("timeout_seconds", 30)))
+                except (RuntimeError, ValueError, OSError) as exc:
+                    return ToolOutput(success=False, error=f"Profile verification failed: {exc}")
+                if not preflight.success or action in {"preflight", "status"}:
+                    return preflight
+            else:
+                preflight = await asyncio.to_thread(
+                    _probe_cdp_endpoint,
+                    str(params["connect"]),
+                    int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)),
+                )
+                if not preflight.success or action in {"preflight", "status"}:
+                    return preflight
+        elif action == "preflight" and profile is None:
             return ToolOutput(success=False, error="CDP preflight requires browser_context='existing' and connect.")
 
         unsafe_url = _unsafe_url_reason(action, params)
@@ -801,14 +1003,54 @@ class BrowserTool(Tool):
             return ToolOutput(success=False, error=unsafe_url)
 
         session_id = params.get("task_id", "") or params.get("session_id", "default")
+        if profile is not None:
+            session_id = profile.browser_name
+            if action == "close" and profile.context == "existing":
+                return ToolOutput(success=False, error="North will not close your existing browser. Close it yourself.")
+            params["page"] = f"task-{str(input.params.get('task_id') or 'default')}"
+            if action == "preflight":
+                params = {**params, "url": "about:blank", "stealth": False}
+                action = "goto"
         try:
             command = self._get_cmd() + self._build_args(action, params, session_id)
         except (RuntimeError, ValueError) as exc:
             return ToolOutput(success=False, error=str(exc))
 
         try:
+            navigation = None
+            if action == "read" and params.get("url"):
+                navigation = _tool_output_for(
+                    "goto",
+                    await _run_chrome_agent(
+                        self._get_cmd() + self._build_args("goto", params, session_id),
+                        int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)),
+                    ),
+                )
+                if not navigation.success:
+                    return navigation
             result = await _run_chrome_agent(command, int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)))
         except _ChromeAgentError as exc:
             return ToolOutput(success=False, error=str(exc))
 
-        return _tool_output_for(action, result)
+        output = _tool_output_for(action, result)
+        if navigation is not None:
+            output.data["navigation"] = navigation.data
+        if profile is not None:
+            output.data.update(profile_id=profile.id, profile_name=profile.name)
+            if profile.context == "isolated":
+                key = (str(input.params.get("task_id") or "default"), profile.id)
+                self._verified_bindings.pop(key, None)
+                if output.success and action != "close":
+                    with contextlib.suppress(ValueError, OSError):
+                        endpoint = active_cdp_endpoint(profile.managed_directory)
+                        connection = await asyncio.to_thread(_probe_cdp_endpoint, endpoint, 5)
+                        if connection.success:
+                            # Store only same-browser evidence for target-aware
+                            # descriptions; this is not an approval or a login.
+                            self._verified_bindings[key] = (
+                                profile.model_dump_json(),
+                                hashlib.sha256(endpoint.encode()).hexdigest(),
+                            )
+            if input.params.get("action") == "preflight" and output.success:
+                output.data.update(verified=True, profile_verified=True, login_verified=False)
+        return output

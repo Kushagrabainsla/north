@@ -260,6 +260,41 @@ Every wait must be visible. Proved by the experiments, or marked to build:
 3. `evals/` coding tasks run through the old coder and the new tool; the old coder is deleted in
    a follow-up PR only if the new path matches or beats it.
 
+### Delegation check, 2026-10-09
+
+Reused the existing opt-in live tests against disposable repositories, not the
+user's repositories, live conversations or external accounts:
+
+- **Codex: five live tests passed.** A startup naming preference reached the
+  agent; a missing preference was answered through `ask_north`; an edit passed
+  North's own test run and landed; a new process resumed the existing thread;
+  and the chat-to-server path handed off, tested and landed a change.
+- The chat test uses a recorded Telegram API and scripted North inference, but
+  the actual server, approval routing, Codex CLI, project tests and landing.
+  It proves the integrated handoff, not autonomous planner/model selection.
+- **Claude: live completion blocked by its weekly usage limit.** North reported
+  the resource pause. Further Claude calls were stopped, so this run does not
+  establish that a live Claude edit completes. Recorded-protocol tests cover
+  both adapters with real `MemoryBriefing`, repository instructions and run
+  storage (`tests/unit/coding_agents/test_delegation.py`).
+- **Small retrieval check: nine expectations passed** with the cached local
+  embedding model and built-in general-domain skills. Five retrospective
+  requests injected no unrelated action skill; job drafting, flow authoring,
+  coding and a summary-plus-coding request retained the expected procedure.
+  This is a regression check, not a broad quality benchmark.
+- Fixed flow list/read formatting and the evidence auditor's treatment of
+  explanatory follow-ups and source-backed historical test reports. Fresh
+  execution/mutation claims and action continuations still require evidence.
+  Read-only rechecks of the two saved chat answers cleared the reproduced
+  false warnings; saved messages were not rewritten.
+
+Python unit/integration validation: **2,813 passed, one skipped**, excluding
+the earlier experiment suites, with two unrelated dictation-mock warnings.
+Command: `env -u NO_COLOR .venv/bin/pytest tests/unit --ignore=tests/unit/experiments tests/integration -q`.
+The initial run's forced-ANSI colour assertion failed under the inherited
+`NO_COLOR` setting; the colour tests and full rerun passed with it unset.
+Ruff lint/format checks and `git diff --check` also passed.
+
 ## Phases
 
 0. **Done.** Close the four gaps the experiments found, each with its tests: `Action.leaves_sandbox`

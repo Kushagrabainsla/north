@@ -397,6 +397,15 @@ class AgenticLLMAgent(LLMAgent):
         current_is_mutating: bool | None = None
 
         for index, call in enumerate(calls):
+            if call.name == "ask_user" and call.params.get("requires_user_action") is True:
+                # A human takeover is a barrier, even to read-only browser calls:
+                # do not inspect credentials or race the person while they act.
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+                chunks.append([(index, call)])
+                current_is_mutating = None
+                continue
             is_mut = self._is_mutating_call(call, tool_map)
             if current_is_mutating is None or is_mut == current_is_mutating:
                 current_chunk.append((index, call))
@@ -1165,6 +1174,7 @@ class AgenticLLMAgent(LLMAgent):
         event: CardEvent,
         fields: list[CardField] | None = None,
         context: str = "",
+        requires_user_action: bool = False,
     ) -> Card:
         """Raise a card through the approval layer and return it resolved."""
         interaction = self._deps.interaction
@@ -1182,6 +1192,7 @@ class AgenticLLMAgent(LLMAgent):
             options=options,
             fields=fields or [],
             context=context,
+            requires_user_action=requires_user_action,
         )
         return await interaction.request_decision(card, event=event)
 
@@ -1248,10 +1259,15 @@ class AgenticLLMAgent(LLMAgent):
         text or a chosen option) so the agent continues with it instead of assuming.
         This is how an agent refuses to invent an unknown - it asks. In the modes
         that answer for you, the approval layer answers it (`ApprovalPolicy.answer`).
+        Real-world handoffs use that same policy; an answer is not proof the
+        physical action happened, so the caller must verify the resulting state.
         """
         question = str(params.get("question", "")).strip()
         if not question:
             return _failed_json("ask_user requires a non-empty 'question'.")
+        requires_user_action = params.get("requires_user_action", False)
+        if not isinstance(requires_user_action, bool):
+            return _failed_json("requires_user_action must be a boolean.")
         options = [str(o) for o in params.get("options", []) if str(o).strip()]
 
         card = await self._surface_card(
@@ -1261,6 +1277,7 @@ class AgenticLLMAgent(LLMAgent):
             body=question,
             options=options,
             event=CardEvent.QUESTION,
+            requires_user_action=requires_user_action,
         )
         answer = (card.chosen_option or "").strip()
         if not answer:

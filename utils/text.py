@@ -10,6 +10,36 @@ from typing import Any
 _FENCE_OPEN_RE = re.compile(r"^```[\w-]*\s*\n")
 _FENCE_CLOSE_RE = re.compile(r"\n?```\s*$")
 
+_ACTIVITY_SUMMARY = re.compile(
+    r"\bwhat\s+(?:all\s+)?(?:did|have)\s+(?:we|i|you)\b"
+    r"|\bwhat\s+(?:we|i|you)\s+(?:did|have\s+done)\b"
+    r"|\b(?:summari[sz]e|recap|report|tell\s+me)\b[^?\n]{0,100}"
+    r"\b(?:recent|past|last|previous|progress|history|activity|activities|work\s+done)\b",
+    re.IGNORECASE,
+)
+_EXPLANATORY_REQUEST = re.compile(
+    r"^\s*(?:(?:how|what)\b(?!\s+about\b)|why\b|where\b|when\b|which\b|"
+    r"explain\b|tell\s+me\b(?!\s+(?:once|after|when)\b)|can\s+you\s+explain\b)",
+    re.IGNORECASE,
+)
+_ADDITIONAL_ACTION = re.compile(
+    r"(?:\band\b|\balso\b|[?!.,;\n])\s*"
+    r"(?:(?:please|then|can\s+you|could\s+you|let'?s)\s+)*"
+    r"(?:create|build|add|update|edit|implement|activate|run|delete|change|set\s+up)\b",
+    re.IGNORECASE,
+)
+
+
+def is_activity_summary(prompt: str) -> bool:
+    """A request to report previous work, not perform those actions again."""
+    return bool(_ACTIVITY_SUMMARY.search(prompt)) and not _ADDITIONAL_ACTION.search(prompt)
+
+
+def is_explanatory_request(prompt: str) -> bool:
+    """A question about existing work, without an additional action request."""
+    return bool(_EXPLANATORY_REQUEST.search(prompt)) and not _ADDITIONAL_ACTION.search(prompt)
+
+
 # Em dash (—) and horizontal bar (―) read as an "AI tell" in prose; collapse the
 # surrounding *inline* whitespace (not newlines) so ``a—b`` and ``a — b`` both
 # become ``a - b``. En dash (–) is replaced in place below, preserving spacing.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from agents.models import AgentResult
@@ -47,6 +48,94 @@ class FakeAgents:
 class ApprovingInteraction:
     async def request_approval_status(self, **kwargs):
         return ApprovalDecision.APPROVED
+
+
+async def test_missing_runtime_input_pauses_before_approval_or_agent_work(tmp_path):
+    registry = _flow(
+        tmp_path,
+        """name: demo
+description: One bounded review
+steps:
+  - name: first
+    skill: review-item
+    approval: before_step
+    inputs:
+      value: ${inputs.value}
+""",
+    )
+    skills = _skills(tmp_path)
+    agent = FakeAgent()
+
+    class NoUnexpectedApproval:
+        async def request_approval_status(self, **kwargs):
+            raise AssertionError("input validation must happen before approval")
+
+    store = FlowRunStore(tmp_path / "runs.db")
+    runner = FlowRunner(registry, FakeAgents(agent), skills, store, NoUnexpectedApproval())
+
+    run = await runner.run("demo", inputs={})
+
+    assert run.status == "paused"
+    assert "inputs.value" in run.error
+    assert agent.payloads == []
+    assert store.get(run.run_id).error == run.error
+
+
+async def test_resolved_runtime_inputs_are_checked_against_the_skill_schema(tmp_path):
+    registry = _flow(
+        tmp_path,
+        """name: demo
+description: One bounded review
+steps:
+  - name: first
+    skill: review-item
+    inputs:
+      value: ${inputs.value}
+""",
+    )
+    skills = _skills(tmp_path)
+    skill = skills.get("review-item")
+    skills._skills[skill.name] = replace(
+        skill,
+        execution=replace(
+            skill.execution,
+            inputs={"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
+        ),
+    )
+    agent = FakeAgent()
+    runner = FlowRunner(registry, FakeAgents(agent), skills, FlowRunStore(tmp_path / "runs.db"))
+
+    bad = await runner.run("demo", inputs={"value": False})
+    assert bad.status == "paused" and "inputs.value must be string" in bad.error
+    assert agent.payloads == []
+    good = await runner.run("demo", inputs={"value": "one item"})
+    assert good.status == "completed" and len(agent.payloads) == 1
+
+
+async def test_candidate_skill_can_be_tested_without_becoming_active(tmp_path):
+    registry = _flow(
+        tmp_path,
+        """name: demo
+description: Custom candidate
+status: candidate
+steps:
+  - name: first
+    skill: review-item
+""",
+    )
+    skills = _skills(tmp_path)
+    skill = skills.get("review-item")
+    skills._skills[skill.name] = replace(skill, status="candidate")
+    agent = FakeAgent()
+    runner = FlowRunner(registry, FakeAgents(agent), skills, FlowRunStore(tmp_path / "runs.db"))
+    import pytest
+
+    with pytest.raises(ValueError, match="not active"):
+        await runner.run("demo")
+    run = await runner.run("demo", test_mode=True)
+    assert run.status == "completed"
+    assert agent.payloads[0].allow_candidate_skills
+    assert skills.get("review-item").status == "candidate"
 
 
 def _skills(tmp_path) -> SkillRegistry:

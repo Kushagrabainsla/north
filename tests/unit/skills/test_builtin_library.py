@@ -104,7 +104,37 @@ def test_browser_skill_has_an_enforced_flow_contract():
     assert skill.execution.agent == "general"
     assert skill.execution.tools == ("browser",)
     assert skill.execution.approval == "on_mutation"
-    assert {"browser_context", "context_confirmed"} <= set(skill.execution.inputs["required"])
+    assert "profile_id" not in skill.execution.inputs.get("properties", {})
+    assert "browser_context" not in skill.execution.inputs.get("required", [])
+
+
+def test_flow_authoring_requires_complete_setup_and_explicit_timing() -> None:
+    body = _REGISTRY.get("authoring-a-north-flow").body
+    assert "before calling `create_flow:create`" in body
+    for choice in ("Outcome and evidence", "Inputs and preferences", "Outputs and delivery", "Scope and safety"):
+        assert choice in body
+    for timing in ("Manual only", "Once at a specific time", "Recurring"):
+        assert timing in body
+    assert 'call `ask_user`: "When should this flow run?"' in body
+    assert "Do not silently default to manual" in body
+    assert "date and local time" in body
+    assert "days and local time" in body
+    assert "timezone" in body
+    assert "timezone is not a flow input or question" in body
+    assert "Do not ask for timezone" in body
+    assert "configured in North settings" in body
+    assert "do not ask again for details already supplied" in body
+    assert "preserve existing timing" in body
+    assert "pending, not installed" in body
+    assert "Choosing timing is not approval to test, activate, or install it" in body
+
+
+def test_scheduling_skill_clarifies_incomplete_timing() -> None:
+    body = _REGISTRY.get("scheduling-north-work").body
+    assert "`ask_user` for missing timing details" in body
+    assert 'Never invent a time from "daily"' in body
+    assert "Do not ask again for timing already supplied" in body
+    assert "Do not ask for timezone or pass an override" in body
 
 
 def test_job_application_skills_split_drafting_from_submission() -> None:

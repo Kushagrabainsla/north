@@ -3,7 +3,9 @@
 The model may propose a mutation, but it cannot decide whether the target is
 editable.  This policy keeps the consent boundary, sandbox definition, ledger,
 inference, configuration, and credentials outside North's self-edit surface.
-All other updates require an authorship record created by this module.
+All other source updates require an authorship record created by this module.
+Managed skill/flow documents may opt into consent-bound user updates through
+their authoring tool. Such updates preserve a before-image but grant no ownership.
 
 Activation is not an update of the content: it marks a skill or flow you have
 validated and confirmed as live. It is allowed on any existing file outside the
@@ -46,8 +48,11 @@ class Mutation:
 class SelfEditPolicy:
     """Authorize and journal create/update mutations for North-owned paths."""
 
-    def __init__(self, root: Path, registry_root: Path | None = None) -> None:
+    def __init__(self, root: Path, registry_root: Path | None = None, *, user_document: str | None = None) -> None:
         self.root = root.resolve()
+        # Only skills/flows opt in. Source code and other policy users retain
+        # the North-authorship requirement without exception.
+        self.user_document = user_document
         self.registry_root = (registry_root or (Path.home() / ".north" / "mutations")).resolve()
         self.registry_root.mkdir(parents=True, exist_ok=True)
         self._registry = self.registry_root / "authorship.json"
@@ -74,6 +79,11 @@ class SelfEditPolicy:
             return None
         if operation == "activate":
             return None if resolved.is_file() else f"Path `{relative}` does not exist."
+        if operation == "user_update":
+            parts = Path(relative).parts
+            if not self.user_document or len(parts) != 2 or parts[-1] != self.user_document:
+                return "Target is not a managed user procedure."
+            return None if resolved.is_file() else f"Path `{relative}` does not exist."
         return f"Unsupported self-edit operation: {operation!r}."
 
     def begin(self, path: Path, operation: str) -> Mutation:
@@ -82,7 +92,7 @@ class SelfEditPolicy:
             raise PermissionError(refusal)
         mutation_id = uuid.uuid4().hex
         before_image: str | None = None
-        if operation in ("update", "activate"):
+        if operation in ("update", "activate", "user_update"):
             before_image = str(self._snapshots / mutation_id)
             shutil.copy2(path, before_image)
         return Mutation(mutation_id, str(path.resolve()), operation, before_image)
@@ -116,9 +126,9 @@ class SelfEditPolicy:
         return False
 
     def _owned(self, path: Path) -> bool:
-        # An activation is journaled but authors nothing: it must not make your file North's to rewrite.
+        # Activation and approved user edits grant no autonomous rewrite authority.
         return any(
-            record.get("path") == str(path.resolve()) and record.get("operation") != "activate"
+            record.get("path") == str(path.resolve()) and record.get("operation") in {"create", "update"}
             for record in self._read_registry()
         )
 

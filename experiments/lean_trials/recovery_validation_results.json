@@ -1,0 +1,690 @@
+{
+  "kind": "real Tool.execute baseline; experimental atomic ledger; synthetic receiver only",
+  "fault_rows": [
+    {
+      "arm": "current",
+      "fault": "none",
+      "effects": 1,
+      "recovery": "current Tool.execute"
+    },
+    {
+      "arm": "current",
+      "fault": "before_claim",
+      "effects": 1,
+      "recovery": "current Tool.execute"
+    },
+    {
+      "arm": "current",
+      "fault": "after_claim",
+      "effects": 1,
+      "recovery": "current Tool.execute"
+    },
+    {
+      "arm": "current",
+      "fault": "after_effect",
+      "effects": 2,
+      "recovery": "current Tool.execute"
+    },
+    {
+      "arm": "current",
+      "fault": "lost_ack",
+      "effects": 2,
+      "recovery": "current Tool.execute"
+    },
+    {
+      "arm": "current",
+      "fault": "known_no_effect",
+      "effects": 1,
+      "recovery": "current Tool.execute"
+    },
+    {
+      "arm": "current",
+      "fault": "after_success",
+      "effects": 1,
+      "recovery": "current Tool.execute"
+    },
+    {
+      "arm": "atomic_pause",
+      "fault": "none",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_pause",
+      "fault": "before_claim",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_pause",
+      "fault": "after_claim",
+      "effects": 0,
+      "recovery": "unknown"
+    },
+    {
+      "arm": "atomic_pause",
+      "fault": "after_effect",
+      "effects": 1,
+      "recovery": "unknown"
+    },
+    {
+      "arm": "atomic_pause",
+      "fault": "lost_ack",
+      "effects": 1,
+      "recovery": "unknown"
+    },
+    {
+      "arm": "atomic_pause",
+      "fault": "known_no_effect",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_pause",
+      "fault": "after_success",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_idempotent",
+      "fault": "none",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_idempotent",
+      "fault": "before_claim",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_idempotent",
+      "fault": "after_claim",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_idempotent",
+      "fault": "after_effect",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_idempotent",
+      "fault": "lost_ack",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_idempotent",
+      "fault": "known_no_effect",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_idempotent",
+      "fault": "after_success",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_receipt",
+      "fault": "none",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_receipt",
+      "fault": "before_claim",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_receipt",
+      "fault": "after_claim",
+      "effects": 0,
+      "recovery": "unknown"
+    },
+    {
+      "arm": "atomic_receipt",
+      "fault": "after_effect",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_receipt",
+      "fault": "lost_ack",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_receipt",
+      "fault": "known_no_effect",
+      "effects": 1,
+      "recovery": "succeeded"
+    },
+    {
+      "arm": "atomic_receipt",
+      "fault": "after_success",
+      "effects": 1,
+      "recovery": "succeeded"
+    }
+  ],
+  "concurrency_rows": [
+    {
+      "arm": "current",
+      "repeat": 0,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 1,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 2,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 3,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 4,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 5,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 6,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 7,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 8,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 9,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 10,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 11,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 12,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 13,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 14,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 15,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 16,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 17,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 18,
+      "effects": 2
+    },
+    {
+      "arm": "current",
+      "repeat": 19,
+      "effects": 2
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 0,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 1,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 2,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 3,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 4,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 5,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 6,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 7,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 8,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 9,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 10,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 11,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 12,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 13,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 14,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 15,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 16,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 17,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 18,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_pause",
+      "repeat": 19,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 0,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 1,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 2,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 3,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 4,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 5,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 6,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 7,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 8,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 9,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 10,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 11,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 12,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 13,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 14,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 15,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 16,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 17,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 18,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_idempotent",
+      "repeat": 19,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 0,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 1,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 2,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 3,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 4,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 5,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 6,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 7,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 8,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 9,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 10,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 11,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 12,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 13,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 14,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 15,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 16,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 17,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 18,
+      "effects": 1
+    },
+    {
+      "arm": "atomic_receipt",
+      "repeat": 19,
+      "effects": 1
+    }
+  ],
+  "integrity_rows": [
+    {
+      "arm": "atomic_pause",
+      "case": "ledger_unavailable",
+      "effects": 0,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_pause",
+      "case": "changed_payload",
+      "effects": 1,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_pause",
+      "case": "separate_identical_operations",
+      "effects": 2,
+      "paused_or_rejected": false
+    },
+    {
+      "arm": "atomic_pause",
+      "case": "old_sender_still_running",
+      "effects": 1,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_pause",
+      "case": "response_record_failure",
+      "effects": 1,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_idempotent",
+      "case": "ledger_unavailable",
+      "effects": 0,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_idempotent",
+      "case": "changed_payload",
+      "effects": 1,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_idempotent",
+      "case": "separate_identical_operations",
+      "effects": 2,
+      "paused_or_rejected": false
+    },
+    {
+      "arm": "atomic_idempotent",
+      "case": "old_sender_still_running",
+      "effects": 1,
+      "paused_or_rejected": false
+    },
+    {
+      "arm": "atomic_idempotent",
+      "case": "response_record_failure",
+      "effects": 1,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_receipt",
+      "case": "ledger_unavailable",
+      "effects": 0,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_receipt",
+      "case": "changed_payload",
+      "effects": 1,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_receipt",
+      "case": "separate_identical_operations",
+      "effects": 2,
+      "paused_or_rejected": false
+    },
+    {
+      "arm": "atomic_receipt",
+      "case": "old_sender_still_running",
+      "effects": 1,
+      "paused_or_rejected": true
+    },
+    {
+      "arm": "atomic_receipt",
+      "case": "response_record_failure",
+      "effects": 1,
+      "paused_or_rejected": true
+    }
+  ],
+  "summary": {
+    "current": {
+      "duplicate_faults": 2,
+      "unfinished_faults": 0,
+      "duplicate_races": 20
+    },
+    "atomic_pause": {
+      "duplicate_faults": 0,
+      "unfinished_faults": 1,
+      "duplicate_races": 0
+    },
+    "atomic_idempotent": {
+      "duplicate_faults": 0,
+      "unfinished_faults": 0,
+      "duplicate_races": 0
+    },
+    "atomic_receipt": {
+      "duplicate_faults": 0,
+      "unfinished_faults": 1,
+      "duplicate_races": 0
+    }
+  },
+  "source_sha256": "a2eff5a83f180bf79abbad8fa703b9a92202f9e53bde4ffee2e9a32b2b7f1a01"
+}

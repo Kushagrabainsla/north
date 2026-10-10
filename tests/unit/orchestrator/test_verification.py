@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from orchestrator.verification import evidence_sufficiency_violations, verify_claims
 
 
@@ -31,6 +33,42 @@ def test_test_pass_claim_without_bash_flagged() -> None:
 
 def test_test_pass_claim_with_bash_ok() -> None:
     assert verify_claims("All tests pass now.", ["bash"]) == []
+
+
+@pytest.mark.parametrize("tools", [["read_file"], ["search_code"], ["git"]])
+def test_source_backed_retrospective_does_not_require_rerunning_old_tests(tools) -> None:
+    assert (
+        verify_claims(
+            "Last month, we ran tests and built the pilot. The tests passed.",
+            tools,
+            task="Tell me what all did we do for the last month or 2",
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "I ran tests and they passed.",
+        "All tests pass now.",
+        "Tests pass.",
+        "We ran tests this session.",
+        "We ran tests today.",
+        "Last month we ran tests. I just verified the checks.",
+    ],
+)
+def test_retrospective_does_not_exempt_fresh_execution_claims(output) -> None:
+    violations = verify_claims(output, ["read_file"], task="Summarize last month's progress")
+    assert any("running a check" in v for v in violations)
+
+
+def test_retrospective_without_source_evidence_still_flags_tests() -> None:
+    assert verify_claims("We ran tests last month.", [], task="What did we do last month?")
+
+
+def test_retrospective_does_not_exempt_mutation_claims() -> None:
+    assert verify_claims("I created the file config.py.", ["read_file"], task="Recap last month's work")
 
 
 def test_commit_claim_without_git_flagged() -> None:
@@ -142,6 +180,34 @@ def test_listing_flows_does_not_count_as_creating_one() -> None:
         {"create_flow:list": 1},
     )
     assert any("flow creation" in violation for violation in violations)
+
+
+def test_explaining_flow_creation_does_not_require_creating_another_flow() -> None:
+    assert (
+        evidence_sufficiency_violations(
+            "How does the create_flow tool work?",
+            ["create_flow"],
+            evidence_actions={"create_flow:read": 1},
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "How does it work? Create a North flow for jobs.",
+        "Explain it and create a North flow for jobs.",
+        "How is it triggered? Then please create a North flow for jobs.",
+        "What does it do and can you create a North flow for jobs?",
+        "How about we create a North flow for jobs?",
+        "Tell me once you create a North flow for jobs.",
+        "Explain it; create a North flow for jobs.",
+        "How is it triggered, and let's create a North flow for jobs?",
+    ],
+)
+def test_explanation_plus_action_still_requires_creation_evidence(prompt) -> None:
+    assert evidence_sufficiency_violations(prompt, ["create_flow"], evidence_actions={"create_flow:read": 1})
 
 
 def test_flow_create_action_satisfies_capability_request() -> None:

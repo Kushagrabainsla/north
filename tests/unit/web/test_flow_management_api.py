@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from agents.models import AgentResult
 from flows.models import flow_fingerprint
@@ -165,6 +166,24 @@ async def test_an_active_flow_can_be_put_on_a_daily_schedule(env) -> None:
     assert row["flow"] == "live" and row["hour"] == 7 and row["minute"] == 30
 
 
+@pytest.mark.parametrize("model", [web_api.FlowScheduleCreate, web_api.FlowScheduleUpdate])
+@pytest.mark.parametrize("field", ["tz", "timezone"])
+def test_flow_schedule_requests_have_no_timezone_input(model, field) -> None:
+    assert field not in model.model_fields
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        model(hour=9, **{field: "Asia/Kolkata"})
+
+
+async def test_dashboard_flow_schedules_use_the_configured_timezone(env, monkeypatch) -> None:
+    import utils.time as time_utils
+
+    monkeypatch.setattr(time_utils, "_configured_timezone_name", "Asia/Kolkata")
+    created = await web_api.create_flow_schedule("live", web_api.FlowScheduleCreate(hour=9, minute=30))
+    assert created["tz"] == "Asia/Kolkata"
+    updated = await web_api.update_flow_schedule(created["name"], web_api.FlowScheduleUpdate(hour=10))
+    assert updated["tz"] == "Asia/Kolkata"
+
+
 async def test_a_candidate_cannot_be_scheduled(env) -> None:
     with pytest.raises(HTTPException) as refused:
         await web_api.create_flow_schedule("draft", web_api.FlowScheduleCreate(hour=7))
@@ -232,6 +251,17 @@ async def test_a_test_run_is_visible_at_once_and_finishes_in_the_background(env)
     assert run.status == "completed"
     assert run.test_mode and run.trigger == "test"
     assert run.task_id == started["task_id"]
+
+
+async def test_dashboard_passes_inputs_and_can_test_candidate_skills_without_activation(env) -> None:
+    path = env.skills.get("review-item").directory / "SKILL.md"
+    path.write_text(path.read_text().replace("domains: [general]", "domains: [general]\nstatus: candidate"))
+    env.skills.reload()
+    started = await web_api.start_flow_run("draft", web_api.FlowRunRequest(mode="test", inputs={"value": "saved"}))
+    await drain()
+    run = env.store.get(started["run_id"])
+    assert run.status == "completed" and run.inputs == {"value": "saved"}
+    assert env.skills.get("review-item").status == "candidate"
 
 
 async def test_a_real_run_of_a_candidate_is_refused(env) -> None:

@@ -1,0 +1,170 @@
+{
+  "kind": "live Claude, synthetic fixtures, equal information and effort in both arms",
+  "issues": [
+    63,
+    65,
+    67
+  ],
+  "cli_version": "2.1.289 (Claude Code)",
+  "cases": [
+    {
+      "id": "scope_leak",
+      "bug": true,
+      "contract": "A grant permits only its operation AND account. The caller supplies an untrusted account.",
+      "code": "def allowed(grant, op, account):\n    return op == grant['operation']\n",
+      "args": [
+        {
+          "operation": "submit",
+          "account": "A"
+        },
+        "submit",
+        "B"
+      ],
+      "expected": false
+    },
+    {
+      "id": "retry_key",
+      "bug": true,
+      "contract": "The receiver deduplicates by key. Retries of one logical run must have the same key.",
+      "code": "def key(run, attempt):\n    return f'{run}:{attempt}'\n",
+      "args": [
+        "run-1",
+        2
+      ],
+      "expected": "run-1"
+    },
+    {
+      "id": "stale_review",
+      "bug": true,
+      "contract": "Landing requires review of the current code hash AND current attempt. Old attempts cannot authorize landing.",
+      "code": "def ready(review, code_hash, attempt):\n    return review['hash'] == code_hash and review['ok']\n",
+      "args": [
+        {
+          "hash": "abc",
+          "attempt": 1,
+          "ok": true
+        },
+        "abc",
+        2
+      ],
+      "expected": false
+    },
+    {
+      "id": "owner_yolo",
+      "bug": false,
+      "contract": "The authenticated owner deliberately chooses YOLO: allow all actions, even destructive ones. Other modes refuse destructive actions. There is intentionally no universal hard-danger floor.",
+      "code": "def allowed(mode, destructive):\n    if mode == 'yolo':\n        return True\n    return not destructive\n",
+      "args": [
+        "yolo",
+        true
+      ],
+      "expected": true
+    },
+    {
+      "id": "parked_slot",
+      "bug": false,
+      "contract": "Only running jobs consume worker slots. Paused jobs and jobs awaiting approval retain their durable state but release the worker slot.",
+      "code": "def slots(jobs):\n    return sum(job['state'] == 'running' for job in jobs)\n",
+      "args": [
+        [
+          {
+            "state": "running"
+          },
+          {
+            "state": "waiting_for_approval"
+          }
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "id": "cache_miss",
+      "bug": false,
+      "contract": "A cached result is usable only with matching code hash and test-command hash. A miss returns None and triggers fresh tests; it must not mean success.",
+      "code": "def cached(row, code_hash, command_hash):\n    if row is None or (row['code'], row['command']) != (code_hash, command_hash):\n        return None\n    return row['passed']\n",
+      "args": [
+        {
+          "code": "old",
+          "command": "cmd",
+          "passed": true
+        },
+        "new",
+        "cmd"
+      ],
+      "expected": null
+    }
+  ],
+  "system_prompt": "You are reviewing a small synthetic function against its explicit contract. Return ONLY JSON with keys bug (boolean) and reason (short string). A bug must violate the stated contract, not an unstated product preference. No tools are available.",
+  "strategies": {
+    "plain": "Review this code for a concrete contract violation.",
+    "invariant": "Check the contract's invariants against each branch. Try a counterexample, including retries, stale state and authorization where relevant. Do not invent requirements or flag intentional behavior."
+  },
+  "seed": 63165,
+  "limits": {
+    "calls": 36,
+    "dollars_per_call": 0.05,
+    "seconds_per_call": 45
+  },
+  "rows": [
+    {
+      "case": "parked_slot",
+      "strategy": "invariant",
+      "repeat": 2,
+      "expected_bug": false,
+      "prompt_sha256": "d6c4d9ee44c8e73e7c181aadfc17efdf0024b6a6b1ea7051f26e1946e9ca4cc8",
+      "cost_usd": 0,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "models": [],
+      "turns": 1,
+      "error": "You've hit your weekly limit \u00b7 resets Oct 11 at 3am (America/Los_Angeles)",
+      "seconds": 3.168
+    }
+  ],
+  "summary": {
+    "plain": {
+      "completed": 0,
+      "correct": 0,
+      "missed_bugs": 0,
+      "false_alarms": 0,
+      "median_seconds": null,
+      "reported_cost_usd": 0,
+      "errors": 0
+    },
+    "invariant": {
+      "completed": 0,
+      "correct": 0,
+      "missed_bugs": 0,
+      "false_alarms": 0,
+      "median_seconds": null,
+      "reported_cost_usd": 0,
+      "errors": 1
+    },
+    "paired_accuracy": {
+      "invariant_wins": 0,
+      "plain_wins": 0,
+      "ties": 0,
+      "pairs": 0
+    }
+  }
+}

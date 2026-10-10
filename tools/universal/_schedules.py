@@ -16,7 +16,7 @@ from jobs.scheduler import (
     CronEntry,
     next_firing_epoch,
 )
-from utils.time import format_local, is_known_timezone, local_timezone_name
+from utils.time import format_local
 from utils.weekdays import parse_weekdays
 
 __all__ = [
@@ -27,7 +27,7 @@ __all__ = [
     "is_pending_one_shot",
     "job_view",
     "parse_weekdays",
-    "resolve_zone_name",
+    "TIMEZONE_INPUT_ERROR",
     "schedule_name",
 ]
 
@@ -48,13 +48,7 @@ def describe_weekdays(weekdays: frozenset[int] | None) -> str:
     return CronEntry(name="_", agent="_", task="_", hour=0, minute=0, weekdays=weekdays).cadence
 
 
-def resolve_zone_name(tz: str | None) -> str:
-    """Return a stored zone name, rejecting invalid IANA names."""
-    if not tz:
-        return local_timezone_name()
-    if not is_known_timezone(tz):
-        raise ValueError(f"Unknown timezone {tz!r}")
-    return tz
+TIMEZONE_INPUT_ERROR = "Schedule timezone comes from North settings, not a per-flow input. Change it in settings."
 
 
 def entry_view(row: dict[str, Any], source: str | None = None) -> dict[str, Any]:

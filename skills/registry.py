@@ -56,6 +56,10 @@ def parse_execution_contract(raw: object) -> SkillExecution | None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("execution must be a mapping")
+    known = {"agent", "tools", "inputs", "outputs", "approval", "success_criteria"}
+    unknown = set(raw) - known
+    if unknown:
+        raise ValueError(f"Unknown execution fields: {sorted(unknown, key=str)}. Use only {sorted(known)}.")
     agent = str(raw.get("agent") or "").strip()
     if not agent:
         raise ValueError("execution.agent is required")

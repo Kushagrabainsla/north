@@ -92,6 +92,9 @@ class NorthSettings:
         # A named zone is persisted rather than an offset so recurring wall
         # clocks continue to mean the same thing through daylight-saving time.
         self._timezone: str = default_timezone if _is_known_timezone(default_timezone) else "UTC"
+        self._timezone_configured = False
+        self._browser_profiles: list = []
+        self._setup_progress: dict = {"status": "not_started", "step": 0}
         self._load()
 
     def _load(self) -> None:
@@ -121,8 +124,23 @@ class NorthSettings:
             if raw_timezone:
                 if _is_known_timezone(raw_timezone):
                     self._timezone = raw_timezone
+                    self._timezone_configured = data.get("timezone_configured", True) is True
                 else:
                     logger.warning("Unknown timezone %r in settings.json - using %s", raw_timezone, self._timezone)
+            from config.browser_profiles import BrowserProfile, SetupProgress
+
+            raw_profiles = data.get("browser_profiles", [])
+            for raw in raw_profiles[:24] if isinstance(raw_profiles, list) else []:
+                try:
+                    profile = BrowserProfile.model_validate(raw)
+                    if not any(saved.id == profile.id for saved in self._browser_profiles):
+                        self._browser_profiles.append(profile)
+                except ValueError:
+                    logger.warning("Ignoring invalid saved browser profile")
+            try:
+                self._setup_progress = SetupProgress.model_validate(data.get("setup", {})).model_dump()
+            except ValueError:
+                logger.warning("Ignoring invalid saved setup progress")
         except Exception as exc:
             logger.warning(
                 "settings.json is unreadable - resetting to defaults (%s): %s",
@@ -192,6 +210,34 @@ class NorthSettings:
         if not _is_known_timezone(name):
             raise ValueError(f"Unknown timezone {name!r}")
         self._timezone = name
+        self._timezone_configured = True
+        self._save()
+
+    @property
+    def timezone_configured(self) -> bool:
+        return self._timezone_configured
+
+    @property
+    def browser_profiles(self) -> list:
+        return list(self._browser_profiles)
+
+    def set_browser_profiles(self, profiles: list) -> None:
+        from config.browser_profiles import BrowserProfile
+
+        parsed = [BrowserProfile.model_validate(profile) for profile in profiles]
+        if len(parsed) > 24 or len({profile.id for profile in parsed}) != len(parsed):
+            raise ValueError("Browser profiles need unique IDs; at most 24 can be saved.")
+        self._browser_profiles = parsed
+        self._save()
+
+    @property
+    def setup_progress(self) -> dict:
+        return dict(self._setup_progress)
+
+    def set_setup_progress(self, progress: dict) -> None:
+        from config.browser_profiles import SetupProgress
+
+        self._setup_progress = SetupProgress.model_validate(progress).model_dump()
         self._save()
 
     def _save(self) -> None:
@@ -201,6 +247,9 @@ class NorthSettings:
                 "power": self._power.value,
                 "autonomy": self._autonomy.value,
                 "timezone": self._timezone,
+                "timezone_configured": self._timezone_configured,
+                "browser_profiles": [profile.model_dump() for profile in self._browser_profiles],
+                "setup": self._setup_progress,
             }
             routing: dict[str, object] = {"mode": self._routing_mode.value}
             if self._routing_model:

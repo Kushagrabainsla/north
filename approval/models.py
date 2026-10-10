@@ -167,6 +167,9 @@ class Card(BaseModel):
     # you decide whenever. A blocking card cannot outlive its task; a
     # non-blocking one is meant to.
     blocking: bool = True
+    # A real-world handoff, not evidence that the action has happened. Routing
+    # still belongs to ApprovalPolicy; tools must verify state after an answer.
+    requires_user_action: bool = False
     # What produced this card, for a card that outlives the task that made it.
     # A card's life is otherwise scoped to its `task_id`, which is exactly wrong
     # for prepared work: the task finishing is the *normal* case there, not the
@@ -206,6 +209,7 @@ class Card(BaseModel):
         fields: Sequence[CardField] = (),
         context: str = "",
         blocking: bool = True,
+        requires_user_action: bool = False,
         source: str = "",
         action_key: str = "",
     ) -> Card:
@@ -229,6 +233,7 @@ class Card(BaseModel):
             # invariant at construction so every notifier sees the truth even
             # when a caller does not go through UserInteraction.inform().
             blocking=False if type is CardType.INFORMATION else blocking,
+            requires_user_action=requires_user_action,
             source=source,
             action_key=action_key,
         )

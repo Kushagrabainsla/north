@@ -46,6 +46,9 @@ class AgentPayload(BaseModel):
     # Exact procedures required by a flow step. Unlike semantic suggestions,
     # these skills are loaded in full and form part of the execution contract.
     skills: list[str] = Field(default_factory=list)
+    # Only the flow runner sets this for a test invocation of exact named skills.
+    # Candidates remain excluded from ordinary semantic selection and delegation.
+    allow_candidate_skills: bool = Field(default=False, exclude=True)
     # Exact server-owned tool allowlist for an executable skill. None keeps the
     # normal task-time catalog behavior; an empty list means no external tools.
     allowed_tools: list[str] | None = None

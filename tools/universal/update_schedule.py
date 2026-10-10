@@ -8,7 +8,7 @@ from flows.validation import schedulable_flow_error
 from jobs.scheduler import builtin_default
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.universal._schedules import entry_view, parse_weekdays, resolve_zone_name
+from tools.universal._schedules import TIMEZONE_INPUT_ERROR, entry_view, parse_weekdays
 from utils.time import now_epoch
 
 if TYPE_CHECKING:
@@ -25,7 +25,8 @@ class UpdateScheduleTool(Tool):
         "the 'name' shown by list_schedules, and pass only the fields that change - anything "
         "omitted is left alone. What a schedule does lives in its flow, so change the flow "
         "(create_flow update) rather than the schedule; pass 'flow' only to point the schedule "
-        "at a different active flow. Times are the user's local time. 'days' takes day names or "
+        "at a different active flow. Times use the timezone in North settings; never ask for or pass "
+        "a per-flow timezone. 'days' takes day names or "
         "numbers (0=Mon … 6=Sun), or 'weekdays' / 'weekends' / 'daily'; pass 'daily' to go back to "
         "running every day. Pass interval_minutes to change it to a fixed interval, or pass "
         "hour to change an interval back to a wall-clock schedule. Pass enabled false to "
@@ -52,7 +53,6 @@ class UpdateScheduleTool(Tool):
                 ),
             },
             "enabled": {"type": "boolean", "description": "false pauses the schedule, true resumes it"},
-            "tz": {"type": "string", "description": "New IANA zone"},
             "flow": {"type": "string", "description": "A different active flow for it to run"},
         },
         "required": ["name"],
@@ -73,6 +73,8 @@ class UpdateScheduleTool(Tool):
         self._tool_registry = tool_registry
 
     async def run(self, input: ToolInput) -> ToolOutput:
+        if {"tz", "timezone"} & input.params.keys():
+            return ToolOutput(success=False, error=TIMEZONE_INPUT_ERROR)
         name = str(input.params.get("name", "")).strip()
         if not name:
             return ToolOutput(success=False, error="Parameter 'name' is required.")
@@ -181,8 +183,6 @@ class UpdateScheduleTool(Tool):
             changes["weekdays"] = parse_weekdays(days)
         if params.get("enabled") is not None:
             changes["enabled"] = bool(params["enabled"])
-        if params.get("tz") is not None:
-            changes["tz"] = resolve_zone_name(str(params["tz"]))
         return changes
 
     def format_output(self, data: dict) -> str:

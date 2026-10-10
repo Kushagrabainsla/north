@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 import orchestrator.api.cron as api
 from flows.registry import FlowRegistry
@@ -101,11 +102,42 @@ async def test_an_impossible_hour_is_refused(store, flows) -> None:
     assert exc.value.status_code == 422
 
 
-@pytest.mark.asyncio
-async def test_an_unknown_timezone_is_refused(store, flows) -> None:
-    with bind_services(ApiServices(cron_store=store, flow_registry=flows)), pytest.raises(HTTPException) as exc:
-        await create(tz="Mars/Olympus_Mons")
-    assert exc.value.status_code == 422
+@pytest.mark.parametrize("model", [api.CronEntryCreate, api.CronEntryUpdate])
+@pytest.mark.parametrize("field", ["tz", "timezone"])
+def test_schedule_api_does_not_accept_timezone_inputs(model, field) -> None:
+    assert field not in model.model_fields
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        model(flow="briefing", hour=9, **{field: "Asia/Kolkata"})
+
+
+async def test_flow_schedule_uses_live_settings_for_listing_and_firing(store, flows, tmp_path, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    import orchestrator.api.settings as settings_api
+    import utils.time as time_utils
+    from config.strategy import NorthSettings
+    from jobs.scheduler import CronEntry, next_firing, previous_firing
+
+    monkeypatch.setattr(time_utils, "_configured_timezone_name", None)
+    settings = NorthSettings(tmp_path / "settings.json")
+    with bind_services(ApiServices(cron_store=store, flow_registry=flows, north_settings=settings)):
+        await settings_api.update_settings(settings_api.SettingsUpdate(timezone="America/Los_Angeles"))
+        created = await create(hour=9, minute=30)
+        row = await store.get(created.name)
+        entry = CronEntry.from_row(row)
+        after = datetime(2030, 1, 1, tzinfo=UTC)
+        assert created.tz == "America/Los_Angeles"
+        assert next_firing(entry, after).astimezone(UTC) == datetime(2030, 1, 1, 17, 30, tzinfo=UTC)
+
+        await settings_api.update_settings(settings_api.SettingsUpdate(timezone="Asia/Kolkata"))
+        listed = await api.list_cron_entries(builtin=False)
+        assert listed[0].tz == settings.timezone == "Asia/Kolkata"
+        assert next_firing(entry, after).astimezone(UTC) == datetime(2030, 1, 1, 4, 0, tzinfo=UTC)
+        assert previous_firing(entry, datetime(2030, 1, 1, 6, 0, tzinfo=UTC)).astimezone(UTC) == datetime(
+            2030, 1, 1, 4, 0, tzinfo=UTC
+        )
+        # Settings changes do not rewrite the stored local time or legacy metadata.
+        assert await store.get(created.name) == row
 
 
 @pytest.mark.asyncio

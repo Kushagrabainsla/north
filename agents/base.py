@@ -91,7 +91,9 @@ class Agent(ABC):
             try:
                 # Selected once and shared: _load_context and _load_tools both need
                 # the task's skills, and each selection costs an embedding call.
-                selected_skills = await self._select_skills(payload.prompt, payload.skills)
+                selected_skills = await self._select_skills(
+                    payload.prompt, payload.skills, allow_candidates=payload.allow_candidate_skills
+                )
                 context, scored_tools = await asyncio.gather(
                     self._load_context(payload, selected_skills),
                     self._load_tools(payload, selected_skills),
@@ -141,7 +143,9 @@ class Agent(ABC):
             self._deps.episodic_store,
         )
 
-    async def _select_skills(self, task_prompt: str, required_names: list[str] | None = None) -> list[Any]:
+    async def _select_skills(
+        self, task_prompt: str, required_names: list[str] | None = None, *, allow_candidates: bool = False
+    ) -> list[Any]:
         """Skills relevant to this task, selected once per run.
 
         Selection embeds the prompt, so it is done here and passed to both
@@ -155,7 +159,8 @@ class Agent(ABC):
             selected = []
             for name in dict.fromkeys(required_names):
                 skill = registry.get(name)
-                if not skill.available_to(self.domain):
+                candidate_allowed = allow_candidates and skill.status == "candidate" and self.domain in skill.domains
+                if not skill.available_to(self.domain) and not candidate_allowed:
                     raise ValueError(f"Skill {name!r} is not active for agent {self.name!r} in domain {self.domain!r}")
                 selected.append(skill)
             return selected
@@ -312,7 +317,7 @@ class Agent(ABC):
         # assistant sees cross-domain skills (e.g. scouting) but never an engineering
         # skill leaking into ordinary chat, and engineering agents keep all of theirs.
         skills = [skill for skill in registry.all() if skill.available_to(self.domain)]
-        if not skills:
+        if not skills and not (payload.skills and selected):
             return ""
 
         selected_names = {skill.name for skill in selected}

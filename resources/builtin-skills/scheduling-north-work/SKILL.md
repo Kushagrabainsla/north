@@ -9,9 +9,10 @@ domains: [general, engineering]
 > A schedule is a trigger, not the capability that performs the work. Every schedule runs an active flow; a reminder or routine is a flow with one step of instructions.
 
 ## Procedure
-1. Identify what must run, when it must run, the user's timezone, and what result or notification proves each run completed.
+1. Identify what must run, when it must run, and what result or notification proves each run completed. Take the user's timezone only from North settings via trusted runtime context; it is read-only schedule information, not a question or per-flow input.
 2. Inspect existing schedules and reusable flows. Update the schedule that already owns the job instead of creating a duplicate, and reuse a flow that already does the work.
 3. Choose exactly one timing model: a one-shot local datetime, a fixed interval in minutes, or a recurring wall-clock time with optional weekdays.
+   - Use `ask_user` for missing timing details before authoring or installing: one-time date/time or recurrence interval or days/time. Do not ask for timezone or pass an override: use the timezone configured in North settings. Never invent a time from "daily" or "in the morning". Creating a flow also requires an explicit manual-only versus one-time versus recurring choice; follow the authoring-a-north-flow setup checklist. Do not ask again for timing already supplied.
 4. If no flow does the work yet, create one (`create_flow`: one step of instructions or an existing skill), run it once with `run_flow` in test mode, and activate it with the user's confirmation. Verify every referenced skill, tool, credential, and external environment exists. The flow must be active, not a candidate.
 5. For browser work, ask isolated browser versus the user's existing CDP browser before scheduling. Explain that the existing browser can expose sessions, cookies, tabs, and extensions, then verify login and connection while the user is present.
 6. Put bounded work in the flow's instructions: limits, deduplication key, retry behavior, per-item failures, approval boundary, and prohibited final actions. A timer must never turn an unsafe action into unattended authority.

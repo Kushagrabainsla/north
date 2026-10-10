@@ -112,6 +112,7 @@ def validate_flow_capabilities(
     skill_registry=None,
     agent_registry=None,
     tool_registry=None,
+    allow_candidate_skills: bool = False,
 ) -> FlowValidationReport:
     """Validate skill-backed and inline-instruction flow steps."""
     errors: list[str] = []
@@ -136,8 +137,11 @@ def validate_flow_capabilities(
         except Exception:
             errors.append(f"{prefix}: unknown skill {step.skill!r}")
             continue
-        if skill.status != "active":
+        candidate_allowed = allow_candidate_skills and skill.status == "candidate"
+        if skill.status != "active" and not candidate_allowed:
             errors.append(f"{prefix}: skill {step.skill!r} is {skill.status}, not active")
+        elif candidate_allowed:
+            warnings.append(f"{prefix}: candidate skill {step.skill!r} is available for test runs only")
         execution = skill.execution
         if execution is None:
             # Advisory skills are valid instruction sources. They run through
@@ -171,7 +175,7 @@ def validate_flow_capabilities(
             except Exception:
                 errors.append(f"{prefix}: unknown skill executor {execution.agent!r}")
             else:
-                if not skill.available_to(agent.domain):
+                if not skill.available_to(agent.domain) and not (candidate_allowed and agent.domain in skill.domains):
                     errors.append(
                         f"{prefix}: skill {step.skill!r} is not active for its executor "
                         f"{execution.agent!r} in domain {agent.domain!r}"

@@ -112,6 +112,46 @@ async def test_every_weekday_at_930_is_scheduled(tool, store) -> None:
     assert (row["hour"], row["minute"]) == (9, 30)
 
 
+def test_schedule_tools_do_not_offer_timezone_inputs() -> None:
+    for cls in (ScheduleTaskTool, UpdateScheduleTool):
+        assert "tz" not in cls.parameters_schema["properties"]
+        assert "timezone" not in cls.parameters_schema["properties"]
+
+
+@pytest.mark.parametrize("zone", ["America/Los_Angeles", "Asia/Kolkata"])
+async def test_schedules_use_the_settings_timezone_without_an_input(tool, store, monkeypatch, zone) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    import utils.time as time_utils
+
+    monkeypatch.setattr(time_utils, "_configured_timezone_name", zone)
+    recurring = await run(tool, hour=9, minute=30)
+    one_shot = await run(tool, run_at="2030-01-01T09:30")
+
+    assert recurring.success and recurring.data["tz"] == zone
+    assert one_shot.success
+    assert (
+        tool._job_processor.jobs[-1].scheduled_at.timestamp()
+        == datetime(2030, 1, 1, 9, 30, tzinfo=ZoneInfo(zone)).timestamp()
+    )
+
+
+@pytest.mark.parametrize("field", ["tz", "timezone"])
+async def test_timezone_overrides_are_refused_before_creating_or_updating(tool, store, field) -> None:
+    refused = await run(tool, hour=9, **{field: "Asia/Kolkata"})
+    assert not refused.success and "settings" in refused.error.lower()
+    assert await store.list() == []
+
+    created = await run(tool, hour=9)
+    before = await store.get(created.data["name"])
+    refused = await UpdateScheduleTool(store).run(
+        ToolInput(params={"name": created.data["name"], "hour": 11, field: "Asia/Kolkata"})
+    )
+    assert not refused.success and "settings" in refused.error.lower()
+    assert await store.get(created.data["name"]) == before
+
+
 @pytest.mark.asyncio
 async def test_a_bare_list_of_days_is_accepted(tool) -> None:
     """What a model actually sends when asked for "every weekday"."""

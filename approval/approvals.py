@@ -46,6 +46,9 @@ class Request:
     declined: str = "Action cancelled by user."
     refused_hint: str = ""
     prepared: Any = None
+    # Editing a user-authored procedure requires fresh consent, even if a
+    # remembered or autonomous rule would ordinarily allow this tool.
+    requires_confirmation: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,8 @@ class Approvals:
         if self._already_done(request.action, task_id):
             return Decision(Verdict.REFUSE, _ALREADY_DONE)
         ruling = await self._policy.rule(request.action)
+        if request.requires_confirmation and ruling.verdict is not Verdict.REFUSE:
+            return await self._ask(request, task_id)
         if ruling.verdict is Verdict.ASK:
             return await self._ask(request, task_id)
         if _worth_recording(request.action):

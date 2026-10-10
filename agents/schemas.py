@@ -99,7 +99,10 @@ ASK_USER_SCHEMA: dict = {
             "stated in the task or context - NEVER assume or invent it. The user's "
             "typed answer is returned as the tool result so you can continue with it. "
             "This is for gathering information, not for approving an action "
-            "(use request_approval for that)."
+            "(use request_approval for that). For a real-world handoff such as login, MFA, "
+            "or browser takeover, set requires_user_action=true and use the same mode policy "
+            "to obtain an answer. Send that handoff as its own tool call, then verify "
+            "the resulting state before continuing the original task."
         ),
         "parameters": {
             "type": "object",
@@ -107,6 +110,15 @@ ASK_USER_SCHEMA: dict = {
                 "question": {
                     "type": "string",
                     "description": "The specific question to ask. One clear question at a time.",
+                },
+                "requires_user_action": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "True when the person must do something outside the chat (login, MFA, unlock, "
+                        "or browser takeover). Uses the same approval policy and current mode as "
+                        "every question. An answer does not prove completion; verify the actual state."
+                    ),
                 },
                 "options": {
                     "type": "array",

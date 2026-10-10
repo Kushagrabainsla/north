@@ -1,6 +1,6 @@
-"""Delegating coding to the coding agents installed here (Claude Code now, Codex next).
+"""Delegating coding to the coding agents installed here (Claude Code and Codex).
 
-north does not write code. It runs the user's own agent, read-only for now, and records the
+north does not write code. It runs the user's own agent in plan or isolated edit mode, and records the
 run. See docs/design/coding-agents.md.
 """
 

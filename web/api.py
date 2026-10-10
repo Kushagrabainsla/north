@@ -127,6 +127,7 @@ class WebRuntime:
 
     bootstrap_task: asyncio.Task | None = None
     auth_sessions: dict[str, ProviderAuthSession] = field(default_factory=dict)
+    browser_tests: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def configure(

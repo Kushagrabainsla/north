@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from flows.models import Flow, FlowStep
@@ -58,6 +59,31 @@ def test_validation_accepts_advisory_skill(tmp_path):
     )
 
     assert report.valid
+
+
+def test_candidate_skills_require_explicit_test_validation_and_matching_domain(tmp_path):
+    skill = replace(
+        _skill(
+            tmp_path,
+            execution=SkillExecution(
+                agent="general",
+                tools=(),
+                approval="never",
+                inputs={"type": "object"},
+                outputs={"type": "object"},
+                success_criteria=("Reviewed",),
+            ),
+        ),
+        status="candidate",
+    )
+    kwargs = {
+        "skill_registry": _Registry({"strict": skill}),
+        "agent_registry": _Registry({"general": SimpleNamespace(domain="general")}),
+    }
+    assert not validate_flow_capabilities(_flow(tmp_path), **kwargs).valid
+    assert validate_flow_capabilities(_flow(tmp_path), allow_candidate_skills=True, **kwargs).valid
+    kwargs["agent_registry"] = _Registry({"general": SimpleNamespace(domain="engineering")})
+    assert not validate_flow_capabilities(_flow(tmp_path), allow_candidate_skills=True, **kwargs).valid
 
 
 def test_validation_enforces_inputs_approval_executor_and_tools(tmp_path):

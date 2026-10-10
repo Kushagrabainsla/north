@@ -139,7 +139,9 @@ class CronEntry:
 
     @property
     def zone_name(self) -> str:
-        """The IANA zone this entry's wall-clock time is read in."""
+        """Flow schedules follow settings; legacy non-flow entries retain their zone."""
+        if self.flow:
+            return local_timezone_name()
         return self.tz or local_timezone_name()
 
     def describe(self) -> str:
@@ -174,7 +176,7 @@ def _wall_clock_on(entry: CronEntry, day) -> datetime:
     (02:30 becomes 03:30). A repeated time in autumn uses its first occurrence.
     Round-tripping through UTC both detects and normalises the skipped case.
     """
-    zone = resolve_timezone(entry.tz)
+    zone = resolve_timezone(entry.zone_name)
     candidate = datetime(day.year, day.month, day.day, entry.hour, entry.minute, tzinfo=zone, fold=0)
     return candidate.astimezone(UTC).astimezone(zone)
 
@@ -204,7 +206,7 @@ def next_firing(entry: CronEntry, after: datetime) -> datetime:
         periods = int((after_epoch - anchor) // period) + 1
         return from_epoch(anchor + periods * period)
 
-    zone = resolve_timezone(entry.tz)
+    zone = resolve_timezone(entry.zone_name)
     day = after.astimezone(zone).date()
     candidate = _wall_clock_on(entry, day)
     if _instant(candidate) <= _instant(after):
@@ -237,7 +239,7 @@ def previous_firing(entry: CronEntry, at: datetime) -> datetime:
         periods = max(0, int((at_epoch - anchor) // period))
         return from_epoch(anchor + periods * period)
 
-    zone = resolve_timezone(entry.tz)
+    zone = resolve_timezone(entry.zone_name)
     day = at.astimezone(zone).date()
     candidate = _wall_clock_on(entry, day)
     if _instant(candidate) > _instant(at):

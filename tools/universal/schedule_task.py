@@ -9,9 +9,9 @@ from jobs.models import Job, JobPriority, JobType
 from jobs.scheduler import CronEntry
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.universal._schedules import entry_view, parse_weekdays, resolve_zone_name
+from tools.universal._schedules import TIMEZONE_INPUT_ERROR, entry_view, parse_weekdays
 from utils.ids import generate_id
-from utils.time import format_local, from_epoch, now_epoch, parse_local
+from utils.time import format_local, from_epoch, local_timezone_name, now_epoch, parse_local
 
 if TYPE_CHECKING:
     from agents.registry import AgentRegistry
@@ -63,8 +63,8 @@ class ScheduleTaskTool(Tool):
         "For a repeating wall-clock run, pass hour (0-23) plus optional minute (0-59) and days (omit "
         "days for every day). 'days' takes a list of day names or numbers (0=Mon … 6=Sun), "
         "or one of the words 'weekdays', 'weekends', 'daily' - so \"every weekday at 9:30\" "
-        "is hour 9, minute 30, days 'weekdays'. Pass tz only to schedule in a zone other "
-        "than the user's own, as an IANA name like 'Asia/Kolkata'. Use list_schedules to see what "
+        "is hour 9, minute 30, days 'weekdays'. The timezone always comes from North settings; "
+        "never ask for or pass a per-flow timezone. Use list_schedules to see what "
         "is scheduled, update_schedule to change one, and cancel_schedule to remove one."
     )
     parameters_schema = {
@@ -88,7 +88,6 @@ class ScheduleTaskTool(Tool):
                     "'weekdays' / 'weekends' / 'daily'. Omit for every day."
                 ),
             },
-            "tz": {"type": "string", "description": "IANA zone, only if not the user's own"},
         },
         "required": ["flow"],
     }
@@ -110,6 +109,8 @@ class ScheduleTaskTool(Tool):
         self._tool_registry = tool_registry
 
     async def run(self, input: ToolInput) -> ToolOutput:
+        if {"tz", "timezone"} & input.params.keys():
+            return ToolOutput(success=False, error=TIMEZONE_INPUT_ERROR)
         flow = str(input.params.get("flow", "")).strip()
         if not flow:
             return ToolOutput(success=False, error=NO_FLOW)
@@ -241,7 +242,7 @@ class ScheduleTaskTool(Tool):
         # from a cached description of this tool is not simply refused.
         days = params.get("days", params.get("weekday"))
         try:
-            tz = resolve_zone_name(params.get("tz"))
+            tz = local_timezone_name()
             label = str(params.get("label", "")).strip()
             entry = CronEntry(
                 name=await self._cron_store.unique_name(label or task),

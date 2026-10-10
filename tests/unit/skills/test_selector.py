@@ -148,3 +148,65 @@ async def test_self_extension_prompts_select_the_matching_authoring_skill(tmp_pa
 
     assert intent in picked[0].intents
     assert picked[0].name == expected
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "This is my project folder, tell me what all did we do for the last month or 2",
+        "Summarize our progress last month",
+        "What have we done recently?",
+        "Recap the previous work",
+        "Summarize the code we implemented last month",
+    ],
+)
+async def test_retrospectives_do_not_inject_unrelated_action_skills(tmp_path, prompt):
+    _write_skill(tmp_path, "jobs", "Use when preparing job applications", ["implement"])
+    _write_skill(tmp_path, "flow", "Use when creating a flow", ["create-flow"])
+    _write_skill(tmp_path, "legacy-jobs", "Use when preparing job applications")
+    calls = []
+
+    async def embed(texts):
+        calls.append(texts)
+        return [[1.0] for _ in texts]  # even a perfect semantic score cannot override intent
+
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=embed)
+
+    assert await selector.select(prompt) == []
+    assert calls == [], "don't spend an embedding call when no skill is eligible"
+
+
+async def test_known_intent_without_a_matching_skill_does_not_fall_back(tmp_path):
+    _write_skill(tmp_path, "flow", "Use when creating a flow", ["create-flow"])
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=_fake_embed, min_similarity=0.0)
+
+    assert await selector.select("Implement a function") == []
+
+
+async def test_explicit_intent_match_wins_over_unannotated_semantic_matches(tmp_path):
+    _write_skill(tmp_path, "jobs", "Use when preparing job applications")
+    _write_skill(tmp_path, "flow", "Use when creating a flow", ["create-flow"])
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=_fake_embed, min_similarity=0.0)
+
+    assert [s.name for s in await selector.select("Create a flow for job applications")] == ["flow"]
+
+
+async def test_a_declared_summary_skill_can_still_be_selected(tmp_path):
+    _write_skill(tmp_path, "retrospective", "Use when summarizing previous work", ["summarize"])
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=_fake_embed, min_similarity=0.0)
+
+    assert [s.name for s in await selector.select("What did we do last month?")] == ["retrospective"]
+
+
+async def test_legacy_skills_without_metadata_still_match_action_requests(tmp_path):
+    _write_skill(tmp_path, "add-tool", "Use when adding a tool")
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=_fake_embed)
+
+    assert [s.name for s in await selector.select("add a tool")] == ["add-tool"]
+
+
+async def test_history_plus_a_new_action_still_selects_the_action_skill(tmp_path):
+    _write_skill(tmp_path, "implement", "Use when implementing code", ["implement"])
+    selector = SkillSelector(SkillRegistry(builtin_dir=tmp_path), embed_fn=_fake_embed, min_similarity=0.0)
+
+    assert [s.name for s in await selector.select("Summarize last month and implement subtract")] == ["implement"]

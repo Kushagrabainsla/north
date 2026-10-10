@@ -1,21 +1,24 @@
-"""Dashboard management routes for agents' procedural skills and flows."""
+"""Dashboard management views over existing skills, flows and user settings."""
 
 from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 import yaml
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from config.browser_profiles import BrowserProfile, SetupProgress, discover_browser_profiles
 from flows.exceptions import FlowNotFoundError, FlowParseError
 from flows.models import FLOW_FILENAME, FlowSource, flow_fingerprint
 from flows.registry import parse_flow_document
 from flows.store import FlowRun
 from flows.validation import schedulable_flow_error, validate_flow_capabilities
+from inference.registry import PROVIDER_DEFINITIONS
 from jobs.models import JobStatus
 from orchestrator.api_context import current_services
 from skills.exceptions import SkillNotFoundError, SkillParseError
@@ -24,6 +27,7 @@ from skills.parser import parse_skill_document
 from skills.registry import parse_execution_contract, rejection_reason
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.universal.browser import browser_availability
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_tool import (
@@ -146,6 +150,7 @@ def _validate_flow_definition(flow) -> None:
         skill_registry=services.skill_registry,
         agent_registry=services.agent_registry,
         tool_registry=services.tool_registry,
+        allow_candidate_skills=flow.status == "candidate",
     )
     if not report.valid:
         raise HTTPException(status_code=422, detail="Flow is not executable: " + "; ".join(report.errors))
@@ -601,6 +606,7 @@ async def list_flow_runs(flow: str | None = None, limit: int = 50) -> list[dict[
 
 class FlowRunRequest(BaseModel):
     mode: str = Field(default="test", pattern="^(test|execute)$")
+    inputs: dict[str, Any] = Field(default_factory=dict)
 
 
 class FlowActivation(BaseModel):
@@ -610,22 +616,24 @@ class FlowActivation(BaseModel):
 class FlowScheduleCreate(BaseModel):
     """When a flow should run. The flow carries the work, so there is no prompt or agent."""
 
+    model_config = ConfigDict(extra="forbid")
+
     label: str = Field(default="", max_length=200)
     hour: int | None = None
     minute: int | None = None
     interval_minutes: int | None = None
     days: Any = None
-    tz: str | None = None
     run_at: str | None = None
 
 
 class FlowScheduleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     label: str | None = Field(default=None, max_length=200)
     hour: int | None = None
     minute: int | None = None
     interval_minutes: int | None = None
     days: Any = None
-    tz: str | None = None
     enabled: bool | None = None
 
 
@@ -747,6 +755,7 @@ async def start_flow_run(name: str, body: FlowRunRequest) -> dict[str, Any]:
             skill_registry=skills,
             agent_registry=services.agent_registry,
             tool_registry=services.tool_registry,
+            allow_candidate_skills=True,
         )
         problem = "Flow is not executable: " + "; ".join(report.errors) if not report.valid else ""
     else:
@@ -771,9 +780,12 @@ async def start_flow_run(name: str, body: FlowRunRequest) -> dict[str, Any]:
         flow_fingerprint=flow_fingerprint(flow, skills.get if skills is not None else None),
         test_mode=test_mode,
         trigger=trigger,
+        inputs=body.inputs,
     )
 
-    _drive_in_background(runner, store, name, run_id=run_id, task_id=task_id, test_mode=test_mode, trigger=trigger)
+    _drive_in_background(
+        runner, store, name, run_id=run_id, task_id=task_id, test_mode=test_mode, trigger=trigger, inputs=body.inputs
+    )
     return {"run_id": run_id, "task_id": task_id, "status": "running", "trigger": trigger}
 
 
@@ -978,3 +990,98 @@ async def delete_flow(name: str) -> None:
     if not registry.remove_learned(name):
         raise HTTPException(status_code=404, detail=f"Learned flow {name!r} was not found")
     await _remove_schedules_of(name)
+
+
+def _settings():
+    return current_services().require("north_settings")
+
+
+@router.get("/setup")
+async def get_setup():
+    settings = _settings()
+    return {
+        **settings.setup_progress,
+        "timezone": settings.timezone,
+        "timezone_configured": settings.timezone_configured,
+        "profiles": [profile.catalog_entry() for profile in settings.browser_profiles],
+        "browser": dict(zip(("state", "detail"), browser_availability(), strict=True)),
+        "coding_agents": {name: bool(shutil.which(name)) for name in ("codex", "claude")},
+        "providers": [
+            {
+                "id": p.id,
+                "name": p.display_name,
+                "configured": p.is_configured(settings),
+                "optional": not p.env_key and p.auth_kind.value != "oauth_pkce",
+            }
+            for p in PROVIDER_DEFINITIONS
+        ],
+    }
+
+
+@router.post("/setup")
+async def update_setup(body: SetupProgress):
+    _settings().set_setup_progress(body.model_dump())
+    return await get_setup()
+
+
+class ProfilesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profiles: list[BrowserProfile]
+
+
+@router.get("/browser/profiles")
+async def get_browser_profiles():
+    runtime = current_services().web_runtime
+    return {
+        "profiles": [profile.model_dump() for profile in _settings().browser_profiles],
+        "tests": runtime.browser_tests if runtime is not None else {},
+    }
+
+
+@router.post("/browser/profiles")
+async def update_browser_profiles(body: ProfilesUpdate):
+    try:
+        _settings().set_browser_profiles(body.profiles)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    runtime = current_services().web_runtime
+    if runtime is not None:
+        runtime.browser_tests.clear()  # edits invalidate old readiness evidence
+    return await get_browser_profiles()
+
+
+@router.post("/browser/profiles/discover")
+async def discover_profiles():
+    return {"profiles": await asyncio.to_thread(discover_browser_profiles)}
+
+
+@router.post("/browser/profiles/{profile_id}/test")
+async def test_browser_profile(profile_id: str):
+    """Run only the existing preflight tool, with its ordinary central approval.
+
+    This is a bounded diagnostic, not an LLM task with arbitrary tools. Return
+    immediately so the dashboard can still answer any pending approval card.
+    """
+    settings = _settings()
+    if not any(profile.id == profile_id and profile.enabled for profile in settings.browser_profiles):
+        raise HTTPException(status_code=404, detail="Enabled browser profile not found")
+    runtime = current_services().require("web_runtime")
+    previous = runtime.browser_tests.get(profile_id, {})
+    if previous.get("status") == "running":
+        return previous
+    tool = current_services().require("tool_registry").get("browser")
+    test_id = f"browser-profile-test-{generate_id()}"
+    result = {"test_id": test_id, "status": "running", "profile_id": profile_id}
+    runtime.browser_tests[profile_id] = result
+
+    async def check():
+        try:
+            output = await tool.execute(
+                ToolInput(params={"action": "preflight", "profile_id": profile_id, "task_id": test_id})
+            )
+            result.update(status="completed" if output.success else "failed", data=output.data, error=output.error)
+        except Exception as exc:
+            result.update(status="failed", error=str(exc))
+
+    spawn(check(), name=test_id)
+    return result

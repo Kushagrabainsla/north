@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from flows.exceptions import FlowNotFoundError
 from flows.validation import schedulable_flow_error
@@ -24,7 +24,7 @@ from jobs.scheduler import (
 )
 from orchestrator.api.deps import _get_cron_store, router
 from orchestrator.api_context import current_services
-from utils.time import format_local, is_known_timezone, local_timezone_name, now_epoch
+from utils.time import format_local, local_timezone_name, now_epoch
 from utils.weekdays import parse_weekdays
 
 
@@ -78,6 +78,8 @@ class CronEntryOut(BaseModel):
 class CronEntryCreate(BaseModel):
     """A new schedule. It runs a flow, so all it says is which flow and when."""
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     label: str = ""
     flow: str = Field(min_length=1)
@@ -87,7 +89,6 @@ class CronEntryCreate(BaseModel):
     # Accepts day numbers, day names, or "weekdays" / "weekends" / "daily",
     # matching what the schedule_task tool takes - one vocabulary, two doors.
     days: Any = None
-    tz: str | None = None
     enabled: bool = True
 
 
@@ -101,13 +102,14 @@ class CronEntryUpdate(BaseModel):
     restriction, which is a real change and not the same as omitting the field.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     label: str | None = None
     flow: str | None = None
     hour: int | None = None
     minute: int | None = None
     interval_minutes: int | None = None
     days: Any = None
-    tz: str | None = None
     enabled: bool | None = None
 
 
@@ -155,14 +157,6 @@ def _validate(hour: int | None, minute: int | None, interval_minutes: int | None
         raise HTTPException(status_code=422, detail="minute must be 0-59")
     if interval_minutes is not None and interval_minutes < 1:
         raise HTTPException(status_code=422, detail="interval_minutes must be at least 1")
-
-
-def _timezone(value: str | None) -> str:
-    """Resolve an omitted zone to North's setting and reject misspellings."""
-    name = value or local_timezone_name()
-    if not is_known_timezone(name):
-        raise HTTPException(status_code=422, detail=f"Unknown timezone {name!r}")
-    return name
 
 
 def _days(value: Any) -> frozenset[int] | None:
@@ -252,7 +246,7 @@ async def list_cron_entries(builtin: bool = True) -> list[CronEntryOut]:
 
 @router.post("/cron", response_model=CronEntryOut, status_code=201)
 async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
-    """Add a recurring schedule. Times are wall clock in `tz` (default: North's configured zone)."""
+    """Add a recurring schedule. Times use North's configured timezone."""
     _validate(body.hour, body.minute, body.interval_minutes)
     if (body.hour is None) == (body.interval_minutes is None):
         raise HTTPException(status_code=422, detail="provide exactly one of hour or interval_minutes")
@@ -272,7 +266,7 @@ async def create_cron_entry(body: CronEntryCreate) -> CronEntryOut:
         hour=body.hour or 0,
         minute=0 if body.interval_minutes is not None else body.minute,
         weekdays=_days(body.days),
-        tz=_timezone(body.tz),
+        tz=local_timezone_name(),
         enabled=body.enabled,
         label=body.label,
         interval_minutes=body.interval_minutes,
@@ -300,8 +294,6 @@ async def update_cron_entry(name: str, body: CronEntryUpdate) -> CronEntryOut:
     elif body.hour is not None:
         # Naming a wall-clock hour is the explicit way to leave interval mode.
         changes.update(interval_minutes=None, anchor_epoch=None)
-    if body.tz is not None:
-        changes["tz"] = _timezone(body.tz)
     # `days` is translated rather than passed through, and only when the caller
     # sent it: UNSET is how the store tells "leave the days alone" apart from
     # "clear them back to daily", which both look like None on the wire.

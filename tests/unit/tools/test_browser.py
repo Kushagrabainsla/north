@@ -20,6 +20,17 @@ def _isolated(**params):
     return {"browser_context": "isolated", "context_confirmed": True, **params}
 
 
+def test_browser_guidance_selects_profile_and_reuses_existing_login():
+    guidance = BrowserTool.description
+    assert "which browser profile" in guidance
+    assert "already signed in" in guidance
+    assert "Never silently switch" in guidance
+    assert "read or export passwords" in guidance
+    assert "profile name alone is not a verified connection" in guidance
+    assert "requires_user_action=true" in guidance
+    assert "then inspect and assert" in guidance
+
+
 def test_find_chrome_agent_binary():
     # When shutil.which finds it
     with patch("shutil.which", side_effect=lambda x: "/usr/local/bin/chrome-agent" if x == "chrome-agent" else None):
@@ -59,7 +70,7 @@ def test_build_args_all_actions():
 
     # read
     args = tool._build_args("read", {"url": "https://example.com/blog"}, "task1")
-    assert args == ["--json", "--browser", "task1", "goto", "https://example.com/blog", "--inspect", "read"]
+    assert args == ["--json", "--browser", "task1", "read"]
 
     # click
     args = tool._build_args("click", {"uid": "n12"}, "task1")
@@ -83,7 +94,7 @@ def test_build_args_all_actions():
 
     # close
     args = tool._build_args("close", {}, "task1")
-    assert args == ["--json", "--browser", "task1", "close", "--purge"]
+    assert args == ["--json", "--browser", "task1", "close"]
 
 
 def test_format_output():

@@ -992,6 +992,55 @@ async def test_execute_calls_ordered_preserves_causal_chunks(tmp_path: Path) -> 
     assert execution_order == ["write", "read"]
 
 
+async def test_browser_reads_do_not_run_while_a_human_handoff_waits(tmp_path: Path) -> None:
+    from approval.interaction import UserInteraction
+    from approval.models import ApprovalDecision
+    from approval.store import ApprovalStore
+
+    reads: list[str] = []
+
+    class BrowserRead(Tool):
+        name = "browser_read"
+        is_mutating = False
+        description = "Inspect the browser."
+        parameters_schema = {"type": "object", "properties": {}}
+
+        async def run(self, input: ToolInput) -> ToolOutput:
+            reads.append(input.params["stage"])
+            return ToolOutput(success=True)
+
+    store = ApprovalStore()
+    agent = _load_agent("general", tmp_path)
+    agent.deps.interaction = UserInteraction(store)
+    calls = [
+        ToolCall(name="browser_read", call_id="before", params={"stage": "before"}),
+        ToolCall(
+            name="ask_user",
+            call_id="login",
+            params={"question": "Finish sign-in, then choose Done.", "requires_user_action": True},
+        ),
+        ToolCall(name="browser_read", call_id="after", params={"stage": "after"}),
+    ]
+    work = asyncio.create_task(
+        agent._execute_calls_ordered(calls, AgentPayload(task_id="t1", prompt="Draft"), {"browser_read": BrowserRead()})
+    )
+    try:
+        async with asyncio.timeout(1):
+            while not store.pending():
+                await asyncio.sleep(0)
+        assert reads == ["before"]
+        assert not work.done()
+        [card] = store.pending()
+        store.resolve(card.id, ApprovalDecision.ANSWERED, chosen_option="Done")
+        results = await asyncio.wait_for(work, timeout=1)
+        assert reads == ["before", "after"]
+        assert [result[0].call_id for result in results] == ["before", "login", "after"]
+    finally:
+        if not work.done():
+            work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+
+
 async def test_a_tool_that_takes_the_workspace_lock_itself_is_not_run_under_it(tmp_path: Path) -> None:
     """`coding_agent` lands a change under the workspace lock; the loop holding it too waited for itself for ever."""
     import asyncio
@@ -1163,6 +1212,32 @@ async def test_flow_skill_contract_hard_limits_tools_and_find_tools(tmp_path: Pa
     assert set(tool_map) == {"browser"}
     assert not json.loads(result)["success"]
     assert "write_file" not in tool_map
+
+
+async def test_only_explicit_test_skills_can_load_candidate_procedures(tmp_path: Path) -> None:
+    from skills.models import Skill
+
+    agent = _load_agent("general", tmp_path)
+    skill = Skill(
+        name="custom",
+        description="Use when reviewing custom items.",
+        body="Required private procedure",
+        directory=tmp_path,
+        status="candidate",
+        domains=frozenset({"general"}),
+    )
+    registry = MagicMock()
+    registry.get.return_value = skill
+    registry.all.return_value = [skill]
+    agent._deps.skill_registry = registry
+    with pytest.raises(ValueError, match="not active"):
+        await agent._select_skills("review", ["custom"])
+    selected = await agent._select_skills("review", ["custom"], allow_candidates=True)
+    block = await agent._load_skills_block(
+        AgentPayload(task_id="test", prompt="review", skills=["custom"], allow_candidate_skills=True), selected
+    )
+    assert "Required private procedure" in block
+    assert await agent._select_skills("review", allow_candidates=True) == []
 
 
 # ---------------------------------------------------------------------------

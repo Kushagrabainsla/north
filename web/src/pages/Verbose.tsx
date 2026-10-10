@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { ChangeEvent, TextareaHTMLAttributes } from "react";
 import { api, del, patch, post } from "../api";
+import { BrowserProfiles } from "../browserProfiles";
 import {
   configureDisplayTimezone,
   dateInNorthTimezone,
@@ -2677,9 +2678,11 @@ export function SettingsPage() {
         eyebrow="Configuration"
         title="Settings"
         subtitle="Control how North balances capability, cost, autonomy, and readability."
+        actions={<Link to="/setup">Setup guide</Link>}
       />
       {error && <ErrorNotice message={error} />}
       <div className="settings-grid">
+        <BrowserProfiles/>
         <Panel title="Model routing" label="Who picks">
           <div className="segmented">
             <button

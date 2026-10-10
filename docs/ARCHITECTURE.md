@@ -116,6 +116,12 @@ north extends itself through a small hierarchy. Choosing the right entity is the
 
 The execution hierarchy is **flow -> skill -> tool**. A flow stores no executor or tool choice. An executable skill declares its agent, exact tool allowlist, input/output object schemas, minimum approval, and success criteria; the runner resolves all of them through the skill fingerprint. Skills teach; policies bind. Flow approval modes are server-enforced at the tool boundary, so a read-only skill step cannot mutate merely because its prose was misunderstood. A policy is only as strong as the model that reads it, so critical policies are also backed by deterministic enforcement (approval-gated mutating tools, the Definition-of-Done gate) - see `resources/policies/` and `agents/policy.py`.
 
+User-defined workflows are authored from prompts through `create_skill` and `create_flow` as learned runtime documents, not new built-ins or repository code. Candidate skills may be invoked by exact name in test-mode flows under their usual approval and tool boundaries; they remain excluded from ordinary skill selection, execution-mode flows, and schedules. Activation still requires active dependencies and evidence for the exact definition. Missing or wrongly typed resolved inputs pause before step approval or agent work. The dashboard run API also accepts runtime `inputs`.
+
+Prompt-based authoring gathers missing outcome, input/preferences, output/delivery, workload, safety, and timing choices before creating the candidate. Timing must be explicitly manual-only, one-time, or recurring, with complete date/time or interval details. Timezone is never an intake question or flow input: it comes only from the user's North settings via trusted runtime context. Schedule tools and creation/update APIs do not accept timezone overrides. Recurring flow schedules use the current settings timezone for display and firing calculations, including after a settings change; legacy non-flow entries retain their stored zone. One-time local date/time is resolved to an absolute instant when scheduled, using settings, and is not moved by a later timezone change. Deferring activation does not imply manual-only use. Existing cadence and local clock time are preserved on updates unless the user changes them. This is conversational intake through `ask_user`, not a new scheduling engine or a `FLOW.yaml` schedule field: schedules remain separate records installed through `schedule_task` only after testing and confirmation. Setup summaries distinguish chosen timing pending installation from an installed schedule verified by read-back.
+
+Updating an existing user-authored `SKILL.md` or `FLOW.yaml` requires fresh human approval bound to the proposed parameters, resolved path, and previous content hash. North snapshots the previous version and resets the updated procedure to candidate. This journal entry grants no ownership or future autonomous rewrite authority. Source-edit policies do not opt into this exception; protected paths and root/symlink checks remain enforced.
+
 ---
 
 ## 3. Perception Layer
@@ -696,6 +702,11 @@ POST   /orchestrator/transcribe          -> transcribe raw audio bytes via OpenR
 GET    /orchestrator/settings            -> read current user settings (strategy mode, etc.)
 POST   /orchestrator/settings            -> update user settings
 
+GET/POST /web/api/setup                  -> resumable/skippable dashboard setup progress
+GET/POST /web/api/browser/profiles       -> the profiles in user settings, not flow bindings
+POST   /web/api/browser/profiles/discover -> explicit names/directories-only local discovery
+POST   /web/api/browser/profiles/{id}/test -> bounded browser preflight through Tool.execute
+
 POST   /orchestrator/webhooks/{source}   -> receive an external event and submit it as a task
                                             auth: X-Webhook-Secret header (same shared secret)
                                             body: {prompt, context?}
@@ -707,6 +718,20 @@ POST   /orchestrator/webhooks/{source}   -> receive an external event and submit
 ---
 
 ## 7. Agent Layer
+
+Dashboard setup is a view over existing provider connections, coding-agent availability,
+NorthSettings and ApprovalPolicy. It does not create another runner, credential store,
+profile router or permission system. Setup detects timezone only if Settings has none.
+Browser profiles have owner-defined purposes; the agent selects an enabled `profile_id`
+per tool call from task context and asks through the central policy when ambiguous.
+Existing-browser connections must match the directory reported by `chrome://version`;
+Chrome's own remote-debugging permission cannot be bypassed. HTTP and native WebSocket
+CDP are supported via chrome-agent. No credential copying or silent profile fallback.
+Preflight proves connection/profile identity, not site login or operational flow readiness.
+Pending handoffs block following calls. Every question, including a physical handoff,
+uses the same mode policy; an automatic answer is not evidence the physical action occurred.
+Managed profiles are reused across tasks, with task-specific tabs, and ordinary close
+never purges login data. Profile edits invalidate pending approvals and readiness evidence.
 
 Agents are domain specialists. Each knows one domain and operates only within it. They do not talk to each other directly. All communication goes through the Task Context Object managed by the Orchestrator.
 

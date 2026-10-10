@@ -92,6 +92,12 @@ def _steps(value: str = "ready") -> list[dict]:
     ]
 
 
+def test_tool_description_requires_explicit_timing_intake() -> None:
+    assert "resolve missing setup choices with ask_user" in CreateFlowTool.description
+    assert "manual-only, one-time, or recurring timing (never assume)" in CreateFlowTool.description
+    assert "collecting timing does not install a schedule or authorize activation" in CreateFlowTool.description
+
+
 async def test_creates_and_reloads_skill_based_flow(tmp_path):
     tool, registry, _skills_registry, _agents, _runs = _manager(tmp_path)
 
@@ -122,6 +128,47 @@ async def test_creates_and_reloads_skill_based_flow(tmp_path):
     assert registry.get("job-application-review").status == "candidate"
 
 
+async def test_user_authored_flow_update_needs_fresh_consent_and_preserves_ownership(tmp_path):
+
+    from config.approval_mode import ApprovalMode
+    from policies.self_edit import SelfEditPolicy
+    from tests.conftest import approving_store, bind_approvals, rejecting_store
+
+    tool, registry, *_ = _manager(tmp_path)
+    created = await tool.run(
+        ToolInput(params={"action": "create", "name": "mine", "description": "Original", "steps": _steps()})
+    )
+    path = tool._learned_dir / "mine" / "FLOW.yaml"
+    original = path.read_text()
+    policy = SelfEditPolicy(tool._learned_dir, tmp_path / "mutations", user_document="FLOW.yaml")
+    tool._self_edit_policy = policy
+    call = ToolInput(params={"action": "update", "name": "mine", "description": "Improved", "steps": _steps()})
+    assert created.success
+    assert not (await tool.run(call)).success
+    assert path.read_text() == original
+    store = rejecting_store()
+    bind_approvals(tool, ApprovalMode.YOLO, store=store)
+    assert not (await tool.execute(call)).success
+    store.wait_for_decision.assert_awaited_once()
+    assert path.read_text() == original
+    request = await tool.describe(call)
+    assert request.requires_confirmation
+    approved = call.model_copy(update={"approved": request})
+    store = approving_store()
+    bind_approvals(tool, ApprovalMode.YOLO, store=store)
+    out = await tool.execute(call)
+    store.wait_for_decision.assert_awaited_once()
+    assert out.success and registry.get("mine").status == "candidate"
+    records = policy._read_registry()
+    assert records[-1]["operation"] == "user_update"
+    assert policy.authorize(path, "update") is not None
+    assert policy.revert(records[-1]["id"])
+    assert path.read_text() == original
+    path.write_text(original + "\n# Human changed this after approval\n")
+    assert not (await tool.run(approved)).success
+    assert "Human changed" in path.read_text()
+
+
 async def test_create_flow_rejects_invalid_approval(tmp_path):
     tool, registry, _skills_registry, _agents, _runs = _manager(tmp_path)
     invalid = _steps()
@@ -141,6 +188,27 @@ async def test_create_flow_rejects_invalid_approval(tmp_path):
     assert not out.success
     assert "approval" in out.error
     assert registry.names() == []
+
+
+async def test_list_and_read_describe_existing_flows_without_claiming_creation(tmp_path):
+    tool, _registry, *_ = _manager(tmp_path)
+    created = await tool.run(
+        ToolInput(params={"action": "create", "name": "existing", "description": "Review one item.", "steps": _steps()})
+    )
+    assert created.success
+    listed = await tool.execute(ToolInput(params={"action": "list"}))
+    assert listed.success
+    assert tool.format_output(listed.data) == "existing - Review one item. (1 steps; candidate)"
+    read = await tool.execute(ToolInput(params={"action": "read", "name": "existing"}))
+    assert read.success
+    text = tool.format_output(read.data)
+    assert "candidate; 1 steps" in text and "skill: review-item" in text
+    assert "created" not in text and "None" not in text
+    assert "created at" in tool.format_output(created.data)
+
+
+def test_format_an_empty_flow_list():
+    assert CreateFlowTool.format_output(None, {"flows": []}) == "No flows registered."
 
 
 async def test_create_flow_rejects_boolean_approval_instead_of_silently_changing_it(tmp_path):

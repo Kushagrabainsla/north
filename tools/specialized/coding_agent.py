@@ -1,7 +1,7 @@
 """CodingAgentTool - hand a coding task to the user's installed coding agent.
 
 north does not write code itself (docs/design/coding-agents.md). This runs the user's own
-Claude Code. In plan mode it only reads and answers. In edit mode it changes files in an isolated
+Claude Code or Codex. In plan mode it only reads and answers. In edit mode it changes files in an isolated
 copy of the repository, every action ruled on by the approval layer, and leaves the result on a
 branch; nothing is applied to the real working tree. The run itself goes through the approval
 layer too, and the folder is the one the server granted the task, never one the model names.
@@ -41,13 +41,13 @@ class _Call:
 
 
 class CodingAgentTool(Tool):
-    """Ask the installed coding agent to investigate or plan, read-only."""
+    """Ask an installed coding agent to investigate, plan, or edit in an isolated copy."""
 
     name = "coding_agent"
     locks_workspace_itself = True  # its landing step takes the workspace lock; see `Tool.locks_workspace_itself`
     is_mutating = True  # it starts a process and spends the user's agent quota, so the user's mode decides
     description = (
-        "Hand a coding task to the coding agent installed on this machine (Claude Code). Give it the whole "
+        "Hand a coding task to an installed coding agent (Claude Code or Codex). Give it the whole "
         "task with the context it needs. mode 'plan' (the default) only reads the repository and answers: use "
         "it to investigate unfamiliar code, plan a change or review an approach. mode 'edit' makes the change "
         "in an isolated copy and leaves it on a new branch for the user to review; nothing is applied to the "

@@ -20,6 +20,7 @@ from skills.parser import parse_skill_document
 from skills.registry import parse_execution_contract, rejection_reason
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
+from tools.universal._procedure_edit import begin_edit, describe_user_edit
 
 if TYPE_CHECKING:
     from skills.registry import SkillRegistry
@@ -79,8 +80,8 @@ class CreateSkillTool(Tool):
             },
             "intents": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional supported intent identifiers used by skill selection.",
+                "items": {"type": "string", "enum": [intent.value for intent in SkillIntent]},
+                "description": "Optional fixed intent identifiers, not free-form triggers. Omit when none fits.",
             },
             "execution": {
                 "type": "object",
@@ -88,6 +89,16 @@ class CreateSkillTool(Tool):
                     "Optional flow-execution contract containing agent, exact tools, input/output object "
                     "schemas, minimum approval, and success_criteria. Required before a flow can use the skill."
                 ),
+                "properties": {
+                    "agent": {"type": "string"},
+                    "tools": {"type": "array", "items": {"type": "string"}},
+                    "approval": {"type": "string", "enum": ["never", "on_mutation", "before_step"]},
+                    "inputs": {"type": "object", "description": "JSON object schema for required runtime inputs."},
+                    "outputs": {"type": "object", "description": "JSON object schema for the final result."},
+                    "success_criteria": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                },
+                "required": ["agent", "tools", "approval", "inputs", "outputs", "success_criteria"],
+                "additionalProperties": False,
             },
             "positive_prompts": {
                 "type": "array",
@@ -140,7 +151,11 @@ class CreateSkillTool(Tool):
         """
         if self._will_refuse(input.params):
             return None
-        return await super().describe(input)
+        request = await super().describe(input)
+        if str(input.params.get("action") or "").strip().lower() == "update":
+            path = self._learned_dir / _slug(str(input.params.get("name") or "")) / SKILL_FILENAME
+            return describe_user_edit(self._self_edit_policy, path, input, request)
+        return request
 
     def _will_refuse(self, params: dict[str, Any]) -> bool:
         action = str(params.get("action") or "create").strip().lower()
@@ -158,6 +173,8 @@ class CreateSkillTool(Tool):
             except Exception:
                 return True
         if action in {"create", "update"} and self._self_edit_policy is not None:
+            if action == "update" and not self._self_edit_policy.authorize(path, "user_update"):
+                return False
             return self._self_edit_policy.authorize(path, "update" if path.exists() else "create") is not None
         return False
 
@@ -221,7 +238,11 @@ class CreateSkillTool(Tool):
             return ToolOutput(success=False, error="Parameter 'intents' must be a list of strings.")
         unknown_intents = {item.strip().lower() for item in intents} - {item.value for item in SkillIntent}
         if unknown_intents:
-            return ToolOutput(success=False, error=f"Unknown skill intents: {sorted(unknown_intents)}")
+            return ToolOutput(
+                success=False,
+                error=f"Unknown skill intents: {sorted(unknown_intents)}. "
+                f"Use only {[intent.value for intent in SkillIntent]}, or omit intents.",
+            )
 
         execution_raw = input.params.get("execution")
         try:
@@ -257,7 +278,7 @@ class CreateSkillTool(Tool):
         try:
             operation = "update" if skill_file.exists() else "create"
             mutation = (
-                self._self_edit_policy.begin(skill_file, operation) if self._self_edit_policy is not None else None
+                begin_edit(self._self_edit_policy, skill_file, operation, input) if self._self_edit_policy else None
             )
             # mkdir + write off-thread so the agent loop is never blocked on disk.
             await asyncio.to_thread(_write_skill_file, skill_dir, skill_file, document)

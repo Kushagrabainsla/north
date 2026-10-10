@@ -30,6 +30,7 @@ class SettingsOut(BaseModel):
     timezone: str = "UTC"
     timezone_options: list[str] = Field(default_factory=list)
     local_time: str = ""
+    timezone_configured: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -39,6 +40,7 @@ class SettingsUpdate(BaseModel):
     routing: str | None = None
     model: str | None = None
     timezone: str | None = None
+    initialize_timezone_only: bool = False
 
 
 def _settings_out(settings_obj: NorthSettings | None) -> SettingsOut:
@@ -52,6 +54,7 @@ def _settings_out(settings_obj: NorthSettings | None) -> SettingsOut:
         timezone=settings_obj.timezone if settings_obj else "UTC",
         timezone_options=timezone_names(),
         local_time=format_local(now_epoch()),
+        timezone_configured=settings_obj.timezone_configured if settings_obj else False,
     )
 
 
@@ -67,7 +70,9 @@ async def update_settings(body: SettingsUpdate) -> SettingsOut:
     settings_obj = current_services().north_settings
     # Validate first so a request that also changes another dial cannot be half
     # applied before a bad zone is discovered.
-    if body.timezone is not None:
+    if body.timezone is not None and not (
+        body.initialize_timezone_only and settings_obj is not None and settings_obj.timezone_configured
+    ):
         try:
             if settings_obj is None:
                 configure_timezone(body.timezone)
