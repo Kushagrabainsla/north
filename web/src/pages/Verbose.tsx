@@ -2678,11 +2678,10 @@ export function SettingsPage() {
         eyebrow="Configuration"
         title="Settings"
         subtitle="Control how North balances capability, cost, autonomy, and readability."
-        actions={<Link to="/setup">Setup guide</Link>}
+        actions={<Link className="ghost-button" to="/setup">Setup guide</Link>}
       />
       {error && <ErrorNotice message={error} />}
       <div className="settings-grid">
-        <BrowserProfiles/>
         <Panel title="Model routing" label="Who picks">
           <div className="segmented">
             <button
@@ -2793,6 +2792,7 @@ export function SettingsPage() {
             schedules and times without an explicit zone use this setting.
           </p>
         </Panel>
+        <BrowserProfiles />
       </div>
     </div>
   );

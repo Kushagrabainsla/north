@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { post } from "./api";
-import { ErrorNotice, Panel } from "./components";
+import { Empty, ErrorNotice, Panel } from "./components";
 import { useResource } from "./hooks";
 
 export interface BrowserProfile {
@@ -45,45 +45,47 @@ export function BrowserProfiles() {
       await save([...profiles.filter(profile => profile.id !== draft.id), draft]); setDraft(null);
     });
   };
-  return <Panel title="Browser profiles" label="Chosen per tool call">
-    <p className="muted">Give each profile a purpose. North chooses from the current task context, and asks through the same approval layer when unclear. Profiles are not attached to flows.</p>
+  return <Panel title="Browser profiles" label="Chosen per tool call" className="browser-profiles">
+    <p className="browser-profiles-intro">Give each profile a purpose. North selects it for the current task and asks through your approval mode when unclear—not through a flow setting.</p>
     {(error || resource.error) && <ErrorNotice message={error || resource.error!}/>}
     {resource.loading && <p>Loading profiles…</p>}
+    {!resource.loading && !resource.error && !profiles.length && !draft && <Empty>No browser profiles yet. Connect an existing profile or create a separate one for North.</Empty>}
     {profiles.map(profile => <div className="browser-profile" key={profile.id}>
-      <div><b>{profile.name}{!profile.enabled && " · disabled"}</b><p>{profile.purpose}</p>
-        <small>{profile.context === "existing" ? "Your existing browser" : "North-managed browser"} · {profileTestLabel(resource.data?.tests[profile.id])}</small></div>
+      <div className="browser-profile-main"><b>{profile.name}{!profile.enabled && " · disabled"}</b><p>{profile.purpose}</p>
+        <div className="browser-profile-meta"><span className="status">{profile.context === "existing" ? "Existing browser" : "North-managed"}</span><small role="status">{profileTestLabel(resource.data?.tests[profile.id])}</small></div></div>
       <div className="setup-actions">
-        <button disabled={busy || !profile.enabled || resource.data?.tests[profile.id]?.status === "running"}
+        <button className="ghost-button" disabled={busy || !profile.enabled || resource.data?.tests[profile.id]?.status === "running"}
           onClick={() => void perform(() => post(`/web/api/browser/profiles/${profile.id}/test`, {}))}>Test connection</button>
-        <button disabled={busy} onClick={() => setDraft({ ...profile })}>Edit</button>
-        <button disabled={busy} onClick={() => void perform(() => save(profiles.map(item => item.id === profile.id ? { ...item, enabled: !item.enabled } : item)))}>{profile.enabled ? "Disconnect" : "Enable"}</button>
+        <button className="ghost-button" disabled={busy} aria-label={`Edit ${profile.name}`} onClick={() => setDraft({ ...profile })}>Edit</button>
+        <button className="ghost-button" disabled={busy} onClick={() => void perform(() => save(profiles.map(item => item.id === profile.id ? { ...item, enabled: !item.enabled } : item)))}>{profile.enabled ? "Disconnect" : "Enable"}</button>
       </div>
     </div>)}
-    <div className="setup-actions">
-      <button disabled={busy || resource.loading || !!resource.error} onClick={() => setDraft(newBrowserProfile())}>Add North-managed profile</button>
-      <button disabled={busy} onClick={() => void perform(async () => {
+    <div className="setup-actions browser-profile-toolbar">
+      <button className="ghost-button" disabled={busy || resource.loading || !!resource.error} onClick={() => setDraft(newBrowserProfile())}>Add North-managed profile</button>
+      <button className="ghost-button" disabled={busy} onClick={() => void perform(async () => {
         const result = await post<{ profiles: DiscoveredProfile[] }>("/web/api/browser/profiles/discover", {});
         setFound(result.profiles); if (!result.profiles.length) setError("No supported browser profiles found. Chrome, Chromium and Brave are supported.");
       })}>Find existing profiles</button>
-      <Link to="/approvals">Open Approvals</Link>
+      <Link className="browser-approvals-link" to="/approvals">Open Approvals →</Link>
     </div>
-    <p className="muted">Discovery reads profile names and directories only—not passwords, cookies or browsing history. Disconnect disables North’s use; it does not close your browser or erase logins.</p>
+    <p className="browser-privacy-note">Discovery reads names and directories only, never passwords, cookies or history. Disconnect only disables North’s access; it keeps your browser and logins intact.</p>
     {found.length > 0 && <div className="setup-discovery">{found.map(({ browser, ...profile }) =>
-      <button key={profile.id} disabled={busy} onClick={() => { setDraft({ ...profile, purpose: "", enabled: false }); setFound([]); }}>{browser} · {profile.name}</button>)}</div>}
+      <button className="ghost-button" key={profile.id} disabled={busy} onClick={() => { setDraft({ ...profile, purpose: "", enabled: false }); setFound([]); }}>{browser} · {profile.name}</button>)}</div>}
     {draft && <form className="setup-form" onSubmit={submit}>
+      <div className="setup-form-heading"><h3>{profiles.some(profile => profile.id === draft.id) ? "Edit browser profile" : "Add browser profile"}</h3><p>{draft.context === "existing" ? "Use a profile you already sign in with." : "Keep this browser separate from your personal profiles."}</p></div>
       <label>Name<input required maxLength={100} value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })}/></label>
       <label>Use this profile for<textarea required maxLength={1000} value={draft.purpose} placeholder="University work and job applications" onChange={event => setDraft({ ...draft, purpose: event.target.value })}/></label>
       {draft.context === "existing" ? <>
-        <p>Existing browser access includes logged-in sessions, cookies, tabs and extensions. North checks the actual profile directory before use, never silently switches profiles, and never copies credentials.</p>
-        <p>Open this profile in Chrome. Enable remote debugging at <code>chrome://inspect/#remote-debugging</code>, then approve Chrome’s connection prompt when shown. North cannot bypass that browser permission.</p>
-        <details><summary>Connection details</summary>
+        <div className="setup-connection-note"><p>Access includes this profile’s logged-in sessions, cookies, tabs and extensions. North verifies the profile before use and never copies credentials.</p>
+        <p>Open this profile in Chrome. Enable remote debugging at <code>chrome://inspect/#remote-debugging</code> and approve Chrome’s connection prompt. North cannot bypass this permission.</p></div>
+        <details className="setup-connection-details"><summary>Connection details</summary>
           <label>Browser data directory<input required value={draft.data_directory} onChange={event => setDraft({ ...draft, data_directory: event.target.value })}/></label>
           <label>Profile directory<input required value={draft.profile_directory} onChange={event => setDraft({ ...draft, profile_directory: event.target.value })}/></label>
           <label>Local CDP endpoint (optional)<input value={draft.connect} placeholder="Auto-detect from this browser’s data directory" onChange={event => setDraft({ ...draft, connect: event.target.value })}/></label>
         </details>
-      </> : <label className="setup-check"><input type="checkbox" checked={draft.headed} onChange={event => setDraft({ ...draft, headed: event.target.checked })}/>Show the browser window so I can help when needed</label>}
-      <label className="setup-check"><input type="checkbox" checked={draft.enabled} onChange={event => setDraft({ ...draft, enabled: event.target.checked })}/>Allow North to select this profile (calls still follow my approval mode)</label>
-      <div className="setup-actions"><button className="primary-button" disabled={busy || resource.loading || !!resource.error} type="submit">Save profile</button><button type="button" disabled={busy} onClick={() => setDraft(null)}>Cancel</button></div>
+      </> : <label className="setup-check"><input type="checkbox" checked={draft.headed} onChange={event => setDraft({ ...draft, headed: event.target.checked })}/><span>Show the browser window so I can help when needed</span></label>}
+      <label className="setup-check"><input type="checkbox" checked={draft.enabled} onChange={event => setDraft({ ...draft, enabled: event.target.checked })}/><span>Allow North to select this profile. Calls still follow my approval mode.</span></label>
+      <div className="setup-actions"><button className="primary-button" disabled={busy || resource.loading || !!resource.error} type="submit">Save profile</button><button className="ghost-button" type="button" disabled={busy} onClick={() => setDraft(null)}>Cancel</button></div>
     </form>}
   </Panel>;
 }

@@ -6,6 +6,9 @@ Run: .venv/bin/python -m experiments.browser_setup_ui_probe
 
 from __future__ import annotations
 
+import argparse
+import asyncio
+import base64
 import contextlib
 import json
 import mimetypes
@@ -16,8 +19,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+import aiohttp
+
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--screenshots", type=Path, help="Optional directory for synthetic UI screenshots")
+    options = parser.parse_args()
+    if options.screenshots:
+        options.screenshots.mkdir(parents=True, exist_ok=True)
     dist = Path(__file__).resolve().parents[1] / "web/dist"
     profile_name = f"north-ui-probe-{uuid.uuid4().hex[:12]}"
     settings = {
@@ -25,6 +35,9 @@ def main():
         "timezone_configured": False,
         "autonomy": "ask",
         "autonomy_options": [{"value": "ask", "description": "Ask before actions"}],
+        "routing": "auto",
+        "power": "cruise",
+        "timezone_options": ["UTC"],
     }
     setup = {
         "status": "not_started",
@@ -77,6 +90,25 @@ def main():
             if self.path == "/web/api/browser/profiles":
                 profiles.update(profiles=body["profiles"], tests={})
                 return self.reply(profiles)
+            if self.path == "/web/api/browser/profiles/discover":
+                return self.reply(
+                    {
+                        "profiles": [
+                            {
+                                "id": "synthetic-student",
+                                "name": "Student",
+                                "purpose": "",
+                                "browser": "Chrome",
+                                "context": "existing",
+                                "data_directory": "/tmp/north-ui-synthetic/Chrome",
+                                "profile_directory": "Profile 1",
+                                "connect": "",
+                                "headed": True,
+                                "enabled": False,
+                            }
+                        ]
+                    }
+                )
             if self.path.endswith("/test"):
                 profile_id = self.path.split("/")[-2]
                 profiles["tests"][profile_id] = {"status": "completed", "data": {"profile_verified": True}}
@@ -104,15 +136,94 @@ def main():
         result = run("click", "--selector", selector)
         assert result.get("ok") and result.get("delivery") != "intercepted", result
 
+    def evaluate(script):
+        return run("eval", script)["result"]
+
+    async def check_layout(width, label):
+        # Only this probe's disposable Chrome; never attach to a user browser.
+        root = Path.home() / ".chrome-agent" / "browsers" / profile_name / "chromium-profile"
+        port = (root / "DevToolsActivePort").read_text().splitlines()[0]
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/json/list") as response:
+                targets = await response.json()
+            target = next(t for t in targets if t.get("url", "").startswith(f"http://127.0.0.1:{server.server_port}/"))
+            async with session.ws_connect(target["webSocketDebuggerUrl"]) as socket:
+                command_id = 0
+
+                async def command(method, params):
+                    nonlocal command_id
+                    command_id += 1
+                    await socket.send_json({"id": command_id, "method": method, "params": params})
+                    while True:
+                        message = await socket.receive_json(timeout=10)
+                        if message.get("id") == command_id:
+                            assert "error" not in message, message
+                            return message.get("result", {})
+
+                await command(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": width, "height": 1600, "deviceScaleFactor": 1, "mobile": False},
+                )
+                # Keep the CDP session open: closing it clears its emulation.
+                await command(
+                    "Runtime.evaluate",
+                    {
+                        "expression": "document.fonts.ready.then(() => new Promise(requestAnimationFrame))",
+                        "awaitPromise": True,
+                    },
+                )
+                measured = await command(
+                    "Runtime.evaluate",
+                    {
+                        "returnByValue": True,
+                        "expression": """(() => {
+              const page = document.querySelector('.page');
+              const bounds = page.getBoundingClientRect();
+              const buttons = [...page.querySelectorAll('button')];
+              return {
+                width: innerWidth,
+                pageFits: bounds.right <= innerWidth + 1 && bounds.left >= 0,
+                noOverflow: page.scrollWidth <= page.clientWidth + 1,
+                styledButtons: buttons.every(b => b.matches('.ghost-button, .primary-button, .segmented button')),
+                controlSizes: buttons.every(b => parseFloat(getComputedStyle(b).fontSize) <= 11
+                  && parseFloat(getComputedStyle(b).minHeight) >= 34),
+                formFits: [...page.querySelectorAll('.setup-form input, .setup-form textarea')]
+                  .every(e => e.getBoundingClientRect().right <= bounds.right),
+              };
+            })()""",
+                    },
+                )
+                result = measured["result"]["value"]
+                assert result["width"] == width, result
+                assert all(
+                    result[key] for key in ("pageFits", "noOverflow", "styledButtons", "controlSizes", "formFits")
+                ), result
+                if options.screenshots:
+                    await command(
+                        "Runtime.evaluate",
+                        {"expression": "window.scrollTo(0, 0); document.querySelector('.workspace').scrollTop = 0"},
+                    )
+                    if label.startswith("existing-profile"):
+                        await command(
+                            "Runtime.evaluate", {"expression": "document.querySelector('.setup-form').scrollIntoView()"}
+                        )
+                    capture = await command("Page.captureScreenshot", {"format": "png"})
+                    destination = options.screenshots / f"{label}.png"
+                    destination.write_bytes(base64.b64decode(capture["data"]))
+                return result
+
     try:
         run("goto", f"http://127.0.0.1:{server.server_port}/app/#/setup")
         run("wait", "text", "Connect an AI provider")
         click(".setup-steps button:nth-child(3)")
         run("wait", "text", "Add North-managed profile")
-        click(".setup-actions button")
+        click(".browser-profile-toolbar button")
         run("wait", "selector", ".setup-form")
         run("fill", "--selector", ".setup-form input:not([type=checkbox])", "University")
         run("fill", "--selector", ".setup-form textarea", "University work and job applications")
+        layouts = {}
+        for width in (1440, 820, 390):
+            layouts[f"setup-form-{width}"] = asyncio.run(check_layout(width, f"setup-form-{width}"))
         click(".setup-form button[type=submit]")
         run("wait", "text", "University work and job applications")
         click(".browser-profile .setup-actions button")
@@ -127,6 +238,32 @@ def main():
         click(".browser-profile .setup-actions button:last-child")
         run("wait", "text", "University · disabled")
         assert not profiles["profiles"][0]["enabled"]
+        # The existing Settings dials keep their order. Browser profiles is last
+        # and spans both desktop columns instead of squeezing them into one.
+        click('.header-actions a[href="#/settings"]')
+        run("wait", "text", "Model routing")
+        headings = evaluate(
+            "[...document.querySelectorAll('.settings-grid > .panel > header h2')].map(e => e.textContent)"
+        )
+        assert headings == ["Model routing", "Power", "Autonomy", "Time zone", "Browser profiles"], headings
+        for width in (1440, 820, 390):
+            layouts[f"settings-{width}"] = asyncio.run(check_layout(width, f"settings-{width}"))
+            spans_grid = evaluate(
+                """(() => {
+                  const grid = document.querySelector('.settings-grid').getBoundingClientRect();
+                  const profile = document.querySelector('.browser-profiles').getBoundingClientRect();
+                  return Math.abs(grid.width - profile.width) < 1;
+                })()"""
+            )
+            assert spans_grid
+        # Discovery and permissions render against synthetic profile data only.
+        click(".browser-profile-toolbar button:nth-child(2)")
+        run("wait", "text", "Chrome · Student")
+        click(".setup-discovery button")
+        run("wait", "text", "Connection details")
+        click(".setup-connection-details summary")
+        run("wait", "selector", ".setup-connection-details[open]")
+        layouts["existing-profile-390"] = asyncio.run(check_layout(390, "existing-profile-390"))
         print(
             json.dumps(
                 {
@@ -135,6 +272,8 @@ def main():
                     "profile_create_and_test": True,
                     "reload_resumes_setup": True,
                     "disconnect_disables_only": True,
+                    "settings_profiles_last_and_full_width": True,
+                    "responsive_layouts": layouts,
                 }
             )
         )

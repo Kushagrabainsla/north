@@ -20,7 +20,7 @@ export function SetupReminder() {
   const { data } = useResource<SetupData>("/web/api/setup", 10000);
   if (!data || !setupNeedsAttention(data.status)) return null;
   return <Panel title="Set up North" label="Your connections and preferences" className="setup-reminder">
-    <p>Connect AI, choose browser profiles, and review permissions. You can skip optional steps and return later.</p>
+    <p className="setup-copy">Connect AI, choose browser profiles, and review permissions. Skip optional steps and return whenever you’re ready.</p>
     <Link className="primary-button" to="/setup">{data.status === "in_progress" ? "Continue setup" : "Start setup"}</Link>
   </Panel>;
 }
@@ -49,41 +49,42 @@ export function Setup() {
   const step = data.step;
   const configured = data.providers.filter(provider => !provider.optional && provider.configured);
   return <div className="page setup-page">
-    <PageHeader title="Set up North" eyebrow="Onboarding" subtitle="Use existing connections and settings. No separate approval system." actions={<Link to="/settings">Settings</Link>}/>
+    <PageHeader title="Set up North" eyebrow="Onboarding" subtitle="Connect your tools and browsers. Everything follows your existing approval settings." actions={<Link className="ghost-button" to="/settings">Settings</Link>}/>
     {(error || resource.error) && <ErrorNotice message={error || resource.error!}/>}
-    <nav className="setup-steps" aria-label="Setup steps">{SETUP_STEPS.map((name, index) => <button key={name} aria-current={step === index ? "step" : undefined} disabled={busy} onClick={() => void progress(index)}>{index + 1}. {name}</button>)}</nav>
-    {data.status === "completed" && <p>Setup guide completed. Connections can still need authentication or further checks.</p>}
-    {data.status === "skipped" && <p>Setup skipped. You can continue whenever you like.</p>}
+    <nav className="segmented setup-steps" aria-label="Setup steps">{SETUP_STEPS.map((name, index) => <button key={name} className={step === index ? "active" : ""} aria-current={step === index ? "step" : undefined} disabled={busy} onClick={() => void progress(index)}><span className="setup-step-number">{index + 1}</span>{name}</button>)}</nav>
+    {data.status === "completed" && <p className="setup-copy">Setup guide completed. Connections may still need authentication or further checks.</p>}
+    {data.status === "skipped" && <p className="setup-copy">Setup skipped. You can continue whenever you like.</p>}
     {step === 0 && <Panel title="Connect an AI provider" label="Required for agent tasks">
-      <p>{configured.length ? `Configured: ${configured.map(provider => provider.name).join(", ")}` : "No AI provider configured yet."}</p>
-      <p className="muted">Use North’s existing provider controls. Configured does not mean a live model call has passed.</p>
-      <Link className="primary-button" to="/system">Open provider connections</Link>
+      <div className="setup-copy"><p>{configured.length ? `Configured: ${configured.map(provider => provider.name).join(", ")}` : "No AI provider configured yet."}</p>
+      <p className="muted">Use North’s existing provider controls. Configuration alone does not prove a live model call works.</p></div>
+      <div className="setup-actions"><Link className="primary-button" to="/system">Open provider connections</Link></div>
     </Panel>}
     {step === 1 && <Panel title="Coding agents" label="Optional">
-      {Object.entries(data.coding_agents).map(([name, installed]) => <p key={name}>{name}: {installed ? "installed" : "not found"}</p>)}
-      <p className="muted">North can delegate coding to installed agents. Their own login and quota must also work; installation alone does not prove that.</p>
+      <div className="setup-status-list">{Object.entries(data.coding_agents).map(([name, installed]) => <div key={name}><b>{name}</b><span className={`status status-${installed ? "completed" : "pending"}`}>{installed ? "installed" : "not found"}</span></div>)}</div>
+      <p className="setup-copy muted">North can delegate coding to installed agents. Their own login and quota must also work; installation alone does not prove that.</p>
     </Panel>}
     {step === 2 && <BrowserProfiles/>}
     {step === 3 && <Panel title="One approval layer" label={settings.data?.autonomy || "Permissions"}>
-      <p>{settings.data?.autonomy_options.find(option => option.value === settings.data?.autonomy)?.description}</p>
+      <div className="setup-copy"><p>{settings.data?.autonomy_options.find(option => option.value === settings.data?.autonomy)?.description}</p>
       <p>North’s questions, browser access and login handoffs all use the current approval mode. When a request needs you, the task waits; after the answer, North checks the actual browser state before continuing.</p>
-      <p className="muted">Your timezone comes from Settings. Setup detects it once if unset; flows never ask for a separate timezone.</p>
-      <Link className="primary-button" to="/settings">Review approval mode and settings</Link>
+      <p className="muted">Your timezone comes from Settings. Setup detects it once if unset; flows never ask for a separate timezone.</p></div>
+      <div className="setup-actions"><Link className="primary-button" to="/settings">Review approval mode and settings</Link></div>
     </Panel>}
     {step === 4 && <>
       <Panel title="Check your browser connections" label="Harmless preflight">
-        <p>{data.browser.detail}</p>
-        <p>Test each enabled profile below. Checks open a blank managed page or verify an existing profile’s identity. They do not submit forms, export passwords, activate flows, or prove a site is logged in.</p>
+        <div className="setup-copy"><p className="setup-tool-detail">{data.browser.detail}</p>
+        <p>Test each enabled profile below. Checks open a blank managed page or verify an existing profile’s identity. They do not submit forms, export passwords, activate flows, or prove a site is logged in.</p></div>
       </Panel>
       <BrowserProfiles/>
     </>}
-    <div className="setup-actions">
-      {step > 0 && <button disabled={busy} onClick={() => void progress(step - 1)}>Back</button>}
+    <footer className="setup-footer"><div className="setup-actions">
+      {step > 0 && <button className="ghost-button" disabled={busy} onClick={() => void progress(step - 1)}>Back</button>}
       {step < 4 ? <button className="primary-button" disabled={busy} onClick={() => void progress(step + 1)}>Continue</button>
         : <button className="primary-button" disabled={busy || !configured.length} onClick={() => void progress(4, "completed")}>Finish setup</button>}
-      <button disabled={busy} onClick={() => void progress(step, "skipped")}>Skip setup for now</button>
-      <Link to="/">Dashboard</Link>
-    </div>
-    {step === 4 && !configured.length && <p>Connect an AI provider before finishing, or skip setup for now.</p>}
+    </div><div className="setup-actions">
+      <button className="ghost-button" disabled={busy} onClick={() => void progress(step, "skipped")}>Skip setup for now</button>
+      <Link className="ghost-button" to="/">Dashboard</Link>
+    </div></footer>
+    {step === 4 && !configured.length && <p className="setup-copy">Connect an AI provider before finishing, or skip setup for now.</p>}
   </div>;
 }

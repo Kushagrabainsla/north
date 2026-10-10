@@ -21,6 +21,10 @@ same primitives, but it must not import recorded results.
 - [`browser_setup_ui_probe.py`](browser_setup_ui_probe.py) — click through the
   built dashboard using synthetic APIs and a disposable browser: create a
   purpose-labelled profile, test it, reload/resume setup, and disconnect.
+  It also checks Settings panel order, full-width profile placement, styled
+  controls, and overflow at 1440, 820 and 390 pixels. Add
+  `--screenshots /tmp/north-ui-review` to save synthetic UI captures; emulation
+  stays attached during each check so the measured viewport is the requested size.
   Backend approval and persistence are checked separately by unit/integration
   tests; this probe does not claim a real provider or personal login works.
 
