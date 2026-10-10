@@ -426,6 +426,32 @@ class FlowRunner:
                     ),
                 )
 
+            # A skill can promise files in its structured output, too. Verify
+            # that contract with the same helper as configured `produces`;
+            # prose and schema-valid paths are not evidence of saved work.
+            artifact_schema = output_schema.get("properties", {}).get("artifacts", {})
+            if artifact_schema.get("type") == "array" and artifact_schema.get("items", {}).get("type") == "string":
+                reported = contract_output.get("artifacts", [])
+                paths = [
+                    str(Path(self._workspace) / path) if self._workspace and not Path(path).is_absolute() else path
+                    for path in reported
+                ]
+                # Without a granted workspace a relative path is ambiguous;
+                # the daemon's working directory must not count as evidence.
+                unresolved = [path for path in paths if not Path(path).is_absolute()]
+                missing = [*unresolved, *missing_artifact_paths(path for path in paths if path not in unresolved)]
+                if missing:
+                    return self._store.update(
+                        run.run_id,
+                        status="paused",
+                        current_step=index,
+                        outputs=outputs,
+                        error=f"Skill step '{step.name}' reported missing or empty artifacts: "
+                        + ", ".join(missing)
+                        + (". Use absolute paths when no workspace is configured." if unresolved else ""),
+                    )
+                written = list(dict.fromkeys([*written, *paths]))
+
             outputs.append(
                 {
                     "step": step.name,

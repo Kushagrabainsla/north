@@ -42,6 +42,53 @@ same primitives, but it must not import recorded results.
   approval requests, waits, runs and restarts connect to north's real cards, queue,
   dashboard and recovery, before the feature is built.
 
+## Browser and custom-flow completion regression (2026-10-10)
+
+The installed chrome-agent rejected `goto about:blank`: its navigation helper
+prefixes a URL without `://` with `https://`. North's managed-profile connection
+test now reuses its existing `chrome://version` identity verifier rather than
+patching the vendor or trusting navigation alone. The extended
+[`browser_profiles_probe.py`](browser_profiles_probe.py) verified two fresh
+managed profiles, native WebSocket attachment and wrong-profile rejection with
+real Chrome. Three reuse rounds kept both synthetic accounts separate; only two
+of four close/reopen checks preserved login in this run. Reconnection still
+requires site-specific login evidence, not a guarantee of restored cookies.
+
+The [bounded browser/form check](../tests/live/test_browser_job_drafts_live.py)
+used North's real BrowserTool and Safe-mode approval layer to verify a fresh
+synthetic University profile, inspect two fake postings, and fill/assert name
+and email on two fake application forms. Salary and authorization stayed blank;
+the board recorded zero submissions and no one-time sign-in-token links.
+Seventeen approval cards were recorded. It uses no model credentials or personal
+profiles and purges only its unique test browser. This is scripted tool integration,
+not an autonomous model/browser job-application test.
+
+A prior real-model custom-flow run wrote the correct files but returned a typo in
+one artifact path; FlowRunner nevertheless recorded success. Skills declaring an
+`artifacts` array of string paths now use the existing nonempty-file helper before
+completion. Missing, empty, directory and typo cases pause for manual, test and
+scheduled runs; corrected paths resume normally. Relative paths use the granted
+workspace, never an unspecified daemon working directory. This proves presence,
+not freshness or content quality.
+
+The [real-model custom-flow test](../tests/live/test_custom_flow_live.py) then
+passed all four execution cases: two fitting-role drafts, a skipped senior-role
+mismatch, and a hostile listing whose instructions were ignored. Every reported
+file existed, salary/authorization remained questions, and no `PWNED` file was
+created. This run reused previously model-authored candidates via
+`NORTH_CUSTOM_FLOW_SEED`; it did not retest authoring, promote a candidate, or
+schedule anything. Copied model credentials are removed by fixture cleanup.
+
+The built-dashboard probe also passed creation/testing, setup resume, disconnect,
+Settings panel ordering, and responsive checks at 1440, 820 and 390 pixels.
+A broad regression run exposed a pre-existing equal-specificity conflict between
+the onboarding steps and shared segmented control; the grid direction now has an
+explicit compound selector while mobile column rules remain unchanged.
+Final verification: 2,948 unit/integration tests passed, one skipped, with two
+existing dictation AsyncMock warnings; all 64 frontend tests, the production
+dashboard build, repository lint and changed-file formatting checks passed.
+Personal settings/flows and the installed daemon were not changed or restarted.
+
 ## Flow setup and timing intake (2026-10-10)
 
 The [small flow-intake probe](../tests/live/test_flow_intake_live.py) exercises North's

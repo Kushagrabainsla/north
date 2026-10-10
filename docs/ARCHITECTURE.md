@@ -728,10 +728,21 @@ Existing-browser connections must match the directory reported by `chrome://vers
 Chrome's own remote-debugging permission cannot be bypassed. HTTP and native WebSocket
 CDP are supported via chrome-agent. No credential copying or silent profile fallback.
 Preflight proves connection/profile identity, not site login or operational flow readiness.
+Managed and existing profiles share the same `chrome://version` identity check. A
+successful navigation alone cannot mark a managed connection verified.
 Pending handoffs block following calls. Every question, including a physical handoff,
 uses the same mode policy; an automatic answer is not evidence the physical action occurred.
 Managed profiles are reused across tasks, with task-specific tabs, and ordinary close
 never purges login data. Profile edits invalidate pending approvals and readiness evidence.
+
+Executable skills may declare `artifacts` as an array of string file paths in their
+output schema. FlowRunner checks these paths with the existing nonempty-file helper
+before advancing the step, for manual, test and scheduled runs. Relative paths resolve
+against the server-granted workspace; without one they must be absolute. Missing or
+empty files pause the run at that step with the invalid paths, preserving earlier
+outputs and using ordinary resume/approval handling. Verified paths join configured
+`produces` evidence in run history. This proves file presence, not content quality,
+freshness, or permission to send anything. Other artifact shapes are not file claims.
 
 Agents are domain specialists. Each knows one domain and operates only within it. They do not talk to each other directly. All communication goes through the Task Context Object managed by the Orchestrator.
 

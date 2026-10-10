@@ -65,9 +65,17 @@ async def test_no_unknown_profile_fallback_or_raw_override(settings, params):
 
 
 @pytest.mark.asyncio
-async def test_managed_profile_persists_across_tasks_but_tabs_are_separate(settings):
+async def test_managed_preflight_reuses_the_identity_page_but_binds_each_task(settings):
     tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
-    with patch("tools.universal.browser._run_chrome_agent", new_callable=AsyncMock, return_value=result()) as command:
+    profile = settings.browser_profiles[1]
+    with (
+        patch("tools.universal.browser.active_cdp_endpoint", return_value="ws://127.0.0.1:9222/devtools/browser/test"),
+        patch(
+            "tools.universal.browser._run_chrome_agent",
+            new_callable=AsyncMock,
+            side_effect=[result(), result(result=str(profile.managed_directory / "Default"))] * 2,
+        ) as command,
+    ):
         for task in ("one", "two"):
             output = await tool.run(
                 ToolInput(params={"action": "preflight", "profile_id": "personal", "task_id": task})
@@ -76,8 +84,38 @@ async def test_managed_profile_persists_across_tasks_but_tabs_are_separate(setti
             assert not output.data["login_verified"]
     commands = [call.args[0] for call in command.call_args_list]
     assert all(cmd[cmd.index("--browser") + 1] == "north-personal" for cmd in commands)
-    assert [cmd[cmd.index("--page") + 1] for cmd in commands] == ["task-one", "task-two"]
-    assert all("about:blank" in cmd and "--purge" not in cmd and "--copy-cookies" not in cmd for cmd in commands)
+    assert all(cmd[cmd.index("--page") + 1] == "north-profile-check" for cmd in commands)
+    assert all("chrome://version" in commands[index] for index in (0, 2))
+    assert all("about:blank" not in cmd and "--purge" not in cmd and "--copy-cookies" not in cmd for cmd in commands)
+    assert {key[0] for key in tool._verified_bindings} == {"one", "two"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", ["/tmp/wrong/Default", "", None])
+async def test_managed_preflight_does_not_claim_success_without_correct_identity(settings, identity):
+    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
+    with patch(
+        "tools.universal.browser._run_chrome_agent",
+        new_callable=AsyncMock,
+        side_effect=[result(), result(result=identity)],
+    ):
+        output = await tool.run(ToolInput(params={"action": "preflight", "profile_id": "personal"}))
+    assert not output.success and "different profile" in output.error
+    assert not tool._verified_bindings
+
+
+@pytest.mark.asyncio
+async def test_managed_preflight_propagates_failed_identity_navigation(settings):
+    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
+    with patch(
+        "tools.universal.browser._run_chrome_agent",
+        new_callable=AsyncMock,
+        return_value=_CommandResult(returncode=1, stdout='{"ok":false}', stderr="navigation failed"),
+    ) as command:
+        output = await tool.run(ToolInput(params={"action": "preflight", "profile_id": "personal"}))
+    assert not output.success
+    assert command.call_count == 1
+    assert not tool._verified_bindings
 
 
 @pytest.mark.asyncio

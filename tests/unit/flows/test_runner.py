@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 from agents.models import AgentResult
 from approval import ApprovalDecision
 from flows.registry import FlowRegistry
@@ -412,6 +414,124 @@ steps:
     instructions: Inspect one item.
     approval: never
 """
+
+
+class ArtifactAgent(FakeAgent):
+    def __init__(self, paths):
+        super().__init__()
+        self.paths = paths
+
+    async def run(self, payload):
+        self.payloads.append(payload)
+        return AgentResult(output="Saved the drafts.", summary="Prepared drafts.", data={"artifacts": self.paths})
+
+
+def _artifact_skills(tmp_path):
+    skills = _skills(tmp_path)
+    skill = skills.get("review-item")
+    skills._skills[skill.name] = replace(
+        skill,
+        execution=replace(
+            skill.execution,
+            outputs={
+                "type": "object",
+                "properties": {"artifacts": {"type": "array", "items": {"type": "string"}}},
+                "required": ["artifacts"],
+            },
+        ),
+    )
+    return skills
+
+
+@pytest.mark.parametrize("trigger", ["manual", "test", "schedule"])
+@pytest.mark.parametrize("invalid", ["missing", "empty", "directory", "typo"])
+async def test_reported_artifacts_must_be_real_nonempty_files_before_completion(tmp_path, trigger, invalid):
+    path = tmp_path / "fit.md"
+    if invalid == "empty":
+        path.touch()
+    elif invalid == "directory":
+        path.mkdir()
+    elif invalid == "typo":
+        path.write_text("Actual saved fit assessment.")
+        path = tmp_path / "wrong-user-name" / "fit.md"
+    agent = ArtifactAgent([str(path)])
+    store = FlowRunStore(tmp_path / "runs.db")
+    runner = FlowRunner(_flow(tmp_path, _ONE_STEP), FakeAgents(agent), _artifact_skills(tmp_path), store)
+    run = await runner.run("demo", trigger=trigger, test_mode=trigger == "test")
+    assert run.status == "paused" and run.current_step == 0 and run.outputs == []
+    assert "reported missing or empty artifacts" in run.error and str(path) in run.error
+    assert store.get(run.run_id).status == "paused"
+
+
+async def test_artifact_failure_resumes_with_corrected_evidence_and_records_verified_files(tmp_path):
+    target = tmp_path / "fit.md"
+    target.write_text("Saved assessment.")
+    agent = ArtifactAgent([str(tmp_path / "typo" / "fit.md")])
+    agent.config = SimpleNamespace(produces=[str(target)])
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP), FakeAgents(agent), _artifact_skills(tmp_path), FlowRunStore(tmp_path / "runs.db")
+    )
+    paused = await runner.run("demo")
+    assert paused.status == "paused"
+    agent.paths = [str(target), str(target)]
+    resumed = await runner.run("demo", run_id=paused.run_id)
+    assert resumed.status == "completed" and resumed.run_id == paused.run_id
+    assert resumed.outputs[0]["data"]["artifacts"] == [str(target)]
+    assert "reported missing or empty artifacts" in agent.payloads[-1].prompt
+
+
+async def test_relative_artifacts_resolve_in_the_granted_workspace_not_process_directory(tmp_path):
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    (workspace / "fit.md").write_text("Saved assessment.")
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(ArtifactAgent(["fit.md"])),
+        _artifact_skills(tmp_path),
+        FlowRunStore(tmp_path / "runs.db"),
+        workspace=str(workspace),
+    )
+    run = await runner.run("demo")
+    assert run.status == "completed"
+    assert run.outputs[0]["data"]["artifacts"] == [str(workspace / "fit.md")]
+
+
+async def test_relative_artifacts_without_a_workspace_do_not_use_daemon_files(tmp_path, monkeypatch):
+    (tmp_path / "fit.md").write_text("An unrelated file in the process directory.")
+    monkeypatch.chdir(tmp_path)
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(ArtifactAgent(["fit.md"])),
+        _artifact_skills(tmp_path),
+        FlowRunStore(tmp_path / "runs.db"),
+    )
+    run = await runner.run("demo")
+    assert run.status == "paused" and "Use absolute paths" in run.error
+
+
+async def test_artifact_objects_are_not_mistaken_for_local_file_paths(tmp_path):
+    skills = _skills(tmp_path)
+    skill = skills.get("review-item")
+    skills._skills[skill.name] = replace(
+        skill,
+        execution=replace(
+            skill.execution,
+            outputs={
+                "type": "object",
+                "properties": {
+                    "artifacts": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+        ),
+    )
+    runner = FlowRunner(
+        _flow(tmp_path, _ONE_STEP),
+        FakeAgents(ArtifactAgent([{"name": "review draft"}])),
+        skills,
+        FlowRunStore(tmp_path / "runs.db"),
+    )
+    run = await runner.run("demo")
+    assert run.status == "completed" and run.outputs[0]["data"]["artifacts"] == []
 
 
 async def test_a_scheduled_run_pauses_when_the_agent_never_wrote_its_declared_file(tmp_path):

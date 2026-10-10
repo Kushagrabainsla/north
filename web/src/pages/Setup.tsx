@@ -73,7 +73,7 @@ export function Setup() {
     {step === 4 && <>
       <Panel title="Check your browser connections" label="Harmless preflight">
         <div className="setup-copy"><p className="setup-tool-detail">{data.browser.detail}</p>
-        <p>Test each enabled profile below. Checks open a blank managed page or verify an existing profile’s identity. They do not submit forms, export passwords, activate flows, or prove a site is logged in.</p></div>
+        <p>Test each enabled profile below. Checks open Chrome’s profile information page and verify the profile’s identity. They do not submit forms, export passwords, activate flows, or prove a site is logged in.</p></div>
       </Panel>
       <BrowserProfiles/>
     </>}

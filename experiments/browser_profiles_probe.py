@@ -74,7 +74,27 @@ def main():
             await socket.send_json({"id": 1, "method": "Browser.close"})
             await socket.receive(timeout=5)
 
+    async def check_managed(settings):
+        tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
+        tool.approvals = Approvals(ApprovalPolicy(mode_provider=lambda: ApprovalMode.YOLO), None)
+        for profile in settings.browser_profiles:
+            out = await tool.execute(
+                ToolInput(params={"action": "preflight", "profile_id": profile.id, "task_id": "fresh-managed-probe"})
+            )
+            assert out.success and out.data["profile_verified"], out.error
+            assert not out.data["login_verified"]
+        return {"fresh_managed_profiles_verified": len(settings.browser_profiles)}
+
     try:
+        with TemporaryDirectory(prefix="north-managed-preflight-") as scratch:
+            settings = NorthSettings(Path(scratch) / "settings.json")
+            settings.set_browser_profiles(
+                [
+                    BrowserProfile(id=name.removeprefix("north-"), name=name, purpose="Synthetic probe", headed=False)
+                    for name in names
+                ]
+            )
+            results.append(asyncio.run(check_managed(settings)))
         for name in names:
             run(name, "goto", url)
         for name, account in zip(names, ("personal", "university"), strict=True):

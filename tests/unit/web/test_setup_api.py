@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -83,12 +84,16 @@ async def test_preflight_uses_real_central_approval_and_returns_without_blocking
     registry.register(tool)
     wired = services.replace(tool_registry=registry)
     command_result = _CommandResult(returncode=0, stdout='{"ok":true}', stderr="")
+    profile = services.north_settings.browser_profiles[0]
+    identity = _CommandResult(
+        returncode=0, stdout=json.dumps({"ok": True, "result": str(profile.managed_directory / "Default")}), stderr=""
+    )
     with (
         bind_services(wired),
         patch(
-            "tools.universal.browser._run_chrome_agent", new_callable=AsyncMock, return_value=command_result
+            "tools.universal.browser._run_chrome_agent", new_callable=AsyncMock, side_effect=[command_result, identity]
         ) as command,
-        patch("tools.universal.browser.active_cdp_endpoint", side_effect=ValueError("Not running")),
+        patch("tools.universal.browser.active_cdp_endpoint", return_value="ws://127.0.0.1:9222/devtools/browser/test"),
     ):
         result = await setup.test_browser_profile("university")
         duplicate = await setup.test_browser_profile("university")
@@ -106,8 +111,9 @@ async def test_preflight_uses_real_central_approval_and_returns_without_blocking
         assert result["status"] == "completed"
         assert result["data"]["profile_verified"]
         assert not result["data"]["login_verified"]
-        [call] = command.call_args_list
-        assert "about:blank" in call.args[0]
+        [navigation, check] = command.call_args_list
+        assert "chrome://version" in navigation.args[0]
+        assert "eval" in check.args[0]
 
 
 def test_setup_routes_inherit_existing_session_and_csrf_protection(services):

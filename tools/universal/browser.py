@@ -574,7 +574,7 @@ class BrowserTool(Tool):
         "  - 'screenshot', 'pdf': Capture viewport or full page to a file.\n"
         "  - 'eval': Execute JavaScript in the page context.\n"
         "  - 'assert': Deterministically verify page text, values, element existence, or state.\n"
-        "  - 'preflight': Verify an existing-browser CDP endpoint with /json/version before use.\n"
+        "  - 'preflight': Verify the selected managed or existing browser's actual profile identity before use.\n"
         "  - 'wait': Wait for text, selector, URL, or network-idle.\n"
         "  - 'close': Close the browser instance or tab for this task."
     )
@@ -765,7 +765,8 @@ class BrowserTool(Tool):
         return [*self._get_cmd(), *self._session_args(params, session)]
 
     async def _verify_profile(self, profile, params: dict, timeout: int) -> ToolOutput:
-        endpoint = str(params["connect"])
+        endpoint = str(params.get("connect") or "")
+        connection_data = {}
         if urlparse(endpoint).scheme in {"ws", "wss"}:
             # Chrome's built-in remote debugging may expose only WebSocket CDP,
             # not /json/version. Let chrome-agent perform its native handshake;
@@ -776,7 +777,7 @@ class BrowserTool(Tool):
                 "endpoint": base,
                 "connection_id": hashlib.sha256(endpoint.encode()).hexdigest(),
             }
-        else:
+        elif endpoint:
             connection = await asyncio.to_thread(_probe_cdp_endpoint, endpoint, timeout)
             if not connection.success:
                 return connection
@@ -803,6 +804,15 @@ class BrowserTool(Tool):
                     "Chrome and retry. North will not use another account or copy cookies."
                 ),
             )
+        if not endpoint:
+            # Managed sessions launch through the same vendor commands. The
+            # successful identity read is evidence, not an optimistic goto.
+            endpoint = active_cdp_endpoint(profile.managed_directory)
+            connection_data = {
+                "action": "preflight",
+                "endpoint": _cdp_http_base(endpoint),
+                "connection_id": hashlib.sha256(endpoint.encode()).hexdigest(),
+            }
         key = (str(params.get("task_id") or "default"), profile.id)
         self._verified_bindings[key] = (profile.model_dump_json(), connection_data["connection_id"])
         return ToolOutput(
@@ -997,6 +1007,11 @@ class BrowserTool(Tool):
                     return preflight
         elif action == "preflight" and profile is None:
             return ToolOutput(success=False, error="CDP preflight requires browser_context='existing' and connect.")
+        elif action == "preflight":
+            try:
+                return await self._verify_profile(profile, params, int(params.get("timeout_seconds", 30)))
+            except (RuntimeError, ValueError, OSError) as exc:
+                return ToolOutput(success=False, error=f"Profile verification failed: {exc}")
 
         unsafe_url = _unsafe_url_reason(action, params)
         if unsafe_url:
@@ -1008,9 +1023,6 @@ class BrowserTool(Tool):
             if action == "close" and profile.context == "existing":
                 return ToolOutput(success=False, error="North will not close your existing browser. Close it yourself.")
             params["page"] = f"task-{str(input.params.get('task_id') or 'default')}"
-            if action == "preflight":
-                params = {**params, "url": "about:blank", "stealth": False}
-                action = "goto"
         try:
             command = self._get_cmd() + self._build_args(action, params, session_id)
         except (RuntimeError, ValueError) as exc:
@@ -1051,6 +1063,4 @@ class BrowserTool(Tool):
                                 profile.model_dump_json(),
                                 hashlib.sha256(endpoint.encode()).hexdigest(),
                             )
-            if input.params.get("action") == "preflight" and output.success:
-                output.data.update(verified=True, profile_verified=True, login_verified=False)
         return output
