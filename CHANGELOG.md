@@ -3,7 +3,16 @@
 All notable changes to north are documented here.
 
 ## [Unreleased]
+
 ### Added
+
+### Fixed
+
+## [1.21.0] - 2026-10-10
+
+### Added
+- Existing Chrome profiles use public Puppeteer Core through North's existing MCP client and approval layer, with a verified separate window per task/profile, preserved drafts on worker restart, owned-tab-only close, and no automatic replay after uncertain browser actions.
+- Reproducible existing-Chrome CDP experiments using public Puppeteer Core: actual-profile verification, wrong-profile rejection before form interaction, synthetic field filling, and owned-tab cleanup. The initial prototype passed three fresh connections and nine fill rounds; this alone does not prove real job-flow readiness.
 - **Work left for the user is offered once** (`agents/agentic_llm_agent.py`, `tools/universal/offered_before.py`, `jobs/seen.py`). `request_approval(wait=false)` takes `item_keys` (an item's address, its "company | role"), and north makes no card for an item offered before, whichever flow found it; the new read-only `offered_before` tool lets an agent check before doing any work, so a repeat never gets a filled-in form. Both use `jobs/seen.py`, which matches a link without its tracking parameters and catches cross-posts by company and role; it existed since September, but nothing used it. Keeping that list had been left to the agent, which wrote it to the wrong place, or not at all, run after run.
 - **A browser category in safe mode's safe list** (`approval/unattended_rules.py`, `approval/unattended.py`, `approval/policy.py`, the Settings page). Opening pages, filling fields, typing and choosing options can run without asking, so a run drafting an application does not stop at every field (a test run raised 11 cards for 2 jobs; with the rules on, the fields raise none). Shipped switched off, and restoring defaults never switches it on: a page can read a field as it is typed, so filling forms on their own is the user's trade to make. A click or key press can never be in the list: `add` refuses it and the matcher ignores a row naming one. For browser actions the browser's own page-based flags decide what sends or pays; the word list, a backstop for tools that report nothing, read field labels and took every "Email" field for sending an email.
 - **`request_approval` can leave work without waiting** (`agents/agentic_llm_agent.py`, `agents/schemas.py`). With `wait: false` the card is left for the user and the run carries on, so a run preparing five applications no longer waits on each in turn. `UserInteraction.hand_over` already existed for this, but no agent could reach it.
@@ -14,6 +23,9 @@ All notable changes to north are documented here.
 - **A nightly smoke run** (`scripts/smoke.sh`, `scripts/install_smoke_schedule.sh`). Lint, the whole suite and the live Claude and Codex tests, every night at 03:30 (on wake if the Mac was asleep), with a dated report in `~/.north/smoke` and a macOS notification when anything fails.
 
 ### Fixed
+- MCP calls keep North's injected task/workspace context out of external arguments and approval descriptions unless the server explicitly declares those fields, fixing strict Gmail searches without changing the approval policy.
+- Saved existing profiles no longer depend on chrome-agent's HTTP target discovery. Native WebSocket connections use the public SDK; profile mismatch remains a blocker and requires selecting the intended Chrome window through the existing approval handoff.
+- Browser experiment notes use generic profile labels and distinguish capability tests from real custom-flow readiness.
 - Managed browser connection tests use Chrome's supported profile-information page and verify the actual directory, instead of failing on `about:blank` or claiming identity from navigation alone.
 - Onboarding steps explicitly override the shared segmented control's grid direction, so their responsive layout does not depend on stylesheet order.
 - Custom flow steps declaring an `artifacts` array of file paths pause on missing, empty, or unresolved files before recording success; corrected evidence resumes through the existing runner and verified files appear in run history.

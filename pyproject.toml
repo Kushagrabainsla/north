@@ -1,6 +1,6 @@
 [project]
 name = "north"
-version = "1.20.1"
+version = "1.21.0"
 description = "north - Personal Life Operating System."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -87,6 +87,10 @@ resources = [
     "policies/*.md",
     "builtin-skills/**/*.md",
     "builtin-flows/**/*.yaml",
+    # Existing-profile browser SDK is pinned in this npm manifest/lock, installed
+    # on first approved use; Puppeteer Core never downloads or launches Chrome.
+    "browser/*.mjs",
+    "browser/package*.json",
 ]
 web = [
     "dist/*.html",

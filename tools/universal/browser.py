@@ -1,7 +1,8 @@
 """BrowserTool — autonomous browser automation and structured web extraction.
 
 Universal tool available to all agents (general, researcher, coder, news_briefing, wellness, etc.).
-Wraps the chrome-agent Rust CLI (https://github.com/sderosiaux/chrome-agent) over Chrome CDP.
+Managed sessions use chrome-agent; existing profiles use public Puppeteer Core
+through a private MCP bridge. Both share this tool and North's approval layer.
 Provides:
   1. Token-efficient structured record extraction (MDR/DEPTA heuristics via 'extract').
   2. Reader mode article/documentation extraction ('read').
@@ -34,6 +35,7 @@ from config.browser_connection import cdp_http_base as _cdp_http_base
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
 from tools.universal.browser_describe import describe_browser_call
+from tools.universal.browser_native import ExistingChrome
 from utils.net import UnsafeUrlError, validate_public_url
 
 if TYPE_CHECKING:
@@ -551,7 +553,16 @@ class BrowserTool(Tool):
         "route questions through ask_user and actions through the ordinary approval layer; the mode "
         "decides who answers. Resolve the chosen context through the supported connection and preflight: "
         "a profile name alone is not a verified connection. Never silently switch profiles or copy "
-        "cookies as a fallback. Check the expected account on the target site; if already signed in, "
+        "cookies as a fallback. Existing profiles get a separate task-owned window in that same Chrome profile. "
+        "Native CDP creates windows in Chrome's last-selected profile. If preflight reports a mismatch, "
+        "ask_user with requires_user_action=true to bring the chosen profile's window to the front; "
+        "then retry preflight, not the interrupted business action. Do not try other accounts. "
+        "Reuse it for "
+        "the whole task and pauses; never navigate or close the user's unrelated tabs. Windows share "
+        "profile logins/cookies and are not separate accounts. Keep drafts open for review unless the "
+        "user requests close; close affects only the task's North-owned tab, never Chrome itself. "
+        "If an action's outcome is unknown, inspect and ask for review; never repeat it automatically. "
+        "Check the expected account on the target site; if already signed in, "
         "reuse that session without asking the user to log in again. Saved passwords alone do not "
         "prove an active login. Ask for user sign-in help only when the site requires it, such as "
         "an expired session, MFA, or password-manager unlock. Do not read or export passwords or "
@@ -565,7 +576,7 @@ class BrowserTool(Tool):
         "completed or failed merely because it is waiting, and do not repeat completed external actions. "
         "Actions:\n"
         "  - 'goto' (or 'navigate'): Navigate to URL. Supports --stealth, --copy-cookies, --connect.\n"
-        "  - 'extract': Discover and extract structured lists/tables as JSON records (saves 80% tokens).\n"
+        "  - 'extract': Structured records; existing Chrome supports HTML tables; read/inspect for other listings.\n"
         "  - 'read': Reader-mode extraction of clean article/doc text without ads/nav.\n"
         "  - 'inspect': Accessibility Tree (AXTree) with stable numeric UIDs (e.g. n12), or diff=True.\n"
         "  - 'click', 'dblclick': Click element by UID (e.g. uid='n12'), selector, or coordinates.\n"
@@ -722,9 +733,15 @@ class BrowserTool(Tool):
         "required": ["action"],
     }
 
-    def __init__(self, binary_cmd: list[str] | None = None, north_settings: NorthSettings | None = None) -> None:
+    def __init__(
+        self,
+        binary_cmd: list[str] | None = None,
+        north_settings: NorthSettings | None = None,
+        existing_browser: ExistingChrome | None = None,
+    ) -> None:
         self._binary_cmd = binary_cmd
         self._north_settings = north_settings
+        self._existing_browser = existing_browser
         self._verified_bindings: dict[tuple[str, str], tuple[str, str]] = {}
 
     def _profiles(self):
@@ -765,6 +782,12 @@ class BrowserTool(Tool):
         return [*self._get_cmd(), *self._session_args(params, session)]
 
     async def _verify_profile(self, profile, params: dict, timeout: int) -> ToolOutput:
+        if profile.context == "existing":
+            output = await self._native_call(profile, {**params, "action": "preflight", "timeout_seconds": timeout})
+            if output.success and output.data.get("profile_verified") is True:
+                key = (str(params.get("task_id") or "default"), profile.id)
+                self._verified_bindings[key] = (profile.model_dump_json(), output.data["connection_id"])
+            return output
         endpoint = str(params.get("connect") or "")
         connection_data = {}
         if urlparse(endpoint).scheme in {"ws", "wss"}:
@@ -865,11 +888,16 @@ class BrowserTool(Tool):
                     connection = await self._verify_profile(profile, {**resolved, "connect": endpoint}, 5)
                     if connection.success and binding == (profile.model_dump_json(), connection.data["connection_id"]):
                         resolved["page"] = f"task-{str(params.get('task_id') or 'default')}"
-                        request = await describe_browser_call(
-                            resolved,
-                            self._prefix({**resolved, "connect": endpoint}, profile.browser_name),
-                            _run_chrome_agent,
-                        )
+                        if profile.context == "existing" and self._existing_browser is not None:
+                            request = await describe_browser_call(
+                                resolved, [], self._existing_browser.description_runner(profile, resolved)
+                            )
+                        else:
+                            request = await describe_browser_call(
+                                resolved,
+                                self._prefix({**resolved, "connect": endpoint}, profile.browser_name),
+                                _run_chrome_agent,
+                            )
                         return replace(
                             request,
                             title=f"Browser: {label}",
@@ -898,7 +926,9 @@ class BrowserTool(Tool):
                 title=f"Browser: {label}",
                 prepared=binding_config,
                 message=f"Use {label} for {action}. Existing profiles expose sessions, cookies, tabs and extensions. "
-                "Connection and profile identity will be checked before the requested action.",
+                "Connection and profile identity will be checked before the requested action. "
+                "Existing Chrome uses a separate task window in the same profile; first use installs the pinned "
+                "Puppeteer Core SDK (Node >=22.12 and npm required).",
             )
         try:
             command = self._get_cmd()
@@ -940,6 +970,36 @@ class BrowserTool(Tool):
         if action == "assert":
             return _format_assertion(data)
         return json.dumps(data, indent=2)
+
+    async def _native_call(self, profile, params: dict) -> ToolOutput:
+        if self._existing_browser is None:
+            return ToolOutput(
+                success=False, error="The existing-Chrome adapter is not configured. No fallback is allowed."
+            )
+        return await self._existing_browser.call(profile, params)
+
+    async def _native_action(self, profile, params: dict, input: ToolInput) -> ToolOutput:
+        if params.get("action") in {"screenshot", "pdf"}:
+            from tools._path import resolve_path, scope_refusal
+
+            path = resolve_path(str(params.get("filename") or ""), input.granted_workspace)
+            refusal = scope_refusal(input.edit_scope, path) if path is not None else "Output path is not allowed."
+            if not params.get("filename") or refusal:
+                return ToolOutput(success=False, error=refusal or "A workspace filename is required.")
+            params = {**params, "filename": str(path)}
+        output = await self._native_call(profile, params)
+        output.data.update(profile_id=profile.id, profile_name=profile.name)
+        if output.success and output.data.get("profile_verified") is True:
+            key = (str(params.get("task_id") or "default"), profile.id)
+            self._verified_bindings[key] = (profile.model_dump_json(), output.data["connection_id"])
+        if params.get("action") == "close":
+            self._verified_bindings.pop((str(params.get("task_id") or "default"), profile.id), None)
+        return output
+
+    async def aclose(self) -> None:
+        """Disconnect existing Chrome without closing task drafts or the user's browser."""
+        if self._existing_browser is not None:
+            await self._existing_browser.aclose()
 
     async def run(self, input: ToolInput) -> ToolOutput:
         params = input.params or {}
@@ -986,25 +1046,22 @@ class BrowserTool(Tool):
                 error="Existing-browser context requires connect or copy_cookies.",
             )
 
-        # chrome-agent's generic status output describes its own managed
-        # browsers; it does not prove that a supplied CDP endpoint is reachable.
-        # Perform the DevTools handshake ourselves before claiming attachment.
+        unsafe_url = _unsafe_url_reason(action, params)
+        if unsafe_url:
+            return ToolOutput(success=False, error=unsafe_url)
+        if profile is not None and profile.context == "existing":
+            return await self._native_action(profile, {**params, "action": action}, input)
+
+        # Unconfigured legacy connections retain their HTTP handshake. Saved
+        # existing profiles already returned through the verified SDK adapter.
         if browser_context == "existing" and params.get("connect"):
-            if profile is not None:
-                try:
-                    preflight = await self._verify_profile(profile, params, int(params.get("timeout_seconds", 30)))
-                except (RuntimeError, ValueError, OSError) as exc:
-                    return ToolOutput(success=False, error=f"Profile verification failed: {exc}")
-                if not preflight.success or action in {"preflight", "status"}:
-                    return preflight
-            else:
-                preflight = await asyncio.to_thread(
-                    _probe_cdp_endpoint,
-                    str(params["connect"]),
-                    int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)),
-                )
-                if not preflight.success or action in {"preflight", "status"}:
-                    return preflight
+            preflight = await asyncio.to_thread(
+                _probe_cdp_endpoint,
+                str(params["connect"]),
+                int(params.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)),
+            )
+            if not preflight.success or action in {"preflight", "status"}:
+                return preflight
         elif action == "preflight" and profile is None:
             return ToolOutput(success=False, error="CDP preflight requires browser_context='existing' and connect.")
         elif action == "preflight":
@@ -1013,15 +1070,9 @@ class BrowserTool(Tool):
             except (RuntimeError, ValueError, OSError) as exc:
                 return ToolOutput(success=False, error=f"Profile verification failed: {exc}")
 
-        unsafe_url = _unsafe_url_reason(action, params)
-        if unsafe_url:
-            return ToolOutput(success=False, error=unsafe_url)
-
         session_id = params.get("task_id", "") or params.get("session_id", "default")
         if profile is not None:
             session_id = profile.browser_name
-            if action == "close" and profile.context == "existing":
-                return ToolOutput(success=False, error="North will not close your existing browser. Close it yourself.")
             params["page"] = f"task-{str(input.params.get('task_id') or 'default')}"
         try:
             command = self._get_cmd() + self._build_args(action, params, session_id)

@@ -224,8 +224,11 @@ def _build_tool_registry(
     # something is decided in one place - see Tool.execute.
     tool_registry = ToolRegistry(auto_register=True, learned_dir=learned_tools_dir, approvals=approvals)
     from tools.universal.browser import BrowserTool
+    from tools.universal.browser_native import ExistingChrome
 
-    tool_registry.register(BrowserTool(north_settings=deps.north_settings))
+    tool_registry.register(
+        BrowserTool(north_settings=deps.north_settings, existing_browser=ExistingChrome(settings.north_home))
+    )
     mutation_root = settings.north_home / "mutations"
     source_edit_policy = SelfEditPolicy(learned_tools_dir, mutation_root)
     agent_edit_policy = SelfEditPolicy(settings.north_home / "agents", mutation_root)

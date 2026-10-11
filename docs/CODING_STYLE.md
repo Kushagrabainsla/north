@@ -1267,6 +1267,14 @@ fabricated completion is visible rather than silently marked clean. Patterns
 favour precision (flag, don't cry wolf); `successful_tools is None` (a non-tool
 agent) skips the check.
 
+### 16.1.3 Task-owned Browser Windows
+
+Existing-profile browser work owns a separate window per task/profile and reuses
+it through pauses; never adopt, navigate, or close unrelated user tabs.
+**Why:** using the same profile must not overwrite the user's ongoing work.
+**How to apply:** reuse public Puppeteer/CDP APIs behind BrowserTool, verify actual
+profile identity, persist owned target/window IDs, and keep one approval layer.
+
 ### 16.2 Confidence Scoring
 
 ```python

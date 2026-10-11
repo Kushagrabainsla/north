@@ -9,7 +9,7 @@ same primitives, but it must not import recorded results.
 
 - [`browser_profiles_probe.py`](browser_profiles_probe.py) — disposable real Chrome
   sessions: separate synthetic logins, open-session reuse versus close/reopen,
-  actual profile-directory checks, and North's native connection/wrong-profile gate.
+  actual profile-directory checks, and North's connection/wrong-profile gate.
   No personal browser, credentials, or North settings are used. Temporary profiles
   are removed after the probe. Re-run with `.venv/bin/python -m experiments.browser_profiles_probe`.
   On 2026-10-10, all three open-session reuse rounds preserved both identities;
@@ -18,6 +18,12 @@ same primitives, but it must not import recorded results.
   Therefore North keeps sessions open between tasks, never purges ordinary closes,
   and requires fresh login evidence after reconnecting. These results are not a
   guarantee for every site, browser, or cookie policy.
+- [`native_cdp_probe.mjs`](native_cdp_probe.mjs) — attach to the user's running
+  Chrome through its built-in WebSocket-only debugging connection using public
+  Puppeteer Core. Verify the actual profile, reject a wrong-profile expectation
+  before any form interaction, and fill a synthetic form without submitting.
+  This is an isolated SDK experiment, not North's production browser adapter.
+  See the recorded comparison and limitations below.
 - [`browser_setup_ui_probe.py`](browser_setup_ui_probe.py) — click through the
   built dashboard using synthetic APIs and a disposable browser: create a
   purpose-labelled profile, test it, reload/resume setup, and disconnect.
@@ -49,8 +55,9 @@ prefixes a URL without `://` with `https://`. North's managed-profile connection
 test now reuses its existing `chrome://version` identity verifier rather than
 patching the vendor or trusting navigation alone. The extended
 [`browser_profiles_probe.py`](browser_profiles_probe.py) verified two fresh
-managed profiles, native WebSocket attachment and wrong-profile rejection with
-real Chrome. Three reuse rounds kept both synthetic accounts separate; only two
+managed profiles, WebSocket-URL attachment and wrong-profile rejection with
+real Chrome exposing HTTP target discovery. This did not test Chrome's built-in
+WebSocket-only debugging mode. Three reuse rounds kept both synthetic accounts separate; only two
 of four close/reopen checks preserved login in this run. Reconnection still
 requires site-specific login evidence, not a guarantee of restored cookies.
 
@@ -88,6 +95,119 @@ Final verification: 2,948 unit/integration tests passed, one skipped, with two
 existing dictation AsyncMock warnings; all 64 frontend tests, the production
 dashboard build, repository lint and changed-file formatting checks passed.
 Personal settings/flows and the installed daemon were not changed or restarted.
+
+## Existing-Chrome native CDP comparison (2026-10-10)
+
+The user enabled Chrome's built-in remote debugging. The selected existing
+University profile was verified against the directory reported by
+`chrome://version`, not a profile label or a successful socket handshake.
+
+| Approach | Observed result | Decision |
+| --- | --- | --- |
+| Installed chrome-agent 0.12.0 | Profile preflight failed: HTTP `/json/list` returned 404 on the native endpoint. | Cannot use this adapter for this connection mode. |
+| Google Chrome DevTools MCP 1.10.1 | Its `new_page` tool rejects `chrome://version`, required by North's identity check. Native attachment through an allowed page was inconclusive. | Do not remove the identity check to accommodate the wrapper. |
+| Public Puppeteer Core 25.11.0 | Three fresh connections verified the selected profile; all nine form-fill rounds passed. Every connection also rejected a wrong-profile expectation before form interaction. | Candidate at this stage; integration follow-up below. |
+
+The public-SDK probe created and closed only its own tab and disconnected without
+closing Chrome. Each round verified name/email values, an untouched salary field,
+and zero synthetic form submissions. No passwords or cookies were read, and no
+existing user tab was intentionally navigated or closed. No real job application,
+resume upload, or flow-definition change was attempted.
+The public SDK was installed with scripts disabled in a disposable npm prefix;
+no North production dependency was added. An earlier successful experiment used
+the Puppeteer bundle shipped inside Google's MCP package; the reproducible probe
+deliberately avoids that internal module.
+
+Reproduce only after the user has enabled native debugging and selected a profile:
+
+```sh
+NORTH_CDP_PROBE_DIR=$(mktemp -d /tmp/north-native-cdp-probe.XXXXXX)
+npm install --prefix "$NORTH_CDP_PROBE_DIR" --ignore-scripts --no-audit --no-fund --package-lock=false puppeteer-core@25.11.0
+node experiments/native_cdp_probe.mjs --user-data-dir '/path/to/Chrome' --profile-directory 'Profile 3' --sdk-root "$NORTH_CDP_PROBE_DIR"
+```
+
+The probe reads `DevToolsActivePort` from the supplied Chrome directory, uses only
+its loopback browser WebSocket, and fails before filling if the actual profile
+does not match. It never launches a browser or retries mutations. Chrome may
+request connection permission; it cannot be bypassed. Node >=22.12.0 is required.
+
+Limitations: one machine/profile and a synthetic form, three connections with
+three fill rounds each. This does not establish reliable site logins, LinkedIn
+navigation, resume upload, arbitrary forms, approvals, pause/resume, crash safety,
+or end-to-end job-flow readiness. Production integration must preserve the
+existing BrowserTool and central approval layer, tool-call profile selection,
+fresh identity checks, page-based action classification, task-owned tabs, and
+uncertain-action recovery. The job flow remains untested against the real site.
+
+Regression verification: `env -u NO_COLOR .venv/bin/pytest tests/unit tests/integration -q`
+passed 2,955 tests, skipped one, and reported two existing dictation AsyncMock
+warnings. Running with the shell's `NO_COLOR=1` produced one unrelated truecolor
+wordmark-test failure; that test passed when the variable was removed. Repository
+Ruff checks, the probe's Node syntax check, and `git diff --check` passed.
+
+## Existing-Chrome task windows and recovery (2026-10-10)
+
+The [opt-in live test](../tests/live/test_existing_chrome_windows_live.py) now runs
+North's actual BrowserTool through its central Safe-mode approval layer against
+the explicitly selected running University Chrome profile. Only synthetic local
+forms are used. The harness approves only its own browser requests and does not
+alter the user's mode, saved profiles, flows, schedules or credentials.
+
+Puppeteer Core 25.13.0 provides public `newPage({type: 'window', background: true})`.
+The thin adapter reuses North's MCP client with the official MCP SDK 1.32.1; no
+custom CDP transport, Chrome launch, profile cloning or credential export is added.
+The runtime manifest and integrity lock are included in the built wheel; Node
+dependencies are installed with scripts disabled on first approved use. npm's
+lockfile audit reported zero known vulnerabilities in this dependency set.
+
+Adversarial repetition rejected a tempting profile-routing approach: native
+target metadata lists several normal profile context IDs, but Chrome does not
+allow arbitrary normal-profile selection with those IDs. Some fresh-connection
+trials passed and others failed before form interaction. Chromium's
+[context manager](https://github.com/chromium/chromium/blob/main/chrome/browser/devtools/devtools_browser_context_manager.cc)
+only resolves the last-used regular profile (plus its DevTools-created incognito
+contexts). The implementation therefore uses the public window API, verifies the
+actual profile path before use, closes mismatches and requests profile-selection
+help through the existing ask_user layer. It does not probe other accounts.
+
+The final three independent live trials all passed (62.25 seconds): six distinct
+task windows and 18 form-fill rounds, with salary and work authorization left
+blank, and zero submissions. Each trial verified that restarting the private
+SDK worker restored the same window and its draft without navigation; a mutation
+that threw after changing a field was not replayed after a further worker restart.
+The original change remained exactly once. Submission controls were correctly
+classified through the existing page-based approval code, without clicking them.
+Task-owned tabs were closed at the end; Chrome itself was only disconnected.
+
+Fourteen deterministic Node tests cover reuse, ownership, moved/closed tabs,
+changed profile/endpoint bindings, context-identity changes, interrupted creation,
+unknown outcomes, forged purpose flags, and invalid connection/action inputs.
+The focused Python regression selection passed 44 tests. These tests do not prove
+real LinkedIn login, MFA, resume upload, popup handling or job-flow completion.
+Windows share the existing profile's cookies and extensions; this is isolation
+of tab ownership, not isolation of accounts. New tasks may need the intended
+profile brought forward first; existing verified tasks do not depend on whichever
+profile is currently selected. No real application was attempted or submitted.
+
+Final unit/integration regression: 2,965 passed, one skipped, with the same two
+pre-existing dictation AsyncMock warnings. Repository Ruff checks, changed-file
+formatting, Node syntax checks, the built wheel's resource inventory and diff
+whitespace checks passed.
+
+After confirming no active tasks or running flow runs, North was updated from
+the local checkout and restarted. All health checks passed; the selected enabled
+existing profile remained configured. The installed interpreter resolves the
+new adapter and all six packaged SDK resource files. Chrome was not restarted,
+and no settings, approval mode, personal flow or schedule was edited. The real
+job-flow test is still pending; these results establish generic browser behavior.
+
+```sh
+env -u NO_COLOR NORTH_LIVE_EXISTING_CHROME=1 \
+  NORTH_EXISTING_CHROME_DIR='/path/to/Chrome' \
+  NORTH_EXISTING_CHROME_PROFILE='Profile 3' \
+  .venv/bin/pytest tests/live/test_existing_chrome_windows_live.py -q -s
+node --test tests/unit/tools/browser_windows.test.mjs
+```
 
 ## Flow setup and timing intake (2026-10-10)
 

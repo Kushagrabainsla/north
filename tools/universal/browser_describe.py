@@ -65,7 +65,8 @@ _PAGE_SCRIPT = """(() => {
     return {
       role: el.getAttribute("role") || (buttonish ? "button" : tag === "a" ? "link" : tag),
       text: (el.getAttribute("aria-label") || (el.labels && el.labels[0] && el.labels[0].innerText)
-        || el.innerText || el.value || el.placeholder || el.name || "").trim().slice(0, %(chars)d),
+        || el.innerText || (el.type === "password" ? "" : el.value)
+        || el.placeholder || el.name || "").trim().slice(0, %(chars)d),
       inForm: !!el.closest("form"),
     };
   };

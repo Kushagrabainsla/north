@@ -19,6 +19,29 @@ north           # the terminal UI
 
 Every provider can be added or changed later on the dashboard under **System → Providers**.
 
+## Browser profiles
+
+Save profiles and their purposes in dashboard Settings. North selects a profile
+per browser call, asks through the usual approval layer if unsure, and verifies
+the actual profile before use. Profiles are not attached to flows.
+
+For your existing Chrome, enable `chrome://inspect/#remote-debugging` and allow
+the connection. North uses Puppeteer Core over local CDP, with a separate window
+per task/profile; your other tabs are not navigated or closed. It keeps that
+window during pauses and leaves drafts open for review. `close` closes only the
+task's North-owned tab, not Chrome or tabs you added yourself. Windows share the
+profile's logins, cookies and extensions; this is tab isolation, not account isolation.
+Native CDP creates windows in Chrome's last-selected profile. If it differs from
+the requested profile, North stops and asks you to bring that profile's window
+forward, then checks again. It will not switch accounts or copy credentials to
+get past a failed check. Resuming a verified task uses its original window even
+if you are now working in another profile.
+
+Existing-profile automation requires Node >=22.12 and npm. On first approved use,
+North installs the pinned Puppeteer Core and official MCP SDK packages in its
+private runtime directory with installation scripts disabled. No replacement
+Chrome is downloaded or launched. Managed isolated sessions retain chrome-agent.
+
 ## Telegram
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.

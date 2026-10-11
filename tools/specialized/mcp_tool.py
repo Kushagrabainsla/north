@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from mcp.client import McpClient, McpError
@@ -11,6 +12,8 @@ from tools.models import ToolInput, ToolOutput
 
 if TYPE_CHECKING:
     from approval.approvals import Request
+
+_NORTH_CONTEXT_PARAMS = frozenset({"workspace", "task_id"})
 
 
 class McpTool(Tool):
@@ -30,13 +33,20 @@ class McpTool(Tool):
         # treated as a change and goes to the approval layer.
         self.is_mutating = not tool_def.annotations.read_only_hint
 
+    def _arguments(self, input: ToolInput) -> dict[str, Any]:
+        # Runtime context belongs to North, not a strict external tool signature.
+        # A server may legitimately declare these names as its own arguments.
+        declared = self.parameters_schema.get("properties", {})
+        return {
+            name: value for name, value in input.params.items() if name not in _NORTH_CONTEXT_PARAMS or name in declared
+        }
+
     async def describe(self, input: ToolInput) -> Request:
         """The call as facts: which server and tool, its arguments, and what the server says it does."""
         from approval.approvals import Request
         from approval.policy import Action, ActionKind
 
-        generic = await super().describe(input)
-        args = generic.action.args
+        args = json.dumps(self._arguments(input), sort_keys=True, default=str)
         hints = self.tool_def.annotations
         said = [
             line
@@ -70,7 +80,7 @@ class McpTool(Tool):
 
     async def run(self, input: ToolInput) -> ToolOutput:
         try:
-            result = await self.client.call_tool(self._original_name, input.params)
+            result = await self.client.call_tool(self._original_name, self._arguments(input))
         except McpError as exc:
             return ToolOutput(success=False, error=f"MCP tool {self.name!r} failed: {exc}")
         except Exception as exc:

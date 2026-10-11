@@ -33,8 +33,8 @@ Thumbs.db
 .kiro/
 design-explorations/
 
-# web client dependencies and generated TypeScript metadata
-web/node_modules/
+# Node dependencies (web client and browser SDK) and generated TypeScript metadata
+node_modules/
 web/*.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts

@@ -63,6 +63,44 @@ def _load_agent(name: str, tmp_path: Path, router: MockInferenceRouter | None = 
 # ---------------------------------------------------------------------------
 
 
+async def test_mcp_dispatch_retains_north_context_without_forwarding_it_to_the_external_server(tmp_path):
+    from mcp.client import McpClient
+    from mcp.models import McpCallResult, McpToolDefinition
+    from tools.specialized.mcp_tool import McpTool
+
+    client = AsyncMock(spec=McpClient)
+
+    async def strict_search(name, arguments):
+        assert name == "search_gmail_messages"
+        assert arguments == {"query": "LinkedIn job alerts"}
+        return McpCallResult(content=[{"type": "text", "text": "Message ID: synthetic-alert"}])
+
+    client.call_tool.side_effect = strict_search
+    tool = McpTool(
+        "gmail",
+        client,
+        McpToolDefinition.model_validate(
+            {
+                "name": "search_gmail_messages",
+                "annotations": {"readOnlyHint": True},
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            }
+        ),
+    )
+    agent = _load_agent("general", tmp_path)
+    call = ToolCall(name=tool.name, call_id="gmail-search", params={"query": "LinkedIn job alerts"})
+    _, output, success, _ = await agent._execute_call(
+        call, AgentPayload(task_id="email-check", prompt="Read one alert", workspace=str(tmp_path)), {tool.name: tool}
+    )
+    assert success, output
+    assert "synthetic-alert" in output
+    client.call_tool.assert_awaited_once_with("search_gmail_messages", call.params)
+
+
 def test_outcome_status_marks_direct_questions_and_user_handoffs_as_waiting() -> None:
     assert _infer_outcome_status("Do you want me to continue?") == "waiting_for_user"
     assert _infer_outcome_status("Once it is open, tell me and I will verify the connection.") == "waiting_for_user"

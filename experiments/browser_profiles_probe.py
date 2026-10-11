@@ -156,7 +156,9 @@ def main():
                 )
             )
             assert not wrong.success and "different profile" in wrong.error, wrong
-            return {"north_native_connection_verified": True, "north_wrong_profile_rejected": True}
+            # This launched Chrome also exposes HTTP target discovery; it does
+            # not exercise Chrome's built-in WebSocket-only debugging mode.
+            return {"north_websocket_url_verified": True, "north_wrong_profile_rejected": True}
 
         with TemporaryDirectory(prefix="north-browser-probe-") as scratch:
             settings = NorthSettings(Path(scratch) / "settings.json")

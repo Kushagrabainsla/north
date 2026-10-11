@@ -725,11 +725,44 @@ profile router or permission system. Setup detects timezone only if Settings has
 Browser profiles have owner-defined purposes; the agent selects an enabled `profile_id`
 per tool call from task context and asks through the central policy when ambiguous.
 Existing-browser connections must match the directory reported by `chrome://version`;
-Chrome's own remote-debugging permission cannot be bypassed. HTTP and native WebSocket
-CDP are supported via chrome-agent. No credential copying or silent profile fallback.
+Chrome's own remote-debugging permission cannot be bypassed. Saved existing profiles
+use public Puppeteer Core through a private official-MCP-SDK stdio bridge and
+North's existing McpClient. It is owned by BrowserTool, not registered in the MCP
+tool catalog, and never creates another approval path. Native browser WebSockets
+do not need HTTP target discovery; configured HTTP endpoints resolve their local
+browser WebSocket through `/json/version`. Managed sessions and unconfigured legacy
+calls retain chrome-agent, whose page attachment still needs HTTP `/json/list`.
+Passing a WebSocket URL or opening its socket alone does not prove usable page control.
+No credential copying or silent profile fallback.
 Preflight proves connection/profile identity, not site login or operational flow readiness.
 Managed and existing profiles share the same `chrome://version` identity check. A
 successful navigation alone cannot mark a managed connection verified.
+Existing profiles own a new window per task/profile through Puppeteer's public
+newPage(type=window, background=true). Native Chrome creates targets in its last-used
+regular profile; other normal target context IDs are not freely selectable.
+The adapter checks the exact profile path in its own new window before business
+interaction and closes mismatches. The browser prompt routes profile-selection help
+through ask_user: bring the intended profile window forward, then retry preflight.
+No user tab is navigated for discovery, and no other account is a fallback.
+The initial verified window becomes the task page. The live connection, profile
+configuration and window ownership are checked on subsequent calls without
+navigating a draft back to chrome://version. Worker reconnects restore only the
+recorded target/window and verify its saved browser-context identity. They create
+no replacement window and do not depend on Chrome's currently selected profile.
+Closed or moved tabs, edited profiles, changed endpoints, or interrupted creation
+fail closed; there is no automatic replacement/adoption. Task windows remain open
+through pauses and shutdown for review; close affects only the owned task tab,
+not the browser or any user-added tabs. Cookies, sessions and extensions are still
+shared within the profile; window ownership is not account isolation.
+Ownership and in-flight markers are atomically saved under NORTH_HOME/browser/
+task-windows (hashed task/profile filenames, no cookie data or WebSocket tokens).
+An unknown mutation outcome blocks later browser mutations, including after a
+worker restart, while inspection remains available for user review. There are
+no automatic mutation retries or custom CDP transports. Known input-validation
+failures before action execution do not leave an uncertain-effect marker.
+The pinned Node >=22.12/npm dependencies are packaged as an explicit npm manifest
+and integrity lock. The first approved call installs them with scripts disabled
+under NORTH_HOME/runtime/browser; Puppeteer Core never downloads or launches Chrome.
 Pending handoffs block following calls. Every question, including a physical handoff,
 uses the same mode policy; an automatic answer is not evidence the physical action occurred.
 Managed profiles are reused across tasks, with task-specific tabs, and ordinary close
@@ -743,6 +776,13 @@ empty files pause the run at that step with the invalid paths, preserving earlie
 outputs and using ordinary resume/approval handling. Verified paths join configured
 `produces` evidence in run history. This proves file presence, not content quality,
 freshness, or permission to send anything. Other artifact shapes are not file claims.
+
+MCP adapters remove North's injected `workspace` and `task_id` from external
+arguments unless the tool's schema explicitly declares those names. The same
+argument projection describes an approval and invokes the server; internal
+context stays on the original ToolInput for policy and tracing. Other unknown
+arguments are not silently dropped. Server annotations and the existing central
+approval gate still decide whether a call may run.
 
 Agents are domain specialists. Each knows one domain and operates only within it. They do not talk to each other directly. All communication goes through the Task Context Object managed by the Orchestrator.
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -121,33 +121,36 @@ async def test_managed_preflight_propagates_failed_identity_navigation(settings)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("matches", [True, False])
 async def test_existing_connection_must_match_actual_profile_before_site_action(settings, matches):
-    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
-    path = str(settings.browser_profiles[0].expected_path) if matches else "/tmp/wrong/Profile 2"
-    preflight = ToolOutput(success=True, data={"verified": True, "connection_id": "synthetic"})
-    with (
-        patch("tools.universal.browser._probe_cdp_endpoint", return_value=preflight),
-        patch(
-            "tools.universal.browser._run_chrome_agent",
-            new_callable=AsyncMock,
-            side_effect=[result(), result(result=path), result(tree="target")],
-        ) as command,
-    ):
+    native = Mock()
+    native.call = AsyncMock(
+        return_value=ToolOutput(
+            success=matches,
+            data={"profile_verified": matches, "connection_id": "synthetic"},
+            error=None if matches else "Connection reached a different profile",
+        )
+    )
+    tool = BrowserTool(north_settings=settings, existing_browser=native)
+    with patch("tools.universal.browser._run_chrome_agent", new_callable=AsyncMock) as command:
         output = await tool.run(ToolInput(params={"action": "inspect", "profile_id": "university", "task_id": "task"}))
     assert output.success is matches
-    assert command.call_count == (3 if matches else 2)
-    assert all("--connect" in call.args[0] for call in command.call_args_list)
+    command.assert_not_called()
+    assert native.call.call_args.args[0] == settings.browser_profiles[0]
+    assert native.call.call_args.args[1]["task_id"] == "task"
     if not matches:
         assert "different profile" in output.error
 
 
 @pytest.mark.asyncio
 async def test_describe_does_not_read_private_browser_before_initial_approval(settings):
-    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
+    native = Mock()
+    native.call = AsyncMock()
+    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings, existing_browser=native)
     with patch("tools.universal.browser._run_chrome_agent", new_callable=AsyncMock) as command:
         request = await tool.describe(ToolInput(params={"action": "inspect", "profile_id": "university"}))
     assert "University" in request.message
     assert request.prepared["browser_profile"] == settings.browser_profiles[0].model_dump_json()
     command.assert_not_called()
+    native.call.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -164,12 +167,15 @@ async def test_profile_edit_invalidates_pending_approval(settings):
 
 @pytest.mark.asyncio
 async def test_unbound_central_gate_refuses_existing_profile_without_connecting(settings):
-    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
+    native = Mock()
+    native.call = AsyncMock()
+    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings, existing_browser=native)
     tool.approvals = Approvals(approval_policy(), None)
     with patch("tools.universal.browser._run_chrome_agent", new_callable=AsyncMock) as command:
         output = await tool.execute(ToolInput(params={"action": "preflight", "profile_id": "university"}))
     assert not output.success and output.failure_kind == "refused"
     command.assert_not_called()
+    native.call.assert_not_called()
 
 
 @pytest.mark.parametrize("action", ["inspect", "extract", "assert", "click", "fill", "wait", "read"])
@@ -189,21 +195,49 @@ def test_connection_and_task_tab_are_forwarded_to_every_action(settings, action)
 
 
 @pytest.mark.asyncio
-async def test_native_websocket_profile_does_not_require_http_version_endpoint(settings):
+async def test_websocket_url_uses_private_native_adapter_not_http_or_vendor(settings):
     profile = settings.browser_profiles[0].model_copy(update={"connect": "ws://localhost:9222/devtools/browser/native"})
     settings.set_browser_profiles([profile])
-    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
+    native = Mock()
+    native.call = AsyncMock(
+        return_value=ToolOutput(
+            success=True, data={"profile_verified": True, "login_verified": False, "connection_id": "native"}
+        )
+    )
+    tool = BrowserTool(north_settings=settings, existing_browser=native)
     with (
         patch("tools.universal.browser._probe_cdp_endpoint", side_effect=AssertionError("HTTP not supported")),
         patch(
             "tools.universal.browser._run_chrome_agent",
             new_callable=AsyncMock,
-            side_effect=[result(), result(result=str(profile.expected_path))],
+            side_effect=AssertionError("No vendor fallback"),
         ),
     ):
         output = await tool.run(ToolInput(params={"action": "preflight", "profile_id": profile.id}))
     assert output.success and output.data["profile_verified"]
     assert not output.data["login_verified"]
+
+
+@pytest.mark.asyncio
+async def test_native_connection_failure_never_verifies_or_falls_back(settings):
+    profile = settings.browser_profiles[0].model_copy(update={"connect": "ws://localhost:9222/devtools/browser/native"})
+    settings.set_browser_profiles([profile])
+    native = Mock()
+    native.call = AsyncMock(return_value=ToolOutput(success=False, error="Connection not permitted"))
+    tool = BrowserTool(north_settings=settings, existing_browser=native)
+    with (
+        patch("tools.universal.browser._probe_cdp_endpoint", side_effect=AssertionError("HTTP not supported")),
+        patch(
+            "tools.universal.browser._run_chrome_agent",
+            new_callable=AsyncMock,
+        ) as command,
+    ):
+        output = await tool.run(ToolInput(params={"action": "preflight", "profile_id": profile.id}))
+    assert not output.success
+    assert not output.data.get("profile_verified")
+    assert not tool._verified_bindings
+    command.assert_not_called()
+    native.call.assert_awaited_once()
 
 
 def test_wait_uses_vendor_condition_and_pattern():
