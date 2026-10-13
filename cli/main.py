@@ -61,6 +61,7 @@ from cli._server import (
     _find_project_root,
     _is_north_server,
     _kill_port,
+    _listens_on,
     _port_in_use,
     _resolve_workspace,
     _start_server_process,
@@ -2010,7 +2011,10 @@ def web(
     """Start North's web cockpit and open it in the default browser."""
     _ensure_web_build()
     if not _port_in_use(host, port) or not _is_north_server(host, port):
-        start(host=host, port=port, docker=docker, no_chat=True, workspace=workspace)
+        # Every option is passed: a typer command called as a function receives an
+        # omitted option as its OptionInfo default, which is truthy, and that is
+        # how `north web` came to run uvicorn with --reload over the home folder.
+        start(host=host, port=port, reload=False, docker=docker, no_chat=True, workspace=workspace)
     url = f"http://{host}:{port}/app/"
     _console.print(f"  [dim]web cockpit [/dim]  {url}")
     if not no_open:
@@ -2065,6 +2069,13 @@ def stop(
         return
 
     _stop_server(port)
+    if _port_in_use("127.0.0.1", port):
+        typer.secho(
+            f"Something is still listening on port {port}. Find it with: lsof -nP -iTCP:{port} -sTCP:LISTEN",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
     typer.secho("✓ Stopped.", fg=typer.colors.GREEN)
 
 
@@ -2342,25 +2353,6 @@ def update(
     _update_local_checkout(project_root, options)
 
 
-def _listens_on(proc, port: int) -> bool:
-    """Whether *proc* holds a listening socket on *port*.
-
-    Asked per process rather than through ``psutil.net_connections()``, which
-    needs root on macOS and fails with AccessDenied for everyone else - silently,
-    if the caller suppresses it. A process owned by the current user answers for
-    itself without privileges.
-    """
-    import psutil
-
-    try:
-        return any(
-            conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port
-            for conn in proc.net_connections(kind="inet")
-        )
-    except (psutil.Error, OSError):
-        return False
-
-
 def _north_processes(port: int = 8000) -> list:
     """Every process that is part of a running north, however it was spawned.
 
@@ -2464,35 +2456,34 @@ def _stop_all_north_processes(port: int = 8000) -> int:
 
 
 def _stop_server(port: int) -> None:
-    """Stop a locally-running north server. Mirrors the logic in the stop command."""
-    import signal
+    """Stop a locally-running north server and everything it spawned.
+
+    The recorded process is a supervisor: with auto-reload, uvicorn serves from a
+    child. Its children are collected before the supervisor is signalled, since
+    once it exits they are orphaned and no longer reachable through it. Whatever
+    still listens on the port afterwards is stopped too (covers stale pid files).
+    """
+    import psutil
 
     from config.settings import settings
 
     pid_path = settings.north_home / "north.pid"
-    if pid_path.exists():
-        try:
-            pid = int(pid_path.read_text(encoding="utf-8").strip())
-            os.kill(pid, signal.SIGTERM)
-            pid_path.unlink(missing_ok=True)
-            # Give up to 3 seconds for graceful shutdown, then SIGKILL.
-            for _ in range(3):
-                time.sleep(1)
-                try:
-                    os.kill(pid, 0)  # check if still alive
-                except ProcessLookupError:
-                    break
-            else:
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pid_path.unlink(missing_ok=True)
-        except Exception as exc:
-            typer.secho(f"  Warning: could not stop via PID: {exc}", fg=typer.colors.YELLOW)
-    # Kill any remaining process still bound to the port (covers stale pid files).
+    group: list = []
+    with contextlib.suppress(ValueError, OSError, psutil.Error):
+        server = psutil.Process(int(pid_path.read_text(encoding="utf-8").strip()))
+        group = [server, *server.children(recursive=True)]
+    for proc in group:
+        with contextlib.suppress(psutil.Error):
+            proc.terminate()
+    _, alive = psutil.wait_procs(group, timeout=3)
+    for proc in alive:
+        with contextlib.suppress(psutil.Error):
+            proc.kill()
     if _port_in_use("127.0.0.1", port):
         _kill_port("127.0.0.1", port)
         time.sleep(1)
+    if not _port_in_use("127.0.0.1", port):
+        pid_path.unlink(missing_ok=True)
 
 
 def _run_command(cmd: list[str], *, cwd: Path) -> bool:

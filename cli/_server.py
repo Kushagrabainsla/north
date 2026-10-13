@@ -5,6 +5,7 @@ Extracted from cli/main.py to decouple commands from process control details.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import socket
@@ -60,36 +61,42 @@ def _sync_docker_secret(compose_file: Path) -> None:
         pass
 
 
-def _kill_port(host: str, port: int) -> bool:
-    try:
-        import psutil
+def _listens_on(proc, port: int) -> bool:
+    """Whether *proc* holds a listening socket on *port*.
 
-        killed = False
-        for conn in psutil.net_connections(kind="inet"):
-            if conn.laddr.port == port and conn.status == "LISTEN":
-                try:
-                    psutil.Process(conn.pid).kill()
-                    killed = True
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-        return killed
-    except ImportError:
-        # Fallback: platform-agnostic subprocess approach
-        try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True,
-                text=True,
-            )
-            pids = result.stdout.strip().split()
-            if not pids:
-                return False
-            subprocess.run(["kill", "-9", *pids], capture_output=True)
-            return True
-        except Exception:
-            return False
-    except Exception:
+    Asked per process rather than through ``psutil.net_connections()``, which
+    needs root on macOS and fails with AccessDenied for everyone else - silently,
+    if the caller suppresses it. A process owned by the current user answers for
+    itself without privileges.
+    """
+    import psutil
+
+    try:
+        return any(
+            conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port
+            for conn in proc.net_connections(kind="inet")
+        )
+    except (psutil.Error, OSError):
         return False
+
+
+def _kill_port(host: str, port: int) -> bool:
+    """Kill this user's processes listening on *port*; True when any were found.
+
+    Only the current user's processes are asked: they answer without root, and
+    north never runs as anyone else.
+    """
+    import psutil
+
+    me = psutil.Process().username()
+    killed = False
+    for proc in psutil.process_iter(["username"]):
+        if proc.info.get("username") != me or proc.pid == os.getpid() or not _listens_on(proc, port):
+            continue
+        with contextlib.suppress(psutil.Error):
+            proc.kill()
+            killed = True
+    return killed
 
 
 def _find_compose_file() -> Path | None:
