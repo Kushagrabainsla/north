@@ -1765,3 +1765,4 @@ button:not(:disabled):active { transform: translateY(1px); }
   .setup-page .page-header { align-items: flex-start; flex-wrap: wrap; }
   .setup-form { max-width: none; }
 }
+.artifact-run h3 a { color: var(--text); text-decoration: none; font-family: inherit; }.artifact-run h3 a:hover { color: var(--accent); }.artifact-owner-kind { color: var(--accent); text-transform: uppercase; letter-spacing: .12em; font-size: 9px; }

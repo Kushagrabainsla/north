@@ -56,7 +56,6 @@ _ALWAYS_ALLOWED_FACT_TOPICS = frozenset({"user", "identity"})
 _FACT_TOPICS_BY_DOMAIN: dict[str, frozenset[str]] = {
     "engineering": frozenset({"preferences"}),
     "home": frozenset({"preferences", "schedule"}),
-    "wellness": frozenset({"health", "preferences", "schedule"}),
 }
 
 

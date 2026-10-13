@@ -29,6 +29,11 @@ def test_state_databases_are_never_readable_artifacts(tmp_path) -> None:
 def test_task_attribution_only_applies_inside_the_task_tree(tmp_path) -> None:
     assert artifact_task_id(tmp_path / "tasks" / "t1" / "spec.md", tmp_path) == "t1"
     assert artifact_task_id(tmp_path / "notes" / "note.md", tmp_path) == ""
+    task = "0123456789abcdef0123456789abcdef"
+    assert artifact_task_id(tmp_path / "notes" / task / "plan.md", tmp_path) == task
+    research = tmp_path / "news" / "research" / "task_0123456789ab" / "d.md"
+    assert artifact_task_id(research, tmp_path) == "task_0123456789ab"
+    assert artifact_task_id(tmp_path / "news" / "research" / "2026-10-01.md", tmp_path) == ""
     assert artifact_task_id(tmp_path.parent / "elsewhere.md", tmp_path) == ""
 
 

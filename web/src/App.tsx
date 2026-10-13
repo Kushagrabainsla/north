@@ -2,7 +2,14 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Layout } from "./components";
 import { Chat, Sessions } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
-import { Agents, Approvals, Artifacts, Insights, Memory, SettingsPage, Skills, SystemPage, Tools } from "./pages/Verbose";
+import { Agents } from "./pages/Agents";
+import { Approvals } from "./pages/Approvals";
+import { Artifacts } from "./pages/Artifacts";
+import { Memory } from "./pages/Memory";
+import { SettingsPage } from "./pages/Settings";
+import { Skills } from "./pages/Skills";
+import { SystemPage } from "./pages/System";
+import { Tools } from "./pages/Tools";
 import { Flows } from "./pages/Flows";
 import { Tasks } from "./pages/Tasks";
 import { DialogProvider } from "./dialog";
@@ -44,7 +51,7 @@ export function App() {
     <Route path="/activity" element={<Navigate to="/tasks?view=everything" replace/>}/>
     <Route path="/work" element={<Navigate to="/tasks" replace/>}/>
     <Route path="/work/:taskId" element={<WorkRedirect/>}/>
-    <Route path="/bootstrap" element={<Navigate to="/memory" replace/>}/>
+    <Route path="/bootstrap" element={<Navigate to="/setup" replace/>}/>
     <Route path="/insights" element={<Navigate to="/system" replace/>}/>
     <Route path="/system" element={<SystemPage/>}/>
     <Route path="/settings" element={<SettingsPage/>}/>

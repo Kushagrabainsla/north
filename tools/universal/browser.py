@@ -1,6 +1,6 @@
 """BrowserTool — autonomous browser automation and structured web extraction.
 
-Universal tool available to all agents (general, researcher, coder, news_briefing, wellness, etc.).
+Universal tool available to all agents.
 Managed sessions use chrome-agent; existing profiles use North's pinned, audited
 TaskWindow bridge. Both share this tool and North's approval layer.
 Provides:

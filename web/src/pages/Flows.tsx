@@ -8,6 +8,7 @@ import {
   PageHeader,
   Panel,
   Status,
+  Modal,
 } from "../components";
 import { useDialog } from "../dialog";
 import { useResource } from "../hooks";
@@ -30,8 +31,8 @@ import {
   usesSystemAction,
 } from "./flowsView";
 import type { JobLike, RunLike, ScheduleLike } from "./flowsView";
-import { CapabilityModal } from "./Verbose";
-import type { SkillSummary } from "./Verbose";
+
+import type { SkillSummary } from "./capabilities";
 
 interface FlowSummary {
   name: string;
@@ -1213,7 +1214,7 @@ export function Flows() {
         )}
       </Panel>
 
-      <CapabilityModal
+      <Modal
         open={Boolean(selected)}
         onClose={closeEditor}
         title={selected || "Flow"}
@@ -1331,7 +1332,7 @@ export function Flows() {
             )}
           </div>
         )}
-      </CapabilityModal>
+      </Modal>
     </div>
   );
 }

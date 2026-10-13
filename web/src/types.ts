@@ -122,8 +122,10 @@ export interface Artifact {
   id: string;
   name: string;
   kind: string;
-  /** Task this artifact came out of; empty for personal outputs (news, notes, wellness). */
+  /** Task this artifact came out of; empty for files written outside any task. */
   task?: string;
+  /** Who made it, by name: the flow, session or task behind `task`. */
+  owner?: { kind: "flow" | "session" | "task"; name: string; link: string } | null;
   media_type: string;
   size?: number;
   /** Dashboard-only: whether this file was updated today in North's timezone. */

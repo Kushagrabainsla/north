@@ -161,7 +161,7 @@ def test_run_view_lists_the_files_a_step_wrote_and_drops_an_empty_answer(tmp_pat
             {
                 "step": "s",
                 "skill": "news-briefing",
-                "agent": "news_briefing",
+                "agent": "general",
                 "data": {
                     "summary": "{}",
                     "output": "{}",

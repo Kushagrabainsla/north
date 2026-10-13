@@ -112,3 +112,12 @@ def test_a_paused_run_can_be_discarded_and_keeps_its_finished_steps(tmp_path):
     assert "model down" in discarded.error
     with pytest.raises(ValueError):
         store.discard("r")
+
+
+def test_flow_names_are_found_by_the_task_each_run_used(tmp_path):
+    store = FlowRunStore(tmp_path / "runs.db")
+    store.create(run_id="r1", flow_name="daily-news-briefing", task_id="t1")
+    store.create(run_id="r2", flow_name="job-drafts", task_id="t2")
+
+    assert store.flow_names_for_tasks(["t1", "t2", "t3"]) == {"t1": "daily-news-briefing", "t2": "job-drafts"}
+    assert store.flow_names_for_tasks([]) == {}

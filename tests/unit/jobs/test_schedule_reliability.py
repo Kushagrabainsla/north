@@ -25,7 +25,7 @@ MORNING = datetime(2026, 5, 22, 10, 0, tzinfo=UTC)  # the 08:00 slot was missed 
 
 
 def briefing() -> CronEntry:
-    return CronEntry(name="news", agent="news_briefing", task="brief", hour=8, minute=0, tz="UTC")
+    return CronEntry(name="news", agent="general", task="brief", hour=8, minute=0, tz="UTC")
 
 
 async def fired_jobs(processor: SQLiteJobProcessor, name: str = "news") -> list:
@@ -160,10 +160,10 @@ async def test_a_scheduled_task_runs_its_configured_agent() -> None:
     await _run_scheduled_task(
         orchestrator,
         "[scheduled] brief",
-        forced_agent="news_briefing",
+        forced_agent="general",
         poll_seconds=0,
     )
-    assert orchestrator.requests[0].forced_agent == "news_briefing"
+    assert orchestrator.requests[0].forced_agent == "general"
     assert orchestrator.requests[0].source is LedgerSource.CRON
 
 

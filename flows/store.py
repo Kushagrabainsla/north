@@ -143,6 +143,17 @@ class FlowRunStore:
             rows = connection.execute(query, params).fetchall()
         return [_from_row(row) for row in rows]
 
+    def flow_names_for_tasks(self, task_ids: list[str]) -> dict[str, str]:
+        """The flow each of *task_ids* ran for, where one did."""
+        if not task_ids:
+            return {}
+        marks = ",".join("?" * len(task_ids))
+        with sqlite3.connect(self._path) as connection:
+            rows = connection.execute(
+                f"SELECT task_id, flow_name FROM flow_runs WHERE task_id IN ({marks})", task_ids
+            ).fetchall()
+        return dict(rows)
+
     def prune(self, before: datetime) -> int:
         """Delete finished runs last touched before *before*; returns how many.
 

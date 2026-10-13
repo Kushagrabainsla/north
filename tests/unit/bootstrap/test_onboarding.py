@@ -720,3 +720,11 @@ def test_survey_caps_repeated_versions_of_one_document(tmp_path: Path) -> None:
 
     assert [item.family for item in report.kept] == ["resume", "resume"]
     assert report.drop_reasons["surplus resume"] == 5
+
+
+def test_startup_resumes_only_a_run_the_person_started(tmp_path: Path) -> None:
+    assert not onboarding.bootstrap_paused(tmp_path)  # never started: wait for the person
+    (tmp_path / onboarding._PROGRESS_FILE).write_text("[]")
+    assert onboarding.bootstrap_paused(tmp_path)  # started and paused: finish it
+    (tmp_path / onboarding._BOOTSTRAPPED_MARKER).write_text("done")
+    assert not onboarding.bootstrap_paused(tmp_path)  # finished

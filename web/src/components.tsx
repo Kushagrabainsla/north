@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { post } from "./api";
 import { UI_PREFERENCE_KEYS, useHealth, usePersistentState } from "./hooks";
@@ -211,4 +211,66 @@ export function timeAgo(value?: string | number) {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleDateString(undefined, { timeZone: displayTimezone, month: "short", day: "numeric" });
+}
+
+/** Scroll a row into the middle of the view, for links that land on one item in a list. */
+export const reveal = (element: HTMLElement | null) => element?.scrollIntoView({ block: "center" });
+
+// One modal for the whole dashboard: a native dialog, closed with Escape, a
+// click outside, or its Close button.
+export function Modal({
+  open,
+  title,
+  eyebrow,
+  actions,
+  className = "",
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  eyebrow: string;
+  actions?: ReactNode;
+  className?: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    if (open && !element.open) element.showModal();
+    if (!open && element.open) element.close();
+  }, [open]);
+  if (!open) return null;
+  return (
+    <dialog
+      className={`capability-modal ${className}`}
+      ref={ref}
+      aria-label={`${title} ${eyebrow}`}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClick={(event) => {
+        if (event.target === ref.current) onClose();
+      }}
+    >
+      <div className="capability-modal-shell">
+        <header className="capability-modal-header">
+          <div>
+            <span>{eyebrow}</span>
+            <h2>{title}</h2>
+          </div>
+          <div className="capability-modal-actions">
+            <button className="ghost-button" onClick={onClose}>
+              Close
+            </button>
+            {actions}
+          </div>
+        </header>
+        <div className="capability-modal-content">{children}</div>
+      </div>
+    </dialog>
+  );
 }

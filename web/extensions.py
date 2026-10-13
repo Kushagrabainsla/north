@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +26,6 @@ from skills.parser import parse_skill_document
 from skills.registry import parse_execution_contract, rejection_reason
 from tools.base import Tool
 from tools.models import ToolInput, ToolOutput
-from tools.universal.browser import browser_availability
 from tools.universal.cancel_schedule import CancelScheduleTool
 from tools.universal.create_flow import CreateFlowTool
 from tools.universal.create_tool import (
@@ -1004,8 +1002,6 @@ async def get_setup():
         "timezone": settings.timezone,
         "timezone_configured": settings.timezone_configured,
         "profiles": [profile.catalog_entry() for profile in settings.browser_profiles],
-        "browser": dict(zip(("state", "detail"), browser_availability(), strict=True)),
-        "coding_agents": {name: bool(shutil.which(name)) for name in ("codex", "claude")},
         "providers": [
             {
                 "id": p.id,
@@ -1016,6 +1012,38 @@ async def get_setup():
             for p in PROVIDER_DEFINITIONS
         ],
     }
+
+
+# Coding agents North can delegate to; a missing one is reported, not hidden.
+_CODING_AGENT_NAMES = ("codex", "claude")
+_CODING_PROBE_SECONDS = 30
+
+
+@router.get("/setup/coding-agents")
+async def coding_agent_status():
+    """Installed, recent enough and logged in, per agent, using the agents' own probes.
+
+    Each probe starts the agent's CLI, so this runs when the person asks rather
+    than on the setup page's poll.
+    """
+    from coding_agents.discovery import discover_backends
+
+    backends = discover_backends()
+
+    def row(name: str, *, installed: bool, ready: bool = False, version: str = "", detail: str = "") -> dict:
+        return {"name": name, "installed": installed, "ready": ready, "version": version, "detail": detail}
+
+    async def status(name: str) -> dict:
+        backend = backends.get(name)
+        if backend is None:
+            return row(name, installed=False, detail=f"`{name}` is not installed")
+        try:
+            found = await asyncio.wait_for(backend.probe(), _CODING_PROBE_SECONDS)
+        except TimeoutError:
+            return row(name, installed=True, detail="The check timed out")
+        return row(name, installed=True, ready=found.available, version=found.version, detail=found.reason)
+
+    return list(await asyncio.gather(*(status(name) for name in _CODING_AGENT_NAMES)))
 
 
 @router.post("/setup")

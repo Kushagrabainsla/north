@@ -231,3 +231,13 @@ async def test_archived_conversations_leave_active_list(tmp_path) -> None:
     assert await store.list() == []
     archived = await store.list(archived=True)
     assert [item.id for item in archived] == [conversation.id]
+
+
+async def test_a_task_is_traced_back_to_its_session_title(tmp_path) -> None:
+    store = ConversationStore(tmp_path / "web.db")
+    conversation = await store.create("Trip planning")
+    turn = await store.add_turn(conversation.id, "plan Tokyo")
+    await store.attach_task(turn.id, "task_1")
+
+    assert await store.titles_for_tasks(["task_1", "task_2"]) == {"task_1": (conversation.id, "Trip planning")}
+    assert await store.titles_for_tasks([]) == {}

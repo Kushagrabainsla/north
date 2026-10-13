@@ -194,7 +194,7 @@ async def test_scheduled_agent_missing_declared_artifact_fails_before_notificati
 ):
     """A Telegram-sized answer is not a substitute for the file the dashboard reads."""
     orch, ledger, _ = _make_orchestrator(tmp_path)
-    agent = orch._agent_registry.get("news_briefing")
+    agent = orch._agent_registry.get("general")
     artifact = tmp_path / "news" / "missing.md"
     if artifact_contents is not None:
         artifact.parent.mkdir()
@@ -207,7 +207,7 @@ async def test_scheduled_agent_missing_declared_artifact_fails_before_notificati
 
     await orch._run_forced_agent(
         "task_missing_artifact",
-        TaskRequest(prompt="brief me", source=LedgerSource.CRON, forced_agent="news_briefing"),
+        TaskRequest(prompt="brief me", source=LedgerSource.CRON, forced_agent="general"),
     )
 
     entries = await ledger.query(LedgerFilters(task_id="task_missing_artifact"))
@@ -223,7 +223,7 @@ async def test_scheduled_agent_missing_declared_artifact_fails_before_notificati
 @pytest.mark.asyncio
 async def test_scheduled_agent_with_declared_artifact_completes_and_notifies(tmp_path, monkeypatch):
     orch, ledger, _ = _make_orchestrator(tmp_path)
-    agent = orch._agent_registry.get("news_briefing")
+    agent = orch._agent_registry.get("general")
     artifact = tmp_path / "news" / "briefing.md"
     artifact.parent.mkdir()
     artifact.write_text("# Daily briefing\n", encoding="utf-8")
@@ -238,7 +238,7 @@ async def test_scheduled_agent_with_declared_artifact_completes_and_notifies(tmp
 
     await orch._run_forced_agent(
         "task_with_artifact",
-        TaskRequest(prompt="brief me", source=LedgerSource.CRON, forced_agent="news_briefing"),
+        TaskRequest(prompt="brief me", source=LedgerSource.CRON, forced_agent="general"),
     )
 
     entries = await ledger.query(LedgerFilters(task_id="task_with_artifact"))

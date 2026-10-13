@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { BrowserProfiles, newBrowserProfile, profileTestLabel } from "./browserProfiles";
 import { setupNeedsAttention } from "./pages/Setup";
-import { SettingsPage } from "./pages/Verbose";
+import { SettingsPage } from "./pages/Settings";
 
 vi.mock("./hooks", async (importOriginal) => ({
   ...await importOriginal<typeof import("./hooks")>(),
@@ -41,10 +41,10 @@ describe("browser setup evidence", () => {
 });
 
 describe("browser profile presentation", () => {
-  it("keeps every existing Settings panel before browser profiles", () => {
+  it("puts preferences first, then connections, with browser profiles last", () => {
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SettingsPage)));
     const titles = [...markup.matchAll(/<h2>(.*?)<\/h2>/g)].map(match => match[1]);
-    expect(titles).toEqual(["Model routing", "Power", "Autonomy", "Time zone", "Browser profiles"]);
+    expect(titles).toEqual(["Model routing", "Power", "Autonomy", "Time zone", "Providers", "Coding agents", "Browser profiles"]);
   });
 
   it("uses North's existing secondary button variant and a helpful empty state", () => {

@@ -199,7 +199,7 @@ def test_previous_firing_daily_returns_yesterday_when_time_not_yet() -> None:
 async def test_catch_up_enqueues_missed_slot_once_and_dedups(tmp_path) -> None:
     processor = SQLiteJobProcessor(tmp_path / "jobs.db")
     now = datetime(2026, 5, 22, 10, 0, tzinfo=UTC)  # 10am; the 8am slot was missed 2h ago
-    entry = CronEntry(name="news", agent="news_briefing", task="brief", hour=8, minute=0, tz="UTC")
+    entry = CronEntry(name="news", agent="general", task="brief", hour=8, minute=0, tz="UTC")
     scheduler = CronScheduler(processor, [entry], clock=lambda: now)
 
     await scheduler._catch_up([entry], now)

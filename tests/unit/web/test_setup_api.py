@@ -150,3 +150,50 @@ def test_setup_routes_inherit_existing_session_and_csrf_protection(services):
     )
     assert saved.status_code == 200
     assert saved.json()["status"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_coding_agents_report_readiness_from_their_own_probes(monkeypatch):
+    from coding_agents.models import Availability
+
+    ready, logged_out = AsyncMock(), AsyncMock()
+    ready.probe.return_value = Availability(True, "0.130.0")
+    logged_out.probe.return_value = Availability(False, "2.1.0", "Claude Code is not logged in")
+    monkeypatch.setattr("coding_agents.discovery.discover_backends", lambda: {"codex": ready, "claude": logged_out})
+
+    rows = {row["name"]: row for row in await setup.coding_agent_status()}
+
+    assert rows["codex"]["ready"] and rows["codex"]["version"] == "0.130.0"
+    assert rows["claude"]["installed"] and not rows["claude"]["ready"]
+    assert "not logged in" in rows["claude"]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_missing_coding_agent_is_reported_not_hidden(monkeypatch):
+    monkeypatch.setattr("coding_agents.discovery.discover_backends", dict)
+
+    rows = await setup.coding_agent_status()
+
+    assert [row["installed"] for row in rows] == [False, False]
+
+
+def test_files_newer_than_a_finished_run_are_reported_unread(tmp_path, monkeypatch):
+    import os
+
+    from web import api as web_api
+
+    old, new = tmp_path / "old.pdf", tmp_path / "new.pdf"
+    old.write_text("x")
+    new.write_text("y")
+    marker = tmp_path / ".bootstrapped"
+    marker.write_text("done")
+    os.utime(old, (100, 100))
+    os.utime(marker, (200, 200))
+    os.utime(new, (300, 300))
+    monkeypatch.setattr(web_api, "_discover_files", lambda: [old, new])
+
+    progress, candidates, finished = web_api._bootstrap_overview(tmp_path)
+
+    assert finished
+    assert [item["path"] for item in progress] == [str(old.resolve())]
+    assert set(candidates) - {item["path"] for item in progress} == {str(new.resolve())}

@@ -286,6 +286,22 @@ class ConversationStore:
         with open_db_connection(self._db_path) as conn:
             conn.execute("UPDATE web_turns SET task_id=? WHERE id=?", (task_id, turn_id))
 
+    async def titles_for_tasks(self, task_ids: list[str]) -> dict[str, tuple[str, str]]:
+        """Conversation ID and title for each of *task_ids* that came from a session."""
+        return await asyncio.to_thread(self._titles_for_tasks_sync, task_ids)
+
+    def _titles_for_tasks_sync(self, task_ids: list[str]) -> dict[str, tuple[str, str]]:
+        if not task_ids:
+            return {}
+        marks = ",".join("?" * len(task_ids))
+        with open_db_connection(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT t.task_id, c.id, c.title FROM web_turns t "
+                f"JOIN web_conversations c ON c.id = t.conversation_id WHERE t.task_id IN ({marks})",
+                task_ids,
+            ).fetchall()
+        return {row[0]: (row[1], row[2]) for row in rows}
+
     async def turns(self, conversation_id: str) -> list[Turn]:
         rows = await asyncio.to_thread(self._turns_sync, conversation_id)
         return [self._turn(row) for row in rows]

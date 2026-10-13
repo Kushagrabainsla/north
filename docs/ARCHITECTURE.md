@@ -394,7 +394,6 @@ A relevance *score* cannot decide whether a task wants personal facts at all: me
 _FACT_TOPICS_BY_DOMAIN = {
     "engineering": frozenset({"preferences"}),
     "home": frozenset({"preferences", "schedule"}),
-    "wellness": frozenset({"health", "preferences", "schedule"}),
 }
 ```
 
@@ -553,7 +552,7 @@ scoping each task's rows. Earlier versions used one file per task.
 
 ```python
 await task_context.write(task_id, agent="general", key="output", value=..., status="completed")
-await task_context.update_agent_status(task_id, "news_briefing", "failed")
+await task_context.update_agent_status(task_id, "home", "failed")
 everything = await task_context.get_all(task_id)   # {agent: {key: value}}
 ```
 
@@ -719,9 +718,16 @@ POST   /orchestrator/webhooks/{source}   -> receive an external event and submit
 
 ## 7. Agent Layer
 
-Dashboard setup is a view over existing provider connections, coding-agent availability,
-NorthSettings and ApprovalPolicy. It does not create another runner, credential store,
-profile router or permission system. Setup detects timezone only if Settings has none.
+Dashboard setup is a guided walk over the same components Settings > Connections shows:
+AI providers, coding agents (their own probe: installed, recent enough, logged in), browser
+profiles, and reading the person's files. It does not create another runner, credential
+store, profile router or permission system. Setup detects timezone only if Settings has none.
+Reading personal files (bootstrap) is opt-in: it starts only from Setup's "Read my files";
+startup only resumes a run the person started that paused. Each concept has one page:
+Settings holds preferences and connections, Approvals holds waiting cards, past decisions
+and safe actions, Memory holds documents, facts and episodes, System is read-only health,
+model choice and cost. Artifacts are grouped by the flow, session or task that made them;
+durable notes live in ~/.north/notes/<task id>/ so they stay grouped and are never pruned.
 Browser profiles have owner-defined purposes; the agent selects an enabled `profile_id`
 per tool call from task context and asks through the central policy when ambiguous.
 Existing profiles go through TaskWindow (MIT, github.com/clawnify/taskwindow), audited at
@@ -817,7 +823,9 @@ Each agent is a self-contained folder dropped into `/agents`. The Orchestrator s
     config.yaml           <- declaration: agent, domain, accepted keywords
     prompts/
       system.md           <- system prompt defining the agent's expertise
-  /home/  /news_briefing/  /wellness/
+  /home/
+  (news briefings and wellness coaching are skills on the general agent, not agents:
+   an agent that is only a prompt is a skill)
   (no coding agents of its own: code tasks go to the general agent, which hands them to the installed
    Claude Code / Codex through `coding_agent`; see docs/design/coding-agents.md)
 ```
@@ -1621,7 +1629,8 @@ All storage is local SQLite and markdown files. Nothing proprietary, battle-test
     tasks.db             <- shared Task Context Object store (task_id column per task)
                             cleaned up per Section 6.6 cleanup policy
     {task_id}/           <- per-task handoff directory (internal agent scratch)
-      news/              <-   news_briefing: {date}.md (and any other declared artifact)
+      news/              <-   news-briefing skill: {date}.md (and any other declared artifact)
+  notes/{task_id}/       <- durable notes and plans, one folder per task (never pruned)
   context/
     user.md
     judgement_rules.md

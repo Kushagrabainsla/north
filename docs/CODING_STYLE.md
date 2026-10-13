@@ -204,6 +204,8 @@ Sections 4.1-4.14 are the rules this codebase enforces in review. The general ch
 
 Every piece of logic exists in exactly one place. SQLite connection setup with WAL pragmas lives in `utils/db.py:open_db_connection()`; `ledger/` and `jobs/` both import it. If you find yourself copy-pasting, extract.
 
+**One home per concept in the dashboard.** Each thing (a setting, a connection, a kind of record) lives on exactly one page; another page links to it or reuses the same component, never a copy. Onboarding walks through those same components. **Why:** scattered, repeated controls drift apart and confuse. **How to apply:** before adding a panel, find the concept's home; move rather than duplicate.
+
 ### 5.2 Shared Utilities Live in utils/
 
 Logic used by more than one module lives in `utils/`; never re-implemented inline.
@@ -321,6 +323,8 @@ Swapping any backend (e.g. `FileContextStore` → `DBContextStore`) is one line.
 ### 6.4 Agents Are Discovered, Not Registered
 
 The Orchestrator scans `/agents` at startup. A valid agent folder contains `config.yaml` and `agent.py`. Adding an agent = adding a folder. The registry exposes `get(name)`, `all()`, and `for_domain(domain)`. No registry code changes when agents come or go.
+
+An agent that is only a prompt is a skill on the general agent. Add an agent only for what a skill cannot give: its own tools, permissions or isolation (as `home` guards device control).
 
 ### 6.5 Tools Are Discovered from the Filesystem
 
@@ -538,7 +542,7 @@ agents/
     agent.py           <- CoderAgent
     config.yaml
     prompts/
-  architect/  reviewer/  researcher/  general/  home/  news_briefing/
+  architect/  reviewer/  researcher/  general/  home/
   health/  job/  finance/  university/
 
 tools/

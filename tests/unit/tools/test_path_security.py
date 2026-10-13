@@ -73,13 +73,11 @@ class TestPersonalDataCarveOut:
         resolved = resolve_path(str(target), None)
         assert resolved == target
 
-    def test_allows_wellness_subdir_write_inside_workspace(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_allows_notes_subdir_write_inside_workspace(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         # Even when the agent runs scoped to a project workspace, personal dirs
         # must be reachable - otherwise output silently falls back to CWD.
         monkeypatch.setenv("NORTH_HOME", str(tmp_path))
-        target = tmp_path / "wellness" / "meal-plans" / "x.md"
+        target = tmp_path / "notes" / "0123456789abcdef0123456789abcdef" / "meal-plan.md"
         resolved = resolve_path(str(target), "/srv/project")
         assert resolved == target
 

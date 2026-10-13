@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentDeletionPrompt, memoryLabel, memoryLink } from "./Verbose";
+import { agentDeletionPrompt } from "./Agents";
+import { memoryLabel, memoryLink } from "./Approvals";
 
 describe("personal-agent deletion confirmation", () => {
   it("names every schedule and pending job that will be removed", () => {
@@ -28,7 +29,8 @@ describe("links from a decision to the memory it used", () => {
 
   it("finds a past decision by its fingerprint, not its wording", () => {
     const link = memoryLink({ kind: "past_decision", label: "Your past decision", text: "you approved 'x' (2x)", ref: "abc123" });
-    expect(params(link).get("tab")).toBe("approvals");
+    expect(link.startsWith("/approvals?")).toBe(true);
+    expect(params(link).get("tab")).toBe("decisions");
     expect(params(link).get("find")).toBe("abc123");
   });
 

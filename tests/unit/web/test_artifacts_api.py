@@ -86,3 +86,25 @@ async def test_a_handoff_artifact_reads_back_with_its_task(north_home) -> None:
     assert artifact["task"] == "task_abc123"
     assert artifact["kind"] == "research"
     assert "findings" in artifact["content"]
+
+
+async def test_each_task_group_is_named_by_its_flow_session_or_request(tmp_path) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    for task in ("flowtask", "chattask", "task_plain0000"):
+        (tmp_path / "tasks" / task).mkdir(parents=True)
+        (tmp_path / "tasks" / task / "out.md").write_text("x", encoding="utf-8")
+    flows = Mock(flow_names_for_tasks=Mock(return_value={"flowtask": "daily-news-briefing"}))
+    sessions = Mock(titles_for_tasks=AsyncMock(return_value={"chattask": ("conv1", "Trip planning")}))
+    received = SimpleNamespace(action="task_received", input="Summarise my week\nwith detail")
+    ledger = Mock(query=AsyncMock(return_value=[received]))
+    services = ApiServices(north_home=tmp_path, flow_store=flows, conversation_store=sessions, ledger=ledger)
+
+    with bind_services(services):
+        owners = {row["task"]: row["owner"] for row in await web_api.list_artifacts()}
+
+    assert owners["flowtask"] == {"kind": "flow", "name": "daily-news-briefing", "link": "/flows"}
+    assert owners["chattask"] == {"kind": "session", "name": "Trip planning", "link": "/sessions/conv1"}
+    assert owners["task_plain0000"]["name"] == "Summarise my week"
+    assert owners["task_plain0000"]["link"] == "/tasks/task_plain0000"

@@ -35,7 +35,7 @@ from approval.telegram import TelegramNotifier
 from approval.tui import TUIAwareNotifier
 from approval.unattended import UnattendedPolicy
 from approval.unattended_rules import UnattendedRuleStore
-from bootstrap.onboarding import run_bootstrap_if_needed
+from bootstrap.onboarding import bootstrap_paused, run_bootstrap_if_needed
 from coding_agents import CodingRunner, CommandVerifier, Gate, GateSessions, discover_backends
 from config.dependencies import build_production_dependencies
 from config.security import load_secret
@@ -1141,9 +1141,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         _step("autonomous background tasks disabled")
 
-    # Onboarding is independently controllable because it reads personal files.
-    # It defaults off in test mode even if another background worker is enabled.
-    if settings.onboarding_active:
+    # Reading personal files starts only when the person asks, in onboarding.
+    # Startup resumes a run they started that paused; it never begins one.
+    # It stays off in test mode even if another background worker is enabled.
+    if settings.onboarding_active and bootstrap_paused(settings.north_home):
         background_tasks.append(
             asyncio.create_task(
                 _guarded(
@@ -1159,7 +1160,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
         )
     else:
-        _step("personal-file onboarding disabled")
+        _step("personal-file reading waits for the person to start it")
 
     _step("startup complete - yielding to server")
     try:

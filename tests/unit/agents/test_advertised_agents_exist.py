@@ -100,8 +100,8 @@ def test_no_scaffolded_agent_directories() -> None:
 def test_planner_routing_table_targets_resolve() -> None:
     """Every target in the planner's classification table must exist.
 
-    The table routes by domain, except `news_briefing`, which is an agent name.
-    Both are legitimate; a name that is neither is the bug.
+    The table routes by domain or agent name. Both are legitimate; a name that
+    is neither is the bug.
     """
     rows = re.findall(r"^\|(?!\s*-)[^|]+\|\s*`([a-z_]+)`\s*\|", PLANNER_PROMPT.read_text(encoding="utf-8"), re.M)
     assert rows, "no routing rows parsed - the table's shape changed, update this test"

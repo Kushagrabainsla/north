@@ -7,6 +7,7 @@ about which files may ever be published can be read and tested on their own.
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 
 from tools._path import DB_SUFFIXES
@@ -30,13 +31,24 @@ def is_readable_artifact(path: Path) -> bool:
     return path.is_file() and not path.name.endswith(DB_SUFFIXES)
 
 
+# A task ID as it appears in a folder name: the orchestrator's 32-hex IDs and
+# the older task_<12 hex> form.
+_TASK_ID = re.compile(r"^(?:[0-9a-f]{32}|task_[0-9a-f]{12})$")
+
+
 def artifact_task_id(path: Path, home: Path) -> str:
-    """Return the task a handoff artifact belongs to, or "" for personal output."""
+    """Return the task an artifact belongs to, or "" for a file written outside any task.
+
+    Task output lives in a folder named for its task: tasks/<id>/..., and the
+    durable notes/<id>/... and news/research/<id>/... stores.
+    """
     try:
         parts = path.relative_to(home).parts
     except ValueError:
         return ""
-    return parts[1] if len(parts) > 2 and parts[0] == "tasks" else ""
+    if len(parts) > 2 and parts[0] == "tasks":
+        return parts[1]
+    return next((part for part in parts[1:-1] if _TASK_ID.match(part)), "")
 
 
 def encode_artifact_id(path: Path, home: Path) -> str:

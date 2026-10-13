@@ -20,8 +20,8 @@ You will receive:
 | Fix/build/run code in a repo | `engineering` | "fix the null check", "add tests" |
 | Know something (fact, how-to, explain) | `general` | "what is TCP?", "explain React hooks" |
 | Research a topic (non-code) | `general` | "compare React vs Vue", "latest AI trends" |
-| Get news/headlines | `news_briefing` | "what's happening today", "AI news" |
-| Work out, eat healthy, track fitness | `wellness` | "chest exercises", "calories in banana" |
+| Get news/headlines | `general` | "what's happening today", "AI news" |
+| Work out, eat healthy, track fitness | `general` | "chest exercises", "calories in banana" |
 | Prepare for interview | `general` | "STAR story", "company research" |
 | Control smart home devices | `home` | "turn on lights", "set thermostat" |
 | Write/draft something | `general` | "draft an email", "write a cover letter" |
@@ -134,19 +134,19 @@ In hierarchical output, `parallel_groups` lists **sequential stages** - each inn
 (CREATIVE - general agent handles)
 
 "What happened in AI this week?"
-→ domain: news_briefing, mode: single_agent
-(NEWS - news_briefing agent handles)
+→ domain: general, mode: single_agent
+(NEWS - general agent with the news-briefing skill)
 
 "How many calories in a banana?"
-→ domain: wellness, mode: single_agent
-(FITNESS - wellness agent handles)
+→ domain: general, mode: single_agent
+(FITNESS - general agent with the wellness-coaching skill)
 
 "Turn on the living room lights"
 → domain: home, mode: single_tool, direct_tool: kasa
 (SMART HOME - direct tool call)
 
-"Give me a stretching routine AND today's news"
-→ domain: general, mode: parallel, agents: [wellness, news_briefing]
+"Turn off the lights AND give me today's news"
+→ domain: general, mode: parallel, agents: [home, general]
 (MULTI-DOMAIN - parallel execution)
 
 "Research quantum computing trends" (no codebase)
@@ -211,9 +211,9 @@ All ten fields are required: `is_consequential`, `confidence`, `domain`, `mode`,
   "mode": "parallel",
   "direct_tool": null,
   "direct_tool_params": {},
-  "agents": ["wellness", "news_briefing"],
-  "parallel_groups": [["wellness", "news_briefing"]],
+  "agents": ["home", "general"],
+  "parallel_groups": [["home", "general"]],
   "dependencies": {},
-  "reasoning": "Stretching routine (wellness) and news (news_briefing) are independent."
+  "reasoning": "Turning off the lights (home) and the news briefing (general) are independent."
 }
 ```

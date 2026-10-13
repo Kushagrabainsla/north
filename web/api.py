@@ -656,7 +656,15 @@ def _bootstrap_overview(home: Path) -> tuple[list, list[str], bool]:
     """
     progress = _load_progress(home) or []
     candidates = [str(path.resolve()) for path in _discover_files()]
-    return progress, candidates, (home / ".bootstrapped").exists()
+    marker = home / ".bootstrapped"
+    if marker.exists() and not progress:
+        # A finished run keeps no per-file record: a file is read if it is no
+        # newer than the run. One saved or changed since is not, and says so.
+        finished = marker.stat().st_mtime
+        progress = [
+            {"path": path, "status": "completed"} for path in candidates if Path(path).stat().st_mtime <= finished
+        ]
+    return progress, candidates, marker.exists()
 
 
 def _embeddings_overview() -> dict[str, Any]:
@@ -701,7 +709,8 @@ async def system_overview() -> dict[str, Any]:
     # _discover_files() walks the user's home directory - off-thread so this
     # GET never stalls the event loop (CODING_STYLE §10.3).
     progress, candidates, bootstrapped = await asyncio.to_thread(_bootstrap_overview, home)
-    completed = progress or ([{"path": path, "status": "completed"} for path in candidates] if bootstrapped else [])
+    completed = progress
+    read = {item["path"] for item in completed if item.get("status") == "completed"}
     return {
         "providers": providers,
         "embeddings": _embeddings_overview(),
@@ -722,6 +731,7 @@ async def system_overview() -> dict[str, Any]:
             "completed": completed,
             "candidates": candidates,
             "candidate_count": len(candidates),
+            "unread": [path for path in candidates if path not in read],
         },
     }
 
@@ -1156,9 +1166,48 @@ def _list_artifacts_sync(limit: int) -> list[dict[str, Any]]:
     return result
 
 
+# A task's own request, as a group name: its first line, short enough for a heading.
+_OWNER_NAME_CHARS = 90
+
+
+async def _artifact_owners(task_ids: list[str]) -> dict[str, dict[str, str]]:
+    """Who produced each task's files, by name: the flow, the session, or the request itself."""
+    services = current_services()
+    flows = await asyncio.to_thread(services.flow_store.flow_names_for_tasks, task_ids) if services.flow_store else {}
+    store = services.conversation_store
+    sessions = await store.titles_for_tasks(task_ids) if store is not None else {}
+    ledger = services.ledger
+
+    async def request_of(task_id: str) -> str:
+        entries = await ledger.query(LedgerFilters(task_id=task_id, limit=5, order_asc=True))
+        text = next((entry.input for entry in entries if entry.action == "task_received" and entry.input), "")
+        first = text.strip().splitlines()[0] if text.strip() else ""
+        return first if len(first) <= _OWNER_NAME_CHARS else first[: _OWNER_NAME_CHARS - 1] + "…"
+
+    rest = [task_id for task_id in task_ids if task_id not in flows and task_id not in sessions]
+    requests = (
+        dict(zip(rest, await asyncio.gather(*(request_of(task_id) for task_id in rest)), strict=True)) if ledger else {}
+    )
+    owners: dict[str, dict[str, str]] = {}
+    for task_id in task_ids:
+        if task_id in flows:
+            owners[task_id] = {"kind": "flow", "name": flows[task_id], "link": "/flows"}
+        elif task_id in sessions:
+            conversation_id, title = sessions[task_id]
+            owners[task_id] = {"kind": "session", "name": title or "Session", "link": f"/sessions/{conversation_id}"}
+        else:
+            owners[task_id] = {"kind": "task", "name": requests.get(task_id) or "Task", "link": f"/tasks/{task_id}"}
+    return owners
+
+
 @router.get("/artifacts")
 async def list_artifacts(limit: int = 100) -> list[dict[str, Any]]:
-    return await asyncio.to_thread(_list_artifacts_sync, limit)
+    """Every readable output, each tagged with the flow, session or task that made it."""
+    files = await asyncio.to_thread(_list_artifacts_sync, limit)
+    owners = await _artifact_owners(sorted({file["task"] for file in files if file["task"]}))
+    for file in files:
+        file["owner"] = owners.get(file["task"])
+    return files
 
 
 @router.get("/artifacts/{artifact_id}")
@@ -1186,7 +1235,7 @@ async def dashboard() -> dict[str, Any]:
         current_services().require("ledger").get_metrics(days=7),
         current_services().require("ledger").query(LedgerFilters(limit=12)),
         current_services().require("conversation_store").list(limit=6),
-        list_artifacts(limit=100),
+        asyncio.to_thread(_list_artifacts_sync, 100),
     )
     agents = current_services().require("agent_registry").all()
     settings = current_services().require("north_settings")

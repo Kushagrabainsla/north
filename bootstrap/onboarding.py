@@ -1079,6 +1079,15 @@ async def _bootstrap_already_done(
     return True
 
 
+def bootstrap_paused(north_home: Path) -> bool:
+    """Whether a run the person started is waiting to finish.
+
+    Reading personal files starts only when the person asks, from onboarding.
+    Startup may finish a run that paused (models unavailable), never begin one.
+    """
+    return (north_home / _PROGRESS_FILE).exists() and not (north_home / _BOOTSTRAPPED_MARKER).exists()
+
+
 async def run_bootstrap_if_needed(
     fact_store: FactStore | None,
     inference_router: InferenceRouter,
@@ -1086,7 +1095,7 @@ async def run_bootstrap_if_needed(
     selected_paths: set[str] | None = None,
     context_store: ContextStore | None = None,
 ) -> None:
-    """Seed facts from local files on first-ever start.
+    """Seed facts from local files when the person starts it, or resume a paused run.
 
     Checks for {north_home}/.bootstrapped — if present, returns immediately.
     Otherwise discovers high-ROI files, extracts facts via unified LLM call,

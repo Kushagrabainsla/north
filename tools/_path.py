@@ -116,10 +116,10 @@ def _in_handoff_root(resolved: str) -> bool:
 
 
 # Personal-data subdirectories inside NORTH_HOME that agents are allowed to
-# write to (news digests, wellness logs, general notes). The rest of ~/.north
+# write to (research digests, notes and plans), one folder per task inside. The rest of ~/.north
 # stays blocked (secret.key, .env, ledger/jobs/facts DBs). Kept in sync with
 # agent prompts so output never lands in the CWD/workspace.
-_PERSONAL_SUBDIRS: tuple[str, ...] = ("news", "notes", "wellness")
+_PERSONAL_SUBDIRS: tuple[str, ...] = ("news", "notes")
 
 
 def _personal_root() -> str:

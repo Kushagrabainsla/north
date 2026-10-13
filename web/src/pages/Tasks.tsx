@@ -20,7 +20,8 @@ import { post } from "../api";
 import { useResource } from "../hooks";
 import { Empty, ErrorNotice, formatDateTime, InferenceCategories, Loading, PageHeader, Panel, PromptTelemetry, Status, timeAgo } from "../components";
 import type { AgentRun, Approval, Artifact, Conversation, LedgerEntry, TaskDetail } from "../types";
-import { RoutingAttempts, stageIcon } from "./Verbose";
+import { RoutingAttempts } from "./routing";
+import { stageIcon } from "./Artifacts";
 
 /** One source of truth for the lifecycle actions shown in the task list. */
 const TASK_ACTION_STATUS: Record<string, string> = {

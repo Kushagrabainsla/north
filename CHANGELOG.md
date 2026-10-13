@@ -13,6 +13,17 @@ All notable changes to north are documented here.
 - Built-in job skills and scheduling guidance choose a saved browser profile per call (`profile_id`) instead of `browser_context`, `context_confirmed` and `connect`. Old flows that still pass the context flags keep working; the flags are ignored.
 - A click by uid is refused if the element no longer has the role and name that inspect and the approval card showed.
 
+### Changed (cleanup)
+- Reading your personal files into memory is opt-in: it starts only when you press "Read my files" in onboarding, which says which folders it reads and that their text goes to your AI provider. Startup only resumes a run you started.
+- Onboarding is five steps: AI connection, coding agents (a real check that each is installed, recent enough and logged in), browser profiles (shown once), your files, and a finish summary. The Permissions step is gone; approval mode lives in Settings.
+- One home per concept: Settings gains a Connections section (providers, coding agents, browser profiles; providers moved from System), Approvals gains Past decisions and Safe actions (moved from Memory), and the bootstrap panels left Memory and System.
+- Artifacts are grouped by the flow, session or task that made them, by name, with older loose files last, and open in a modal. Notes and plans are saved under ~/.north/notes/<task id>/.
+- The news_briefing and wellness agents are gone: they were only prompts. Wellness coaching is a built-in skill; the daily news briefing is your own skill on the general agent. The home agent stays.
+- The 3,300-line Verbose.tsx is split into one file per page, with one shared Modal.
+
+### Fixed
+- `north web` no longer runs the server in auto-reload mode over your home folder (an omitted Typer option was truthy). `north stop` now stops the server's child processes too, finds a leftover listener without root on macOS, and fails instead of printing "Stopped" while the port is still taken.
+
 ### Removed
 - The Puppeteer/CDP existing-Chrome bridge (`browser_native.py`, `resources/browser/`), Chrome's remote-debugging setup and its permission prompt, the saved CDP endpoint on profiles, and agent-supplied `connect`/`copy_cookies`. Uncommitted browser-bridge experiments are summarized in `experiments/README.md` and deleted.
 
