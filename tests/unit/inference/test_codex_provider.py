@@ -389,3 +389,49 @@ async def test_json_mode_still_asks_for_a_plain_json_object() -> None:
 async def test_an_unstructured_request_asks_for_no_format_at_all() -> None:
     body = await _capture_body(CompletionRequest(prompt="hi", component="coder"))
     assert "text" not in body
+
+
+def _limited(status_body: dict | None, headers: dict | None = None):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers=headers or {}, json=status_body)
+
+    client = httpx.AsyncClient(base_url="https://example.test", transport=httpx.MockTransport(handler))
+    return OpenAICodexProvider(ApiKeyCredentialProvider("test", "token"), client=client)
+
+
+@pytest.mark.asyncio
+async def test_a_plan_usage_limit_carries_the_reset_codex_reported() -> None:
+    """North retried every minute for hours; Codex had said when it resets."""
+    from inference.exceptions import ModelRateLimitedError
+
+    body = {"error": {"type": "usage_limit_reached", "resets_at": int(time.time()) + 10879, "resets_in_seconds": 10879}}
+    with pytest.raises(ModelRateLimitedError) as raised:
+        await _limited(body).complete("codex-model", CompletionRequest(prompt="hi", component="test"))
+    assert raised.value.retry_after == 10879
+
+
+@pytest.mark.asyncio
+async def test_the_full_window_header_is_used_when_the_body_has_no_reset() -> None:
+    from inference.exceptions import ModelRateLimitedError
+
+    headers = {
+        "x-codex-primary-used-percent": "0",
+        "x-codex-primary-reset-after-seconds": "18000",
+        "x-codex-secondary-used-percent": "100",
+        "x-codex-secondary-reset-after-seconds": "10880",
+    }
+    with pytest.raises(ModelRateLimitedError) as raised:
+        await _limited({"error": {"type": "rate_limit"}}, headers).complete(
+            "codex-model", CompletionRequest(prompt="hi", component="test")
+        )
+    assert raised.value.retry_after == 10880
+
+
+@pytest.mark.asyncio
+async def test_spent_credits_need_billing_not_a_timer() -> None:
+    from inference.exceptions import PaymentRequiredError
+
+    with pytest.raises(PaymentRequiredError):
+        await _limited({"error": {"code": "credit_balance_exhausted"}}).complete(
+            "codex-model", CompletionRequest(prompt="hi", component="test")
+        )

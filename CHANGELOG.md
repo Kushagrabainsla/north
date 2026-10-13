@@ -22,6 +22,7 @@ All notable changes to north are documented here.
 - The 3,300-line Verbose.tsx is split into one file per page, with one shared Modal.
 
 ### Fixed
+- A Codex plan limit is read from Codex's own 429 (`usage_limit_reached` with `resets_in_seconds`, or the full `x-codex-*` window): North holds Codex until that reset instead of retrying every minute, and a waiting run says when, e.g. "until 12:51 PM". Codex quota and credit errors are treated as needing billing. `north limits` shows resets up to a week out instead of capping them at ten minutes.
 - `north web` no longer runs the server in auto-reload mode over your home folder (an omitted Typer option was truthy). `north stop` now stops the server's child processes too, finds a leftover listener without root on macOS, and fails instead of printing "Stopped" while the port is still taken.
 
 ### Removed

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,6 +19,7 @@ from inference.exceptions import (
     InferenceError,
     ModelNotFoundError,
     ModelRateLimitedError,
+    PaymentRequiredError,
     PoolRefreshError,
     ProviderAuthError,
     ProviderUnavailableError,
@@ -297,6 +299,56 @@ _RESPONSE_EVENT_HANDLERS: dict[str, Callable[[_ResponsesStream, dict], Awaitable
 }
 
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+# Codex 429s that are about money rather than pace: no reset will lift them.
+# The same set the Codex CLI treats as quota exceeded (codex-rs api_bridge.rs).
+_QUOTA_ERRORS = frozenset(
+    {
+        "insufficient_quota",
+        "credit_balance_exhausted",
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
+        "usage_not_included",
+    }
+)
+
+
+def _json_object(response: httpx.Response) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _codex_reset_seconds(error: dict[str, Any], headers: httpx.Headers) -> float | None:
+    """Seconds until a Codex usage limit lifts, from the provider's own report.
+
+    A plan limit (``usage_limit_reached``) carries its reset in the body; the
+    ``x-codex-*`` headers carry each window's reset, and the full window is the
+    one holding the call back. ``Retry-After`` is the last resort.
+    """
+    resets_in = error.get("resets_in_seconds")
+    if isinstance(resets_in, int | float) and resets_in > 0:
+        return float(resets_in)
+    resets_at = error.get("resets_at")
+    if isinstance(resets_at, int | float) and resets_at > time.time():
+        return float(resets_at - time.time())
+    waits = []
+    for window in ("primary", "secondary"):
+        try:
+            used = float(headers.get(f"x-codex-{window}-used-percent") or 0)
+            wait = float(headers.get(f"x-codex-{window}-reset-after-seconds") or 0)
+        except ValueError:
+            continue
+        if used >= 100 and wait > 0:
+            waits.append(wait)
+    if waits:
+        return max(waits)
+    try:
+        return float(headers["retry-after"]) if headers.get("retry-after") else None
+    except ValueError:
+        return None
 
 
 def _tool_definition(tool: dict) -> dict:
@@ -457,12 +509,19 @@ class OpenAICodexProvider:
         if response.status_code == 404:
             raise ModelNotFoundError(model_id, self.name, status_code=404)
         if response.status_code == 429:
-            retry = response.headers.get("retry-after")
-            try:
-                retry_after = float(retry) if retry else None
-            except ValueError:
-                retry_after = None
-            raise ModelRateLimitedError(model_id, self.name, retry_after=retry_after, status_code=429)
+            body = _json_object(response)
+            error = body.get("error") if isinstance(body.get("error"), dict) else {}
+            headers = dict(response.headers)
+            if error.get("type") in _QUOTA_ERRORS or error.get("code") in _QUOTA_ERRORS:
+                raise PaymentRequiredError(model_id, self.name, status_code=429, headers=headers, body=body)
+            raise ModelRateLimitedError(
+                model_id,
+                self.name,
+                retry_after=_codex_reset_seconds(error, response.headers),
+                status_code=429,
+                headers=headers,
+                body=body,
+            )
         if response.status_code in {502, 503, 504}:
             raise ProviderUnavailableError(f"OpenAI Codex returned {response.status_code}")
         if response.status_code >= 400:

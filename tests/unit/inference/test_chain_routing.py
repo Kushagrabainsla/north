@@ -253,3 +253,21 @@ class TestPowerDial:
     def test_the_dial_never_relaxes_a_requirement(self) -> None:
         for power in ("eco", "cruise", "sport"):
             assert "no-tools-model" not in self._order(power)
+
+
+class TestAWaitSaysWhenItEnds:
+    def test_a_reset_the_provider_reported_is_shown_as_a_clock_time(self) -> None:
+        view = _view()
+        codex = Endpoint("gpt-5-6", "openai_codex", "gpt-5.6-terra", 0.0, 0.0)
+        view.apply(
+            Failure(Scope.ACCOUNT_FREE, "free allowance spent", "gpt-5.6-terra", "openai_codex", retry_after=10879),
+            codex,
+        )
+        reason = view.skip_reason(codex)
+        assert reason is not None and " until " in reason and ("AM" in reason or "PM" in reason)
+
+    def test_a_guessed_window_does_not_pretend_to_know_when_it_ends(self) -> None:
+        view = _view()
+        paid = Endpoint("claude-opus-5", "opencode_zen", "claude-opus-5", 1e-5, 2.5e-5)
+        view.apply(Failure(Scope.ACCOUNT_PAID, "no payment method", "claude-opus-5", "opencode_zen"), paid)
+        assert " until " not in (view.skip_reason(paid) or "")

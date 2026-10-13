@@ -28,6 +28,7 @@ from inference.facts.models import Endpoint, Entitlement
 from inference.failure import Failure, Scope
 from inference.provider_health import ProviderHealthTracker
 from inference.rate_limit_status import RateLimitStatusStore
+from utils.time import epoch_to_local
 
 # How long "this account needs billing" stands before north tries a paid model
 # again. Entitlement is a fact about the account, but accounts get funded, so it
@@ -42,6 +43,20 @@ class _Entitlement:
     state: Entitlement
     reason: str
     until: float | None  # monotonic; None = no timer, needs an action
+    reported: bool = False  # `until` is the provider's own reset, not North's guess
+
+
+def _until(monotonic_deadline: float | None) -> str:
+    """' until 12:51 PM' for a timed block, so a wait says when it ends; '' otherwise."""
+    if monotonic_deadline is None:
+        return ""
+    lifts = epoch_to_local(time.time() + monotonic_deadline - time.monotonic())
+    when = (
+        lifts.strftime("%-I:%M %p")
+        if lifts.date() == epoch_to_local(time.time()).date()
+        else lifts.strftime("%a %-I:%M %p")
+    )
+    return f" until {when}"
 
 
 class EntitlementLedger:
@@ -76,8 +91,9 @@ class EntitlementLedger:
         and unactionable. ``resets_in`` is the wait the provider itself reported;
         without one the allowance is held for the standard window.
         """
-        window = resets_in if resets_in and resets_in > 0 else self._billing_window
-        self._free[provider] = _Entitlement(Entitlement.FREE_SPENT, reason, time.monotonic() + window)
+        reported = bool(resets_in and resets_in > 0)
+        window = resets_in if reported else self._billing_window
+        self._free[provider] = _Entitlement(Entitlement.FREE_SPENT, reason, time.monotonic() + window, reported)
 
     def forbidden(self, provider: str, reason: str) -> None:
         """The key itself was rejected. No timer - a person has to fix it."""
@@ -165,7 +181,7 @@ class AvailabilityView:
         """None when the endpoint is callable, otherwise a human-readable reason."""
         state = self._entitlements.state_of(endpoint)
         if state is not None:
-            return f"{state.state.value} ({state.reason})"
+            return f"{state.state.value} ({state.reason}){_until(state.until) if state.reported else ''}"
         if not self._health.is_available(endpoint.provider):
             return "provider unavailable"
         key = (endpoint.provider_model_id, endpoint.provider)

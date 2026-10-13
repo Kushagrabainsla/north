@@ -354,3 +354,11 @@ def test_format_status_table_empty_and_populated(tmp_path) -> None:
     t_pop = format_status_table(p)
     assert len(t_pop.rows) == 1
     assert "openrouter" in str(t_pop.columns[0]._cells[0])
+
+
+def test_a_weekly_reset_the_provider_reported_is_shown_as_reported() -> None:
+    """Capped at ten minutes, Codex's three-hour reset read as 'available in 60 s'."""
+    from inference.rate_limit_status import compute_wait_seconds
+
+    wait, source = compute_wait_seconds(status_code=429, headers={}, retry_after=10_879)
+    assert (wait, source) == (10_879, "retry-after")

@@ -60,7 +60,11 @@ _PAYLOAD_TOO_LARGE = "payload_too_large"  # 413 - model can't accept north's req
 # Default functional windows (mirror cooldowns.py so the displayed ETA matches
 # the actual skip window when no provider hint is present).
 _DEFAULT_RATE_LIMIT_SECS = 60.0
-_MAX_RATE_LIMIT_SECS = 600.0
+# The longest reset a provider may report and have shown as such. Plan allowances
+# reset daily or weekly (Groq's daily requests, Codex's weekly window); capped at
+# ten minutes, a reset hours away was shown as "available in 60 s" while routing
+# correctly held the provider until the real reset.
+_MAX_RATE_LIMIT_SECS = 7 * 86_400.0
 _PAYMENT_EXHAUSTED_SECS = 86_400.0
 _PROVIDER_DOWN_SECS = 86_400.0
 # 413 is permanent for the current prompt but may clear if the provider raises
