@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>TaskWindow Options</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 560px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+      h1 { font-size: 1.2rem; }
+      .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+      label { display: block; font-weight: 600; margin: 0.75rem 0 0.25rem; }
+      input, textarea { width: 100%; box-sizing: border-box; padding: 0.5rem; font-size: 0.9rem; border: 1px solid #bbb; border-radius: 6px; }
+      textarea { font-family: ui-monospace, monospace; min-height: 180px; }
+      button { margin-top: 0.75rem; padding: 0.5rem 1.1rem; font-size: 0.9rem; border: none; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }
+      button:disabled { background: #999; }
+      .status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #bbb; }
+      .dot.on { background: #16a34a; }
+      .dot.off { background: #dc2626; }
+      .hint { color: #666; font-size: 0.8rem; margin-top: 0.25rem; }
+      code { background: #f1f1f1; padding: 1px 5px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>TaskWindow</h1>
+
+    <div class="card">
+      <div class="status">
+        <span id="dot" class="dot"></span>
+        <span id="status">checking…</span>
+      </div>
+      <p id="setup" class="hint" style="margin: 0.5rem 0 0;" hidden>
+        Not set up the daemon yet? Follow the <a id="guide" href="#">setup guide</a>. Already did?
+        <code>taskwindow doctor</code> says what is wrong.
+      </p>
+    </div>
+
+    <div class="card">
+      <label for="pairCode">Manual pairing</label>
+      <input id="pairCode" placeholder="6-character pairing code" style="text-transform: uppercase;" autocomplete="off" />
+      <button id="pair">Pair</button>
+      <span id="pairStatus" style="margin-left: 0.5rem;"></span>
+      <p class="hint">
+        Normal setup connects automatically. For manual recovery, run <code>taskwindow pair</code>
+        and enter the one-time code here.
+      </p>
+
+      <label for="token" style="margin-top: 1.25rem;">Daemon token (manual — usually unnecessary)</label>
+      <input id="token" type="password" placeholder="paste the token from ~/.taskwindow/token" />
+      <span id="saved" style="margin-left: 0.5rem; color: #16a34a;"></span>
+
+      <label for="port">Daemon port</label>
+      <input id="port" type="number" value="9377" />
+      <p class="hint">Only change this if you start the daemon with a different <code>TASKWINDOW_PORT</code>.</p>
+
+      <button id="save">Save</button>
+
+      <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 500; margin-top: 1rem;">
+        <input id="allowAllTabs" type="checkbox" style="width: auto;" />
+        Allow access to all tabs (not just the agent's task groups)
+      </label>
+      <p class="hint">
+        Off by default: the agent can only see and act on tabs it created, which live in tab groups
+        named after the task they belong to. Turning this on lets the agent use any tab in any window.
+      </p>
+
+      <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 500; margin-top: 1rem;">
+        <input id="separateWindow" type="checkbox" style="width: auto;" checked />
+        Open agent tabs in their own window
+      </label>
+      <p class="hint">
+        On by default: each task's tab group lives in its own window, so agent work never shares a
+        window with your tabs.
+      </p>
+    </div>
+
+    <div class="card">
+      <label for="shortcuts">Shortcuts (macros)</label>
+      <textarea id="shortcuts" spellcheck="false"></textarea>
+      <p class="hint">
+        JSON map of <code>name → {description, actions: [{tool, params}]}</code>. Actions run in order
+        through the same dispatcher as <code>browser_batch</code>; run one with
+        <code>shortcuts_execute</code>.
+      </p>
+      <button id="save-shortcuts">Save shortcuts</button>
+      <span id="saved-shortcuts" style="margin-left: 0.5rem; color: #16a34a;"></span>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>

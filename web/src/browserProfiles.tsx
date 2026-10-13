@@ -6,15 +6,16 @@ import { useResource } from "./hooks";
 
 export interface BrowserProfile {
   id: string; name: string; purpose: string; context: "isolated" | "existing";
-  data_directory: string; profile_directory: string; connect: string; headed: boolean; enabled: boolean;
+  data_directory: string; profile_directory: string; headed: boolean; enabled: boolean;
 }
+interface ConnectSetup { folder: string; steps: string[]; }
 interface ProfileTest { status: string; error?: string; data?: { profile_verified?: boolean }; }
 interface ProfilesData { profiles: BrowserProfile[]; tests: Record<string, ProfileTest>; }
 type DiscoveredProfile = BrowserProfile & { browser: string };
 
 export function newBrowserProfile(): BrowserProfile {
   return { id: `profile-${crypto.randomUUID()}`, name: "", purpose: "", context: "isolated",
-    data_directory: "", profile_directory: "Default", connect: "", headed: true, enabled: true };
+    data_directory: "", profile_directory: "Default", headed: true, enabled: true };
 }
 
 export function profileTestLabel(test?: ProfileTest): string {
@@ -30,6 +31,7 @@ export function BrowserProfiles() {
   const [found, setFound] = useState<DiscoveredProfile[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [setup, setSetup] = useState<{ id: string; data: ConnectSetup } | null>(null);
   const profiles = resource.data?.profiles || [];
   const perform = async (work: () => Promise<unknown>) => {
     setBusy(true); setError("");
@@ -54,11 +56,18 @@ export function BrowserProfiles() {
       <div className="browser-profile-main"><b>{profile.name}{!profile.enabled && " · disabled"}</b><p>{profile.purpose}</p>
         <div className="browser-profile-meta"><span className="status">{profile.context === "existing" ? "Existing browser" : "North-managed"}</span><small role="status">{profileTestLabel(resource.data?.tests[profile.id])}</small></div></div>
       <div className="setup-actions">
+        {profile.context === "existing" && <button className="ghost-button" disabled={busy}
+          onClick={() => void perform(async () => setSetup({ id: profile.id, data: await post<ConnectSetup>(`/web/api/browser/profiles/${profile.id}/connect`, {}) }))}>Connect</button>}
         <button className="ghost-button" disabled={busy || !profile.enabled || resource.data?.tests[profile.id]?.status === "running"}
           onClick={() => void perform(() => post(`/web/api/browser/profiles/${profile.id}/test`, {}))}>Test connection</button>
         <button className="ghost-button" disabled={busy} aria-label={`Edit ${profile.name}`} onClick={() => setDraft({ ...profile })}>Edit</button>
         <button className="ghost-button" disabled={busy} onClick={() => void perform(() => save(profiles.map(item => item.id === profile.id ? { ...item, enabled: !item.enabled } : item)))}>{profile.enabled ? "Disconnect" : "Enable"}</button>
       </div>
+      {setup?.id === profile.id && <div className="setup-connection-note">
+        <ol>{setup.data.steps.map(step => <li key={step}>{step}</li>)}</ol>
+        <p><code>{setup.data.folder}</code> <button className="ghost-button" type="button" onClick={() => void navigator.clipboard.writeText(setup.data.folder)}>Copy folder</button></p>
+        <p>Then choose Test connection. North’s copy of the extension never updates by itself.</p>
+      </div>}
     </div>)}
     <div className="setup-actions browser-profile-toolbar">
       <button className="ghost-button" disabled={busy || resource.loading || !!resource.error} onClick={() => setDraft(newBrowserProfile())}>Add North-managed profile</button>
@@ -77,11 +86,10 @@ export function BrowserProfiles() {
       <label>Use this profile for<textarea required maxLength={1000} value={draft.purpose} placeholder="University work and job applications" onChange={event => setDraft({ ...draft, purpose: event.target.value })}/></label>
       {draft.context === "existing" ? <>
         <div className="setup-connection-note"><p>Access includes this profile’s logged-in sessions, cookies, tabs and extensions. North verifies the profile before use and never copies credentials.</p>
-        <p>Open this profile in Chrome. Enable remote debugging at <code>chrome://inspect/#remote-debugging</code> and approve Chrome’s connection prompt. North cannot bypass this permission.</p></div>
+        <p>After saving, choose Connect and load North’s extension folder into this profile once. North then works in a background window and never brings it forward.</p></div>
         <details className="setup-connection-details"><summary>Connection details</summary>
           <label>Browser data directory<input required value={draft.data_directory} onChange={event => setDraft({ ...draft, data_directory: event.target.value })}/></label>
           <label>Profile directory<input required value={draft.profile_directory} onChange={event => setDraft({ ...draft, profile_directory: event.target.value })}/></label>
-          <label>Local CDP endpoint (optional)<input value={draft.connect} placeholder="Auto-detect from this browser’s data directory" onChange={event => setDraft({ ...draft, connect: event.target.value })}/></label>
         </details>
       </> : <label className="setup-check"><input type="checkbox" checked={draft.headed} onChange={event => setDraft({ ...draft, headed: event.target.checked })}/><span>Show the browser window so I can help when needed</span></label>}
       <label className="setup-check"><input type="checkbox" checked={draft.enabled} onChange={event => setDraft({ ...draft, enabled: event.target.checked })}/><span>Allow North to select this profile. Calls still follow my approval mode.</span></label>

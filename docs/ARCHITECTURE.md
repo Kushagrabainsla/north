@@ -724,45 +724,43 @@ NorthSettings and ApprovalPolicy. It does not create another runner, credential 
 profile router or permission system. Setup detects timezone only if Settings has none.
 Browser profiles have owner-defined purposes; the agent selects an enabled `profile_id`
 per tool call from task context and asks through the central policy when ambiguous.
-Existing-browser connections must match the directory reported by `chrome://version`;
-Chrome's own remote-debugging permission cannot be bypassed. Saved existing profiles
-use public Puppeteer Core through a private official-MCP-SDK stdio bridge and
-North's existing McpClient. It is owned by BrowserTool, not registered in the MCP
-tool catalog, and never creates another approval path. Native browser WebSockets
-do not need HTTP target discovery; configured HTTP endpoints resolve their local
-browser WebSocket through `/json/version`. Managed sessions and unconfigured legacy
-calls retain chrome-agent, whose page attachment still needs HTTP `/json/list`.
-Passing a WebSocket URL or opening its socket alone does not prove usable page control.
-No credential copying or silent profile fallback.
-Preflight proves connection/profile identity, not site login or operational flow readiness.
-Managed and existing profiles share the same `chrome://version` identity check. A
-successful navigation alone cannot mark a managed connection verified.
-Existing profiles own a new window per task/profile through Puppeteer's public
-newPage(type=window, background=true). Native Chrome creates targets in its last-used
-regular profile; other normal target context IDs are not freely selectable.
-The adapter checks the exact profile path in its own new window before business
-interaction and closes mismatches. The browser prompt routes profile-selection help
-through ask_user: bring the intended profile window forward, then retry preflight.
-No user tab is navigated for discovery, and no other account is a fallback.
-The initial verified window becomes the task page. The live connection, profile
-configuration and window ownership are checked on subsequent calls without
-navigating a draft back to chrome://version. Worker reconnects restore only the
-recorded target/window and verify its saved browser-context identity. They create
-no replacement window and do not depend on Chrome's currently selected profile.
-Closed or moved tabs, edited profiles, changed endpoints, or interrupted creation
-fail closed; there is no automatic replacement/adoption. Task windows remain open
-through pauses and shutdown for review; close affects only the owned task tab,
-not the browser or any user-added tabs. Cookies, sessions and extensions are still
-shared within the profile; window ownership is not account isolation.
-Ownership and in-flight markers are atomically saved under NORTH_HOME/browser/
-task-windows (hashed task/profile filenames, no cookie data or WebSocket tokens).
-An unknown mutation outcome blocks later browser mutations, including after a
-worker restart, while inspection remains available for user review. There are
-no automatic mutation retries or custom CDP transports. Known input-validation
-failures before action execution do not leave an uncertain-effect marker.
-The pinned Node >=22.12/npm dependencies are packaged as an explicit npm manifest
-and integrity lock. The first approved call installs them with scripts disabled
-under NORTH_HOME/runtime/browser; Puppeteer Core never downloads or launches Chrome.
+Existing profiles go through TaskWindow (MIT, github.com/clawnify/taskwindow), audited at
+0.2.13 and pinned: its extension is vendored byte-identical under resources/taskwindow and
+loaded unpacked, so Chrome never updates it; its daemon is pinned by npm lockfile and
+installed with scripts disabled under NORTH_HOME/runtime/taskwindow. North patches one
+line: upstream hands the daemon key to any request claiming the Web Store origin, which
+a local program can forge, so pairing takes only a one-time code. A daemon that differs
+from the audited copy is not started, and its daily update check is off.
+Each existing profile gets its own daemon (own port, own key) and its own copy of the
+extension at NORTH_HOME/browser/taskwindow/<profile>/extension. One-time setup: the
+person loads that folder in the profile (Developer mode, Load unpacked); a short-lived
+code in the folder pairs it. Every copy carries one manifest key, so all of North's
+copies share one extension ID: Chrome lets only one extension ID debug at a time,
+and copies with different IDs locked each other out. Preflight proves the profile:
+the connected extension must have North's ID, and Chrome's own Secure Preferences
+must show this profile, and no other, loading this profile's folder, which held
+this daemon's pairing code. Another debugger extension (e.g. Claude in Chrome)
+blocks North while it is driving a tab, and vice versa.
+No credential copying, no remote-debugging prompt, no silent profile fallback.
+Preflight proves connection/profile identity, not site login. Managed profiles keep
+chrome-agent and its `chrome://version` identity check; agents can no longer pass
+`connect` or `copy_cookies` to reach the user's own Chrome.
+Work happens in one background TaskWindow window per profile, in a tab group per
+North task; TaskWindow never focuses a tab or window, and agents see only their own
+group's tabs. The task key is derived from the daemon key and task ID, so a restarted
+North resumes the same tabs. Groups survive pauses (30 days idle); close affects only
+the task's tabs. Creating that window can still raise Chrome on macOS, so around
+the first tab of a task North watches the frontmost app (utils/desktop.py) and, if
+Chrome jumped in front of the person's app, hands the front back once. North's own
+page reads retry a Chrome debugger detach caused by a page switching sites; page
+actions never retry. North tags elements it inspects (`data-north-uid`) and clicks by
+position through TaskWindow's real input events, after checking the element still has
+the role and name the approval card described. If North is not running, Chrome keeps
+its windows; a disconnected profile reconnects within about 30 seconds, and a closed
+one is opened in the background (`open -g`). An unknown page-action outcome writes a
+marker under NORTH_HOME/browser/taskwindow/<profile>/tasks that blocks later page
+actions for that task until close; reads stay available for review. Tool errors
+TaskWindow reports are definite failures; timeouts and lost connections are not.
 Pending handoffs block following calls. Every question, including a physical handoff,
 uses the same mode policy; an automatic answer is not evidence the physical action occurred.
 Managed profiles are reused across tasks, with task-specific tabs, and ordinary close

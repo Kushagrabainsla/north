@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Set up TaskWindow</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 560px; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; line-height: 1.45; }
+      h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+      .lead { color: #444; margin-top: 0; }
+      .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1.25rem 0; }
+      .status { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #bbb; flex: none; }
+      .dot.on { background: #16a34a; }
+      .dot.off { background: #d97706; }
+      ol { padding-left: 1.25rem; }
+      li { margin: 0.5rem 0; }
+      pre { background: #f1f1f1; padding: 0.6rem 0.8rem; border-radius: 6px; font-size: 0.9rem; overflow-x: auto; margin: 0.5rem 0; }
+      code { background: #f1f1f1; padding: 1px 5px; border-radius: 4px; }
+      .hint { color: #666; font-size: 0.85rem; }
+      a { color: #2563eb; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <h1>TaskWindow is installed in Chrome</h1>
+    <p class="lead">It lets a coding agent drive the tabs you are signed into. One more piece runs on your machine: a small daemon the agent talks to.</p>
+
+    <div class="card">
+      <div class="status"><span id="dot" class="dot"></span><span id="status">Checking for the daemon…</span></div>
+    </div>
+
+    <div id="guide" class="card">
+      <ol>
+        <li>
+          Open a terminal and run (needs <a href="https://nodejs.org" target="_blank" rel="noreferrer">Node 18+</a>):
+          <pre>npm install -g taskwindow
+taskwindow install</pre>
+          The installer asks which coding agents to connect, starts the daemon as a login service, and finds this extension.
+        </li>
+        <li>Come back here. This page turns green on its own; nothing to click in Chrome.</li>
+        <li>Ask your agent: <em>"Open example.com in a new tab and take a screenshot."</em></li>
+      </ol>
+      <p class="hint">Already ran that? <code>taskwindow doctor</code> says what is wrong. Details in the <a href="https://github.com/clawnify/taskwindow#readme" target="_blank" rel="noreferrer">README</a>.</p>
+    </div>
+
+    <div id="done" class="card" hidden>
+      <p style="margin: 0;">All set. Ask your agent: <em>"Open example.com in a new tab and take a screenshot."</em> A blue tab group named after the task appears in a separate TaskWindow window, never in front of yours.</p>
+      <p class="hint" style="margin-bottom: 0;">Tab access and other options live in <a id="settings" href="#">Settings</a>.</p>
+    </div>
+
+    <script src="onboarding.js"></script>
+  </body>
+</html>

@@ -5,8 +5,19 @@ All notable changes to north are documented here.
 ## [Unreleased]
 
 ### Added
+- Existing Chrome profiles now run through TaskWindow, an open-source extension and local daemon, audited at 0.2.13 and pinned. The extension is vendored byte-identical and loaded unpacked, so Chrome never updates it; the daemon is pinned by npm lockfile. North works in one background window per profile, in a tab group per task, and never brings Chrome forward. Each profile has its own daemon, key and extension folder; all copies share one extension ID (Chrome lets only one extension ID debug at a time), and preflight proves the profile from Chrome's record of which profile loaded which folder. If creating North's window raises Chrome on macOS, North hands the front back to the app you were in. Real sjsu.edu and personal profiles ran in parallel for three rounds. Real sjsu.edu profile: Canvas, LinkedIn and Gmail opened signed in with the right account, and focus stayed on the user's app.
+- Browser `upload` action attaches a local file (such as a resume) to a file input in an existing profile, inside the granted workspace and subject to approval.
+- Dashboard **Connect** for existing profiles: shows the folder to load once in Chrome; it pairs by itself with a one-time code.
 
-### Fixed
+### Changed
+- Built-in job skills and scheduling guidance choose a saved browser profile per call (`profile_id`) instead of `browser_context`, `context_confirmed` and `connect`. Old flows that still pass the context flags keep working; the flags are ignored.
+- A click by uid is refused if the element no longer has the role and name that inspect and the approval card showed.
+
+### Removed
+- The Puppeteer/CDP existing-Chrome bridge (`browser_native.py`, `resources/browser/`), Chrome's remote-debugging setup and its permission prompt, the saved CDP endpoint on profiles, and agent-supplied `connect`/`copy_cookies`. Uncommitted browser-bridge experiments are summarized in `experiments/README.md` and deleted.
+
+### Security
+- North patches TaskWindow's daemon so pairing needs a one-time code; upstream gave its key to any request claiming the Web Store origin, which a local program can forge. A daemon that differs from the audited copy is refused, and its update check is off.
 
 ## [1.21.0] - 2026-10-10
 

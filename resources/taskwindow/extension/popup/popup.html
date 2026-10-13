@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: system-ui, sans-serif; width: 300px; margin: 0; padding: 12px 14px; color: #1a1a1a; }
+      h1 { font-size: 0.95rem; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #bbb; flex: none; }
+      .dot.on { background: #16a34a; }
+      .dot.off { background: #dc2626; }
+      .status { font-size: 0.78rem; color: #555; margin-bottom: 10px; }
+      .section { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #888; margin: 10px 0 4px; }
+      ul { list-style: none; margin: 0; padding: 0; }
+      li { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 6px; font-size: 0.82rem; }
+      li.group { cursor: pointer; }
+      li.group:hover { background: #e8edf8 !important; }
+      li:nth-child(odd) { background: #f4f5f7; }
+      .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .badge { font-size: 0.65rem; background: #2563eb; color: #fff; border-radius: 999px; padding: 2px 7px; margin-left: 6px; flex: none; }
+      .count { color: #666; flex: none; margin-left: 6px; font-variant-numeric: tabular-nums; }
+      .empty { color: #888; font-size: 0.8rem; padding: 6px 8px; }
+      footer { margin-top: 12px; border-top: 1px solid #eee; padding-top: 8px; }
+      button { width: 100%; padding: 6px; font-size: 0.8rem; border: 1px solid #ddd; border-radius: 6px; background: #fff; cursor: pointer; margin-top: 6px; }
+      button:hover { background: #f4f5f7; }
+    </style>
+  </head>
+  <body>
+    <h1><span id="dot" class="dot"></span> TaskWindow</h1>
+    <div id="status" class="status">checking…</div>
+    <div class="section">Task groups</div>
+    <ul id="groups"></ul>
+    <footer>
+      <button id="adopt">Use this window for the agent</button>
+      <button id="options">Settings</button>
+    </footer>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -10,8 +10,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from config.browser_connection import cdp_http_base
-
 
 class BrowserProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
@@ -23,21 +21,26 @@ class BrowserProfile(BaseModel):
     # Existing browser identity comes from chrome://version, not this label.
     data_directory: str = ""
     profile_directory: str = Field(default="Default", pattern=r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,100}$")
-    connect: str = ""
     headed: bool = True
     enabled: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_cdp_endpoint(cls, values):
+        # Saved before the TaskWindow bridge: existing profiles no longer take a CDP endpoint.
+        if isinstance(values, dict) and "connect" in values:
+            values = {key: value for key, value in values.items() if key != "connect"}
+        return values
 
     @model_validator(mode="after")
     def validate_connection(self):
         if self.context == "isolated":
-            if self.connect or self.data_directory:
+            if self.data_directory:
                 raise ValueError("A North-managed profile cannot attach to or copy an existing profile.")
         else:
             path = Path(self.data_directory)
             if not self.data_directory or not path.is_absolute() or path == Path(path.anchor):
                 raise ValueError("Existing profiles need their browser's absolute data directory.")
-            if self.connect:
-                cdp_http_base(self.connect)
         return self
 
     @property

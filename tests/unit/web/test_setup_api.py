@@ -75,6 +75,25 @@ async def test_disabled_or_missing_profiles_cannot_be_tested(services):
 
 
 @pytest.mark.asyncio
+async def test_connect_prepares_only_existing_profiles_through_the_bridge(services, tmp_path):
+    existing = BrowserProfile(
+        id="university", name="University", purpose="Work", context="existing", data_directory=str(tmp_path)
+    )
+    services.north_settings.set_browser_profiles([existing, BrowserProfile(id="managed", name="M", purpose="M")])
+    bridge = AsyncMock()
+    bridge.setup.return_value = {"folder": "/x", "steps": ["Load unpacked"]}
+    tool = BrowserTool(north_settings=services.north_settings, existing_browser=bridge)
+    registry = ToolRegistry(auto_register=False)
+    with patch.object(registry, "get", return_value=tool), bind_services(services.replace(tool_registry=registry)):
+        prepared = await setup.connect_browser_profile("university")
+        with pytest.raises(HTTPException) as error:
+            await setup.connect_browser_profile("managed")
+    assert prepared["folder"] == "/x"
+    bridge.setup.assert_awaited_once_with(existing)
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_preflight_uses_real_central_approval_and_returns_without_blocking_dashboard(services):
     store = ApprovalStore()
     policy = approval_policy()

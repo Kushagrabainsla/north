@@ -150,8 +150,20 @@ async def test_a_selector_reaches_the_page_script_as_a_literal() -> None:
 async def test_opening_a_page_in_your_own_browser_says_so_without_looking() -> None:
     page = _Page("https://x.test/")
 
-    request = await _describe({"action": "goto", "url": "https://mail.test/", "connect": "auto"}, page)
+    request = await _describe({"action": "goto", "url": "https://mail.test/", "browser_context": "existing"}, page)
 
     assert page.commands == []
     assert request.title == "Browser - Open https://mail.test/"
     assert "your own browser" in request.message
+
+
+async def test_an_upload_names_the_file_and_counts_as_sending_it() -> None:
+    page = _Page("https://jobs.acme.test/apply/7")
+
+    request = await _describe(
+        {"action": "upload", "selector": "[name=resume]", "filename": "/Users/me/Resume.pdf"}, page
+    )
+
+    assert request.action.reaches_third_party
+    assert "Upload a file to" in request.title
+    assert "/Users/me/Resume.pdf" in request.message

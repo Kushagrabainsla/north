@@ -1269,11 +1269,28 @@ agent) skips the check.
 
 ### 16.1.3 Task-owned Browser Windows
 
-Existing-profile browser work owns a separate window per task/profile and reuses
-it through pauses; never adopt, navigate, or close unrelated user tabs.
+Existing-profile browser work stays in North's background window and the task's own
+tab group, reused through pauses; never adopt, navigate, or close unrelated user tabs.
 **Why:** using the same profile must not overwrite the user's ongoing work.
-**How to apply:** reuse public Puppeteer/CDP APIs behind BrowserTool, verify actual
-profile identity, persist owned target/window IDs, and keep one approval layer.
+**How to apply:** go through the pinned TaskWindow bridge behind BrowserTool, verify
+actual profile identity on every call, and keep one approval layer.
+
+**Browser autonomy acceptance contract:** explicitly pair profiles during onboarding
+once; normal tasks must choose the configured profile per tool call and reconnect
+without browser-access prompts. Task actions and login/MFA/human-verification
+handoffs use the existing approval/interaction layer; missing or mismatched profiles
+never fall back. Retain background task-owned windows and the user's existing data.
+**Why:** routine browsing should not interrupt the user or duplicate policy.
+**How to apply:** test existing bridges in disposable profiles before changing the
+adapter; access granted at setup is not approval to submit, pay, or replay an action.
+
+**Reuse-first browser integration:** prefer a free, maintained, unchanged external
+solution; a North-owned extension or fork requires explicit user approval.
+**Why:** minimal user input must not create another browser stack to maintain.
+**How to apply:** validate profile sessions, one-time pairing and focus preservation;
+routine work must leave the user's window, active tab and keyboard focus unchanged.
+Foreground-only work asks through the existing interaction layer first. Third-party
+code that touches personal data is audited, pinned, and never auto-updated.
 
 ### 16.2 Confidence Scoring
 

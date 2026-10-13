@@ -24,7 +24,6 @@ def settings(tmp_path):
                 purpose="University work",
                 context="existing",
                 data_directory=str(tmp_path / "chrome"),
-                connect="9222",
             ),
             BrowserProfile(id="personal", name="Personal", purpose="Personal tasks", headed=False),
         ]
@@ -195,9 +194,8 @@ def test_connection_and_task_tab_are_forwarded_to_every_action(settings, action)
 
 
 @pytest.mark.asyncio
-async def test_websocket_url_uses_private_native_adapter_not_http_or_vendor(settings):
-    profile = settings.browser_profiles[0].model_copy(update={"connect": "ws://localhost:9222/devtools/browser/native"})
-    settings.set_browser_profiles([profile])
+async def test_existing_profile_uses_the_bridge_not_cdp_or_vendor(settings):
+    profile = settings.browser_profiles[0]
     native = Mock()
     native.call = AsyncMock(
         return_value=ToolOutput(
@@ -220,8 +218,7 @@ async def test_websocket_url_uses_private_native_adapter_not_http_or_vendor(sett
 
 @pytest.mark.asyncio
 async def test_native_connection_failure_never_verifies_or_falls_back(settings):
-    profile = settings.browser_profiles[0].model_copy(update={"connect": "ws://localhost:9222/devtools/browser/native"})
-    settings.set_browser_profiles([profile])
+    profile = settings.browser_profiles[0]
     native = Mock()
     native.call = AsyncMock(return_value=ToolOutput(success=False, error="Connection not permitted"))
     tool = BrowserTool(north_settings=settings, existing_browser=native)
@@ -287,7 +284,9 @@ async def test_target_description_preserves_external_effect_facts_and_profile_id
     from approval.approvals import Request
     from approval.policy import Action, ActionKind
 
-    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings)
+    native = Mock()
+    native.verify = AsyncMock(return_value={"connection_id": "connection", "profile_verified": True})
+    tool = BrowserTool(binary_cmd=["chrome-agent"], north_settings=settings, existing_browser=native)
     profile = settings.browser_profiles[0]
     tool._verified_bindings[("task", profile.id)] = (profile.model_dump_json(), "connection")
     request = Request(
@@ -302,15 +301,7 @@ async def test_target_description_preserves_external_effect_facts_and_profile_id
         title="Submit application",
         message="Sends one application",
     )
-    with (
-        patch.object(
-            tool,
-            "_verify_profile",
-            new_callable=AsyncMock,
-            return_value=ToolOutput(success=True, data={"connection_id": "connection"}),
-        ),
-        patch("tools.universal.browser.describe_browser_call", new_callable=AsyncMock, return_value=request),
-    ):
+    with patch("tools.universal.browser.describe_browser_call", new_callable=AsyncMock, return_value=request):
         described = await tool.describe(
             ToolInput(params={"action": "click", "profile_id": profile.id, "task_id": "task", "uid": "n1"})
         )

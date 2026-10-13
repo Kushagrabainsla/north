@@ -26,7 +26,7 @@ def test_browser_guidance_selects_profile_and_reuses_existing_login():
     assert "already signed in" in guidance
     assert "Never silently switch" in guidance
     assert "read or export passwords" in guidance
-    assert "profile name alone is not a verified connection" in guidance
+    assert "never ask the user to select or focus a window" in guidance
     assert "requires_user_action=true" in guidance
     assert "then inspect and assert" in guidance
 
@@ -133,8 +133,7 @@ def test_browser_classifies_actions_and_existing_profile_access_per_call():
 
     assert tool.mutates({"action": "inspect"}) is False
     assert tool.mutates({"action": "click"}) is True
-    assert tool.mutates({"action": "goto", "copy_cookies": True}) is True
-    assert tool.mutates({"action": "goto", "connect": "9222"}) is True
+    assert tool.mutates({"action": "upload"}) is True
 
 
 def test_cdp_endpoint_normalization_is_loopback_only():
@@ -215,67 +214,12 @@ async def test_ssrf_blocking_for_private_ips():
 
 
 @pytest.mark.asyncio
-async def test_browser_requires_explicit_user_context_choice():
+@pytest.mark.parametrize("raw", [{"connect": "9222"}, {"copy_cookies": True}])
+async def test_raw_attachment_to_the_users_chrome_is_refused(raw):
     tool = BrowserTool(binary_cmd=["chrome-agent"])
-
-    missing = await tool.run(ToolInput(params={"action": "status"}))
-    assert not missing.success
-    assert "Ask the user" in missing.error
-
-    isolated_with_profile = await tool.run(ToolInput(params=_isolated(action="status", connect="9222")))
-    assert not isolated_with_profile.success
-    assert "isolated browser" in isolated_with_profile.error
-
-    existing_without_connection = await tool.run(
-        ToolInput(params={"action": "status", "browser_context": "existing", "context_confirmed": True})
-    )
-    assert not existing_without_connection.success
-    assert "requires connect or copy_cookies" in existing_without_connection.error
-
-
-@pytest.mark.asyncio
-async def test_existing_browser_status_performs_real_cdp_preflight():
-    tool = BrowserTool(binary_cmd=["chrome-agent"])
-    verified = MagicMock(success=True, data={"action": "preflight", "verified": True}, error="")
-    with patch("tools.universal.browser._probe_cdp_endpoint", return_value=verified) as probe:
-        output = await tool.run(
-            ToolInput(
-                params={
-                    "action": "status",
-                    "browser_context": "existing",
-                    "context_confirmed": True,
-                    "connect": "9222",
-                }
-            )
-        )
-
-    assert output.success is True
-    assert output.data == {"action": "preflight", "verified": True}
-    probe.assert_called_once_with("9222", 30)
-
-
-@pytest.mark.asyncio
-async def test_failed_cdp_preflight_stops_before_browser_command():
-    tool = BrowserTool(binary_cmd=["chrome-agent"])
-    failed = MagicMock(success=False, data={}, error="not a DevTools endpoint")
-    with (
-        patch("tools.universal.browser._probe_cdp_endpoint", return_value=failed),
-        patch("asyncio.create_subprocess_exec") as subprocess,
-    ):
-        output = await tool.run(
-            ToolInput(
-                params={
-                    "action": "goto",
-                    "url": "https://linkedin.com/jobs",
-                    "browser_context": "existing",
-                    "context_confirmed": True,
-                    "connect": "9222",
-                }
-            )
-        )
-
-    assert output.success is False
-    assert output.error == "not a DevTools endpoint"
+    with patch("asyncio.create_subprocess_exec") as subprocess:
+        output = await tool.run(ToolInput(params={"action": "goto", "url": "https://linkedin.com/jobs", **raw}))
+    assert not output.success and "saved profile" in output.error
     subprocess.assert_not_called()
 
 

@@ -49,13 +49,10 @@ def test_saving_optional_setup_does_not_mark_timezone_configured(tmp_path):
         {"id": "../private"},
         {"name": ""},
         {"purpose": ""},
-        {"connect": "9222"},
         {"data_directory": "/tmp/browser"},
         {"context": "existing", "data_directory": "relative"},
         {"context": "existing", "data_directory": "/"},
         {"context": "existing", "data_directory": "/tmp/browser", "profile_directory": "../private"},
-        {"context": "existing", "data_directory": "/tmp/browser", "connect": "https://remote.example:9222"},
-        {"context": "existing", "data_directory": "/tmp/browser", "connect": "http://user:pass@localhost:9222"},
     ],
 )
 def test_unsafe_profile_configuration_is_refused(overrides):
@@ -102,7 +99,14 @@ def test_endpoint_is_only_read_from_selected_directory(tmp_path):
         active_cdp_endpoint(tmp_path / "other")
 
 
+def test_saved_cdp_endpoint_is_dropped_not_used():
+    item = BrowserProfile.model_validate(
+        {"id": "u", "name": "U", "purpose": "W", "context": "existing", "data_directory": "/tmp/b", "connect": "9222"}
+    )
+    assert "connect" not in item.model_dump()
+
+
 def test_profile_catalog_does_not_expose_connection_details():
-    item = profile(context="existing", data_directory="/tmp/private", connect="9222")
+    item = profile(context="existing", data_directory="/tmp/private")
     assert set(item.catalog_entry()) == {"id", "name", "purpose", "context", "enabled"}
     assert Path(item.expected_path).name == "Default"

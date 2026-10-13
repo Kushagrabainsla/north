@@ -12,12 +12,7 @@ execution:
   inputs:
     type: object
     properties:
-      browser_context:
-        type: string
-        enum: [isolated, existing]
-      context_confirmed:
-        type: boolean
-      connect:
+      profile_id:
         type: string
       source_url:
         type: string
@@ -27,7 +22,7 @@ execution:
         type: object
       max_jobs:
         type: integer
-    required: [browser_context, context_confirmed, source_url, resume_path, max_jobs]
+    required: [source_url, resume_path, max_jobs]
     additionalProperties: false
   outputs:
     type: object
@@ -61,8 +56,8 @@ execution:
 > This procedure handles a bounded queue end to end. Initial step approval authorizes preparation only; every application still requires its own final approval.
 
 ## Procedure
-1. Validate the inputs. Refuse `max_jobs` below 1 or above 10. Require explicit browser-context confirmation, and require `connect` for an existing browser.
-2. Preflight the existing CDP endpoint with `browser action="preflight"` and require `verified: true`, or check isolated-browser status. Navigate to `source_url` and assert that the expected account is logged in.
+1. Validate the inputs. Refuse `max_jobs` below 1 or above 10. Call `browser:list_profiles` and choose an enabled profile by task context and saved purpose, or use `profile_id` when given; ask through the central approval policy if unclear. Pass `profile_id` per browser call, never bind it to the flow.
+2. Preflight with `browser action="preflight"` and require `profile_verified: true`. Navigate to `source_url` and assert that the expected account is logged in. Attach the resume to file inputs with `action="upload"` and `filename=resume_path`.
 3. Read the resume and preferences. Never invent experience, dates, credentials, compensation, work authorization, demographic answers, legal attestations, or relocation intent.
 4. Load the persistent job index from the user's North data store. Discover at most `max_jobs` jobs, identify each by stable site ID or canonical URL, and skip already reviewed entries.
 5. For each viable job, inspect the complete posting and application. Fill only answers supported by the resume or preferences. If an answer is unknown, do not guess; record the blocker and move to the next job.

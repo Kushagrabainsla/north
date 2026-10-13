@@ -23,14 +23,9 @@ execution:
         type: string
       max_jobs:
         type: integer
-      browser_context:
+      profile_id:
         type: string
-        enum: [isolated, existing]
-      context_confirmed:
-        type: boolean
-      connect:
-        type: string
-    required: [resume_path, preferences, max_jobs, browser_context, context_confirmed]
+    required: [resume_path, preferences, max_jobs]
     additionalProperties: false
   outputs:
     type: object
@@ -67,8 +62,8 @@ submits themselves. **North never submits an application.**
 4. **Which to apply to.** Read the resume at `resume_path` with read_file.
    Keep the jobs that fit `preferences` and the resume; skip the rest with a
    one-line reason. Draft at most `max_jobs`.
-5. **Fill each kept job's application.** Use the browser with the given
-   `browser_context`, `context_confirmed` and `connect`. Open the job's
+5. **Fill each kept job's application.** Use the browser, passing
+   `profile_id` on every call when one is given. Open the job's
    address and read the posting. Find its apply link's address with the
    browser's `inspect` or `read` (never by running JavaScript) and **open
    that address with `goto`; do not click it.**

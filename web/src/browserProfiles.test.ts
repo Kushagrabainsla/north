@@ -24,7 +24,7 @@ describe("browser setup evidence", () => {
     expect(a.id).not.toBe(b.id);
     expect(a.context).toBe("isolated");
     expect(a.headed).toBe(true);
-    expect(a.connect).toBe("");
+    expect("connect" in a).toBe(false);
   });
   it("never calls a connection check a verified login", () => {
     expect(profileTestLabel({ status: "completed", data: { profile_verified: true } })).toContain("login not checked");

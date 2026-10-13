@@ -12,12 +12,7 @@ execution:
   inputs:
     type: object
     properties:
-      browser_context:
-        type: string
-        enum: [isolated, existing]
-      context_confirmed:
-        type: boolean
-      connect:
+      profile_id:
         type: string
       source_url:
         type: string
@@ -51,7 +46,7 @@ execution:
     required: [processed_job_ids, drafts, skipped, questions]
     additionalProperties: false
   success_criteria:
-    - The chosen browser context and login were verified before reading jobs.
+    - The chosen browser profile and login were verified before reading jobs.
     - No more than max_jobs were processed and persistent job IDs prevented duplicates.
     - Every draft is traceable to the resume and user preferences, and no application was submitted.
 ---
@@ -60,7 +55,7 @@ execution:
 > This procedure discovers matching jobs and prepares truthful drafts. It never submits an application.
 
 ## Procedure
-1. Validate the inputs. Refuse `max_jobs` below 1 or above 10. Call `browser:list_profiles` and choose an enabled profile by task context and saved purpose; ask through the central approval policy if unclear. Pass `profile_id` per tool call, never bind it to this flow. Legacy browser-context inputs remain optional for older flows with no saved profiles; never use them to override a saved profile.
+1. Validate the inputs. Refuse `max_jobs` below 1 or above 10. Call `browser:list_profiles` and choose an enabled profile by task context and saved purpose; ask through the central approval policy if unclear. Pass `profile_id` per tool call, never bind it to this flow. Without saved profiles, North's own browser is used; it holds none of the user's logins.
 2. Preflight the chosen profile with `action="preflight"` and require `profile_verified: true`. Navigate to `source_url` and deterministically verify the expected account. Reuse an existing login; if help is needed, use `ask_user` with `requires_user_action=true`, following the same mode policy, then verify state before continuing. Connection success is not login evidence.
 3. Read the resume from `resume_path` and use only facts present there or in `preferences`. Never invent experience, dates, credentials, compensation, work authorization, demographic answers, or legal attestations.
 4. Load the durable processed-job index from the user's North data store. Create it if absent. Use the site's stable job ID or canonical URL as the deduplication key.

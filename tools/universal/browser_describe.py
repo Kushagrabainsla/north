@@ -51,6 +51,7 @@ _VERBS = {
     "check": "Check",
     "uncheck": "Uncheck",
     "eval": "Run JavaScript on",
+    "upload": "Upload a file to",
     "goto": "Open",
     "navigate": "Open",
 }
@@ -196,10 +197,11 @@ def _request(action: str, params: dict[str, Any], page: _Page, element: _Element
     presses = _presses(action, params)
     words = _words(element.text) if element else set()
     submits_form = bool(element and element.in_form and (element.role == "button" or action == "press"))
-    sends = presses and (bool(words & _SENDING_WORDS) or submits_form)
+    # An upload hands a local file to the site, whatever the button later does.
+    sends = action == "upload" or (presses and (bool(words & _SENDING_WORDS) or submits_form))
     at_checkout = any(part in urlparse(page.url).path.lower() for part in _SPENDING_PATH_PARTS)
     spends = presses and (bool(words & _SPENDING_WORDS) or (at_checkout and (sends or submits_form)))
-    attaches = bool(params.get("connect") or params.get("copy_cookies"))
+    attaches = params.get("browser_context") == "existing"
     location = _location(page.url or str(params.get("url") or ""))
 
     headline = _headline(action, params, label)
@@ -265,6 +267,8 @@ def _message(
         lines.append(f'with "{params["value"]}"')
     if action == "eval":
         lines.append(f"```js\n{params.get('js', '')}\n```")
+    if action == "upload":
+        lines.append(f"file **{params.get('filename', '')}**")
     if page.url:
         lines.append(f"on **{page.title}** - {page.url}" if page.title else f"on {page.url}")
     elif not page.seen and action not in ("goto", "navigate"):

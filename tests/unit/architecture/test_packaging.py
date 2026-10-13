@@ -98,8 +98,9 @@ def test_runtime_package_data_is_explicit(pyproject: dict) -> None:
         "policies/*.md",
         "builtin-skills/**/*.md",
         "builtin-flows/**/*.yaml",
-        "browser/*.mjs",
-        "browser/package*.json",
+        "taskwindow/LICENSE",
+        "taskwindow/package*.json",
+        "taskwindow/extension/**/*",
     ]
     assert package_data["agents"] == ["**/*.yaml", "**/prompts/*.md"]
     assert all("README" not in pattern for pattern in package_data["agents"])

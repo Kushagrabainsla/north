@@ -298,3 +298,29 @@ The optional `NORTH_CUSTOM_FLOW_SEED` points to a previous disposable experiment
 reuse its model-authored candidates when iterating on execution checks. Seeded runs do not
 re-test prompt authoring. Test artifacts are temporary; model availability and routing
 selection remain explicit limitations, not silently promoted readiness.
+
+## Existing-browser bridge choice (2026-10-12)
+
+Goal: use the user's own signed-in Chrome profiles with no repeated prompts, the
+right profile per call, and no focus change while the user works. The probe
+scripts were deleted after the decision; this table is the record.
+
+| Approach | Outcome |
+| --- | --- |
+| Puppeteer over Chrome's remote debugging (CDP) | Forms and task windows worked, but Chrome asks to allow debugging on each new connection, and new windows open in the last-used profile. |
+| chrome-agent / Chrome DevTools MCP attached to native Chrome | Failed on Chrome's WebSocket-only endpoint, or refused the identity page. |
+| Playwright MCP Bridge extension (Microsoft) | Profile-aware with a key, but brought its window forward in all 18 routine trials. |
+| Chrome Faithful extension | Background windows worked only with North's own patches; we would maintain a fork. |
+| chrome-mcp, agent-browser-mcp, mcp-chrome | No separate-window support, weak or no local key, or unclear license. |
+| Agent360 Browser MCP | Brings tabs and windows to the front, cannot tell profiles apart, unauthenticated local bridge since 1.30.1. |
+| Browser MCP (browsermcp.io) | Drives the one tab you click Connect on; extension source not public; last update May 2025. |
+| **TaskWindow 0.2.13 (chosen)** | Six disposable two-profile runs: 72/72 identity, draft and workspace checks, 24/24 reconnects without re-pairing, focus kept in every attributable trial. Real sjsu.edu and personal profiles at once: signed in, right Gmail account each, frontmost app never changed. |
+
+Audit of TaskWindow at commit 6981df5 (6.6k lines; store build, release zip and
+source identical): no outbound calls besides an npm update check, no cookie,
+history or password access, agents limited to their own tab groups. One flaw:
+the daemon gave its key to any request claiming the Web Store origin. North
+patches that, pins both halves, and loads the extension unpacked so it never
+auto-updates. Chrome lets only one extension ID debug at a time: per-profile
+copies with different IDs locked each other out (reproduced in Chrome for
+Testing), so every copy shares one manifest key and ID. Live check: `tests/live/test_taskwindow_bridge_live.py`.

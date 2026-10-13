@@ -87,10 +87,11 @@ resources = [
     "policies/*.md",
     "builtin-skills/**/*.md",
     "builtin-flows/**/*.yaml",
-    # Existing-profile browser SDK is pinned in this npm manifest/lock, installed
-    # on first approved use; Puppeteer Core never downloads or launches Chrome.
-    "browser/*.mjs",
-    "browser/package*.json",
+    # Existing-profile browser bridge: the audited TaskWindow extension, loaded
+    # unpacked so it never auto-updates, and its daemon pinned by npm lockfile.
+    "taskwindow/LICENSE",
+    "taskwindow/package*.json",
+    "taskwindow/extension/**/*",
 ]
 web = [
     "dist/*.html",

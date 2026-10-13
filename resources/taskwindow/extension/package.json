@@ -1,0 +1,7 @@
+{
+  "name": "taskwindow-extension",
+  "version": "0.2.13",
+  "private": true,
+  "type": "module",
+  "description": "TaskWindow Chrome extension (MV3): lets a local daemon drive the user's real tab via CDP"
+}

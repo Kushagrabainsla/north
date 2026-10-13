@@ -1,0 +1,8 @@
+{
+  "name": "north-taskwindow",
+  "private": true,
+  "engines": {"node": ">=18"},
+  "dependencies": {
+    "taskwindow": "0.2.13"
+  }
+}

@@ -90,7 +90,7 @@ def _home(home: Path, board_base: str, workspace: Path) -> None:
         "  instructions: Draft today's applications.\n  approval: on_mutation\n  inputs:\n"
         f"    resume_path: {resume}\n"
         "    preferences: New grad software engineer roles in the US. Authorized to work in the US.\n"
-        "    max_jobs: 2\n    browser_context: isolated\n    context_confirmed: true\n",
+        "    max_jobs: 2\n",
         encoding="utf-8",
     )
 

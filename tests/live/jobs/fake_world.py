@@ -93,6 +93,7 @@ def board_app(board: Board) -> FastAPI:
             "<option>No</option></select></label><br>"
             "<label>Desired annual salary (USD) <input name='salary' required></label><br>"
             "<label>Why do you want to work here? <textarea name='why'></textarea></label><br>"
+            "<label>Resume <input name='resume' type='file'></label><br>"
             "<button type='submit'>Submit application</button>"
             "</form></body></html>"
         )

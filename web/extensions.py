@@ -1055,6 +1055,26 @@ async def discover_profiles():
     return {"profiles": await asyncio.to_thread(discover_browser_profiles)}
 
 
+@router.post("/browser/profiles/{profile_id}/connect")
+async def connect_browser_profile(profile_id: str):
+    """Prepare the one-time setup for an existing profile: a folder to load in Chrome.
+
+    Writing a folder and a short-lived pairing code touches no browser data; the
+    person loads it into the profile themselves, which is the only access grant.
+    """
+    profile = next((p for p in _settings().browser_profiles if p.id == profile_id), None)
+    if profile is None or profile.context != "existing":
+        raise HTTPException(status_code=404, detail="Existing browser profile not found")
+    tool = current_services().require("tool_registry").get("browser")
+    bridge = getattr(tool, "existing_browser", None)
+    if bridge is None:
+        raise HTTPException(status_code=503, detail="The existing-profile bridge is not available")
+    try:
+        return await bridge.setup(profile)
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
 @router.post("/browser/profiles/{profile_id}/test")
 async def test_browser_profile(profile_id: str):
     """Run only the existing preflight tool, with its ordinary central approval.
