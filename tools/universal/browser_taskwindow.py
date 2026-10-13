@@ -14,6 +14,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import shutil
@@ -32,6 +33,8 @@ from utils.runtime_resources import resource_path
 
 if TYPE_CHECKING:
     from config.browser_profiles import BrowserProfile
+
+logger = logging.getLogger(__name__)
 
 PINNED_VERSION = "0.2.13"
 _INSTALL_TIMEOUT_SECONDS = 180
@@ -799,6 +802,7 @@ async def _front_kept(profile: BrowserProfile):
     async def watch() -> None:
         while await asyncio.to_thread(frontmost_app) != app[1]:
             await asyncio.sleep(0.1)
+        logger.info("%s came forward while opening North's window; handing the front back to %s", app[0], before)
         await asyncio.to_thread(activate, before)
 
     watcher = asyncio.create_task(watch())
