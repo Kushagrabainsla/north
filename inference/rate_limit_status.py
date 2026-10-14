@@ -36,7 +36,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +44,7 @@ from rich.table import Table
 from rich.text import Text
 
 from inference.durations import parse_duration_seconds as _parse_duration_seconds
+from utils.time import epoch_to_local
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class RateLimitRecord:
     def available_at_local(self) -> str:
         if self.available_at_epoch <= 0:
             return "unknown"
-        return datetime.fromtimestamp(self.available_at_epoch, UTC).astimezone().strftime("%H:%M:%S")
+        return epoch_to_local(self.available_at_epoch).strftime("%H:%M:%S")
 
     @property
     def remaining_seconds(self) -> float:
@@ -611,10 +611,7 @@ _TIER_LABEL = {True: "free", False: "paid", None: "?"}
 def _format_markdown(rec: RateLimitRecord) -> str:
     """One line per record, precise + tier-aware. Suitable for Telegram."""
     rem = rec.remaining_seconds
-    if rec.available_at_epoch:
-        when = datetime.fromtimestamp(rec.available_at_epoch, UTC).astimezone().strftime("%H:%M:%S")
-    else:
-        when = "?"
+    when = epoch_to_local(rec.available_at_epoch).strftime("%H:%M:%S") if rec.available_at_epoch else "?"
     wait = f"{rem:,.0f}s" if rem >= 1 else f"{rem * 1000:,.0f}ms"
     tier = _TIER_LABEL[rec.is_free]
     scope = rec.model or f"{rec.provider} (provider-wide)"
@@ -695,7 +692,7 @@ def format_status_table(
     for rec in records:
         rem = rec.remaining_seconds
         if rec.available_at_epoch:
-            when = datetime.fromtimestamp(rec.available_at_epoch, UTC).astimezone().strftime("%H:%M:%S")
+            when = epoch_to_local(rec.available_at_epoch).strftime("%H:%M:%S")
             wait = f"{rem:,.0f}s" if rem >= 1 else f"{rem * 1000:,.0f}ms"
             eta_str = f"{when} (in {wait})"
         else:

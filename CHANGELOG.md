@@ -26,6 +26,7 @@ All notable changes to north are documented here.
 - Memory's Documents tab lists only north stars, judgement rules and soul. Your profile is rebuilt from your facts, so its pointer row is gone, and an approval that used your profile now links to the Facts tab.
 
 ### Fixed
+- Every time shows in the zone set on the Settings page. `north ledger`, `north ledger search`, `north limits` and Telegram's `/limits` used the Mac's own zone; the CLI now reads the saved zone itself, so it agrees with the dashboard even with the server offline.
 - North learns from your messages again. Extraction read 50 ledger rows per finished task while a task writes about 40 on average and up to about 350, so it fell two weeks behind (your messages since Sep 29 were unread) with nothing to say so. It now reads to the end of the ledger in one run, waits for a running task to end so a cancelled exchange still teaches nothing, and the Memory page shows how many messages are unread. The actions that end a task are defined once, in the ledger.
 - Bare `north ledger` shows recent audit log entries, as its help says, instead of printing the help.
 - Existing browser profiles say they need Node 20+, not 18+: a pinned TaskWindow dependency requires 20.

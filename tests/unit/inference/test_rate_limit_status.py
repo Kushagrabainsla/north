@@ -362,3 +362,15 @@ def test_a_weekly_reset_the_provider_reported_is_shown_as_reported() -> None:
 
     wait, source = compute_wait_seconds(status_code=429, headers={}, retry_after=10_879)
     assert (wait, source) == (10_879, "retry-after")
+
+
+def test_reset_times_show_in_the_time_zone_chosen_in_settings(monkeypatch) -> None:
+    """The Mac's own zone is not the one the user picked; Settings decides."""
+    import utils.time as north_time
+    from inference.rate_limit_status import RateLimitRecord
+
+    monkeypatch.setattr(north_time, "_configured_timezone_name", None)
+    north_time.configure_timezone("Asia/Kolkata")
+    record = RateLimitRecord("codex", "gpt", "rate_limit", 60.0, "retry-after", "", available_at_epoch=86400.0)
+
+    assert record.available_at_local == "05:30:00"  # 00:00 UTC on 2 Jan 1970

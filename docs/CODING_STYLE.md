@@ -231,6 +231,11 @@ naive timestamp coming in means local, not UTC. A recurring schedule is the one 
 a rule is not an instant, so it stores wall-clock hour/minute plus an IANA zone, which is
 what keeps it fixed across a DST shift.
 
+**"Local" means the zone set on the Settings page, never the Mac's own.** Server, CLI,
+dashboard and Telegram all show times in it: `utils/time.py` helpers (`epoch_to_local`,
+`local_timezone`) on the Python side, `formatDateTime`/`timeAgo` in the dashboard. Never a
+bare `.astimezone()` or `toLocaleString()` without the zone.
+
 ### 5.3 Prompts Are Files, Not Strings
 
 Every LLM prompt is a markdown file under `resources/prompts/`, loaded via `utils.prompts.load_prompt()`. No prompt string is hardcoded in Python. Shared base prompts are loaded and extended; never duplicated.

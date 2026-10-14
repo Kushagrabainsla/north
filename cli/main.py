@@ -90,7 +90,7 @@ from cli.update_spec import pinned_git_spec as _pinned_git_spec
 from cli.web_build import web_build_is_stale as _web_build_is_stale
 from config.approval_mode import ApprovalMode
 from config.security import load_secret
-from utils.time import local_timezone_name
+from utils.time import configure_timezone, local_timezone, local_timezone_name, system_timezone_name
 from utils.version import NORTH_VERSION
 
 _console = Console(force_terminal=sys.stdout.isatty())
@@ -237,9 +237,24 @@ def _root(
     """
     global _YOLO
     _YOLO = yolo
+    _use_saved_timezone()
     if ctx.invoked_subcommand is None:
         # No subcommand - boot the server if needed, then open the TUI.
         _launch_tui()
+
+
+def _use_saved_timezone() -> None:
+    """Show times in the zone chosen in Settings, as the server and dashboard do.
+
+    Read from the saved settings file, so it holds with the server offline. An
+    unknown zone keeps the Mac's own.
+    """
+    from config.settings import settings
+    from config.strategy import NorthSettings
+
+    saved = NorthSettings(settings.north_home / "settings.json", default_timezone=system_timezone_name())
+    with contextlib.suppress(ValueError):
+        configure_timezone(saved.timezone)
 
 
 def _launch_tui(
@@ -508,7 +523,7 @@ def show_ledger(
     table.add_column("status", no_wrap=True)
     table.add_column("agent", style="dim")
     for entry in entries:
-        ts = datetime.datetime.fromisoformat(entry["timestamp"]).astimezone().strftime("%Y-%m-%d %H:%M")
+        ts = datetime.datetime.fromisoformat(entry["timestamp"]).astimezone(local_timezone()).strftime("%Y-%m-%d %H:%M")
         status = entry.get("status") or ""
         status_fmt = (
             f"[green]{status}[/green]"
@@ -552,7 +567,7 @@ def search_ledger(
     _console.print()
     for r in results:
         entry = r["entry"]
-        ts = datetime.datetime.fromisoformat(entry["timestamp"]).astimezone().strftime("%Y-%m-%d %H:%M")
+        ts = datetime.datetime.fromisoformat(entry["timestamp"]).astimezone(local_timezone()).strftime("%Y-%m-%d %H:%M")
         status = entry.get("status") or ""
         status_fmt = (
             f"[green]{status}[/green]"
