@@ -444,14 +444,12 @@ export function memoryLink(ref: MemoryRef): string {
     if (ref.ref) params.set("find", ref.ref);
     return `/approvals?${params.toString()}`;
   }
-  if (ref.kind === "fact") params.set("tab", "facts");
+  // The profile is rebuilt from your facts, so it is corrected there.
+  if (ref.kind === "fact" || ref.kind === "profile") params.set("tab", "facts");
   if (ref.kind === "episode") params.set("tab", "episodes");
-  if (ref.kind === "judgement_rules" || ref.kind === "profile") {
+  if (ref.kind === "judgement_rules") {
     params.set("tab", "documents");
-    params.set(
-      "doc",
-      ref.kind === "profile" ? "user.md" : "judgement_rules.md",
-    );
+    params.set("doc", "judgement_rules.md");
   }
   if (ref.text) params.set("find", ref.text);
   return `/memory?${params.toString()}`;

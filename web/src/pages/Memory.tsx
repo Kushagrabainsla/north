@@ -5,9 +5,10 @@ import { UI_PREFERENCE_KEYS, usePersistentState, useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-export const docs = ["user.md", "north_stars.md", "judgement_rules.md", "soul.md"];
+// Your profile (user.md) is not listed: North rebuilds it from your facts, so
+// facts are edited on their own tab.
+export const docs = ["north_stars.md", "judgement_rules.md", "soul.md"];
 export const docLabels: Record<string, string> = {
-  "user.md": "User facts",
   "north_stars.md": "North stars",
   "judgement_rules.md": "Judgement rules",
   "soul.md": "Soul",
@@ -104,8 +105,7 @@ export function Memory() {
   const [draft, setDraft] = useState<string | null>(null);
   const [factDraft, setFactDraft] = useState("");
   const [editingFact, setEditingFact] = useState<string | null>(null);
-  const isUserFacts = doc === "user.md";
-  const content = isUserFacts ? "" : (draft ?? resource.data?.content ?? "");
+  const content = draft ?? resource.data?.content ?? "";
   const save = async () => {
     await api(`/orchestrator/context/${doc}`, {
       method: "PUT",
@@ -165,7 +165,7 @@ export function Memory() {
         title="Memory"
         subtitle="Everything north has learned about you, and from you."
         actions={
-          onDocuments && !isUserFacts ? (
+          onDocuments ? (
             <>
               <button onClick={removeDocument}>Reset document</button>
               <button
@@ -209,14 +209,8 @@ export function Memory() {
           </aside>
           <div className="memory-editor-grid">
             <section>
-              <div className="editor-label">
-                {isUserFacts ? "User facts" : "Markdown source"}
-              </div>
-              {isUserFacts ? (
-                <div className="document-help">
-                  User details are managed as individual facts on the Facts tab.
-                </div>
-              ) : resource.loading ? (
+              <div className="editor-label">Markdown source</div>
+              {resource.loading ? (
                 <Loading />
               ) : (
                 <textarea
@@ -226,17 +220,9 @@ export function Memory() {
                 />
               )}
             </section>
-            <section
-              className={`memory-preview ${isUserFacts ? "user-facts-preview" : ""}`}
-            >
+            <section className="memory-preview">
               <div className="editor-label">Rendered preview</div>
-              {isUserFacts ? (
-                <div className="document-help">
-                  Your durable user details live on the Facts tab.
-                </div>
-              ) : (
-                <Markdown>{content || "Nothing written yet."}</Markdown>
-              )}
+              <Markdown>{content || "Nothing written yet."}</Markdown>
             </section>
           </div>
         </div>

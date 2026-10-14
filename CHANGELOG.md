@@ -23,6 +23,7 @@ All notable changes to north are documented here.
 - The 3,300-line Verbose.tsx is split into one file per page, with one shared Modal.
 - Artifacts and skill previews render Markdown through one shared pane, so an opened artifact has the same padding and size as a skill preview.
 - The README covers only north, install and commands; Telegram and browser-profile setup moved to onboarding. The logo spans the README's width, and every command row was checked against the CLI.
+- Memory's Documents tab lists only north stars, judgement rules and soul. Your profile is rebuilt from your facts, so its pointer row is gone, and an approval that used your profile now links to the Facts tab.
 
 ### Fixed
 - Bare `north ledger` shows recent audit log entries, as its help says, instead of printing the help.

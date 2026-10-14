@@ -34,9 +34,11 @@ describe("links from a decision to the memory it used", () => {
     expect(params(link).get("find")).toBe("abc123");
   });
 
-  it("opens the right document for rules and the profile", () => {
+  it("opens the rules document, and the facts the profile is built from", () => {
     expect(params(memoryLink({ kind: "judgement_rules", label: "Your judgement rules", text: "", ref: "" })).get("doc")).toBe("judgement_rules.md");
-    expect(params(memoryLink({ kind: "profile", label: "Your profile", text: "", ref: "" })).get("doc")).toBe("user.md");
+    const profile = params(memoryLink({ kind: "profile", label: "Your profile", text: "", ref: "" }));
+    expect(profile.get("tab")).toBe("facts");
+    expect(profile.get("doc")).toBeNull();
   });
 
   it("names what kind of memory it was, as the API words it", () => {
