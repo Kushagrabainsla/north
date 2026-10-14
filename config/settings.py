@@ -294,7 +294,7 @@ def reload_settings() -> Settings:
     """
     fresh = Settings()
     # Update the singleton in place so pre-existing references see new values.
-    for field_name in fresh.model_fields:
+    for field_name in type(fresh).model_fields:
         setattr(settings, field_name, getattr(fresh, field_name))
     return settings
 

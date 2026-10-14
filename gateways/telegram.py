@@ -4,7 +4,8 @@ Runs as a background asyncio task inside the north orchestrator process.
 Uses the webhook endpoint (POST /orchestrator/webhooks/telegram) to submit
 tasks, which reuses the existing auth and routing pipeline.
 
-Requires ``NORTH_TELEGRAM_BOT_TOKEN`` to be set in the environment or .env.
+Set up in the dashboard (onboarding, or Settings > Connections) or with `north setup`;
+until a bot token and a valid allowlist are set, it waits.
 """
 
 from __future__ import annotations
@@ -36,6 +37,9 @@ from gateways.telegram_api import (
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 2.0  # seconds between long-poll requests
+# How often a gateway that is not set up looks again. The dashboard saves the bot
+# into the in-memory settings, so the check is cheap and needs no restart.
+_SETUP_RECHECK_S = 5.0
 # How the gateway waits for a task's answer. It used to give up after 90 s, which a
 # coding task (an agent's edits, north's test run, a card to land it) never beat, so
 # the answer never reached the chat. A task can wait on a card as long as the user
@@ -697,25 +701,41 @@ class TelegramGateway:
             with contextlib.suppress(asyncio.CancelledError):
                 await typing_task
 
-    async def run(self) -> None:
-        """Main polling loop — background task entrypoint."""
-        if not settings.telegram_bot_token:
-            logger.info("Telegram gateway skipped (no bot token)")
-            return
-        if problem := settings.telegram_allowlist_problem:
-            logger.error(
-                "Telegram gateway not started: %s. Without a valid allowlist anyone who finds the "
-                "bot could run tasks. Set it to your numeric Telegram user id.",
-                problem,
-            )
-            return
+    async def _wait_until_ready(self) -> None:
+        """Wait for a bot token and a valid allowlist, saying once per reason why it waits.
 
+        It fails closed: without a valid allowlist anyone who finds the bot could run tasks.
+        """
+        said = ""
+        while not settings.telegram_ready:
+            reason = settings.telegram_allowlist_problem if settings.telegram_bot_token else "no bot token"
+            if reason != said:
+                said = reason
+                logger.log(
+                    logging.ERROR if settings.telegram_bot_token else logging.INFO,
+                    "Telegram gateway waiting: %s. Set it up in the dashboard under Settings.",
+                    reason,
+                )
+            await asyncio.sleep(_SETUP_RECHECK_S)
+
+    async def run(self) -> None:
+        """Main polling loop — background task entrypoint.
+
+        Waits until Telegram is set up, so a bot saved on the dashboard starts
+        without a restart, and goes back to waiting if it is disconnected.
+        """
+        await self._wait_until_ready()
         await self.start()
         self.resume_waits()
+        token = settings.telegram_bot_token
         logger.info("Telegram gateway polling loop started")
 
         while self._running:
             try:
+                if not settings.telegram_ready:
+                    await self._wait_until_ready()
+                if settings.telegram_bot_token != token:  # another bot: its updates are numbered afresh
+                    token, self._offset = settings.telegram_bot_token, 0
                 updates = await self._get_updates()
                 for update in updates:
                     self._offset = update["update_id"] + 1

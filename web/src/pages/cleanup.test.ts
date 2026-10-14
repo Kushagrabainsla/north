@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { ArtifactLibrary } from "./Artifacts";
 import { SETUP_STEPS, YourFiles } from "./Setup";
+import { TelegramConnection } from "../connections";
 
 const DATA: Record<string, unknown> = {
   "/web/api/artifacts": [
@@ -13,6 +14,7 @@ const DATA: Record<string, unknown> = {
       owner: { kind: "session", name: "Trip planning", link: "/sessions/c1" } },
   ],
   "/web/api/bootstrap": { status: "not_started", candidates: ["/Users/me/Documents/resume.pdf"], completed: [], candidate_count: 1 },
+  "/web/api/telegram": { configured: true, token_hint: "1234…wxyz", allowed_chat_ids: "12345", problem: "", bot: "" },
 };
 
 vi.mock("../hooks", async (importOriginal) => ({
@@ -25,7 +27,17 @@ const render = (element: ReturnType<typeof createElement>) =>
 
 describe("onboarding", () => {
   it("walks the connections and your files, with no separate permissions step", () => {
-    expect(SETUP_STEPS).toEqual(["AI connection", "Coding agents", "Browser profiles", "Your files", "Finish"]);
+    expect(SETUP_STEPS).toEqual(["AI connection", "Coding agents", "Browser profiles", "Telegram", "Your files", "Finish"]);
+  });
+
+  it("sets up Telegram in the dashboard, never showing the saved token", () => {
+    const markup = render(createElement(TelegramConnection));
+    expect(markup).toContain("@BotFather");
+    expect(markup).toContain("@userinfobot");
+    expect(markup).toContain("Ready 1234…wxyz");
+    expect(markup).toContain('value="12345"');
+    expect(markup).toContain("Disconnect");
+    expect(markup).not.toMatch(/type="password"[^>]*value="[^"]+"/);
   });
 
   it("explains what reading your files does and never starts on its own", () => {

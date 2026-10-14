@@ -98,6 +98,9 @@ class ApiServices:
     # boundary). Called as ``factory(authorization_callback=...)`` where the
     # callback is optional - browser login needs it, status/logout do not.
     codex_credentials_factory: Any | None = None
+    # Asks Telegram which bot a token belongs to, which proves the token works.
+    # Injected so the web layer never imports the gateway (an integration).
+    telegram_bot_name: Any | None = None
 
     def require(self, name: str) -> Any:
         """Return a wired component, or raise naming the one that is missing."""

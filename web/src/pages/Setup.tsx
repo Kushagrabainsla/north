@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { post } from "../api";
 import { BrowserProfiles } from "../browserProfiles";
-import { CodingAgents, ProviderConnections } from "../connections";
+import { CodingAgents, ProviderConnections, TelegramConnection, type TelegramStatus } from "../connections";
 import { configureDisplayTimezone, ErrorNotice, Loading, PageHeader, Panel, Status } from "../components";
 import { useResource } from "../hooks";
 
@@ -20,7 +20,7 @@ interface BootstrapData {
 }
 // Each step is one connection North needs, shown with the same component its
 // home in Settings uses. Approval mode is a preference, so it stays in Settings.
-export const SETUP_STEPS = ["AI connection", "Coding agents", "Browser profiles", "Your files", "Finish"];
+export const SETUP_STEPS = ["AI connection", "Coding agents", "Browser profiles", "Telegram", "Your files", "Finish"];
 const LAST = SETUP_STEPS.length - 1;
 export const setupNeedsAttention = (status: SetupData["status"]) => status === "not_started" || status === "in_progress";
 
@@ -28,7 +28,7 @@ export function SetupReminder() {
   const { data } = useResource<SetupData>("/web/api/setup", 10000);
   if (!data || !setupNeedsAttention(data.status)) return null;
   return <Panel title="Set up North" label="Your connections" className="setup-reminder">
-    <p className="setup-copy">Connect an AI provider, your coding agents and browser profiles, and choose whether North reads your files. Skip any step and come back later.</p>
+    <p className="setup-copy">Connect an AI provider, your coding agents, browser profiles and Telegram, and choose whether North reads your files. Skip any step and come back later.</p>
     <Link className="primary-button" to="/setup">{data.status === "in_progress" ? "Continue setup" : "Start setup"}</Link>
   </Panel>;
 }
@@ -69,11 +69,13 @@ export function YourFiles() {
 }
 
 function Finish({ data }: { data: SetupData }) {
+  const telegram = useResource<TelegramStatus>("/web/api/telegram").data;
   const providers = data.providers.filter(provider => !provider.optional && provider.configured);
   const browsers = data.profiles.filter(profile => profile.enabled);
   const rows: [string, boolean, string][] = [
     ["AI connection", providers.length > 0, providers.length ? providers.map(provider => provider.name).join(", ") : "Required for any task"],
     ["Browser profiles", browsers.length > 0, browsers.length ? browsers.map(profile => profile.name).join(", ") : "Optional"],
+    ["Telegram", !!telegram?.configured, telegram?.configured ? `Bot ${telegram.token_hint}` : "Optional"],
   ];
   return <Panel title="Ready to go" label="Summary">
     <div className="setup-status-list">{rows.map(([name, ok, detail]) => <div key={name}>
@@ -108,14 +110,15 @@ export function Setup() {
   return <div className="page setup-page">
     <PageHeader title="Set up North" eyebrow="Onboarding" subtitle="Connect what North works with. Every step is also in Settings, so you can change it later." actions={<Link className="ghost-button" to="/settings">Settings</Link>}/>
     {(error || resource.error) && <ErrorNotice message={error || resource.error!}/>}
-    <nav className="segmented setup-steps" aria-label="Setup steps">{SETUP_STEPS.map((name, index) => <button key={name} className={step === index ? "active" : ""} aria-current={step === index ? "step" : undefined} disabled={busy} onClick={() => void progress(index)}><span className="setup-step-number">{index + 1}</span>{name}</button>)}</nav>
+    <nav className="segmented setup-steps" aria-label="Setup steps" style={{ "--steps": SETUP_STEPS.length } as CSSProperties}>{SETUP_STEPS.map((name, index) => <button key={name} className={step === index ? "active" : ""} aria-current={step === index ? "step" : undefined} disabled={busy} onClick={() => void progress(index)}><span className="setup-step-number">{index + 1}</span>{name}</button>)}</nav>
     {data.status === "completed" && <p className="setup-copy">Setup complete. You can revisit any step.</p>}
     {data.status === "skipped" && <p className="setup-copy">Setup skipped. Continue whenever you like.</p>}
     {step === 0 && <ProviderConnections/>}
     {step === 1 && <CodingAgents/>}
     {step === 2 && <BrowserProfiles/>}
-    {step === 3 && <YourFiles/>}
-    {step === 4 && <Finish data={data}/>}
+    {step === 3 && <TelegramConnection/>}
+    {step === 4 && <YourFiles/>}
+    {step === 5 && <Finish data={data}/>}
     <footer className="setup-footer"><div className="setup-actions">
       {step > 0 && <button className="ghost-button" disabled={busy} onClick={() => void progress(step - 1)}>Back</button>}
       {step < LAST ? <button className="primary-button" disabled={busy} onClick={() => void progress(step + 1)}>Continue</button>

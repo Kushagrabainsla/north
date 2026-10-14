@@ -155,6 +155,7 @@ def configure(
     card_continuations=None,
     decision_log=None,
     codex_credentials_factory: CodexCredentialsFactory | None = None,
+    telegram_bot_name=None,
 ) -> None:
     """Contribute the web layer's wiring to *app*.
 
@@ -192,6 +193,7 @@ def configure(
         conversation_store=ConversationStore(north_home / "web.db"),
         web_runtime=WebRuntime(),
         codex_credentials_factory=codex_credentials_factory or _default_codex_credentials_factory,
+        telegram_bot_name=telegram_bot_name,
     )
 
 
@@ -1114,6 +1116,80 @@ async def update_provider(provider_id: str, body: ProviderCredentialUpdate, requ
     os.environ[definition.env_key] = body.api_key.strip()
     await _refresh_inference_runtime(request.app)
     return {"id": definition.id, "configured": True, "credential_hint": body.api_key[:4] + "…" + body.api_key[-4:]}
+
+
+class TelegramUpdate(BaseModel):
+    # Blank keeps the saved token, so the allowlist can change without pasting it again.
+    bot_token: str = Field(default="", max_length=256)
+    allowed_chat_ids: str = Field(default="", max_length=512)
+
+
+# What @BotFather issues: the bot's numeric id, a colon, then the secret. Checked
+# before the token goes into a Telegram URL.
+_TELEGRAM_TOKEN = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
+
+
+def _telegram_payload(bot: str = "") -> dict[str, Any]:
+    from config.settings import settings
+
+    token = settings.telegram_bot_token
+    return {
+        "configured": settings.telegram_ready,
+        "token_hint": f"{token[:4]}…{token[-4:]}" if token else "",
+        "allowed_chat_ids": settings.telegram_allowed_chat_ids,
+        "problem": settings.telegram_allowlist_problem if token else "",
+        "bot": bot,
+    }
+
+
+async def _save_telegram(home: Path, values: dict[str, str]) -> None:
+    """Write the values to ~/.north/.env and reload, which the running gateway reads."""
+    from config.settings import reload_settings
+
+    for key, value in values.items():
+        await asyncio.to_thread(_write_env_key, home, key, value)
+        os.environ[key] = value
+    reload_settings()
+
+
+@router.get("/telegram")
+async def telegram_status() -> dict[str, Any]:
+    return _telegram_payload()
+
+
+@router.post("/telegram")
+async def update_telegram(body: TelegramUpdate) -> dict[str, Any]:
+    """Save the bot and who may use it. The gateway starts on it within seconds, no restart."""
+    import httpx
+
+    from config.settings import settings
+
+    bot_username = current_services().require("telegram_bot_name")
+    token = body.bot_token.strip() or settings.telegram_bot_token
+    if not _TELEGRAM_TOKEN.fullmatch(token):
+        raise HTTPException(status_code=400, detail="Paste the bot token @BotFather gave you, like 123456789:AA…")
+    ids = ",".join(part.strip() for part in body.allowed_chat_ids.split(",") if part.strip())
+    if problem := settings.model_copy(update={"telegram_allowed_chat_ids": ids}).telegram_allowlist_problem:
+        raise HTTPException(status_code=400, detail=f"Use numeric Telegram user ids, not @names. {problem}")
+    try:
+        bot = await bot_username(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Telegram did not accept this token: {exc}") from None
+    except httpx.HTTPError:
+        # The error text carries the token in its URL, so it is not passed on.
+        raise HTTPException(status_code=502, detail="Could not reach Telegram. Check your connection.") from None
+    await _save_telegram(
+        current_services().require("north_home"),
+        {"NORTH_TELEGRAM_BOT_TOKEN": token, "NORTH_TELEGRAM_ALLOWED_CHAT_IDS": ids},
+    )
+    return _telegram_payload(bot)
+
+
+@router.delete("/telegram")
+async def disconnect_telegram() -> dict[str, Any]:
+    """Forget the bot token; the gateway stops polling. Who may use it is kept for next time."""
+    await _save_telegram(current_services().require("north_home"), {"NORTH_TELEGRAM_BOT_TOKEN": ""})
+    return _telegram_payload()
 
 
 def _allowed_output_roots() -> list[Path]:

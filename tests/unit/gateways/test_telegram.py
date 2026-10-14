@@ -267,17 +267,58 @@ def test_allowlist_problem(raw: str, problem: str) -> None:
 
 @pytest.mark.parametrize("raw", ["", "@myname"])
 @pytest.mark.asyncio
-async def test_gateway_does_not_start_without_a_valid_allowlist(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+async def test_gateway_waits_without_a_valid_allowlist_and_starts_once_it_is_set(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    import gateways.telegram as telegram
     from config.settings import settings
 
+    monkeypatch.setattr(telegram, "_SETUP_RECHECK_S", 0.01)
     monkeypatch.setattr(settings, "telegram_bot_token", "123:abc")
     monkeypatch.setattr(settings, "telegram_allowed_chat_ids", raw)
     gw = TelegramGateway()
-    gw.start = AsyncMock()  # type: ignore[method-assign]
+    polled = asyncio.Event()
 
-    await gw.run()
+    async def first_poll() -> list[dict]:
+        polled.set()
+        gw._running = False
+        return []
 
-    gw.start.assert_not_awaited()
+    gw._get_updates = first_poll  # type: ignore[method-assign]
+    gw.resume_waits = MagicMock(return_value=0)  # type: ignore[method-assign]
+    run = asyncio.create_task(gw.run())
+    await asyncio.sleep(0.05)
+    assert not polled.is_set() and not run.done()
+
+    # What saving on the dashboard does: the in-memory settings change, no restart.
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+    await asyncio.wait_for(run, timeout=1)
+
+    assert polled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_a_new_bot_token_starts_its_updates_afresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "telegram_bot_token", "111:old")
+    monkeypatch.setattr(settings, "telegram_allowed_chat_ids", "12345")
+    gw = TelegramGateway()
+    gw.resume_waits = MagicMock(return_value=0)  # type: ignore[method-assign]
+    offsets: list[int] = []
+
+    async def poll() -> list[dict]:
+        offsets.append(gw._offset)
+        if len(offsets) == 1:
+            settings.telegram_bot_token = "222:new"
+            return [{"update_id": 41}]
+        gw._running = False
+        return []
+
+    gw._get_updates = poll  # type: ignore[method-assign]
+    await asyncio.wait_for(gw.run(), timeout=1)
+
+    assert offsets == [0, 0]
 
 
 @pytest.mark.asyncio

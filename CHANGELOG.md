@@ -8,6 +8,7 @@ All notable changes to north are documented here.
 - Existing Chrome profiles now run through TaskWindow, an open-source extension and local daemon, audited at 0.2.13 and pinned. The extension is vendored byte-identical and loaded unpacked, so Chrome never updates it; the daemon is pinned by npm lockfile. North works in one background window per profile, in a tab group per task, and never brings Chrome forward. Each profile has its own daemon, key and extension folder; all copies share one extension ID (Chrome lets only one extension ID debug at a time), and preflight proves the profile from Chrome's record of which profile loaded which folder. If creating North's window raises Chrome on macOS, North hands the front back to the app you were in. Real sjsu.edu and personal profiles ran in parallel for three rounds. Real sjsu.edu profile: Canvas, LinkedIn and Gmail opened signed in with the right account, and focus stayed on the user's app.
 - Browser `upload` action attaches a local file (such as a resume) to a file input in an existing profile, inside the granted workspace and subject to approval.
 - Dashboard **Connect** for existing profiles: shows the folder to load once in Chrome; it pairs by itself with a one-time code.
+- Telegram is set up in the dashboard: an onboarding step and a panel in Settings > Connections, with the BotFather steps. North checks the token with Telegram before saving it, and the running server picks the bot up within seconds, no restart.
 
 ### Changed
 - Built-in job skills and scheduling guidance choose a saved browser profile per call (`profile_id`) instead of `browser_context`, `context_confirmed` and `connect`. Old flows that still pass the context flags keep working; the flags are ignored.
@@ -21,8 +22,11 @@ All notable changes to north are documented here.
 - The news_briefing and wellness agents are gone: they were only prompts. Wellness coaching is a built-in skill; the daily news briefing is your own skill on the general agent. The home agent stays.
 - The 3,300-line Verbose.tsx is split into one file per page, with one shared Modal.
 - Artifacts and skill previews render Markdown through one shared pane, so an opened artifact has the same padding and size as a skill preview.
+- The README covers only north, install and commands; Telegram and browser-profile setup moved to onboarding. The logo spans the README's width, and every command row was checked against the CLI.
 
 ### Fixed
+- Bare `north ledger` shows recent audit log entries, as its help says, instead of printing the help.
+- Existing browser profiles say they need Node 20+, not 18+: a pinned TaskWindow dependency requires 20.
 - An open dashboard no longer shows "Invalid credentials" after North restarts: browser sessions live in server memory, so a forgotten session is renewed once and the request retried.
 - Schedules missed while the Mac slept now run when it wakes. The scheduler fired only the job it was waiting on plus anything due in the last minute, so a Mac asleep 00:35-08:08 ran the 03:00 cleanup and silently skipped both 07:00 briefings.
 - Artifacts written by a flow run started from the dashboard (`flow_<id>` folders) are grouped under that flow instead of "Earlier files".

@@ -206,6 +206,8 @@ Every piece of logic exists in exactly one place. SQLite connection setup with W
 
 **One home per concept in the dashboard.** Each thing (a setting, a connection, a kind of record) lives on exactly one page; another page links to it or reuses the same component, never a copy. Onboarding walks through those same components. **Why:** scattered, repeated controls drift apart and confuse. **How to apply:** before adding a panel, find the concept's home; move rather than duplicate.
 
+**The README covers north, install and commands only.** Setup steps for a connection (Telegram, browser profiles, providers) live in dashboard onboarding, not the README. Every command row matches the CLI's real behavior and options. **Why:** setup docs in two places drift. **How to apply:** when a command or option changes, check its README row against `--help` and the code.
+
 ### 5.2 Shared Utilities Live in utils/
 
 Logic used by more than one module lives in `utils/`; never re-implemented inline.

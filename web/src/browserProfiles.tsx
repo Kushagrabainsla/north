@@ -86,7 +86,7 @@ export function BrowserProfiles() {
       <label>Use this profile for<textarea required maxLength={1000} value={draft.purpose} placeholder="University work and job applications" onChange={event => setDraft({ ...draft, purpose: event.target.value })}/></label>
       {draft.context === "existing" ? <>
         <div className="setup-connection-note"><p>Access includes this profile’s logged-in sessions, cookies, tabs and extensions. North verifies the profile before use and never copies credentials.</p>
-        <p>After saving, choose Connect and load North’s extension folder into this profile once. North then works in a background window and never brings it forward.</p></div>
+        <p>After saving, choose Connect and load North’s extension folder into this profile once. North then works in its own background window, one tab group per task, and never touches your tabs or brings Chrome forward. Needs Node 20 or later and npm.</p></div>
         <details className="setup-connection-details"><summary>Connection details</summary>
           <label>Browser data directory<input required value={draft.data_directory} onChange={event => setDraft({ ...draft, data_directory: event.target.value })}/></label>
           <label>Profile directory<input required value={draft.profile_directory} onChange={event => setDraft({ ...draft, profile_directory: event.target.value })}/></label>

@@ -471,7 +471,8 @@ def context_add(
 
 # ── ledger ───────────────────────────────────────────────────────────────────
 
-ledger_app = typer.Typer(help="Ledger operations.", no_args_is_help=True)
+# Bare `north ledger` shows recent entries, so it must not fall back to help.
+ledger_app = typer.Typer(help="Recent audit log entries, or a search of them.")
 app.add_typer(ledger_app, name="ledger")
 
 

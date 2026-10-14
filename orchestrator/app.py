@@ -42,6 +42,7 @@ from config.security import load_secret
 from config.settings import settings
 from flows import FlowRegistry, FlowRunStore
 from gateways.telegram import TelegramGateway
+from gateways.telegram_api import bot_username as telegram_bot_username
 from jobs.exceptions import JobCancelled, JobNeedsAttention
 from jobs.models import Job
 from jobs.scheduler import V1_CRON_ENTRIES, CronScheduler, provision_default_schedules
@@ -544,6 +545,7 @@ def _configure_routers(
         flow_runner=flow_runner,
         tool_registry=tool_registry,
         codex_credentials_factory=_build_codex_credentials,
+        telegram_bot_name=telegram_bot_username,
     )
 
 
@@ -827,7 +829,7 @@ def _launch_background_tasks(
         ),
     ]
 
-    # Telegram gateway — only if a bot token is configured
+    # Telegram gateway: it waits until a bot is set up, so the dashboard can add one live
     if telegram_gateway is not None:
         tasks.append(
             asyncio.create_task(

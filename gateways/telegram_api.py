@@ -36,6 +36,23 @@ def bot_url(method: str) -> str:
     return f"{TELEGRAM_API}{settings.telegram_bot_token}/{method}"
 
 
+async def bot_username(token: str) -> str:
+    """The bot's @username, asked of Telegram, which proves it accepts the token.
+
+    Raises ValueError when Telegram rejects the token and httpx.HTTPError when
+    it cannot be reached; the error text carries the URL, so it holds the token.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(f"{TELEGRAM_API}{token}/getMe")
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    if not data.get("ok"):
+        raise ValueError(data.get("description") or f"Telegram answered {response.status_code}")
+    return str(data["result"].get("username", ""))
+
+
 def within_telegram_limit(output: str) -> str:
     if len(output) <= MAX_MESSAGE_CHARS:
         return output

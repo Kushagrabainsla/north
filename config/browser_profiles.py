@@ -63,7 +63,7 @@ class BrowserProfile(BaseModel):
 class SetupProgress(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["not_started", "in_progress", "completed", "skipped"] = "not_started"
-    step: int = Field(default=0, ge=0, le=4)
+    step: int = Field(default=0, ge=0, le=5)
 
 
 def discover_browser_profiles(home: Path | None = None) -> list[dict]:

@@ -41,10 +41,10 @@ describe("browser setup evidence", () => {
 });
 
 describe("browser profile presentation", () => {
-  it("puts preferences first, then connections, with browser profiles last", () => {
+  it("puts preferences first, then connections, in onboarding order", () => {
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(SettingsPage)));
     const titles = [...markup.matchAll(/<h2>(.*?)<\/h2>/g)].map(match => match[1]);
-    expect(titles).toEqual(["Model routing", "Power", "Autonomy", "Time zone", "Providers", "Coding agents", "Browser profiles"]);
+    expect(titles).toEqual(["Model routing", "Power", "Autonomy", "Time zone", "Providers", "Coding agents", "Browser profiles", "Telegram"]);
   });
 
   it("uses North's existing secondary button variant and a helpful empty state", () => {

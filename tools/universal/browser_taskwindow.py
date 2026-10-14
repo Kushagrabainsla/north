@@ -256,7 +256,7 @@ class TaskWindowBrowser:
             if not (root / "installed").is_file():
                 npm = shutil.which("npm")
                 if not npm:
-                    raise RuntimeError("Existing browser profiles need Node 18+ and npm.")
+                    raise RuntimeError("Existing browser profiles need Node 20+ and npm.")
                 await asyncio.to_thread(root.mkdir, parents=True, exist_ok=True)
                 for name in ("package.json", "package-lock.json"):
                     await asyncio.to_thread(shutil.copyfile, bundle / name, root / name)
@@ -326,7 +326,7 @@ class TaskWindowBrowser:
             entry = await self._runtime()
             node = shutil.which("node")
             if not node:
-                raise RuntimeError("Existing browser profiles need Node 18+.")
+                raise RuntimeError("Existing browser profiles need Node 20+.")
             daemon_dir = self.state_dir(profile) / "daemon"
             await asyncio.to_thread(daemon_dir.mkdir, parents=True, exist_ok=True)
             await asyncio.to_thread((daemon_dir / "no-update-check").touch)

@@ -1721,7 +1721,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 .setup-reminder .setup-copy { max-width: 76ch; }
 .setup-reminder .primary-button { flex: 0 0 auto; font-size: 10px; }
 .segmented.setup-steps { grid-auto-flow: row; }
-.setup-steps { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.setup-steps { grid-template-columns: repeat(var(--steps), minmax(0, 1fr)); }
 .setup-steps button { display: flex; align-items: center; justify-content: center; gap: 8px; line-height: 1.5; }
 .setup-step-number { opacity: .6; }
 .setup-actions, .setup-discovery { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
@@ -1763,7 +1763,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 @media (max-width: 680px) {
   .setup-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .setup-steps button { justify-content: flex-start; }
-  .setup-steps button:last-child { grid-column: 1 / -1; }
+  .setup-steps button:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .setup-reminder .panel-content { align-items: flex-start; flex-direction: column; gap: 12px; }
   .setup-page .page-header { align-items: flex-start; flex-wrap: wrap; }
   .setup-form { max-width: none; }

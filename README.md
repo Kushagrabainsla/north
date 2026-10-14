@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/north-logo.svg" alt="north." width="360">
+  <img src="docs/assets/north-logo.svg" alt="north." width="100%">
 </p>
 
 <p align="center">A digital version of you that learns how you think and earns autonomy over time.</p>
@@ -10,56 +10,13 @@
 curl -fsSL https://raw.githubusercontent.com/Kushagrabainsla/north/main/scripts/install.sh | bash
 ```
 
-The installer sets up `uv`, installs north, and asks for an OpenRouter key (you can skip it). Groq and Gemini keys go in with `north setup`, OpenCode Zen on the dashboard, and OpenAI Codex signs in with `north auth login openai-codex`. Then:
+The installer sets up `uv`, installs north from GitHub, and asks for an OpenRouter key (you can skip it). Then open the dashboard:
 
 ```bash
-north web       # the dashboard
-north           # the terminal UI
+north web
 ```
 
-Every provider can be added or changed later on the dashboard under **System → Providers**.
-
-## Browser profiles
-
-Save profiles and their purposes in dashboard Settings. North selects a profile
-per browser call, asks through the usual approval layer if unsure, and verifies
-the actual profile before use. Profiles are not attached to flows.
-
-For your existing Chrome, enable `chrome://inspect/#remote-debugging` and allow
-the connection. North uses Puppeteer Core over local CDP, with a separate window
-per task/profile; your other tabs are not navigated or closed. It keeps that
-window during pauses and leaves drafts open for review. `close` closes only the
-task's North-owned tab, not Chrome or tabs you added yourself. Windows share the
-profile's logins, cookies and extensions; this is tab isolation, not account isolation.
-Native CDP creates windows in Chrome's last-selected profile. If it differs from
-the requested profile, North stops and asks you to bring that profile's window
-forward, then checks again. It will not switch accounts or copy credentials to
-get past a failed check. Resuming a verified task uses its original window even
-if you are now working in another profile.
-
-Existing-profile automation requires Node >=22.12 and npm. On first approved use,
-North installs the pinned Puppeteer Core and official MCP SDK packages in its
-private runtime directory with installation scripts disabled. No replacement
-Chrome is downloaded or launched. Managed isolated sessions retain chrome-agent.
-
-## Telegram
-
-1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
-2. Get your numeric Telegram user id, for example from [@userinfobot](https://t.me/userinfobot).
-3. Run `north setup` and enter both, or put them in `~/.north/.env`:
-
-   ```
-   NORTH_TELEGRAM_BOT_TOKEN=123456:ABC...
-   NORTH_TELEGRAM_ALLOWED_CHAT_IDS=123456789
-   ```
-
-4. Restart north: `north stop`, then `north start`.
-
-Only the ids on that list can use the bot. With no list, the bot does not start.
-
-In the chat, send any message or voice note to run a task. Commands: `/status`, `/cancel`, `/autonomy [mode]`, `/decisions`, `/limits`, `/workspace [path|reset]`, `/help`.
-
-Tasks from Telegram work in the folder `/workspace` chose, or the server's default if none was chosen. A coding task needs that folder to be a git repository: `/workspace ~/code/my-repo`, then ask for the change.
+Onboarding walks you through each connection: AI providers, coding agents, browser profiles and Telegram. They all stay in **Settings → Connections**. For the terminal UI, run `north`.
 
 ## Commands
 
@@ -69,45 +26,46 @@ Tasks from Telegram work in the folder `/workspace` chose, or the server's defau
 |---|---|
 | `north` | Open the terminal UI (starts the server if needed) |
 | `north --yolo` | Switch north to yolo: every approval is yes, until you set another mode |
-| `north start` | Start the server and the terminal UI (`--no-chat` for the server only, `--docker`, `--host`, `--port`, `-w <dir>`) |
-| `north web` | Start the server and open the dashboard (`--no-open`) |
-| `north stop` | Stop the server (`--all` stops every north process) |
-| `north status` | Server health, dials, providers and agents |
-| `north setup` | Set up provider keys, Telegram and settings |
-| `north update` | Install the latest north (`--source local --path <dir>` for a checkout) |
-| `north reset` | Wipe north's data (`--all` also removes keys and logins) |
+| `north start` | Start the server and the terminal UI (`--no-chat` for the server only, `-w <dir>`, `--host`, `--port`, `--docker`) |
+| `north web` | Start the server if needed and open the dashboard (`--no-open`, `-w <dir>`) |
+| `north stop` | Stop the server (`--all` stops every north process, `--docker`) |
+| `north status` | Server health, approval mode, models, providers, browser and agents |
+| `north setup` | Enter OpenRouter, Groq and Gemini keys and Telegram in the terminal |
+| `north update` | Install the latest north from GitHub main and restart it (`--source local --path <dir>` for a checkout, `--no-restart`) |
+| `north reset` | Wipe north's data, keeping keys and logins (`--all` removes those too) |
 
 **Work**
 
 | Command | What it does |
 |---|---|
-| `north task "..."` | Submit a task and stream it live |
-| `north tasks` | List running tasks |
+| `north task "..."` | Submit a task and stream it live (`-w <dir>`) |
+| `north tasks` | List active tasks |
 | `north stream <id>` | Raw events for a task |
 | `north cancel <id>` | Stop a task or job (`--all` stops everything) |
-| `north dictate` | Push-to-talk voice input |
+| `north dictate` | Push-to-talk: hold Right Option+Space, speak, release (`--hotkey`) |
 | `north agents` / `north agent list` | List agents |
-| `north agent run <name> "<task>"` | Run one agent directly |
+| `north agent run <name> "<task>"` | Run one agent directly, without the planner |
 | `north agent create` | Scaffold a new agent |
 
 **Schedules and history**
 
 | Command | What it does |
 |---|---|
-| `north cron list` | List schedules |
-| `north cron add <flow> --hour 7` | Run a flow on a schedule (`--minute`, `--days weekdays`, `--label`) |
-| `north cron set <name>` | Change a schedule |
+| `north cron` / `north cron list` | List schedules |
+| `north cron add <flow> --hour 7` | Run a flow on a schedule, in local time (`--minute`, `--days weekdays`, `--name`, `--label`) |
+| `north cron set <name>` | Change a schedule (`--hour`, `--minute`, `--days`, `--flow`, `--pause`, `--resume`) |
 | `north cron rm <name>` | Remove a schedule |
-| `north jobs` | List jobs |
+| `north jobs` | List jobs (`--status`, `-n`) |
 | `north job cancel <id>` | Cancel a job |
+| `north ledger` | Recent audit log entries (`--task <id>`, `--agent`, `-n`) |
 | `north ledger search "<text>"` | Search the audit log |
-| `north metrics` | Performance metrics |
+| `north metrics` | Performance metrics (`-p <days>`) |
 
 **Memory**
 
 | Command | What it does |
 |---|---|
-| `north context show <doc>` | Show a context document (`north_stars`, `judgement_rules`, `user`, `soul`) |
+| `north context show <doc>` | Show a context document (`user`, `north_stars`, `judgement_rules`, `soul`) |
 | `north context edit <doc>` | Edit it in `$EDITOR` |
 | `north context add --text "..."` | Add to your context (`--file <path>`, `--url <url>`) |
 
@@ -115,12 +73,12 @@ Tasks from Telegram work in the folder `/workspace` chose, or the server's defau
 
 | Command | What it does |
 |---|---|
-| `north auth login openai-codex` | Sign in to OpenAI Codex (`status`, `logout`) |
+| `north auth login` | Sign in to OpenAI Codex in the browser (`north auth status`, `north auth logout`) |
 | `north models` | Models north can reach |
-| `north routing` | Why each part of a task ran on its model |
+| `north routing` | Why each part of a task ran on its model (`--task <id>`) |
 | `north speed` | Measured speed of each model |
 | `north limits` | Rate limits and cooldowns, with reset times |
-| `north inference costs` | Cost summary |
+| `north inference costs` | Cost summary (`--period day\|week\|month`) |
 
 **Settings**
 
@@ -128,7 +86,7 @@ Tasks from Telegram work in the folder `/workspace` chose, or the server's defau
 |---|---|
 | `north config list` | All settings and their values |
 | `north config get <key>` | Read one |
-| `north config set <key> <value>` | Change one |
+| `north config set <key> <value>` | Change one, saved to `~/.north/.env` |
 | `north tools confidence` | Tool confidence per agent |
 
 In the terminal UI, type `/help` for its slash commands.

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, post } from "./api";
-import { Panel } from "./components";
+import { ErrorNotice, Panel } from "./components";
 import { useResource } from "./hooks";
 
-// Connections North needs to work: AI providers and coding agents. Each lives
-// here once; onboarding and Settings show the same component, never a copy.
+// Connections North works with: AI providers, coding agents and Telegram. Each
+// lives here once; onboarding and Settings show the same component, never a copy.
 
 export interface ProviderAuthState {
   provider_id: string;
@@ -300,5 +300,63 @@ export function CodingAgents() {
       {agent.detail && <small className="setup-tool-detail">{agent.detail}</small>}
     </div>)}</div>}
     <p className="setup-copy muted">North hands coding to these agents in their own login. Ready means installed, recent enough and logged in; usage limits are only known when a run starts.</p>
+  </Panel>;
+}
+
+export interface TelegramStatus {
+  configured: boolean;
+  token_hint: string;
+  allowed_chat_ids: string;
+  problem: string;
+  bot: string;
+}
+
+// Telegram runs tasks and answers approvals from your phone. North checks the
+// token with Telegram before saving, and the running server picks it up live.
+export function TelegramConnection() {
+  const resource = useResource<TelegramStatus>("/web/api/telegram", 10000);
+  const [token, setToken] = useState("");
+  const [ids, setIds] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const data = resource.data;
+  const allowed = ids ?? data?.allowed_chat_ids ?? "";
+  const perform = async (work: () => Promise<string>) => {
+    setBusy(true); setError(""); setMessage("");
+    try { setMessage(await work()); setToken(""); setIds(null); await resource.reload(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  const save = (event: FormEvent) => {
+    event.preventDefault();
+    void perform(async () => {
+      const saved = await post<TelegramStatus>("/web/api/telegram", { bot_token: token, allowed_chat_ids: allowed });
+      return `Connected as @${saved.bot}. Send it a message to run a task.`;
+    });
+  };
+  const disconnect = () => void perform(async () => {
+    await api<TelegramStatus>("/web/api/telegram", { method: "DELETE" });
+    return "Telegram disconnected.";
+  });
+  return <Panel title="Telegram" label={data?.configured ? `Ready ${data.token_hint}` : "Optional"}
+    actions={data?.token_hint && <button className="ghost-button" disabled={busy} onClick={disconnect}>Disconnect</button>}>
+    {message && <div className="notice">{message}</div>}
+    {(error || resource.error || data?.problem) && <ErrorNotice message={error || resource.error || data!.problem}/>}
+    <div className="setup-connection-note"><ol>
+      <li>In Telegram, message <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a>, send <code>/newbot</code> and copy the token it gives you.</li>
+      <li>Message <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer">@userinfobot</a> to get your numeric user id.</li>
+      <li>Paste both here. Only the ids you list can use the bot.</li>
+    </ol></div>
+    <form className="setup-form" onSubmit={save}>
+      <label>Bot token<input type="password" autoComplete="off" value={token}
+        placeholder={data?.token_hint ? `Saved ${data.token_hint} · paste a new one to replace it` : "123456789:AA…"}
+        onChange={event => setToken(event.target.value)}/></label>
+      <label>Allowed user ids<input value={allowed} placeholder="123456789, comma-separated for more than one"
+        onChange={event => setIds(event.target.value)}/></label>
+      <div className="setup-actions"><button className="primary-button" type="submit"
+        disabled={busy || (!token.trim() && !data?.token_hint) || !allowed.trim()}>{busy ? "Checking with Telegram…" : data?.token_hint ? "Save" : "Connect"}</button></div>
+    </form>
+    <p className="setup-copy muted">Send the bot any message or voice note to run a task. North also sends approval requests there, unless the terminal UI is already showing them. In the chat, <code>/help</code> lists the commands; <code>/workspace</code> picks the folder a task works in, which must be a git repository for coding.</p>
   </Panel>;
 }

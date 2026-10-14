@@ -198,15 +198,21 @@ async def _telegram(allowlist: str, sender: int) -> str:
 
 
 async def _telegram_starts(allowlist: str) -> str:
-    """Whether the gateway starts polling at all with this allowlist."""
+    """Whether the gateway starts polling at all with this allowlist.
+
+    With an unusable allowlist it waits for a valid one instead of returning, so
+    it gets a moment to start and is then stopped.
+    """
     gateway = telegram_gateway.TelegramGateway()
     gateway.start = AsyncMock()  # type: ignore[method-assign]
     gateway._running = False  # exit the loop straight after start()
     with (
         patch.object(settings, "telegram_bot_token", "123:bench"),
         patch.object(settings, "telegram_allowed_chat_ids", allowlist),
+        patch.object(telegram_gateway, "_SETUP_RECHECK_S", 0.01),
+        contextlib.suppress(TimeoutError),
     ):
-        await gateway.run()
+        await asyncio.wait_for(gateway.run(), timeout=0.2)
     await gateway._http.aclose()
     return "starts" if gateway.start.await_count else "refuses"
 
