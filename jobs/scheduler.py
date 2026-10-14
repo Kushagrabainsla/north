@@ -380,9 +380,14 @@ class CronScheduler:
         await asyncio.sleep(min(delay, 60.0))
         now_after_sleep = self._clock()
         if firing <= now_after_sleep:
+            oldest = now_after_sleep - self._STARTUP_CATCHUP
             for e in entries:
                 slot = previous_firing(e, now_after_sleep)
-                if slot == firing or (0 <= (now_after_sleep - slot).total_seconds() < 60):
+                # Every slot that came due during the wait fires, however long the
+                # wait was. A Mac asleep from 00:35 to 08:08 wakes inside a single
+                # capped sleep; firing only "the last minute" ran the 03:00 job the
+                # loop was waiting on and silently dropped both 07:00 briefings.
+                if slot == firing or max(now, oldest) < slot <= now_after_sleep:
                     if await self._already_fired(e, slot):
                         continue
                     if await self._is_already_running(e):

@@ -240,3 +240,23 @@ async def test_same_minute_multiple_entries_both_fire(tmp_path) -> None:
     assert "job_1" in entries_fired
     assert "job_2" in entries_fired
     assert len(jobs) == 2
+
+
+async def test_slots_that_came_due_while_the_mac_slept_all_fire_on_wake(tmp_path) -> None:
+    """Asleep 00:35-08:08: the 03:00 job fired on wake, the 07:00 briefings did not."""
+    processor = SQLiteJobProcessor(tmp_path / "jobs.db")
+    cleanup = CronEntry(name="cleanup", agent="system", task="clean", hour=3, minute=0, tz="UTC")
+    news = CronEntry(name="news", agent="general", task="brief", hour=7, minute=0, tz="UTC")
+    research = CronEntry(name="research", agent="general", task="papers", hour=7, minute=0, tz="UTC")
+    lunch = CronEntry(name="lunch", agent="general", task="later", hour=12, minute=0, tz="UTC")
+    entries = [cleanup, news, research, lunch]
+    went_to_sleep = datetime(2026, 10, 14, 0, 35, tzinfo=UTC)
+    woke = datetime(2026, 10, 14, 8, 8, tzinfo=UTC)
+    scheduler = CronScheduler(processor, entries, clock=lambda: woke)
+
+    await scheduler._execute_due_entry(next_due_entry(entries, went_to_sleep), went_to_sleep, entries)
+
+    fired = {(j.payload or {}).get("cron_entry") for j in await processor.list_jobs()}
+    assert fired == {"cleanup", "news", "research"}
+    await scheduler._execute_due_entry(next_due_entry(entries, went_to_sleep), went_to_sleep, entries)
+    assert len(await processor.list_jobs()) == 3  # waking twice never fires a slot twice
