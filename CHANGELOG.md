@@ -17,9 +17,10 @@ All notable changes to north are documented here.
 - Reading your personal files into memory is opt-in: it starts only when you press "Read my files" in onboarding, which says which folders it reads and that their text goes to your AI provider. Startup only resumes a run you started.
 - Onboarding is five steps: AI connection, coding agents (a real check that each is installed, recent enough and logged in), browser profiles (shown once), your files, and a finish summary. The Permissions step is gone; approval mode lives in Settings.
 - One home per concept: Settings gains a Connections section (providers, coding agents, browser profiles; providers moved from System), Approvals gains Past decisions and Safe actions (moved from Memory), and the bootstrap panels left Memory and System.
-- Artifacts are grouped by the flow, session or task that made them, by name, with older loose files last, and open in a modal. Notes and plans are saved under ~/.north/notes/<task id>/.
+- Artifacts are grouped by the flow, session or task that made them, by name, and open in a modal. Files no flow, session or task owns are not listed. Notes and plans are saved under ~/.north/notes/<task id>/.
 - The news_briefing and wellness agents are gone: they were only prompts. Wellness coaching is a built-in skill; the daily news briefing is your own skill on the general agent. The home agent stays.
 - The 3,300-line Verbose.tsx is split into one file per page, with one shared Modal.
+- Artifacts and skill previews render Markdown through one shared pane, so an opened artifact has the same padding and size as a skill preview.
 
 ### Fixed
 - An open dashboard no longer shows "Invalid credentials" after North restarts: browser sessions live in server memory, so a forgotten session is renewed once and the request retried.

@@ -216,6 +216,14 @@ export function timeAgo(value?: string | number) {
 /** Scroll a row into the middle of the view, for links that land on one item in a list. */
 export const reveal = (element: HTMLElement | null) => element?.scrollIntoView({ block: "center" });
 
+/** Rendered Markdown with the label and padding every modal shows it with. */
+export function MarkdownPane({ label, children }: { label?: string; children: string }) {
+  return <div className="markdown-pane">
+    {label && <div className="editor-label">{label}</div>}
+    <div className="markdown-pane-content"><Markdown>{children}</Markdown></div>
+  </div>;
+}
+
 // One modal for the whole dashboard: a native dialog, closed with Escape, a
 // click outside, or its Close button.
 export function Modal({

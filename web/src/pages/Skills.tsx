@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, del, post } from "../api";
-import { Empty, ErrorNotice, Loading, Markdown, PageHeader, Status, Modal } from "../components";
+import { Empty, ErrorNotice, Loading, MarkdownPane, Modal, PageHeader, Status } from "../components";
 import { useResource } from "../hooks";
 import { useDialog } from "../dialog";
 import { Agent } from "./Agents";
@@ -448,10 +448,7 @@ export function Skills() {
               />
             </div>
             <aside className="skill-preview-pane">
-              <div className="editor-label">Rendered Markdown</div>
-              <div className="skill-preview-content">
-                <Markdown>{content || "Nothing written yet."}</Markdown>
-              </div>
+              <MarkdownPane label="Rendered Markdown">{content || "Nothing written yet."}</MarkdownPane>
             </aside>
           </section>
         )}

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import { Link } from "react-router-dom";
-import { Empty, ErrorNotice, Loading, Markdown, Modal, PageHeader, timeAgo } from "../components";
+import { Empty, ErrorNotice, Loading, MarkdownPane, Modal, PageHeader, timeAgo } from "../components";
 import { useResource } from "../hooks";
 import type { Artifact } from "../types";
 
@@ -83,7 +83,7 @@ export function ArtifactLibrary() {
         title={selected?.name || ""}
         onClose={() => setSelected(null)}
       >
-        <Markdown>{selected?.content || ""}</Markdown>
+        <MarkdownPane>{selected?.content || ""}</MarkdownPane>
       </Modal>
     </>
   );
