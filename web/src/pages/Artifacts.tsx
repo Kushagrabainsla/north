@@ -45,8 +45,7 @@ export function ArtifactLibrary() {
         ),
         updated: Math.max(...items.map((item) => item.updated_at || 0)),
       }))
-      // Files from before every output belonged to a task go last, as one group.
-      .sort((a, b) => Number(!a.task) - Number(!b.task) || b.updated - a.updated);
+      .sort((a, b) => b.updated - a.updated);
   }, [files]);
   const card = (file: Artifact) => (
     <button className="artifact-card" key={file.id} onClick={() => open(file)}>
@@ -64,15 +63,13 @@ export function ArtifactLibrary() {
     <>
       {(resource.error || error) && <ErrorNotice message={resource.error || error} />}
       {groups.map((group) => (
-        <section className="artifact-run" key={group.task || "earlier"}>
+        <section className="artifact-run" key={group.task}>
           <h3>
-            {group.task && group.owner ? (
+            {group.owner && (
               <>
                 <span className="artifact-owner-kind">{OWNER_KIND[group.owner.kind]}</span>
                 <Link to={group.owner.link}>{group.owner.name}</Link>
               </>
-            ) : (
-              "Earlier files"
             )}
             <small>{timeAgo(group.updated)}</small>
           </h3>

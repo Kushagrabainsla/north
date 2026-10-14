@@ -1150,14 +1150,19 @@ def _list_artifacts_sync(limit: int) -> list[dict[str, Any]]:
     paths.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     home = current_services().require("north_home")
     result = []
-    for path in paths[: max(1, min(limit, 500))]:
+    # Every artifact belongs to the flow, session or task that made it; a file
+    # written outside any task is not listed.
+    owned = [(path, task) for path in paths if (task := _artifact_task_id(path, home))]
+    for path, task in owned[: max(1, min(limit, 500))]:
         stat = path.stat()
+        # The kind is the folder it sits in, skipping the task's own folder.
+        folder = path.parent.parent if path.parent.name == task else path.parent
         result.append(
             {
                 "id": _artifact_id(path),
                 "name": path.name,
-                "kind": path.parent.name,
-                "task": _artifact_task_id(path, home),
+                "kind": folder.name,
+                "task": task,
                 "media_type": mimetypes.guess_type(path.name)[0] or "text/plain",
                 "size": stat.st_size,
                 "updated_at": stat.st_mtime,

@@ -53,14 +53,14 @@ async def test_handoff_artifacts_are_listed_with_their_task(north_home) -> None:
     assert by_name["context.md"]["task"] == "task_abc123"
     assert by_name["context.md"]["kind"] == "research"
     assert by_name["review_report_latest.md"]["kind"] == "qa"
-    # A personal output belongs to no task, so the UI can keep it out of the runs.
-    assert by_name["2026-01-01.md"]["task"] == ""
+    # A file written outside any task is not an artifact of anything.
+    assert "2026-01-01.md" not in by_name
 
 
 async def test_state_files_are_never_listed_as_artifacts(north_home) -> None:
     """`tasks.db` lives beside the handoff directories it must not be listed with."""
     names = {row["name"] for row in await web_api.list_artifacts()}
-    assert names == {"context.md", "references.json", "review_report_latest.md", "2026-01-01.md"}
+    assert names == {"context.md", "references.json", "review_report_latest.md"}
 
 
 @pytest.mark.parametrize(
@@ -108,3 +108,14 @@ async def test_each_task_group_is_named_by_its_flow_session_or_request(tmp_path)
     assert owners["chattask"] == {"kind": "session", "name": "Trip planning", "link": "/sessions/conv1"}
     assert owners["task_plain0000"]["name"] == "Summarise my week"
     assert owners["task_plain0000"]["link"] == "/tasks/task_plain0000"
+
+
+async def test_a_task_folder_inside_a_store_names_the_store_as_its_kind(tmp_path) -> None:
+    research = tmp_path / "news" / "research" / "flow_a76e4e08e204"
+    research.mkdir(parents=True)
+    (research / "2026-10-13.md").write_text("papers", encoding="utf-8")
+
+    with bind_services(ApiServices(north_home=tmp_path)):
+        [row] = await web_api.list_artifacts()
+
+    assert (row["task"], row["kind"]) == ("flow_a76e4e08e204", "research")

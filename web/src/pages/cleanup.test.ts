@@ -7,7 +7,6 @@ import { SETUP_STEPS, YourFiles } from "./Setup";
 
 const DATA: Record<string, unknown> = {
   "/web/api/artifacts": [
-    { id: "a", name: "old.md", kind: "news", task: "", updated_at: 50, media_type: "text/markdown", owner: null },
     { id: "b", name: "2026-10-12.md", kind: "news", task: "t1", updated_at: 10, media_type: "text/markdown",
       owner: { kind: "flow", name: "daily-news-briefing", link: "/flows" } },
     { id: "c", name: "plan.md", kind: "notes", task: "t2", updated_at: 20, media_type: "text/markdown",
@@ -39,10 +38,10 @@ describe("onboarding", () => {
 });
 
 describe("artifacts", () => {
-  it("groups files under the flow, session or task by name, earlier files last", () => {
+  it("groups every file under the flow, session or task that made it, by name", () => {
     const markup = render(createElement(ArtifactLibrary));
     const headings = [...markup.matchAll(/<h3>(.*?)<small>/g)].map(match => match[1].replace(/<[^>]+>/g, " ").trim());
-    expect(headings).toEqual(["Session  Trip planning", "Flow  daily-news-briefing", "Earlier files"]);
+    expect(headings).toEqual(["Session  Trip planning", "Flow  daily-news-briefing"]);
     expect(markup).not.toContain(">t1<");
   });
 });

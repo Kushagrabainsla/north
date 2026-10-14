@@ -33,6 +33,8 @@ def test_task_attribution_only_applies_inside_the_task_tree(tmp_path) -> None:
     assert artifact_task_id(tmp_path / "notes" / task / "plan.md", tmp_path) == task
     research = tmp_path / "news" / "research" / "task_0123456789ab" / "d.md"
     assert artifact_task_id(research, tmp_path) == "task_0123456789ab"
+    dashboard_run = tmp_path / "news" / "research" / "flow_a76e4e08e204" / "2026-10-13.md"
+    assert artifact_task_id(dashboard_run, tmp_path) == "flow_a76e4e08e204"
     assert artifact_task_id(tmp_path / "news" / "research" / "2026-10-01.md", tmp_path) == ""
     assert artifact_task_id(tmp_path.parent / "elsewhere.md", tmp_path) == ""
 

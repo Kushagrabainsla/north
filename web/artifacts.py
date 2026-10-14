@@ -31,9 +31,10 @@ def is_readable_artifact(path: Path) -> bool:
     return path.is_file() and not path.name.endswith(DB_SUFFIXES)
 
 
-# A task ID as it appears in a folder name: the orchestrator's 32-hex IDs and
-# the older task_<12 hex> form.
-_TASK_ID = re.compile(r"^(?:[0-9a-f]{32}|task_[0-9a-f]{12})$")
+# A task ID as it appears in a folder name: the orchestrator's 32-hex IDs,
+# task_<12 hex> (utils/ids.py), and flow_<12 hex> for a run started from the
+# dashboard (web/extensions.py).
+_TASK_ID = re.compile(r"^(?:[0-9a-f]{32}|(?:task|flow)_[0-9a-f]{12})$")
 
 
 def artifact_task_id(path: Path, home: Path) -> str:
