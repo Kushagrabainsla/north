@@ -25,6 +25,7 @@ from inference.registry import PROVIDER_DEFINITIONS, AuthKind, ProviderDefinitio
 from jobs.models import display_job_status
 from ledger.base import LedgerFilters
 from ledger.models import LedgerSource
+from memory.extraction import learning_status
 from orchestrator.api_context import bind_request_services, current_services, merge
 from orchestrator.models import TaskRequest
 from tools.universal.browser import browser_availability
@@ -749,6 +750,13 @@ async def memory_facts() -> list[dict[str, Any]]:
     if current_services().fact_store is None:
         return []
     return await current_services().fact_store.all_facts()
+
+
+@router.get("/memory/learning")
+async def memory_learning() -> dict[str, Any]:
+    """How far north has read your messages to learn from them, so a stall is visible."""
+    services = current_services()
+    return await learning_status(services.require("ledger"), services.require("north_home"))
 
 
 @router.get("/memory/episodes")

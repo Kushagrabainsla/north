@@ -41,6 +41,23 @@ class LedgerStatus(StrEnum):
     AWAITING_INPUT = "awaiting_input"
 
 
+# The ledger actions that end a task, mapped to the status the task ends in. A
+# task's status is the most recent of these, not its most recent entry:
+# intermediate steps are logged COMPLETED one by one and would make a running
+# task look done. One definition, read by the orchestrator, ledger retention and
+# memory, which waits for a task to end before learning from it.
+TASK_ENDINGS: dict[str, str] = {
+    "task_completed": "completed",
+    "task_completed_with_failures": "failed",
+    "task_failed": "failed",
+    "task_cancelled": "cancelled",
+    "task_stuck": "failed",
+    "task_needs_attention": "needs_attention",
+    # Legacy rows written before model outages entered the recovery queue.
+    "task_skipped_model_unavailable": "skipped",
+}
+
+
 class LedgerSummary(BaseModel):
     """The narrow projection of a ledger row: everything except the bulk text.
 

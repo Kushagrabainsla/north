@@ -328,7 +328,7 @@ north's persona: its voice, values, curiosity, and sense of humour. Unlike the o
 
 ### 5.4 Extraction Pipeline
 
-A background job runs periodically (every few minutes) reading new Ledger entries and asking one question about each: does this tell me something new, meaningful, and durable about this person?
+When a task ends, the pipeline reads the Ledger from its bookmark to the end and asks one question about each of the user's own messages: does this tell me something new, meaningful, and durable about this person? It learns only from exchanges that are over. A message whose task is still running stops the read there until that task ends, and a cancelled task's messages are dropped. A task with no ending after a day was cut off, so its messages count. The Memory page shows how many messages are still unread.
 
 Since all Ledger entries in v1 come from intentional user input (not ambient capture), the signal-to-noise ratio is already high. The extraction pipeline uses a cheap fast model (high_volume pool) and writes deltas to the appropriate context documents via `ContextStore.append()`. Every write is logged to the Ledger with `source: system`.
 

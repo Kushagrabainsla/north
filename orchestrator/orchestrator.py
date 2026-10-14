@@ -21,7 +21,7 @@ from approval.store import ApprovalStore
 from config.strategy import NorthSettings, StrategyMode, describe
 from inference.cost_tracker import CostTracker
 from inference.exceptions import missing_resource
-from ledger import LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
+from ledger import TASK_ENDINGS, LedgerEntry, LedgerFilters, LedgerSource, LedgerStatus, LedgerWriter
 from orchestrator.constants import (
     MAX_CONCURRENT_TASKS,
     MAX_QUEUE_BACKOFF_SECONDS,
@@ -97,20 +97,6 @@ _BEST_OF_N_TEST_TIMEOUT: int = 300
 # oracle. Each command string is a literal (never built from repo content, so no
 # shell-injection surface) that invokes a standard test runner; the tuple is
 # (project marker file, optional substring the marker must contain, command).
-# Ledger actions that mark a task's terminal state. get_task() reports a task's
-# status from the most recent of these - NOT the most recent ledger entry, since
-# intermediate steps (classification, each agent) are logged COMPLETED per-step
-# and would otherwise make a still-running task look done.
-_TERMINAL_TASK_ACTIONS: dict[str, str] = {
-    "task_completed": "completed",
-    "task_completed_with_failures": "failed",
-    "task_failed": "failed",
-    "task_cancelled": "cancelled",
-    "task_stuck": "failed",
-    "task_needs_attention": "needs_attention",
-    # Legacy rows written before model outages entered the recovery queue.
-    "task_skipped_model_unavailable": "skipped",
-}
 
 
 # Checkbox task line under the spec's "## Tasks" heading, e.g. "- [ ] 1. Do X".
@@ -383,7 +369,7 @@ class Orchestrator:
                 )
 
         for entry in entries:  # query() returns most-recent-first
-            terminal = _TERMINAL_TASK_ACTIONS.get(entry.action)
+            terminal = TASK_ENDINGS.get(entry.action)
             if terminal is not None:
                 return TaskResponse(task_id=task_id, status=terminal, created_at=format_timestamp(entry.timestamp))
             if entry.action == "task_queued":

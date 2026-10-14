@@ -69,6 +69,26 @@ export function EpisodesPanel() {
   );
 }
 
+interface Learning {
+  read_up_to: string | null;
+  waiting: number;
+  more: boolean;
+}
+// Learning from your messages once fell two weeks behind with nothing on screen
+// to say so. Messages of a task still running count as waiting until it ends.
+export function LearningStatus() {
+  const { data } = useResource<Learning>("/web/api/memory/learning", 30000);
+  if (!data) return null;
+  const count = `${data.waiting}${data.more ? "+" : ""} message${data.waiting === 1 ? "" : "s"}`;
+  const upTo = data.read_up_to ? ` (read up to ${timeAgo(data.read_up_to)})` : "";
+  return (
+    <p className="muted memory-note learning-status">
+      Learning from your messages:{" "}
+      {data.waiting ? `${count} not read yet${upTo}.` : "up to date."}
+    </p>
+  );
+}
+
 export function Memory() {
   const dialog = useDialog();
   const [tab, setTab] = usePersistentState<MemoryTab>(
@@ -190,6 +210,7 @@ export function Memory() {
           </button>
         ))}
       </div>
+      <LearningStatus />
 
       {onDocuments && (
         <div className="memory-layout">

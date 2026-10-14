@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ledger.base import LedgerFilters, LedgerWriter, SearchResult
 from ledger.exceptions import LedgerReadError, LedgerWriteError
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus, LedgerSummary
+from ledger.models import TASK_ENDINGS, LedgerEntry, LedgerSource, LedgerStatus, LedgerSummary
 from utils.db import open_db_connection
 
 # Columns a LedgerSummary needs - deliberately excludes input/output/agent_output,
@@ -21,17 +21,8 @@ from utils.db import open_db_connection
 _SUMMARY_COLUMNS = "id, timestamp, source, task_id, run_id, agent, action, tools_used, model_used, status, error_type"
 
 # Minimal task state retained with the final response after detailed history
-# expires. This mirrors the orchestrator's terminal actions without importing
-# the orchestrator into the storage layer.
-_TERMINAL_TASK_ACTIONS = (
-    "task_completed",
-    "task_completed_with_failures",
-    "task_failed",
-    "task_cancelled",
-    "task_stuck",
-    "task_needs_attention",
-    "task_skipped_model_unavailable",
-)
+# expires: the action that ended each task.
+_TERMINAL_TASK_ACTIONS = tuple(TASK_ENDINGS)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ledger (

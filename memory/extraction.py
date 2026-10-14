@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from inference.base import InferenceRouter
 from inference.models import CompletionRequest
 from ledger.base import LedgerFilters, LedgerWriter
-from ledger.models import LedgerEntry, LedgerSource, LedgerStatus
+from ledger.models import TASK_ENDINGS, LedgerEntry, LedgerSource, LedgerStatus
 from memory.backup import snapshot_memory
 from memory.base import ContextStore
 from memory.models import ContextDocument
@@ -31,8 +31,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_BATCH_SIZE = 50
+# Ledger rows read per query. A run keeps reading until it reaches the end of the
+# ledger: it read one batch of 50 per finished task, while a task writes ~40 rows
+# on average and several hundred at times, so learning fell two weeks behind.
+_BATCH_SIZE = 200
 _MAX_CONCURRENT_EXTRACTIONS = 5  # semaphore cap: fast enough, stays under rate limits
+# A message from a task that has not ended waits for it: the task may yet be
+# cancelled, and a cancelled exchange teaches nothing. A task with no ending a day
+# later was cut off (north stopped mid-task), so its messages count after that.
+_UNFINISHED_TASK_WAIT = datetime.timedelta(hours=24)
+# How many of a task's latest system rows are searched for the one that ended it.
+_TASK_ENDING_SCAN = 200
 _WATERMARK_FILENAME = "extraction_watermark.txt"
 
 _DOCUMENT_MAP: dict[str, ContextDocument] = {
@@ -124,58 +133,82 @@ class ExtractionPipeline:
         self._lock = asyncio.Lock()
 
     async def run_once(self, since: datetime.datetime | None = None) -> int:
-        """Process one batch and return the count of extractions made.
+        """Read the ledger up to its end, or up to a task still running; return extractions made.
 
-        The only entry point. Called by the orchestrator when a task finishes, so
-        every entry it reads belongs to an exchange that is over and whose ending
-        - completed, failed, cancelled - is already recorded.
+        The only entry point. Called by the orchestrator when a task finishes. It
+        learns only from exchanges that are over: a message whose task has not
+        ended stops the run there, and the run that task's ending triggers picks
+        it up.
         """
         return await self._process_batch(since_override=since)
 
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _cancelled_tasks(entries: list[LedgerEntry]) -> set[str]:
-        """Tasks in this batch the user abandoned.
+    def _is_candidate(self, entry: LedgerEntry) -> bool:
+        """The user's own non-trivial message: the only thing facts are learned from.
+
+        Facts about the user come from what the *user* wrote (``input``), never
+        from agent or system output, which would let the pipeline learn the
+        assistant's own text as user fact.
+        """
+        return (
+            entry.source in _USER_AUTHORED_SOURCES
+            and entry.status not in _SKIPPED_STATUSES
+            and len((entry.input or "").strip()) >= self._min_input_chars
+        )
+
+    async def _task_endings(self, task_ids: set[str]) -> dict[str, str | None]:
+        """How each task ended ("completed", "cancelled", ...), or None while it runs.
+
+        A system record of the task marked cancelled makes it "cancelled" whatever
+        ended it: a withdrawn exchange stays withdrawn.
+        """
+        endings: dict[str, str | None] = {}
+        for task_id in task_ids:
+            rows = await self._ledger.query(
+                LedgerFilters(task_id=task_id, source=LedgerSource.SYSTEM, limit=_TASK_ENDING_SCAN)
+            )
+            if any(row.status is LedgerStatus.CANCELLED for row in rows):
+                endings[task_id] = "cancelled"
+            else:
+                endings[task_id] = next((TASK_ENDINGS[row.action] for row in rows if row.action in TASK_ENDINGS), None)
+        return endings
+
+    async def _select(self, entries: list[LedgerEntry]) -> tuple[list[LedgerEntry], LedgerEntry | None]:
+        """The messages to learn from, and the last entry this run may move past.
 
         Cancelling is the user saying the exchange does not count, and everything
-        said inside it goes with it. Answers to north's own clarifying questions
-        are the reason this matters: they are user-authored and marked completed
-        individually, so only the task's own ending says they were withdrawn. A
-        job-application run that was cancelled mid-conversation still taught
-        north "user gives standing approval for matching roles" - a consent
-        recorded from a conversation the user walked out of.
+        said inside it goes with it. Answers to north's clarifying questions are
+        why this matters: they are user-authored and marked completed one by one,
+        so only the task's ending says they were withdrawn. A job-application run
+        cancelled mid-conversation once taught north "user gives standing approval
+        for matching roles". So a message waits until its task has ended, and is
+        dropped if it ended cancelled; the selection stops at the first message
+        whose task is still running, and the second value is the entry before it.
+
+        The watermark advances only past the contiguous *prefix* of skipped
+        entries. A skipped entry after a kept one must not move it: the watermark
+        is one timestamp, so jumping past a newer skipped entry would also jump
+        past an older kept entry whose extraction later fails, dropping its retry.
         """
-        return {entry.task_id for entry in entries if entry.task_id and entry.status is LedgerStatus.CANCELLED}
-
-    def _filter_valid_entries(self, entries: list[LedgerEntry]) -> list[LedgerEntry]:
-        """Keep only the user's own non-trivial messages; advance the watermark past the rest.
-
-        Facts about the user are extracted from what the *user* wrote (``input``),
-        never from agent/system output - the latter would let the pipeline learn
-        the assistant's own text as user fact.
-
-        The watermark only advances past the contiguous *prefix* of skipped
-        entries. Skipped entries that come after a kept entry must not move it:
-        the watermark is a single timestamp, so jumping past a newer skipped
-        entry would also jump past any older kept entry whose extraction later
-        fails, silently dropping its retry.
-        """
-        cancelled = self._cancelled_tasks(entries)
-        valid: list[LedgerEntry] = []
+        candidates = [entry for entry in entries if self._is_candidate(entry)]
+        endings = await self._task_endings({entry.task_id for entry in candidates if entry.task_id})
+        cutoff = utcnow() - _UNFINISHED_TASK_WAIT
+        selected: list[LedgerEntry] = []
+        last: LedgerEntry | None = None
         for entry in entries:
-            message = (entry.input or "").strip()
-            skip = (
-                entry.source not in _USER_AUTHORED_SOURCES
-                or entry.status in _SKIPPED_STATUSES
-                or (entry.task_id in cancelled)
-                or len(message) < self._min_input_chars
-            )
-            if not skip:
-                valid.append(entry)
-            elif not valid:
+            if self._is_candidate(entry) and entry.task_id:
+                ending = endings.get(entry.task_id)
+                if ending is None and entry.timestamp > cutoff:
+                    return selected, last  # its task is still running: wait for it to end
+                if ending != "cancelled":
+                    selected.append(entry)
+            elif self._is_candidate(entry):
+                selected.append(entry)
+            if not selected:
                 self._save_watermark(entry.timestamp)
-        return valid
+            last = entry
+        return selected, last
 
     async def _run_extractions_concurrently(self, entries: list[LedgerEntry]) -> list[bool | Exception]:
         """Perform concurrent extraction checks with a semaphore rate-limit cap."""
@@ -197,24 +230,23 @@ class ExtractionPipeline:
         entries: list[LedgerEntry],
         results: list[bool | Exception],
         last_batch_entry: LedgerEntry | None = None,
-    ) -> int:
-        """Process extraction output, saving watermarks sequentially until any error."""
+    ) -> tuple[int, bool]:
+        """Save watermarks in order until any error; return extractions made and whether all succeeded."""
         extractions = 0
         for entry, result in zip(entries, results, strict=True):
             if isinstance(result, Exception):
-                logger.exception(
+                logger.error(
                     "ExtractionPipeline: failed on entry %s - watermark NOT advanced past this point, will retry",
                     entry.id,
+                    exc_info=result,
                 )
-                break
+                return extractions, False
             if result:
                 extractions += 1
             self._save_watermark(entry.timestamp)
-        else:
-            if last_batch_entry is not None:
-                self._save_watermark(last_batch_entry.timestamp)
-
-        return extractions
+        if last_batch_entry is not None:
+            self._save_watermark(last_batch_entry.timestamp)
+        return extractions, True
 
     async def _process_batch(self, since_override: datetime.datetime | None = None) -> int:
         async with self._lock:
@@ -236,18 +268,19 @@ class ExtractionPipeline:
 
         await self._maybe_backup()
         since = since_override or self._load_watermark()
-        # Query oldest-first from the watermark so the watermark advances without skipping backlog entries.
-        entries = await self._ledger.query(LedgerFilters(since=since, limit=_BATCH_SIZE, order_asc=True))
-        if not entries:
-            return 0
-
-        to_process = self._filter_valid_entries(entries)
-        if not to_process:
-            self._save_watermark(entries[-1].timestamp)
-            return 0
-
-        results = await self._run_extractions_concurrently(to_process)
-        return self._process_extraction_results(to_process, results, last_batch_entry=entries[-1])
+        extractions = 0
+        while True:
+            # Oldest-first from the watermark, so it advances without skipping backlog entries.
+            entries = await self._ledger.query(LedgerFilters(since=since, limit=_BATCH_SIZE, order_asc=True))
+            if not entries:
+                return extractions
+            to_process, last = await self._select(entries)
+            results = await self._run_extractions_concurrently(to_process)
+            made, ok = self._process_extraction_results(to_process, results, last_batch_entry=last)
+            extractions += made
+            if not ok or last is not entries[-1]:
+                return extractions  # an error to retry, or a task still running
+            since = self._load_watermark()
 
     async def _process_entry(self, entry: LedgerEntry) -> bool:
         """Ask the LLM whether the user's message yields a fact worth storing."""
@@ -450,13 +483,7 @@ class ExtractionPipeline:
         stamp_path.write_text(utcnow().isoformat(), encoding="utf-8")
 
     def _load_watermark(self) -> datetime.datetime | None:
-        if not self._watermark_path.exists():
-            return None
-        text = self._watermark_path.read_text(encoding="utf-8").strip()
-        try:
-            return datetime.datetime.fromisoformat(text)
-        except ValueError:
-            return None
+        return _read_watermark(self._watermark_path)
 
     def _save_watermark(self, ts: datetime.datetime) -> None:
         # Advance by 1µs so the next batch's `>=` query excludes this entry.
@@ -467,3 +494,35 @@ class ExtractionPipeline:
         tmp = self._watermark_path.with_suffix(".tmp")
         tmp.write_text(advanced.isoformat(), encoding="utf-8")
         os.replace(tmp, self._watermark_path)
+
+
+def _read_watermark(path: Path) -> datetime.datetime | None:
+    if not path.exists():
+        return None
+    try:
+        return datetime.datetime.fromisoformat(path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        return None
+
+
+# Counting stops here: past it the page says "at least", and the scan stays cheap.
+_WAITING_COUNT_CAP = 500
+
+
+async def learning_status(ledger: LedgerWriter, north_home: Path) -> dict[str, object]:
+    """How far north has read your messages, so a stall shows on the Memory page.
+
+    Learning once fell two weeks behind with nothing to say so. `waiting` counts
+    your messages north has not read yet, including ones whose task is still
+    running; `read_up_to` is where reading stopped.
+    """
+    watermark = _read_watermark(north_home / _WATERMARK_FILENAME)
+    waiting = 0
+    for source in _USER_AUTHORED_SOURCES:
+        rows = await ledger.query(LedgerFilters(source=source, since=watermark, limit=_WAITING_COUNT_CAP))
+        waiting += sum(1 for row in rows if row.status not in _SKIPPED_STATUSES)
+    return {
+        "read_up_to": watermark.isoformat() if watermark else None,
+        "waiting": min(waiting, _WAITING_COUNT_CAP),
+        "more": waiting >= _WAITING_COUNT_CAP,
+    }
